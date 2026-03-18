@@ -1,0 +1,102 @@
+# Foxbox Configuration
+# Copy this file to ~/.foxbox/foxbox.toml and fill in your values.
+# WARNING: This file contains secrets — do NOT commit it to version control.
+
+[telegram]
+# Bot token from @BotFather
+token = "YOUR_TELEGRAM_BOT_TOKEN"
+# Security: only these Telegram user IDs can interact with the bot.
+# Find your ID by messaging @userinfobot on Telegram.
+allowed_users = [123456789]
+
+[llm]
+# Provider to use (currently only "openrouter" is supported)
+default_provider = "openrouter"
+# Model to use via OpenRouter (see https://openrouter.ai/models)
+default_model = "anthropic/claude-sonnet-4-20250514"
+# Maximum estimated cost per conversation session (USD)
+max_cost_per_session = 1.0
+
+[llm.openrouter]
+# API key from https://openrouter.ai/keys
+api_key = "YOUR_OPENROUTER_API_KEY"
+
+[memory]
+# Path to SQLite database for conversation history
+# db_path = "~/.foxbox/data/memory.db"  # default
+
+[log]
+# Log level: debug, info, warn, error
+level = "info"
+# Log format: text, json
+format = "text"
+
+# ---------------------------------------------------------------------------
+# Schedules
+# ---------------------------------------------------------------------------
+# Each [[schedules]] entry defines a recurring task.
+#
+# Required fields:
+#   name        - unique identifier
+#   type        - "system" (core tasks, higher priority) or "agent" (skill runs)
+#   schedule    - when to run (see formats below)
+#
+# Schedule expression formats:
+#   Named:    @hourly  @daily  @midnight  @weekly  @monthly  @yearly  @annually
+#   Interval: @every <duration>   e.g. @every 5m, @every 1h30m, @every 24h
+#   Cron:     <min> <hour> <dom> <month> <dow>
+#             e.g. "0 8 * * 1-5" = weekdays at 08:00 UTC
+#             Fields support: * (all), n, n-m (range), */n (step), a,b,c (list)
+#             Day-of-week: 0 and 7 both mean Sunday.
+#
+# Optional fields:
+#   skill        - skill to invoke on each run
+#   session_tier - "supervised" (default), "autonomous", or "restricted"
+#   channel      - delivery channel e.g. "telegram:123456789"
+#   tags         - freeform labels for filtering and organisation
+#   enabled      - true (default) or false to pause without removing
+
+# --- System schedule example ---
+# System schedules are for core housekeeping. They run with higher priority
+# than agent schedules and should not be modifiable by the agent itself.
+#
+# [[schedules]]
+# name         = "agent-heartbeat"
+# type         = "system"
+# schedule     = "@every 5m"
+# tags         = ["system", "health"]
+# enabled      = true
+
+# --- Agent schedule examples ---
+
+# Daily briefing at 08:00 UTC every day.
+# [[schedules]]
+# name         = "daily-briefing"
+# type         = "agent"
+# schedule     = "@daily"
+# skill        = "daily-briefing"
+# session_tier = "supervised"
+# channel      = "telegram:123456789"
+# tags         = ["morning", "briefing"]
+# enabled      = true
+
+# Weekly expense check every Friday at 18:00 UTC.
+# [[schedules]]
+# name         = "weekly-expense-check"
+# type         = "agent"
+# schedule     = "0 18 * * 5"
+# skill        = "expense-tracker"
+# session_tier = "restricted"
+# tags         = ["finance", "weekly"]
+# enabled      = true
+
+# Weekday standup reminder at 09:00 UTC, Monday–Friday.
+# [[schedules]]
+# name         = "standup-reminder"
+# type         = "agent"
+# schedule     = "0 9 * * 1-5"
+# skill        = "standup"
+# session_tier = "supervised"
+# channel      = "telegram:123456789"
+# tags         = ["work", "morning"]
+# enabled      = true
