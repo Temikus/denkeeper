@@ -12,10 +12,22 @@ build:
 test:
     go test -race ./...
 
-# Run tests with coverage
+# Run all tests (verbose)
+test-v:
+    go test -race -v ./...
+
+# Run tests with coverage report
 test-cover:
     go test -race -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
+
+# Open coverage in browser
+test-cover-html: test-cover
+    go tool cover -html=coverage.out
+
+# Run tests for a specific package (e.g. just test-pkg internal/agent)
+test-pkg pkg:
+    go test -race -v ./{{pkg}}/...
 
 # Start the agent (optionally pass config path: just serve ./foxbox.toml)
 serve config="":
@@ -30,6 +42,25 @@ serve config="":
 lint:
     golangci-lint run
 
+# Run linter with auto-fix
+lint-fix:
+    golangci-lint run --fix
+
+# Format all Go files
+fmt:
+    gofmt -w .
+
+# Check formatting (CI-friendly, exits non-zero if unformatted)
+fmt-check:
+    @test -z "$(gofmt -l .)" || (echo "Unformatted files:" && gofmt -l . && exit 1)
+
+# Vet the codebase
+vet:
+    go vet ./...
+
+# Run all checks (fmt, vet, lint, test)
+check: fmt-check vet lint test
+
 # Tidy modules
 tidy:
     go mod tidy
@@ -37,3 +68,14 @@ tidy:
 # Clean build artifacts
 clean:
     rm -f foxbox coverage.out
+
+# Show project structure
+tree:
+    @find . -type f -name '*.go' | grep -v vendor | sort
+
+# Count lines of Go code (source and test separately)
+loc:
+    @echo "Source:"
+    @find . -name '*.go' ! -name '*_test.go' | xargs wc -l | tail -1
+    @echo "Tests:"
+    @find . -name '*_test.go' | xargs wc -l | tail -1

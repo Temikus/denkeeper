@@ -93,6 +93,109 @@ func TestChatCompletion_APIError(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_EmptyChoices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"m","choices":[],"usage":{"total_tokens":0}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty choices")
+	}
+}
+
+func TestChatCompletion_MalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not json at all`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+func TestChatCompletion_MaxTokensAndTemperature(t *testing.T) {
+	var receivedReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&receivedReq); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		resp := apiResponse{
+			ID:    "chatcmpl-1",
+			Model: "test-model",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{TotalTokens: 5},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	temp := 0.7
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:       "test-model",
+		Messages:    []llm.Message{{Role: "user", Content: "Hi"}},
+		MaxTokens:   512,
+		Temperature: &temp,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedReq.MaxTokens == nil || *receivedReq.MaxTokens != 512 {
+		t.Errorf("max_tokens not sent correctly, got %v", receivedReq.MaxTokens)
+	}
+	if receivedReq.Temperature == nil || *receivedReq.Temperature != 0.7 {
+		t.Errorf("temperature not sent correctly, got %v", receivedReq.Temperature)
+	}
+}
+
+func TestHealthCheck_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("path = %s, want /models", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	if err := client.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHealthCheck_Failure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	if err := client.HealthCheck(context.Background()); err == nil {
+		t.Fatal("expected error for 500 status")
+	}
+}
+
 func TestName(t *testing.T) {
 	c := New("key")
 	if c.Name() != "openrouter" {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -34,11 +35,12 @@ func (m *mockAdapter) Stop() error { return nil }
 // mockProvider implements llm.Provider for testing.
 type mockProvider struct {
 	response *llm.ChatResponse
+	err      error
 }
 
 func (m *mockProvider) Name() string { return "mock" }
 func (m *mockProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
-	return m.response, nil
+	return m.response, m.err
 }
 func (m *mockProvider) HealthCheck(_ context.Context) error { return nil }
 
@@ -155,5 +157,156 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 	}
 	if len(messages) != 6 {
 		t.Errorf("stored %d messages, want 6", len(messages))
+	}
+}
+
+func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{Content: "should not be called"},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	// Create a permission engine that denies "chat"
+	permissions := &security.PermissionEngine{}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, logger)
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected error for denied permission")
+	}
+	if len(ma.sent) != 0 {
+		t.Errorf("sent %d messages, want 0 (should not send on denied permission)", len(ma.sent))
+	}
+}
+
+func TestEngine_HandleMessage_LLMError(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		err: fmt.Errorf("LLM unavailable"),
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	permissions := security.NewPermissionEngine()
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, logger)
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected error when LLM fails")
+	}
+	if len(ma.sent) != 0 {
+		t.Errorf("sent %d messages, want 0 (should not send on LLM error)", len(ma.sent))
+	}
+}
+
+func TestEngine_HandleMessage_UnknownAdapter(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Hello!",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	ma := &mockAdapter{name: "discord"} // adapter named "discord"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	permissions := security.NewPermissionEngine()
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, logger)
+
+	// Message claims to be from "telegram" — no matching adapter
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	})
+	// Should not panic; currently silently succeeds (no adapter match)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ma.sent) != 0 {
+		t.Errorf("sent %d messages, want 0 (no adapter match)", len(ma.sent))
+	}
+}
+
+func TestEngine_HandleMessage_EmptyText(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "I got an empty message",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	permissions := security.NewPermissionEngine()
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, logger)
+
+	// Empty text should be handled gracefully
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on empty text: %v", err)
+	}
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
 	}
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +97,99 @@ func TestMemoryStore_EmptyConversation(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d messages, want 0", len(got))
+	}
+}
+
+func TestMemoryStore_MessageOrdering(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "order")
+
+	// Insert messages — SQLite AUTOINCREMENT ensures ordering by insertion
+	contents := []string{"first", "second", "third", "fourth"}
+	for _, c := range contents {
+		if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: c}); err != nil {
+			t.Fatalf("AddMessage(%s): %v", c, err)
+		}
+	}
+
+	got, err := store.GetMessages(ctx, convID, 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d messages, want 4", len(got))
+	}
+	for i, want := range contents {
+		if got[i].Content != want {
+			t.Errorf("message[%d].Content = %q, want %q", i, got[i].Content, want)
+		}
+	}
+}
+
+func TestMemoryStore_LargeContent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "large")
+
+	largeContent := strings.Repeat("A", 10000)
+	if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: largeContent}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	got, err := store.GetMessages(ctx, convID, 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	if len(got[0].Content) != 10000 {
+		t.Errorf("content length = %d, want 10000", len(got[0].Content))
+	}
+}
+
+func TestMemoryStore_MultipleConversations(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	conv1, _ := store.GetOrCreateConversation(ctx, "telegram", "user1")
+	conv2, _ := store.GetOrCreateConversation(ctx, "telegram", "user2")
+
+	if err := store.AddMessage(ctx, conv1, StoredMessage{Role: "user", Content: "msg for conv1"}); err != nil {
+		t.Fatalf("AddMessage conv1: %v", err)
+	}
+	if err := store.AddMessage(ctx, conv2, StoredMessage{Role: "user", Content: "msg for conv2"}); err != nil {
+		t.Fatalf("AddMessage conv2: %v", err)
+	}
+
+	got1, err := store.GetMessages(ctx, conv1, 100)
+	if err != nil {
+		t.Fatalf("GetMessages conv1: %v", err)
+	}
+	got2, err := store.GetMessages(ctx, conv2, 100)
+	if err != nil {
+		t.Fatalf("GetMessages conv2: %v", err)
+	}
+
+	if len(got1) != 1 || got1[0].Content != "msg for conv1" {
+		t.Errorf("conv1 messages leaked or wrong: %+v", got1)
+	}
+	if len(got2) != 1 || got2[0].Content != "msg for conv2" {
+		t.Errorf("conv2 messages leaked or wrong: %+v", got2)
 	}
 }
