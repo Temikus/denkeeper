@@ -1,6 +1,8 @@
 package config
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +119,38 @@ allowed_users = [111222333]
 	_, err := Parse(tomlData)
 	if err == nil {
 		t.Fatal("expected error for missing api_key")
+	}
+}
+
+func TestParse_AgentDefaults(t *testing.T) {
+	tomlData := []byte(baseConfig)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Agent.PersonaDir == "" {
+		t.Fatal("Agent.PersonaDir should not be empty after defaults")
+	}
+	if !strings.HasSuffix(cfg.Agent.PersonaDir, filepath.Join(".foxbox", "agents", "default")) {
+		t.Errorf("Agent.PersonaDir = %q, want suffix .foxbox/agents/default", cfg.Agent.PersonaDir)
+	}
+}
+
+func TestParse_AgentCustomPersonaDir(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[agent]
+persona_dir = "/custom/persona/path"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Agent.PersonaDir != "/custom/persona/path" {
+		t.Errorf("Agent.PersonaDir = %q, want /custom/persona/path", cfg.Agent.PersonaDir)
 	}
 }
 

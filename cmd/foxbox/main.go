@@ -16,6 +16,7 @@ import (
 	"github.com/Temikus/foxbox/internal/config"
 	"github.com/Temikus/foxbox/internal/llm"
 	"github.com/Temikus/foxbox/internal/llm/openrouter"
+	"github.com/Temikus/foxbox/internal/persona"
 	"github.com/Temikus/foxbox/internal/security"
 )
 
@@ -94,6 +95,16 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("initializing telegram: %w", err)
 	}
 
+	// Load persona
+	systemPrompt := persona.DefaultPrompt
+	p, err := persona.Load(cfg.Agent.PersonaDir)
+	if err != nil {
+		logger.Warn("persona files not loaded, using default prompt", "dir", cfg.Agent.PersonaDir, "error", err)
+	} else {
+		systemPrompt = p.SystemPrompt()
+		logger.Info("persona loaded", "dir", cfg.Agent.PersonaDir)
+	}
+
 	// Init permissions
 	permissions := security.NewPermissionEngine()
 
@@ -103,6 +114,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		memory,
 		[]adapter.Adapter{tgAdapter},
 		permissions,
+		systemPrompt,
 		logger,
 	)
 

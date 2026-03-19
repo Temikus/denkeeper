@@ -10,19 +10,17 @@ import (
 	"github.com/Temikus/foxbox/internal/security"
 )
 
-const (
-	systemPrompt     = "You are Foxbox, a helpful personal AI assistant."
-	maxContextMessages = 50
-)
+const maxContextMessages = 50
 
 // Engine is the core agent orchestrator.
 type Engine struct {
-	router      *llm.Router
-	memory      MemoryStore
-	adapters    []adapter.Adapter
-	permissions *security.PermissionEngine
-	incoming    chan adapter.IncomingMessage
-	logger      *slog.Logger
+	router       *llm.Router
+	memory       MemoryStore
+	adapters     []adapter.Adapter
+	permissions  *security.PermissionEngine
+	systemPrompt string
+	incoming     chan adapter.IncomingMessage
+	logger       *slog.Logger
 }
 
 func NewEngine(
@@ -30,15 +28,17 @@ func NewEngine(
 	memory MemoryStore,
 	adapters []adapter.Adapter,
 	permissions *security.PermissionEngine,
+	systemPrompt string,
 	logger *slog.Logger,
 ) *Engine {
 	return &Engine{
-		router:      router,
-		memory:      memory,
-		adapters:    adapters,
-		permissions: permissions,
-		incoming:    make(chan adapter.IncomingMessage, 64),
-		logger:      logger,
+		router:       router,
+		memory:       memory,
+		adapters:     adapters,
+		permissions:  permissions,
+		systemPrompt: systemPrompt,
+		incoming:     make(chan adapter.IncomingMessage, 64),
+		logger:       logger,
 	}
 }
 
@@ -98,7 +98,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	// Build LLM messages: system prompt + history
 	llmMessages := make([]llm.Message, 0, len(history)+1)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: systemPrompt})
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.systemPrompt})
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}

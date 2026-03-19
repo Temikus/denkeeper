@@ -13,7 +13,12 @@ type Config struct {
 	LLM       LLMConfig        `toml:"llm"`
 	Memory    MemoryConfig     `toml:"memory"`
 	Log       LogConfig        `toml:"log"`
+	Agent     AgentConfig      `toml:"agent"`
 	Schedules []ScheduleConfig `toml:"schedules"`
+}
+
+type AgentConfig struct {
+	PersonaDir string `toml:"persona_dir"`
 }
 
 type TelegramConfig struct {
@@ -121,6 +126,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Memory.DBPath == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Memory.DBPath = filepath.Join(home, ".foxbox", "data", "memory.db")
+	}
+	if cfg.Agent.PersonaDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.Agent.PersonaDir = filepath.Join(home, ".foxbox", "agents", "default")
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
