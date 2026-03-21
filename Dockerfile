@@ -1,5 +1,8 @@
 # Stage 1: Build
 FROM golang:1.25-alpine AS builder
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -7,7 +10,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /foxbox ./cmd/foxbox
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+    -o /foxbox ./cmd/foxbox
 
 # Stage 2: Runtime
 FROM alpine:3.21

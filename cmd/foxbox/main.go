@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -18,6 +19,13 @@ import (
 	"github.com/Temikus/foxbox/internal/llm/openrouter"
 	"github.com/Temikus/foxbox/internal/persona"
 	"github.com/Temikus/foxbox/internal/security"
+)
+
+// Build-time variables set via ldflags.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 var cfgFile string
@@ -35,7 +43,19 @@ func main() {
 	}
 	serveCmd.Flags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.foxbox/foxbox.toml)")
 
-	rootCmd.AddCommand(serveCmd)
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(_ *cobra.Command, _ []string) {
+			fmt.Printf("foxbox version %s\n", version)
+			fmt.Printf("  commit:    %s\n", commit)
+			fmt.Printf("  built:     %s\n", date)
+			fmt.Printf("  go:        %s\n", runtime.Version())
+			fmt.Printf("  platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		},
+	}
+
+	rootCmd.AddCommand(serveCmd, versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
