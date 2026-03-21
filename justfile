@@ -73,6 +73,18 @@ clean:
 tree:
     @find . -type f -name '*.go' | grep -v vendor | sort
 
+# Build Docker image
+docker-build:
+    docker build -t foxbox .
+
+# Start with Docker Compose
+docker-up:
+    docker compose up -d
+
+# Stop Docker Compose
+docker-down:
+    docker compose down
+
 # Count lines of Go code (source and test separately)
 loc:
     @echo "Source:"

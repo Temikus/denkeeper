@@ -1,0 +1,6 @@
+services:
+  foxbox:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/data

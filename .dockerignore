@@ -1,0 +1,33 @@
+# Build artifacts
+foxbox
+coverage.out
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Documentation
+*.md
+LICENSE
+design/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Data directory (user config, not part of build)
+data/
+
+# Mise/tool config
+.mise.toml
+mise.toml
+
+# Agent persona files (runtime, not build)
+agents/
