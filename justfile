@@ -6,7 +6,7 @@ default:
 
 # Build the foxbox binary
 build:
-    go build -o foxbox ./cmd/foxbox
+    go build -o pkg/bin/foxbox ./cmd/foxbox
 
 # Run all tests
 test:
@@ -67,7 +67,7 @@ tidy:
 
 # Clean build artifacts
 clean:
-    rm -f foxbox coverage.out
+    rm -rf pkg/ coverage.out
 
 # Show project structure
 tree:
