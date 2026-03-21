@@ -7,11 +7,18 @@ import (
 	"testing"
 )
 
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func TestLoad_AllFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am the soul."), 0644)
-	os.WriteFile(filepath.Join(dir, "USER.md"), []byte("User info here."), 0644)
-	os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("Current context."), 0644)
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "I am the soul.")
+	writeTestFile(t, filepath.Join(dir, "USER.md"), "User info here.")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), "Current context.")
 
 	p, err := Load(dir)
 	if err != nil {
@@ -41,7 +48,7 @@ func TestLoad_AllFiles(t *testing.T) {
 
 func TestLoad_SoulOnly(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Just soul."), 0644)
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Just soul.")
 
 	p, err := Load(dir)
 	if err != nil {
@@ -69,7 +76,7 @@ func TestLoad_MissingSoul(t *testing.T) {
 
 func TestLoad_EmptySoul(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("   \n  "), 0644)
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "   \n  ")
 
 	_, err := Load(dir)
 	if err == nil {
@@ -86,7 +93,7 @@ func TestLoad_DirNotExist(t *testing.T) {
 
 func TestLoad_NotADirectory(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "file.txt")
-	os.WriteFile(f, []byte("not a dir"), 0644)
+	writeTestFile(t, f, "not a dir")
 
 	_, err := Load(f)
 	if err == nil {
@@ -96,7 +103,7 @@ func TestLoad_NotADirectory(t *testing.T) {
 
 func TestPersona_IsEditable_Defaults(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Soul."), 0644)
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
 
 	p, err := Load(dir)
 	if err != nil {
@@ -120,7 +127,7 @@ func TestPersona_IsEditable_Defaults(t *testing.T) {
 
 func TestPersona_IsEditable_UnknownSection(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Soul."), 0644)
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
 
 	p, err := Load(dir)
 	if err != nil {
