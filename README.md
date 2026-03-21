@@ -1,5 +1,14 @@
 # Foxbox
 
+<p align="center">
+  <a href="https://github.com/Temikus/foxbox/actions/workflows/ci.yml"><img src="https://github.com/Temikus/foxbox/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Temikus/foxbox/actions/workflows/release.yml"><img src="https://github.com/Temikus/foxbox/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/Temikus/foxbox/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/foxbox" alt="Latest Release"></a>
+  <a href="https://github.com/Temikus/foxbox/pkgs/container/foxbox"><img src="https://ghcr-badge.egpl.dev/temikus/foxbox/latest_tag?trim=major&label=ghcr.io" alt="Docker Image"></a>
+  <a href="https://goreportcard.com/report/github.com/Temikus/foxbox"><img src="https://goreportcard.com/badge/github.com/Temikus/foxbox" alt="Go Report Card"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/foxbox" alt="License"></a>
+</p>
+
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
 Foxbox connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai), and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
