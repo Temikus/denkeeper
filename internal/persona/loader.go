@@ -14,11 +14,15 @@ const DefaultPrompt = "You are Foxbox, a helpful personal AI assistant."
 type Persona struct {
 	Soul    string // SOUL.md content (required)
 	User    string // USER.md content (optional)
-	Context string // CONTEXT.md content (optional)
+	Memory string // MEMORY.md content (optional)
+
+	// Editable tracks which sections the agent can modify without elevated permissions.
+	// true = freely writable; false = requires approval or elevated permissions.
+	Editable map[string]bool
 }
 
 // Load reads persona files from the given directory.
-// SOUL.md is required and must be non-empty. USER.md and CONTEXT.md are optional.
+// SOUL.md is required and must be non-empty. USER.md and MEMORY.md are optional.
 func Load(dir string) (*Persona, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -38,17 +42,29 @@ func Load(dir string) (*Persona, error) {
 
 	p := &Persona{
 		Soul: strings.TrimSpace(string(soul)),
+		Editable: map[string]bool{
+			"soul":   false, // requires explicit user approval
+			"user":   false, // requires supervised/autonomous tier
+			"memory": true,  // freely writable
+		},
 	}
 
 	if data, err := os.ReadFile(filepath.Join(dir, "USER.md")); err == nil {
 		p.User = strings.TrimSpace(string(data))
 	}
 
-	if data, err := os.ReadFile(filepath.Join(dir, "CONTEXT.md")); err == nil {
-		p.Context = strings.TrimSpace(string(data))
+	if data, err := os.ReadFile(filepath.Join(dir, "MEMORY.md")); err == nil {
+		p.Memory = strings.TrimSpace(string(data))
 	}
 
 	return p, nil
+}
+
+// IsEditable reports whether the agent can modify the given section without elevated permissions.
+// Unknown sections are treated as not editable (returns false).
+func (p *Persona) IsEditable(section string) bool {
+	ed, ok := p.Editable[strings.ToLower(section)]
+	return ok && ed
 }
 
 // SystemPrompt assembles the persona into a single system prompt string.
@@ -63,9 +79,9 @@ func (p *Persona) SystemPrompt() string {
 		b.WriteString(p.User)
 	}
 
-	if p.Context != "" {
-		b.WriteString("\n\n# Context\n\n")
-		b.WriteString(p.Context)
+	if p.Memory != "" {
+		b.WriteString("\n\n# Memory\n\n")
+		b.WriteString(p.Memory)
 	}
 
 	return b.String()

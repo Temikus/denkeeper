@@ -1,4 +1,4 @@
-# CONTEXT.md - Your Scratchpad
+# MEMORY.md - Your Scratchpad
 
 _This is your working memory between sessions._
 
