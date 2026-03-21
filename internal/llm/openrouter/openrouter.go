@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/Temikus/foxbox/internal/llm"
+	"github.com/Temikus/denkeeper/internal/llm"
 )
 
 const defaultBaseURL = "https://openrouter.ai/api/v1"
@@ -66,8 +66,8 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/Temikus/foxbox")
-	httpReq.Header.Set("X-Title", "Foxbox")
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/Temikus/denkeeper")
+	httpReq.Header.Set("X-Title", "Denkeeper")
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

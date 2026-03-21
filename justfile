@@ -1,12 +1,12 @@
-# Foxbox justfile
+# Denkeeper justfile
 
 # Default: list available recipes
 default:
     @just --list
 
-# Build the foxbox binary
+# Build the denkeeper binary
 build:
-    go build -o pkg/bin/foxbox ./cmd/foxbox
+    go build -o pkg/bin/denkeeper ./cmd/denkeeper
 
 # Run all tests
 test:
@@ -29,13 +29,13 @@ test-cover-html: test-cover
 test-pkg pkg:
     go test -race -v ./{{pkg}}/...
 
-# Start the agent (optionally pass config path: just serve ./foxbox.toml)
+# Start the agent (optionally pass config path: just serve ./denkeeper.toml)
 serve config="":
     #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
-        go run ./cmd/foxbox serve --config "{{config}}"
+        go run ./cmd/denkeeper serve --config "{{config}}"
     else
-        go run ./cmd/foxbox serve
+        go run ./cmd/denkeeper serve
     fi
 
 # Run linter
@@ -75,7 +75,7 @@ tree:
 
 # Build Docker image
 docker-build:
-    docker build -t foxbox .
+    docker build -t denkeeper .
 
 # Start with Docker Compose
 docker-up:

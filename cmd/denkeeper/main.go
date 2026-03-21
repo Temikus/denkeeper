@@ -11,14 +11,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Temikus/foxbox/internal/adapter"
-	"github.com/Temikus/foxbox/internal/adapter/telegram"
-	"github.com/Temikus/foxbox/internal/agent"
-	"github.com/Temikus/foxbox/internal/config"
-	"github.com/Temikus/foxbox/internal/llm"
-	"github.com/Temikus/foxbox/internal/llm/openrouter"
-	"github.com/Temikus/foxbox/internal/persona"
-	"github.com/Temikus/foxbox/internal/security"
+	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/adapter/telegram"
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/llm/openrouter"
+	"github.com/Temikus/denkeeper/internal/persona"
+	"github.com/Temikus/denkeeper/internal/security"
 )
 
 // Build-time variables set via ldflags.
@@ -32,22 +32,22 @@ var cfgFile string
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "foxbox",
-		Short: "Foxbox — a security-first personal AI agent",
+		Use:   "denkeeper",
+		Short: "Denkeeper — a security-first personal AI agent",
 	}
 
 	serveCmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Start the Foxbox agent",
+		Short: "Start the Denkeeper agent",
 		RunE:  runServe,
 	}
-	serveCmd.Flags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.foxbox/foxbox.toml)")
+	serveCmd.Flags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.denkeeper/denkeeper.toml)")
 
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Printf("foxbox version %s\n", version)
+			fmt.Printf("denkeeper version %s\n", version)
 			fmt.Printf("  commit:    %s\n", commit)
 			fmt.Printf("  built:     %s\n", date)
 			fmt.Printf("  go:        %s\n", runtime.Version())
@@ -151,7 +151,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		cancel()
 	}()
 
-	logger.Info("foxbox starting",
+	logger.Info("denkeeper starting",
 		"provider", cfg.LLM.DefaultProvider,
 		"model", cfg.LLM.DefaultModel,
 		"permission_tier", permissions.Tier(),

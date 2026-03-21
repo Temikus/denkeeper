@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/Temikus/foxbox/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/adapter"
 )
 
 func TestIsAllowed(t *testing.T) {

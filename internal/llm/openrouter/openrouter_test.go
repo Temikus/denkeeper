@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Temikus/foxbox/internal/llm"
+	"github.com/Temikus/denkeeper/internal/llm"
 )
 
 func TestChatCompletion_Success(t *testing.T) {

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This project uses [just](https://github.com/casey/just) as the command runner and [mise](https://mise.jdx.dev) for tool versioning (Go 1.25.8).
 
 ```bash
-just build                    # Build binary → ./foxbox
+just build                    # Build binary → ./denkeeper
 just serve                    # Run via go run (accepts optional config path)
 just test                     # All tests with -race
 just test-v                   # Verbose test output
@@ -19,7 +19,7 @@ just check                    # fmt-check + vet + lint + test (CI equivalent)
 
 ## Architecture
 
-Foxbox is a single-binary personal AI agent. Messages flow through a pipeline:
+Denkeeper is a single-binary personal AI agent. Messages flow through a pipeline:
 
 ```
 Adapter (Telegram) → Engine → LLM Router → Provider (OpenRouter)
@@ -41,7 +41,7 @@ Adapter (Telegram) → Engine → LLM Router → Provider (OpenRouter)
 - `llm.Provider` — LLM backends (OpenRouter implemented; add new ones under `internal/llm/`)
 - `agent.MemoryStore` — conversation persistence (SQLite implemented)
 
-**Wiring** happens in `cmd/foxbox/main.go` — config drives everything. All behavior should be configurable via TOML, not hardcoded.
+**Wiring** happens in `cmd/denkeeper/main.go` — config drives everything. All behavior should be configurable via TOML, not hardcoded.
 
 ## Conventions
 

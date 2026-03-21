@@ -1,4 +1,4 @@
-module github.com/Temikus/foxbox
+module github.com/Temikus/denkeeper
 
 go 1.25.8
 

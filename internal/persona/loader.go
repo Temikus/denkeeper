@@ -8,7 +8,7 @@ import (
 )
 
 // DefaultPrompt is the fallback system prompt when no persona files are available.
-const DefaultPrompt = "You are Foxbox, a helpful personal AI assistant."
+const DefaultPrompt = "You are Denkeeper, a helpful personal AI assistant."
 
 // Persona holds the content of persona definition files.
 type Persona struct {

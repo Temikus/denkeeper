@@ -1,12 +1,12 @@
 version: 2
-project_name: foxbox
+project_name: denkeeper
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - main: ./cmd/foxbox
+  - main: ./cmd/denkeeper
     env:
       - CGO_ENABLED=0
     goos:

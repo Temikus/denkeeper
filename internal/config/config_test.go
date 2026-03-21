@@ -133,8 +133,8 @@ func TestParse_AgentDefaults(t *testing.T) {
 	if cfg.Agent.PersonaDir == "" {
 		t.Fatal("Agent.PersonaDir should not be empty after defaults")
 	}
-	if !strings.HasSuffix(cfg.Agent.PersonaDir, filepath.Join(".foxbox", "agents", "default")) {
-		t.Errorf("Agent.PersonaDir = %q, want suffix .foxbox/agents/default", cfg.Agent.PersonaDir)
+	if !strings.HasSuffix(cfg.Agent.PersonaDir, filepath.Join(".denkeeper", "agents", "default")) {
+		t.Errorf("Agent.PersonaDir = %q, want suffix .denkeeper/agents/default", cfg.Agent.PersonaDir)
 	}
 }
 

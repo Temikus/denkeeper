@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Temikus/foxbox/internal/adapter"
-	"github.com/Temikus/foxbox/internal/llm"
-	"github.com/Temikus/foxbox/internal/security"
+	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/security"
 )
 
 const maxContextMessages = 50

@@ -18,7 +18,7 @@ go.work
 go.work.sum
 
 # Config with secrets
-foxbox.toml
+denkeeper.toml
 
 # SQLite databases
 *.db

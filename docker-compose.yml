@@ -1,5 +1,5 @@
 services:
-  foxbox:
+  denkeeper:
     build: .
     restart: unless-stopped
     volumes:

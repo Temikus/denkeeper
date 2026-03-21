@@ -3,7 +3,7 @@
 _This file helps you understand who you're working with._
 
 <!--
-Fill this in with details about yourself so Foxbox can tailor its behavior.
+Fill this in with details about yourself so Denkeeper can tailor its behavior.
 Examples:
 - Your name and how you'd like to be addressed
 - Your role (developer, designer, student, etc.)

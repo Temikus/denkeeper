@@ -3,7 +3,7 @@
 _This is your working memory between sessions._
 
 <!--
-This file is meant to be updated by Foxbox itself as it learns things
+This file is meant to be updated by Denkeeper itself as it learns things
 during conversations. It can include:
 - Ongoing projects and their status
 - Recent decisions and their rationale

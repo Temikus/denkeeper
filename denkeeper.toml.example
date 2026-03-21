@@ -1,5 +1,5 @@
-# Foxbox Configuration
-# Copy this file to ~/.foxbox/foxbox.toml and fill in your values.
+# Denkeeper Configuration
+# Copy this file to ~/.denkeeper/denkeeper.toml and fill in your values.
 # WARNING: This file contains secrets — do NOT commit it to version control.
 
 [telegram]
@@ -23,7 +23,7 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 
 [memory]
 # Path to SQLite database for conversation history
-# db_path = "~/.foxbox/data/memory.db"  # default
+# db_path = "~/.denkeeper/data/memory.db"  # default
 
 [log]
 # Log level: debug, info, warn, error

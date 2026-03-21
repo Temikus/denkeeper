@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Temikus/foxbox/internal/adapter"
-	"github.com/Temikus/foxbox/internal/llm"
-	"github.com/Temikus/foxbox/internal/security"
+	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/security"
 )
 
 // mockAdapter implements adapter.Adapter for testing.
@@ -57,7 +57,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content:      "Hello from Foxbox!",
+			Content:      "Hello from Denkeeper!",
 			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
 			Model:        "test-model",
 			FinishReason: "stop",
@@ -88,8 +88,8 @@ func TestEngine_HandleMessage(t *testing.T) {
 	if len(ma.sent) != 1 {
 		t.Fatalf("sent %d messages, want 1", len(ma.sent))
 	}
-	if ma.sent[0].Text != "Hello from Foxbox!" {
-		t.Errorf("sent text = %q, want Hello from Foxbox!", ma.sent[0].Text)
+	if ma.sent[0].Text != "Hello from Denkeeper!" {
+		t.Errorf("sent text = %q, want Hello from Denkeeper!", ma.sent[0].Text)
 	}
 	if ma.sent[0].ExternalID != "chat-123" {
 		t.Errorf("sent external_id = %q, want chat-123", ma.sent[0].ExternalID)
@@ -107,8 +107,8 @@ func TestEngine_HandleMessage(t *testing.T) {
 	if messages[0].Role != "user" || messages[0].Content != "Hi there" {
 		t.Errorf("message[0] = %+v, want user/Hi there", messages[0])
 	}
-	if messages[1].Role != "assistant" || messages[1].Content != "Hello from Foxbox!" {
-		t.Errorf("message[1] = %+v, want assistant/Hello from Foxbox!", messages[1])
+	if messages[1].Role != "assistant" || messages[1].Content != "Hello from Denkeeper!" {
+		t.Errorf("message[1] = %+v, want assistant/Hello from Denkeeper!", messages[1])
 	}
 }
 

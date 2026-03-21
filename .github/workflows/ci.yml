@@ -49,9 +49,9 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o foxbox-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/foxbox
+        run: go build -o denkeeper-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/denkeeper
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: foxbox-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: foxbox-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}

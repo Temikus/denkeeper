@@ -1,17 +1,17 @@
-# Foxbox
+# Denkeeper
 
 <p align="center">
-  <a href="https://github.com/Temikus/foxbox/actions/workflows/ci.yml"><img src="https://github.com/Temikus/foxbox/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Temikus/foxbox/actions/workflows/release.yml"><img src="https://github.com/Temikus/foxbox/actions/workflows/release.yml/badge.svg" alt="Release"></a>
-  <a href="https://github.com/Temikus/foxbox/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/foxbox" alt="Latest Release"></a>
-  <a href="https://github.com/Temikus/foxbox/pkgs/container/foxbox"><img src="https://ghcr-badge.egpl.dev/temikus/foxbox/latest_tag?trim=major&label=ghcr.io" alt="Docker Image"></a>
-  <a href="https://goreportcard.com/report/github.com/Temikus/foxbox"><img src="https://goreportcard.com/badge/github.com/Temikus/foxbox" alt="Go Report Card"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/foxbox" alt="License"></a>
+  <a href="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Temikus/denkeeper/actions/workflows/release.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/Temikus/denkeeper/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper" alt="Latest Release"></a>
+  <a href="https://github.com/Temikus/denkeeper/pkgs/container/denkeeper"><img src="https://ghcr-badge.egpl.dev/temikus/denkeeper/latest_tag?trim=major&label=ghcr.io" alt="Docker Image"></a>
+  <a href="https://goreportcard.com/report/github.com/Temikus/denkeeper"><img src="https://goreportcard.com/badge/github.com/Temikus/denkeeper" alt="Go Report Card"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/denkeeper" alt="License"></a>
 </p>
 
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
-Foxbox connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai), and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+Denkeeper connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai), and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
 
 ## Features
 
@@ -52,18 +52,18 @@ The core loop: adapters receive messages, the engine checks permissions, loads c
 
 ```bash
 # Clone
-git clone https://github.com/Temikus/foxbox.git
-cd foxbox
+git clone https://github.com/Temikus/denkeeper.git
+cd denkeeper
 
 # Copy and edit the config
-mkdir -p ~/.foxbox
-cp foxbox.toml.example ~/.foxbox/foxbox.toml
+mkdir -p ~/.denkeeper
+cp denkeeper.toml.example ~/.denkeeper/denkeeper.toml
 # Fill in your token, API key, and user ID
-$EDITOR ~/.foxbox/foxbox.toml
+$EDITOR ~/.denkeeper/denkeeper.toml
 
 # Build and run
 just build
-./foxbox serve
+./denkeeper serve
 ```
 
 Or run directly without building:
@@ -74,7 +74,7 @@ just serve
 
 ### Configuration
 
-Foxbox uses a single TOML file (default `~/.foxbox/foxbox.toml`). See [`foxbox.toml.example`](foxbox.toml.example) for all options.
+Denkeeper uses a single TOML file (default `~/.denkeeper/denkeeper.toml`). See [`denkeeper.toml.example`](denkeeper.toml.example) for all options.
 
 Key sections:
 
@@ -92,7 +92,7 @@ Key sections:
 [just](https://github.com/casey/just) is used as the command runner. Run `just` to see all available recipes:
 
 ```
-just build           # Build the foxbox binary
+just build           # Build the denkeeper binary
 just serve           # Start the agent (just serve ./path/to/config.toml)
 just test            # Run all tests with race detector
 just test-v          # Verbose test output
@@ -113,7 +113,7 @@ just loc             # Count lines of source vs test code
 ### Project structure
 
 ```
-cmd/foxbox/          Entry point
+cmd/denkeeper/       Entry point
 internal/
   adapter/           Platform integrations (Telegram, ...)
   agent/             Core engine and conversation memory
@@ -127,7 +127,7 @@ agents/default/      Agent personality (SOUL.md)
 
 ## Roadmap
 
-Foxbox is built in phases. Phase 1 (current) covers the core agent loop:
+Denkeeper is built in phases. Phase 1 (current) covers the core agent loop:
 
 - [x] Telegram adapter with user allowlist
 - [x] LLM routing via OpenRouter

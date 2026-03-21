@@ -125,11 +125,11 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Memory.DBPath == "" {
 		home, _ := os.UserHomeDir()
-		cfg.Memory.DBPath = filepath.Join(home, ".foxbox", "data", "memory.db")
+		cfg.Memory.DBPath = filepath.Join(home, ".denkeeper", "data", "memory.db")
 	}
 	if cfg.Agent.PersonaDir == "" {
 		home, _ := os.UserHomeDir()
-		cfg.Agent.PersonaDir = filepath.Join(home, ".foxbox", "agents", "default")
+		cfg.Agent.PersonaDir = filepath.Join(home, ".denkeeper", "agents", "default")
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -212,5 +212,5 @@ func validateSchedules(schedules []ScheduleConfig) error {
 
 func DefaultConfigPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".foxbox", "foxbox.toml")
+	return filepath.Join(home, ".denkeeper", "denkeeper.toml")
 }
