@@ -10,6 +10,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -27,7 +28,7 @@ type Engine struct {
 	permissions    *security.PermissionEngine
 	persona        *persona.Persona // nil = use fallbackPrompt
 	fallbackPrompt string           // used when persona is nil
-	promptSuffix   string           // appended after persona/fallback (e.g. skills)
+	skills         []skill.Skill    // filtered per-message based on triggers
 	tools          *tool.Manager    // nil = no tools available
 	incoming       chan adapter.IncomingMessage
 	logger         *slog.Logger
@@ -40,7 +41,7 @@ func NewEngine(
 	permissions *security.PermissionEngine,
 	p *persona.Persona,
 	fallbackPrompt string,
-	promptSuffix string,
+	skills []skill.Skill,
 	tools *tool.Manager,
 	logger *slog.Logger,
 ) *Engine {
@@ -51,7 +52,7 @@ func NewEngine(
 		permissions:    permissions,
 		persona:        p,
 		fallbackPrompt: fallbackPrompt,
-		promptSuffix:   promptSuffix,
+		skills:         skills,
 		tools:          tools,
 		incoming:       make(chan adapter.IncomingMessage, 64),
 		logger:         logger,
@@ -59,9 +60,9 @@ func NewEngine(
 }
 
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
-// or the fallback string, appending any skill instructions and the memory update
-// directive when the engine has write_memory permission.
-func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine) string {
+// or the fallback string, appending trigger-matched skill instructions and the
+// memory update directive when the engine has write_memory permission.
+func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine, msg adapter.IncomingMessage) string {
 	var base string
 	if e.persona != nil {
 		base = e.persona.SystemPrompt()
@@ -71,8 +72,12 @@ func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine) string {
 	} else {
 		base = e.fallbackPrompt
 	}
-	if e.promptSuffix != "" {
-		return base + "\n\n" + e.promptSuffix
+	matched := skill.MatchSkills(e.skills, skill.MatchContext{
+		MessageText: msg.Text,
+		SkillName:   msg.SkillName,
+	})
+	if suffix := skill.BuildPromptSection(matched); suffix != "" {
+		return base + "\n\n" + suffix
 	}
 	return base
 }
@@ -196,7 +201,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	// Build LLM messages: system prompt + history
 	llmMessages := make([]llm.Message, 0, len(history)+1)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms)})
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms, msg)})
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}

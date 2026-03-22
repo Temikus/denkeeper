@@ -40,11 +40,11 @@ serve config="":
 
 # Run linter
 lint:
-    golangci-lint run
+    mise x -- golangci-lint run
 
 # Run linter with auto-fix
 lint-fix:
-    golangci-lint run --fix
+    mise x -- golangci-lint run --fix
 
 # Format all Go files
 fmt:

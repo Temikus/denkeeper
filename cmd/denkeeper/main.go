@@ -157,12 +157,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	// Load skills
-	var skillsSuffix string
 	skills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
 	if err != nil {
 		logger.Warn("skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
 	} else if len(skills) > 0 {
-		skillsSuffix = skill.BuildPromptSection(skills)
 		logger.Info("skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(skills))
 	}
 
@@ -198,7 +196,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		permissions,
 		p,
 		persona.DefaultPrompt,
-		skillsSuffix,
+		skills,
 		toolMgr,
 		logger,
 	)
@@ -223,6 +221,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			ExternalID: externalID,
 			UserName:   "scheduler",
 			Text:       text,
+			SkillName:  sc.Skill,
 		}
 
 		if err := sched.Register(scheduler.Config{

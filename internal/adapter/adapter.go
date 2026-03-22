@@ -19,6 +19,9 @@ type IncomingMessage struct {
 	// SessionTier, when non-empty, overrides the engine's global permission
 	// tier for this message. Used by the scheduler to enforce per-schedule tiers.
 	SessionTier string
+	// SkillName, when non-empty, indicates this message targets a specific skill.
+	// Used by the scheduler to activate schedule-triggered skills.
+	SkillName string
 }
 
 // OutgoingMessage represents a message to send to an external platform.

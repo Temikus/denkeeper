@@ -76,7 +76,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -144,7 +144,7 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	ctx := context.Background()
 
@@ -192,7 +192,7 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	// Create a permission engine that denies everything.
 	permissions := security.NewDenyAll()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -230,7 +230,7 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -271,7 +271,7 @@ func TestEngine_HandleMessage_UnknownAdapter(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	// Message claims to be from "telegram" — no matching adapter
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -314,7 +314,7 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	// Empty text should be handled gracefully
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -356,7 +356,7 @@ func TestEngine_Dispatch(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -411,7 +411,7 @@ func TestEngine_Dispatch_IsolatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	ctx := context.Background()
 
@@ -486,7 +486,7 @@ func TestEngine_Dispatch_ContextCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
-	engine := NewEngine(router, store, nil, permissions, nil, "", "", nil, logger)
+	engine := NewEngine(router, store, nil, permissions, nil, "", nil, nil, logger)
 
 	// Fill the incoming channel to capacity so Dispatch would block.
 	for i := 0; i < cap(engine.incoming); i++ {
@@ -528,7 +528,7 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	}
 
 	customPrompt := "You are a custom persona with special instructions."
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, nil, nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -637,7 +637,7 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", nil, nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -710,7 +710,7 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 	}
 
 	// No persona — memory update should be stripped but not persisted.
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", nil, nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -790,7 +790,7 @@ func TestEngine_HandleMessage_ToolCallNoManager(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	// LLM requests tools but no tool manager — should error.
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -843,7 +843,7 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -893,7 +893,7 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
 
 	// Override to "restricted" via SessionTier — should deny tool use.
@@ -953,7 +953,7 @@ func TestEngine_HandleMessage_SessionTierEmpty_UsesGlobal(t *testing.T) {
 	}
 
 	toolMgr := tool.NewManager(logger)
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", toolMgr, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, toolMgr, logger)
 
 	// Empty SessionTier — should use global "supervised" and allow tool calls.
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -999,7 +999,7 @@ func TestEngine_HandleMessage_SessionTierInvalid_FallsBack(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", nil, nil, logger)
 
 	// Invalid SessionTier — should log warning and fall back to global.
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{

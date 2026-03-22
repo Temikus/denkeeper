@@ -21,13 +21,14 @@ type SkillRequires struct {
 
 // Skill represents a loaded skill file.
 type Skill struct {
-	Name        string
-	Description string
-	Version     string
-	Triggers    []string
-	Requires    SkillRequires
-	Body        string // markdown body — everything after the closing +++
-	Source      string // file path, for logging/debugging
+	Name           string
+	Description    string
+	Version        string
+	Triggers       []string  // raw trigger strings from frontmatter
+	ParsedTriggers []Trigger // parsed at load time for efficient matching
+	Requires       SkillRequires
+	Body           string // markdown body — everything after the closing +++
+	Source         string // file path, for logging/debugging
 }
 
 // frontmatter is the TOML-decoded structure of the +++ block.
@@ -71,14 +72,20 @@ func ParseFile(path string, content []byte) (*Skill, error) {
 		return nil, fmt.Errorf("skill %q: frontmatter missing required field: name", path)
 	}
 
+	parsed, err := ParseTriggers(fm.Triggers)
+	if err != nil {
+		return nil, fmt.Errorf("skill %q: %w", path, err)
+	}
+
 	return &Skill{
-		Name:        strings.TrimSpace(fm.Name),
-		Description: strings.TrimSpace(fm.Description),
-		Version:     strings.TrimSpace(fm.Version),
-		Triggers:    fm.Triggers,
-		Requires:    fm.Requires,
-		Body:        body,
-		Source:      path,
+		Name:           strings.TrimSpace(fm.Name),
+		Description:    strings.TrimSpace(fm.Description),
+		Version:        strings.TrimSpace(fm.Version),
+		Triggers:       fm.Triggers,
+		ParsedTriggers: parsed,
+		Requires:       fm.Requires,
+		Body:           body,
+		Source:         path,
 	}, nil
 }
 
