@@ -146,21 +146,22 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	// Load persona
-	systemPrompt := persona.DefaultPrompt
-	p, err := persona.Load(cfg.Agent.PersonaDir)
+	var p *persona.Persona
+	loadedPersona, err := persona.Load(cfg.Agent.PersonaDir)
 	if err != nil {
 		logger.Warn("persona files not loaded, using default prompt", "dir", cfg.Agent.PersonaDir, "error", err)
 	} else {
-		systemPrompt = p.SystemPrompt()
+		p = loadedPersona
 		logger.Info("persona loaded", "dir", cfg.Agent.PersonaDir)
 	}
 
-	// Load skills and extend system prompt
+	// Load skills
+	var skillsSuffix string
 	skills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
 	if err != nil {
 		logger.Warn("skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
 	} else if len(skills) > 0 {
-		systemPrompt += "\n\n" + skill.BuildPromptSection(skills)
+		skillsSuffix = skill.BuildPromptSection(skills)
 		logger.Info("skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(skills))
 	}
 
@@ -173,7 +174,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 		memory,
 		[]adapter.Adapter{tgAdapter},
 		permissions,
-		systemPrompt,
+		p,
+		persona.DefaultPrompt,
+		skillsSuffix,
 		logger,
 	)
 

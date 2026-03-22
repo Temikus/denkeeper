@@ -4,23 +4,30 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
 )
 
 const maxContextMessages = 50
 
+const memUpdateOpen = "[MEMORY_UPDATE]"
+const memUpdateClose = "[/MEMORY_UPDATE]"
+
 // Engine is the core agent orchestrator.
 type Engine struct {
-	router       *llm.Router
-	memory       MemoryStore
-	adapters     []adapter.Adapter
-	permissions  *security.PermissionEngine
-	systemPrompt string
-	incoming     chan adapter.IncomingMessage
-	logger       *slog.Logger
+	router         *llm.Router
+	memory         MemoryStore
+	adapters       []adapter.Adapter
+	permissions    *security.PermissionEngine
+	persona        *persona.Persona // nil = use fallbackPrompt
+	fallbackPrompt string           // used when persona is nil
+	promptSuffix   string           // appended after persona/fallback (e.g. skills)
+	incoming       chan adapter.IncomingMessage
+	logger         *slog.Logger
 }
 
 func NewEngine(
@@ -28,18 +35,60 @@ func NewEngine(
 	memory MemoryStore,
 	adapters []adapter.Adapter,
 	permissions *security.PermissionEngine,
-	systemPrompt string,
+	p *persona.Persona,
+	fallbackPrompt string,
+	promptSuffix string,
 	logger *slog.Logger,
 ) *Engine {
 	return &Engine{
-		router:       router,
-		memory:       memory,
-		adapters:     adapters,
-		permissions:  permissions,
-		systemPrompt: systemPrompt,
-		incoming:     make(chan adapter.IncomingMessage, 64),
-		logger:       logger,
+		router:         router,
+		memory:         memory,
+		adapters:       adapters,
+		permissions:    permissions,
+		persona:        p,
+		fallbackPrompt: fallbackPrompt,
+		promptSuffix:   promptSuffix,
+		incoming:       make(chan adapter.IncomingMessage, 64),
+		logger:         logger,
 	}
+}
+
+// buildSystemPrompt assembles the current system prompt from the persona (if set)
+// or the fallback string, appending any skill instructions and the memory update
+// directive when the engine has write_memory permission.
+func (e *Engine) buildSystemPrompt() string {
+	var base string
+	if e.persona != nil {
+		base = e.persona.SystemPrompt()
+		if inst := e.persona.MemoryUpdateInstruction(); inst != "" && e.permissions.CanExecute("write_memory") {
+			base += "\n\n" + inst
+		}
+	} else {
+		base = e.fallbackPrompt
+	}
+	if e.promptSuffix != "" {
+		return base + "\n\n" + e.promptSuffix
+	}
+	return base
+}
+
+// extractMemoryUpdate parses and removes a [MEMORY_UPDATE]...[/MEMORY_UPDATE]
+// block from text. Returns the cleaned text and the extracted content (empty if
+// no block was found or the block was malformed).
+func extractMemoryUpdate(text string) (cleaned, memUpdate string) {
+	start := strings.Index(text, memUpdateOpen)
+	if start == -1 {
+		return text, ""
+	}
+	rest := text[start+len(memUpdateOpen):]
+	end := strings.Index(rest, memUpdateClose)
+	if end == -1 {
+		return text, ""
+	}
+	memUpdate = strings.TrimSpace(rest[:end])
+	after := rest[end+len(memUpdateClose):]
+	cleaned = strings.TrimSpace(text[:start] + after)
+	return cleaned, memUpdate
 }
 
 // Dispatch injects a pre-built message into the engine's incoming queue.
@@ -120,7 +169,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	// Build LLM messages: system prompt + history
 	llmMessages := make([]llm.Message, 0, len(history)+1)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.systemPrompt})
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt()})
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
@@ -131,10 +180,22 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		return fmt.Errorf("LLM completion: %w", err)
 	}
 
-	// Store assistant response
+	// Extract and strip any memory update directive before storing/sending.
+	responseText, memUpdate := extractMemoryUpdate(resp.Content)
+
+	// Persist memory update if present and permitted.
+	if memUpdate != "" && e.persona != nil && e.permissions.CanExecute("write_memory") {
+		if err := e.persona.UpdateMemory(memUpdate); err != nil {
+			e.logger.Warn("failed to persist memory update", "error", err)
+		} else {
+			e.logger.Info("memory updated", "bytes", len(memUpdate))
+		}
+	}
+
+	// Store assistant response (without the memory directive).
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:       "assistant",
-		Content:    resp.Content,
+		Content:    responseText,
 		TokensUsed: resp.TokensUsed.Total,
 	}); err != nil {
 		return fmt.Errorf("storing assistant message: %w", err)
@@ -145,7 +206,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		if a.Name() == msg.Adapter {
 			if err := a.Send(ctx, adapter.OutgoingMessage{
 				ExternalID: msg.ExternalID,
-				Text:       resp.Content,
+				Text:       responseText,
 			}); err != nil {
 				return fmt.Errorf("sending response: %w", err)
 			}

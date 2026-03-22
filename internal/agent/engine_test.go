@@ -6,11 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
 )
 
@@ -69,7 +72,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -134,7 +137,7 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	ctx := context.Background()
 
@@ -182,7 +185,7 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	// Create a permission engine that denies "chat"
 	permissions := &security.PermissionEngine{}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -217,7 +220,7 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -255,7 +258,7 @@ func TestEngine_HandleMessage_UnknownAdapter(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	// Message claims to be from "telegram" — no matching adapter
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -295,7 +298,7 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	// Empty text should be handled gracefully
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -334,7 +337,7 @@ func TestEngine_Dispatch(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	permissions := security.NewPermissionEngine()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -386,7 +389,7 @@ func TestEngine_Dispatch_IsolatedSession(t *testing.T) {
 	ma := &mockAdapter{name: "telegram"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	permissions := security.NewPermissionEngine()
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	ctx := context.Background()
 
@@ -458,7 +461,7 @@ func TestEngine_Dispatch_ContextCancelled(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	permissions := security.NewPermissionEngine()
-	engine := NewEngine(router, store, nil, permissions, "", logger)
+	engine := NewEngine(router, store, nil, permissions, nil, "", "", logger)
 
 	// Fill the incoming channel to capacity so Dispatch would block.
 	for i := 0; i < cap(engine.incoming); i++ {
@@ -497,7 +500,7 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	permissions := security.NewPermissionEngine()
 
 	customPrompt := "You are a custom persona with special instructions."
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, customPrompt, logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, "", logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -522,5 +525,172 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	}
 	if mp.lastRequest.Messages[0].Content != customPrompt {
 		t.Errorf("system prompt = %q, want %q", mp.lastRequest.Messages[0].Content, customPrompt)
+	}
+}
+
+func TestExtractMemoryUpdate_Present(t *testing.T) {
+	text := "Here is my answer.\n\n[MEMORY_UPDATE]\nUser prefers concise answers.\n[/MEMORY_UPDATE]"
+	cleaned, update := extractMemoryUpdate(text)
+	if cleaned != "Here is my answer." {
+		t.Errorf("cleaned = %q, want %q", cleaned, "Here is my answer.")
+	}
+	if update != "User prefers concise answers." {
+		t.Errorf("update = %q, want %q", update, "User prefers concise answers.")
+	}
+}
+
+func TestExtractMemoryUpdate_Absent(t *testing.T) {
+	text := "Just a normal response."
+	cleaned, update := extractMemoryUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned = %q, want original text", cleaned)
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestExtractMemoryUpdate_MissingCloseTag(t *testing.T) {
+	text := "Answer.\n\n[MEMORY_UPDATE]\nSome content without close tag."
+	cleaned, update := extractMemoryUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned should be unchanged when close tag is missing")
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestExtractMemoryUpdate_InMiddle(t *testing.T) {
+	text := "Before.\n\n[MEMORY_UPDATE]\nMemory content.\n[/MEMORY_UPDATE]\n\nAfter."
+	cleaned, update := extractMemoryUpdate(text)
+	// The before/after portions are joined and trimmed; extra newlines are expected.
+	if !strings.Contains(cleaned, "Before.") || !strings.Contains(cleaned, "After.") {
+		t.Errorf("cleaned = %q, want it to contain Before. and After.", cleaned)
+	}
+	if strings.Contains(cleaned, "MEMORY_UPDATE") {
+		t.Error("cleaned should not contain memory update tags")
+	}
+	if update != "Memory content." {
+		t.Errorf("update = %q, want %q", update, "Memory content.")
+	}
+}
+
+func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create a persona dir with a SOUL.md so we have a writable persona.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Hello!\n\n[MEMORY_UPDATE]\nUser said hi.\n[/MEMORY_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions := security.NewPermissionEngine()
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", "", logger)
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "Hi",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	// The sent message should have the memory directive stripped.
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+	if ma.sent[0].Text != "Hello!" {
+		t.Errorf("sent text = %q, want %q", ma.sent[0].Text, "Hello!")
+	}
+
+	// The stored message should also be stripped.
+	msgs, err := store.GetMessages(context.Background(), "test:chat-1", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("stored %d messages, want >= 2", len(msgs))
+	}
+	if msgs[1].Content != "Hello!" {
+		t.Errorf("stored assistant content = %q, want %q", msgs[1].Content, "Hello!")
+	}
+
+	// The persona's in-memory state should be updated.
+	if p.Memory != "User said hi." {
+		t.Errorf("persona.Memory = %q, want %q", p.Memory, "User said hi.")
+	}
+
+	// The MEMORY.md file should have been written.
+	data, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	if err != nil {
+		t.Fatalf("reading MEMORY.md: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "User said hi." {
+		t.Errorf("MEMORY.md = %q, want %q", strings.TrimSpace(string(data)), "User said hi.")
+	}
+}
+
+func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Hello!\n\n[MEMORY_UPDATE]\nShould not persist.\n[/MEMORY_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions := security.NewPermissionEngine()
+
+	// No persona — memory update should be stripped but not persisted.
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", "", logger)
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Hi",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	// Directive should still be stripped from the user-facing message.
+	if ma.sent[0].Text != "Hello!" {
+		t.Errorf("sent text = %q, want %q", ma.sent[0].Text, "Hello!")
 	}
 }
