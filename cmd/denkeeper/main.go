@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,7 +20,9 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
 )
 
 // Build-time variables set via ldflags.
@@ -60,6 +64,16 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// parseChannel splits a "adapter:externalID" channel string into its parts.
+// Returns ok=false if the format is invalid.
+func parseChannel(channel string) (adapterName, externalID string, ok bool) {
+	idx := strings.IndexByte(channel, ':')
+	if idx <= 0 || idx == len(channel)-1 {
+		return "", "", false
+	}
+	return channel[:idx], channel[idx+1:], true
 }
 
 func runServe(_ *cobra.Command, _ []string) error {
@@ -125,6 +139,15 @@ func runServe(_ *cobra.Command, _ []string) error {
 		logger.Info("persona loaded", "dir", cfg.Agent.PersonaDir)
 	}
 
+	// Load skills and extend system prompt
+	skills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
+	if err != nil {
+		logger.Warn("skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
+	} else if len(skills) > 0 {
+		systemPrompt += "\n\n" + skill.BuildPromptSection(skills)
+		logger.Info("skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(skills))
+	}
+
 	// Init permissions
 	permissions := security.NewPermissionEngine()
 
@@ -141,6 +164,58 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Init and wire scheduler
+	sched := scheduler.New(logger)
+	for _, sc := range cfg.Schedules {
+		sc := sc // capture loop variable
+		text := "[Scheduled trigger: " + sc.Name + "]"
+		if sc.Skill != "" {
+			text = "[Scheduled: " + sc.Skill + "]"
+		}
+
+		adapterName, externalID, ok := parseChannel(sc.Channel)
+		if !ok && sc.Channel != "" {
+			logger.Warn("schedule has invalid channel format, skipping", "name", sc.Name, "channel", sc.Channel)
+			continue
+		}
+
+		jobMsg := adapter.IncomingMessage{
+			Adapter:    adapterName,
+			ExternalID: externalID,
+			UserName:   "scheduler",
+			Text:       text,
+		}
+
+		if err := sched.Register(scheduler.Config{
+			Name:        sc.Name,
+			Type:        sc.Type,
+			Schedule:    sc.Schedule,
+			Skill:       sc.Skill,
+			SessionTier: sc.SessionTier,
+			SessionMode: sc.SessionMode,
+			Channel:     sc.Channel,
+			Tags:        sc.Tags,
+			Enabled:     *sc.Enabled,
+		}, func(entry scheduler.Entry) {
+			if sc.Channel == "" {
+				logger.Debug("schedule fired, no channel configured", "name", entry.Name)
+				return
+			}
+			msg := jobMsg
+			msg.Timestamp = time.Now()
+			if entry.SessionMode == "isolated" {
+				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, time.Now().UnixNano())
+			}
+			if err := engine.Dispatch(ctx, msg); err != nil {
+				logger.Error("dispatching scheduled message", "name", entry.Name, "error", err)
+			}
+		}); err != nil {
+			return fmt.Errorf("registering schedule %q: %w", sc.Name, err)
+		}
+	}
+	sched.Start()
+	defer sched.Stop()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

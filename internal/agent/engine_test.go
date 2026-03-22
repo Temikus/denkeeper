@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -310,6 +311,166 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 	}
 	if len(ma.sent) != 1 {
 		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+}
+
+func TestEngine_Dispatch(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Scheduled response",
+			TokensUsed: llm.TokenUsage{Total: 5},
+		},
+	})
+
+	ma := &mockAdapter{name: "telegram"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions := security.NewPermissionEngine()
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+
+	ctx := context.Background()
+	msg := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		UserName:   "scheduler",
+		Text:       "[Scheduled: daily-briefing]",
+		Timestamp:  time.Now(),
+	}
+
+	if err := engine.Dispatch(ctx, msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	// Drain the channel and process the dispatched message directly.
+	select {
+	case dispatched := <-engine.incoming:
+		if err := engine.handleMessage(ctx, dispatched); err != nil {
+			t.Fatalf("handleMessage: %v", err)
+		}
+	default:
+		t.Fatal("expected message in incoming channel after Dispatch")
+	}
+
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+	if ma.sent[0].ExternalID != "12345" {
+		t.Errorf("ExternalID = %q, want 12345", ma.sent[0].ExternalID)
+	}
+}
+
+func TestEngine_Dispatch_IsolatedSession(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Briefing delivered",
+			TokensUsed: llm.TokenUsage{Total: 8},
+		},
+	})
+
+	ma := &mockAdapter{name: "telegram"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions := security.NewPermissionEngine()
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, "You are a test assistant.", logger)
+
+	ctx := context.Background()
+
+	// Two isolated dispatches with distinct ConversationIDs.
+	msg1 := adapter.IncomingMessage{
+		Adapter:        "telegram",
+		ExternalID:     "12345",
+		UserName:       "scheduler",
+		Text:           "[Scheduled: daily-briefing]",
+		Timestamp:      time.Now(),
+		ConversationID: "sched:daily-briefing:1000",
+	}
+	msg2 := adapter.IncomingMessage{
+		Adapter:        "telegram",
+		ExternalID:     "12345",
+		UserName:       "scheduler",
+		Text:           "[Scheduled: daily-briefing]",
+		Timestamp:      time.Now(),
+		ConversationID: "sched:daily-briefing:2000",
+	}
+
+	if err := engine.handleMessage(ctx, msg1); err != nil {
+		t.Fatalf("handleMessage msg1: %v", err)
+	}
+	if err := engine.handleMessage(ctx, msg2); err != nil {
+		t.Fatalf("handleMessage msg2: %v", err)
+	}
+
+	// Each isolated session has its own conversation with exactly 2 messages
+	// (1 user + 1 assistant) — no shared history.
+	msgs1, err := store.GetMessages(ctx, "sched:daily-briefing:1000", 100)
+	if err != nil {
+		t.Fatalf("GetMessages conv1: %v", err)
+	}
+	msgs2, err := store.GetMessages(ctx, "sched:daily-briefing:2000", 100)
+	if err != nil {
+		t.Fatalf("GetMessages conv2: %v", err)
+	}
+
+	if len(msgs1) != 2 {
+		t.Errorf("conv1 has %d messages, want 2 (isolated)", len(msgs1))
+	}
+	if len(msgs2) != 2 {
+		t.Errorf("conv2 has %d messages, want 2 (isolated)", len(msgs2))
+	}
+
+	// The channel's regular conversation is untouched.
+	sharedMsgs, err := store.GetMessages(ctx, "telegram:12345", 100)
+	if err != nil {
+		t.Fatalf("GetMessages shared: %v", err)
+	}
+	if len(sharedMsgs) != 0 {
+		t.Errorf("shared conversation has %d messages, want 0", len(sharedMsgs))
+	}
+}
+
+func TestEngine_Dispatch_ContextCancelled(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{Content: "OK"},
+	})
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions := security.NewPermissionEngine()
+	engine := NewEngine(router, store, nil, permissions, "", logger)
+
+	// Fill the incoming channel to capacity so Dispatch would block.
+	for i := 0; i < cap(engine.incoming); i++ {
+		engine.incoming <- adapter.IncomingMessage{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	err = engine.Dispatch(ctx, adapter.IncomingMessage{Text: "blocked"})
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
 

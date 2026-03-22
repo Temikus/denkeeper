@@ -42,6 +42,18 @@ func NewEngine(
 	}
 }
 
+// Dispatch injects a pre-built message into the engine's incoming queue.
+// It is used by the scheduler to trigger agent runs without an active adapter
+// session. Blocks until the message is accepted or ctx is cancelled.
+func (e *Engine) Dispatch(ctx context.Context, msg adapter.IncomingMessage) error {
+	select {
+	case e.incoming <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Run starts the engine and blocks until the context is cancelled.
 func (e *Engine) Run(ctx context.Context) error {
 	// Start all adapters
@@ -76,10 +88,20 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
-	// Get or create conversation
-	convID, err := e.memory.GetOrCreateConversation(ctx, msg.Adapter, msg.ExternalID)
-	if err != nil {
-		return fmt.Errorf("getting conversation: %w", err)
+	// Get or create conversation — use explicit ID if provided (isolated sessions),
+	// otherwise derive it from the adapter and external chat ID.
+	var convID string
+	if msg.ConversationID != "" {
+		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
+			return fmt.Errorf("getting conversation: %w", err)
+		}
+		convID = msg.ConversationID
+	} else {
+		var err error
+		convID, err = e.memory.GetOrCreateConversation(ctx, msg.Adapter, msg.ExternalID)
+		if err != nil {
+			return fmt.Errorf("getting conversation: %w", err)
+		}
 	}
 
 	// Store incoming message

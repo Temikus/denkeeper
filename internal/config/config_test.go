@@ -136,6 +136,13 @@ func TestParse_AgentDefaults(t *testing.T) {
 	if !strings.HasSuffix(cfg.Agent.PersonaDir, filepath.Join(".denkeeper", "agents", "default")) {
 		t.Errorf("Agent.PersonaDir = %q, want suffix .denkeeper/agents/default", cfg.Agent.PersonaDir)
 	}
+
+	if cfg.Agent.SkillsDir == "" {
+		t.Fatal("Agent.SkillsDir should not be empty after defaults")
+	}
+	if !strings.HasSuffix(cfg.Agent.SkillsDir, filepath.Join(".denkeeper", "skills")) {
+		t.Errorf("Agent.SkillsDir = %q, want suffix .denkeeper/skills", cfg.Agent.SkillsDir)
+	}
 }
 
 func TestParse_AgentCustomPersonaDir(t *testing.T) {
@@ -224,6 +231,10 @@ tags = ["system"]
 	// Omitted session_tier should default to "supervised".
 	if s1.SessionTier != "supervised" {
 		t.Errorf("Schedules[1].SessionTier = %q, want supervised (default)", s1.SessionTier)
+	}
+	// Omitted session_mode should default to "shared".
+	if s1.SessionMode != "shared" {
+		t.Errorf("Schedules[1].SessionMode = %q, want shared (default)", s1.SessionMode)
 	}
 }
 
@@ -331,6 +342,37 @@ enabled = true
 
 	if _, err := Parse(tomlData); err == nil {
 		t.Fatal("expected error for invalid session_tier")
+	}
+}
+
+func TestParse_Schedules_SessionMode(t *testing.T) {
+	for _, mode := range []string{"shared", "isolated"} {
+		tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "mode-test"
+type = "agent"
+schedule = "@daily"
+session_mode = "` + mode + `"
+enabled = true
+`)
+		if _, err := Parse(tomlData); err != nil {
+			t.Errorf("session_mode=%q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestParse_Schedules_InvalidSessionMode(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "bad-mode"
+type = "agent"
+schedule = "@daily"
+session_mode = "shared-ish"
+enabled = true
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid session_mode")
 	}
 }
 

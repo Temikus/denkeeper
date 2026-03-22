@@ -49,6 +49,11 @@ type Config struct {
 	// Channel is the adapter channel to deliver results to (e.g. "telegram:123456").
 	Channel string
 
+	// SessionMode controls which conversation context is used on each run.
+	// "shared": reuses the channel's existing conversation history (default).
+	// "isolated": creates a fresh conversation for each run.
+	SessionMode string
+
 	// Tags are freeform labels for organizing and filtering schedules.
 	Tags []string
 
@@ -65,6 +70,7 @@ type Entry struct {
 	Expr        string // original schedule expression string
 	Skill       string
 	SessionTier string
+	SessionMode string
 	Channel     string
 	Tags        []string
 	Enabled     bool
@@ -134,6 +140,7 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 			Expr:        cfg.Schedule,
 			Skill:       cfg.Skill,
 			SessionTier: cfg.SessionTier,
+			SessionMode: cfg.SessionMode,
 			Channel:     cfg.Channel,
 			Tags:        cfg.Tags,
 			Enabled:     cfg.Enabled,

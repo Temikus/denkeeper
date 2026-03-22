@@ -13,6 +13,9 @@ type IncomingMessage struct {
 	UserName   string
 	Text       string
 	Timestamp  time.Time
+	// ConversationID, when non-empty, overrides the default adapter:externalID
+	// conversation key. Used by the scheduler to create isolated sessions.
+	ConversationID string
 }
 
 // OutgoingMessage represents a message to send to an external platform.

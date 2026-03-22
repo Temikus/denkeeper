@@ -19,6 +19,7 @@ type Config struct {
 
 type AgentConfig struct {
 	PersonaDir string `toml:"persona_dir"`
+	SkillsDir  string `toml:"skills_dir"` // defaults to ~/.denkeeper/skills
 }
 
 type TelegramConfig struct {
@@ -80,6 +81,11 @@ type ScheduleConfig struct {
 	// Channel is the adapter channel to deliver results to (e.g. "telegram:123456").
 	Channel string `toml:"channel"`
 
+	// SessionMode controls which conversation context is used for the scheduled run.
+	// "shared" (default): reuses the channel's existing conversation history.
+	// "isolated": creates a fresh conversation for each run with no prior context.
+	SessionMode string `toml:"session_mode"`
+
 	// Tags are freeform labels for organizing and filtering schedules.
 	Tags []string `toml:"tags"`
 
@@ -131,6 +137,10 @@ func applyDefaults(cfg *Config) {
 		home, _ := os.UserHomeDir()
 		cfg.Agent.PersonaDir = filepath.Join(home, ".denkeeper", "agents", "default")
 	}
+	if cfg.Agent.SkillsDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.Agent.SkillsDir = filepath.Join(home, ".denkeeper", "skills")
+	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
 	}
@@ -146,6 +156,9 @@ func applyDefaults(cfg *Config) {
 		}
 		if s.SessionTier == "" {
 			s.SessionTier = "supervised"
+		}
+		if s.SessionMode == "" {
+			s.SessionMode = "shared"
 		}
 	}
 }
@@ -203,6 +216,18 @@ func validateSchedules(schedules []ScheduleConfig) error {
 				return fmt.Errorf(
 					"config: schedule %q: invalid session_tier %q — must be one of: supervised, autonomous, restricted",
 					s.Name, s.SessionTier,
+				)
+			}
+		}
+
+		if s.SessionMode != "" {
+			switch s.SessionMode {
+			case "shared", "isolated":
+				// valid
+			default:
+				return fmt.Errorf(
+					"config: schedule %q: invalid session_mode %q — must be \"shared\" or \"isolated\"",
+					s.Name, s.SessionMode,
 				)
 			}
 		}

@@ -159,6 +159,44 @@ func TestMemoryStore_LargeContent(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID := "sched:daily-briefing:1234567890"
+
+	// First call creates the row.
+	if err := store.GetOrCreateConversationByID(ctx, convID); err != nil {
+		t.Fatalf("GetOrCreateConversationByID: %v", err)
+	}
+
+	// Messages can be stored against the created conversation.
+	if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "trigger"}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	got, err := store.GetMessages(ctx, convID, 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "trigger" {
+		t.Errorf("got %+v, want one message with content 'trigger'", got)
+	}
+
+	// Second call is idempotent — no error, row not duplicated.
+	if err := store.GetOrCreateConversationByID(ctx, convID); err != nil {
+		t.Fatalf("second GetOrCreateConversationByID: %v", err)
+	}
+	got2, _ := store.GetMessages(ctx, convID, 100)
+	if len(got2) != 1 {
+		t.Errorf("message count changed after idempotent call: got %d, want 1", len(got2))
+	}
+}
+
 func TestMemoryStore_MultipleConversations(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {

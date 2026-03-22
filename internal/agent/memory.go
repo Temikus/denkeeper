@@ -25,6 +25,10 @@ type StoredMessage struct {
 // MemoryStore defines the interface for conversation persistence.
 type MemoryStore interface {
 	GetOrCreateConversation(ctx context.Context, adapter, externalID string) (string, error)
+	// GetOrCreateConversationByID ensures a conversation row exists for the given
+	// convID without requiring a real adapter/externalID pair. Used by the
+	// scheduler for isolated sessions that are not tied to a chat channel.
+	GetOrCreateConversationByID(ctx context.Context, convID string) error
 	AddMessage(ctx context.Context, convID string, msg StoredMessage) error
 	GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error)
 	Close() error
@@ -102,6 +106,17 @@ func (s *SQLiteMemoryStore) GetOrCreateConversation(ctx context.Context, adapter
 	}
 
 	return convID, nil
+}
+
+func (s *SQLiteMemoryStore) GetOrCreateConversationByID(ctx context.Context, convID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO conversations (id, adapter, external_id) VALUES (?, ?, ?)`,
+		convID, "sched", convID,
+	)
+	if err != nil {
+		return fmt.Errorf("creating conversation: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteMemoryStore) AddMessage(ctx context.Context, convID string, msg StoredMessage) error {
