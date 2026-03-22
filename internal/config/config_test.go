@@ -566,3 +566,44 @@ threshold = -1.0
 		t.Fatal("expected error for low_funds with negative threshold")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Session config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_SessionTierDefault(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Session.Tier != "supervised" {
+		t.Errorf("Session.Tier = %q, want supervised (default)", cfg.Session.Tier)
+	}
+}
+
+func TestParse_SessionTierExplicit(t *testing.T) {
+	for _, tier := range []string{"supervised", "autonomous", "restricted"} {
+		tomlData := []byte(baseConfig + `
+[session]
+tier = "` + tier + `"
+`)
+		cfg, err := Parse(tomlData)
+		if err != nil {
+			t.Fatalf("tier=%q: unexpected error: %v", tier, err)
+		}
+		if cfg.Session.Tier != tier {
+			t.Errorf("Session.Tier = %q, want %q", cfg.Session.Tier, tier)
+		}
+	}
+}
+
+func TestParse_SessionTierInvalid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[session]
+tier = "root"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid session tier")
+	}
+}

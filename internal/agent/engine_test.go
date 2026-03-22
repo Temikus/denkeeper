@@ -70,7 +70,10 @@ func TestEngine_HandleMessage(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -135,7 +138,10 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -182,8 +188,8 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	// Create a permission engine that denies "chat"
-	permissions := &security.PermissionEngine{}
+	// Create a permission engine that denies everything.
+	permissions := security.NewDenyAll()
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -218,7 +224,10 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -256,7 +265,10 @@ func TestEngine_HandleMessage_UnknownAdapter(t *testing.T) {
 
 	ma := &mockAdapter{name: "discord"} // adapter named "discord"
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -296,7 +308,10 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -335,7 +350,10 @@ func TestEngine_Dispatch(t *testing.T) {
 
 	ma := &mockAdapter{name: "telegram"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
@@ -388,7 +406,10 @@ func TestEngine_Dispatch_IsolatedSession(t *testing.T) {
 
 	ma := &mockAdapter{name: "telegram"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
 
 	ctx := context.Background()
@@ -460,7 +481,10 @@ func TestEngine_Dispatch_ContextCancelled(t *testing.T) {
 	})
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 	engine := NewEngine(router, store, nil, permissions, nil, "", "", logger)
 
 	// Fill the incoming channel to capacity so Dispatch would block.
@@ -497,7 +521,10 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	customPrompt := "You are a custom persona with special instructions."
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, "", logger)
@@ -604,7 +631,10 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", "", logger)
 
@@ -673,7 +703,10 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 
 	ma := &mockAdapter{name: "test"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
 
 	// No persona — memory update should be stripped but not persisted.
 	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", "", logger)

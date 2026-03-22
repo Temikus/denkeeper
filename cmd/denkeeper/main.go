@@ -166,7 +166,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	// Init permissions
-	permissions := security.NewPermissionEngine()
+	permissions, err := security.NewPermissionEngine(cfg.Session.Tier)
+	if err != nil {
+		return fmt.Errorf("initializing permissions: %w", err)
+	}
 
 	// Init engine
 	engine := agent.NewEngine(

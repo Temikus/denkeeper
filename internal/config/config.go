@@ -14,7 +14,13 @@ type Config struct {
 	Memory    MemoryConfig     `toml:"memory"`
 	Log       LogConfig        `toml:"log"`
 	Agent     AgentConfig      `toml:"agent"`
+	Session   SessionConfig    `toml:"session"`
 	Schedules []ScheduleConfig `toml:"schedules"`
+}
+
+// SessionConfig controls the default permission tier for agent sessions.
+type SessionConfig struct {
+	Tier string `toml:"tier"` // "supervised" (default), "autonomous", "restricted"
 }
 
 type AgentConfig struct {
@@ -160,6 +166,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Log.Format == "" {
 		cfg.Log.Format = "text"
 	}
+	if cfg.Session.Tier == "" {
+		cfg.Session.Tier = "supervised"
+	}
 
 	for i := range cfg.LLM.Fallbacks {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
@@ -182,6 +191,20 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// validTiers is the set of recognised permission tier names.
+var validTiers = map[string]bool{
+	"supervised": true,
+	"autonomous": true,
+	"restricted": true,
+}
+
+func validateTier(tier, context string) error {
+	if !validTiers[tier] {
+		return fmt.Errorf("config: %s: invalid tier %q — must be one of: supervised, autonomous, restricted", context, tier)
+	}
+	return nil
+}
+
 func validate(cfg *Config) error {
 	if cfg.Telegram.Token == "" {
 		return fmt.Errorf("config: telegram.token is required")
@@ -191,6 +214,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.LLM.OpenRouter.APIKey == "" {
 		return fmt.Errorf("config: llm.openrouter.api_key is required")
+	}
+	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
+		return err
 	}
 	if err := validateFallbacks(cfg.LLM.Fallbacks); err != nil {
 		return err
@@ -262,14 +288,8 @@ func validateSchedules(schedules []ScheduleConfig) error {
 		}
 
 		if s.SessionTier != "" {
-			switch s.SessionTier {
-			case "supervised", "autonomous", "restricted":
-				// valid
-			default:
-				return fmt.Errorf(
-					"config: schedule %q: invalid session_tier %q — must be one of: supervised, autonomous, restricted",
-					s.Name, s.SessionTier,
-				)
+			if err := validateTier(s.SessionTier, fmt.Sprintf("schedule %q: session_tier", s.Name)); err != nil {
+				return err
 			}
 		}
 
