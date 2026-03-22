@@ -3,6 +3,7 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -90,6 +91,14 @@ func TestChatCompletion_APIError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for 401 response")
+	}
+
+	var llmErr *llm.LLMError
+	if !errors.As(err, &llmErr) {
+		t.Fatalf("expected *llm.LLMError, got %T: %v", err, err)
+	}
+	if llmErr.StatusCode != http.StatusUnauthorized {
+		t.Errorf("StatusCode = %d, want %d", llmErr.StatusCode, http.StatusUnauthorized)
 	}
 }
 
@@ -200,5 +209,59 @@ func TestName(t *testing.T) {
 	c := New("key")
 	if c.Name() != "openrouter" {
 		t.Errorf("name = %q, want openrouter", c.Name())
+	}
+}
+
+func TestFundsRemaining_WithLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/key" {
+			t.Errorf("path = %s, want /key", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"limit_remaining":42.50}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	balance, err := client.FundsRemaining(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if balance != 42.50 {
+		t.Errorf("balance = %f, want 42.50", balance)
+	}
+}
+
+func TestFundsRemaining_Unlimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"limit_remaining":null}}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	balance, err := client.FundsRemaining(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if balance != -1 {
+		t.Errorf("balance = %f, want -1 (unlimited)", balance)
+	}
+}
+
+func TestFundsRemaining_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("bad-key", server.URL, server.Client())
+	_, err := client.FundsRemaining(context.Background())
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
 	}
 }

@@ -388,3 +388,181 @@ enabled = true
 		t.Fatal("expected error for missing schedule type")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fallback config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_Fallbacks_Valid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "low_funds"
+action = "switch_model"
+model = "meta-llama/llama-3.1-8b-instruct:free"
+threshold = 5.00
+
+[[llm.fallback]]
+trigger = "rate_limit"
+action = "wait_and_retry"
+max_retries = 3
+backoff = "exponential"
+
+[[llm.fallback]]
+trigger = "error"
+action = "switch_provider"
+provider = "backup"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.LLM.Fallbacks) != 3 {
+		t.Fatalf("Fallbacks len = %d, want 3", len(cfg.LLM.Fallbacks))
+	}
+
+	f0 := cfg.LLM.Fallbacks[0]
+	if f0.Trigger != "low_funds" || f0.Action != "switch_model" || f0.Threshold != 5.00 {
+		t.Errorf("Fallbacks[0] = %+v, unexpected values", f0)
+	}
+
+	f1 := cfg.LLM.Fallbacks[1]
+	if f1.Trigger != "rate_limit" || f1.Action != "wait_and_retry" || f1.MaxRetries != 3 || f1.Backoff != "exponential" {
+		t.Errorf("Fallbacks[1] = %+v, unexpected values", f1)
+	}
+
+	f2 := cfg.LLM.Fallbacks[2]
+	if f2.Trigger != "error" || f2.Action != "switch_provider" || f2.Provider != "backup" {
+		t.Errorf("Fallbacks[2] = %+v, unexpected values", f2)
+	}
+}
+
+func TestParse_Fallbacks_Empty(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.LLM.Fallbacks) != 0 {
+		t.Errorf("expected no fallbacks, got %d", len(cfg.LLM.Fallbacks))
+	}
+}
+
+func TestParse_Fallbacks_DefaultBackoff(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "rate_limit"
+action = "wait_and_retry"
+max_retries = 2
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.Fallbacks[0].Backoff != "exponential" {
+		t.Errorf("backoff = %q, want exponential (default)", cfg.LLM.Fallbacks[0].Backoff)
+	}
+}
+
+func TestParse_Fallbacks_InvalidTrigger(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "foo"
+action = "switch_model"
+model = "some-model"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid trigger")
+	}
+}
+
+func TestParse_Fallbacks_InvalidAction(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "error"
+action = "restart"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid action")
+	}
+}
+
+func TestParse_Fallbacks_InvalidBackoff(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "rate_limit"
+action = "wait_and_retry"
+max_retries = 3
+backoff = "linear"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid backoff")
+	}
+}
+
+func TestParse_Fallbacks_SwitchProviderMissingProvider(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "error"
+action = "switch_provider"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for switch_provider without provider field")
+	}
+}
+
+func TestParse_Fallbacks_SwitchModelMissingModel(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "error"
+action = "switch_model"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for switch_model without model field")
+	}
+}
+
+func TestParse_Fallbacks_WaitAndRetryMissingMaxRetries(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "rate_limit"
+action = "wait_and_retry"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for wait_and_retry without max_retries")
+	}
+}
+
+func TestParse_Fallbacks_LowFundsMissingThreshold(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "low_funds"
+action = "switch_model"
+model = "some-model"
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for low_funds without threshold")
+	}
+}
+
+func TestParse_Fallbacks_LowFundsNegativeThreshold(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[llm.fallback]]
+trigger = "low_funds"
+action = "switch_model"
+model = "some-model"
+threshold = -1.0
+`)
+
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for low_funds with negative threshold")
+	}
+}

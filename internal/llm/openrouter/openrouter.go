@@ -81,7 +81,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
 	}
 
 	var apiResp apiResponse
@@ -124,6 +124,42 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// FundsRemaining implements llm.BalanceProvider by querying GET /api/v1/key.
+// Returns -1 if the account has no credit limit (unlimited).
+func (c *Client) FundsRemaining(ctx context.Context) (float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/key", nil)
+	if err != nil {
+		return 0, fmt.Errorf("building key info request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("fetching key info: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("reading key info response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("key info API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var kr keyResponse
+	if err := json.Unmarshal(body, &kr); err != nil {
+		return 0, fmt.Errorf("decoding key info response: %w", err)
+	}
+
+	if kr.Data.LimitRemaining == nil {
+		return -1, nil // unlimited
+	}
+	return *kr.Data.LimitRemaining, nil
+}
+
 // API types (OpenAI-compatible format)
 
 type apiRequest struct {
@@ -154,4 +190,10 @@ type apiUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+type keyResponse struct {
+	Data struct {
+		LimitRemaining *float64 `json:"limit_remaining"` // null means unlimited
+	} `json:"data"`
 }

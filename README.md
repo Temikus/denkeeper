@@ -21,7 +21,8 @@ Denkeeper connects to your Telegram (more adapters planned), routes messages thr
 - **LLM routing** — pluggable provider interface, currently backed by OpenRouter (access to Claude, GPT, Llama, and hundreds more)
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
-- **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand for recurring tasks
+- **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; wired into the agent engine with configurable session modes
+- **Skills** — flat markdown files with TOML frontmatter that teach the agent how to handle specific tasks; auto-injected into the system prompt at startup
 - **Permission tiers** — supervised mode by default, extensible for future autonomy levels
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
 
@@ -85,7 +86,56 @@ Key sections:
 | `[llm.openrouter]` | OpenRouter API key |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
+| `[agent]` | `persona_dir` and `skills_dir` (default: `~/.denkeeper/skills`) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
+
+### Skills
+
+Skills are markdown files that teach the agent how to handle specific tasks. They use TOML frontmatter enclosed in `+++` delimiters:
+
+```markdown
++++
+name = "daily-briefing"
+description = "Compile and deliver a daily briefing"
+version = "1.0.0"
+triggers = ["schedule:daily:08:00", "command:briefing"]
++++
+
+# Daily Briefing
+
+When triggered, compile a briefing with:
+1. Weather forecast for the user's location
+2. Top 3 news headlines
+3. Any pending reminders
+```
+
+Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. All skills are injected into the agent's system prompt at startup.
+
+A sample `help` skill is included in `agents/default/skills/`.
+
+### Schedules
+
+Schedules support three expression formats and can target any adapter channel:
+
+```toml
+[[schedules]]
+name = "daily-briefing"
+type = "cron"
+schedule = "0 8 * * *"
+skill = "daily-briefing"
+session_tier = "supervised"
+session_mode = "isolated"        # fresh context each run (default: "shared")
+channel = "telegram:YOUR_CHAT_ID"
+enabled = true
+
+[[schedules]]
+name = "hourly-check"
+type = "interval"
+schedule = "@every 1h"           # or @daily, @hourly, @weekly
+channel = "telegram:YOUR_CHAT_ID"
+```
+
+`session_mode = "isolated"` creates a fresh conversation context for each run so scheduled jobs don't mix into your regular chat history.
 
 ## Development
 
@@ -120,26 +170,45 @@ internal/
   config/            TOML config parsing and validation
   llm/               Provider interface, router, cost tracking
     openrouter/      OpenRouter client
-  scheduler/         Cron and interval scheduling
+  scheduler/         Cron and interval scheduling (wired to engine)
   security/          Permission engine
-agents/default/      Agent personality (SOUL.md)
+  skill/             Skill file loader and system prompt builder
+agents/default/
+  skills/            Bundled skills (e.g. help.md)
+  SOUL.md            Agent personality
 ```
 
 ## Roadmap
 
-Denkeeper is built in phases. Phase 1 (current) covers the core agent loop:
+Denkeeper is built in phases:
 
+**Phase 1 — Foundation** ✅
 - [x] Telegram adapter with user allowlist
 - [x] LLM routing via OpenRouter
 - [x] Conversation memory (SQLite)
 - [x] Per-session cost budgets
 - [x] Permission engine (supervised tier)
-- [x] Scheduler with cron/interval/named expressions
-- [ ] Skills system (text-based agent capabilities)
-- [ ] Additional adapters (Discord)
-- [ ] Tool integration (MCP protocol)
+- [x] Agent persona system (SOUL.md, USER.md, MEMORY.md injection)
+
+**Phase 2 — Core Features** (in progress)
+- [x] Scheduler with cron/interval/named expressions, wired to engine
+- [x] Configurable session modes for schedules (`shared`/`isolated`)
+- [x] Skills system (flat-file markdown, TOML frontmatter, system prompt injection)
+- [ ] MCP tool support
+- [ ] Fallback strategies and cost-aware model switching
+- [ ] Voice messages (STT/TTS)
+- [ ] External REST API
+
+**Phase 3 — Extensibility**
+- [ ] Plugin system (subprocess + Docker sandboxing)
+- [ ] Config MCP server (agent self-modification)
+- [ ] Approval workflows
 - [ ] Web dashboard
-- [ ] Autonomous permission tiers
+
+**Phase 4 — Polish**
+- [ ] Additional adapters (Discord)
+- [ ] Additional LLM providers
+- [ ] Package distribution (.deb, .rpm, Homebrew)
 
 ## License
 

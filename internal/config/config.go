@@ -32,6 +32,19 @@ type LLMConfig struct {
 	DefaultModel      string           `toml:"default_model"`
 	OpenRouter        OpenRouterConfig `toml:"openrouter"`
 	MaxCostPerSession float64          `toml:"max_cost_per_session"`
+	Fallbacks         []FallbackConfig `toml:"fallback"`
+}
+
+// FallbackConfig defines a single fallback rule for the LLM router.
+// Rules are evaluated in declaration order; first match wins per trigger type.
+type FallbackConfig struct {
+	Trigger    string  `toml:"trigger"`     // "error" | "rate_limit" | "low_funds"
+	Action     string  `toml:"action"`      // "switch_provider" | "switch_model" | "wait_and_retry"
+	Provider   string  `toml:"provider"`    // required for switch_provider
+	Model      string  `toml:"model"`       // required for switch_model; optional for switch_provider
+	Threshold  float64 `toml:"threshold"`   // required for low_funds (USD remaining)
+	MaxRetries int     `toml:"max_retries"` // required for wait_and_retry
+	Backoff    string  `toml:"backoff"`     // "exponential" (default) | "constant"
 }
 
 type OpenRouterConfig struct {
@@ -148,6 +161,12 @@ func applyDefaults(cfg *Config) {
 		cfg.Log.Format = "text"
 	}
 
+	for i := range cfg.LLM.Fallbacks {
+		if cfg.LLM.Fallbacks[i].Backoff == "" {
+			cfg.LLM.Fallbacks[i].Backoff = "exponential"
+		}
+	}
+
 	trueVal := true
 	for i := range cfg.Schedules {
 		s := &cfg.Schedules[i]
@@ -173,8 +192,42 @@ func validate(cfg *Config) error {
 	if cfg.LLM.OpenRouter.APIKey == "" {
 		return fmt.Errorf("config: llm.openrouter.api_key is required")
 	}
+	if err := validateFallbacks(cfg.LLM.Fallbacks); err != nil {
+		return err
+	}
 	if err := validateSchedules(cfg.Schedules); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateFallbacks(fallbacks []FallbackConfig) error {
+	for i, f := range fallbacks {
+		switch f.Trigger {
+		case "error", "rate_limit", "low_funds":
+		default:
+			return fmt.Errorf("config: llm.fallback[%d]: invalid trigger %q", i, f.Trigger)
+		}
+		switch f.Action {
+		case "switch_provider", "switch_model", "wait_and_retry":
+		default:
+			return fmt.Errorf("config: llm.fallback[%d]: invalid action %q", i, f.Action)
+		}
+		if f.Action == "switch_provider" && f.Provider == "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_provider\" requires provider field", i)
+		}
+		if f.Action == "switch_model" && f.Model == "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" requires model field", i)
+		}
+		if f.Action == "wait_and_retry" && f.MaxRetries <= 0 {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"wait_and_retry\" requires max_retries > 0", i)
+		}
+		if f.Trigger == "low_funds" && f.Threshold <= 0 {
+			return fmt.Errorf("config: llm.fallback[%d]: trigger \"low_funds\" requires threshold > 0", i)
+		}
+		if f.Backoff != "" && f.Backoff != "exponential" && f.Backoff != "constant" {
+			return fmt.Errorf("config: llm.fallback[%d]: invalid backoff %q — must be \"exponential\" or \"constant\"", i, f.Backoff)
+		}
 	}
 	return nil
 }

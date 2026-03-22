@@ -123,6 +123,22 @@ func runServe(_ *cobra.Command, _ []string) error {
 	router := llm.NewRouter(cfg.LLM.DefaultProvider, cfg.LLM.DefaultModel, costTracker)
 	router.RegisterProvider(orClient)
 
+	if len(cfg.LLM.Fallbacks) > 0 {
+		fallbackRules := make([]llm.FallbackRule, len(cfg.LLM.Fallbacks))
+		for i, f := range cfg.LLM.Fallbacks {
+			fallbackRules[i] = llm.FallbackRule{
+				Trigger:    f.Trigger,
+				Action:     f.Action,
+				Provider:   f.Provider,
+				Model:      f.Model,
+				Threshold:  f.Threshold,
+				MaxRetries: f.MaxRetries,
+				Backoff:    f.Backoff,
+			}
+		}
+		router.SetFallbacks(fallbackRules)
+	}
+
 	// Init Telegram adapter
 	tgAdapter, err := telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger)
 	if err != nil {

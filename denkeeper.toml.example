@@ -21,6 +21,46 @@ max_cost_per_session = 1.0
 # API key from https://openrouter.ai/keys
 api_key = "YOUR_OPENROUTER_API_KEY"
 
+# ---------------------------------------------------------------------------
+# LLM Fallback Strategies
+# ---------------------------------------------------------------------------
+# Each [[llm.fallback]] entry defines one fallback step, evaluated in order.
+#
+# trigger values:
+#   "low_funds"  — checked before each call; fires when the provider's API key
+#                  balance drops below threshold (USD). Requires threshold > 0.
+#   "rate_limit" — fires on HTTP 429. Use wait_and_retry, switch_provider, or
+#                  switch_model to recover.
+#   "error"      — fires on retryable server errors (5xx, network failures).
+#                  Non-retryable errors (400, 401, 402) skip all fallbacks.
+#
+# action values:
+#   "switch_provider"  — route to a different registered provider (requires provider)
+#   "switch_model"     — stay on same provider, use a different model (requires model)
+#   "wait_and_retry"   — retry with backoff (requires max_retries > 0)
+#
+# backoff values: "exponential" (default, capped at 30s) | "constant" (1s)
+
+# Switch to a free model when API key balance falls below $5.
+# [[llm.fallback]]
+# trigger   = "low_funds"
+# action    = "switch_model"
+# model     = "meta-llama/llama-3.1-8b-instruct:free"
+# threshold = 5.00
+
+# Retry up to 3 times with exponential backoff on rate limiting.
+# [[llm.fallback]]
+# trigger     = "rate_limit"
+# action      = "wait_and_retry"
+# max_retries = 3
+# backoff     = "exponential"
+
+# Fall back to a free model on server errors.
+# [[llm.fallback]]
+# trigger = "error"
+# action  = "switch_model"
+# model   = "meta-llama/llama-3.1-8b-instruct:free"
+
 [memory]
 # Path to SQLite database for conversation history
 # db_path = "~/.denkeeper/data/memory.db"  # default
