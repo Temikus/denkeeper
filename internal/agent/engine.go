@@ -61,11 +61,11 @@ func NewEngine(
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending any skill instructions and the memory update
 // directive when the engine has write_memory permission.
-func (e *Engine) buildSystemPrompt() string {
+func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine) string {
 	var base string
 	if e.persona != nil {
 		base = e.persona.SystemPrompt()
-		if inst := e.persona.MemoryUpdateInstruction(); inst != "" && e.permissions.CanExecute("write_memory") {
+		if inst := e.persona.MemoryUpdateInstruction(); inst != "" && perms.CanExecute("write_memory") {
 			base += "\n\n" + inst
 		}
 	} else {
@@ -136,7 +136,29 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
-	if !e.permissions.CanExecute("chat") {
+	// Resolve effective permissions: per-message override or global default.
+	perms := e.permissions
+	if msg.SessionTier != "" {
+		if !security.ValidTier(msg.SessionTier) {
+			e.logger.Warn("ignoring invalid session tier, using global",
+				"session_tier", msg.SessionTier,
+				"global_tier", e.permissions.Tier(),
+			)
+		} else if msg.SessionTier != e.permissions.Tier() {
+			override, err := security.NewPermissionEngine(msg.SessionTier)
+			if err != nil {
+				e.logger.Warn("failed to create override permissions", "error", err)
+			} else {
+				perms = override
+				e.logger.Info("using per-schedule permission tier",
+					"tier", msg.SessionTier,
+					"global_tier", e.permissions.Tier(),
+				)
+			}
+		}
+	}
+
+	if !perms.CanExecute("chat") {
 		return fmt.Errorf("chat action not permitted")
 	}
 
@@ -174,7 +196,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	// Build LLM messages: system prompt + history
 	llmMessages := make([]llm.Message, 0, len(history)+1)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt()})
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms)})
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
@@ -193,8 +215,8 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		if e.tools == nil {
 			return fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
-		if !e.permissions.CanExecute("use_tools") {
-			return fmt.Errorf("tool execution not permitted under %q tier", e.permissions.Tier())
+		if !perms.CanExecute("use_tools") {
+			return fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 
 		// Append the assistant's tool-call message to history.
@@ -229,7 +251,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	responseText, memUpdate := extractMemoryUpdate(resp.Content)
 
 	// Persist memory update if present and permitted.
-	if memUpdate != "" && e.persona != nil && e.permissions.CanExecute("write_memory") {
+	if memUpdate != "" && e.persona != nil && perms.CanExecute("write_memory") {
 		if err := e.persona.UpdateMemory(memUpdate); err != nil {
 			e.logger.Warn("failed to persist memory update", "error", err)
 		} else {

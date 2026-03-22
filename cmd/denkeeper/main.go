@@ -245,6 +245,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 			if entry.SessionMode == "isolated" {
 				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, time.Now().UnixNano())
 			}
+			if entry.SessionTier != "" {
+				msg.SessionTier = entry.SessionTier
+			}
 			if err := engine.Dispatch(ctx, msg); err != nil {
 				logger.Error("dispatching scheduled message", "name", entry.Name, "error", err)
 			}

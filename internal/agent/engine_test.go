@@ -860,3 +860,161 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "shell", Arguments: "{}"}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Global tier is "supervised" (allows use_tools).
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
+
+	// Override to "restricted" via SessionTier — should deny tool use.
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:     "test",
+		ExternalID:  "chat-tier-override",
+		UserID:      "user-1",
+		UserName:    "scheduler",
+		Text:        "[Scheduled: daily-briefing]",
+		Timestamp:   time.Now(),
+		SessionTier: "restricted",
+	})
+	if err == nil {
+		t.Fatal("expected error for restricted tier denying tool use")
+	}
+	if !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestEngine_HandleMessage_SessionTierEmpty_UsesGlobal(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// First call: tool call. Second call: final text response.
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_weather", Arguments: `{"city":"London"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Sunny in London!",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Global tier is "supervised" (allows use_tools).
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", toolMgr, logger)
+
+	// Empty SessionTier — should use global "supervised" and allow tool calls.
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-global-tier",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "What's the weather?",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+	if ma.sent[0].Text != "Sunny in London!" {
+		t.Errorf("sent text = %q, want %q", ma.sent[0].Text, "Sunny in London!")
+	}
+}
+
+func TestEngine_HandleMessage_SessionTierInvalid_FallsBack(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Response",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+
+	// Invalid SessionTier — should log warning and fall back to global.
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:     "test",
+		ExternalID:  "chat-invalid-tier",
+		UserID:      "user-1",
+		UserName:    "testuser",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+		SessionTier: "bogus",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with invalid tier: %v", err)
+	}
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+}

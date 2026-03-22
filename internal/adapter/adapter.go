@@ -16,6 +16,9 @@ type IncomingMessage struct {
 	// ConversationID, when non-empty, overrides the default adapter:externalID
 	// conversation key. Used by the scheduler to create isolated sessions.
 	ConversationID string
+	// SessionTier, when non-empty, overrides the engine's global permission
+	// tier for this message. Used by the scheduler to enforce per-schedule tiers.
+	SessionTier string
 }
 
 // OutgoingMessage represents a message to send to an external platform.
