@@ -10,9 +10,11 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 const maxContextMessages = 50
+const maxToolRounds = 10
 
 const memUpdateOpen = "[MEMORY_UPDATE]"
 const memUpdateClose = "[/MEMORY_UPDATE]"
@@ -26,6 +28,7 @@ type Engine struct {
 	persona        *persona.Persona // nil = use fallbackPrompt
 	fallbackPrompt string           // used when persona is nil
 	promptSuffix   string           // appended after persona/fallback (e.g. skills)
+	tools          *tool.Manager    // nil = no tools available
 	incoming       chan adapter.IncomingMessage
 	logger         *slog.Logger
 }
@@ -38,6 +41,7 @@ func NewEngine(
 	p *persona.Persona,
 	fallbackPrompt string,
 	promptSuffix string,
+	tools *tool.Manager,
 	logger *slog.Logger,
 ) *Engine {
 	return &Engine{
@@ -48,6 +52,7 @@ func NewEngine(
 		persona:        p,
 		fallbackPrompt: fallbackPrompt,
 		promptSuffix:   promptSuffix,
+		tools:          tools,
 		incoming:       make(chan adapter.IncomingMessage, 64),
 		logger:         logger,
 	}
@@ -178,6 +183,46 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	resp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
 		return fmt.Errorf("LLM completion: %w", err)
+	}
+
+	// Tool-call loop: keep calling tools until the LLM produces a text response.
+	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
+		if round >= maxToolRounds {
+			return fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+		}
+		if e.tools == nil {
+			return fmt.Errorf("LLM requested tool calls but no tool manager configured")
+		}
+		if !e.permissions.CanExecute("use_tools") {
+			return fmt.Errorf("tool execution not permitted under %q tier", e.permissions.Tier())
+		}
+
+		// Append the assistant's tool-call message to history.
+		llmMessages = append(llmMessages, llm.Message{
+			Role:      "assistant",
+			ToolCalls: resp.ToolCalls,
+		})
+
+		// Execute each tool call serially, append results.
+		for _, tc := range resp.ToolCalls {
+			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
+			result, execErr := e.tools.Execute(ctx, tc)
+			if execErr != nil {
+				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "error", execErr)
+				result = fmt.Sprintf("Tool error: %v", execErr)
+			}
+			llmMessages = append(llmMessages, llm.Message{
+				Role:       "tool",
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
+		}
+
+		// Call LLM again with tool results.
+		resp, err = e.router.Complete(ctx, convID, llmMessages)
+		if err != nil {
+			return fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+		}
 	}
 
 	// Extract and strip any memory update directive before storing/sending.

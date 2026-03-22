@@ -607,3 +607,81 @@ tier = "root"
 		t.Fatal("expected error for invalid session tier")
 	}
 }
+
+func TestParse_Tools(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.web-search]
+command = "denkeeper-tool-websearch"
+args = ["--provider", "tavily"]
+
+[tools.calendar]
+command = "denkeeper-tool-gcal"
+env = { GCAL_TOKEN = "test-token" }
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(cfg.Tools))
+	}
+
+	ws, ok := cfg.Tools["web-search"]
+	if !ok {
+		t.Fatal("missing web-search tool config")
+	}
+	if ws.Command != "denkeeper-tool-websearch" {
+		t.Errorf("command = %q, want denkeeper-tool-websearch", ws.Command)
+	}
+	if len(ws.Args) != 2 || ws.Args[0] != "--provider" || ws.Args[1] != "tavily" {
+		t.Errorf("args = %v, want [--provider tavily]", ws.Args)
+	}
+
+	cal, ok := cfg.Tools["calendar"]
+	if !ok {
+		t.Fatal("missing calendar tool config")
+	}
+	if cal.Command != "denkeeper-tool-gcal" {
+		t.Errorf("command = %q, want denkeeper-tool-gcal", cal.Command)
+	}
+	if cal.Env["GCAL_TOKEN"] != "test-token" {
+		t.Errorf("env GCAL_TOKEN = %q, want test-token", cal.Env["GCAL_TOKEN"])
+	}
+}
+
+func TestParse_ToolMissingCommand(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-tool]
+args = ["--flag"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for tool missing command")
+	}
+	if !strings.Contains(err.Error(), "command is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolEnvExpansion(t *testing.T) {
+	t.Setenv("DENKEEPER_TEST_VAR", "expanded-value")
+
+	tomlData := []byte(baseConfig + `
+[tools.test-tool]
+command = "test-cmd"
+env = { MY_VAR = "${DENKEEPER_TEST_VAR}" }
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tc := cfg.Tools["test-tool"]
+	if tc.Env["MY_VAR"] != "expanded-value" {
+		t.Errorf("MY_VAR = %q, want expanded-value", tc.Env["MY_VAR"])
+	}
+}

@@ -9,13 +9,21 @@ import (
 )
 
 type Config struct {
-	Telegram  TelegramConfig   `toml:"telegram"`
-	LLM       LLMConfig        `toml:"llm"`
-	Memory    MemoryConfig     `toml:"memory"`
-	Log       LogConfig        `toml:"log"`
-	Agent     AgentConfig      `toml:"agent"`
-	Session   SessionConfig    `toml:"session"`
-	Schedules []ScheduleConfig `toml:"schedules"`
+	Telegram  TelegramConfig        `toml:"telegram"`
+	LLM       LLMConfig             `toml:"llm"`
+	Memory    MemoryConfig          `toml:"memory"`
+	Log       LogConfig             `toml:"log"`
+	Agent     AgentConfig           `toml:"agent"`
+	Session   SessionConfig         `toml:"session"`
+	Schedules []ScheduleConfig      `toml:"schedules"`
+	Tools     map[string]ToolConfig `toml:"tools"`
+}
+
+// ToolConfig defines an MCP tool server to spawn.
+type ToolConfig struct {
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	Env     map[string]string `toml:"env"`
 }
 
 // SessionConfig controls the default permission tier for agent sessions.
@@ -176,6 +184,14 @@ func applyDefaults(cfg *Config) {
 		}
 	}
 
+	// Expand environment variables in tool env values.
+	for name, tc := range cfg.Tools {
+		for k, v := range tc.Env {
+			tc.Env[k] = os.ExpandEnv(v)
+		}
+		cfg.Tools[name] = tc
+	}
+
 	trueVal := true
 	for i := range cfg.Schedules {
 		s := &cfg.Schedules[i]
@@ -222,6 +238,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateSchedules(cfg.Schedules); err != nil {
+		return err
+	}
+	if err := validateTools(cfg.Tools); err != nil {
 		return err
 	}
 	return nil
@@ -303,6 +322,15 @@ func validateSchedules(schedules []ScheduleConfig) error {
 					s.Name, s.SessionMode,
 				)
 			}
+		}
+	}
+	return nil
+}
+
+func validateTools(tools map[string]ToolConfig) error {
+	for name, tc := range tools {
+		if tc.Command == "" {
+			return fmt.Errorf("config: tools.%s: command is required", name)
 		}
 	}
 	return nil

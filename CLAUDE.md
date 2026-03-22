@@ -68,9 +68,11 @@ Adapter (Telegram) → Engine → LLM Router → Provider (OpenRouter)
 
 Cron matching uses bitsets for O(1) field checks. The scheduler is not yet wired into the engine — it runs independently.
 
-## Current State (Phase 1)
+## Current State (Phase 2 in progress)
 
-- Only the "supervised" permission tier exists (hardcoded allowlist: chat, read_memory, write_memory).
-- Only OpenRouter as an LLM provider, Telegram as an adapter.
-- Skills, tools, plugins, multi-agent routing, and the web dashboard are planned for later phases.
+- Three permission tiers implemented: autonomous, supervised, restricted (configurable via TOML).
+- OpenRouter as LLM provider, Telegram as adapter.
+- Persona system, skill system, scheduler, fallback strategies, and cost tracking are implemented.
+- MCP tool support: the engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, and executes tool calls in an agentic loop (serial execution, no Docker sandboxing yet).
+- Plugins, multi-agent routing, web dashboard, voice, and REST API are planned for later phases.
 - See the product requirements document for the full roadmap.

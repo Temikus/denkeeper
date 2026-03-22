@@ -23,6 +23,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // Build-time variables set via ldflags.
@@ -171,6 +172,24 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("initializing permissions: %w", err)
 	}
 
+	// Setup graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Init tools (if configured)
+	var toolMgr *tool.Manager
+	if len(cfg.Tools) > 0 {
+		toolMgr = tool.NewManager(logger)
+		for name, tc := range cfg.Tools {
+			if err := toolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
+				return fmt.Errorf("initializing tool %q: %w", name, err)
+			}
+			logger.Info("tool server registered", "name", name, "command", tc.Command)
+		}
+		router.SetTools(toolMgr.ToolDefs())
+		defer func() { _ = toolMgr.Close() }()
+	}
+
 	// Init engine
 	engine := agent.NewEngine(
 		router,
@@ -180,12 +199,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 		p,
 		persona.DefaultPrompt,
 		skillsSuffix,
+		toolMgr,
 		logger,
 	)
-
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Init and wire scheduler
 	sched := scheduler.New(logger)

@@ -42,6 +42,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	body := apiRequest{
 		Model:    req.Model,
 		Messages: make([]apiMessage, len(req.Messages)),
+		Tools:    req.Tools,
 	}
 	if req.MaxTokens > 0 {
 		body.MaxTokens = &req.MaxTokens
@@ -51,7 +52,12 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 
 	for i, m := range req.Messages {
-		body.Messages[i] = apiMessage{Role: m.Role, Content: m.Content}
+		body.Messages[i] = apiMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		}
 	}
 
 	jsonBody, err := json.Marshal(body)
@@ -95,6 +101,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 
 	return &llm.ChatResponse{
 		Content:      apiResp.Choices[0].Message.Content,
+		ToolCalls:    apiResp.Choices[0].Message.ToolCalls,
 		Model:        apiResp.Model,
 		FinishReason: apiResp.Choices[0].FinishReason,
 		TokensUsed: llm.TokenUsage{
@@ -163,15 +170,18 @@ func (c *Client) FundsRemaining(ctx context.Context) (float64, error) {
 // API types (OpenAI-compatible format)
 
 type apiRequest struct {
-	Model       string       `json:"model"`
-	Messages    []apiMessage `json:"messages"`
-	MaxTokens   *int         `json:"max_tokens,omitempty"`
-	Temperature *float64     `json:"temperature,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []apiMessage  `json:"messages"`
+	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	Tools       []llm.ToolDef `json:"tools,omitempty"`
 }
 
 type apiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 type apiResponse struct {

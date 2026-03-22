@@ -252,6 +252,135 @@ func TestFundsRemaining_Unlimited(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_ToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req apiRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+
+		// Verify tools were sent in the request.
+		if len(req.Tools) != 1 {
+			t.Fatalf("expected 1 tool in request, got %d", len(req.Tools))
+		}
+		if req.Tools[0].Function.Name != "get_weather" {
+			t.Errorf("tool name = %q, want get_weather", req.Tools[0].Function.Name)
+		}
+
+		resp := apiResponse{
+			ID:    "chatcmpl-tc",
+			Model: "test-model",
+			Choices: []apiChoice{
+				{
+					Message: apiMessage{
+						Role: "assistant",
+						ToolCalls: []llm.ToolCall{
+							{
+								ID:   "call_123",
+								Type: "function",
+								Function: llm.FunctionCall{
+									Name:      "get_weather",
+									Arguments: `{"city":"London"}`,
+								},
+							},
+						},
+					},
+					FinishReason: "tool_calls",
+				},
+			},
+			Usage: apiUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "test-model",
+		Messages: []llm.Message{{Role: "user", Content: "What's the weather?"}},
+		Tools: []llm.ToolDef{
+			{
+				Type: "function",
+				Function: llm.FunctionDef{
+					Name:        "get_weather",
+					Description: "Get current weather",
+					Parameters: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"city": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %q, want tool_calls", resp.FinishReason)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "call_123" {
+		t.Errorf("tool call ID = %q, want call_123", resp.ToolCalls[0].ID)
+	}
+	if resp.ToolCalls[0].Function.Name != "get_weather" {
+		t.Errorf("tool call function = %q, want get_weather", resp.ToolCalls[0].Function.Name)
+	}
+	if resp.ToolCalls[0].Function.Arguments != `{"city":"London"}` {
+		t.Errorf("tool call args = %q, want {\"city\":\"London\"}", resp.ToolCalls[0].Function.Arguments)
+	}
+}
+
+func TestChatCompletion_ToolCallPassesHistory(t *testing.T) {
+	// Verify that tool_call_id and tool_calls in messages are passed through to the API.
+	var receivedReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&receivedReq)
+		resp := apiResponse{
+			ID:    "chatcmpl-1",
+			Model: "m",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "The weather is sunny."}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{TotalTokens: 5},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "m",
+		Messages: []llm.Message{
+			{Role: "user", Content: "weather?"},
+			{Role: "assistant", ToolCalls: []llm.ToolCall{
+				{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "weather", Arguments: "{}"}},
+			}},
+			{Role: "tool", Content: "Sunny, 22C", ToolCallID: "call_1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(receivedReq.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(receivedReq.Messages))
+	}
+	if len(receivedReq.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call in assistant message, got %d", len(receivedReq.Messages[1].ToolCalls))
+	}
+	if receivedReq.Messages[2].ToolCallID != "call_1" {
+		t.Errorf("tool_call_id = %q, want call_1", receivedReq.Messages[2].ToolCallID)
+	}
+}
+
 func TestFundsRemaining_HTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

@@ -33,6 +33,7 @@ type Router struct {
 	defaultModel    string
 	costTracker     *CostTracker
 	fallbacks       []FallbackRule
+	tools           []ToolDef
 	balanceCache    map[string]balanceCacheEntry
 	mu              sync.Mutex // protects balanceCache
 }
@@ -54,6 +55,11 @@ func (r *Router) RegisterProvider(p Provider) {
 // SetFallbacks configures the ordered list of fallback rules.
 func (r *Router) SetFallbacks(rules []FallbackRule) {
 	r.fallbacks = rules
+}
+
+// SetTools configures the tool definitions passed to every LLM request.
+func (r *Router) SetTools(tools []ToolDef) {
+	r.tools = tools
 }
 
 func (r *Router) Complete(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
@@ -106,7 +112,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	// 2. Make the primary call.
-	req := ChatRequest{Model: activeModel, Messages: messages}
+	req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
 		r.costTracker.Record(sessionID, tokenCost(resp))
@@ -147,10 +153,10 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 				if rule.Model != "" {
 					fbModel = rule.Model
 				}
-				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages})
+				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages, Tools: r.tools})
 			case "switch_model":
 				resp, err = activeProvider.ChatCompletion(ctx,
-					ChatRequest{Model: rule.Model, Messages: messages})
+					ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
 			}
 
 		case "error":
@@ -174,10 +180,10 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 				if rule.Model != "" {
 					fbModel = rule.Model
 				}
-				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages})
+				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages, Tools: r.tools})
 			case "switch_model":
 				resp, err = activeProvider.ChatCompletion(ctx,
-					ChatRequest{Model: rule.Model, Messages: messages})
+					ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
 			}
 		}
 

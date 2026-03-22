@@ -64,18 +64,48 @@ type ChatRequest struct {
 	Messages    []Message
 	MaxTokens   int
 	Temperature *float64
+	Tools       []ToolDef
 }
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type ChatResponse struct {
 	Content      string
+	ToolCalls    []ToolCall
 	TokensUsed   TokenUsage
 	Model        string
 	FinishReason string
+}
+
+// ToolCall represents a tool invocation requested by the LLM (OpenAI format).
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // "function"
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall is the function name and JSON-encoded arguments within a ToolCall.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolDef describes a tool available for the LLM to call (OpenAI format).
+type ToolDef struct {
+	Type     string      `json:"type"` // "function"
+	Function FunctionDef `json:"function"`
+}
+
+// FunctionDef describes the function signature within a ToolDef.
+type FunctionDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"` // JSON Schema object
 }
 
 type TokenUsage struct {

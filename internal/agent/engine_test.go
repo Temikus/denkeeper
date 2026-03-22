@@ -15,6 +15,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // mockAdapter implements adapter.Adapter for testing.
@@ -75,7 +76,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -143,7 +144,7 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	ctx := context.Background()
 
@@ -191,7 +192,7 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	// Create a permission engine that denies everything.
 	permissions := security.NewDenyAll()
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -229,7 +230,7 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -270,7 +271,7 @@ func TestEngine_HandleMessage_UnknownAdapter(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	// Message claims to be from "telegram" — no matching adapter
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -313,7 +314,7 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	// Empty text should be handled gracefully
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
@@ -355,7 +356,7 @@ func TestEngine_Dispatch(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -410,7 +411,7 @@ func TestEngine_Dispatch_IsolatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
 
 	ctx := context.Background()
 
@@ -485,7 +486,7 @@ func TestEngine_Dispatch_ContextCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
-	engine := NewEngine(router, store, nil, permissions, nil, "", "", logger)
+	engine := NewEngine(router, store, nil, permissions, nil, "", "", nil, logger)
 
 	// Fill the incoming channel to capacity so Dispatch would block.
 	for i := 0; i < cap(engine.incoming); i++ {
@@ -527,7 +528,7 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	}
 
 	customPrompt := "You are a custom persona with special instructions."
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, customPrompt, "", nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -636,7 +637,7 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, p, "", "", nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -709,7 +710,7 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 	}
 
 	// No persona — memory update should be stripped but not persisted.
-	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", "", logger)
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Fallback.", "", nil, logger)
 
 	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -725,5 +726,137 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 	// Directive should still be stripped from the user-facing message.
 	if ma.sent[0].Text != "Hello!" {
 		t.Errorf("sent text = %q, want %q", ma.sent[0].Text, "Hello!")
+	}
+}
+
+// sequentialProvider returns responses in order for successive calls.
+type sequentialProvider struct {
+	responses []*llm.ChatResponse
+	callIndex int
+}
+
+func (s *sequentialProvider) Name() string { return "mock" }
+func (s *sequentialProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	if s.callIndex >= len(s.responses) {
+		return nil, fmt.Errorf("no more mock responses (call %d)", s.callIndex)
+	}
+	resp := s.responses[s.callIndex]
+	s.callIndex++
+	return resp, nil
+}
+func (s *sequentialProvider) HealthCheck(_ context.Context) error { return nil }
+
+func TestEngine_HandleMessage_ToolCallNoManager(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// First call: LLM requests a tool call.
+	// Second call: LLM returns final text response.
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      "get_weather",
+							Arguments: `{"city":"London"}`,
+						},
+					},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "The weather in London is sunny, 22°C.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+
+	// LLM requests tools but no tool manager — should error.
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-tool-1",
+		UserID:     "user-1",
+		Text:       "What's the weather?",
+		Timestamp:  time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected error when LLM requests tools but no tool manager")
+	}
+	if !strings.Contains(err.Error(), "no tool manager configured") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Reset provider for next test.
+	provider.callIndex = 0
+}
+
+func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "shell", Arguments: "{}"}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// restricted tier does NOT have use_tools permission.
+	permissions, err := security.NewPermissionEngine("restricted")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "You are a test assistant.", "", nil, logger)
+	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-denied",
+		UserID:     "user-1",
+		Text:       "run a command",
+		Timestamp:  time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected error for denied tool execution")
+	}
+	if !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
