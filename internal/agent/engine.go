@@ -20,24 +20,30 @@ const maxToolRounds = 10
 const memUpdateOpen = "[MEMORY_UPDATE]"
 const memUpdateClose = "[/MEMORY_UPDATE]"
 
-// Engine is the core agent orchestrator.
+// SendFunc is a callback for sending a response back to the originating adapter.
+// The Dispatcher sets this when constructing each Engine.
+type SendFunc func(ctx context.Context, msg adapter.OutgoingMessage) error
+
+// Engine is the core agent orchestrator. Each named agent gets its own Engine
+// instance with its own persona, skills, permissions, and LLM router.
 type Engine struct {
+	name           string // agent name (e.g. "default", "work-assistant")
 	router         *llm.Router
 	memory         MemoryStore
-	adapters       []adapter.Adapter
+	sendFunc       SendFunc // sends responses back via the originating adapter
 	permissions    *security.PermissionEngine
 	persona        *persona.Persona // nil = use fallbackPrompt
 	fallbackPrompt string           // used when persona is nil
 	skills         []skill.Skill    // filtered per-message based on triggers
 	tools          *tool.Manager    // nil = no tools available
-	incoming       chan adapter.IncomingMessage
 	logger         *slog.Logger
 }
 
 func NewEngine(
+	name string,
 	router *llm.Router,
 	memory MemoryStore,
-	adapters []adapter.Adapter,
+	sendFunc SendFunc,
 	permissions *security.PermissionEngine,
 	p *persona.Persona,
 	fallbackPrompt string,
@@ -46,18 +52,21 @@ func NewEngine(
 	logger *slog.Logger,
 ) *Engine {
 	return &Engine{
+		name:           name,
 		router:         router,
 		memory:         memory,
-		adapters:       adapters,
+		sendFunc:       sendFunc,
 		permissions:    permissions,
 		persona:        p,
 		fallbackPrompt: fallbackPrompt,
 		skills:         skills,
 		tools:          tools,
-		incoming:       make(chan adapter.IncomingMessage, 64),
-		logger:         logger,
+		logger:         logger.With("agent", name),
 	}
 }
+
+// Name returns the agent's name.
+func (e *Engine) Name() string { return e.name }
 
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending trigger-matched skill instructions and the
@@ -101,46 +110,9 @@ func extractMemoryUpdate(text string) (cleaned, memUpdate string) {
 	return cleaned, memUpdate
 }
 
-// Dispatch injects a pre-built message into the engine's incoming queue.
-// It is used by the scheduler to trigger agent runs without an active adapter
-// session. Blocks until the message is accepted or ctx is cancelled.
-func (e *Engine) Dispatch(ctx context.Context, msg adapter.IncomingMessage) error {
-	select {
-	case e.incoming <- msg:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// Run starts the engine and blocks until the context is cancelled.
-func (e *Engine) Run(ctx context.Context) error {
-	// Start all adapters
-	for _, a := range e.adapters {
-		a := a
-		go func() {
-			if err := a.Start(ctx, e.incoming); err != nil && ctx.Err() == nil {
-				e.logger.Error("adapter stopped with error", "adapter", a.Name(), "error", err)
-			}
-		}()
-	}
-
-	e.logger.Info("engine started", "adapters", len(e.adapters))
-
-	for {
-		select {
-		case <-ctx.Done():
-			e.logger.Info("engine shutting down")
-			return ctx.Err()
-		case msg := <-e.incoming:
-			if err := e.handleMessage(ctx, msg); err != nil {
-				e.logger.Error("handling message", "error", err, "adapter", msg.Adapter, "user", msg.UserName)
-			}
-		}
-	}
-}
-
-func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
+// HandleMessage processes a single incoming message through the full pipeline:
+// permission check → conversation lookup → LLM call → tool loop → response.
+func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
 	// Resolve effective permissions: per-message override or global default.
 	perms := e.permissions
 	if msg.SessionTier != "" {
@@ -170,7 +142,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
 	// Get or create conversation — use explicit ID if provided (isolated sessions),
-	// otherwise derive it from the adapter and external chat ID.
+	// otherwise derive it from the agent name, adapter, and external chat ID.
 	var convID string
 	if msg.ConversationID != "" {
 		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
@@ -179,7 +151,8 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		convID = msg.ConversationID
 	} else {
 		var err error
-		convID, err = e.memory.GetOrCreateConversation(ctx, msg.Adapter, msg.ExternalID)
+		// Namespace conversations by agent name so each agent has its own history.
+		convID, err = e.memory.GetOrCreateConversation(ctx, e.name+":"+msg.Adapter, msg.ExternalID)
 		if err != nil {
 			return fmt.Errorf("getting conversation: %w", err)
 		}
@@ -273,17 +246,14 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		return fmt.Errorf("storing assistant message: %w", err)
 	}
 
-	// Send response back via the appropriate adapter
-	for _, a := range e.adapters {
-		if a.Name() == msg.Adapter {
-			if err := a.Send(ctx, adapter.OutgoingMessage{
-				ExternalID: msg.ExternalID,
-				Text:       responseText,
-				IsVoice:    msg.IsVoice,
-			}); err != nil {
-				return fmt.Errorf("sending response: %w", err)
-			}
-			break
+	// Send response back via the originating adapter.
+	if e.sendFunc != nil {
+		if err := e.sendFunc(ctx, adapter.OutgoingMessage{
+			ExternalID: msg.ExternalID,
+			Text:       responseText,
+			IsVoice:    msg.IsVoice,
+		}); err != nil {
+			return fmt.Errorf("sending response: %w", err)
 		}
 	}
 

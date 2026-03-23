@@ -4,10 +4,10 @@ import "sync"
 
 // CostTracker tracks token usage and estimated costs per session and globally.
 type CostTracker struct {
-	mu             sync.Mutex
-	sessionCosts   map[string]float64
-	globalCost     float64
-	maxPerSession  float64
+	mu            sync.Mutex
+	sessionCosts  map[string]float64
+	globalCost    float64
+	maxPerSession float64
 }
 
 func NewCostTracker(maxPerSession float64) *CostTracker {

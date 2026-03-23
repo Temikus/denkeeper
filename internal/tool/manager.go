@@ -30,9 +30,9 @@ type Manager struct {
 // NewManager creates a manager with no servers registered.
 func NewManager(logger *slog.Logger) *Manager {
 	return &Manager{
-		servers:  make(map[string]*serverConn),
-		toolMap:  make(map[string]*serverConn),
-		logger:   logger,
+		servers: make(map[string]*serverConn),
+		toolMap: make(map[string]*serverConn),
+		logger:  logger,
 	}
 }
 

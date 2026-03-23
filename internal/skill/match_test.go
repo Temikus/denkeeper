@@ -91,10 +91,10 @@ func TestMatchSkills_ScheduleTrigger_NoMatch(t *testing.T) {
 
 func TestMatchSkills_MixedSkills(t *testing.T) {
 	skills := []Skill{
-		makeSkill("always-on"),                                  // no triggers — always included
-		makeSkill("briefing", "command:briefing"),               // command trigger
-		makeSkill("daily-briefing", "schedule:daily:08:00"),     // schedule trigger
-		makeSkill("expense-tracker", "command:expense"),         // another command
+		makeSkill("always-on"),                              // no triggers — always included
+		makeSkill("briefing", "command:briefing"),           // command trigger
+		makeSkill("daily-briefing", "schedule:daily:08:00"), // schedule trigger
+		makeSkill("expense-tracker", "command:expense"),     // another command
 	}
 
 	// Plain message: only always-on

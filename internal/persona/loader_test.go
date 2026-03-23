@@ -141,8 +141,8 @@ func TestPersona_IsEditable_UnknownSection(t *testing.T) {
 
 func TestSystemPrompt_AllSections(t *testing.T) {
 	p := &Persona{
-		Soul:    "Soul content",
-		User:    "User content",
+		Soul:   "Soul content",
+		User:   "User content",
 		Memory: "Context content",
 	}
 	prompt := p.SystemPrompt()

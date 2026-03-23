@@ -30,14 +30,14 @@ func TestValidateExpr_Valid(t *testing.T) {
 		"@every 30m",
 		"@every 1h30m",
 		"@every 45s",
-		"0 8 * * *",          // daily at 08:00
-		"0 8 * * 1-5",        // weekdays at 08:00
-		"0 18 * * 5",         // every Friday at 18:00
-		"*/15 * * * *",       // every 15 minutes
-		"0 0 1 1 *",          // yearly
-		"0 0 1,15 * *",       // 1st and 15th of month
-		"0 8-18 * * 1-5",     // hourly during business hours on weekdays
-		"0 0 * * 7",          // Sunday (using 7 as alias)
+		"0 8 * * *",      // daily at 08:00
+		"0 8 * * 1-5",    // weekdays at 08:00
+		"0 18 * * 5",     // every Friday at 18:00
+		"*/15 * * * *",   // every 15 minutes
+		"0 0 1 1 *",      // yearly
+		"0 0 1,15 * *",   // 1st and 15th of month
+		"0 8-18 * * 1-5", // hourly during business hours on weekdays
+		"0 0 * * 7",      // Sunday (using 7 as alias)
 	}
 	for _, expr := range cases {
 		if err := ValidateExpr(expr); err != nil {
@@ -52,22 +52,22 @@ func TestValidateExpr_Invalid(t *testing.T) {
 		wantErr string
 	}{
 		{"", "must not be empty"},
-		{"@every", "shorthand"},       // missing duration — falls through to unknown shorthand
-		{"@every -1h", "positive"},   // negative duration
-		{"@every 0s", "positive"},    // zero duration
-		{"@every abc", "invalid"},    // bad duration string
-		{"@unknown", "unknown"},      // unrecognised shorthand
-		{"* * * *", "5 fields"},      // too few fields
-		{"* * * * * *", "5 fields"},  // too many fields
-		{"60 * * * *", "out of"},     // minute > 59
-		{"* 24 * * *", "out of"},     // hour > 23
-		{"* * 0 * *", "out of"},      // dom < 1
-		{"* * 32 * *", "out of"},     // dom > 31
-		{"* * * 0 *", "out of"},      // month < 1
-		{"* * * 13 *", "out of"},     // month > 12
-		{"* * * * 8", "out of"},      // dow > 7
-		{"* * * * abc", "invalid"},   // non-integer dow
-		{"a * * * *", "invalid"},     // non-integer minute
+		{"@every", "shorthand"},     // missing duration — falls through to unknown shorthand
+		{"@every -1h", "positive"},  // negative duration
+		{"@every 0s", "positive"},   // zero duration
+		{"@every abc", "invalid"},   // bad duration string
+		{"@unknown", "unknown"},     // unrecognised shorthand
+		{"* * * *", "5 fields"},     // too few fields
+		{"* * * * * *", "5 fields"}, // too many fields
+		{"60 * * * *", "out of"},    // minute > 59
+		{"* 24 * * *", "out of"},    // hour > 23
+		{"* * 0 * *", "out of"},     // dom < 1
+		{"* * 32 * *", "out of"},    // dom > 31
+		{"* * * 0 *", "out of"},     // month < 1
+		{"* * * 13 *", "out of"},    // month > 12
+		{"* * * * 8", "out of"},     // dow > 7
+		{"* * * * abc", "invalid"},  // non-integer dow
+		{"a * * * *", "invalid"},    // non-integer minute
 	}
 	for _, tc := range cases {
 		err := ValidateExpr(tc.expr)

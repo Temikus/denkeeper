@@ -19,27 +19,31 @@ just check                    # fmt-check + vet + lint + test (CI equivalent)
 
 ## Architecture
 
-Denkeeper is a single-binary personal AI agent. Messages flow through a pipeline:
+Denkeeper is a single-binary personal AI agent with multi-agent routing. Messages flow through:
 
 ```
-Adapter (Telegram) → Engine → LLM Router → Provider (OpenRouter)
-                       ↕           ↕
-                   MemoryStore  CostTracker
-                   (SQLite)
+Adapter (Telegram) → Dispatcher → Engine (per agent) → LLM Router → Provider (OpenRouter)
+                                       ↕                    ↕
+                                   MemoryStore          CostTracker
+                                   (SQLite)
 ```
 
-**Engine** (`internal/agent/engine.go`) is the orchestrator. On each incoming message it:
+**Dispatcher** (`internal/agent/dispatcher.go`) routes incoming messages to the correct Engine based on adapter bindings (`"telegram"` wildcard or `"telegram:12345"` specific). Falls back to the `"default"` agent.
+
+**Engine** (`internal/agent/engine.go`) is the per-agent orchestrator. Each named agent gets its own Engine with its own persona, skills, permissions, and LLM router. On each message it:
 1. Checks permissions via `security.PermissionEngine`
-2. Loads/creates conversation from `MemoryStore` (keyed as `"adapter:externalID"`)
-3. Builds message history with system prompt
+2. Loads/creates conversation from `MemoryStore` (namespaced as `"agentName:adapter:externalID"`)
+3. Builds message history with system prompt (persona + trigger-matched skills)
 4. Calls `Router.Complete()` which checks budget, delegates to a `Provider`, and records cost
-5. Stores the response and sends it back through the originating adapter
+5. Stores the response and sends it back via the `SendFunc` callback
 
 **Three key interfaces** define the extension points:
 
 - `adapter.Adapter` — platform integrations (Telegram implemented; add new ones here)
 - `llm.Provider` — LLM backends (OpenRouter implemented; add new ones under `internal/llm/`)
 - `agent.MemoryStore` — conversation persistence (SQLite implemented)
+
+**Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters` (bindings), `llm_model` (optional override), and `session_tier` (optional override). Backward compatible: if no `[[agents]]` section exists, a single `"default"` agent is synthesized from `[agent]`/`[session]`.
 
 **Wiring** happens in `cmd/denkeeper/main.go` — config drives everything. All behavior should be configurable via TOML, not hardcoded.
 
@@ -66,13 +70,15 @@ Adapter (Telegram) → Engine → LLM Router → Provider (OpenRouter)
 - Interval: `@every 5m`, `@every 1h30m`
 - Cron (5-field): `0 8 * * 1-5`
 
-Cron matching uses bitsets for O(1) field checks. The scheduler is not yet wired into the engine — it runs independently.
+Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messages to agents via `Dispatcher.Dispatch(ctx, agentName, msg)`. Schedules have an `agent` field (defaults to `"default"`).
 
-## Current State (Phase 2 in progress)
+## Current State (Phase 2 nearly complete)
 
-- Three permission tiers implemented: autonomous, supervised, restricted (configurable via TOML).
+- Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
+- Three permission tiers implemented: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
 - OpenRouter as LLM provider, Telegram as adapter.
-- Persona system, skill system, scheduler, fallback strategies, and cost tracking are implemented.
+- Persona system (load/write), skill system (with trigger-based filtering and per-agent merge), scheduler (with per-schedule agent targeting), fallback strategies, cost tracking, and voice (STT/TTS) are all implemented.
 - MCP tool support: the engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, and executes tool calls in an agentic loop (serial execution, no Docker sandboxing yet).
-- Plugins, multi-agent routing, web dashboard, voice, and REST API are planned for later phases.
-- See the product requirements document for the full roadmap.
+- **Remaining in Phase 2**: External REST API.
+- Plugins, web dashboard, and additional adapters are planned for Phase 3+.
+- See `design/denkeeper-prd.md` for the full roadmap.

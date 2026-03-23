@@ -115,7 +115,7 @@ type TokenUsage struct {
 }
 
 type ProviderMetadata struct {
-	Name       string
-	BaseURL    string
-	Models     []string
+	Name    string
+	BaseURL string
+	Models  []string
 }
