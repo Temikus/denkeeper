@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This project uses [just](https://github.com/casey/just) as the command runner and [mise](https://mise.jdx.dev) for tool versioning (Go 1.25.8).
 
 ```bash
-just build                    # Build binary → ./denkeeper
+just build                    # Build binary → pkg/bin/denkeeper
 just serve                    # Run via go run (accepts optional config path)
 just test                     # All tests with -race
 just test-v                   # Verbose test output
@@ -72,13 +72,24 @@ Adapter (Telegram) → Dispatcher → Engine (per agent) → LLM Router → Prov
 
 Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messages to agents via `Dispatcher.Dispatch(ctx, agentName, msg)`. Schedules have an `agent` field (defaults to `"default"`).
 
-## Current State (Phase 2 nearly complete)
+## External REST API
+
+`internal/api/` provides the external HTTP API server, started when `[api] enabled = true` in config.
+
+- **Auth**: Bearer token with scoped API keys (constant-time comparison).
+- **Rate limiting**: Per-key token bucket (`api.rate_limit` requests/sec).
+- **CORS**: Configurable allowed origins (`api.cors_origins`).
+- **TLS**: Optional (`api.tls = true` with `cert_file`/`key_file`).
+- **Health**: `GET /api/v1/health` (no auth required).
+- Authenticated endpoints use `server.RequireScope(scope, handler)` middleware.
+
+## Current State (Phase 2 complete)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers implemented: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
 - OpenRouter as LLM provider, Telegram as adapter.
 - Persona system (load/write), skill system (with trigger-based filtering and per-agent merge), scheduler (with per-schedule agent targeting), fallback strategies, cost tracking, and voice (STT/TTS) are all implemented.
 - MCP tool support: the engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, and executes tool calls in an agentic loop (serial execution, no Docker sandboxing yet).
-- **Remaining in Phase 2**: External REST API.
+- External REST API: server skeleton with auth, rate limiting, CORS, TLS, health endpoint. Chat and management endpoints to be added next.
 - Plugins, web dashboard, and additional adapters are planned for Phase 3+.
 - See `design/denkeeper-prd.md` for the full roadmap.

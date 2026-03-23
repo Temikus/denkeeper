@@ -1,5 +1,6 @@
 # Build output
-pkg/
+pkg/*
+!pkg/.gitkeep
 
 # Binaries
 *.exe
