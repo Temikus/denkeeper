@@ -48,3 +48,19 @@ func (ct *CostTracker) ExceedsBudget(sessionID string) bool {
 	defer ct.mu.Unlock()
 	return ct.sessionCosts[sessionID] > ct.maxPerSession
 }
+
+// AllSessionCosts returns a copy of all session costs.
+func (ct *CostTracker) AllSessionCosts() map[string]float64 {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	out := make(map[string]float64, len(ct.sessionCosts))
+	for k, v := range ct.sessionCosts {
+		out[k] = v
+	}
+	return out
+}
+
+// MaxBudgetPerSession returns the per-session cost cap.
+func (ct *CostTracker) MaxBudgetPerSession() float64 {
+	return ct.maxPerSession
+}

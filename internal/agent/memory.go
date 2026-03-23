@@ -22,6 +22,15 @@ type StoredMessage struct {
 	CreatedAt      time.Time `db:"created_at"`
 }
 
+// ConversationInfo provides metadata about a conversation.
+type ConversationInfo struct {
+	ID           string    `db:"id"            json:"id"`
+	Adapter      string    `db:"adapter"       json:"adapter"`
+	ExternalID   string    `db:"external_id"   json:"external_id"`
+	CreatedAt    time.Time `db:"created_at"    json:"created_at"`
+	MessageCount int       `db:"message_count" json:"message_count"`
+}
+
 // MemoryStore defines the interface for conversation persistence.
 type MemoryStore interface {
 	GetOrCreateConversation(ctx context.Context, adapter, externalID string) (string, error)
@@ -31,6 +40,7 @@ type MemoryStore interface {
 	GetOrCreateConversationByID(ctx context.Context, convID string) error
 	AddMessage(ctx context.Context, convID string, msg StoredMessage) error
 	GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error)
+	ListConversations(ctx context.Context) ([]ConversationInfo, error)
 	Close() error
 }
 
@@ -141,6 +151,22 @@ func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limi
 		return nil, fmt.Errorf("getting messages: %w", err)
 	}
 	return messages, nil
+}
+
+func (s *SQLiteMemoryStore) ListConversations(ctx context.Context) ([]ConversationInfo, error) {
+	var convos []ConversationInfo
+	err := s.db.SelectContext(ctx, &convos,
+		`SELECT c.id, c.adapter, c.external_id, c.created_at,
+		        COALESCE(m.cnt, 0) AS message_count
+		 FROM conversations c
+		 LEFT JOIN (SELECT conversation_id, COUNT(*) AS cnt FROM messages GROUP BY conversation_id) m
+		   ON m.conversation_id = c.id
+		 ORDER BY c.created_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing conversations: %w", err)
+	}
+	return convos, nil
 }
 
 func (s *SQLiteMemoryStore) Close() error {

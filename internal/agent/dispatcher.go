@@ -100,6 +100,20 @@ func (d *Dispatcher) Dispatch(ctx context.Context, agentName string, msg adapter
 	return e.HandleMessage(ctx, msg)
 }
 
+// Agents returns the names of all registered agents.
+func (d *Dispatcher) Agents() []string {
+	names := make([]string, 0, len(d.agents))
+	for name := range d.agents {
+		names = append(names, name)
+	}
+	return names
+}
+
+// Agent returns the Engine for the named agent, or nil if not found.
+func (d *Dispatcher) Agent(name string) *Engine {
+	return d.agents[name]
+}
+
 // Run starts all adapters and processes incoming messages until ctx is cancelled.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	for _, a := range d.adapters {

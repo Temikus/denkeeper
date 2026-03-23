@@ -68,6 +68,18 @@ func NewEngine(
 // Name returns the agent's name.
 func (e *Engine) Name() string { return e.name }
 
+// PermissionTier returns the agent's default permission tier.
+func (e *Engine) PermissionTier() string { return e.permissions.Tier() }
+
+// ModelName returns the agent's default LLM model.
+func (e *Engine) ModelName() string { return e.router.DefaultModel() }
+
+// Skills returns the agent's loaded skills (global + agent-specific, merged).
+func (e *Engine) Skills() []skill.Skill { return e.skills }
+
+// HasTools returns true if the agent has MCP tools configured.
+func (e *Engine) HasTools() bool { return e.tools != nil }
+
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending trigger-matched skill instructions and the
 // memory update directive when the engine has write_memory permission.

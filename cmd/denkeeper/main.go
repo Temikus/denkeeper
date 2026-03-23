@@ -359,7 +359,13 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Start API server (if enabled)
 	if cfg.API.Enabled {
-		apiServer := api.New(cfg.API, logger)
+		apiServer := api.New(cfg.API, api.Deps{
+			Dispatcher:  dispatcher,
+			Scheduler:   sched,
+			CostTracker: costTracker,
+			Memory:      memory,
+			Config:      cfg,
+		}, logger)
 		go func() {
 			if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("api server error", "error", err)

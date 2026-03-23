@@ -38,6 +38,9 @@ type Router struct {
 	mu              sync.Mutex // protects balanceCache
 }
 
+// DefaultModel returns the router's default model name.
+func (r *Router) DefaultModel() string { return r.defaultModel }
+
 func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *Router {
 	return &Router{
 		providers:       make(map[string]Provider),

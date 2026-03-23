@@ -12,13 +12,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 )
+
+// Deps holds the application dependencies the API server needs to serve data.
+type Deps struct {
+	Dispatcher  *agent.Dispatcher
+	Scheduler   *scheduler.Scheduler
+	CostTracker *llm.CostTracker
+	Memory      agent.MemoryStore
+	Config      *config.Config
+}
 
 // Server is the external REST API server.
 type Server struct {
 	httpServer *http.Server
 	cfg        config.APIConfig
+	deps       Deps
 	logger     *slog.Logger
 
 	// limiters tracks per-key rate limiter state.
@@ -27,9 +40,10 @@ type Server struct {
 }
 
 // New creates a new API server. The server is not started until Run is called.
-func New(cfg config.APIConfig, logger *slog.Logger) *Server {
+func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	s := &Server{
 		cfg:      cfg,
+		deps:     deps,
 		logger:   logger,
 		limiters: make(map[string]*rateLimiter),
 	}
@@ -39,8 +53,15 @@ func New(cfg config.APIConfig, logger *slog.Logger) *Server {
 	// Health endpoint — no auth required.
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 
-	// All other routes go through auth middleware.
-	// (Endpoints will be added in subsequent PRs.)
+	// Data endpoints — require auth with appropriate scopes.
+	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
+	mux.HandleFunc("GET /api/v1/agents/{name}", s.RequireScope("admin", s.handleAgent))
+	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
+	mux.HandleFunc("GET /api/v1/skills", s.RequireScope("skills:read", s.handleSkills))
+	mux.HandleFunc("GET /api/v1/skills/{agent}", s.RequireScope("skills:read", s.handleSkillsByAgent))
+	mux.HandleFunc("GET /api/v1/schedules", s.RequireScope("schedules:read", s.handleSchedules))
+	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
 
 	var handler http.Handler = mux
 	handler = s.middlewareLogging(handler)
@@ -99,6 +120,243 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleAgents lists all registered agents with metadata.
+func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
+	type agentInfo struct {
+		Name           string   `json:"name"`
+		PermissionTier string   `json:"permission_tier"`
+		Model          string   `json:"model"`
+		SkillCount     int      `json:"skill_count"`
+		HasTools       bool     `json:"has_tools"`
+		Adapters       []string `json:"adapters,omitempty"`
+	}
+
+	names := s.deps.Dispatcher.Agents()
+	agents := make([]agentInfo, 0, len(names))
+	// Look up configured adapter bindings for each agent.
+	bindingMap := make(map[string][]string)
+	for _, ac := range s.deps.Config.Agents {
+		bindingMap[ac.Name] = ac.Adapters
+	}
+	for _, name := range names {
+		e := s.deps.Dispatcher.Agent(name)
+		if e == nil {
+			continue
+		}
+		agents = append(agents, agentInfo{
+			Name:           e.Name(),
+			PermissionTier: e.PermissionTier(),
+			Model:          e.ModelName(),
+			SkillCount:     len(e.Skills()),
+			HasTools:       e.HasTools(),
+			Adapters:       bindingMap[name],
+		})
+	}
+	writeJSON(w, http.StatusOK, agents)
+}
+
+// handleAgent returns details for a single agent.
+func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	e := s.deps.Dispatcher.Agent(name)
+	if e == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	type skillInfo struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description,omitempty"`
+		Version     string   `json:"version,omitempty"`
+		Triggers    []string `json:"triggers,omitempty"`
+	}
+
+	skills := e.Skills()
+	skillList := make([]skillInfo, len(skills))
+	for i, sk := range skills {
+		skillList[i] = skillInfo{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Version:     sk.Version,
+			Triggers:    sk.Triggers,
+		}
+	}
+
+	var adapters []string
+	for _, ac := range s.deps.Config.Agents {
+		if ac.Name == name {
+			adapters = ac.Adapters
+			break
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":            e.Name(),
+		"permission_tier": e.PermissionTier(),
+		"model":           e.ModelName(),
+		"has_tools":       e.HasTools(),
+		"adapters":        adapters,
+		"skills":          skillList,
+	})
+}
+
+// handleCosts returns cost tracking data.
+func (s *Server) handleCosts(w http.ResponseWriter, _ *http.Request) {
+	sessions := s.deps.CostTracker.AllSessionCosts()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"global_cost":        s.deps.CostTracker.GlobalCost(),
+		"max_per_session":    s.deps.CostTracker.MaxBudgetPerSession(),
+		"session_count":      len(sessions),
+		"session_costs":      sessions,
+	})
+}
+
+// handleSkills lists all skills across all agents (deduplicated by name).
+func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
+	type skillInfo struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description,omitempty"`
+		Version     string   `json:"version,omitempty"`
+		Triggers    []string `json:"triggers,omitempty"`
+		Agent       string   `json:"agent"`
+	}
+
+	var all []skillInfo
+	seen := make(map[string]bool)
+	for _, name := range s.deps.Dispatcher.Agents() {
+		e := s.deps.Dispatcher.Agent(name)
+		if e == nil {
+			continue
+		}
+		for _, sk := range e.Skills() {
+			key := name + ":" + sk.Name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, skillInfo{
+				Name:        sk.Name,
+				Description: sk.Description,
+				Version:     sk.Version,
+				Triggers:    sk.Triggers,
+				Agent:       name,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, all)
+}
+
+// handleSkillsByAgent lists skills for a specific agent.
+func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
+	agentName := r.PathValue("agent")
+	e := s.deps.Dispatcher.Agent(agentName)
+	if e == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	type skillInfo struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description,omitempty"`
+		Version     string   `json:"version,omitempty"`
+		Triggers    []string `json:"triggers,omitempty"`
+	}
+
+	skills := e.Skills()
+	out := make([]skillInfo, len(skills))
+	for i, sk := range skills {
+		out[i] = skillInfo{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Version:     sk.Version,
+			Triggers:    sk.Triggers,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSchedules lists all registered schedule entries.
+func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
+	entries := s.deps.Scheduler.Entries()
+
+	type scheduleInfo struct {
+		Name        string   `json:"name"`
+		Type        string   `json:"type"`
+		Expression  string   `json:"expression"`
+		Skill       string   `json:"skill,omitempty"`
+		SessionTier string   `json:"session_tier,omitempty"`
+		SessionMode string   `json:"session_mode,omitempty"`
+		Channel     string   `json:"channel,omitempty"`
+		Tags        []string `json:"tags,omitempty"`
+		Enabled     bool     `json:"enabled"`
+		LastRun     string   `json:"last_run,omitempty"`
+		NextRun     string   `json:"next_run,omitempty"`
+	}
+
+	out := make([]scheduleInfo, len(entries))
+	for i, e := range entries {
+		info := scheduleInfo{
+			Name:        e.Name,
+			Type:        string(e.Type),
+			Expression:  e.Expr,
+			Skill:       e.Skill,
+			SessionTier: e.SessionTier,
+			SessionMode: e.SessionMode,
+			Channel:     e.Channel,
+			Tags:        e.Tags,
+			Enabled:     e.Enabled,
+		}
+		if !e.LastRun.IsZero() {
+			info.LastRun = e.LastRun.Format(time.RFC3339)
+		}
+		if !e.NextRun.IsZero() {
+			info.NextRun = e.NextRun.Format(time.RFC3339)
+		}
+		out[i] = info
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSessions lists all conversations from the memory store.
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	convos, err := s.deps.Memory.ListConversations(r.Context())
+	if err != nil {
+		s.logger.Error("listing conversations", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, convos)
+}
+
+// handleSessionMessages returns messages for a specific conversation.
+func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	messages, err := s.deps.Memory.GetMessages(r.Context(), id, 200)
+	if err != nil {
+		s.logger.Error("getting messages", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	type messageInfo struct {
+		Role       string    `json:"role"`
+		Content    string    `json:"content"`
+		TokensUsed int       `json:"tokens_used,omitempty"`
+		CreatedAt  time.Time `json:"created_at"`
+	}
+
+	out := make([]messageInfo, len(messages))
+	for i, m := range messages {
+		out[i] = messageInfo{
+			Role:       m.Role,
+			Content:    m.Content,
+			TokensUsed: m.TokensUsed,
+			CreatedAt:  m.CreatedAt,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------------------
