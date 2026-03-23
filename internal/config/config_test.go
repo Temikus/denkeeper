@@ -804,3 +804,436 @@ api_key = "sk-test"
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Multi-agent config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_Agents_BackwardCompat(t *testing.T) {
+	// No [[agents]] defined — should synthesize a "default" agent from [agent]/[session].
+	tomlData := []byte(baseConfig + `
+[agent]
+persona_dir = "/custom/persona"
+skills_dir = "/custom/skills"
+
+[session]
+tier = "autonomous"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1 (synthesized)", len(cfg.Agents))
+	}
+	a := cfg.Agents[0]
+	if a.Name != "default" {
+		t.Errorf("Name = %q, want default", a.Name)
+	}
+	if a.PersonaDir != "/custom/persona" {
+		t.Errorf("PersonaDir = %q, want /custom/persona", a.PersonaDir)
+	}
+	if a.SkillsDir != "/custom/skills" {
+		t.Errorf("SkillsDir = %q, want /custom/skills", a.SkillsDir)
+	}
+	if a.SessionTier != "autonomous" {
+		t.Errorf("SessionTier = %q, want autonomous", a.SessionTier)
+	}
+	if len(a.Adapters) != 1 || a.Adapters[0] != "telegram" {
+		t.Errorf("Adapters = %v, want [telegram]", a.Adapters)
+	}
+}
+
+func TestParse_Agents_Explicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+description = "General assistant"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+
+[[agents]]
+name = "work"
+description = "Work assistant"
+persona_dir = "/agents/work"
+adapters = ["telegram:99999"]
+llm_model = "openai/gpt-4o"
+session_tier = "restricted"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Agents) != 2 {
+		t.Fatalf("Agents len = %d, want 2", len(cfg.Agents))
+	}
+
+	a0 := cfg.Agents[0]
+	if a0.Name != "default" || a0.PersonaDir != "/agents/default" {
+		t.Errorf("Agents[0] = %+v, unexpected", a0)
+	}
+
+	a1 := cfg.Agents[1]
+	if a1.Name != "work" {
+		t.Errorf("Agents[1].Name = %q, want work", a1.Name)
+	}
+	if a1.LLMModel != "openai/gpt-4o" {
+		t.Errorf("Agents[1].LLMModel = %q, want openai/gpt-4o", a1.LLMModel)
+	}
+	if a1.SessionTier != "restricted" {
+		t.Errorf("Agents[1].SessionTier = %q, want restricted", a1.SessionTier)
+	}
+}
+
+func TestParse_Agents_MissingDefault(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "work"
+persona_dir = "/agents/work"
+adapters = ["telegram"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when no default agent defined")
+	}
+	if !strings.Contains(err.Error(), "named \"default\"") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_DuplicateName(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/a"
+adapters = ["telegram"]
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/b"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for duplicate agent name")
+	}
+	if !strings.Contains(err.Error(), "duplicate agent name") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_InvalidSessionTier(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "root"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid agent session_tier")
+	}
+}
+
+func TestParse_Agents_ConflictingWildcard(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+
+[[agents]]
+name = "other"
+persona_dir = "/agents/other"
+adapters = ["telegram"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for conflicting wildcard bindings")
+	}
+	if !strings.Contains(err.Error(), "conflicts with") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_PersonaDirDefault(t *testing.T) {
+	// When persona_dir is omitted from [[agents]], it should default to ~/.denkeeper/agents/<name>.
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+adapters = ["telegram"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(cfg.Agents[0].PersonaDir, filepath.Join(".denkeeper", "agents", "default")) {
+		t.Errorf("PersonaDir = %q, want suffix .denkeeper/agents/default", cfg.Agents[0].PersonaDir)
+	}
+}
+
+func TestParse_Schedules_AgentField(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+
+[[agents]]
+name = "work"
+persona_dir = "/agents/work"
+adapters = ["telegram:99999"]
+
+[[schedules]]
+name = "work-report"
+type = "agent"
+schedule = "@daily"
+agent = "work"
+channel = "telegram:99999"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Schedules[0].Agent != "work" {
+		t.Errorf("Schedules[0].Agent = %q, want work", cfg.Schedules[0].Agent)
+	}
+}
+
+func TestParse_Schedules_AgentDefault(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[[schedules]]
+name = "test"
+type = "agent"
+schedule = "@daily"
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Schedules[0].Agent != "default" {
+		t.Errorf("Schedules[0].Agent = %q, want default", cfg.Schedules[0].Agent)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// API config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_APIDisabledByDefault(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.API.Enabled {
+		t.Error("API should be disabled by default")
+	}
+}
+
+func TestParse_APIEnabled(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+listen = ":9090"
+
+[[api.keys]]
+name = "test-key"
+key = "dk-secret"
+scopes = ["health", "chat"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.API.Enabled {
+		t.Error("API should be enabled")
+	}
+	if cfg.API.Listen != ":9090" {
+		t.Errorf("Listen = %q, want :9090", cfg.API.Listen)
+	}
+	if len(cfg.API.Keys) != 1 {
+		t.Fatalf("Keys len = %d, want 1", len(cfg.API.Keys))
+	}
+	if cfg.API.Keys[0].Name != "test-key" {
+		t.Errorf("Keys[0].Name = %q, want test-key", cfg.API.Keys[0].Name)
+	}
+}
+
+func TestParse_APIDefaultListen(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.API.Listen != ":8080" {
+		t.Errorf("Listen = %q, want :8080 (default)", cfg.API.Listen)
+	}
+}
+
+func TestParse_APITLSMissingCertFile(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+tls = true
+key_file = "certs/api.key"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for TLS without cert_file")
+	}
+	if !strings.Contains(err.Error(), "cert_file") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APITLSMissingKeyFile(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+tls = true
+cert_file = "certs/api.crt"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for TLS without key_file")
+	}
+	if !strings.Contains(err.Error(), "key_file") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIKeyMissingName(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+key = "dk-secret"
+scopes = ["health"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for key missing name")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIKeyMissingSecret(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+name = "test"
+scopes = ["health"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for key missing secret")
+	}
+	if !strings.Contains(err.Error(), "key is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIKeyDuplicateName(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+name = "dup"
+key = "dk-one"
+scopes = ["health"]
+
+[[api.keys]]
+name = "dup"
+key = "dk-two"
+scopes = ["chat"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for duplicate key name")
+	}
+	if !strings.Contains(err.Error(), "duplicate key name") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIKeyNoScopes(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+name = "test"
+key = "dk-secret"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for key with no scopes")
+	}
+	if !strings.Contains(err.Error(), "at least one scope") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIKeyInvalidScope(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+name = "test"
+key = "dk-secret"
+scopes = ["health", "superadmin"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid scope")
+	}
+	if !strings.Contains(err.Error(), "invalid scope") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Schedules_InvalidAgent(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "bad-agent-ref"
+type = "agent"
+schedule = "@daily"
+agent = "nonexistent"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for schedule referencing nonexistent agent")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

@@ -68,6 +68,36 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # "restricted"  — chat, read-only tools, memory only
 # tier = "supervised"
 
+# ---------------------------------------------------------------------------
+# Agent Instances (Multi-Agent)
+# ---------------------------------------------------------------------------
+# Define multiple agents, each with their own persona, LLM model, and adapter
+# bindings. If no [[agents]] section is present, a single "default" agent is
+# synthesized from the [agent] and [session] settings above.
+#
+# One agent MUST be named "default" — it handles messages that don't match
+# any specific binding.
+#
+# Adapter binding formats:
+#   "telegram"        — wildcard: all Telegram messages go to this agent
+#   "telegram:12345"  — specific: only messages from chat ID 12345
+
+# [[agents]]
+# name         = "default"
+# description  = "General-purpose personal assistant"
+# persona_dir  = "~/.denkeeper/agents/default"
+# adapters     = ["telegram"]
+# # llm_model  = "anthropic/claude-sonnet-4-20250514"   # optional override
+# # session_tier = "supervised"                          # optional override
+
+# [[agents]]
+# name         = "work-assistant"
+# description  = "Focused work productivity agent"
+# persona_dir  = "~/.denkeeper/agents/work-assistant"
+# adapters     = ["telegram:987654321"]   # bound to a specific chat
+# llm_model    = "openai/gpt-4o"
+# session_tier = "restricted"
+
 [memory]
 # Path to SQLite database for conversation history
 # db_path = "~/.denkeeper/data/memory.db"  # default
@@ -94,6 +124,35 @@ format = "text"
 # api_key = "YOUR_OPENAI_API_KEY"
 
 # ---------------------------------------------------------------------------
+# External REST API
+# ---------------------------------------------------------------------------
+# Exposes an HTTP API for external integrations: mobile clients, dashboards,
+# automation. Disabled by default.
+
+# [api]
+# enabled = true
+# listen = ":8080"                 # address to bind (default ":8080")
+# tls = true                       # enable HTTPS (requires cert_file + key_file)
+# cert_file = "certs/api.crt"
+# key_file = "certs/api.key"
+# cors_origins = ["https://dashboard.example.com"]  # allowed CORS origins
+# rate_limit = 10.0                # max requests per second per API key (0 = unlimited)
+
+# API keys — each key has a name, secret, and list of scopes.
+# Valid scopes: chat, sessions:read, costs:read, skills:read, skills:write,
+#               schedules:read, schedules:write, health, admin
+
+# [[api.keys]]
+# name   = "mobile-app"
+# key    = "dk-your-secret-key-here"
+# scopes = ["chat", "sessions:read", "costs:read"]
+
+# [[api.keys]]
+# name   = "monitoring"
+# key    = "dk-monitoring-key-here"
+# scopes = ["health", "costs:read"]
+
+# ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
 # Each [[schedules]] entry defines a recurring task.
@@ -113,6 +172,7 @@ format = "text"
 #
 # Optional fields:
 #   skill        - skill to invoke on each run
+#   agent        - target agent name (default: "default")
 #   session_tier - "supervised" (default), "autonomous", or "restricted"
 #   channel      - delivery channel e.g. "telegram:123456789"
 #   tags         - freeform labels for filtering and organisation
