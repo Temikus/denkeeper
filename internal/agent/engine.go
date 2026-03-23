@@ -279,6 +279,7 @@ func (e *Engine) handleMessage(ctx context.Context, msg adapter.IncomingMessage)
 			if err := a.Send(ctx, adapter.OutgoingMessage{
 				ExternalID: msg.ExternalID,
 				Text:       responseText,
+				IsVoice:    msg.IsVoice,
 			}); err != nil {
 				return fmt.Errorf("sending response: %w", err)
 			}

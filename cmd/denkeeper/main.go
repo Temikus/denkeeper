@@ -24,6 +24,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
+	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
 )
 
 // Build-time variables set via ldflags.
@@ -140,8 +141,30 @@ func runServe(_ *cobra.Command, _ []string) error {
 		router.SetFallbacks(fallbackRules)
 	}
 
+	// Init voice providers (if configured)
+	var voiceOpts *telegram.VoiceOpts
+	if cfg.Voice.STTProvider != "" || cfg.Voice.TTSProvider != "" {
+		voiceOpts = &telegram.VoiceOpts{
+			TTSVoice:       cfg.Voice.TTSVoice,
+			AutoVoiceReply: cfg.Voice.AutoVoiceReply,
+		}
+		if cfg.Voice.STTProvider == "openai" {
+			client := openaivoice.New(cfg.Voice.OpenAI.APIKey)
+			voiceOpts.STT = client
+		}
+		if cfg.Voice.TTSProvider == "openai" {
+			client := openaivoice.New(cfg.Voice.OpenAI.APIKey)
+			voiceOpts.TTS = client
+		}
+		logger.Info("voice support enabled",
+			"stt_provider", cfg.Voice.STTProvider,
+			"tts_provider", cfg.Voice.TTSProvider,
+			"auto_voice_reply", cfg.Voice.AutoVoiceReply,
+		)
+	}
+
 	// Init Telegram adapter
-	tgAdapter, err := telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger)
+	tgAdapter, err := telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger, voiceOpts)
 	if err != nil {
 		return fmt.Errorf("initializing telegram: %w", err)
 	}

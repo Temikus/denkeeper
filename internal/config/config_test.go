@@ -685,3 +685,122 @@ env = { MY_VAR = "${DENKEEPER_TEST_VAR}" }
 		t.Errorf("MY_VAR = %q, want expanded-value", tc.Env["MY_VAR"])
 	}
 }
+
+func TestParse_VoiceConfig(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[voice]
+stt_provider = "openai"
+tts_provider = "openai"
+tts_voice = "nova"
+auto_voice_reply = true
+
+[voice.openai]
+api_key = "sk-voice-test"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Voice.STTProvider != "openai" {
+		t.Errorf("STTProvider = %q, want openai", cfg.Voice.STTProvider)
+	}
+	if cfg.Voice.TTSProvider != "openai" {
+		t.Errorf("TTSProvider = %q, want openai", cfg.Voice.TTSProvider)
+	}
+	if cfg.Voice.TTSVoice != "nova" {
+		t.Errorf("TTSVoice = %q, want nova", cfg.Voice.TTSVoice)
+	}
+	if !cfg.Voice.AutoVoiceReply {
+		t.Error("AutoVoiceReply should be true")
+	}
+	if cfg.Voice.OpenAI.APIKey != "sk-voice-test" {
+		t.Errorf("OpenAI.APIKey = %q, want sk-voice-test", cfg.Voice.OpenAI.APIKey)
+	}
+}
+
+func TestParse_VoiceDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Voice.STTProvider != "" {
+		t.Errorf("STTProvider should be empty, got %q", cfg.Voice.STTProvider)
+	}
+	if cfg.Voice.TTSProvider != "" {
+		t.Errorf("TTSProvider should be empty, got %q", cfg.Voice.TTSProvider)
+	}
+	if cfg.Voice.AutoVoiceReply {
+		t.Error("AutoVoiceReply should default to false")
+	}
+}
+
+func TestParse_VoiceTTSVoiceDefault(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[voice]
+tts_provider = "openai"
+
+[voice.openai]
+api_key = "sk-test"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Voice.TTSVoice != "alloy" {
+		t.Errorf("TTSVoice should default to alloy, got %q", cfg.Voice.TTSVoice)
+	}
+}
+
+func TestParse_VoiceInvalidSTTProvider(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[voice]
+stt_provider = "google"
+
+[voice.openai]
+api_key = "sk-test"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for unsupported STT provider")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_VoiceMissingAPIKey(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[voice]
+stt_provider = "openai"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for missing OpenAI API key")
+	}
+	if !strings.Contains(err.Error(), "api_key is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_VoiceInvalidTTSVoice(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[voice]
+tts_provider = "openai"
+tts_voice = "invalid-voice"
+
+[voice.openai]
+api_key = "sk-test"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid TTS voice")
+	}
+	if !strings.Contains(err.Error(), "invalid voice") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

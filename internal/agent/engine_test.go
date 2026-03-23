@@ -1018,3 +1018,51 @@ func TestEngine_HandleMessage_SessionTierInvalid_FallsBack(t *testing.T) {
 		t.Fatalf("sent %d messages, want 1", len(ma.sent))
 	}
 }
+
+func TestEngine_HandleMessage_VoiceFlagPropagated(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Voice response",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+
+	ma := &mockAdapter{name: "test"}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine(router, store, []adapter.Adapter{ma}, permissions, nil, "Test.", nil, nil, logger)
+
+	err = engine.handleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-voice",
+		UserID:     "user-1",
+		UserName:   "voiceuser",
+		Text:       "transcribed voice text",
+		Timestamp:  time.Now(),
+		IsVoice:    true,
+	})
+	if err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	if len(ma.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(ma.sent))
+	}
+	if !ma.sent[0].IsVoice {
+		t.Error("outgoing message IsVoice should be true when incoming was voice")
+	}
+}

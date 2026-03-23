@@ -79,6 +79,21 @@ level = "info"
 format = "text"
 
 # ---------------------------------------------------------------------------
+# Voice (STT / TTS)
+# ---------------------------------------------------------------------------
+# Enables speech-to-text (incoming voice messages → text) and optionally
+# text-to-speech (replies sent back as voice). Requires an OpenAI API key.
+
+# [voice]
+# stt_provider = "openai"           # transcribe incoming voice messages
+# tts_provider = "openai"           # synthesize replies to voice (requires auto_voice_reply)
+# tts_voice = "alloy"               # OpenAI voice: alloy, echo, fable, onyx, nova, shimmer
+# auto_voice_reply = false           # reply with voice when user sends a voice message
+#
+# [voice.openai]
+# api_key = "YOUR_OPENAI_API_KEY"
+
+# ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
 # Each [[schedules]] entry defines a recurring task.

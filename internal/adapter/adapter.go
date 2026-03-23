@@ -22,12 +22,18 @@ type IncomingMessage struct {
 	// SkillName, when non-empty, indicates this message targets a specific skill.
 	// Used by the scheduler to activate schedule-triggered skills.
 	SkillName string
+	// IsVoice is true when the original message was a voice note.
+	// The adapter sets this after transcribing the audio via STT.
+	IsVoice bool
 }
 
 // OutgoingMessage represents a message to send to an external platform.
 type OutgoingMessage struct {
 	ExternalID string
 	Text       string
+	// IsVoice signals that the adapter should attempt to send a voice reply
+	// (via TTS) instead of plain text, if configured to do so.
+	IsVoice bool
 }
 
 // Adapter defines the interface for communication platform integrations.

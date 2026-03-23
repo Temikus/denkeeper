@@ -17,6 +17,20 @@ type Config struct {
 	Session   SessionConfig         `toml:"session"`
 	Schedules []ScheduleConfig      `toml:"schedules"`
 	Tools     map[string]ToolConfig `toml:"tools"`
+	Voice     VoiceConfig           `toml:"voice"`
+}
+
+// VoiceConfig controls speech-to-text and text-to-speech.
+type VoiceConfig struct {
+	STTProvider    string           `toml:"stt_provider"`     // "openai" or "" (disabled)
+	TTSProvider    string           `toml:"tts_provider"`     // "openai" or "" (disabled)
+	TTSVoice       string           `toml:"tts_voice"`        // e.g. "alloy"
+	AutoVoiceReply bool             `toml:"auto_voice_reply"` // reply with voice when user sends voice
+	OpenAI         VoiceOpenAIConfig `toml:"openai"`
+}
+
+type VoiceOpenAIConfig struct {
+	APIKey string `toml:"api_key"`
 }
 
 // ToolConfig defines an MCP tool server to spawn.
@@ -192,6 +206,10 @@ func applyDefaults(cfg *Config) {
 		cfg.Tools[name] = tc
 	}
 
+	if cfg.Voice.TTSVoice == "" && cfg.Voice.TTSProvider != "" {
+		cfg.Voice.TTSVoice = "alloy"
+	}
+
 	trueVal := true
 	for i := range cfg.Schedules {
 		s := &cfg.Schedules[i]
@@ -242,6 +260,31 @@ func validate(cfg *Config) error {
 	}
 	if err := validateTools(cfg.Tools); err != nil {
 		return err
+	}
+	if err := validateVoice(&cfg.Voice); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validTTSVoices is the set of supported OpenAI TTS voice IDs.
+var validTTSVoices = map[string]bool{
+	"alloy": true, "echo": true, "fable": true,
+	"onyx": true, "nova": true, "shimmer": true,
+}
+
+func validateVoice(v *VoiceConfig) error {
+	if v.STTProvider != "" && v.STTProvider != "openai" {
+		return fmt.Errorf("config: voice.stt_provider: unsupported provider %q — only \"openai\" is supported", v.STTProvider)
+	}
+	if v.TTSProvider != "" && v.TTSProvider != "openai" {
+		return fmt.Errorf("config: voice.tts_provider: unsupported provider %q — only \"openai\" is supported", v.TTSProvider)
+	}
+	if (v.STTProvider == "openai" || v.TTSProvider == "openai") && v.OpenAI.APIKey == "" {
+		return fmt.Errorf("config: voice.openai.api_key is required when using OpenAI voice providers")
+	}
+	if v.TTSProvider != "" && !validTTSVoices[v.TTSVoice] {
+		return fmt.Errorf("config: voice.tts_voice: invalid voice %q — must be one of: alloy, echo, fable, onyx, nova, shimmer", v.TTSVoice)
 	}
 	return nil
 }
