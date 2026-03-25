@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -53,6 +56,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Health endpoint — no auth required.
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 
+	// Chat endpoint.
+	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.handleChat))
+
 	// Data endpoints — require auth with appropriate scopes.
 	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
 	mux.HandleFunc("GET /api/v1/agents/{name}", s.RequireScope("admin", s.handleAgent))
@@ -62,6 +68,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/schedules", s.RequireScope("schedules:read", s.handleSchedules))
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
 
 	var handler http.Handler = mux
 	handler = s.middlewareLogging(handler)
@@ -206,10 +213,10 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCosts(w http.ResponseWriter, _ *http.Request) {
 	sessions := s.deps.CostTracker.AllSessionCosts()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"global_cost":        s.deps.CostTracker.GlobalCost(),
-		"max_per_session":    s.deps.CostTracker.MaxBudgetPerSession(),
-		"session_count":      len(sessions),
-		"session_costs":      sessions,
+		"global_cost":     s.deps.CostTracker.GlobalCost(),
+		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(),
+		"session_count":   len(sessions),
+		"session_costs":   sessions,
 	})
 }
 
@@ -328,6 +335,121 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, convos)
+}
+
+// chatRequest is the JSON body for POST /api/v1/chat.
+type chatRequest struct {
+	Agent     string `json:"agent"`      // optional; defaults to "default"
+	SessionID string `json:"session_id"` // optional; generated if blank
+	Message   string `json:"message"`    // required
+	UserID    string `json:"user_id"`    // optional
+	UserName  string `json:"user_name"`  // optional
+}
+
+// chatResponse is the JSON body returned by POST /api/v1/chat (non-streaming).
+type chatResponse struct {
+	SessionID string `json:"session_id"`
+	Response  string `json:"response"`
+}
+
+// handleChat handles POST /api/v1/chat. It accepts a JSON body describing the
+// message and returns the agent's response. When the request includes
+// Accept: text/event-stream, the response is streamed as Server-Sent Events.
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+		return
+	}
+
+	agentName := req.Agent
+	if agentName == "" {
+		agentName = "default"
+	}
+	eng := s.deps.Dispatcher.Agent(agentName)
+	if eng == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = generateID()
+	}
+
+	msg := adapter.IncomingMessage{
+		Adapter:        "api",
+		ExternalID:     sessionID,
+		UserID:         req.UserID,
+		UserName:       req.UserName,
+		Text:           req.Message,
+		Timestamp:      time.Now(),
+		ConversationID: sessionID,
+	}
+
+	if r.Header.Get("Accept") == "text/event-stream" {
+		s.handleChatSSE(w, r, eng, msg, sessionID)
+		return
+	}
+
+	responseText, err := eng.Chat(r.Context(), msg)
+	if err != nil {
+		s.logger.Error("chat error", "error", err, "agent", agentName, "session", sessionID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to process message"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, chatResponse{
+		SessionID: sessionID,
+		Response:  responseText,
+	})
+}
+
+// handleChatSSE streams the response as Server-Sent Events.
+// The engine pipeline is currently synchronous, so we send a single content
+// event followed by a done event once the response is ready.
+func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	flush := func() {
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	writeEvent := func(data any) {
+		b, _ := json.Marshal(data)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+		flush()
+	}
+
+	responseText, err := eng.Chat(r.Context(), msg)
+	if err != nil {
+		s.logger.Error("chat SSE error", "error", err, "session", sessionID)
+		writeEvent(map[string]string{"type": "error", "message": "failed to process message"})
+		return
+	}
+
+	writeEvent(map[string]string{"type": "content", "text": responseText})
+	writeEvent(map[string]string{"type": "done", "session_id": sessionID})
+}
+
+// handleDeleteSession handles DELETE /api/v1/sessions/{id}.
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.deps.Memory.DeleteConversation(r.Context(), id); err != nil {
+		s.logger.Error("deleting conversation", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSessionMessages returns messages for a specific conversation.
@@ -533,4 +655,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// generateID returns a cryptographically random 16-character hex string suitable
+// for use as a session identifier.
+func generateID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

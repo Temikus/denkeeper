@@ -1,12 +1,15 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -16,6 +19,18 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
+
+// mockProvider implements llm.Provider for testing.
+type mockProvider struct {
+	response *llm.ChatResponse
+	err      error
+}
+
+func (m *mockProvider) Name() string { return "mock" }
+func (m *mockProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return m.response, m.err
+}
+func (m *mockProvider) HealthCheck(_ context.Context) error { return nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -35,9 +50,17 @@ func testDeps() Deps {
 	mem, _ := agent.NewInMemoryStore()
 	costTracker := llm.NewCostTracker(1.0)
 
-	// Build a minimal "default" engine.
+	// Build a minimal "default" engine with a mock LLM provider.
 	perms, _ := security.NewPermissionEngine("supervised")
-	router := llm.NewRouter("openrouter", "test-model", costTracker)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Hello from mock!",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
 	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{
 		{Name: "greet", Description: "Greeting skill", Version: "1.0", Triggers: []string{"command:hello"}},
 		{Name: "help", Description: "Help system"},
@@ -626,5 +649,247 @@ func TestSessionMessages_EmptyForUnknown(t *testing.T) {
 	}
 	if len(messages) != 0 {
 		t.Errorf("messages count = %d, want 0", len(messages))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Chat endpoint
+// ---------------------------------------------------------------------------
+
+// makeChatReq builds an authenticated POST /api/v1/chat request with JSON body.
+func makeChatReq(body map[string]any) *http.Request {
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestChat_RequiresAuth(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	b, _ := json.Marshal(map[string]string{"message": "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestChat_EmptyMessage(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, makeChatReq(map[string]any{"message": ""}))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChat_UnknownAgent(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, makeChatReq(map[string]any{
+		"message": "hello",
+		"agent":   "nonexistent",
+	}))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestChat_JSONResponse(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, makeChatReq(map[string]any{"message": "hello"}))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["response"] != "Hello from mock!" {
+		t.Errorf("response = %v, want 'Hello from mock!'", resp["response"])
+	}
+	if resp["session_id"] == "" {
+		t.Error("session_id should be generated and returned")
+	}
+}
+
+func TestChat_JSONResponse_ExplicitSessionID(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, makeChatReq(map[string]any{
+		"message":    "hello",
+		"session_id": "my-session-123",
+	}))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["session_id"] != "my-session-123" {
+		t.Errorf("session_id = %v, want my-session-123", resp["session_id"])
+	}
+}
+
+func TestChat_SSEResponse(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	b, _ := json.Marshal(map[string]string{"message": "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	// Parse SSE events.
+	var events []map[string]string
+	scanner := bufio.NewScanner(rec.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev map[string]string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+			t.Fatalf("parse SSE event: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events count = %d, want 2", len(events))
+	}
+	if events[0]["type"] != "content" || events[0]["text"] != "Hello from mock!" {
+		t.Errorf("events[0] = %v, want content/Hello from mock!", events[0])
+	}
+	if events[1]["type"] != "done" || events[1]["session_id"] == "" {
+		t.Errorf("events[1] = %v, want done with session_id", events[1])
+	}
+}
+
+func TestChat_HistoryPersisted(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	// First message.
+	rec1 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec1, makeChatReq(map[string]any{
+		"message":    "first message",
+		"session_id": "persist-test",
+	}))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first chat status = %d", rec1.Code)
+	}
+
+	// Second message in same session.
+	rec2 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec2, makeChatReq(map[string]any{
+		"message":    "second message",
+		"session_id": "persist-test",
+	}))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second chat status = %d", rec2.Code)
+	}
+
+	// Verify 4 messages stored: 2 user + 2 assistant.
+	ctx := context.Background()
+	messages, err := deps.Memory.GetMessages(ctx, "persist-test", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 4 {
+		t.Errorf("message count = %d, want 4", len(messages))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delete session endpoint
+// ---------------------------------------------------------------------------
+
+func TestDeleteSession_DeletesConversation(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+
+	// Create a conversation via the memory store.
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "telegram", "del-test")
+	_ = deps.Memory.AddMessage(ctx, "telegram:del-test", agent.StoredMessage{Role: "user", Content: "hello"})
+
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodDelete, "/api/v1/sessions/telegram:del-test")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	// Conversation should be gone — messages return empty.
+	messages, err := deps.Memory.GetMessages(ctx, "telegram:del-test", 100)
+	if err != nil {
+		t.Fatalf("GetMessages after delete: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Errorf("messages count = %d after delete, want 0", len(messages))
+	}
+}
+
+func TestDeleteSession_NonExistentIsNoOp(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	req := authedRequest(http.MethodDelete, "/api/v1/sessions/does-not-exist")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestDeleteSession_RequiresAuth(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/some-session", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

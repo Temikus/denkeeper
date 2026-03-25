@@ -197,6 +197,58 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_DeleteConversation(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "del-user")
+	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi"})
+	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hello"})
+
+	// Delete the conversation.
+	if err := store.DeleteConversation(ctx, convID); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
+
+	// Messages should be gone.
+	got, err := store.GetMessages(ctx, convID, 100)
+	if err != nil {
+		t.Fatalf("GetMessages after delete: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d messages after delete, want 0", len(got))
+	}
+
+	// Conversations list should not include it.
+	convos, err := store.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("ListConversations: %v", err)
+	}
+	for _, c := range convos {
+		if c.ID == convID {
+			t.Errorf("conversation %q still in list after delete", convID)
+		}
+	}
+}
+
+func TestMemoryStore_DeleteConversation_NonExistent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	// Should not error on non-existent ID.
+	if err := store.DeleteConversation(ctx, "does-not-exist"); err != nil {
+		t.Errorf("DeleteConversation on non-existent: %v", err)
+	}
+}
+
 func TestMemoryStore_MultipleConversations(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {

@@ -41,6 +41,9 @@ type MemoryStore interface {
 	AddMessage(ctx context.Context, convID string, msg StoredMessage) error
 	GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error)
 	ListConversations(ctx context.Context) ([]ConversationInfo, error)
+	// DeleteConversation removes a conversation and all its messages by ID.
+	// Returns nil if the conversation does not exist (idempotent).
+	DeleteConversation(ctx context.Context, convID string) error
 	Close() error
 }
 
@@ -167,6 +170,17 @@ func (s *SQLiteMemoryStore) ListConversations(ctx context.Context) ([]Conversati
 		return nil, fmt.Errorf("listing conversations: %w", err)
 	}
 	return convos, nil
+}
+
+func (s *SQLiteMemoryStore) DeleteConversation(ctx context.Context, convID string) error {
+	// Delete messages first (FK reference), then the conversation row.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, convID); err != nil {
+		return fmt.Errorf("deleting messages: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE id = ?`, convID); err != nil {
+		return fmt.Errorf("deleting conversation: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteMemoryStore) Close() error {

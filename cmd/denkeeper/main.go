@@ -15,9 +15,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
-	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/adapter/telegram"
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"

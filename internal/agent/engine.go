@@ -122,9 +122,10 @@ func extractMemoryUpdate(text string) (cleaned, memUpdate string) {
 	return cleaned, memUpdate
 }
 
-// HandleMessage processes a single incoming message through the full pipeline:
-// permission check → conversation lookup → LLM call → tool loop → response.
-func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
+// Chat processes a single incoming message through the full pipeline and
+// returns the response text. It does not call the sendFunc — use this when
+// the caller wants to receive the reply directly (e.g. the REST API).
+func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
 	// Resolve effective permissions: per-message override or global default.
 	perms := e.permissions
 	if msg.SessionTier != "" {
@@ -148,7 +149,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	}
 
 	if !perms.CanExecute("chat") {
-		return fmt.Errorf("chat action not permitted")
+		return "", fmt.Errorf("chat action not permitted")
 	}
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
@@ -158,7 +159,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	var convID string
 	if msg.ConversationID != "" {
 		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
-			return fmt.Errorf("getting conversation: %w", err)
+			return "", fmt.Errorf("getting conversation: %w", err)
 		}
 		convID = msg.ConversationID
 	} else {
@@ -166,7 +167,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		// Namespace conversations by agent name so each agent has its own history.
 		convID, err = e.memory.GetOrCreateConversation(ctx, e.name+":"+msg.Adapter, msg.ExternalID)
 		if err != nil {
-			return fmt.Errorf("getting conversation: %w", err)
+			return "", fmt.Errorf("getting conversation: %w", err)
 		}
 	}
 
@@ -175,13 +176,13 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		Role:    "user",
 		Content: msg.Text,
 	}); err != nil {
-		return fmt.Errorf("storing user message: %w", err)
+		return "", fmt.Errorf("storing user message: %w", err)
 	}
 
 	// Load conversation history
 	history, err := e.memory.GetMessages(ctx, convID, maxContextMessages)
 	if err != nil {
-		return fmt.Errorf("loading history: %w", err)
+		return "", fmt.Errorf("loading history: %w", err)
 	}
 
 	// Build LLM messages: system prompt + history
@@ -194,19 +195,19 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 	// Call LLM
 	resp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
-		return fmt.Errorf("LLM completion: %w", err)
+		return "", fmt.Errorf("LLM completion: %w", err)
 	}
 
 	// Tool-call loop: keep calling tools until the LLM produces a text response.
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		if round >= maxToolRounds {
-			return fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+			return "", fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
 		}
 		if e.tools == nil {
-			return fmt.Errorf("LLM requested tool calls but no tool manager configured")
+			return "", fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
 		if !perms.CanExecute("use_tools") {
-			return fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+			return "", fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 
 		// Append the assistant's tool-call message to history.
@@ -233,7 +234,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		// Call LLM again with tool results.
 		resp, err = e.router.Complete(ctx, convID, llmMessages)
 		if err != nil {
-			return fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+			return "", fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
 	}
 
@@ -255,10 +256,21 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		Content:    responseText,
 		TokensUsed: resp.TokensUsed.Total,
 	}); err != nil {
-		return fmt.Errorf("storing assistant message: %w", err)
+		return "", fmt.Errorf("storing assistant message: %w", err)
 	}
 
-	// Send response back via the originating adapter.
+	e.logger.Info("chat complete", "adapter", msg.Adapter, "tokens", resp.TokensUsed.Total)
+	return responseText, nil
+}
+
+// HandleMessage processes a single incoming message and sends the response
+// back via the adapter's SendFunc. It delegates the full pipeline to Chat.
+func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
+	responseText, err := e.Chat(ctx, msg)
+	if err != nil {
+		return err
+	}
+
 	if e.sendFunc != nil {
 		if err := e.sendFunc(ctx, adapter.OutgoingMessage{
 			ExternalID: msg.ExternalID,
@@ -269,6 +281,6 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 		}
 	}
 
-	e.logger.Info("response sent", "adapter", msg.Adapter, "tokens", resp.TokensUsed.Total)
+	e.logger.Info("response sent", "adapter", msg.Adapter)
 	return nil
 }
