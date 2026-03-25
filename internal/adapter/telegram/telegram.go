@@ -24,13 +24,14 @@ type VoiceOpts struct {
 }
 
 type Adapter struct {
-	bot            *tgbotapi.BotAPI
-	allowedUsers   map[int64]bool
-	logger         *slog.Logger
-	stt            voice.STTProvider
-	tts            voice.TTSProvider
-	ttsVoice       string
-	autoVoiceReply bool
+	bot              *tgbotapi.BotAPI
+	allowedUsers     map[int64]bool
+	logger           *slog.Logger
+	stt              voice.STTProvider
+	tts              voice.TTSProvider
+	ttsVoice         string
+	autoVoiceReply   bool
+	callbackResolver adapter.CallbackResolver // nil = ignore callback queries
 }
 
 func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *VoiceOpts) (*Adapter, error) {
@@ -83,6 +84,12 @@ func newWithBot(bot *tgbotapi.BotAPI, allowedUsers []int64, logger *slog.Logger,
 
 func (a *Adapter) Name() string { return "telegram" }
 
+// SetCallbackResolver sets the resolver used to handle inline keyboard button
+// clicks (callback queries). Call this after adapter construction, before Start.
+func (a *Adapter) SetCallbackResolver(r adapter.CallbackResolver) {
+	a.callbackResolver = r
+}
+
 func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMessage) error {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30
@@ -94,6 +101,12 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 		case <-ctx.Done():
 			return ctx.Err()
 		case update := <-updates:
+			// Handle inline keyboard button clicks.
+			if update.CallbackQuery != nil && a.callbackResolver != nil {
+				a.handleCallbackQuery(ctx, update.CallbackQuery)
+				continue
+			}
+
 			if update.Message == nil {
 				continue
 			}
@@ -177,6 +190,17 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 	// Text reply (default path).
 	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
 
+	// Attach inline keyboard buttons if provided.
+	if len(msg.Buttons) > 0 {
+		rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(msg.Buttons))
+		for _, btn := range msg.Buttons {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(btn.Label, btn.CallbackData),
+			))
+		}
+		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	}
+
 	// Try Markdown first, fall back to plain text if the LLM response
 	// contains characters that break Telegram's Markdown parser.
 	tgMsg.ParseMode = "Markdown"
@@ -191,6 +215,34 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 	}
 
 	return nil
+}
+
+// handleCallbackQuery processes an inline keyboard button click. It answers
+// the Telegram callback query (required to clear the loading state) and then
+// asks the resolver for a confirmation message to send back to the chat.
+func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.CallbackQuery) {
+	// Answer the callback query first — Telegram requires this within a few
+	// seconds or the button shows a loading spinner indefinitely.
+	answer := tgbotapi.NewCallback(cq.ID, "")
+	if _, err := a.bot.Request(answer); err != nil {
+		a.logger.Warn("failed to answer callback query", "error", err)
+	}
+
+	// Ask the resolver what text to send back to the user.
+	responseText, err := a.callbackResolver.Resolve(ctx, cq.Data)
+	if err != nil {
+		a.logger.Error("resolving callback query", "data", cq.Data, "error", err)
+		return
+	}
+	if responseText == "" {
+		return // unknown callback, silently ignore
+	}
+
+	// Send the confirmation message to the originating chat.
+	reply := tgbotapi.NewMessage(cq.Message.Chat.ID, responseText)
+	if _, err := a.bot.Send(reply); err != nil {
+		a.logger.Warn("failed to send callback response", "chat_id", cq.Message.Chat.ID, "error", err)
+	}
 }
 
 // downloadVoiceFile retrieves a voice file from Telegram's servers by file ID.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
@@ -70,7 +71,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -136,7 +137,7 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	ctx := context.Background()
 
@@ -182,7 +183,7 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	// Create a permission engine that denies everything.
 	permissions := security.NewDenyAll()
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -219,7 +220,7 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -259,7 +260,7 @@ func TestEngine_HandleMessage_NilSendFunc(t *testing.T) {
 	}
 
 	// nil sendFunc — should not panic, message still processed and stored.
-	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -296,7 +297,7 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	// Empty text should be handled gracefully
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
@@ -336,7 +337,7 @@ func TestEngine_HandleMessage_IsolatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	ctx := context.Background()
 
@@ -417,7 +418,7 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	}
 
 	customPrompt := "You are a custom persona with special instructions."
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, customPrompt, nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, customPrompt, nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -524,7 +525,7 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -596,7 +597,7 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 	}
 
 	// No persona — memory update should be stripped but not persisted.
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Fallback.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Fallback.", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -673,7 +674,7 @@ func TestEngine_HandleMessage_ToolCallNoManager(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	// LLM requests tools but no tool manager — should error.
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
@@ -722,7 +723,7 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
@@ -771,7 +772,7 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
 
 	// Override to "restricted" via SessionTier — should deny tool use.
@@ -829,7 +830,7 @@ func TestEngine_HandleMessage_SessionTierEmpty_UsesGlobal(t *testing.T) {
 	}
 
 	toolMgr := tool.NewManager(testLogger())
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
 
 	// Empty SessionTier — should use global "supervised" and allow tool calls.
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
@@ -873,7 +874,7 @@ func TestEngine_HandleMessage_SessionTierInvalid_FallsBack(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
 
 	// Invalid SessionTier — should log warning and fall back to global.
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
@@ -917,7 +918,7 @@ func TestEngine_HandleMessage_VoiceFlagPropagated(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Test.", nil, nil, testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Test.", nil, nil, nil, testLogger())
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -941,7 +942,7 @@ func TestEngine_HandleMessage_VoiceFlagPropagated(t *testing.T) {
 }
 
 func TestEngine_Name(t *testing.T) {
-	engine := NewEngine("work-assistant", nil, nil, nil, nil, nil, "", nil, nil, testLogger())
+	engine := NewEngine("work-assistant", nil, nil, nil, nil, nil, "", nil, nil, nil, testLogger())
 	if engine.Name() != "work-assistant" {
 		t.Errorf("Name() = %q, want work-assistant", engine.Name())
 	}
@@ -970,8 +971,8 @@ func TestEngine_ConversationNamespacing(t *testing.T) {
 	}
 
 	// Two engines with different names, same store.
-	engine1 := NewEngine("agent-a", router, store, sent.send, permissions, nil, "Agent A.", nil, nil, testLogger())
-	engine2 := NewEngine("agent-b", router, store, sent.send, permissions, nil, "Agent B.", nil, nil, testLogger())
+	engine1 := NewEngine("agent-a", router, store, sent.send, permissions, nil, "Agent A.", nil, nil, nil, testLogger())
+	engine2 := NewEngine("agent-b", router, store, sent.send, permissions, nil, "Agent B.", nil, nil, nil, testLogger())
 
 	ctx := context.Background()
 	msg := adapter.IncomingMessage{
@@ -998,5 +999,290 @@ func TestEngine_ConversationNamespacing(t *testing.T) {
 	}
 	if len(msgs2) != 2 {
 		t.Errorf("agent-b has %d messages, want 2", len(msgs2))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// USER_UPDATE directive tests
+// ---------------------------------------------------------------------------
+
+func TestExtractUserUpdate_Found(t *testing.T) {
+	text := "Here is my answer.\n\n[USER_UPDATE]\nUser prefers brief answers.\n[/USER_UPDATE]"
+	cleaned, update := extractUserUpdate(text)
+	if cleaned != "Here is my answer." {
+		t.Errorf("cleaned = %q, want %q", cleaned, "Here is my answer.")
+	}
+	if update != "User prefers brief answers." {
+		t.Errorf("update = %q, want %q", update, "User prefers brief answers.")
+	}
+}
+
+func TestExtractUserUpdate_NotFound(t *testing.T) {
+	text := "Just a normal response."
+	cleaned, update := extractUserUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned = %q, want original text", cleaned)
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestExtractUserUpdate_MissingCloseTag(t *testing.T) {
+	text := "Answer.\n\n[USER_UPDATE]\nSome content without close tag."
+	cleaned, update := extractUserUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned should be unchanged when close tag is missing")
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestEngine_Chat_UserUpdate_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create a persona dir with USER.md so Save can target it.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Got it!\n\n[USER_UPDATE]\nUser likes short answers.\n[/USER_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Remember my preference",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// USER.md should NOT have been written yet (pending approval).
+	if _, readErr := os.ReadFile(filepath.Join(dir, "USER.md")); readErr == nil {
+		t.Error("USER.md should not exist yet — approval is pending")
+	}
+
+	// A pending approval should exist.
+	pending, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("List approvals: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != approval.ActionKindUserUpdate {
+		t.Errorf("kind = %q, want user_update", pending[0].Kind)
+	}
+}
+
+func TestEngine_Chat_UserUpdate_Autonomous_WritesDirectly(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Done!\n\n[USER_UPDATE]\nUser is a Go developer.\n[/USER_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Remember I am a Go developer",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// USER.md should have been written directly (autonomous tier).
+	data, err := os.ReadFile(filepath.Join(dir, "USER.md"))
+	if err != nil {
+		t.Fatalf("USER.md not written: %v", err)
+	}
+	if !strings.Contains(string(data), "User is a Go developer.") {
+		t.Errorf("USER.md = %q, want it to contain the update", string(data))
+	}
+}
+
+func TestEngine_Chat_UserUpdate_NoApprovalManager_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Sure!\n\n[USER_UPDATE]\nSome update.\n[/USER_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	// approvals=nil — directive should be silently stripped.
+	sent := &sentMessages{}
+	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, nil, testLogger())
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Remember something",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Directive should be stripped from response.
+	if strings.Contains(responseText, "USER_UPDATE") {
+		t.Errorf("response should not contain USER_UPDATE tags, got: %q", responseText)
+	}
+
+	// USER.md should not have been written.
+	if _, readErr := os.ReadFile(filepath.Join(dir, "USER.md")); readErr == nil {
+		t.Error("USER.md should not exist — no approval manager")
+	}
+}
+
+func TestEngine_HandleMessage_WithPendingApproval_AttachesButtons(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Noted!\n\n[USER_UPDATE]\nUser likes Go.\n[/USER_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, approvalMgr, testLogger())
+
+	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Remember I like Go",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	if len(sent.msgs) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(sent.msgs))
+	}
+	msg := sent.msgs[0]
+	if len(msg.Buttons) != 2 {
+		t.Fatalf("buttons count = %d, want 2", len(msg.Buttons))
+	}
+	if msg.Buttons[0].Label != "✅ Approve" {
+		t.Errorf("buttons[0].Label = %q, want '✅ Approve'", msg.Buttons[0].Label)
+	}
+	if msg.Buttons[1].Label != "❌ Deny" {
+		t.Errorf("buttons[1].Label = %q, want '❌ Deny'", msg.Buttons[1].Label)
+	}
+	if !strings.HasSuffix(msg.Buttons[0].CallbackData, ":approve") {
+		t.Errorf("approve button callback = %q, want :approve suffix", msg.Buttons[0].CallbackData)
+	}
+	if !strings.HasSuffix(msg.Buttons[1].CallbackData, ":deny") {
+		t.Errorf("deny button callback = %q, want :deny suffix", msg.Buttons[1].CallbackData)
 	}
 }

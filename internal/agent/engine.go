@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
@@ -17,8 +18,11 @@ import (
 const maxContextMessages = 50
 const maxToolRounds = 10
 
-const memUpdateOpen = "[MEMORY_UPDATE]"
+const memUpdateOpen  = "[MEMORY_UPDATE]"
 const memUpdateClose = "[/MEMORY_UPDATE]"
+
+const userUpdateOpen  = "[USER_UPDATE]"
+const userUpdateClose = "[/USER_UPDATE]"
 
 // SendFunc is a callback for sending a response back to the originating adapter.
 // The Dispatcher sets this when constructing each Engine.
@@ -32,10 +36,11 @@ type Engine struct {
 	memory         MemoryStore
 	sendFunc       SendFunc // sends responses back via the originating adapter
 	permissions    *security.PermissionEngine
-	persona        *persona.Persona // nil = use fallbackPrompt
-	fallbackPrompt string           // used when persona is nil
-	skills         []skill.Skill    // filtered per-message based on triggers
-	tools          *tool.Manager    // nil = no tools available
+	persona        *persona.Persona  // nil = use fallbackPrompt
+	fallbackPrompt string            // used when persona is nil
+	skills         []skill.Skill     // filtered per-message based on triggers
+	tools          *tool.Manager     // nil = no tools available
+	approvals      *approval.Manager // nil = USER_UPDATE directives silently stripped
 	logger         *slog.Logger
 }
 
@@ -49,6 +54,7 @@ func NewEngine(
 	fallbackPrompt string,
 	skills []skill.Skill,
 	tools *tool.Manager,
+	approvals *approval.Manager,
 	logger *slog.Logger,
 ) *Engine {
 	return &Engine{
@@ -61,6 +67,7 @@ func NewEngine(
 		fallbackPrompt: fallbackPrompt,
 		skills:         skills,
 		tools:          tools,
+		approvals:      approvals,
 		logger:         logger.With("agent", name),
 	}
 }
@@ -88,6 +95,9 @@ func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine, msg adapter
 	if e.persona != nil {
 		base = e.persona.SystemPrompt()
 		if inst := e.persona.MemoryUpdateInstruction(); inst != "" && perms.CanExecute("write_memory") {
+			base += "\n\n" + inst
+		}
+		if inst := e.persona.UserUpdateInstruction(perms.Tier()); inst != "" {
 			base += "\n\n" + inst
 		}
 	} else {
@@ -122,10 +132,38 @@ func extractMemoryUpdate(text string) (cleaned, memUpdate string) {
 	return cleaned, memUpdate
 }
 
+// extractUserUpdate parses and removes a [USER_UPDATE]...[/USER_UPDATE] block
+// from text. Returns the cleaned text and the proposed USER.md content
+// (empty if no block was found or the block was malformed).
+func extractUserUpdate(text string) (cleaned, userUpdate string) {
+	start := strings.Index(text, userUpdateOpen)
+	if start == -1 {
+		return text, ""
+	}
+	rest := text[start+len(userUpdateOpen):]
+	end := strings.Index(rest, userUpdateClose)
+	if end == -1 {
+		return text, ""
+	}
+	userUpdate = strings.TrimSpace(rest[:end])
+	after := rest[end+len(userUpdateClose):]
+	cleaned = strings.TrimSpace(text[:start] + after)
+	return cleaned, userUpdate
+}
+
 // Chat processes a single incoming message through the full pipeline and
 // returns the response text. It does not call the sendFunc — use this when
 // the caller wants to receive the reply directly (e.g. the REST API).
+// Any pending approval request is accessible via GET /api/v1/approvals.
 func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
+	text, _, err := e.chatWithApproval(ctx, msg)
+	return text, err
+}
+
+// chatWithApproval is the internal full-pipeline implementation. It returns
+// both the response text and any approval request that was created during this
+// call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
+func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage) (string, *approval.Request, error) {
 	// Resolve effective permissions: per-message override or global default.
 	perms := e.permissions
 	if msg.SessionTier != "" {
@@ -149,7 +187,7 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 	}
 
 	if !perms.CanExecute("chat") {
-		return "", fmt.Errorf("chat action not permitted")
+		return "", nil, fmt.Errorf("chat action not permitted")
 	}
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
@@ -159,7 +197,7 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 	var convID string
 	if msg.ConversationID != "" {
 		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
-			return "", fmt.Errorf("getting conversation: %w", err)
+			return "", nil, fmt.Errorf("getting conversation: %w", err)
 		}
 		convID = msg.ConversationID
 	} else {
@@ -167,7 +205,7 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 		// Namespace conversations by agent name so each agent has its own history.
 		convID, err = e.memory.GetOrCreateConversation(ctx, e.name+":"+msg.Adapter, msg.ExternalID)
 		if err != nil {
-			return "", fmt.Errorf("getting conversation: %w", err)
+			return "", nil, fmt.Errorf("getting conversation: %w", err)
 		}
 	}
 
@@ -176,13 +214,13 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 		Role:    "user",
 		Content: msg.Text,
 	}); err != nil {
-		return "", fmt.Errorf("storing user message: %w", err)
+		return "", nil, fmt.Errorf("storing user message: %w", err)
 	}
 
 	// Load conversation history
 	history, err := e.memory.GetMessages(ctx, convID, maxContextMessages)
 	if err != nil {
-		return "", fmt.Errorf("loading history: %w", err)
+		return "", nil, fmt.Errorf("loading history: %w", err)
 	}
 
 	// Build LLM messages: system prompt + history
@@ -195,19 +233,19 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 	// Call LLM
 	resp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
-		return "", fmt.Errorf("LLM completion: %w", err)
+		return "", nil, fmt.Errorf("LLM completion: %w", err)
 	}
 
 	// Tool-call loop: keep calling tools until the LLM produces a text response.
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		if round >= maxToolRounds {
-			return "", fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+			return "", nil, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
 		}
 		if e.tools == nil {
-			return "", fmt.Errorf("LLM requested tool calls but no tool manager configured")
+			return "", nil, fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
 		if !perms.CanExecute("use_tools") {
-			return "", fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+			return "", nil, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 
 		// Append the assistant's tool-call message to history.
@@ -234,7 +272,7 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 		// Call LLM again with tool results.
 		resp, err = e.router.Complete(ctx, convID, llmMessages)
 		if err != nil {
-			return "", fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+			return "", nil, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
 	}
 
@@ -250,33 +288,84 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 		}
 	}
 
-	// Store assistant response (without the memory directive).
+	// Extract and process any user profile update directive.
+	responseText, userUpdate := extractUserUpdate(responseText)
+	var pendingApproval *approval.Request
+
+	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
+		switch perms.Tier() {
+		case "autonomous":
+			// Autonomous tier: write USER.md directly.
+			if err := e.persona.Save("user", userUpdate); err != nil {
+				e.logger.Warn("failed to persist user update", "error", err)
+			} else {
+				e.logger.Info("user profile updated directly", "bytes", len(userUpdate))
+			}
+		case "supervised":
+			// Supervised tier: submit for approval if manager is configured.
+			if e.approvals != nil {
+				personaRef := e.persona
+				req, submitErr := e.approvals.Submit(
+					ctx,
+					e.name,
+					approval.ActionKindUserUpdate,
+					"Update user profile (USER.md)",
+					userUpdate,
+					msg.ExternalID,
+					msg.Adapter,
+					convID,
+					func(actCtx context.Context, payload string) error {
+						return personaRef.Save("user", payload)
+					},
+				)
+				if submitErr != nil {
+					e.logger.Warn("user update approval submit failed", "error", submitErr)
+				} else {
+					pendingApproval = req
+					responseText += "\n\n_Proposed user profile update is pending your approval._"
+					e.logger.Info("user update approval submitted", "id", req.ID)
+				}
+			}
+		// restricted: silently drop — no instruction was given so this is purely defensive
+		}
+	}
+
+	// Store assistant response (without any directives).
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:       "assistant",
 		Content:    responseText,
 		TokensUsed: resp.TokensUsed.Total,
 	}); err != nil {
-		return "", fmt.Errorf("storing assistant message: %w", err)
+		return "", nil, fmt.Errorf("storing assistant message: %w", err)
 	}
 
 	e.logger.Info("chat complete", "adapter", msg.Adapter, "tokens", resp.TokensUsed.Total)
-	return responseText, nil
+	return responseText, pendingApproval, nil
 }
 
 // HandleMessage processes a single incoming message and sends the response
-// back via the adapter's SendFunc. It delegates the full pipeline to Chat.
+// back via the adapter's SendFunc. It delegates the full pipeline to
+// chatWithApproval so it can attach inline keyboard buttons when an approval
+// was created during this call.
 func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
-	responseText, err := e.Chat(ctx, msg)
+	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg)
 	if err != nil {
 		return err
 	}
 
 	if e.sendFunc != nil {
-		if err := e.sendFunc(ctx, adapter.OutgoingMessage{
+		out := adapter.OutgoingMessage{
 			ExternalID: msg.ExternalID,
 			Text:       responseText,
 			IsVoice:    msg.IsVoice,
-		}); err != nil {
+		}
+		if pendingApproval != nil {
+			out.Buttons = []adapter.KeyboardButton{
+				{Label: "✅ Approve", CallbackData: pendingApproval.CallbackData + ":approve"},
+				{Label: "❌ Deny", CallbackData: pendingApproval.CallbackData + ":deny"},
+			}
+		}
+		if err := e.sendFunc(ctx, out); err != nil {
 			return fmt.Errorf("sending response: %w", err)
 		}
 	}

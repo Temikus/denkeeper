@@ -137,6 +137,34 @@ If important context emerges during this conversation that you should remember f
 The content between the tags replaces MEMORY.md entirely — preserve any existing context you want to keep. Only include this when genuinely useful information needs to persist across sessions. Omit it entirely when no update is needed.`
 }
 
+// UserUpdateInstruction returns the system prompt fragment that instructs the
+// agent how to request a USER.md update via a [USER_UPDATE] directive.
+// Returns an empty string if the persona has no write path or the tier is
+// "restricted" (which cannot write user files).
+func (p *Persona) UserUpdateInstruction(tier string) string {
+	if p.dir == "" || tier == "restricted" {
+		return ""
+	}
+	var modeNote string
+	if tier == "autonomous" {
+		modeNote = "In autonomous mode, this will be applied directly."
+	} else {
+		modeNote = "In supervised mode, this will be presented for your approval before being applied."
+	}
+	return `## User Profile Updates
+
+If the user shares important personal information they want remembered persistently ` +
+		`(name, preferences, background details, routines), include a user update block ` +
+		`at the end of your response:
+
+[USER_UPDATE]
+<complete updated USER.md content>
+[/USER_UPDATE]
+
+` + modeNote + ` Only include this when the user explicitly shares information they want ` +
+		`persisted across sessions. Omit entirely when not needed.`
+}
+
 // IsEditable reports whether the agent can modify the given section without elevated permissions.
 // Unknown sections are treated as not editable (returns false).
 func (p *Persona) IsEditable(section string) bool {

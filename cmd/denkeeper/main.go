@@ -18,6 +18,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter/telegram"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
@@ -120,6 +121,22 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("initializing memory store: %w", err)
 	}
 	defer func() { _ = memory.Close() }()
+
+	// Init approval store (same WAL database file as memory store)
+	approvalStore, err := approval.NewSQLiteStore(cfg.Memory.DBPath)
+	if err != nil {
+		return fmt.Errorf("initializing approval store: %w", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+
+	// Expire any approvals left pending from a previous run.
+	if n, expErr := approvalStore.ExpirePending(context.Background()); expErr != nil {
+		logger.Warn("failed to expire pending approvals", "error", expErr)
+	} else if n > 0 {
+		logger.Info("expired pending approvals from previous run", "count", n)
+	}
+
+	approvalManager := approval.NewManager(approvalStore, logger)
 
 	// Init LLM provider (shared across all agents)
 	orClient := openrouter.New(cfg.LLM.OpenRouter.APIKey)
@@ -270,6 +287,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			persona.DefaultPrompt,
 			mergedSkills,
 			toolMgr,
+			approvalManager,
 			logger,
 		)
 
@@ -289,6 +307,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Re-create dispatcher with the fully wired engines and bindings.
 	dispatcher = agent.NewDispatcher(engines, bindings, []adapter.Adapter{tgAdapter}, logger)
+
+	// Wire the callback resolver so Telegram inline keyboard buttons resolve approvals.
+	tgAdapter.SetCallbackResolver(&callbackShim{
+		manager: approvalManager,
+		logger:  logger,
+	})
 
 	// Init and wire scheduler
 	sched := scheduler.New(logger)
@@ -365,6 +389,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			CostTracker: costTracker,
 			Memory:      memory,
 			Config:      cfg,
+			Approvals:   approvalManager,
 		}, logger)
 		go func() {
 			if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
@@ -380,4 +405,31 @@ func runServe(_ *cobra.Command, _ []string) error {
 	)
 
 	return dispatcher.Run(ctx)
+}
+
+// callbackShim implements adapter.CallbackResolver, bridging Telegram inline
+// keyboard callbacks to the approval manager.
+type callbackShim struct {
+	manager *approval.Manager
+	logger  *slog.Logger
+}
+
+func (s *callbackShim) Resolve(ctx context.Context, data string) (string, error) {
+	if !strings.HasPrefix(data, "appr:") {
+		return "", nil // not an approval callback
+	}
+
+	resolved, err := s.manager.ResolveByCallback(ctx, data, "telegram")
+	if err != nil {
+		if err == approval.ErrNotFound {
+			s.logger.Warn("callback for unknown approval", "data", data)
+			return "", nil
+		}
+		return fmt.Sprintf("Error processing request: %v", err), err
+	}
+
+	if strings.HasSuffix(data, ":approve") {
+		return "✅ Approved: " + resolved.Summary, nil
+	}
+	return "❌ Denied: " + resolved.Summary, nil
 }

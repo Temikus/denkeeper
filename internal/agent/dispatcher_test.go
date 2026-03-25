@@ -32,7 +32,7 @@ func newTestEngine(t *testing.T, name string, sent *sentMessages) *Engine {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	return NewEngine(name, router, store, sent.send, perms, nil, "Agent "+name, nil, nil, testLogger())
+	return NewEngine(name, router, store, sent.send, perms, nil, "Agent "+name, nil, nil, nil, testLogger())
 }
 
 func TestDispatcher_ResolveAgent_SpecificBinding(t *testing.T) {

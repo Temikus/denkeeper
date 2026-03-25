@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -61,10 +62,13 @@ func testDeps() Deps {
 			FinishReason: "stop",
 		},
 	})
+	approvalStore, _ := approval.NewInMemoryStore()
+	approvalMgr := approval.NewManager(approvalStore, logger)
+
 	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{
 		{Name: "greet", Description: "Greeting skill", Version: "1.0", Triggers: []string{"command:hello"}},
 		{Name: "help", Description: "Help system"},
-	}, nil, logger)
+	}, nil, approvalMgr, logger)
 
 	dispatcher := agent.NewDispatcher(
 		map[string]*agent.Engine{"default": e},
@@ -80,6 +84,7 @@ func testDeps() Deps {
 		Scheduler:   sched,
 		CostTracker: costTracker,
 		Memory:      mem,
+		Approvals:   approvalMgr,
 		Config: &config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
@@ -105,6 +110,7 @@ func allScopesKey() config.APIKeyConfig {
 			"sessions:read", "costs:read",
 			"skills:read", "skills:write",
 			"schedules:read", "schedules:write",
+			"approvals:read", "approvals:write",
 		},
 	}
 }
@@ -886,6 +892,269 @@ func TestDeleteSession_RequiresAuth(t *testing.T) {
 	srv := New(cfg, testDeps(), testLogger())
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/some-session", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Approvals endpoints
+// ---------------------------------------------------------------------------
+
+// submitTestApproval creates a pending approval via the manager and returns its ID.
+func submitTestApproval(t *testing.T, mgr *approval.Manager, summary string) string {
+	t.Helper()
+	req, err := mgr.Submit(
+		context.Background(),
+		"default",
+		approval.ActionKindUserUpdate,
+		summary,
+		"payload content",
+		"chat-123",
+		"api",
+		"session-abc",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	return req.ID
+}
+
+func TestHandleListApprovals_Empty(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/approvals"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("approvals count = %d, want 0", len(list))
+	}
+}
+
+func TestHandleListApprovals_FilterByStatus(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	submitTestApproval(t, deps.Approvals, "pending approval")
+	srv := New(cfg, deps, testLogger())
+
+	// Filter by pending — should return 1.
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/approvals?status=pending"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("approvals count = %d, want 1", len(list))
+	}
+	if list[0]["status"] != "pending" {
+		t.Errorf("status = %v, want pending", list[0]["status"])
+	}
+
+	// Filter by approved — should return 0.
+	rec2 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec2, authedRequest(http.MethodGet, "/api/v1/approvals?status=approved"))
+	var list2 []map[string]any
+	if err := json.NewDecoder(rec2.Body).Decode(&list2); err != nil {
+		t.Fatalf("decode approved: %v", err)
+	}
+	if len(list2) != 0 {
+		t.Errorf("approved count = %d, want 0", len(list2))
+	}
+}
+
+func TestHandleGetApproval_Found(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	id := submitTestApproval(t, deps.Approvals, "get me")
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/approvals/"+id))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["id"] != id {
+		t.Errorf("id = %v, want %s", resp["id"], id)
+	}
+	if resp["summary"] != "get me" {
+		t.Errorf("summary = %v, want 'get me'", resp["summary"])
+	}
+}
+
+func TestHandleGetApproval_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/approvals/nonexistent"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleApproveApproval_Success(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	actionCalled := false
+	req, err := deps.Approvals.Submit(
+		context.Background(),
+		"default", approval.ActionKindUserUpdate,
+		"approve me", "payload",
+		"chat-123", "api", "session-1",
+		func(_ context.Context, _ string) error {
+			actionCalled = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/approvals/"+req.ID+"/approve"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !actionCalled {
+		t.Error("expected action closure to be called on approval")
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "approved" {
+		t.Errorf("status = %v, want approved", resp["status"])
+	}
+}
+
+func TestHandleDenyApproval_Success(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	actionCalled := false
+	req, err := deps.Approvals.Submit(
+		context.Background(),
+		"default", approval.ActionKindUserUpdate,
+		"deny me", "payload",
+		"chat-123", "api", "session-1",
+		func(_ context.Context, _ string) error {
+			actionCalled = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/approvals/"+req.ID+"/deny"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if actionCalled {
+		t.Error("action closure should NOT be called on denial")
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "denied" {
+		t.Errorf("status = %v, want denied", resp["status"])
+	}
+}
+
+func TestHandleApproveApproval_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/approvals/doesnotexist/approve"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleApproveApproval_AlreadyResolved(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	id := submitTestApproval(t, deps.Approvals, "already resolved")
+	// Resolve once.
+	if _, err := deps.Approvals.Resolve(context.Background(), id, true, "api"); err != nil {
+		t.Fatalf("first Resolve: %v", err)
+	}
+	srv := New(cfg, deps, testLogger())
+
+	// Second resolve should return 409.
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/approvals/"+id+"/approve"))
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+}
+
+func TestHandleApprovals_NilManager_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Approvals = nil // simulate unconfigured approvals
+	srv := New(cfg, deps, testLogger())
+
+	paths := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/approvals"},
+		{http.MethodGet, "/api/v1/approvals/someid"},
+		{http.MethodPost, "/api/v1/approvals/someid/approve"},
+		{http.MethodPost, "/api/v1/approvals/someid/deny"},
+	}
+
+	for _, p := range paths {
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, authedRequest(p.method, p.path))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s %s: status = %d, want %d", p.method, p.path, rec.Code, http.StatusServiceUnavailable)
+		}
+	}
+}
+
+func TestHandleApprovals_RequiresScope(t *testing.T) {
+	// Key with only approvals:read — write endpoints should be 401.
+	readOnlyKey := config.APIKeyConfig{
+		Name: "readonly", Key: "dk-readonly", Scopes: []string{"approvals:read"},
+	}
+	cfg := testConfig(readOnlyKey)
+	srv := New(cfg, testDeps(), testLogger())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/approvals/someid/approve", nil)
+	req.Header.Set("Authorization", "Bearer dk-readonly")
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 

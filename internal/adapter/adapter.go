@@ -27,6 +27,14 @@ type IncomingMessage struct {
 	IsVoice bool
 }
 
+// KeyboardButton is an adapter-agnostic inline action button.
+// Each adapter renders it as appropriate (Telegram: inline keyboard button;
+// others may append as text or ignore if unsupported).
+type KeyboardButton struct {
+	Label        string
+	CallbackData string
+}
+
 // OutgoingMessage represents a message to send to an external platform.
 type OutgoingMessage struct {
 	ExternalID string
@@ -34,6 +42,18 @@ type OutgoingMessage struct {
 	// IsVoice signals that the adapter should attempt to send a voice reply
 	// (via TTS) instead of plain text, if configured to do so.
 	IsVoice bool
+	// Buttons, when non-empty, requests the adapter render an inline keyboard.
+	// Ignored during voice replies.
+	Buttons []KeyboardButton
+}
+
+// CallbackResolver handles adapter callback queries (e.g. Telegram inline
+// button clicks). The adapter calls Resolve when it receives a callback; the
+// resolver maps the callback data to a human-readable confirmation string.
+// Returns ("", nil) if the callback is unknown or not handled.
+// Defined here (not in approval/) to avoid circular imports.
+type CallbackResolver interface {
+	Resolve(ctx context.Context, callbackData string) (responseText string, err error)
 }
 
 // Adapter defines the interface for communication platform integrations.

@@ -1,0 +1,266 @@
+package approval
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"testing"
+)
+
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return NewManager(store, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+}
+
+func TestManager_Submit_AssignsID(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"Test summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if req.ID == "" {
+		t.Error("expected non-empty ID")
+	}
+	if req.CallbackData != "appr:"+req.ID {
+		t.Errorf("unexpected CallbackData %q", req.CallbackData)
+	}
+	if req.Status != StatusPending {
+		t.Errorf("expected pending, got %q", req.Status)
+	}
+}
+
+func TestManager_Submit_RegistersAction(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Action should be in registry.
+	fn, ok := m.registry.Pop(req.ID)
+	if !ok || fn == nil {
+		t.Error("action not registered")
+	}
+}
+
+func TestManager_Resolve_Approved_CallsAction(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	var receivedPayload string
+	req, err := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"summary", "the-payload", "123", "telegram", "conv1",
+		func(_ context.Context, p string) error {
+			receivedPayload = p
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := m.Resolve(ctx, req.ID, true, "test")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Status != StatusApproved {
+		t.Errorf("expected approved, got %q", resolved.Status)
+	}
+	if receivedPayload != "the-payload" {
+		t.Errorf("action received wrong payload: %q", receivedPayload)
+	}
+}
+
+func TestManager_Resolve_Denied_SkipsAction(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	called := false
+	req, err := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error {
+			called = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := m.Resolve(ctx, req.ID, false, "test")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Status != StatusDenied {
+		t.Errorf("expected denied, got %q", resolved.Status)
+	}
+	if called {
+		t.Error("action should not be called on denial")
+	}
+}
+
+func TestManager_Resolve_NotFound(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := m.Resolve(ctx, "missing", true, "test")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestManager_Resolve_AlreadyResolved(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, _ := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"s", "p", "123", "telegram", "c",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if _, err := m.Resolve(ctx, req.ID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.Resolve(ctx, req.ID, false, "test")
+	if !errors.Is(err, ErrAlreadyResolved) {
+		t.Errorf("expected ErrAlreadyResolved, got %v", err)
+	}
+}
+
+func TestManager_Resolve_ActionPoppedOnce(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	callCount := 0
+	req, _ := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"s", "p", "123", "telegram", "c",
+		func(_ context.Context, _ string) error {
+			callCount++
+			return nil
+		},
+	)
+
+	if _, err := m.Resolve(ctx, req.ID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-registering to attempt double-invoke.
+	m.registry.Register(req.ID, func(_ context.Context, _ string) error {
+		callCount++
+		return nil
+	})
+	// But resolve should return ErrAlreadyResolved, not invoke again.
+	_, err := m.Resolve(ctx, req.ID, true, "test")
+	if !errors.Is(err, ErrAlreadyResolved) {
+		t.Errorf("expected ErrAlreadyResolved, got %v", err)
+	}
+	if callCount != 1 {
+		t.Errorf("expected action called once, got %d", callCount)
+	}
+}
+
+func TestManager_ResolveByCallback_Approve(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	var executed string
+	req, _ := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"s", "my-payload", "123", "telegram", "c",
+		func(_ context.Context, p string) error {
+			executed = p
+			return nil
+		},
+	)
+
+	resolved, err := m.ResolveByCallback(ctx, req.CallbackData+":approve", "telegram")
+	if err != nil {
+		t.Fatalf("ResolveByCallback: %v", err)
+	}
+	if resolved.Status != StatusApproved {
+		t.Errorf("expected approved, got %q", resolved.Status)
+	}
+	if executed != "my-payload" {
+		t.Errorf("expected payload %q, got %q", "my-payload", executed)
+	}
+}
+
+func TestManager_ResolveByCallback_Deny(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	called := false
+	req, _ := m.Submit(ctx, "default", ActionKindUserUpdate,
+		"s", "p", "123", "telegram", "c",
+		func(_ context.Context, _ string) error {
+			called = true
+			return nil
+		},
+	)
+
+	resolved, err := m.ResolveByCallback(ctx, req.CallbackData+":deny", "telegram")
+	if err != nil {
+		t.Fatalf("ResolveByCallback: %v", err)
+	}
+	if resolved.Status != StatusDenied {
+		t.Errorf("expected denied, got %q", resolved.Status)
+	}
+	if called {
+		t.Error("action should not be called on denial")
+	}
+}
+
+func TestManager_ResolveByCallback_Unknown(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := m.ResolveByCallback(ctx, "unknown:data", "telegram")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for unknown callback, got %v", err)
+	}
+}
+
+func TestManager_List(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	for range 3 {
+		if _, err := m.Submit(ctx, "default", ActionKindUserUpdate,
+			"s", "p", "123", "telegram", "c",
+			func(_ context.Context, _ string) error { return nil },
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := m.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Errorf("expected 3, got %d", len(all))
+	}
+
+	pending, err := m.List(ctx, StatusPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 3 {
+		t.Errorf("expected 3 pending, got %d", len(pending))
+	}
+}

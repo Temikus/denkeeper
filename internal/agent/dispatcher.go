@@ -100,6 +100,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, agentName string, msg adapter
 	return e.HandleMessage(ctx, msg)
 }
 
+// SendVia sends a message through the adapter registered under adapterName.
+// Returns an error if no adapter with that name is registered.
+func (d *Dispatcher) SendVia(ctx context.Context, adapterName string, msg adapter.OutgoingMessage) error {
+	return d.SendFor(adapterName)(ctx, msg)
+}
+
 // Agents returns the names of all registered agents.
 func (d *Dispatcher) Agents() []string {
 	names := make([]string, 0, len(d.agents))

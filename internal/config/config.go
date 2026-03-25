@@ -538,6 +538,7 @@ var validAPIScopes = map[string]bool{
 	"chat": true, "sessions:read": true, "costs:read": true,
 	"skills:read": true, "skills:write": true,
 	"schedules:read": true, "schedules:write": true,
+	"approvals:read": true, "approvals:write": true,
 	"health": true, "admin": true,
 }
 

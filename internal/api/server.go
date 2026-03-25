@@ -16,6 +16,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -28,6 +29,7 @@ type Deps struct {
 	CostTracker *llm.CostTracker
 	Memory      agent.MemoryStore
 	Config      *config.Config
+	Approvals   *approval.Manager // nil = approval endpoints return 503
 }
 
 // Server is the external REST API server.
@@ -69,6 +71,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
+
+	// Approval endpoints.
+	mux.HandleFunc("GET /api/v1/approvals", s.RequireScope("approvals:read", s.handleListApprovals))
+	mux.HandleFunc("GET /api/v1/approvals/{id}", s.RequireScope("approvals:read", s.handleGetApproval))
+	mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.RequireScope("approvals:write", s.handleResolveApproval(true)))
+	mux.HandleFunc("POST /api/v1/approvals/{id}/deny", s.RequireScope("approvals:write", s.handleResolveApproval(false)))
 
 	var handler http.Handler = mux
 	handler = s.middlewareLogging(handler)
@@ -479,6 +487,94 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ---------------------------------------------------------------------------
+// Approval handlers
+// ---------------------------------------------------------------------------
+
+// approvalNotConfigured writes a 503 when the approval manager is not set.
+func (s *Server) approvalNotConfigured(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approvals not configured"})
+}
+
+// handleListApprovals handles GET /api/v1/approvals?status=<status>.
+func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Approvals == nil {
+		s.approvalNotConfigured(w)
+		return
+	}
+	status := approval.Status(r.URL.Query().Get("status"))
+	reqs, err := s.deps.Approvals.List(r.Context(), status)
+	if err != nil {
+		s.logger.Error("listing approvals", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if reqs == nil {
+		reqs = []approval.Request{}
+	}
+	writeJSON(w, http.StatusOK, reqs)
+}
+
+// handleGetApproval handles GET /api/v1/approvals/{id}.
+func (s *Server) handleGetApproval(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Approvals == nil {
+		s.approvalNotConfigured(w)
+		return
+	}
+	id := r.PathValue("id")
+	req, err := s.deps.Approvals.Get(r.Context(), id)
+	if err != nil {
+		if err == approval.ErrNotFound {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		s.logger.Error("getting approval", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, req)
+}
+
+// handleResolveApproval returns a handler for POST /api/v1/approvals/{id}/approve|deny.
+func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.deps.Approvals == nil {
+			s.approvalNotConfigured(w)
+			return
+		}
+		id := r.PathValue("id")
+		resolved, err := s.deps.Approvals.Resolve(r.Context(), id, approved, "api")
+		if err != nil {
+			switch err {
+			case approval.ErrNotFound:
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			case approval.ErrAlreadyResolved:
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "already resolved"})
+			default:
+				s.logger.Error("resolving approval", "id", id, "approved", approved, "error", err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			}
+			return
+		}
+
+		// Notify the originating adapter channel of the resolution.
+		action := "Denied"
+		if approved {
+			action = "Approved"
+		}
+		notifyMsg := fmt.Sprintf("%s via API: %s", action, resolved.Summary)
+		if err := s.deps.Dispatcher.SendVia(r.Context(), resolved.AdapterName, adapter.OutgoingMessage{
+			ExternalID: resolved.ExternalID,
+			Text:       notifyMsg,
+		}); err != nil {
+			// Non-fatal: the action was already applied; just log.
+			s.logger.Warn("failed to send approval notification", "id", id, "error", err)
+		}
+
+		writeJSON(w, http.StatusOK, resolved)
+	}
 }
 
 // ---------------------------------------------------------------------------
