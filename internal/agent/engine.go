@@ -24,16 +24,16 @@ import (
 const maxContextMessages = 50
 const maxToolRounds = 10
 
-const memUpdateOpen  = "[MEMORY_UPDATE]"
+const memUpdateOpen = "[MEMORY_UPDATE]"
 const memUpdateClose = "[/MEMORY_UPDATE]"
 
-const userUpdateOpen  = "[USER_UPDATE]"
+const userUpdateOpen = "[USER_UPDATE]"
 const userUpdateClose = "[/USER_UPDATE]"
 
-const skillCreateOpen  = "[SKILL_CREATE]"
+const skillCreateOpen = "[SKILL_CREATE]"
 const skillCreateClose = "[/SKILL_CREATE]"
 
-const scheduleAddOpen  = "[SCHEDULE_ADD]"
+const scheduleAddOpen = "[SCHEDULE_ADD]"
 const scheduleAddClose = "[/SCHEDULE_ADD]"
 
 // SendFunc is a callback for sending a response back to the originating adapter.
@@ -48,16 +48,16 @@ type Engine struct {
 	memory         MemoryStore
 	sendFunc       SendFunc // sends responses back via the originating adapter
 	permissions    *security.PermissionEngine
-	persona        *persona.Persona  // nil = use fallbackPrompt
-	fallbackPrompt string            // used when persona is nil
+	persona        *persona.Persona // nil = use fallbackPrompt
+	fallbackPrompt string           // used when persona is nil
 	skillsMu       sync.RWMutex
 	skills         []skill.Skill     // filtered per-message based on triggers
 	tools          *tool.Manager     // nil = no tools available
 	approvals      *approval.Manager // nil = directives requiring approval are silently stripped
 
 	// Extension fields wired in after construction via SetSkillDirs / SetScheduler.
-	agentSkillsDir  string              // where to write new agent skill files
-	globalSkillsDir string              // base global skills dir (for merge on reload)
+	agentSkillsDir  string               // where to write new agent skill files
+	globalSkillsDir string               // base global skills dir (for merge on reload)
 	sched           *scheduler.Scheduler // nil = SCHEDULE_ADD directives silently stripped
 
 	logger *slog.Logger
@@ -123,8 +123,8 @@ func (e *Engine) Skills() []skill.Skill {
 	return e.skills
 }
 
-// appendSkill appends a new skill to the engine's in-memory skill list.
-func (e *Engine) appendSkill(s skill.Skill) {
+// AppendSkill appends a new skill to the engine's in-memory skill list.
+func (e *Engine) AppendSkill(s skill.Skill) {
 	e.skillsMu.Lock()
 	defer e.skillsMu.Unlock()
 	e.skills = append(e.skills, s)
@@ -297,7 +297,7 @@ func (e *Engine) applySkillCreate(payload string) error {
 		return fmt.Errorf("committing skill file: %w", err)
 	}
 
-	e.appendSkill(*s)
+	e.AppendSkill(*s)
 	e.logger.Info("skill created", "name", s.Name, "file", filename)
 	return nil
 }
@@ -570,7 +570,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 					e.logger.Info("user update approval submitted", "id", req.ID)
 				}
 			}
-		// restricted: silently drop — no instruction was given so this is purely defensive
+			// restricted: silently drop — no instruction was given so this is purely defensive
 		}
 	}
 
@@ -606,7 +606,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 					e.logger.Info("skill create approval submitted", "id", req.ID)
 				}
 			}
-		// restricted: silently drop
+			// restricted: silently drop
 		}
 	}
 
@@ -642,7 +642,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 					e.logger.Info("schedule add approval submitted", "id", req.ID)
 				}
 			}
-		// restricted: silently drop
+			// restricted: silently drop
 		}
 	}
 

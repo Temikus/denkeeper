@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
@@ -191,17 +192,17 @@ func runServe(_ *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Init tools (shared across all agents)
-	var toolMgr *tool.Manager
+	// Init shared external tools (processes shared across all agents).
+	var sharedToolMgr *tool.Manager
 	if len(cfg.Tools) > 0 {
-		toolMgr = tool.NewManager(logger)
+		sharedToolMgr = tool.NewManager(logger)
 		for name, tc := range cfg.Tools {
-			if err := toolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
+			if err := sharedToolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
 				return fmt.Errorf("initializing tool %q: %w", name, err)
 			}
 			logger.Info("tool server registered", "name", name, "command", tc.Command)
 		}
-		defer func() { _ = toolMgr.Close() }()
+		defer func() { _ = sharedToolMgr.Close() }()
 	}
 
 	// Load global skills
@@ -211,6 +212,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 	} else if len(globalSkills) > 0 {
 		logger.Info("global skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(globalSkills))
 	}
+
+	// Init scheduler early so per-agent Config MCP servers can reference it.
+	sched := scheduler.New(logger)
 
 	// Build per-agent engines
 	engines := make(map[string]*agent.Engine, len(cfg.Agents))
@@ -264,6 +268,13 @@ func runServe(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("initializing permissions for agent %q: %w", ac.Name, pErr)
 		}
 
+		// Per-agent tool manager: adopt shared external tools then add the
+		// per-agent Config MCP server so skill/schedule tools are agent-scoped.
+		agentToolMgr := tool.NewManager(logger)
+		if sharedToolMgr != nil {
+			agentToolMgr.AdoptFrom(sharedToolMgr)
+		}
+
 		// Per-agent LLM router (with optional model override)
 		model := cfg.LLM.DefaultModel
 		if ac.LLMModel != "" {
@@ -274,11 +285,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 		if len(fallbackRules) > 0 {
 			agentRouter.SetFallbacks(fallbackRules)
 		}
-		if toolMgr != nil {
-			agentRouter.SetTools(toolMgr.ToolDefs())
-		}
 
-		// Build engine
+		// Build engine before connecting Config MCP so we can capture its methods.
 		e := agent.NewEngine(
 			ac.Name,
 			agentRouter,
@@ -288,12 +296,37 @@ func runServe(_ *cobra.Command, _ []string) error {
 			p,
 			persona.DefaultPrompt,
 			mergedSkills,
-			toolMgr,
+			agentToolMgr,
 			approvalManager,
 			logger,
 		)
-
 		e.SetSkillDirs(agentSkillsDir, effectiveGlobalSkillsDir)
+		e.SetScheduler(sched)
+
+		// Connect per-agent Config MCP server and register its tools.
+		cmcpSrv := configmcp.New(configmcp.Deps{
+			AgentName:      ac.Name,
+			AgentSkillsDir: agentSkillsDir,
+			GetSkills:      e.Skills,
+			AppendSkill:    e.AppendSkill,
+			Sched:          sched,
+			HandleMessage:  e.HandleMessage,
+			Approvals:      approvalManager,
+			PermissionTier: e.PermissionTier,
+			Logger:         logger,
+		})
+		cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
+		if cmcpErr != nil {
+			return fmt.Errorf("starting config MCP for agent %q: %w", ac.Name, cmcpErr)
+		}
+		if err := agentToolMgr.RegisterSession(ctx, "config-"+ac.Name, cmcpSession); err != nil {
+			return fmt.Errorf("registering config MCP for agent %q: %w", ac.Name, err)
+		}
+		logger.Info("config MCP registered", "agent", ac.Name, "tools", len(agentToolMgr.ToolDefs()))
+
+		// Wire tool defs into the router now that Config MCP tools are registered.
+		agentRouter.SetTools(agentToolMgr.ToolDefs())
+
 		engines[ac.Name] = e
 
 		for _, binding := range ac.Adapters {
@@ -317,8 +350,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		logger:  logger,
 	})
 
-	// Init and wire scheduler
-	sched := scheduler.New(logger)
+	// Register config-file schedules into the already-initialised scheduler.
 	for _, sc := range cfg.Schedules {
 		sc := sc // capture loop variable
 		text := "[Scheduled trigger: " + sc.Name + "]"
@@ -372,11 +404,6 @@ func runServe(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("registering schedule %q: %w", sc.Name, err)
 		}
 	}
-	// Wire scheduler into each engine so agents can register new schedules at runtime.
-	for _, e := range engines {
-		e.SetScheduler(sched)
-	}
-
 	sched.Start()
 	defer sched.Stop()
 

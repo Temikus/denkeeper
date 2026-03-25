@@ -59,12 +59,16 @@ func (m *Manager) RegisterServer(ctx context.Context, name, command string, args
 
 	sc := &serverConn{name: name, session: session}
 	m.servers[name] = sc
+	return m.discoverTools(ctx, sc)
+}
 
-	// Discover tools via ListTools.
-	result, err := session.ListTools(ctx, nil)
+// discoverTools calls ListTools on the server's session and populates the
+// manager's toolMap and toolDefs. Called by both RegisterServer and RegisterSession.
+func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
+	result, err := sc.session.ListTools(ctx, nil)
 	if err != nil {
-		_ = session.Close()
-		return fmt.Errorf("listing tools from MCP server %q: %w", name, err)
+		_ = sc.session.Close()
+		return fmt.Errorf("listing tools from MCP server %q: %w", sc.name, err)
 	}
 
 	for _, tool := range result.Tools {
@@ -72,7 +76,7 @@ func (m *Manager) RegisterServer(ctx context.Context, name, command string, args
 		params, err := schemaToMap(tool.InputSchema)
 		if err != nil {
 			m.logger.Warn("skipping tool with unparseable schema",
-				"server", name, "tool", tool.Name, "error", err)
+				"server", sc.name, "tool", tool.Name, "error", err)
 			continue
 		}
 
@@ -85,10 +89,32 @@ func (m *Manager) RegisterServer(ctx context.Context, name, command string, args
 				Parameters:  params,
 			},
 		})
-		m.logger.Debug("discovered tool", "server", name, "tool", tool.Name)
+		m.logger.Debug("discovered tool", "server", sc.name, "tool", tool.Name)
 	}
 
 	return nil
+}
+
+// RegisterSession registers an already-connected MCP client session without
+// spawning a subprocess. Use this for in-process servers (e.g. configmcp).
+func (m *Manager) RegisterSession(ctx context.Context, name string, session *mcp.ClientSession) error {
+	sc := &serverConn{name: name, session: session}
+	m.servers[name] = sc
+	return m.discoverTools(ctx, sc)
+}
+
+// AdoptFrom copies all registered tool connections from source into m.
+// Both managers then share the same underlying *mcp.ClientSession pointers,
+// which is safe for concurrent use. Use this to give per-agent managers
+// access to shared external MCP servers without re-spawning subprocesses.
+func (m *Manager) AdoptFrom(source *Manager) {
+	for name, sc := range source.servers {
+		m.servers[name] = sc
+	}
+	for toolName, sc := range source.toolMap {
+		m.toolMap[toolName] = sc
+	}
+	m.toolDefs = append(m.toolDefs, source.toolDefs...)
 }
 
 // ToolDefs returns OpenAI-format tool definitions for all registered tools.

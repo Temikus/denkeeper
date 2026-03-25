@@ -1350,7 +1350,7 @@ func TestEngine_SkillCreate_Autonomous_WritesFile(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "I'll create that skill for you!\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			Content:    "I'll create that skill for you!\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
 			TokensUsed: llm.TokenUsage{Total: 20},
 		},
 	})
@@ -1424,7 +1424,7 @@ func TestEngine_SkillCreate_Supervised_SubmitsApproval(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "I'll create that skill pending approval.\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			Content:    "I'll create that skill pending approval.\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
 			TokensUsed: llm.TokenUsage{Total: 20},
 		},
 	})
@@ -1514,7 +1514,7 @@ func TestEngine_SkillCreate_Restricted_DropsDirective(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			Content:    "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
 			TokensUsed: llm.TokenUsage{Total: 10},
 		},
 	})
@@ -1559,7 +1559,7 @@ func TestEngine_SkillCreate_NoSkillsDir_DropsDirective(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			Content:    "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
 			TokensUsed: llm.TokenUsage{Total: 10},
 		},
 	})
@@ -1632,7 +1632,7 @@ func TestEngine_ScheduleAdd_Autonomous_RegistersSchedule(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "Schedule added!\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			Content:    "Schedule added!\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
 			TokensUsed: llm.TokenUsage{Total: 20},
 		},
 	})
@@ -1697,7 +1697,7 @@ func TestEngine_ScheduleAdd_Supervised_SubmitsApproval(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "Schedule pending approval.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			Content:    "Schedule pending approval.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
 			TokensUsed: llm.TokenUsage{Total: 20},
 		},
 	})
@@ -1773,7 +1773,7 @@ func TestEngine_ScheduleAdd_NoScheduler_DropsDirective(t *testing.T) {
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "Done.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			Content:    "Done.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
 			TokensUsed: llm.TokenUsage{Total: 10},
 		},
 	})
@@ -1818,7 +1818,7 @@ channel = "telegram:123"
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
-			Content: "Done.\n\n[SCHEDULE_ADD]\n" + invalidPayload + "\n[/SCHEDULE_ADD]",
+			Content:    "Done.\n\n[SCHEDULE_ADD]\n" + invalidPayload + "\n[/SCHEDULE_ADD]",
 			TokensUsed: llm.TokenUsage{Total: 10},
 		},
 	})
@@ -1852,4 +1852,3 @@ channel = "telegram:123"
 		t.Errorf("scheduler entries = %d, want 0 (invalid expression)", len(sched.Entries()))
 	}
 }
-

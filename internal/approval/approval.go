@@ -32,10 +32,10 @@ const (
 
 // Request is the persisted record of a pending or resolved approval.
 type Request struct {
-	ID      string     `db:"id"      json:"id"`
-	AgentName string   `db:"agent_name" json:"agent_name"`
-	Kind    ActionKind `db:"kind"    json:"kind"`
-	Status  Status     `db:"status"  json:"status"`
+	ID        string     `db:"id"      json:"id"`
+	AgentName string     `db:"agent_name" json:"agent_name"`
+	Kind      ActionKind `db:"kind"    json:"kind"`
+	Status    Status     `db:"status"  json:"status"`
 
 	// Summary is a human-readable one-liner shown in the approval UI.
 	Summary string `db:"summary" json:"summary"`
