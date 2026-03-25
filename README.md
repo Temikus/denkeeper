@@ -28,7 +28,7 @@ Denkeeper connects to your Telegram (more adapters planned), routes messages thr
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
-- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support
+- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming and session management
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
 
 ## Architecture
@@ -94,7 +94,7 @@ Key sections:
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
 | `[tools.*]` | MCP tool server definitions |
 | `[voice]` | STT/TTS configuration (OpenAI) |
-| `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys) |
+| `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys with scopes) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
@@ -170,6 +170,57 @@ channel = "telegram:YOUR_CHAT_ID"
 
 `session_mode = "isolated"` creates a fresh conversation context for each run so scheduled jobs don't mix into your regular chat history.
 
+### REST API
+
+Enable the API with `[api] enabled = true` in your config. All endpoints (except `/health`) require a `Bearer` token matching a configured API key.
+
+```toml
+[api]
+enabled = true
+listen = "0.0.0.0:8080"
+
+[[api.keys]]
+name = "my-client"
+key  = "dk-your-secret-key"
+scopes = ["chat", "sessions:read", "costs:read"]
+```
+
+**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`
+
+**Endpoints:**
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/health` | — | Health check (no auth) |
+| `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
+| `GET` | `/api/v1/sessions` | `sessions:read` | List all conversations |
+| `GET` | `/api/v1/sessions/{id}/messages` | `sessions:read` | Get messages for a session |
+| `DELETE` | `/api/v1/sessions/{id}` | `sessions:read` | Delete a session and its history |
+| `GET` | `/api/v1/agents` | `admin` | List agents with metadata |
+| `GET` | `/api/v1/agents/{name}` | `admin` | Agent details and skills |
+| `GET` | `/api/v1/skills` | `skills:read` | List all skills across agents |
+| `GET` | `/api/v1/schedules` | `schedules:read` | List schedules with run times |
+| `GET` | `/api/v1/costs` | `costs:read` | Cost summary |
+
+**Chat example:**
+
+```bash
+# Non-streaming
+curl -X POST http://localhost:8080/api/v1/chat \
+  -H "Authorization: Bearer dk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello!", "session_id": "my-session"}'
+
+# SSE streaming
+curl -X POST http://localhost:8080/api/v1/chat \
+  -H "Authorization: Bearer dk-your-secret-key" \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{"message": "Hello!", "session_id": "my-session"}'
+```
+
+Pass the same `session_id` in subsequent requests to continue the conversation. Omit it to start a new session with an auto-generated ID.
+
 ## Development
 
 [just](https://github.com/casey/just) is used as the command runner. Run `just` to see all available recipes:
@@ -240,10 +291,10 @@ Denkeeper is built in phases:
 - [x] Three permission tiers (autonomous/supervised/restricted), per-agent and per-schedule
 - [x] External REST API server skeleton (auth, rate limiting, CORS, TLS, health endpoint)
 
-**Phase 3 — Extensibility** (next)
-- [ ] REST API chat and management endpoints
-- [ ] Config MCP server (agent self-modification)
-- [ ] Approval workflows (inline in Telegram)
+**Phase 3 — Extensibility** (in progress)
+- [x] REST API chat endpoint — `POST /api/v1/chat` with JSON response and SSE streaming, `session_id` for conversation continuity, `DELETE /api/v1/sessions/:id`
+- [ ] Approval workflows (inline in Telegram + `POST /api/v1/approvals/:id/approve|deny`)
+- [ ] Config MCP server (agent self-modification of skills, schedules, fallbacks)
 - [ ] Plugin system (subprocess + Docker sandboxing)
 - [ ] Plugin signing and verification
 - [ ] Web dashboard
