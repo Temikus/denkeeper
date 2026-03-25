@@ -239,12 +239,14 @@ func runServe(_ *cobra.Command, _ []string) error {
 		}
 		// If agent has a custom skills_dir override, load from there instead of global.
 		effectiveGlobal := globalSkills
+		effectiveGlobalSkillsDir := cfg.Agent.SkillsDir
 		if ac.SkillsDir != "" && ac.SkillsDir != cfg.Agent.SkillsDir {
 			overrideSkills, oErr := skill.LoadDir(ac.SkillsDir, logger)
 			if oErr != nil {
 				logger.Warn("agent skills_dir loading error", "agent", ac.Name, "dir", ac.SkillsDir, "error", oErr)
 			} else {
 				effectiveGlobal = overrideSkills
+				effectiveGlobalSkillsDir = ac.SkillsDir
 			}
 		}
 		mergedSkills := skill.MergeSkills(effectiveGlobal, agentSkills)
@@ -291,6 +293,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			logger,
 		)
 
+		e.SetSkillDirs(agentSkillsDir, effectiveGlobalSkillsDir)
 		engines[ac.Name] = e
 
 		for _, binding := range ac.Adapters {
@@ -369,6 +372,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("registering schedule %q: %w", sc.Name, err)
 		}
 	}
+	// Wire scheduler into each engine so agents can register new schedules at runtime.
+	for _, e := range engines {
+		e.SetScheduler(sched)
+	}
+
 	sched.Start()
 	defer sched.Stop()
 

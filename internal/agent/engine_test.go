@@ -15,6 +15,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
@@ -1286,3 +1287,569 @@ func TestEngine_HandleMessage_WithPendingApproval_AttachesButtons(t *testing.T) 
 		t.Errorf("deny button callback = %q, want :deny suffix", msg.Buttons[1].CallbackData)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SKILL_CREATE directive tests
+// ---------------------------------------------------------------------------
+
+const testSkillPayload = `+++
+name = "test-skill"
+description = "A test skill for unit testing."
+version = "1.0.0"
+triggers = ["command:test-skill"]
++++
+
+# Test Skill
+
+When the user runs /test-skill, do something useful.`
+
+func TestExtractSkillCreate_Found(t *testing.T) {
+	text := "I'll create that skill.\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]"
+	cleaned, payload := extractSkillCreate(text)
+	if !strings.Contains(cleaned, "I'll create that skill.") {
+		t.Errorf("cleaned = %q, should contain the message text", cleaned)
+	}
+	if strings.Contains(cleaned, "SKILL_CREATE") {
+		t.Error("cleaned should not contain SKILL_CREATE tags")
+	}
+	if !strings.Contains(payload, `name = "test-skill"`) {
+		t.Errorf("payload = %q, should contain skill frontmatter", payload)
+	}
+}
+
+func TestExtractSkillCreate_NotFound(t *testing.T) {
+	text := "Just a normal response."
+	cleaned, payload := extractSkillCreate(text)
+	if cleaned != text {
+		t.Errorf("cleaned = %q, want original text", cleaned)
+	}
+	if payload != "" {
+		t.Errorf("payload = %q, want empty", payload)
+	}
+}
+
+func TestEngine_SkillCreate_Autonomous_WritesFile(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	skillsDir := filepath.Join(dir, "skills")
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "I'll create that skill for you!\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+	engine.SetSkillDirs(skillsDir, "")
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Create a test skill",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Skill file should have been written.
+	skillFile := filepath.Join(skillsDir, "test-skill.md")
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("skill file not created at %s: %v", skillFile, err)
+	}
+	if !strings.Contains(string(data), `name = "test-skill"`) {
+		t.Errorf("skill file = %q, want it to contain the frontmatter", string(data))
+	}
+
+	// Skill should appear in the engine's in-memory list.
+	skills := engine.Skills()
+	found := false
+	for _, s := range skills {
+		if s.Name == "test-skill" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		names := make([]string, len(skills))
+		for i, s := range skills {
+			names[i] = s.Name
+		}
+		t.Errorf("test-skill not found in engine skills: %v", names)
+	}
+}
+
+func TestEngine_SkillCreate_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	skillsDir := filepath.Join(dir, "skills")
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "I'll create that skill pending approval.\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
+	engine.SetSkillDirs(skillsDir, "")
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Create a test skill",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Skill file should NOT exist yet (pending approval).
+	if _, readErr := os.ReadFile(filepath.Join(skillsDir, "test-skill.md")); readErr == nil {
+		t.Error("skill file should not exist yet — approval is pending")
+	}
+
+	// A pending approval should exist with the correct kind.
+	pending, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("List approvals: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != approval.ActionKindCreateSkill {
+		t.Errorf("kind = %q, want create_skill", pending[0].Kind)
+	}
+
+	// Approving should write the file.
+	if _, resolveErr := approvalMgr.Resolve(context.Background(), pending[0].ID, true, "test"); resolveErr != nil {
+		t.Fatalf("Resolve: %v", resolveErr)
+	}
+	if _, readErr := os.ReadFile(filepath.Join(skillsDir, "test-skill.md")); readErr != nil {
+		t.Errorf("skill file should exist after approval: %v", readErr)
+	}
+
+	// And the skill should appear in the engine's in-memory list.
+	found := false
+	for _, s := range engine.Skills() {
+		if s.Name == "test-skill" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test-skill not found in engine skills after approval")
+	}
+}
+
+func TestEngine_SkillCreate_Restricted_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	skillsDir := filepath.Join(dir, "skills")
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("restricted")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+	engine.SetSkillDirs(skillsDir, "")
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Create skill",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Directive should be stripped from response.
+	if strings.Contains(responseText, "SKILL_CREATE") {
+		t.Errorf("response should not contain SKILL_CREATE tags, got: %q", responseText)
+	}
+
+	// Skill file should not exist.
+	if _, readErr := os.ReadFile(filepath.Join(skillsDir, "test-skill.md")); readErr == nil {
+		t.Error("skill file should not exist in restricted tier")
+	}
+}
+
+func TestEngine_SkillCreate_NoSkillsDir_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "OK\n\n[SKILL_CREATE]\n" + testSkillPayload + "\n[/SKILL_CREATE]",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	// No SetSkillDirs call — engine.agentSkillsDir is empty.
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Fallback.", nil, nil, nil, testLogger())
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Create skill",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat should not error even without skills dir: %v", err)
+	}
+
+	// Directive should be stripped; no file written, no error.
+	if strings.Contains(responseText, "SKILL_CREATE") {
+		t.Errorf("response should not contain SKILL_CREATE tags, got: %q", responseText)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDULE_ADD directive tests
+// ---------------------------------------------------------------------------
+
+const testSchedulePayload = `name = "test-daily"
+schedule = "@daily"
+skill = "briefing"
+channel = "telegram:123456789"
+session_mode = "isolated"`
+
+func TestExtractScheduleAdd_Found(t *testing.T) {
+	text := "I'll set up that schedule.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]"
+	cleaned, payload := extractScheduleAdd(text)
+	if !strings.Contains(cleaned, "I'll set up that schedule.") {
+		t.Errorf("cleaned = %q, should contain the message text", cleaned)
+	}
+	if strings.Contains(cleaned, "SCHEDULE_ADD") {
+		t.Error("cleaned should not contain SCHEDULE_ADD tags")
+	}
+	if !strings.Contains(payload, `name = "test-daily"`) {
+		t.Errorf("payload = %q, should contain schedule TOML", payload)
+	}
+}
+
+func TestEngine_ScheduleAdd_Autonomous_RegistersSchedule(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "Schedule added!\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	sched := scheduler.New(testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+	engine.SetScheduler(sched)
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Add a daily schedule",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// The schedule should be registered.
+	entries := sched.Entries()
+	found := false
+	for _, e := range entries {
+		if e.Name == "test-daily" {
+			found = true
+			if e.Skill != "briefing" {
+				t.Errorf("skill = %q, want briefing", e.Skill)
+			}
+			if e.Channel != "telegram:123456789" {
+				t.Errorf("channel = %q, want telegram:123456789", e.Channel)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("test-daily schedule not found in scheduler")
+	}
+}
+
+func TestEngine_ScheduleAdd_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test soul."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "Schedule pending approval.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	sched := scheduler.New(testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
+	engine.SetScheduler(sched)
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Add a daily schedule",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Schedule should NOT be registered yet.
+	if len(sched.Entries()) != 0 {
+		t.Errorf("scheduler entries = %d, want 0 (pending approval)", len(sched.Entries()))
+	}
+
+	// A pending approval should exist.
+	pending, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("List approvals: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != approval.ActionKindModifySchedule {
+		t.Errorf("kind = %q, want modify_schedule", pending[0].Kind)
+	}
+
+	// Approving should register the schedule.
+	if _, resolveErr := approvalMgr.Resolve(context.Background(), pending[0].ID, true, "test"); resolveErr != nil {
+		t.Fatalf("Resolve: %v", resolveErr)
+	}
+	entries := sched.Entries()
+	found := false
+	for _, e := range entries {
+		if e.Name == "test-daily" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test-daily schedule not found in scheduler after approval")
+	}
+}
+
+func TestEngine_ScheduleAdd_NoScheduler_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "Done.\n\n[SCHEDULE_ADD]\n" + testSchedulePayload + "\n[/SCHEDULE_ADD]",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	// No SetScheduler call — engine.sched is nil.
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Fallback.", nil, nil, nil, testLogger())
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Add daily schedule",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat should not error without scheduler: %v", err)
+	}
+
+	// Directive should be stripped from response.
+	if strings.Contains(responseText, "SCHEDULE_ADD") {
+		t.Errorf("response should not contain SCHEDULE_ADD tags, got: %q", responseText)
+	}
+}
+
+func TestEngine_ScheduleAdd_InvalidExpression_LogsWarning(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	invalidPayload := `name = "bad-schedule"
+schedule = "not-valid-cron"
+channel = "telegram:123"
+`
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content: "Done.\n\n[SCHEDULE_ADD]\n" + invalidPayload + "\n[/SCHEDULE_ADD]",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	sched := scheduler.New(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Fallback.", nil, nil, nil, testLogger())
+	engine.SetScheduler(sched)
+
+	// Should not return an error — invalid schedule is logged as a warning.
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		Text:       "Add schedule",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat should not error on invalid schedule expression: %v", err)
+	}
+
+	if strings.Contains(responseText, "SCHEDULE_ADD") {
+		t.Errorf("directive tags should be stripped from response, got: %q", responseText)
+	}
+
+	// No entries should be registered.
+	if len(sched.Entries()) != 0 {
+		t.Errorf("scheduler entries = %d, want 0 (invalid expression)", len(sched.Entries()))
+	}
+}
+

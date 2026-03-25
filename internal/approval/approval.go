@@ -22,6 +22,12 @@ type ActionKind string
 const (
 	// ActionKindUserUpdate is a request to update the agent's USER.md persona file.
 	ActionKindUserUpdate ActionKind = "user_update"
+
+	// ActionKindCreateSkill is a request to create a new skill file in the agent's skills directory.
+	ActionKindCreateSkill ActionKind = "create_skill"
+
+	// ActionKindModifySchedule is a request to register a new schedule entry at runtime.
+	ActionKindModifySchedule ActionKind = "modify_schedule"
 )
 
 // Request is the persisted record of a pending or resolved approval.

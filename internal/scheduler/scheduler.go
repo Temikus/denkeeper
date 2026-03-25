@@ -163,6 +163,64 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 	return nil
 }
 
+// RegisterAndStart registers a new schedule entry and immediately starts its
+// goroutine if the entry is enabled. Unlike Register, this is safe to call
+// after Start has been invoked — the goroutine is spawned inline rather than
+// waiting for the next Start call.
+func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
+	s.mu.Lock()
+
+	if _, exists := s.entries[cfg.Name]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("scheduler: duplicate schedule name %q", cfg.Name)
+	}
+
+	expr, err := parseScheduleExpr(cfg.Schedule)
+	if err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("scheduler: schedule %q: %w", cfg.Name, err)
+	}
+
+	e := &internalEntry{
+		Entry: Entry{
+			Name:        cfg.Name,
+			Type:        ScheduleType(cfg.Type),
+			Expr:        cfg.Schedule,
+			Skill:       cfg.Skill,
+			SessionTier: cfg.SessionTier,
+			SessionMode: cfg.SessionMode,
+			Channel:     cfg.Channel,
+			Tags:        cfg.Tags,
+			Enabled:     cfg.Enabled,
+		},
+		job:  job,
+		expr: expr,
+	}
+
+	if cfg.Enabled {
+		now := time.Now().UTC()
+		switch expr.kind {
+		case kindInterval:
+			e.NextRun = now.Add(expr.interval)
+		case kindCron:
+			e.NextRun = expr.cron.next(now)
+		}
+	}
+
+	s.entries[cfg.Name] = e
+	s.mu.Unlock()
+
+	if cfg.Enabled {
+		s.wg.Add(1)
+		go s.runEntry(e)
+		s.logger.Info("schedule registered and started", "name", cfg.Name)
+	} else {
+		s.logger.Info("schedule registered (disabled)", "name", cfg.Name)
+	}
+
+	return nil
+}
+
 // Start launches goroutines for all enabled entries.
 // Calling Start on an already-running Scheduler is safe but will spawn
 // duplicate goroutines for already-active entries.
