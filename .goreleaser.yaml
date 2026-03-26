@@ -102,25 +102,19 @@ nfpms:
       group: Applications/Internet
 
 # ── Homebrew tap ──────────────────────────────────────────────────────────────
-# Requires the Temikus/homebrew-denkeeper tap repo to exist and a HOMEBREW_TAP_TOKEN
-# secret with repo write access. To activate: create the repo, add the secret,
-# and uncomment the block below (replacing the placeholder token env var).
-#
-# homebrew:
-#   - name: denkeeper
-#     ids: [default]
-#     repository:
-#       owner: Temikus
-#       name: homebrew-denkeeper
-#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     directory: Formula
-#     homepage: https://github.com/Temikus/denkeeper
-#     description: Security-first personal AI agent
-#     license: Apache-2.0
-#     install: |
-#       bin.install "denkeeper"
-#     test: |
-#       system "#{bin}/denkeeper", "version"
+# Requires HOMEBREW_TAP_TOKEN secret (GitHub PAT with repo write access on
+# Temikus/homebrew-denkeeper). Add it at:
+# github.com/Temikus/denkeeper/settings/secrets/actions
+homebrew_casks:
+  - name: denkeeper
+    ids: [default]
+    repository:
+      owner: Temikus
+      name: homebrew-denkeeper
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/Temikus/denkeeper
+    description: Security-first personal AI agent
+    license: Apache-2.0
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 changelog:

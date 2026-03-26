@@ -38,10 +38,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # skip_upload: true in .goreleaser.yaml means the formula is never pushed,
-          # but goreleaser still substitutes the template variable — provide empty string
-          # to avoid template errors until Temikus/homebrew-denkeeper is created.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || '' }}
+          # GitHub PAT with repo write access on Temikus/homebrew-denkeeper.
+          # Add at: github.com/Temikus/denkeeper/settings/secrets/actions
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   docker:
     name: Docker
