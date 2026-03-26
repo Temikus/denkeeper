@@ -30,6 +30,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
 	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
+	"github.com/Temikus/denkeeper/internal/web"
 )
 
 // Build-time variables set via ldflags.
@@ -434,6 +435,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			Memory:      memory,
 			Config:      cfg,
 			Approvals:   approvalManager,
+			WebHandler:  web.Handler(),
 		}, logger)
 		go func() {
 			if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {

@@ -30,6 +30,7 @@ type Deps struct {
 	Memory      agent.MemoryStore
 	Config      *config.Config
 	Approvals   *approval.Manager // nil = approval endpoints return 503
+	WebHandler  http.Handler      // nil = no web dashboard served
 }
 
 // Server is the external REST API server.
@@ -77,6 +78,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/approvals/{id}", s.RequireScope("approvals:read", s.handleGetApproval))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.RequireScope("approvals:write", s.handleResolveApproval(true)))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/deny", s.RequireScope("approvals:write", s.handleResolveApproval(false)))
+
+	// Web dashboard — catch-all for non-API paths (more-specific /api/v1/ routes always win).
+	if deps.WebHandler != nil {
+		mux.Handle("/", deps.WebHandler)
+	}
 
 	var handler http.Handler = mux
 	handler = s.middlewareLogging(handler)
@@ -238,7 +244,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 		Agent       string   `json:"agent"`
 	}
 
-	var all []skillInfo
+	all := make([]skillInfo, 0)
 	seen := make(map[string]bool)
 	for _, name := range s.deps.Dispatcher.Agents() {
 		e := s.deps.Dispatcher.Agent(name)
@@ -341,6 +347,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("listing conversations", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
+	}
+	if convos == nil {
+		convos = []agent.ConversationInfo{}
 	}
 	writeJSON(w, http.StatusOK, convos)
 }

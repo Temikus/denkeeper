@@ -1,4 +1,13 @@
-# Stage 1: Build
+# Stage 1: Build web dashboard
+FROM node:22-alpine AS frontend
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --prefer-offline || npm install
+COPY web/ ./
+# outDir in vite.config.js is ../internal/web/dist (relative to /src/web → /src/internal/web/dist)
+RUN npm run build
+
+# Stage 2: Build Go binary
 FROM golang:1.25-alpine AS builder
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -8,13 +17,15 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY . .
+# Overwrite the placeholder stub with the real Vite build.
+COPY --from=frontend /src/internal/web/dist ./internal/web/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /denkeeper ./cmd/denkeeper
 
-# Stage 2: Runtime
+# Stage 3: Runtime
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /denkeeper /usr/local/bin/denkeeper

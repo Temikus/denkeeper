@@ -140,7 +140,15 @@ format = "text"
 
 # API keys — each key has a name, secret, and list of scopes.
 # Valid scopes: chat, sessions:read, costs:read, skills:read, skills:write,
-#               schedules:read, schedules:write, health, admin
+#               schedules:read, schedules:write, approvals:read, approvals:write,
+#               health, admin
+
+# Web dashboard key — needs all read scopes + approvals:write to manage approvals.
+# Navigate to http://localhost:8080 and enter this key to log in.
+# [[api.keys]]
+# name   = "dashboard"
+# key    = "dk-your-dashboard-key-here"
+# scopes = ["admin", "sessions:read", "costs:read", "skills:read", "schedules:read", "approvals:read", "approvals:write"]
 
 # [[api.keys]]
 # name   = "mobile-app"

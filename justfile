@@ -85,6 +85,21 @@ docker-up:
 docker-down:
     docker compose down
 
+# Build the web dashboard (requires Node.js and npm)
+build-ui:
+    cd web && npm install && npm run build
+
+# Full build: web dashboard then Go binary
+build-full: build-ui build
+
+# Run the Vite dev server (proxies /api to localhost:8080)
+dev-ui:
+    cd web && npm install && npm run dev
+
+# Remove frontend build artifacts and node_modules
+clean-ui:
+    rm -rf web/node_modules
+
 # Count lines of Go code (source and test separately)
 loc:
     @echo "Source:"

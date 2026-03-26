@@ -46,3 +46,11 @@ Thumbs.db
 
 # design
 design/
+
+# Frontend build output (rebuilt by just build-ui)
+internal/web/dist/
+# Keep the stub so the binary compiles without running npm
+!internal/web/dist/index.html
+
+# Node.js
+web/node_modules/

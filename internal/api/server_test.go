@@ -1162,3 +1162,154 @@ func TestHandleApprovals_RequiresScope(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Nil-array regression tests (JSON must be [] not null when empty)
+// ---------------------------------------------------------------------------
+
+func TestSessions_EmptyListReturnsArray(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger()) // no sessions created
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body == "null" {
+		t.Error("sessions response is JSON null; want [] for empty list (Svelte #each crashes on null)")
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list == nil {
+		t.Error("sessions decoded to nil slice, want non-nil empty slice")
+	}
+}
+
+func TestSkills_NoSkillsReturnsArray(t *testing.T) {
+	// Build deps with an agent that has no skills.
+	logger := testLogger()
+	mem, _ := agent.NewInMemoryStore()
+	costTracker := llm.NewCostTracker(1.0)
+	perms, _ := security.NewPermissionEngine("supervised")
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{Content: "ok", Model: "test-model", FinishReason: "stop"},
+	})
+	approvalStore, _ := approval.NewInMemoryStore()
+	approvalMgr := approval.NewManager(approvalStore, logger)
+	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test",
+		[]skill.Skill{}, // no skills
+		nil, approvalMgr, logger)
+	dispatcher := agent.NewDispatcher(
+		map[string]*agent.Engine{"default": e},
+		[]agent.Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil, logger,
+	)
+	deps := Deps{
+		Dispatcher:  dispatcher,
+		Scheduler:   scheduler.New(logger),
+		CostTracker: costTracker,
+		Memory:      mem,
+		Approvals:   approvalMgr,
+		Config: &config.Config{
+			Agents: []config.AgentInstanceConfig{{Name: "default", Adapters: []string{"telegram"}}},
+		},
+	}
+
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/skills"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body == "null" {
+		t.Error("skills response is JSON null; want [] for empty list (Svelte #each crashes on null)")
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list == nil {
+		t.Error("skills decoded to nil slice, want non-nil empty slice")
+	}
+}
+
+func TestSchedules_EmptyReturnsArray(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger()) // no schedules registered
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/schedules"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body == "null" {
+		t.Error("schedules response is JSON null; want [] for empty list (Svelte #each crashes on null)")
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list == nil {
+		t.Error("schedules decoded to nil slice, want non-nil empty slice")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WebHandler routing
+// ---------------------------------------------------------------------------
+
+func TestWebHandler_ServedForNonAPIPath(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.WebHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html>dashboard</html>"))
+	})
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html" {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "dashboard") {
+		t.Error("expected web handler body in response")
+	}
+}
+
+func TestWebHandler_APIRoutesNotIntercepted(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.WebHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// If this is reached for /api/v1/health the test should fail.
+		http.Error(w, "web handler intercepted API route", http.StatusTeapot)
+	})
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+
+	if rec.Code == http.StatusTeapot {
+		t.Fatal("web handler intercepted /api/v1/health; API routes must take priority")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("health status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
