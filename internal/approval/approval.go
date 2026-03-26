@@ -16,6 +16,16 @@ const (
 	StatusExpired  Status = "expired"
 )
 
+// ValidStatus reports whether s is one of the four known status values.
+// An empty string is also accepted (means "all" in list queries).
+func ValidStatus(s Status) bool {
+	switch s {
+	case "", StatusPending, StatusApproved, StatusDenied, StatusExpired:
+		return true
+	}
+	return false
+}
+
 // ActionKind categorises what kind of action is awaiting approval.
 type ActionKind string
 
@@ -57,6 +67,7 @@ type Request struct {
 	ConversationID string `db:"conversation_id" json:"conversation_id"`
 
 	CreatedAt  time.Time  `db:"created_at"  json:"created_at"`
+	ExpiresAt  *time.Time `db:"expires_at"  json:"expires_at,omitempty"`
 	ResolvedAt *time.Time `db:"resolved_at" json:"resolved_at,omitempty"`
 
 	// ResolvedBy records who resolved the approval: "telegram", "api", or "expired".
@@ -74,6 +85,10 @@ type Store interface {
 	// Get fetches a single approval by ID. Returns ErrNotFound if absent.
 	Get(ctx context.Context, id string) (*Request, error)
 
+	// GetByCallbackData fetches a single approval by its callback_data prefix,
+	// regardless of status. Returns ErrNotFound if absent.
+	GetByCallbackData(ctx context.Context, callbackData string) (*Request, error)
+
 	// List returns approvals filtered by status. Pass an empty string for all.
 	List(ctx context.Context, status Status) ([]Request, error)
 
@@ -89,6 +104,11 @@ type Store interface {
 	// ExpirePending marks all pending approvals as expired. Call at startup.
 	// Returns the number of rows affected.
 	ExpirePending(ctx context.Context) (int, error)
+
+	// ExpireBefore marks all pending approvals whose expires_at is before
+	// deadline as expired. Used by the background expiry worker.
+	// Returns the number of rows affected.
+	ExpireBefore(ctx context.Context, deadline time.Time) (int, error)
 
 	Close() error
 }

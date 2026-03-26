@@ -192,6 +192,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start background worker that expires pending approvals past their TTL.
+	// ctx is cancelled on shutdown, which stops the goroutine cleanly.
+	approvalManager.StartExpiryWorker(ctx, time.Hour)
+
 	// Init shared external tools (processes shared across all agents).
 	var sharedToolMgr *tool.Manager
 	if len(cfg.Tools) > 0 {
@@ -456,11 +460,26 @@ func (s *callbackShim) Resolve(ctx context.Context, data string) (string, error)
 
 	resolved, err := s.manager.ResolveByCallback(ctx, data, "telegram")
 	if err != nil {
-		if err == approval.ErrNotFound {
+		switch err {
+		case approval.ErrNotFound:
 			s.logger.Warn("callback for unknown approval", "data", data)
 			return "", nil
+		case approval.ErrStaleCallback:
+			// The approval was already resolved or has expired.
+			if resolved != nil {
+				switch resolved.Status {
+				case approval.StatusExpired:
+					return "⏰ This approval request has expired.", nil
+				case approval.StatusApproved:
+					return "✅ Already approved: " + resolved.Summary, nil
+				case approval.StatusDenied:
+					return "❌ Already denied: " + resolved.Summary, nil
+				}
+			}
+			return "⚠️ This approval request is no longer pending.", nil
+		default:
+			return fmt.Sprintf("Error processing request: %v", err), err
 		}
-		return fmt.Sprintf("Error processing request: %v", err), err
 	}
 
 	if strings.HasSuffix(data, ":approve") {

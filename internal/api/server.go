@@ -505,6 +505,12 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := approval.Status(r.URL.Query().Get("status"))
+	if !approval.ValidStatus(status) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid status: must be one of pending, approved, denied, expired (or empty for all)",
+		})
+		return
+	}
 	reqs, err := s.deps.Approvals.List(r.Context(), status)
 	if err != nil {
 		s.logger.Error("listing approvals", "error", err)

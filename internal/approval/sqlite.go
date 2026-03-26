@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -24,12 +25,18 @@ CREATE TABLE IF NOT EXISTS approvals (
     adapter_name TEXT NOT NULL,
     conversation_id TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
     resolved_at DATETIME,
     resolved_by TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_approvals_callback ON approvals(callback_data);
+CREATE INDEX IF NOT EXISTS idx_approvals_expires ON approvals(expires_at) WHERE status = 'pending';
 `
+
+// migrationAddExpiresAt is applied after schema creation to add the expires_at
+// column to pre-existing databases that were created before this column existed.
+const migrationAddExpiresAt = `ALTER TABLE approvals ADD COLUMN expires_at DATETIME`
 
 // SQLiteStore implements Store using SQLite.
 type SQLiteStore struct {
@@ -55,6 +62,12 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
+	// Idempotent migration: add expires_at to pre-existing databases.
+	if _, err := db.Exec(migrationAddExpiresAt); err != nil && !isDuplicateColumn(err) {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrating schema (expires_at): %w", err)
+	}
+
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -68,17 +81,23 @@ func NewInMemoryStore() (*SQLiteStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// In-memory DBs are always fresh; migration is a no-op but run for consistency.
+	if _, err := db.Exec(migrationAddExpiresAt); err != nil && !isDuplicateColumn(err) {
+		_ = db.Close()
+		return nil, err
+	}
 	return &SQLiteStore{db: db}, nil
 }
 
 func (s *SQLiteStore) Create(ctx context.Context, req Request) (string, error) {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO approvals
-		 (id, agent_name, kind, status, summary, payload, callback_data, external_id, adapter_name, conversation_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, agent_name, kind, status, summary, payload, callback_data, external_id, adapter_name, conversation_id, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.ID, req.AgentName, string(req.Kind), string(StatusPending),
 		req.Summary, req.Payload, req.CallbackData,
 		req.ExternalID, req.AdapterName, req.ConversationID,
+		req.ExpiresAt,
 	)
 	if err != nil {
 		return "", fmt.Errorf("creating approval: %w", err)
@@ -86,12 +105,13 @@ func (s *SQLiteStore) Create(ctx context.Context, req Request) (string, error) {
 	return req.ID, nil
 }
 
+const selectCols = `id, agent_name, kind, status, summary, payload, callback_data,
+		        external_id, adapter_name, conversation_id, created_at, expires_at, resolved_at, resolved_by`
+
 func (s *SQLiteStore) Get(ctx context.Context, id string) (*Request, error) {
 	var req Request
 	err := s.db.GetContext(ctx, &req,
-		`SELECT id, agent_name, kind, status, summary, payload, callback_data,
-		        external_id, adapter_name, conversation_id, created_at, resolved_at, resolved_by
-		 FROM approvals WHERE id = ?`, id,
+		`SELECT `+selectCols+` FROM approvals WHERE id = ?`, id,
 	)
 	if err != nil {
 		if isNotFound(err) {
@@ -102,20 +122,31 @@ func (s *SQLiteStore) Get(ctx context.Context, id string) (*Request, error) {
 	return &req, nil
 }
 
+func (s *SQLiteStore) GetByCallbackData(ctx context.Context, callbackData string) (*Request, error) {
+	var req Request
+	err := s.db.GetContext(ctx, &req,
+		`SELECT `+selectCols+` FROM approvals WHERE callback_data = ? ORDER BY created_at DESC LIMIT 1`,
+		callbackData,
+	)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("getting approval by callback: %w", err)
+	}
+	return &req, nil
+}
+
 func (s *SQLiteStore) List(ctx context.Context, status Status) ([]Request, error) {
 	var rows []Request
 	var err error
 	if status == "" {
 		err = s.db.SelectContext(ctx, &rows,
-			`SELECT id, agent_name, kind, status, summary, payload, callback_data,
-			        external_id, adapter_name, conversation_id, created_at, resolved_at, resolved_by
-			 FROM approvals ORDER BY created_at DESC`,
+			`SELECT `+selectCols+` FROM approvals ORDER BY created_at DESC`,
 		)
 	} else {
 		err = s.db.SelectContext(ctx, &rows,
-			`SELECT id, agent_name, kind, status, summary, payload, callback_data,
-			        external_id, adapter_name, conversation_id, created_at, resolved_at, resolved_by
-			 FROM approvals WHERE status = ? ORDER BY created_at DESC`, string(status),
+			`SELECT `+selectCols+` FROM approvals WHERE status = ? ORDER BY created_at DESC`, string(status),
 		)
 	}
 	if err != nil {
@@ -152,9 +183,7 @@ func (s *SQLiteStore) ResolveByCallbackPrefix(ctx context.Context, prefix string
 	// Look up the pending approval whose callback_data matches the prefix.
 	var req Request
 	err := s.db.GetContext(ctx, &req,
-		`SELECT id, agent_name, kind, status, summary, payload, callback_data,
-		        external_id, adapter_name, conversation_id, created_at, resolved_at, resolved_by
-		 FROM approvals WHERE callback_data = ? AND status = 'pending'`, prefix,
+		`SELECT `+selectCols+` FROM approvals WHERE callback_data = ? AND status = 'pending'`, prefix,
 	)
 	if err != nil {
 		if isNotFound(err) {
@@ -187,6 +216,22 @@ func (s *SQLiteStore) ExpirePending(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+func (s *SQLiteStore) ExpireBefore(ctx context.Context, deadline time.Time) (int, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET status = 'expired', resolved_at = ?, resolved_by = 'expired'
+		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?`,
+		deadline.UTC(), deadline.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("expiring old approvals: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("expiring old approvals (rows): %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
@@ -194,4 +239,10 @@ func (s *SQLiteStore) Close() error {
 // isNotFound returns true for the error SQLite returns on no-row queries.
 func isNotFound(err error) bool {
 	return err != nil && err.Error() == "sql: no rows in result set"
+}
+
+// isDuplicateColumn returns true when SQLite rejects an ALTER TABLE ADD COLUMN
+// because the column already exists (idempotent migration guard).
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }

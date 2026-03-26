@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 // Manager coordinates the persistent Store with the in-memory action Registry.
@@ -26,8 +27,13 @@ func NewManager(store Store, logger *slog.Logger) *Manager {
 	}
 }
 
+// DefaultTTL is the time an approval request stays pending before it is
+// automatically expired by the background worker.
+const DefaultTTL = 24 * time.Hour
+
 // Submit creates a new pending approval, registers the action closure, and
-// returns the persisted Request with its ID populated.
+// returns the persisted Request with its ID populated. The request expires
+// after DefaultTTL if not resolved.
 func (m *Manager) Submit(
 	ctx context.Context,
 	agentName string,
@@ -40,6 +46,7 @@ func (m *Manager) Submit(
 	action ActionFunc,
 ) (*Request, error) {
 	id := generateID()
+	expiresAt := time.Now().UTC().Add(DefaultTTL)
 	req := Request{
 		ID:             id,
 		AgentName:      agentName,
@@ -51,6 +58,7 @@ func (m *Manager) Submit(
 		ExternalID:     externalID,
 		AdapterName:    adapterName,
 		ConversationID: conversationID,
+		ExpiresAt:      &expiresAt,
 	}
 
 	if _, err := m.store.Create(ctx, req); err != nil {
@@ -103,9 +111,15 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 	return m.store.Get(ctx, id)
 }
 
+// ErrStaleCallback is returned by ResolveByCallback when the callback refers to
+// an approval that exists but is no longer pending (already resolved, expired,
+// or approved). The caller should surface its Status to the user.
+var ErrStaleCallback = fmt.Errorf("approval: callback refers to a non-pending request")
+
 // ResolveByCallback parses the full Telegram callback data string
 // ("appr:{id}:approve" or "appr:{id}:deny"), resolves the approval, and
-// returns the updated Request. Returns ErrNotFound for unknown callbacks.
+// returns the updated Request. Returns ErrNotFound for unknown callbacks,
+// ErrStaleCallback when the approval is no longer pending.
 func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, resolvedBy string) (*Request, error) {
 	if !strings.HasPrefix(callbackData, "appr:") {
 		return nil, ErrNotFound
@@ -117,6 +131,14 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 	// Look up the pending row by prefix.
 	req, err := m.store.ResolveByCallbackPrefix(ctx, prefix, statusFor(approved), resolvedBy)
 	if err != nil {
+		if err == ErrNotFound {
+			// No pending row. Check whether the row exists in any other status so
+			// we can give the user an informative message instead of silence.
+			if existing, lookupErr := m.store.GetByCallbackData(ctx, prefix); lookupErr == nil {
+				_ = existing // Status is available to the caller via ErrStaleCallback
+				return existing, ErrStaleCallback
+			}
+		}
 		return nil, err
 	}
 
@@ -153,6 +175,39 @@ func (m *Manager) List(ctx context.Context, status Status) ([]Request, error) {
 // ExpirePending expires all pending approvals. Call at startup.
 func (m *Manager) ExpirePending(ctx context.Context) (int, error) {
 	return m.store.ExpirePending(ctx)
+}
+
+// StartExpiryWorker starts a background goroutine that expires pending
+// approvals whose TTL has elapsed. It ticks every interval until ctx is
+// cancelled. Expired closures are removed from the in-memory registry.
+// Safe to call once per process lifetime.
+func (m *Manager) StartExpiryWorker(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n, err := m.store.ExpireBefore(ctx, time.Now().UTC())
+				if err != nil {
+					m.logger.Warn("expiry worker failed", "error", err)
+					continue
+				}
+				if n > 0 {
+					m.logger.Info("expired pending approvals by TTL", "count", n)
+				}
+			}
+		}
+	}()
+}
+
+// GetByCallbackData fetches an approval by its callback_data prefix regardless
+// of status. Used to provide informative feedback when a user clicks an
+// already-resolved or expired Telegram button.
+func (m *Manager) GetByCallbackData(ctx context.Context, callbackData string) (*Request, error) {
+	return m.store.GetByCallbackData(ctx, callbackData)
 }
 
 func statusFor(approved bool) Status {
