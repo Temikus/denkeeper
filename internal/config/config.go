@@ -18,7 +18,8 @@ type Config struct {
 	Session   SessionConfig         `toml:"session"`
 	Agents    []AgentInstanceConfig `toml:"agents"`
 	Schedules []ScheduleConfig      `toml:"schedules"`
-	Tools     map[string]ToolConfig `toml:"tools"`
+	Tools     map[string]ToolConfig   `toml:"tools"`
+	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Voice     VoiceConfig           `toml:"voice"`
 	API       APIConfig             `toml:"api"`
 }
@@ -109,6 +110,21 @@ type ToolConfig struct {
 	Command string            `toml:"command"`
 	Args    []string          `toml:"args"`
 	Env     map[string]string `toml:"env"`
+}
+
+// PluginConfig defines a denkeeper plugin with explicit capability declarations.
+// Unlike [tools.*] entries (raw MCP servers), plugins participate in permission
+// checks and lifecycle management. Docker sandboxing is planned for a future release.
+type PluginConfig struct {
+	// Type is the execution strategy. Only "subprocess" is supported currently.
+	// "docker" is reserved for future sandboxed execution.
+	Type    string            `toml:"type"`
+	Command string            `toml:"command"`
+	Args    []string          `toml:"args"`
+	Env     map[string]string `toml:"env"`
+	// Capabilities declares contracts this plugin satisfies.
+	// Currently only "tools" is meaningful — registers the plugin as an MCP server.
+	Capabilities []string `toml:"capabilities"`
 }
 
 // SessionConfig controls the default permission tier for agent sessions.
@@ -287,6 +303,14 @@ func applyDefaults(cfg *Config) {
 		cfg.Tools[name] = tc
 	}
 
+	// Expand environment variables in plugin env values.
+	for name, pc := range cfg.Plugins {
+		for k, v := range pc.Env {
+			pc.Env[k] = os.ExpandEnv(v)
+		}
+		cfg.Plugins[name] = pc
+	}
+
 	if cfg.Voice.TTSVoice == "" && cfg.Voice.TTSProvider != "" {
 		cfg.Voice.TTSVoice = "alloy"
 	}
@@ -386,6 +410,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateTools(cfg.Tools); err != nil {
+		return err
+	}
+	if err := validatePlugins(cfg.Plugins, cfg.Tools); err != nil {
 		return err
 	}
 	if err := validateVoice(&cfg.Voice); err != nil {
@@ -603,6 +630,28 @@ func validateTools(tools map[string]ToolConfig) error {
 	for name, tc := range tools {
 		if tc.Command == "" {
 			return fmt.Errorf("config: tools.%s: command is required", name)
+		}
+	}
+	return nil
+}
+
+// validPluginTypes are the recognised type values for plugins.
+// "docker" is accepted in config (rejected at runtime) to ease future upgrades.
+var validPluginTypes = map[string]bool{"subprocess": true, "docker": true}
+
+func validatePlugins(plugins map[string]PluginConfig, tools map[string]ToolConfig) error {
+	for name, pc := range plugins {
+		if pc.Type == "" {
+			return fmt.Errorf("config: plugins.%s: type is required (must be \"subprocess\")", name)
+		}
+		if !validPluginTypes[pc.Type] {
+			return fmt.Errorf("config: plugins.%s: invalid type %q", name, pc.Type)
+		}
+		if pc.Command == "" {
+			return fmt.Errorf("config: plugins.%s: command is required", name)
+		}
+		if _, exists := tools[name]; exists {
+			return fmt.Errorf("config: plugins.%s: name conflicts with tools.%s", name, name)
 		}
 	}
 	return nil

@@ -230,3 +230,30 @@ format = "text"
 # channel      = "telegram:123456789"
 # tags         = ["work", "morning"]
 # enabled      = true
+
+# ---------------------------------------------------------------------------
+# Plugins
+# ---------------------------------------------------------------------------
+# Plugins are enhanced subprocess wrappers that declare their capabilities
+# explicitly. Unlike [tools.*] entries (raw MCP servers), plugins participate
+# in permission checks and lifecycle management.
+#
+# Required fields:
+#   type         - execution strategy; currently only "subprocess" is supported
+#                  ("docker" sandboxing is planned for a future release)
+#   command      - path to the plugin binary
+#   capabilities - list of contracts the plugin satisfies; currently only "tools"
+#                  is meaningful (registers the plugin as an MCP server)
+#
+# Optional fields:
+#   args         - command-line arguments passed to the plugin binary
+#   env          - environment variable overrides (values support $VAR expansion)
+#
+# Plugin names must not conflict with [tools.*] entry names.
+
+# [plugins.web-scraper]
+# type         = "subprocess"
+# command      = "denkeeper-plugin-scraper"
+# args         = ["--headless"]
+# env          = { CHROMIUM_PATH = "/usr/bin/chromium" }
+# capabilities = ["tools"]

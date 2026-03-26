@@ -1287,3 +1287,146 @@ agent = "nonexistent"
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestParse_Plugins(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[plugins.web-scraper]
+type         = "subprocess"
+command      = "denkeeper-plugin-scraper"
+args         = ["--headless"]
+capabilities = ["tools"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Plugins) != 1 {
+		t.Fatalf("expected 1 plugin, got %d", len(cfg.Plugins))
+	}
+	p, ok := cfg.Plugins["web-scraper"]
+	if !ok {
+		t.Fatal("missing web-scraper plugin config")
+	}
+	if p.Type != "subprocess" {
+		t.Errorf("Type = %q, want subprocess", p.Type)
+	}
+	if p.Command != "denkeeper-plugin-scraper" {
+		t.Errorf("Command = %q, want denkeeper-plugin-scraper", p.Command)
+	}
+	if len(p.Args) != 1 || p.Args[0] != "--headless" {
+		t.Errorf("Args = %v, want [--headless]", p.Args)
+	}
+	if len(p.Capabilities) != 1 || p.Capabilities[0] != "tools" {
+		t.Errorf("Capabilities = %v, want [tools]", p.Capabilities)
+	}
+}
+
+func TestParse_PluginDockerTypeAcceptedInConfig(t *testing.T) {
+	// "docker" is syntactically valid in config; it is rejected at plugin.Manager.Load time
+	// with a clear "not yet implemented" error. This lets users pre-configure docker plugins
+	// without a config-level error when upgrading to a future release.
+	tomlData := []byte(baseConfig + `
+[plugins.sandboxed]
+type         = "docker"
+command      = "ghcr.io/example/plugin:latest"
+capabilities = ["tools"]
+`)
+
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected docker type to be accepted in config, got: %v", err)
+	}
+}
+
+func TestParse_PluginMissingType(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[plugins.bad-plugin]
+command      = "some-command"
+capabilities = ["tools"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for plugin missing type")
+	}
+	if !strings.Contains(err.Error(), "type is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_PluginInvalidType(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[plugins.bad-plugin]
+type         = "kubernetes"
+command      = "some-command"
+capabilities = ["tools"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid plugin type")
+	}
+	if !strings.Contains(err.Error(), "invalid type") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_PluginMissingCommand(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[plugins.bad-plugin]
+type         = "subprocess"
+capabilities = ["tools"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for plugin missing command")
+	}
+	if !strings.Contains(err.Error(), "command is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_PluginNameCollisionWithTool(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.my-server]
+command = "denkeeper-tool-server"
+
+[plugins.my-server]
+type         = "subprocess"
+command      = "denkeeper-plugin-server"
+capabilities = ["tools"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for plugin name conflicting with tool")
+	}
+	if !strings.Contains(err.Error(), "conflicts with tools") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_PluginEnvExpansion(t *testing.T) {
+	t.Setenv("DENKEEPER_PLUGIN_TEST_VAR", "plugin-expanded-value")
+
+	tomlData := []byte(baseConfig + `
+[plugins.test-plugin]
+type         = "subprocess"
+command      = "test-plugin-cmd"
+env          = { PLUGIN_VAR = "${DENKEEPER_PLUGIN_TEST_VAR}" }
+capabilities = ["tools"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := cfg.Plugins["test-plugin"]
+	if p.Env["PLUGIN_VAR"] != "plugin-expanded-value" {
+		t.Errorf("PLUGIN_VAR = %q, want plugin-expanded-value", p.Env["PLUGIN_VAR"])
+	}
+}

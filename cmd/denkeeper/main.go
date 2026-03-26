@@ -25,6 +25,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
+	"github.com/Temikus/denkeeper/internal/plugin"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -213,6 +214,31 @@ func runServe(_ *cobra.Command, _ []string) error {
 			logger.Info("tool server registered", "name", name, "command", tc.Command)
 		}
 		defer func() { _ = sharedToolMgr.Close() }()
+	}
+
+	// Load and start plugins (if configured).
+	if len(cfg.Plugins) > 0 {
+		// Plugins register MCP servers into the shared tool manager.
+		// Create it lazily if no [tools.*] entries were configured.
+		if sharedToolMgr == nil {
+			sharedToolMgr = tool.NewManager(logger)
+			defer func() { _ = sharedToolMgr.Close() }()
+		}
+
+		existingToolNames := make(map[string]bool, len(cfg.Tools))
+		for name := range cfg.Tools {
+			existingToolNames[name] = true
+		}
+
+		pluginMgr := plugin.NewManager(logger)
+		if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
+			return fmt.Errorf("loading plugins: %w", err)
+		}
+		if err := pluginMgr.Start(ctx, sharedToolMgr); err != nil {
+			// Non-fatal: individual plugin failures were already logged by Start.
+			logger.Warn("one or more plugins failed to start", "error", err)
+		}
+		logger.Info("plugins loaded", "count", pluginMgr.Count())
 	}
 
 	// Load global skills
