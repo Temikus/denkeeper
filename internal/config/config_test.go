@@ -1220,6 +1220,56 @@ scopes = ["health", "superadmin"]
 	}
 }
 
+func TestParse_OllamaProvider_NoAPIKeyRequired(t *testing.T) {
+	// When default_provider is "ollama", no OpenRouter API key should be required.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "ollama"
+default_model = "llama3"
+
+[llm.ollama]
+base_url = "http://localhost:11434"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for ollama-only config: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "ollama" {
+		t.Errorf("default_provider = %q, want ollama", cfg.LLM.DefaultProvider)
+	}
+	if cfg.LLM.Ollama.BaseURL != "http://localhost:11434" {
+		t.Errorf("ollama.base_url = %q, want http://localhost:11434", cfg.LLM.Ollama.BaseURL)
+	}
+}
+
+func TestParse_OllamaProvider_FallbackRequiresOpenRouterKey(t *testing.T) {
+	// When a fallback references openrouter, the API key must be present.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "ollama"
+default_model = "llama3"
+
+[[llm.fallback]]
+trigger = "error"
+action = "switch_provider"
+provider = "openrouter"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when openrouter fallback is configured without an API key")
+	}
+}
+
 func TestParse_Schedules_InvalidAgent(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[schedules]]

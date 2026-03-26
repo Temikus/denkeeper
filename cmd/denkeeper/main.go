@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -139,8 +140,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	approvalManager := approval.NewManager(approvalStore, logger)
 
-	// Init LLM provider (shared across all agents)
-	orClient := openrouter.New(cfg.LLM.OpenRouter.APIKey)
+	// Init LLM providers (shared across all agents)
+	var orClient *openrouter.Client
+	if cfg.LLM.OpenRouter.APIKey != "" {
+		orClient = openrouter.New(cfg.LLM.OpenRouter.APIKey)
+	}
+	ollamaClient := ollama.New(cfg.LLM.Ollama.BaseURL)
 	costTracker := llm.NewCostTracker(cfg.LLM.MaxCostPerSession)
 
 	// Parse fallback rules once (shared)
@@ -285,7 +290,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 			model = ac.LLMModel
 		}
 		agentRouter := llm.NewRouter(cfg.LLM.DefaultProvider, model, costTracker)
-		agentRouter.RegisterProvider(orClient)
+		agentRouter.RegisterProvider(ollamaClient)
+		if orClient != nil {
+			agentRouter.RegisterProvider(orClient)
+		}
 		if len(fallbackRules) > 0 {
 			agentRouter.SetFallbacks(fallbackRules)
 		}

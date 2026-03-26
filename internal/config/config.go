@@ -130,6 +130,7 @@ type LLMConfig struct {
 	DefaultProvider   string           `toml:"default_provider"`
 	DefaultModel      string           `toml:"default_model"`
 	OpenRouter        OpenRouterConfig `toml:"openrouter"`
+	Ollama            OllamaConfig     `toml:"ollama"`
 	MaxCostPerSession float64          `toml:"max_cost_per_session"`
 	Fallbacks         []FallbackConfig `toml:"fallback"`
 }
@@ -148,6 +149,12 @@ type FallbackConfig struct {
 
 type OpenRouterConfig struct {
 	APIKey string `toml:"api_key"`
+}
+
+// OllamaConfig configures the local Ollama LLM provider.
+type OllamaConfig struct {
+	// BaseURL is the Ollama server address. Defaults to http://localhost:11434.
+	BaseURL string `toml:"base_url"`
 }
 
 type MemoryConfig struct {
@@ -341,6 +348,20 @@ func validateTier(tier, context string) error {
 	return nil
 }
 
+// needsOpenRouter reports whether the config references the openrouter provider
+// in either the default provider or any fallback rule, meaning an API key is required.
+func needsOpenRouter(cfg *Config) bool {
+	if cfg.LLM.DefaultProvider == "openrouter" {
+		return true
+	}
+	for _, f := range cfg.LLM.Fallbacks {
+		if f.Provider == "openrouter" {
+			return true
+		}
+	}
+	return false
+}
+
 func validate(cfg *Config) error {
 	if cfg.Telegram.Token == "" {
 		return fmt.Errorf("config: telegram.token is required")
@@ -348,8 +369,8 @@ func validate(cfg *Config) error {
 	if len(cfg.Telegram.AllowedUsers) == 0 {
 		return fmt.Errorf("config: telegram.allowed_users must not be empty (security requirement)")
 	}
-	if cfg.LLM.OpenRouter.APIKey == "" {
-		return fmt.Errorf("config: llm.openrouter.api_key is required")
+	if needsOpenRouter(cfg) && cfg.LLM.OpenRouter.APIKey == "" {
+		return fmt.Errorf("config: llm.openrouter.api_key is required when using openrouter provider")
 	}
 	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
 		return err
