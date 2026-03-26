@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write  # Required for cosign keyless OIDC signing and build attestations
 
 jobs:
   test:
@@ -27,12 +28,20 @@ jobs:
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@v2
+      # cosign for keyless signing of the checksums file
+      - uses: sigstore/cosign-installer@v3
+      # syft for SBOM generation (goreleaser sboms: section shells out to syft)
+      - uses: anchore/sbom-action/download-syft@v0
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # skip_upload: true in .goreleaser.yaml means the formula is never pushed,
+          # but goreleaser still substitutes the template variable — provide empty string
+          # to avoid template errors until Temikus/homebrew-denkeeper is created.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || '' }}
 
   docker:
     name: Docker
@@ -55,7 +64,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+      - uses: sigstore/cosign-installer@v3
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -68,3 +79,15 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ github.event.head_commit.timestamp }}
+      # Sign by digest (immutable) rather than tag (mutable)
+      - name: Sign Docker image
+        run: |
+          cosign sign --yes \
+            ghcr.io/temikus/denkeeper@${{ steps.build.outputs.digest }}
+      # Attach SLSA build provenance attestation to the image
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/temikus/denkeeper
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

@@ -1,0 +1,55 @@
+[Unit]
+Description=Denkeeper personal AI agent
+Documentation=https://github.com/Temikus/denkeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=denkeeper
+Group=denkeeper
+ExecStart=/usr/bin/denkeeper serve --config /etc/denkeeper/denkeeper.toml
+Restart=on-failure
+RestartSec=5s
+
+# systemd manages these directories with correct ownership
+StateDirectory=denkeeper
+ConfigurationDirectory=denkeeper
+RuntimeDirectory=denkeeper
+
+# Hardening — filesystem
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/denkeeper
+PrivateTmp=true
+PrivateDevices=true
+
+# Hardening — kernel
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+
+# Hardening — network (agent needs outbound HTTPS for LLM providers + Telegram)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Hardening — capabilities
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Hardening — syscalls (safe for CGO_ENABLED=0 Go binaries)
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# Hardening — memory
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+Environment=HOME=/var/lib/denkeeper
+
+[Install]
+WantedBy=multi-user.target

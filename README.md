@@ -9,9 +9,85 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/denkeeper" alt="License"></a>
 </p>
 
-A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
+A security-first personal AI agent that lives in your chat. **[Install](#installation)** Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
 Denkeeper connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai) or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+
+## Installation
+
+### One-liner (Linux and macOS)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Temikus/denkeeper/main/install.sh | sh
+```
+
+To install to a custom prefix (e.g. without sudo):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Temikus/denkeeper/main/install.sh | sh -s -- --prefix ~/.local
+```
+
+The installer detects OS/arch, downloads the correct release archive, verifies the SHA-256 checksum, and places the binary in `<prefix>/bin`.
+
+### Debian / Ubuntu (.deb)
+
+```sh
+VERSION=$(curl -fsSL https://api.github.com/repos/Temikus/denkeeper/releases/latest | grep '"tag_name"' | sed 's/.*"\(v[^"]*\)".*/\1/')
+curl -fsSL "https://github.com/Temikus/denkeeper/releases/download/${VERSION}/denkeeper_${VERSION#v}_linux_amd64.deb" -o denkeeper.deb
+sudo dpkg -i denkeeper.deb
+```
+
+Configure and start the service:
+
+```sh
+sudo cp /etc/denkeeper/denkeeper.toml.example /etc/denkeeper/denkeeper.toml
+sudoedit /etc/denkeeper/denkeeper.toml
+sudo systemctl enable --now denkeeper
+journalctl -u denkeeper -f
+```
+
+### RHEL / Fedora (.rpm)
+
+```sh
+VERSION=$(curl -fsSL https://api.github.com/repos/Temikus/denkeeper/releases/latest | grep '"tag_name"' | sed 's/.*"\(v[^"]*\)".*/\1/')
+curl -fsSL "https://github.com/Temikus/denkeeper/releases/download/${VERSION}/denkeeper_${VERSION#v}_linux_amd64.rpm" -o denkeeper.rpm
+sudo rpm -i denkeeper.rpm
+```
+
+### Docker
+
+```sh
+docker pull ghcr.io/temikus/denkeeper:latest
+docker run -d --name denkeeper \
+  -v ~/.denkeeper:/data \
+  ghcr.io/temikus/denkeeper:latest
+```
+
+### Homebrew (macOS)
+
+> Tap coming soon — check back after the first tagged release.
+
+### Verify release signatures
+
+All release archives are signed with [cosign](https://github.com/sigstore/cosign) (keyless OIDC — no long-lived keys):
+
+```sh
+cosign verify-blob \
+  --signature checksums.txt.sig \
+  --certificate checksums.txt.pem \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp='https://github.com/Temikus/denkeeper/.github/workflows/release.yml.*' \
+  checksums.txt
+```
+
+Docker images are signed and carry SLSA build provenance attestations:
+
+```sh
+cosign verify \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp='https://github.com/Temikus/denkeeper/.github/workflows/release.yml.*' \
+  ghcr.io/temikus/denkeeper:latest
+```
 
 ## Features
 
@@ -302,20 +378,20 @@ Denkeeper is built in phases:
 - [x] Three permission tiers (autonomous/supervised/restricted), per-agent and per-schedule
 - [x] External REST API server skeleton (auth, rate limiting, CORS, TLS, health endpoint)
 
-**Phase 3 — Extensibility** (in progress)
+**Phase 3 — Extensibility** ✅
 - [x] REST API chat endpoint — `POST /api/v1/chat` with JSON response and SSE streaming, `session_id` for conversation continuity, `DELETE /api/v1/sessions/:id`
 - [x] Approval workflows — supervised-tier Telegram inline buttons (Approve/Deny) + REST API (`GET|POST /api/v1/approvals/...`); TTL expiry, stale callback UX, keyboard auto-removal on resolution
 - [x] Config MCP server — per-agent in-process MCP tools for skill and schedule self-modification
 - [x] Ollama LLM provider — local inference with conditional OpenRouter API key validation
-- [ ] Plugin system (subprocess + Docker sandboxing)
-- [ ] Plugin signing and verification
-- [ ] Web dashboard
+- [x] Plugin system — subprocess plugins with capability declarations (`capabilities = ["tools"]`); Docker sandboxing planned
+- [x] Web dashboard — embedded Svelte UI with auth, chat, agent context viewer, API key management, schedules, approvals
 
-**Phase 4 — Polish**
+**Phase 4 — Polish** (in progress)
 - [ ] Additional adapters (Discord)
 - [ ] Additional LLM providers (Anthropic direct)
-- [ ] GoReleaser, .deb/.rpm packages, Homebrew tap
-- [ ] CI/CD pipeline (golangci-lint, govulncheck, release automation)
+- [x] GoReleaser, .deb/.rpm packages, Homebrew tap config
+- [x] CI/CD pipeline (golangci-lint, govulncheck, cosign signing, SBOM generation)
+- [x] One-liner install script + systemd service unit
 - [ ] Hugo documentation website
 
 ## License
