@@ -39,7 +39,7 @@ The pipeline steps are: check permissions → get/create conversation → store 
 **Three key interfaces** define the extension points:
 
 - `adapter.Adapter` — platform integrations (Telegram implemented; add new ones here)
-- `llm.Provider` — LLM backends (OpenRouter implemented; add new ones under `internal/llm/`)
+- `llm.Provider` — LLM backends (OpenRouter and Ollama implemented; add new ones under `internal/llm/`)
 - `agent.MemoryStore` — conversation persistence (SQLite implemented)
 
 **Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters` (bindings), `llm_model` (optional override), and `session_tier` (optional override). Backward compatible: if no `[[agents]]` section exists, a single `"default"` agent is synthesized from `[agent]`/`[session]`.
@@ -83,14 +83,36 @@ Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messa
 - Authenticated endpoints use `server.RequireScope(scope, handler)` middleware.
 - **Chat**: `POST /api/v1/chat` (scope `chat`) — JSON body `{agent, session_id, message, user_id, user_name}`; returns `{session_id, response}`. Set `Accept: text/event-stream` for SSE (two events: `{"type":"content","text":"..."}` then `{"type":"done","session_id":"..."}`). `session_id` is auto-generated if omitted; pass the same value in subsequent requests to continue the conversation.
 - **Session deletion**: `DELETE /api/v1/sessions/{id}` (scope `sessions:read`) — removes the conversation and all its messages (204, idempotent).
+- **Approvals**: `GET /api/v1/approvals` / `GET /api/v1/approvals/{id}` (scope `approvals:read`) — list or fetch approval requests. `POST /api/v1/approvals/{id}/approve` / `.../deny` (scope `approvals:write`) — resolve programmatically.
+
+## Approval Workflows
+
+`internal/approval/` manages supervised-tier action requests that require human sign-off before execution.
+
+- **Manager** (`approval.Manager`) — submits requests, resolves them, runs TTL expiry.
+- **Store** (`approval.SQLiteStore`) — persists requests; shares the WAL SQLite database with the memory store.
+- **Registry** (`approval.Registry`) — holds in-memory action closures keyed by approval ID; cleared on restart (stale pending rows are expired at startup via `ExpirePending`).
+- **Handler** (`approval.NewCallbackHandler`) — implements `adapter.CallbackResolver`; maps Telegram inline button callbacks (`"appr:{id}:approve"` / `"appr:{id}:deny"`) to resolution logic and confirmation strings.
+
+Flow: Engine produces a directive → supervised tier submits to Manager → Manager persists row + registers closure → Engine attaches Approve/Deny inline keyboard buttons to the outgoing message → user clicks → Telegram adapter routes callback to `Handler.Resolve` → Manager resolves + invokes closure → original message keyboard is cleared.
+
+Three action kinds: `user_update`, `create_skill`, `modify_schedule`. Default TTL: 24 h (background worker ticks hourly).
+
+## Config MCP Server
+
+`internal/configmcp/` provides a per-agent in-process MCP server that lets the LLM modify its own configuration at runtime (supervised or autonomous tier).
+
+Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `get_permission_tier`. In supervised mode these tools still submit to the approval Manager rather than acting directly.
 
 ## Current State (Phase 3 in progress)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
-- OpenRouter as LLM provider, Telegram as adapter.
+- LLM providers: OpenRouter (production) and Ollama (local inference). Telegram adapter.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial, no Docker sandboxing yet).
-- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion.
-- Next: approval workflows, Config MCP server, plugin system, web dashboard.
+- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD.
+- Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
+- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, and permission tier inspection.
+- Next: plugin system (subprocess, no Docker yet), CI/CD pipeline + GoReleaser, web dashboard.
 - See `design/denkeeper-prd.md` for the full roadmap.

@@ -357,10 +357,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	dispatcher = agent.NewDispatcher(engines, bindings, []adapter.Adapter{tgAdapter}, logger)
 
 	// Wire the callback resolver so Telegram inline keyboard buttons resolve approvals.
-	tgAdapter.SetCallbackResolver(&callbackShim{
-		manager: approvalManager,
-		logger:  logger,
-	})
+	tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
 
 	// Register config-file schedules into the already-initialised scheduler.
 	for _, sc := range cfg.Schedules {
@@ -454,44 +451,3 @@ func runServe(_ *cobra.Command, _ []string) error {
 	return dispatcher.Run(ctx)
 }
 
-// callbackShim implements adapter.CallbackResolver, bridging Telegram inline
-// keyboard callbacks to the approval manager.
-type callbackShim struct {
-	manager *approval.Manager
-	logger  *slog.Logger
-}
-
-func (s *callbackShim) Resolve(ctx context.Context, data string) (string, error) {
-	if !strings.HasPrefix(data, "appr:") {
-		return "", nil // not an approval callback
-	}
-
-	resolved, err := s.manager.ResolveByCallback(ctx, data, "telegram")
-	if err != nil {
-		switch err {
-		case approval.ErrNotFound:
-			s.logger.Warn("callback for unknown approval", "data", data)
-			return "", nil
-		case approval.ErrStaleCallback:
-			// The approval was already resolved or has expired.
-			if resolved != nil {
-				switch resolved.Status {
-				case approval.StatusExpired:
-					return "⏰ This approval request has expired.", nil
-				case approval.StatusApproved:
-					return "✅ Already approved: " + resolved.Summary, nil
-				case approval.StatusDenied:
-					return "❌ Already denied: " + resolved.Summary, nil
-				}
-			}
-			return "⚠️ This approval request is no longer pending.", nil
-		default:
-			return fmt.Sprintf("Error processing request: %v", err), err
-		}
-	}
-
-	if strings.HasSuffix(data, ":approve") {
-		return "✅ Approved: " + resolved.Summary, nil
-	}
-	return "❌ Denied: " + resolved.Summary, nil
-}

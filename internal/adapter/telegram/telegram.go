@@ -218,8 +218,9 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 }
 
 // handleCallbackQuery processes an inline keyboard button click. It answers
-// the Telegram callback query (required to clear the loading state) and then
-// asks the resolver for a confirmation message to send back to the chat.
+// the Telegram callback query (required to clear the loading state), removes
+// the inline keyboard from the original message so buttons cannot be clicked
+// again, and sends a confirmation message to the chat.
 func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.CallbackQuery) {
 	// Answer the callback query first — Telegram requires this within a few
 	// seconds or the button shows a loading spinner indefinitely.
@@ -236,6 +237,21 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 	}
 	if responseText == "" {
 		return // unknown callback, silently ignore
+	}
+
+	// Remove the inline keyboard from the original message. This prevents the
+	// user from clicking the buttons a second time after the approval has
+	// already been resolved or expired.
+	if cq.Message != nil {
+		edit := tgbotapi.NewEditMessageReplyMarkup(
+			cq.Message.Chat.ID,
+			cq.Message.MessageID,
+			tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
+		)
+		if _, editErr := a.bot.Request(edit); editErr != nil {
+			// Non-fatal: the message may have been deleted or the bot lacks edit permission.
+			a.logger.Debug("failed to remove inline keyboard from message", "error", editErr)
+		}
 	}
 
 	// Send the confirmation message to the originating chat.

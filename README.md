@@ -11,15 +11,15 @@
 
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
-Denkeeper connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai), and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+Denkeeper connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai) or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
 
 ## Features
 
 - **Single binary** — no runtime dependencies, no containers required
 - **Multi-agent routing** — run multiple named agents, each with their own persona, skills, LLM model, and permission tier
-- **Telegram integration** — chat with your agent from your phone
+- **Telegram integration** — chat with your agent from your phone, including inline Approve/Deny buttons for supervised actions
 - **User allowlist** — only approved Telegram user IDs can interact
-- **LLM routing** — pluggable provider interface, currently backed by OpenRouter (access to Claude, GPT, Llama, and hundreds more)
+- **LLM routing** — pluggable provider interface; OpenRouter (cloud, hundreds of models) and Ollama (local inference) built-in
 - **Fallback strategies** — automatic model/provider switching on errors, rate limits, or low funds
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
@@ -28,7 +28,9 @@ Denkeeper connects to your Telegram (more adapters planned), routes messages thr
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
-- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming and session management
+- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions) require explicit human approval via Telegram buttons or REST API
+- **Config MCP server** — per-agent in-process MCP tools let the LLM list/create skills, list/add schedules, and inspect its own permission tier at runtime
+- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, and approval CRUD
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
 
 ## Architecture
@@ -89,6 +91,7 @@ Key sections:
 | `[telegram]` | Bot token and allowed user IDs |
 | `[llm]` | Default provider, model, and per-session cost cap |
 | `[llm.openrouter]` | OpenRouter API key |
+| `[llm.ollama]` | Ollama base URL (default: `http://localhost:11434`) |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
@@ -185,7 +188,7 @@ key  = "dk-your-secret-key"
 scopes = ["chat", "sessions:read", "costs:read"]
 ```
 
-**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`
+**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`, `approvals:read`, `approvals:write`
 
 **Endpoints:**
 
@@ -199,8 +202,13 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/agents` | `admin` | List agents with metadata |
 | `GET` | `/api/v1/agents/{name}` | `admin` | Agent details and skills |
 | `GET` | `/api/v1/skills` | `skills:read` | List all skills across agents |
+| `GET` | `/api/v1/skills/{agent}` | `skills:read` | List skills for a specific agent |
 | `GET` | `/api/v1/schedules` | `schedules:read` | List schedules with run times |
 | `GET` | `/api/v1/costs` | `costs:read` | Cost summary |
+| `GET` | `/api/v1/approvals` | `approvals:read` | List approval requests (filter by `?status=pending`) |
+| `GET` | `/api/v1/approvals/{id}` | `approvals:read` | Get a single approval request |
+| `POST` | `/api/v1/approvals/{id}/approve` | `approvals:write` | Approve a pending request |
+| `POST` | `/api/v1/approvals/{id}/deny` | `approvals:write` | Deny a pending request |
 
 **Chat example:**
 
@@ -252,9 +260,12 @@ internal/
   adapter/           Platform integrations (Telegram, ...)
   agent/             Dispatcher, engine, and conversation memory
   api/               External REST API server
+  approval/          Approval workflow manager, store, registry, and Telegram callback handler
   config/            TOML config parsing and validation
+  configmcp/         Per-agent Config MCP server (skill/schedule/tier tools)
   llm/               Provider interface, router, cost tracking
     openrouter/      OpenRouter client
+    ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
   scheduler/         Cron and interval scheduling
   security/          Permission engine (tiers)
@@ -293,16 +304,18 @@ Denkeeper is built in phases:
 
 **Phase 3 — Extensibility** (in progress)
 - [x] REST API chat endpoint — `POST /api/v1/chat` with JSON response and SSE streaming, `session_id` for conversation continuity, `DELETE /api/v1/sessions/:id`
-- [ ] Approval workflows (inline in Telegram + `POST /api/v1/approvals/:id/approve|deny`)
-- [ ] Config MCP server (agent self-modification of skills, schedules, fallbacks)
+- [x] Approval workflows — supervised-tier Telegram inline buttons (Approve/Deny) + REST API (`GET|POST /api/v1/approvals/...`); TTL expiry, stale callback UX, keyboard auto-removal on resolution
+- [x] Config MCP server — per-agent in-process MCP tools for skill and schedule self-modification
+- [x] Ollama LLM provider — local inference with conditional OpenRouter API key validation
 - [ ] Plugin system (subprocess + Docker sandboxing)
 - [ ] Plugin signing and verification
 - [ ] Web dashboard
 
 **Phase 4 — Polish**
 - [ ] Additional adapters (Discord)
-- [ ] Additional LLM providers
+- [ ] Additional LLM providers (Anthropic direct)
 - [ ] GoReleaser, .deb/.rpm packages, Homebrew tap
+- [ ] CI/CD pipeline (golangci-lint, govulncheck, release automation)
 - [ ] Hugo documentation website
 
 ## License

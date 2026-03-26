@@ -93,3 +93,45 @@ func TestNewWithBot_NilVoiceOpts(t *testing.T) {
 		t.Error("autoVoiceReply should default to false")
 	}
 }
+
+// mockCallbackResolver satisfies adapter.CallbackResolver for wiring tests.
+type mockCallbackResolver struct {
+	called bool
+	retStr string
+}
+
+func (m *mockCallbackResolver) Resolve(_ context.Context, _ string) (string, error) {
+	m.called = true
+	return m.retStr, nil
+}
+
+func TestSetCallbackResolver_Wiring(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	if a.callbackResolver != nil {
+		t.Error("callbackResolver should be nil before SetCallbackResolver")
+	}
+
+	mock := &mockCallbackResolver{}
+	a.SetCallbackResolver(mock)
+
+	if a.callbackResolver == nil {
+		t.Error("callbackResolver should not be nil after SetCallbackResolver")
+	}
+	if a.callbackResolver != mock {
+		t.Error("callbackResolver should be the exact resolver passed to SetCallbackResolver")
+	}
+}
+
+func TestCallbackResolver_NotSetByDefault(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	// The adapter must not call callbackResolver when it is nil.
+	// Validate the guard branch: Start() checks `a.callbackResolver != nil`
+	// before routing callback queries, so a nil resolver is safe.
+	if a.callbackResolver != nil {
+		t.Error("fresh adapter must have nil callbackResolver")
+	}
+}
