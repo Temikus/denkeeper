@@ -35,7 +35,7 @@ jobs:
       - uses: jdx/mise-action@v4
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -80,7 +80,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -o denkeeper-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/denkeeper
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}
           path: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}
