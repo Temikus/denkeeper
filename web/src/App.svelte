@@ -9,6 +9,8 @@
   import Sessions from './pages/Sessions.svelte'
   import Schedules from './pages/Schedules.svelte'
   import Skills from './pages/Skills.svelte'
+  import Chat from './pages/Chat.svelte'
+  import ApiKeys from './pages/ApiKeys.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   $: route = $currentRoute.split('/')[0]
@@ -32,6 +34,10 @@
         <Schedules />
       {:else if route === 'skills'}
         <Skills />
+      {:else if route === 'chat'}
+        <Chat />
+      {:else if route === 'keys'}
+        <ApiKeys />
       {:else}
         <p style="color: var(--text-muted)">Page not found.</p>
       {/if}

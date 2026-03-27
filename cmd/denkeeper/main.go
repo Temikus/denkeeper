@@ -454,6 +454,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Start API server (if enabled)
 	if cfg.API.Enabled {
+		// Initialize API key store (same WAL database as memory/approval store).
+		keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
+		if ksErr != nil {
+			return fmt.Errorf("initializing api key store: %w", ksErr)
+		}
+
 		apiServer := api.New(cfg.API, api.Deps{
 			Dispatcher:  dispatcher,
 			Scheduler:   sched,
@@ -462,6 +468,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			Config:      cfg,
 			Approvals:   approvalManager,
 			WebHandler:  web.Handler(),
+			KeyStore:    keyStore,
 		}, logger)
 		go func() {
 			if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {

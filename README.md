@@ -1,4 +1,6 @@
-# Denkeeper
+<p align="center">
+  <img src="assets/logo_text.png" alt="Denkeeper" width="300">
+</p>
 
 <p align="center">
   <a href="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>

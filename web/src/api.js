@@ -55,4 +55,59 @@ export const api = {
   approval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}`),
   approveApproval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   denyApproval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}/deny`, { method: 'POST' }),
+
+  // API Keys
+  listKeys: () => apiFetch('/api/v1/keys'),
+  createKey: (name, scopes) => apiFetch('/api/v1/keys', {
+    method: 'POST',
+    body: JSON.stringify({ name, scopes }),
+  }),
+  revokeKey: id => apiFetch(`/api/v1/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  rotateKey: id => apiFetch(`/api/v1/keys/${encodeURIComponent(id)}/rotate`, { method: 'POST' }),
+
+  // Chat with SSE streaming.
+  // onChunk(text) is called for each content chunk.
+  // onDone(sessionId) is called when the stream ends.
+  streamChat: async (agent, sessionId, message, onChunk, onDone) => {
+    const res = await fetch('/api/v1/chat', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify({ agent, session_id: sessionId || undefined, message }),
+    })
+    if (res.status === 401) {
+      token.clear()
+      throw new Error('Unauthorized — please log in again')
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `HTTP ${res.status}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      // SSE frames are separated by "\n\n".
+      const frames = buf.split('\n\n')
+      buf = frames.pop() // keep incomplete frame
+      for (const frame of frames) {
+        const line = frame.trim()
+        if (!line.startsWith('data: ')) continue
+        try {
+          const evt = JSON.parse(line.slice(6))
+          if (evt.type === 'content') onChunk(evt.text || '')
+          if (evt.type === 'done') onDone(evt.session_id || '')
+          if (evt.type === 'error') throw new Error(evt.message || 'stream error')
+        } catch (e) {
+          if (e.message !== 'stream error') continue // skip malformed JSON
+          throw e
+        }
+      }
+    }
+  },
 }

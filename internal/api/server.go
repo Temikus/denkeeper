@@ -31,6 +31,7 @@ type Deps struct {
 	Config      *config.Config
 	Approvals   *approval.Manager // nil = approval endpoints return 503
 	WebHandler  http.Handler      // nil = no web dashboard served
+	KeyStore    *KeyStore          // nil = API key CRUD endpoints return 503
 }
 
 // Server is the external REST API server.
@@ -78,6 +79,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/approvals/{id}", s.RequireScope("approvals:read", s.handleGetApproval))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.RequireScope("approvals:write", s.handleResolveApproval(true)))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/deny", s.RequireScope("approvals:write", s.handleResolveApproval(false)))
+
+	// API key management endpoints (require admin scope).
+	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
+	mux.HandleFunc("POST /api/v1/keys", s.RequireScope("admin", s.handleCreateKey))
+	mux.HandleFunc("DELETE /api/v1/keys/{id}", s.RequireScope("admin", s.handleRevokeKey))
+	mux.HandleFunc("POST /api/v1/keys/{id}/rotate", s.RequireScope("admin", s.handleRotateKey))
 
 	// Web dashboard — catch-all for non-API paths (more-specific /api/v1/ routes always win).
 	if deps.WebHandler != nil {
@@ -608,7 +615,7 @@ const keyNameKey contextKey = "api_key_name"
 // required scope. Use this to wrap individual route handlers.
 func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		keyName, ok := s.authenticate(r, scope)
+		keyName, ok := s.authenticate(r.Context(), r, scope)
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
@@ -628,8 +635,9 @@ func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerF
 }
 
 // authenticate checks the Authorization header for a valid API key with the
-// given scope. Returns the key name and true if valid.
-func (s *Server) authenticate(r *http.Request, scope string) (string, bool) {
+// given scope. SQLite-managed keys are checked first, then TOML keys.
+// Returns the key name and true if valid.
+func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string) (string, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		return "", false
@@ -640,6 +648,23 @@ func (s *Server) authenticate(r *http.Request, scope string) (string, bool) {
 		return "", false // no "Bearer " prefix
 	}
 
+	// Check SQLite-managed keys first (allows runtime key management without restart).
+	if s.deps.KeyStore != nil {
+		sk, _ := s.deps.KeyStore.FindActiveByHash(ctx, hashToken(token))
+		if sk != nil {
+			var scopes []string
+			_ = json.Unmarshal([]byte(sk.ScopesJSON), &scopes)
+			for _, sc := range scopes {
+				if sc == scope {
+					go s.deps.KeyStore.TouchLastUsed(context.Background(), sk.ID)
+					return sk.Name, true
+				}
+			}
+			return "", false // key valid but scope missing
+		}
+	}
+
+	// Fall back to TOML-configured keys (backward-compatible).
 	for _, k := range s.cfg.Keys {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(k.Key)) == 1 {
 			for _, s := range k.Scopes {
@@ -651,6 +676,101 @@ func (s *Server) authenticate(r *http.Request, scope string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// keyStoreRequired writes 503 when the KeyStore is not configured.
+func (s *Server) keyStoreRequired(w http.ResponseWriter) bool {
+	if s.deps.KeyStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "key management not configured"})
+		return false
+	}
+	return true
+}
+
+// handleListKeys handles GET /api/v1/keys.
+func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	recs, err := s.deps.KeyStore.List(r.Context())
+	if err != nil {
+		s.logger.Error("listing api keys", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if recs == nil {
+		recs = []APIKeyRecord{}
+	}
+	writeJSON(w, http.StatusOK, recs)
+}
+
+// handleCreateKey handles POST /api/v1/keys.
+func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	var body struct {
+		Name   string   `json:"name"`
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if len(body.Scopes) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one scope is required"})
+		return
+	}
+	rec, plaintext, err := s.deps.KeyStore.Create(r.Context(), body.Name, body.Scopes)
+	if err != nil {
+		s.logger.Error("creating api key", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         rec.ID,
+		"name":       rec.Name,
+		"key":        plaintext, // shown once
+		"scopes":     rec.Scopes,
+		"created_at": rec.CreatedAt,
+	})
+}
+
+// handleRevokeKey handles DELETE /api/v1/keys/{id}.
+func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.deps.KeyStore.Revoke(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRotateKey handles POST /api/v1/keys/{id}/rotate.
+func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	id := r.PathValue("id")
+	rec, plaintext, err := s.deps.KeyStore.Rotate(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":         rec.ID,
+		"name":       rec.Name,
+		"key":        plaintext, // shown once
+		"scopes":     rec.Scopes,
+		"created_at": rec.CreatedAt,
+	})
 }
 
 // ---------------------------------------------------------------------------

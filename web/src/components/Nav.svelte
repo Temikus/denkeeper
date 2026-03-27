@@ -5,11 +5,13 @@
 
   const links = [
     { id: 'overview',  label: 'Overview' },
+    { id: 'chat',      label: 'Chat' },
     { id: 'agents',    label: 'Agents' },
     { id: 'approvals', label: 'Approvals' },
     { id: 'sessions',  label: 'Sessions' },
     { id: 'schedules', label: 'Schedules' },
     { id: 'skills',    label: 'Skills' },
+    { id: 'keys',      label: 'API Keys' },
   ]
 
   function logout() {
