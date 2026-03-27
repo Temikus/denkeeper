@@ -47,6 +47,15 @@ func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *Voi
 
 	logger.Info("telegram bot authorized", "username", bot.Self.UserName)
 
+	// Register slash commands so they appear in the Telegram command menu.
+	cmds := []tgbotapi.BotCommand{
+		{Command: "start", Description: "Start a conversation"},
+		{Command: "help", Description: "Show help and available commands"},
+	}
+	if _, err := bot.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
+		logger.Warn("failed to register bot commands", "error", err)
+	}
+
 	a := &Adapter{
 		bot:          bot,
 		allowedUsers: allowed,
@@ -116,6 +125,9 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 				a.logger.Warn("unauthorized user", "user_id", userID, "username", update.Message.From.UserName)
 				continue
 			}
+
+			// Show typing indicator while processing.
+			_, _ = a.bot.Send(tgbotapi.NewChatAction(update.Message.Chat.ID, tgbotapi.ChatTyping))
 
 			var text string
 			var isVoice bool

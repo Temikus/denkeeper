@@ -214,12 +214,15 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":            e.Name(),
-		"permission_tier": e.PermissionTier(),
-		"model":           e.ModelName(),
-		"has_tools":       e.HasTools(),
-		"adapters":        adapters,
-		"skills":          skillList,
+		"name":             e.Name(),
+		"permission_tier":  e.PermissionTier(),
+		"model":            e.ModelName(),
+		"has_tools":        e.HasTools(),
+		"adapters":         adapters,
+		"skills":           skillList,
+		"tool_names":       e.ToolNames(),
+		"persona_dir":      e.PersonaDir(),
+		"persona_sections": e.PersonaSections(),
 	})
 }
 

@@ -1852,3 +1852,179 @@ channel = "telegram:123"
 		t.Errorf("scheduler entries = %d, want 0 (invalid expression)", len(sched.Entries()))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Accessor tests: PersonaDir, PersonaSections, ToolNames
+// ---------------------------------------------------------------------------
+
+func TestEngine_PersonaDir_NoPersona(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if dir := eng.PersonaDir(); dir != "" {
+		t.Errorf("PersonaDir() = %q, want empty string", dir)
+	}
+}
+
+func TestEngine_PersonaDir_WithPersona(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	if got := eng.PersonaDir(); got != dir {
+		t.Errorf("PersonaDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestEngine_PersonaSections_NoPersona(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if secs := eng.PersonaSections(); secs != nil {
+		t.Errorf("PersonaSections() = %v, want nil", secs)
+	}
+}
+
+func TestEngine_PersonaSections_SoulOnly(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	secs := eng.PersonaSections()
+	if secs == nil {
+		t.Fatal("PersonaSections() = nil, want map")
+	}
+	if !secs["soul"] {
+		t.Error("soul should be loaded")
+	}
+	if secs["user"] {
+		t.Error("user should not be loaded (no USER.md)")
+	}
+	if secs["memory"] {
+		t.Error("memory should not be loaded (no MEMORY.md)")
+	}
+}
+
+func TestEngine_PersonaSections_AllSections(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	for _, f := range []struct{ name, body string }{
+		{"SOUL.md", "You are helpful."},
+		{"USER.md", "User context."},
+		{"MEMORY.md", "Memory content."},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.body), 0600); err != nil {
+			t.Fatalf("writing %s: %v", f.name, err)
+		}
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	secs := eng.PersonaSections()
+	if secs == nil {
+		t.Fatal("PersonaSections() = nil, want map")
+	}
+	for _, sec := range []string{"soul", "user", "memory"} {
+		if !secs[sec] {
+			t.Errorf("section %q should be loaded", sec)
+		}
+	}
+}
+
+func TestEngine_ToolNames_NoTools(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if names := eng.ToolNames(); names != nil {
+		t.Errorf("ToolNames() = %v, want nil", names)
+	}
+}
+
+func TestEngine_ToolNames_WithToolManager(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	mgr := tool.NewManager(testLogger())
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, mgr, nil, testLogger())
+
+	// An empty tool manager → has tools configured but no tools discovered yet.
+	if eng.ToolNames() == nil {
+		t.Error("ToolNames() should return non-nil slice when tool manager is set")
+	}
+	if len(eng.ToolNames()) != 0 {
+		t.Errorf("ToolNames() = %v, want empty slice", eng.ToolNames())
+	}
+}

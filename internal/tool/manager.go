@@ -122,6 +122,15 @@ func (m *Manager) ToolDefs() []llm.ToolDef {
 	return m.toolDefs
 }
 
+// ToolNames returns the names of all registered MCP tools.
+func (m *Manager) ToolNames() []string {
+	names := make([]string, len(m.toolDefs))
+	for i, td := range m.toolDefs {
+		names[i] = td.Function.Name
+	}
+	return names
+}
+
 // Execute runs a single tool call and returns the text result.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
 	sc, ok := m.toolMap[call.Function.Name]

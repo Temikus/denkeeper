@@ -81,6 +81,34 @@
       {:else}
         <p class="empty">No skills loaded.</p>
       {/if}
+
+      {#if detail.tool_names && detail.tool_names.length > 0}
+        <h3>MCP Tools ({detail.tool_names.length})</h3>
+        <ul class="tool-list">
+          {#each detail.tool_names as t}
+            <li class="mono">{t}</li>
+          {/each}
+        </ul>
+      {:else if detail.has_tools}
+        <h3>MCP Tools</h3>
+        <p class="empty">Configured — none registered yet.</p>
+      {/if}
+
+      {#if detail.persona_dir}
+        <h3>Persona</h3>
+        <dl class="props">
+          <dt>Directory</dt>
+          <dd class="mono">{detail.persona_dir}</dd>
+          {#if detail.persona_sections}
+            <dt>Sections</dt>
+            <dd class="sections">
+              {#each Object.entries(detail.persona_sections) as [sec, loaded]}
+                <span class="tag" class:loaded>{sec}</span>
+              {/each}
+            </dd>
+          {/if}
+        </dl>
+      {/if}
     </section>
   {:else if !error && agents.length > 0}
     <p class="empty">Select an agent.</p>
@@ -114,4 +142,9 @@
   .skill-name { font-weight: 500; }
   .muted { color: var(--text-muted); max-width: 240px; }
   .empty { color: var(--text-muted); font-size: 13px; padding: 4px 0; }
+  .tool-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool-list li { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px; }
+  .sections { display: flex; gap: 6px; }
+  .tag { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 8px; font-size: 12px; color: var(--text-muted); }
+  .tag.loaded { border-color: var(--accent); color: var(--text); }
 </style>

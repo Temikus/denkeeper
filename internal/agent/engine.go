@@ -133,6 +133,37 @@ func (e *Engine) AppendSkill(s skill.Skill) {
 // HasTools returns true if the agent has MCP tools configured.
 func (e *Engine) HasTools() bool { return e.tools != nil }
 
+// ToolNames returns the names of all registered MCP tools for this agent.
+// Returns nil if the agent has no tools configured.
+func (e *Engine) ToolNames() []string {
+	if e.tools == nil {
+		return nil
+	}
+	return e.tools.ToolNames()
+}
+
+// PersonaDir returns the directory the agent's persona was loaded from.
+// Returns an empty string if no persona is configured.
+func (e *Engine) PersonaDir() string {
+	if e.persona == nil {
+		return ""
+	}
+	return e.persona.Dir()
+}
+
+// PersonaSections returns which persona sections are loaded (soul/user/memory).
+// Returns nil if no persona is configured.
+func (e *Engine) PersonaSections() map[string]bool {
+	if e.persona == nil {
+		return nil
+	}
+	return map[string]bool{
+		"soul":   e.persona.Soul != "",
+		"user":   e.persona.User != "",
+		"memory": e.persona.Memory != "",
+	}
+}
+
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending trigger-matched skill instructions and the
 // memory update directive when the engine has write_memory permission.

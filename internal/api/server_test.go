@@ -434,6 +434,33 @@ func TestAgent_SingleAgent(t *testing.T) {
 	}
 }
 
+func TestAgent_ContextFields_NoPersonaNoTools(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/agents/default"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var detail map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// persona_dir should be absent or empty string for an engine with no persona.
+	if v, ok := detail["persona_dir"]; ok && v != "" {
+		t.Errorf("persona_dir = %v, want empty or absent", v)
+	}
+
+	// tool_names should be absent or nil for an engine with no tools.
+	if v, ok := detail["tool_names"]; ok && v != nil {
+		t.Errorf("tool_names = %v, want nil or absent", v)
+	}
+}
+
 func TestAgent_NotFound(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	srv := New(cfg, testDeps(), testLogger())
