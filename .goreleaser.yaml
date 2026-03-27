@@ -71,8 +71,8 @@ nfpms:
     maintainer: Temikus <github@temik.us>
     description: |-
       Denkeeper — a security-first personal AI agent.
-      Connects to Telegram, routes messages through LLM providers (OpenRouter,
-      Ollama), and persists conversations in a local SQLite database.
+      Connects to Telegram and Discord, routes messages through LLM providers
+      (Anthropic, OpenRouter, Ollama), and persists conversations in SQLite.
     license: Apache-2.0
     formats:
       - deb
@@ -113,7 +113,7 @@ homebrew_casks:
       name: homebrew-denkeeper
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/Temikus/denkeeper
-    description: Security-first personal AI agent
+    description: Security-first personal AI agent (Telegram/Discord, Anthropic/OpenRouter/Ollama)
     license: Apache-2.0
 
 # ── Changelog ─────────────────────────────────────────────────────────────────

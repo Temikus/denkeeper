@@ -13,7 +13,7 @@
 
 A security-first personal AI agent that lives in your chat. **[Install](#installation)** Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
-Denkeeper connects to your Telegram (more adapters planned), routes messages through LLM providers via [OpenRouter](https://openrouter.ai) or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+Denkeeper connects to your Telegram or Discord, routes messages through LLM providers via [Anthropic](https://anthropic.com), [OpenRouter](https://openrouter.ai), or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
 
 ## Installation
 
@@ -97,9 +97,9 @@ cosign verify \
 
 - **Single binary** — no runtime dependencies, no containers required
 - **Multi-agent routing** — run multiple named agents, each with their own persona, skills, LLM model, and permission tier
-- **Telegram integration** — chat with your agent from your phone, including inline Approve/Deny buttons for supervised actions
-- **User allowlist** — only approved Telegram user IDs can interact
-- **LLM routing** — pluggable provider interface; OpenRouter (cloud, hundreds of models) and Ollama (local inference) built-in
+- **Telegram + Discord** — chat with your agent from your phone or Discord server, including inline Approve/Deny buttons for supervised actions; both adapters can run simultaneously
+- **User allowlist** — only approved user IDs can interact (per-adapter)
+- **LLM routing** — pluggable provider interface; Anthropic (direct), OpenRouter (cloud, hundreds of models), and Ollama (local inference) built-in
 - **Fallback strategies** — automatic model/provider switching on errors, rate limits, or low funds
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
@@ -107,10 +107,10 @@ cosign verify \
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
 - **Plugin system** — subprocess plugins with capability declarations; tools capability wires plugin tools into the agent's LLM loop
-- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, sessions, approvals, schedules, skills, and agent context viewer (persona status + MCP tool names)
+- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, agent context viewer, and API key management
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
-- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions) require explicit human approval via Telegram buttons or REST API
+- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions) require explicit human approval via chat buttons (Telegram/Discord) or REST API
 - **Config MCP server** — per-agent in-process MCP tools let the LLM list/create skills, list/add schedules, and inspect its own permission tier at runtime
 - **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, and approval CRUD
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
@@ -118,13 +118,13 @@ cosign verify \
 ## Architecture
 
 ```
-Adapter (Telegram) → Dispatcher → Engine (per agent) → LLM Router → Provider (OpenRouter)
-                                       ↕                    ↕
-                                   MemoryStore          CostTracker
-                                   (SQLite)
+Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenRouter/Ollama)
+                                               ↕                    ↕
+                                           MemoryStore          CostTracker
+                                           (SQLite)
 
-API Server (/api/v1/...) ──────────────┘
-Scheduler ─────────────────────────────┘
+API Server (/api/v1/...) ──────────────────────┘
+Scheduler ─────────────────────────────────────┘
 ```
 
 The Dispatcher routes incoming messages to named agent Engines based on adapter bindings. Each Engine checks permissions, loads conversation history, builds the system prompt (persona + skills), calls the LLM (with tool-call loop if MCP tools are configured), stores the response, and sends it back through the adapter.
@@ -135,7 +135,7 @@ The Dispatcher routes incoming messages to named agent Engines based on adapter 
 
 - Go 1.25+ (managed via [mise](https://mise.jdx.dev) — see `mise.toml`)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- An OpenRouter API key (from [openrouter.ai/keys](https://openrouter.ai/keys))
+- An API key for your chosen LLM provider: [OpenRouter](https://openrouter.ai/keys), [Anthropic](https://console.anthropic.com/settings/keys), or a local [Ollama](https://ollama.com) instance
 - Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
 
 ### Setup
@@ -171,7 +171,9 @@ Key sections:
 | Section | Purpose |
 |---------|---------|
 | `[telegram]` | Bot token and allowed user IDs |
-| `[llm]` | Default provider, model, and per-session cost cap |
+| `[discord]` | Bot token and allowed user snowflake IDs |
+| `[llm]` | Default provider (`anthropic`/`openrouter`/`ollama`), model, and per-session cost cap |
+| `[llm.anthropic]` | Anthropic API key (direct provider; no OpenRouter key needed) |
 | `[llm.openrouter]` | OpenRouter API key |
 | `[llm.ollama]` | Ollama base URL (default: `http://localhost:11434`) |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
@@ -343,13 +345,16 @@ just loc             # Count lines of source vs test code
 ```
 cmd/denkeeper/       Entry point
 internal/
-  adapter/           Platform integrations (Telegram, ...)
+  adapter/           Platform integrations
+    telegram/        Telegram bot adapter
+    discord/         Discord bot adapter
   agent/             Dispatcher, engine, and conversation memory
   api/               External REST API server
-  approval/          Approval workflow manager, store, registry, and Telegram callback handler
+  approval/          Approval workflow manager, store, registry, and callback handler
   config/            TOML config parsing and validation
   configmcp/         Per-agent Config MCP server (skill/schedule/tier tools)
   llm/               Provider interface, router, cost tracking
+    anthropic/       Anthropic direct client
     openrouter/      OpenRouter client
     ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
@@ -399,12 +404,16 @@ Denkeeper is built in phases:
 - [x] Plugin system — subprocess plugins with capability declarations (`capabilities = ["tools"]`); Docker sandboxing planned
 - [x] Web dashboard — embedded Svelte UI with overview, sessions, approvals, schedules, skills, and agent context viewer (persona status + MCP tool names)
 
-**Phase 4 — Polish** (in progress)
-- [ ] Additional adapters (Discord)
-- [ ] Additional LLM providers (Anthropic direct)
+**Phase 4 — Polish** ✅
+- [x] Discord adapter — DM and guild channel support, allowlist, typing indicator, action-row approval buttons
+- [x] Anthropic direct LLM provider — Anthropic Messages API, tool_use support, no OpenRouter dependency
+- [x] API Key CRUD — runtime key management (create/revoke/rotate) without TOML restarts
+- [x] Web dashboard Chat page — SSE streaming chat UI in the dashboard
 - [x] GoReleaser, .deb/.rpm packages, Homebrew tap config
 - [x] CI/CD pipeline (golangci-lint, govulncheck, cosign signing, SBOM generation)
 - [x] One-liner install script + systemd service unit
+
+**Phase 5 — Documentation**
 - [ ] Hugo documentation website
 
 ## License
