@@ -65,7 +65,9 @@ docker run -d --name denkeeper \
 
 ### Homebrew (macOS)
 
-> Tap coming soon — check back after the first tagged release.
+```sh
+brew install Temikus/denkeeper/denkeeper
+```
 
 ### Verify release signatures
 
@@ -102,6 +104,8 @@ cosign verify \
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
+- **Plugin system** — subprocess plugins with capability declarations; tools capability wires plugin tools into the agent's LLM loop
+- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, sessions, approvals, schedules, skills, and agent context viewer (persona status + MCP tool names)
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions) require explicit human approval via Telegram buttons or REST API
@@ -172,6 +176,7 @@ Key sections:
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
 | `[tools.*]` | MCP tool server definitions |
+| `[plugins.*]` | Subprocess plugin definitions (capability declarations) |
 | `[voice]` | STT/TTS configuration (OpenAI) |
 | `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys with scopes) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
@@ -310,8 +315,11 @@ Pass the same `session_id` in subsequent requests to continue the conversation. 
 [just](https://github.com/casey/just) is used as the command runner. Run `just` to see all available recipes:
 
 ```
-just build           # Build the denkeeper binary
+just build           # Build the denkeeper binary (requires web/dist/ to exist)
+just build-ui        # Build the Svelte web dashboard (requires Node.js)
+just build-full      # Build web dashboard then Go binary in one step
 just serve           # Start the agent (just serve ./path/to/config.toml)
+just web-dev         # Start Vite dev server for dashboard hot-reload
 just test            # Run all tests with race detector
 just test-v          # Verbose test output
 just test-pkg <pkg>  # Test a single package (e.g. just test-pkg internal/agent)
@@ -343,12 +351,15 @@ internal/
     openrouter/      OpenRouter client
     ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
+  plugin/            Subprocess plugin manager
   scheduler/         Cron and interval scheduling
   security/          Permission engine (tiers)
   skill/             Skill file loader, trigger matching, merging
   tool/              MCP tool server manager
   voice/             STT/TTS provider interface
     openai/          OpenAI Whisper + TTS client
+  web/               Embedded web dashboard handler (serves web/dist/)
+web/                 Svelte dashboard source (npm build → web/dist/)
 pkg/bin/             Build output (gitignored)
 agents/default/
   skills/            Bundled skills (e.g. help.md)
@@ -384,7 +395,7 @@ Denkeeper is built in phases:
 - [x] Config MCP server — per-agent in-process MCP tools for skill and schedule self-modification
 - [x] Ollama LLM provider — local inference with conditional OpenRouter API key validation
 - [x] Plugin system — subprocess plugins with capability declarations (`capabilities = ["tools"]`); Docker sandboxing planned
-- [x] Web dashboard — embedded Svelte UI with auth, chat, agent context viewer, API key management, schedules, approvals
+- [x] Web dashboard — embedded Svelte UI with overview, sessions, approvals, schedules, skills, and agent context viewer (persona status + MCP tool names)
 
 **Phase 4 — Polish** (in progress)
 - [ ] Additional adapters (Discord)

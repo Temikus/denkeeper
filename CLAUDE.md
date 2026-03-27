@@ -104,15 +104,41 @@ Three action kinds: `user_update`, `create_skill`, `modify_schedule`. Default TT
 
 Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `get_permission_tier`. In supervised mode these tools still submit to the approval Manager rather than acting directly.
 
-## Current State (Phase 3 in progress)
+## Plugin System
+
+`internal/plugin/` provides subprocess-based plugins with capability declarations.
+
+- Plugins declare capabilities in TOML config (e.g. `capabilities = ["tools"]`).
+- The Manager spawns plugin subprocesses at startup and wires them into the engine.
+- Docker sandboxing is planned but not yet implemented.
+
+## Web Dashboard
+
+`internal/web/` embeds a Svelte SPA compiled to `web/dist/` at build time via `//go:embed dist`.
+
+- Served at the root path when `[api] enabled = true`.
+- 7 pages: Login, Overview, Approvals, Sessions, Schedules, Skills, Agents.
+- Agent detail page shows persona directory, loaded sections (soul/user/memory), and MCP tool names.
+- **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. The CI workflows already handle this.
+- Local dev: `just build-ui` (build once) or `just web-dev` (Vite dev server with hot-reload). `just build-full` builds web then binary in one step.
+
+## Telegram UX
+
+- **Typing indicator**: `sendChatAction` (ChatTyping) is sent in `Start()` after the allowlist check, before placing the message on the channel. Shows "typing…" for ~5 s in Telegram.
+- **Command menu**: `setMyCommands` is called once in `New()` to register `/start` and `/help` in the Telegram command composer menu.
+
+## Current State (Phase 3 complete, Phase 4 in progress)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
-- LLM providers: OpenRouter (production) and Ollama (local inference). Telegram adapter.
+- LLM providers: OpenRouter (production) and Ollama (local inference). Telegram adapter with typing indicator and command menu registration.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial, no Docker sandboxing yet).
-- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD.
+- Plugin system: subprocess plugins with capability declarations (Docker sandboxing planned).
+- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD. Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
 - Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, and permission tier inspection.
-- Next: plugin system (subprocess, no Docker yet), CI/CD pipeline + GoReleaser, web dashboard.
+- Web dashboard: embedded Svelte SPA (7 pages) served via the API server. Agent detail page shows persona status and MCP tool names.
+- CI/CD: golangci-lint, govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
+- Next: additional adapters (Discord), Anthropic direct provider, Hugo documentation website.
 - See `design/denkeeper-prd.md` for the full roadmap.
