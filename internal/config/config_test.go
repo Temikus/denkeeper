@@ -1430,3 +1430,178 @@ capabilities = ["tools"]
 		t.Errorf("PLUGIN_VAR = %q, want plugin-expanded-value", p.Env["PLUGIN_VAR"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Discord + Anthropic config tests
+// ---------------------------------------------------------------------------
+
+const discordBaseConfig = `
+[discord]
+token = "Bot.discord.token"
+allowed_users = ["123456789012345678"]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`
+
+func TestParse_DiscordOnly_Valid(t *testing.T) {
+	_, err := Parse([]byte(discordBaseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error for discord-only config: %v", err)
+	}
+}
+
+func TestParse_DiscordOnly_NoAllowedUsers(t *testing.T) {
+	tomlData := []byte(`
+[discord]
+token = "Bot.discord.token"
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for discord with no allowed_users")
+	}
+	if !strings.Contains(err.Error(), "discord.allowed_users") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_NoAdaptersConfigured(t *testing.T) {
+	// Neither telegram nor discord token set.
+	tomlData := []byte(`
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when no adapters are configured")
+	}
+	if !strings.Contains(err.Error(), "at least one adapter") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_BothAdapters_Valid(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[discord]
+token = "Bot.discord.token"
+allowed_users = ["123456789012345678"]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for both-adapter config: %v", err)
+	}
+}
+
+func TestParse_AnthropicProvider_Valid(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+
+[llm.anthropic]
+api_key = "sk-ant-test"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for anthropic provider config: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "anthropic" {
+		t.Errorf("default_provider = %q, want anthropic", cfg.LLM.DefaultProvider)
+	}
+	if cfg.LLM.Anthropic.APIKey != "sk-ant-test" {
+		t.Errorf("anthropic api_key = %q, want sk-ant-test", cfg.LLM.Anthropic.APIKey)
+	}
+}
+
+func TestParse_AnthropicProvider_MissingAPIKey(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for anthropic provider without api_key")
+	}
+	if !strings.Contains(err.Error(), "llm.anthropic.api_key") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_AnthropicProvider_NoOpenRouterKeyRequired(t *testing.T) {
+	// When using anthropic provider, openrouter.api_key should NOT be required.
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+
+[llm.anthropic]
+api_key = "sk-ant-test"
+`)
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error when openrouter key absent with anthropic provider: %v", err)
+	}
+}
+
+func TestParse_DiscordOnly_DefaultAgentAdapters(t *testing.T) {
+	// When only discord is configured, the synthesized default agent should
+	// have "discord" in its adapters list (not "telegram").
+	cfg, err := Parse([]byte(discordBaseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Agents) == 0 {
+		t.Fatal("expected synthesized agents, got none")
+	}
+	found := false
+	for _, a := range cfg.Agents[0].Adapters {
+		if a == "discord" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("default agent adapters = %v, want to contain discord", cfg.Agents[0].Adapters)
+	}
+}
+
+func TestParse_DiscordConfig_BaseURL(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+
+[llm.anthropic]
+api_key    = "sk-ant-test"
+base_url   = "https://custom.anthropic.proxy"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.Anthropic.BaseURL != "https://custom.anthropic.proxy" {
+		t.Errorf("anthropic base_url = %q, want https://custom.anthropic.proxy", cfg.LLM.Anthropic.BaseURL)
+	}
+}
