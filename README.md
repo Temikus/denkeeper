@@ -4,9 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/Temikus/denkeeper/actions/workflows/release.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/release.yml/badge.svg" alt="Release"></a>
-  <a href="https://github.com/Temikus/denkeeper/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper" alt="Latest Release"></a>
-  <a href="https://github.com/Temikus/denkeeper/pkgs/container/denkeeper"><img src="https://ghcr-badge.egpl.dev/temikus/denkeeper/latest_tag?trim=major&label=ghcr.io" alt="Docker Image"></a>
+  <a href="https://github.com/Temikus/denkeeper/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper?label=release" alt="Latest Release"></a>
+  <a href="https://github.com/Temikus/denkeeper/pkgs/container/denkeeper"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper?label=ghcr.io&logo=docker" alt="Docker Image"></a>
   <a href="https://goreportcard.com/report/github.com/Temikus/denkeeper"><img src="https://goreportcard.com/badge/github.com/Temikus/denkeeper" alt="Go Report Card"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/denkeeper" alt="License"></a>
 </p>
