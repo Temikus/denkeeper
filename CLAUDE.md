@@ -112,6 +112,31 @@ Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_sched
 - The Manager spawns plugin subprocesses at startup and wires them into the engine.
 - Docker sandboxing is planned but not yet implemented.
 
+## UI/UX Standards
+
+Every user-facing feature — web dashboard pages, CLI output, and adapter messages — must include thoughtful UX treatment. "Works correctly" is necessary but not sufficient; features should feel polished.
+
+**Web dashboard (Svelte)**
+- Loading states: show a spinner or skeleton for every async operation; never leave the user staring at a blank area.
+- Empty states: when a list is empty, show a helpful message and a clear call-to-action (e.g. "No schedules yet. Add one with `denkeeper keys create`.").
+- Error states: display human-readable error messages in context (inline near the form, not just a console log). Include recovery guidance where possible.
+- Optimistic updates: for destructive actions (delete, revoke), use a confirmation step or undo affordance.
+- Feedback on actions: success toasts or inline confirmation after create/update/delete so the user knows something happened.
+- Disabled states: buttons must visually reflect loading (`Creating…`, `Saving…`) and be disabled while in-flight to prevent double-submit.
+- Responsive layout: pages must be usable at narrow viewport widths (≥ 320 px).
+- Consistent style: use the existing CSS variables (`--accent`, `--surface`, `--border`, `--text-muted`, `--danger`) — do not introduce ad-hoc colors or inline styles.
+
+**CLI (Cobra)**
+- Progress feedback: for operations that may take >500 ms, print a status line before starting (e.g. `Opening key store…`).
+- Structured output: use `tabwriter` for tabular data; align columns and include a header row.
+- Actionable errors: error messages must say what failed *and* suggest the next step (e.g. `opening key store at /path: permission denied — check file permissions or use --config to specify an alternate path`).
+- Exit codes: non-zero on all errors; `RunE` everywhere (never `Run` with `os.Exit`).
+
+**Adapter messages (Telegram / Discord)**
+- Typing indicators: always send a typing action before any LLM call so the user sees activity immediately.
+- Structured formatting: use platform-native formatting (Markdown for Telegram, embeds for Discord) to distinguish code, headings, and inline values.
+- Inline keyboards: for multi-step interactions (approvals, confirmations), prefer inline buttons over free-text prompts.
+
 ## Web Dashboard
 
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` at build time via `//go:embed dist`.

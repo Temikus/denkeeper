@@ -705,3 +705,9 @@ func DefaultConfigPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".denkeeper", "denkeeper.toml")
 }
+
+// DefaultDBPath returns the default path for the SQLite database.
+func DefaultDBPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".denkeeper", "data", "memory.db")
+}

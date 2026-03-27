@@ -393,6 +393,311 @@ func TestHandleKeys_NoKeyStore_Returns503(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// KeyStore.HasActiveKey
+// ---------------------------------------------------------------------------
+
+func TestKeyStore_HasActiveKey_Empty(t *testing.T) {
+	ks := testKeyStore(t)
+	has, err := ks.HasActiveKey(context.Background())
+	if err != nil {
+		t.Fatalf("HasActiveKey: %v", err)
+	}
+	if has {
+		t.Error("expected false on empty store")
+	}
+}
+
+func TestKeyStore_HasActiveKey_WithActiveKey(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+
+	_, _, _ = ks.Create(ctx, "active", []string{"admin"})
+	has, err := ks.HasActiveKey(ctx)
+	if err != nil {
+		t.Fatalf("HasActiveKey: %v", err)
+	}
+	if !has {
+		t.Error("expected true with one active key")
+	}
+}
+
+func TestKeyStore_HasActiveKey_OnlyRevoked(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+
+	rec, _, _ := ks.Create(ctx, "revokeme", []string{"admin"})
+	_ = ks.Revoke(ctx, rec.ID)
+
+	has, err := ks.HasActiveKey(ctx)
+	if err != nil {
+		t.Fatalf("HasActiveKey: %v", err)
+	}
+	if has {
+		t.Error("expected false when all keys are revoked")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Setup endpoint handlers
+// ---------------------------------------------------------------------------
+
+func testSetupServer(t *testing.T, ks *KeyStore, tomlKeys ...config.APIKeyConfig) *Server {
+	t.Helper()
+	deps := testDeps()
+	deps.KeyStore = ks
+	return New(testConfig(tomlKeys...), deps, testLogger())
+}
+
+func TestHandleSetupStatus_SetupRequired(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("GET", "/api/v1/setup", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body map[string]bool
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body["setup_required"] {
+		t.Error("expected setup_required=true when no keys exist")
+	}
+}
+
+func TestHandleSetupStatus_NotRequired_SQLiteKey(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+	_, _, _ = ks.Create(ctx, "existing", []string{"admin"})
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("GET", "/api/v1/setup", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body map[string]bool
+	json.NewDecoder(w.Body).Decode(&body) //nolint:errcheck
+	if body["setup_required"] {
+		t.Error("expected setup_required=false when SQLite key exists")
+	}
+}
+
+func TestHandleSetupStatus_NotRequired_TOMLKey(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks, config.APIKeyConfig{Name: "toml", Key: "toml-secret", Scopes: []string{"admin"}})
+
+	req := httptest.NewRequest("GET", "/api/v1/setup", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body map[string]bool
+	json.NewDecoder(w.Body).Decode(&body) //nolint:errcheck
+	if body["setup_required"] {
+		t.Error("expected setup_required=false when TOML key exists")
+	}
+}
+
+func TestHandleSetupInit_CreatesKey(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	body := `{"name":"myadmin","scopes":["admin","chat"]}`
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	key, _ := resp["key"].(string)
+	if !strings.HasPrefix(key, "dk_") {
+		t.Errorf("key %q should start with dk_", key)
+	}
+	if resp["name"] != "myadmin" {
+		t.Errorf("name = %v, want myadmin", resp["name"])
+	}
+}
+
+func TestHandleSetupInit_DefaultsWhenBodyEmpty(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp) //nolint:errcheck
+	if resp["name"] != "admin" {
+		t.Errorf("name = %v, want admin (default)", resp["name"])
+	}
+}
+
+func TestHandleSetupInit_ConflictWhenKeyExists(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+	_, _, _ = ks.Create(ctx, "existing", []string{"admin"})
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"name":"new"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+}
+
+func TestHandleSetupInit_InvalidScope(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"name":"admin","scopes":["notascope"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for unknown scope", w.Code)
+	}
+}
+
+func TestHandleSetupInit_NameTooLong(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	longName := strings.Repeat("a", maxKeyNameLen+1)
+	body := `{"name":"` + longName + `","scopes":["admin"]}`
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized name", w.Code)
+	}
+}
+
+func TestHandleSetupInit_Concurrent_OnlyOneSucceeds(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	const goroutines = 10
+	results := make([]int, goroutines)
+	done := make(chan struct{})
+
+	for i := range goroutines {
+		go func(i int) {
+			req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"name":"admin","scopes":["admin"]}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(w, req)
+			results[i] = w.Code
+			done <- struct{}{}
+		}(i)
+	}
+	for range goroutines {
+		<-done
+	}
+
+	created := 0
+	for _, code := range results {
+		if code == http.StatusCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("expected exactly 1 successful setup, got %d (codes: %v)", created, results)
+	}
+}
+
+func TestHandleCreateKey_InvalidScope(t *testing.T) {
+	ks := testKeyStore(t)
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(testAdminConfig(), deps, testLogger())
+
+	body := `{"name":"mykey","scopes":["notascope"]}`
+	req := httptest.NewRequest("POST", "/api/v1/keys", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for unknown scope", w.Code)
+	}
+}
+
+func TestHandleCreateKey_NameTooLong(t *testing.T) {
+	ks := testKeyStore(t)
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(testAdminConfig(), deps, testLogger())
+
+	longName := strings.Repeat("a", maxKeyNameLen+1)
+	body := `{"name":"` + longName + `","scopes":["admin"]}`
+	req := httptest.NewRequest("POST", "/api/v1/keys", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for oversized name", w.Code)
+	}
+}
+
+func TestValidateKeyInput(t *testing.T) {
+	if err := ValidateKeyInput("admin", []string{"admin", "chat"}); err != nil {
+		t.Errorf("valid input rejected: %v", err)
+	}
+	if err := ValidateKeyInput("admin", []string{"notascope"}); err == nil {
+		t.Error("expected error for unknown scope")
+	}
+	if err := ValidateKeyInput(strings.Repeat("x", maxKeyNameLen+1), []string{"admin"}); err == nil {
+		t.Error("expected error for name exceeding max length")
+	}
+	if err := ValidateKeyInput(strings.Repeat("x", maxKeyNameLen), []string{"admin"}); err != nil {
+		t.Errorf("name exactly at limit should be valid: %v", err)
+	}
+}
+
+func TestHandleSetupInit_NoKeyStore_Returns503(t *testing.T) {
+	deps := testDeps()
+	// KeyStore is nil.
+	srv := New(testConfig(), deps, testLogger())
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
 func TestAuthenticate_UpdatesLastUsedAt(t *testing.T) {
 	ks := testKeyStore(t)
 	deps := testDeps()

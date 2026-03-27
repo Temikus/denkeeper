@@ -44,6 +44,11 @@ type Server struct {
 	// limiters tracks per-key rate limiter state.
 	limiters   map[string]*rateLimiter
 	limitersMu sync.Mutex
+
+	// setupMu serialises the check+create in handleSetupInit to prevent a
+	// TOCTOU race where two concurrent requests both see setup_required=true
+	// and both succeed in creating a key.
+	setupMu sync.Mutex
 }
 
 // New creates a new API server. The server is not started until Run is called.
@@ -59,6 +64,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 
 	// Health endpoint — no auth required.
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+
+	// Setup endpoints — no auth required; only functional when no keys exist.
+	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/v1/setup", s.handleSetupInit)
 
 	// Chat endpoint.
 	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.handleChat))
@@ -678,6 +687,40 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string
 	return "", false
 }
 
+// ---------------------------------------------------------------------------
+// Key input validation
+// ---------------------------------------------------------------------------
+
+// ValidScopes is the set of scope values accepted by the key management system.
+// Exported so the CLI can share the same allowlist.
+var ValidScopes = map[string]struct{}{
+	"admin":           {},
+	"chat":            {},
+	"sessions:read":   {},
+	"costs:read":      {},
+	"skills:read":     {},
+	"schedules:read":  {},
+	"approvals:read":  {},
+	"approvals:write": {},
+	"health":          {},
+}
+
+const maxKeyNameLen = 255
+
+// ValidateKeyInput checks that name is within the length limit and every scope
+// is in the ValidScopes allowlist. Returns a user-facing error on failure.
+func ValidateKeyInput(name string, scopes []string) error {
+	if len(name) > maxKeyNameLen {
+		return fmt.Errorf("name exceeds maximum length of %d characters", maxKeyNameLen)
+	}
+	for _, s := range scopes {
+		if _, ok := ValidScopes[s]; !ok {
+			return fmt.Errorf("unknown scope %q", s)
+		}
+	}
+	return nil
+}
+
 // keyStoreRequired writes 503 when the KeyStore is not configured.
 func (s *Server) keyStoreRequired(w http.ResponseWriter) bool {
 	if s.deps.KeyStore == nil {
@@ -725,6 +768,10 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one scope is required"})
 		return
 	}
+	if err := ValidateKeyInput(body.Name, body.Scopes); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	rec, plaintext, err := s.deps.KeyStore.Create(r.Context(), body.Name, body.Scopes)
 	if err != nil {
 		s.logger.Error("creating api key", "error", err)
@@ -765,6 +812,101 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"id":         rec.ID,
+		"name":       rec.Name,
+		"key":        plaintext, // shown once
+		"scopes":     rec.Scopes,
+		"created_at": rec.CreatedAt,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Setup (first-run bootstrap)
+// ---------------------------------------------------------------------------
+
+// setupRequired returns true when there are no active keys anywhere — neither
+// in the SQLite store nor in the TOML config. TOML keys always satisfy the
+// check so that users who prefer static config never see the setup prompt.
+func (s *Server) setupRequired(ctx context.Context) (bool, error) {
+	if len(s.cfg.Keys) > 0 {
+		return false, nil
+	}
+	has, err := s.deps.KeyStore.HasActiveKey(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !has, nil
+}
+
+// handleSetupStatus handles GET /api/v1/setup.
+// Returns {"setup_required": true} when no active API keys exist.
+// No authentication required.
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	required, err := s.setupRequired(r.Context())
+	if err != nil {
+		s.logger.Error("checking setup status", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"setup_required": required})
+}
+
+// handleSetupInit handles POST /api/v1/setup.
+// Creates the first API key. Returns 409 Conflict once any active key exists.
+// No authentication required — the endpoint locks itself after first use.
+func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+
+	// Parse and validate the body before acquiring the mutex so we hold the
+	// lock only for the atomic check+create.
+	var body struct {
+		Name   string   `json:"name"`
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		body.Name = "admin"
+	}
+	if len(body.Scopes) == 0 {
+		body.Scopes = []string{"admin"}
+	}
+	if err := ValidateKeyInput(body.Name, body.Scopes); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Serialise the check+create to prevent a TOCTOU race where two concurrent
+	// requests both observe setup_required=true and both proceed to create a key.
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+
+	required, err := s.setupRequired(r.Context())
+	if err != nil {
+		s.logger.Error("checking setup status", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if !required {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "setup already complete — manage keys on the API Keys page"})
+		return
+	}
+
+	rec, plaintext, err := s.deps.KeyStore.Create(r.Context(), body.Name, body.Scopes)
+	if err != nil {
+		s.logger.Error("creating setup key", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	s.logger.Info("first-run setup complete", "key_name", rec.Name, "remote_addr", r.RemoteAddr)
+	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":         rec.ID,
 		"name":       rec.Name,
 		"key":        plaintext, // shown once

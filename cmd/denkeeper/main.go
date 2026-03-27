@@ -70,7 +70,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd)
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -499,6 +499,21 @@ func runServe(_ *cobra.Command, _ []string) error {
 		keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
 		if ksErr != nil {
 			return fmt.Errorf("initializing api key store: %w", ksErr)
+		}
+
+		// First-run check: warn when the web dashboard will be inaccessible.
+		existingKeys, _ := keyStore.List(ctx)
+		hasActiveKey := len(cfg.API.Keys) > 0 // TOML-defined keys count too
+		for _, k := range existingKeys {
+			if !k.Revoked {
+				hasActiveKey = true
+				break
+			}
+		}
+		if !hasActiveKey {
+			logger.Warn("no API keys found — web dashboard login will fail",
+				"hint", "run: denkeeper keys create <name>",
+			)
 		}
 
 		apiServer := api.New(cfg.API, api.Deps{

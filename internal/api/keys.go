@@ -194,6 +194,18 @@ func (ks *KeyStore) Revoke(ctx context.Context, id string) error {
 	return nil
 }
 
+// HasActiveKey reports whether at least one non-revoked key exists in the store.
+func (ks *KeyStore) HasActiveKey(ctx context.Context) (bool, error) {
+	var count int
+	err := ks.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL`,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("checking active keys: %w", err)
+	}
+	return count > 0, nil
+}
+
 // Rotate revokes the existing key and creates a replacement with the same name and scopes.
 // Returns the new record and plaintext key.
 func (ks *KeyStore) Rotate(ctx context.Context, id string) (APIKeyRecord, string, error) {
