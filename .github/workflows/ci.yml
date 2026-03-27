@@ -12,6 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Build web UI
+        run: cd web && npm ci && npm run build
       - uses: jdx/mise-action@v2
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -22,6 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Build web UI
+        run: cd web && npm ci && npm run build
       - uses: jdx/mise-action@v2
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage
@@ -35,6 +45,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Build web UI
+        run: cd web && npm ci && npm run build
       - uses: jdx/mise-action@v2
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -55,6 +70,11 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Build web UI
+        run: cd web && npm ci && npm run build
       - uses: jdx/mise-action@v2
       - name: Build
         env:
