@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/adapter/discord"
 	"github.com/Temikus/denkeeper/internal/adapter/telegram"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
@@ -22,6 +23,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/llm"
+	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
@@ -148,6 +150,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 		orClient = openrouter.New(cfg.LLM.OpenRouter.APIKey)
 	}
 	ollamaClient := ollama.New(cfg.LLM.Ollama.BaseURL)
+	var anthropicClient *anthropicllm.Client
+	if cfg.LLM.Anthropic.APIKey != "" {
+		anthropicClient = anthropicllm.New(cfg.LLM.Anthropic.APIKey)
+	}
 	costTracker := llm.NewCostTracker(cfg.LLM.MaxCostPerSession)
 
 	// Parse fallback rules once (shared)
@@ -189,11 +195,29 @@ func runServe(_ *cobra.Command, _ []string) error {
 		)
 	}
 
-	// Init Telegram adapter
-	tgAdapter, err := telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger, voiceOpts)
-	if err != nil {
-		return fmt.Errorf("initializing telegram: %w", err)
+	// Collect active adapters.
+	var adapters []adapter.Adapter
+
+	// Init Telegram adapter (optional — only if token is set).
+	var tgAdapter *telegram.Adapter
+	if cfg.Telegram.Token != "" {
+		tgAdapter, err = telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger, voiceOpts)
+		if err != nil {
+			return fmt.Errorf("initializing telegram: %w", err)
+		}
+		adapters = append(adapters, tgAdapter)
 	}
+
+	// Init Discord adapter (optional — only if token is set).
+	var discordAdapter *discord.Adapter
+	if cfg.Discord.Token != "" {
+		discordAdapter, err = discord.New(cfg.Discord.Token, cfg.Discord.AllowedUsers, logger)
+		if err != nil {
+			return fmt.Errorf("initializing discord: %w", err)
+		}
+		adapters = append(adapters, discordAdapter)
+	}
+	_ = discordAdapter // referenced via adapters slice
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,7 +282,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Create dispatcher first (without engines) so we can reference SendFor.
 	// We'll wire engines in after the loop.
-	dispatcher := agent.NewDispatcher(nil, nil, []adapter.Adapter{tgAdapter}, logger)
+	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
 
 	for _, ac := range cfg.Agents {
 		// Per-agent persona
@@ -321,8 +345,23 @@ func runServe(_ *cobra.Command, _ []string) error {
 		if orClient != nil {
 			agentRouter.RegisterProvider(orClient)
 		}
+		if anthropicClient != nil {
+			agentRouter.RegisterProvider(anthropicClient)
+		}
 		if len(fallbackRules) > 0 {
 			agentRouter.SetFallbacks(fallbackRules)
+		}
+
+		// sendVia routes responses through whichever adapter delivered the
+		// incoming message (set via OutgoingMessage.Adapter in HandleMessage).
+		// Falls back to the first registered adapter when Adapter is empty
+		// (e.g. for scheduler-triggered messages).
+		sendVia := func(ctx context.Context, msg adapter.OutgoingMessage) error {
+			name := msg.Adapter
+			if name == "" && len(adapters) > 0 {
+				name = adapters[0].Name()
+			}
+			return dispatcher.SendVia(ctx, name, msg)
 		}
 
 		// Build engine before connecting Config MCP so we can capture its methods.
@@ -330,7 +369,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			ac.Name,
 			agentRouter,
 			memory,
-			dispatcher.SendFor("telegram"), // route responses through Telegram adapter
+			sendVia, // route responses through the incoming message's adapter
 			permissions,
 			p,
 			persona.DefaultPrompt,
@@ -381,10 +420,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	// Re-create dispatcher with the fully wired engines and bindings.
-	dispatcher = agent.NewDispatcher(engines, bindings, []adapter.Adapter{tgAdapter}, logger)
+	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
 
 	// Wire the callback resolver so Telegram inline keyboard buttons resolve approvals.
-	tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
+	if tgAdapter != nil {
+		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
+	}
 
 	// Register config-file schedules into the already-initialised scheduler.
 	for _, sc := range cfg.Schedules {

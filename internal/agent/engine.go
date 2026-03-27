@@ -702,6 +702,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 
 	if e.sendFunc != nil {
 		out := adapter.OutgoingMessage{
+			Adapter:    msg.Adapter,
 			ExternalID: msg.ExternalID,
 			Text:       responseText,
 			IsVoice:    msg.IsVoice,

@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Telegram  TelegramConfig        `toml:"telegram"`
+	Discord   DiscordConfig         `toml:"discord"`
 	LLM       LLMConfig             `toml:"llm"`
 	Memory    MemoryConfig          `toml:"memory"`
 	Log       LogConfig             `toml:"log"`
@@ -22,6 +23,15 @@ type Config struct {
 	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Voice     VoiceConfig           `toml:"voice"`
 	API       APIConfig             `toml:"api"`
+}
+
+// DiscordConfig configures the Discord bot adapter.
+type DiscordConfig struct {
+	// Token is the Discord bot token. Required to enable the Discord adapter.
+	Token string `toml:"token"`
+	// AllowedUsers is a list of Discord user snowflake IDs (as strings) that
+	// may interact with the bot. Required when token is set.
+	AllowedUsers []string `toml:"allowed_users"`
 }
 
 // APIConfig controls the external REST API server.
@@ -147,8 +157,17 @@ type LLMConfig struct {
 	DefaultModel      string           `toml:"default_model"`
 	OpenRouter        OpenRouterConfig `toml:"openrouter"`
 	Ollama            OllamaConfig     `toml:"ollama"`
+	Anthropic         AnthropicConfig  `toml:"anthropic"`
 	MaxCostPerSession float64          `toml:"max_cost_per_session"`
 	Fallbacks         []FallbackConfig `toml:"fallback"`
+}
+
+// AnthropicConfig configures the Anthropic direct LLM provider.
+type AnthropicConfig struct {
+	// APIKey is the Anthropic API key (sk-ant-...). Required to enable the provider.
+	APIKey string `toml:"api_key"`
+	// BaseURL overrides the default API endpoint. Useful for Bedrock/Vertex proxies.
+	BaseURL string `toml:"base_url"`
 }
 
 // FallbackConfig defines a single fallback rule for the LLM router.
@@ -321,13 +340,24 @@ func applyDefaults(cfg *Config) {
 
 	// Multi-agent backward compat: if no [[agents]] defined, synthesize a
 	// single "default" agent from the legacy [agent]/[session] config.
+	// Build adapter bindings from which adapters are configured.
 	if len(cfg.Agents) == 0 {
+		var defaultAdapters []string
+		if cfg.Telegram.Token != "" {
+			defaultAdapters = append(defaultAdapters, "telegram")
+		}
+		if cfg.Discord.Token != "" {
+			defaultAdapters = append(defaultAdapters, "discord")
+		}
+		if len(defaultAdapters) == 0 {
+			defaultAdapters = []string{"telegram"} // placeholder; validated later
+		}
 		cfg.Agents = []AgentInstanceConfig{{
 			Name:        "default",
 			Description: "Default agent",
 			PersonaDir:  cfg.Agent.PersonaDir,
 			SkillsDir:   cfg.Agent.SkillsDir,
-			Adapters:    []string{"telegram"},
+			Adapters:    defaultAdapters,
 			SessionTier: cfg.Session.Tier,
 		}}
 	}
@@ -386,15 +416,29 @@ func needsOpenRouter(cfg *Config) bool {
 	return false
 }
 
+// needsAnthropic reports whether the config's default provider is anthropic.
+func needsAnthropic(cfg *Config) bool {
+	return cfg.LLM.DefaultProvider == "anthropic"
+}
+
 func validate(cfg *Config) error {
-	if cfg.Telegram.Token == "" {
-		return fmt.Errorf("config: telegram.token is required")
+	// Telegram is required only when a token is set. If no token is set we skip
+	// Telegram-specific validation so Discord-only deployments are valid.
+	if cfg.Telegram.Token != "" && len(cfg.Telegram.AllowedUsers) == 0 {
+		return fmt.Errorf("config: telegram.allowed_users must not be empty when telegram.token is set (security requirement)")
 	}
-	if len(cfg.Telegram.AllowedUsers) == 0 {
-		return fmt.Errorf("config: telegram.allowed_users must not be empty (security requirement)")
+	// At least one adapter must be configured.
+	if cfg.Telegram.Token == "" && cfg.Discord.Token == "" {
+		return fmt.Errorf("config: at least one adapter must be configured (telegram.token or discord.token)")
+	}
+	if cfg.Discord.Token != "" && len(cfg.Discord.AllowedUsers) == 0 {
+		return fmt.Errorf("config: discord.allowed_users must not be empty when discord.token is set (security requirement)")
 	}
 	if needsOpenRouter(cfg) && cfg.LLM.OpenRouter.APIKey == "" {
 		return fmt.Errorf("config: llm.openrouter.api_key is required when using openrouter provider")
+	}
+	if needsAnthropic(cfg) && cfg.LLM.Anthropic.APIKey == "" {
+		return fmt.Errorf("config: llm.anthropic.api_key is required when using anthropic provider")
 	}
 	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
 		return err

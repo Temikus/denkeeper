@@ -2,6 +2,10 @@
 # Copy this file to ~/.denkeeper/denkeeper.toml and fill in your values.
 # WARNING: This file contains secrets — do NOT commit it to version control.
 
+# ---------------------------------------------------------------------------
+# Adapters — at least one must be configured
+# ---------------------------------------------------------------------------
+
 [telegram]
 # Bot token from @BotFather
 token = "YOUR_TELEGRAM_BOT_TOKEN"
@@ -9,10 +13,18 @@ token = "YOUR_TELEGRAM_BOT_TOKEN"
 # Find your ID by messaging @userinfobot on Telegram.
 allowed_users = [123456789]
 
+# [discord]
+# # Discord bot token from the Discord Developer Portal.
+# # Set this to enable the Discord adapter (DM and guild channel support).
+# token = "YOUR_DISCORD_BOT_TOKEN"
+# # Security: only these Discord user snowflake IDs can interact with the bot.
+# # Right-click a user in Discord (developer mode enabled) to copy their ID.
+# allowed_users = ["123456789012345678"]
+
 [llm]
-# Provider to use (currently only "openrouter" is supported)
+# Provider to use: "openrouter" (default), "anthropic", or "ollama"
 default_provider = "openrouter"
-# Model to use via OpenRouter (see https://openrouter.ai/models)
+# Model to use (format depends on provider)
 default_model = "anthropic/claude-sonnet-4-20250514"
 # Maximum estimated cost per conversation session (USD)
 max_cost_per_session = 1.0
@@ -20,6 +32,13 @@ max_cost_per_session = 1.0
 [llm.openrouter]
 # API key from https://openrouter.ai/keys
 api_key = "YOUR_OPENROUTER_API_KEY"
+
+# [llm.anthropic]
+# # Direct Anthropic API key (sk-ant-...). Set default_provider = "anthropic" above.
+# # Bypasses OpenRouter; requires no llm.openrouter.api_key when set as the provider.
+# api_key = "YOUR_ANTHROPIC_API_KEY"
+# # Optional: override the API endpoint (e.g. for Bedrock/Vertex proxies).
+# # base_url = "https://api.anthropic.com"
 
 # ---------------------------------------------------------------------------
 # LLM Fallback Strategies

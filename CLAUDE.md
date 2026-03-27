@@ -127,18 +127,42 @@ Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_sched
 - **Typing indicator**: `sendChatAction` (ChatTyping) is sent in `Start()` after the allowlist check, before placing the message on the channel. Shows "typing…" for ~5 s in Telegram.
 - **Command menu**: `setMyCommands` is called once in `New()` to register `/start` and `/help` in the Telegram command composer menu.
 
-## Current State (Phase 3 complete, Phase 4 in progress)
+## Discord Adapter
+
+`internal/adapter/discord/` implements `adapter.Adapter` via `bwmarrin/discordgo`.
+
+- DM-first: supports both DMs and guild text channels.
+- `ExternalID` in `IncomingMessage` is the Discord channel ID.
+- `UserID` is the Discord user snowflake string; `UserName` is the username.
+- Typing indicator: `session.ChannelTyping(channelID)` analogous to Telegram.
+- Buttons (approval keyboards): rendered as Discord action-row components.
+- Config: `[discord]` with `token` (bot token) and `allowed_users` (string snowflake IDs).
+- Both Telegram and Discord adapters can run simultaneously; each agent's `adapters` binding list determines which it handles.
+- `OutgoingMessage.Adapter` field routes responses back through the correct adapter.
+
+## Anthropic Direct LLM Provider
+
+`internal/llm/anthropic/` implements `llm.Provider` against the Anthropic Messages API.
+
+- Raw HTTP implementation (consistent with OpenRouter/Ollama patterns).
+- Maps `llm.Message` roles: `system` → top-level `system` field; `tool` → `user` role with `tool_result` block.
+- Maps `tool_use` response blocks → `llm.ToolCall` with JSON-encoded arguments.
+- `MaxTokens` defaults to 4096 if not set in the request.
+- Config: `[llm.anthropic]` with `api_key` and optional `base_url` (for Bedrock/Vertex).
+- When `default_provider = "anthropic"`, OpenRouter API key is not required.
+
+## Current State (Phase 4 complete)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
-- LLM providers: OpenRouter (production) and Ollama (local inference). Telegram adapter with typing indicator and command menu registration.
+- LLM providers: OpenRouter (production), Ollama (local), Anthropic (direct). Telegram and Discord adapters.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial, no Docker sandboxing yet).
 - Plugin system: subprocess plugins with capability declarations (Docker sandboxing planned).
-- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD. Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
+- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
 - Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, and permission tier inspection.
-- Web dashboard: embedded Svelte SPA (7 pages) served via the API server. Agent detail page shows persona status and MCP tool names.
+- Web dashboard: embedded Svelte SPA (9 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD.
 - CI/CD: golangci-lint, govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
-- Next: additional adapters (Discord), Anthropic direct provider, Hugo documentation website.
+- Next: Hugo documentation website.
 - See `design/denkeeper-prd.md` for the full roadmap.

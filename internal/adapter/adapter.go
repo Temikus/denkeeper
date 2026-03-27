@@ -37,6 +37,11 @@ type KeyboardButton struct {
 
 // OutgoingMessage represents a message to send to an external platform.
 type OutgoingMessage struct {
+	// Adapter is the name of the adapter to route the response through (e.g.
+	// "telegram", "discord"). Set by Engine.HandleMessage from the incoming
+	// message's Adapter field. The SendFunc implementation (typically a
+	// Dispatcher wrapper) uses this to select the correct outbound adapter.
+	Adapter    string
 	ExternalID string
 	Text       string
 	// IsVoice signals that the adapter should attempt to send a voice reply
