@@ -40,6 +40,9 @@ jobs:
           hugo-version: "0.159.1"
           extended: true
 
+      - name: Install Dart Sass
+        run: sudo snap install dart-sass
+
       - name: Build site
         run: hugo --minify --gc --environment production
         working-directory: website
