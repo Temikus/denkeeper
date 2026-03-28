@@ -3,6 +3,7 @@ version: "2"
 linters:
   enable:
     - errcheck
+    - gocyclo
     - govet
     - ineffassign
     - staticcheck
@@ -10,4 +11,6 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
+    gocyclo:
+      min-complexity: 35
 

@@ -435,6 +435,56 @@ func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string,
 	return text, err
 }
 
+// directiveSpec describes a single extracted directive that may need autonomous
+// execution or supervised approval.
+type directiveSpec struct {
+	payload     string
+	kind        approval.ActionKind
+	description string
+	pendingMsg  string
+	logLabel    string
+	externalID  string
+	adapter     string
+	convID      string
+	applyFn     func(ctx context.Context, payload string) error
+}
+
+// processDirective handles the autonomous/supervised/restricted logic for a
+// single directive. It returns a non-nil approval request when a supervised
+// submission succeeds, and the (possibly appended) response text.
+func (e *Engine) processDirective(ctx context.Context, perms *security.PermissionEngine, spec directiveSpec, responseText string) (*approval.Request, string) {
+	switch perms.Tier() {
+	case "autonomous":
+		if err := spec.applyFn(ctx, spec.payload); err != nil {
+			e.logger.Warn(spec.logLabel+" failed", "error", err)
+		} else {
+			e.logger.Info(spec.logLabel+" applied directly", "bytes", len(spec.payload))
+		}
+	case "supervised":
+		if e.approvals != nil {
+			req, submitErr := e.approvals.Submit(
+				ctx,
+				e.name,
+				spec.kind,
+				spec.description,
+				spec.payload,
+				spec.externalID,
+				spec.adapter,
+				spec.convID,
+				spec.applyFn,
+			)
+			if submitErr != nil {
+				e.logger.Warn(spec.logLabel+" approval submit failed", "error", submitErr)
+			} else {
+				e.logger.Info(spec.logLabel+" approval submitted", "id", req.ID)
+				return req, responseText + spec.pendingMsg
+			}
+		}
+		// restricted: silently drop
+	}
+	return nil, responseText
+}
+
 // chatWithApproval is the internal full-pipeline implementation. It returns
 // both the response text and any approval request that was created during this
 // call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
@@ -563,118 +613,57 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		}
 	}
 
-	// Extract and process any user profile update directive.
+	// Extract and process directives (user update, skill creation, schedule addition).
 	responseText, userUpdate := extractUserUpdate(responseText)
+	responseText, skillPayload := extractSkillCreate(responseText)
+	responseText, schedPayload := extractScheduleAdd(responseText)
+
 	var pendingApproval *approval.Request
 
+	// User profile update requires a persona with a directory.
 	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
-		switch perms.Tier() {
-		case "autonomous":
-			// Autonomous tier: write USER.md directly.
-			if err := e.persona.Save("user", userUpdate); err != nil {
-				e.logger.Warn("failed to persist user update", "error", err)
-			} else {
-				e.logger.Info("user profile updated directly", "bytes", len(userUpdate))
-			}
-		case "supervised":
-			// Supervised tier: submit for approval if manager is configured.
-			if e.approvals != nil {
-				personaRef := e.persona
-				req, submitErr := e.approvals.Submit(
-					ctx,
-					e.name,
-					approval.ActionKindUserUpdate,
-					"Update user profile (USER.md)",
-					userUpdate,
-					msg.ExternalID,
-					msg.Adapter,
-					convID,
-					func(actCtx context.Context, payload string) error {
-						return personaRef.Save("user", payload)
-					},
-				)
-				if submitErr != nil {
-					e.logger.Warn("user update approval submit failed", "error", submitErr)
-				} else {
-					pendingApproval = req
-					responseText += "\n\n_Proposed user profile update is pending your approval._"
-					e.logger.Info("user update approval submitted", "id", req.ID)
-				}
-			}
-			// restricted: silently drop — no instruction was given so this is purely defensive
-		}
+		personaRef := e.persona
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload:     userUpdate,
+			kind:        approval.ActionKindUserUpdate,
+			description: "Update user profile (USER.md)",
+			pendingMsg:  "\n\n_Proposed user profile update is pending your approval._",
+			logLabel:    "user update",
+			externalID:  msg.ExternalID,
+			adapter:     msg.Adapter,
+			convID:      convID,
+			applyFn: func(_ context.Context, payload string) error {
+				return personaRef.Save("user", payload)
+			},
+		}, responseText)
 	}
 
-	// Extract and process any skill creation directive.
-	responseText, skillPayload := extractSkillCreate(responseText)
 	if skillPayload != "" && pendingApproval == nil {
-		switch perms.Tier() {
-		case "autonomous":
-			if err := e.applySkillCreate(skillPayload); err != nil {
-				e.logger.Warn("skill creation failed", "error", err)
-			}
-		case "supervised":
-			if e.approvals != nil {
-				engineRef := e
-				req, submitErr := e.approvals.Submit(
-					ctx,
-					e.name,
-					approval.ActionKindCreateSkill,
-					"Create new skill",
-					skillPayload,
-					msg.ExternalID,
-					msg.Adapter,
-					convID,
-					func(actCtx context.Context, payload string) error {
-						return engineRef.applySkillCreate(payload)
-					},
-				)
-				if submitErr != nil {
-					e.logger.Warn("skill create approval submit failed", "error", submitErr)
-				} else {
-					pendingApproval = req
-					responseText += "\n\n_Proposed skill creation is pending your approval._"
-					e.logger.Info("skill create approval submitted", "id", req.ID)
-				}
-			}
-			// restricted: silently drop
-		}
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload:     skillPayload,
+			kind:        approval.ActionKindCreateSkill,
+			description: "Create new skill",
+			pendingMsg:  "\n\n_Proposed skill creation is pending your approval._",
+			logLabel:    "skill create",
+			externalID:  msg.ExternalID,
+			adapter:     msg.Adapter,
+			convID:      convID,
+			applyFn:     func(_ context.Context, payload string) error { return e.applySkillCreate(payload) },
+		}, responseText)
 	}
 
-	// Extract and process any schedule addition directive.
-	responseText, schedPayload := extractScheduleAdd(responseText)
 	if schedPayload != "" && pendingApproval == nil {
-		switch perms.Tier() {
-		case "autonomous":
-			if err := e.applyScheduleAdd(schedPayload); err != nil {
-				e.logger.Warn("schedule add failed", "error", err)
-			}
-		case "supervised":
-			if e.approvals != nil {
-				engineRef := e
-				req, submitErr := e.approvals.Submit(
-					ctx,
-					e.name,
-					approval.ActionKindModifySchedule,
-					"Add new schedule",
-					schedPayload,
-					msg.ExternalID,
-					msg.Adapter,
-					convID,
-					func(actCtx context.Context, payload string) error {
-						return engineRef.applyScheduleAdd(payload)
-					},
-				)
-				if submitErr != nil {
-					e.logger.Warn("schedule add approval submit failed", "error", submitErr)
-				} else {
-					pendingApproval = req
-					responseText += "\n\n_Proposed schedule addition is pending your approval._"
-					e.logger.Info("schedule add approval submitted", "id", req.ID)
-				}
-			}
-			// restricted: silently drop
-		}
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload:     schedPayload,
+			kind:        approval.ActionKindModifySchedule,
+			description: "Add new schedule",
+			pendingMsg:  "\n\n_Proposed schedule addition is pending your approval._",
+			logLabel:    "schedule add",
+			externalID:  msg.ExternalID,
+			adapter:     msg.Adapter,
+			convID:      convID,
+			applyFn:     func(_ context.Context, payload string) error { return e.applyScheduleAdd(payload) },
+		}, responseText)
 	}
 
 	// Store assistant response (without any directives).

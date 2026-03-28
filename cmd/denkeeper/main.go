@@ -87,20 +87,16 @@ func parseChannel(channel string) (adapterName, externalID string, ok bool) {
 	return channel[:idx], channel[idx+1:], true
 }
 
-func runServe(_ *cobra.Command, _ []string) error {
-	// Determine config path
-	path := cfgFile
-	if path == "" {
-		path = config.DefaultConfigPath()
-	}
+// llmClients holds the initialized LLM provider clients.
+type llmClients struct {
+	openRouter *openrouter.Client
+	ollama     *ollama.Client
+	anthropic  *anthropicllm.Client
+	cost       *llm.CostTracker
+	fallbacks  []llm.FallbackRule
+}
 
-	// Load config
-	cfg, err := config.Load(path)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-
-	// Setup logger
+func initLogger(cfg *config.Config) *slog.Logger {
 	var logLevel slog.Level
 	switch cfg.Log.Level {
 	case "debug":
@@ -119,32 +115,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	} else {
 		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
 	}
-	logger := slog.New(handler)
+	return slog.New(handler)
+}
 
-	// Init memory store (shared across all agents)
-	memory, err := agent.NewSQLiteMemoryStore(cfg.Memory.DBPath)
-	if err != nil {
-		return fmt.Errorf("initializing memory store: %w", err)
-	}
-	defer func() { _ = memory.Close() }()
-
-	// Init approval store (same WAL database file as memory store)
-	approvalStore, err := approval.NewSQLiteStore(cfg.Memory.DBPath)
-	if err != nil {
-		return fmt.Errorf("initializing approval store: %w", err)
-	}
-	defer func() { _ = approvalStore.Close() }()
-
-	// Expire any approvals left pending from a previous run.
-	if n, expErr := approvalStore.ExpirePending(context.Background()); expErr != nil {
-		logger.Warn("failed to expire pending approvals", "error", expErr)
-	} else if n > 0 {
-		logger.Info("expired pending approvals from previous run", "count", n)
-	}
-
-	approvalManager := approval.NewManager(approvalStore, logger)
-
-	// Init LLM providers (shared across all agents)
+func initLLMClients(cfg *config.Config) llmClients {
 	var orClient *openrouter.Client
 	if cfg.LLM.OpenRouter.APIKey != "" {
 		orClient = openrouter.New(cfg.LLM.OpenRouter.APIKey)
@@ -154,9 +128,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	if cfg.LLM.Anthropic.APIKey != "" {
 		anthropicClient = anthropicllm.New(cfg.LLM.Anthropic.APIKey)
 	}
-	costTracker := llm.NewCostTracker(cfg.LLM.MaxCostPerSession)
 
-	// Parse fallback rules once (shared)
 	var fallbackRules []llm.FallbackRule
 	if len(cfg.LLM.Fallbacks) > 0 {
 		fallbackRules = make([]llm.FallbackRule, len(cfg.LLM.Fallbacks))
@@ -173,80 +145,83 @@ func runServe(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Init voice providers (if configured)
-	var voiceOpts *telegram.VoiceOpts
-	if cfg.Voice.STTProvider != "" || cfg.Voice.TTSProvider != "" {
-		voiceOpts = &telegram.VoiceOpts{
-			TTSVoice:       cfg.Voice.TTSVoice,
-			AutoVoiceReply: cfg.Voice.AutoVoiceReply,
-		}
-		if cfg.Voice.STTProvider == "openai" {
-			client := openaivoice.New(cfg.Voice.OpenAI.APIKey)
-			voiceOpts.STT = client
-		}
-		if cfg.Voice.TTSProvider == "openai" {
-			client := openaivoice.New(cfg.Voice.OpenAI.APIKey)
-			voiceOpts.TTS = client
-		}
-		logger.Info("voice support enabled",
-			"stt_provider", cfg.Voice.STTProvider,
-			"tts_provider", cfg.Voice.TTSProvider,
-			"auto_voice_reply", cfg.Voice.AutoVoiceReply,
-		)
+	return llmClients{
+		openRouter: orClient,
+		ollama:     ollamaClient,
+		anthropic:  anthropicClient,
+		cost:       llm.NewCostTracker(cfg.LLM.MaxCostPerSession),
+		fallbacks:  fallbackRules,
 	}
+}
 
-	// Collect active adapters.
+func initVoiceOpts(cfg *config.Config, logger *slog.Logger) *telegram.VoiceOpts {
+	if cfg.Voice.STTProvider == "" && cfg.Voice.TTSProvider == "" {
+		return nil
+	}
+	voiceOpts := &telegram.VoiceOpts{
+		TTSVoice:       cfg.Voice.TTSVoice,
+		AutoVoiceReply: cfg.Voice.AutoVoiceReply,
+	}
+	if cfg.Voice.STTProvider == "openai" {
+		voiceOpts.STT = openaivoice.New(cfg.Voice.OpenAI.APIKey)
+	}
+	if cfg.Voice.TTSProvider == "openai" {
+		voiceOpts.TTS = openaivoice.New(cfg.Voice.OpenAI.APIKey)
+	}
+	logger.Info("voice support enabled",
+		"stt_provider", cfg.Voice.STTProvider,
+		"tts_provider", cfg.Voice.TTSProvider,
+		"auto_voice_reply", cfg.Voice.AutoVoiceReply,
+	)
+	return voiceOpts
+}
+
+func initAdapters(cfg *config.Config, logger *slog.Logger, voiceOpts *telegram.VoiceOpts) ([]adapter.Adapter, *telegram.Adapter, error) {
 	var adapters []adapter.Adapter
 
-	// Init Telegram adapter (optional — only if token is set).
 	var tgAdapter *telegram.Adapter
 	if cfg.Telegram.Token != "" {
+		var err error
 		tgAdapter, err = telegram.New(cfg.Telegram.Token, cfg.Telegram.AllowedUsers, logger, voiceOpts)
 		if err != nil {
-			return fmt.Errorf("initializing telegram: %w", err)
+			return nil, nil, fmt.Errorf("initializing telegram: %w", err)
 		}
 		adapters = append(adapters, tgAdapter)
 	}
 
-	// Init Discord adapter (optional — only if token is set).
-	var discordAdapter *discord.Adapter
 	if cfg.Discord.Token != "" {
-		discordAdapter, err = discord.New(cfg.Discord.Token, cfg.Discord.AllowedUsers, logger)
+		discordAdapter, err := discord.New(cfg.Discord.Token, cfg.Discord.AllowedUsers, logger)
 		if err != nil {
-			return fmt.Errorf("initializing discord: %w", err)
+			return nil, nil, fmt.Errorf("initializing discord: %w", err)
 		}
 		adapters = append(adapters, discordAdapter)
 	}
-	_ = discordAdapter // referenced via adapters slice
 
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	return adapters, tgAdapter, nil
+}
 
-	// Start background worker that expires pending approvals past their TTL.
-	// ctx is cancelled on shutdown, which stops the goroutine cleanly.
-	approvalManager.StartExpiryWorker(ctx, time.Hour)
+// cleanupFunc is a function to be called on shutdown.
+type cleanupFunc func()
 
-	// Init shared external tools (processes shared across all agents).
+func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*tool.Manager, []cleanupFunc, error) {
 	var sharedToolMgr *tool.Manager
+	var cleanups []cleanupFunc
+
 	if len(cfg.Tools) > 0 {
 		sharedToolMgr = tool.NewManager(logger)
+		cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
 		for name, tc := range cfg.Tools {
 			if err := sharedToolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
-				return fmt.Errorf("initializing tool %q: %w", name, err)
+				return nil, cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
 			}
 			logger.Info("tool server registered", "name", name, "command", tc.Command)
 		}
-		defer func() { _ = sharedToolMgr.Close() }()
 	}
 
-	// Load and start plugins (if configured).
 	if len(cfg.Plugins) > 0 {
-		// Plugins register MCP servers into the shared tool manager.
-		// Create it lazily if no [tools.*] entries were configured.
 		if sharedToolMgr == nil {
 			sharedToolMgr = tool.NewManager(logger)
-			defer func() { _ = sharedToolMgr.Close() }()
+			cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
 		}
 
 		existingToolNames := make(map[string]bool, len(cfg.Tools))
@@ -254,12 +229,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 			existingToolNames[name] = true
 		}
 
-		// Set up plugin signature verification if trusted keys are configured.
 		var verifyOpts *plugin.VerifyOpts
 		if len(cfg.Security.TrustedKeys) > 0 {
 			trustedKeys, keyErr := security.LoadTrustedKeys(cfg.Security.TrustedKeys)
 			if keyErr != nil {
-				return fmt.Errorf("loading trusted plugin keys: %w", keyErr)
+				return nil, cleanups, fmt.Errorf("loading trusted plugin keys: %w", keyErr)
 			}
 			verifyOpts = &plugin.VerifyOpts{
 				TrustedKeys:   trustedKeys,
@@ -269,178 +243,161 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 		pluginMgr := plugin.NewManager(logger, verifyOpts)
 		if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
-			return fmt.Errorf("loading plugins: %w", err)
+			return nil, cleanups, fmt.Errorf("loading plugins: %w", err)
 		}
 		if err := pluginMgr.Start(ctx, sharedToolMgr); err != nil {
-			// Non-fatal: individual plugin failures were already logged by Start.
 			logger.Warn("one or more plugins failed to start", "error", err)
 		}
 		logger.Info("plugins loaded", "count", pluginMgr.Count())
 	}
 
-	// Load global skills
-	globalSkills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
-	if err != nil {
-		logger.Warn("global skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
-	} else if len(globalSkills) > 0 {
-		logger.Info("global skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(globalSkills))
+	return sharedToolMgr, cleanups, nil
+}
+
+// agentBuildCtx holds all the shared state needed to build per-agent engines.
+type agentBuildCtx struct {
+	cfg             *config.Config
+	llm             llmClients
+	memory          agent.MemoryStore
+	sharedToolMgr   *tool.Manager
+	approvalManager *approval.Manager
+	globalSkills    []skill.Skill
+	sched           *scheduler.Scheduler
+	adapters        []adapter.Adapter
+	dispatcher      *agent.Dispatcher
+	logger          *slog.Logger
+}
+
+func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
+	// Per-agent persona
+	var p *persona.Persona
+	loadedPersona, pErr := persona.Load(ac.PersonaDir)
+	if pErr != nil {
+		abc.logger.Warn("persona files not loaded, using default prompt", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
+	} else {
+		p = loadedPersona
+		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
 	}
 
-	// Init scheduler early so per-agent Config MCP servers can reference it.
-	sched := scheduler.New(logger)
-
-	// Build per-agent engines
-	engines := make(map[string]*agent.Engine, len(cfg.Agents))
-	var bindings []agent.Binding
-
-	// Create dispatcher first (without engines) so we can reference SendFor.
-	// We'll wire engines in after the loop.
-	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
-
-	for _, ac := range cfg.Agents {
-		// Per-agent persona
-		var p *persona.Persona
-		loadedPersona, pErr := persona.Load(ac.PersonaDir)
-		if pErr != nil {
-			logger.Warn("persona files not loaded, using default prompt", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
+	// Per-agent skills: merge global + agent-specific (from persona_dir/skills/)
+	agentSkillsDir := filepath.Join(ac.PersonaDir, "skills")
+	agentSkills, sErr := skill.LoadDir(agentSkillsDir, abc.logger)
+	if sErr != nil {
+		abc.logger.Debug("no agent-specific skills", "agent", ac.Name, "dir", agentSkillsDir)
+	}
+	effectiveGlobal := abc.globalSkills
+	effectiveGlobalSkillsDir := abc.cfg.Agent.SkillsDir
+	if ac.SkillsDir != "" && ac.SkillsDir != abc.cfg.Agent.SkillsDir {
+		overrideSkills, oErr := skill.LoadDir(ac.SkillsDir, abc.logger)
+		if oErr != nil {
+			abc.logger.Warn("agent skills_dir loading error", "agent", ac.Name, "dir", ac.SkillsDir, "error", oErr)
 		} else {
-			p = loadedPersona
-			logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
+			effectiveGlobal = overrideSkills
+			effectiveGlobalSkillsDir = ac.SkillsDir
 		}
-
-		// Per-agent skills: merge global + agent-specific (from persona_dir/skills/)
-		agentSkillsDir := filepath.Join(ac.PersonaDir, "skills")
-		agentSkills, sErr := skill.LoadDir(agentSkillsDir, logger)
-		if sErr != nil {
-			logger.Debug("no agent-specific skills", "agent", ac.Name, "dir", agentSkillsDir)
-		}
-		// If agent has a custom skills_dir override, load from there instead of global.
-		effectiveGlobal := globalSkills
-		effectiveGlobalSkillsDir := cfg.Agent.SkillsDir
-		if ac.SkillsDir != "" && ac.SkillsDir != cfg.Agent.SkillsDir {
-			overrideSkills, oErr := skill.LoadDir(ac.SkillsDir, logger)
-			if oErr != nil {
-				logger.Warn("agent skills_dir loading error", "agent", ac.Name, "dir", ac.SkillsDir, "error", oErr)
-			} else {
-				effectiveGlobal = overrideSkills
-				effectiveGlobalSkillsDir = ac.SkillsDir
-			}
-		}
-		mergedSkills := skill.MergeSkills(effectiveGlobal, agentSkills)
-		if len(mergedSkills) > 0 {
-			logger.Info("skills loaded for agent", "agent", ac.Name, "count", len(mergedSkills))
-		}
-
-		// Per-agent permission tier (fall back to global session.tier)
-		tier := cfg.Session.Tier
-		if ac.SessionTier != "" {
-			tier = ac.SessionTier
-		}
-		permissions, pErr := security.NewPermissionEngine(tier)
-		if pErr != nil {
-			return fmt.Errorf("initializing permissions for agent %q: %w", ac.Name, pErr)
-		}
-
-		// Per-agent tool manager: adopt shared external tools then add the
-		// per-agent Config MCP server so skill/schedule tools are agent-scoped.
-		agentToolMgr := tool.NewManager(logger)
-		if sharedToolMgr != nil {
-			agentToolMgr.AdoptFrom(sharedToolMgr)
-		}
-
-		// Per-agent LLM router (with optional model override)
-		model := cfg.LLM.DefaultModel
-		if ac.LLMModel != "" {
-			model = ac.LLMModel
-		}
-		agentRouter := llm.NewRouter(cfg.LLM.DefaultProvider, model, costTracker)
-		agentRouter.RegisterProvider(ollamaClient)
-		if orClient != nil {
-			agentRouter.RegisterProvider(orClient)
-		}
-		if anthropicClient != nil {
-			agentRouter.RegisterProvider(anthropicClient)
-		}
-		if len(fallbackRules) > 0 {
-			agentRouter.SetFallbacks(fallbackRules)
-		}
-
-		// sendVia routes responses through whichever adapter delivered the
-		// incoming message (set via OutgoingMessage.Adapter in HandleMessage).
-		// Falls back to the first registered adapter when Adapter is empty
-		// (e.g. for scheduler-triggered messages).
-		sendVia := func(ctx context.Context, msg adapter.OutgoingMessage) error {
-			name := msg.Adapter
-			if name == "" && len(adapters) > 0 {
-				name = adapters[0].Name()
-			}
-			return dispatcher.SendVia(ctx, name, msg)
-		}
-
-		// Build engine before connecting Config MCP so we can capture its methods.
-		e := agent.NewEngine(
-			ac.Name,
-			agentRouter,
-			memory,
-			sendVia, // route responses through the incoming message's adapter
-			permissions,
-			p,
-			persona.DefaultPrompt,
-			mergedSkills,
-			agentToolMgr,
-			approvalManager,
-			logger,
-		)
-		e.SetSkillDirs(agentSkillsDir, effectiveGlobalSkillsDir)
-		e.SetScheduler(sched)
-
-		// Connect per-agent Config MCP server and register its tools.
-		cmcpSrv := configmcp.New(configmcp.Deps{
-			AgentName:      ac.Name,
-			AgentSkillsDir: agentSkillsDir,
-			GetSkills:      e.Skills,
-			AppendSkill:    e.AppendSkill,
-			Sched:          sched,
-			HandleMessage:  e.HandleMessage,
-			Approvals:      approvalManager,
-			PermissionTier: e.PermissionTier,
-			Logger:         logger,
-		})
-		cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
-		if cmcpErr != nil {
-			return fmt.Errorf("starting config MCP for agent %q: %w", ac.Name, cmcpErr)
-		}
-		if err := agentToolMgr.RegisterSession(ctx, "config-"+ac.Name, cmcpSession); err != nil {
-			return fmt.Errorf("registering config MCP for agent %q: %w", ac.Name, err)
-		}
-		logger.Info("config MCP registered", "agent", ac.Name, "tools", len(agentToolMgr.ToolDefs()))
-
-		// Wire tool defs into the router now that Config MCP tools are registered.
-		agentRouter.SetTools(agentToolMgr.ToolDefs())
-
-		engines[ac.Name] = e
-
-		for _, binding := range ac.Adapters {
-			bindings = append(bindings, agent.Binding{Pattern: binding, AgentName: ac.Name})
-		}
-
-		logger.Info("agent initialized",
-			"agent", ac.Name,
-			"model", model,
-			"tier", tier,
-			"skills", len(mergedSkills),
-		)
+	}
+	mergedSkills := skill.MergeSkills(effectiveGlobal, agentSkills)
+	if len(mergedSkills) > 0 {
+		abc.logger.Info("skills loaded for agent", "agent", ac.Name, "count", len(mergedSkills))
 	}
 
-	// Re-create dispatcher with the fully wired engines and bindings.
-	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
-
-	// Wire the callback resolver so Telegram inline keyboard buttons resolve approvals.
-	if tgAdapter != nil {
-		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
+	// Per-agent permission tier (fall back to global session.tier)
+	tier := abc.cfg.Session.Tier
+	if ac.SessionTier != "" {
+		tier = ac.SessionTier
+	}
+	permissions, pErr := security.NewPermissionEngine(tier)
+	if pErr != nil {
+		return nil, nil, fmt.Errorf("initializing permissions for agent %q: %w", ac.Name, pErr)
 	}
 
-	// Register config-file schedules into the already-initialised scheduler.
+	// Per-agent tool manager: adopt shared external tools then add the
+	// per-agent Config MCP server so skill/schedule tools are agent-scoped.
+	agentToolMgr := tool.NewManager(abc.logger)
+	if abc.sharedToolMgr != nil {
+		agentToolMgr.AdoptFrom(abc.sharedToolMgr)
+	}
+
+	// Per-agent LLM router (with optional model override)
+	model := abc.cfg.LLM.DefaultModel
+	if ac.LLMModel != "" {
+		model = ac.LLMModel
+	}
+	agentRouter := llm.NewRouter(abc.cfg.LLM.DefaultProvider, model, abc.llm.cost)
+	agentRouter.RegisterProvider(abc.llm.ollama)
+	if abc.llm.openRouter != nil {
+		agentRouter.RegisterProvider(abc.llm.openRouter)
+	}
+	if abc.llm.anthropic != nil {
+		agentRouter.RegisterProvider(abc.llm.anthropic)
+	}
+	if len(abc.llm.fallbacks) > 0 {
+		agentRouter.SetFallbacks(abc.llm.fallbacks)
+	}
+
+	sendVia := func(ctx context.Context, msg adapter.OutgoingMessage) error {
+		name := msg.Adapter
+		if name == "" && len(abc.adapters) > 0 {
+			name = abc.adapters[0].Name()
+		}
+		return abc.dispatcher.SendVia(ctx, name, msg)
+	}
+
+	e := agent.NewEngine(
+		ac.Name,
+		agentRouter,
+		abc.memory,
+		sendVia,
+		permissions,
+		p,
+		persona.DefaultPrompt,
+		mergedSkills,
+		agentToolMgr,
+		abc.approvalManager,
+		abc.logger,
+	)
+	e.SetSkillDirs(agentSkillsDir, effectiveGlobalSkillsDir)
+	e.SetScheduler(abc.sched)
+
+	// Connect per-agent Config MCP server and register its tools.
+	cmcpSrv := configmcp.New(configmcp.Deps{
+		AgentName:      ac.Name,
+		AgentSkillsDir: agentSkillsDir,
+		GetSkills:      e.Skills,
+		AppendSkill:    e.AppendSkill,
+		Sched:          abc.sched,
+		HandleMessage:  e.HandleMessage,
+		Approvals:      abc.approvalManager,
+		PermissionTier: e.PermissionTier,
+		Logger:         abc.logger,
+	})
+	cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
+	if cmcpErr != nil {
+		return nil, nil, fmt.Errorf("starting config MCP for agent %q: %w", ac.Name, cmcpErr)
+	}
+	if err := agentToolMgr.RegisterSession(ctx, "config-"+ac.Name, cmcpSession); err != nil {
+		return nil, nil, fmt.Errorf("registering config MCP for agent %q: %w", ac.Name, err)
+	}
+	abc.logger.Info("config MCP registered", "agent", ac.Name, "tools", len(agentToolMgr.ToolDefs()))
+
+	agentRouter.SetTools(agentToolMgr.ToolDefs())
+
+	var bindings []agent.Binding
+	for _, binding := range ac.Adapters {
+		bindings = append(bindings, agent.Binding{Pattern: binding, AgentName: ac.Name})
+	}
+
+	abc.logger.Info("agent initialized",
+		"agent", ac.Name,
+		"model", model,
+		"tier", tier,
+		"skills", len(mergedSkills),
+	)
+
+	return e, bindings, nil
+}
+
+func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler.Scheduler, dispatcher *agent.Dispatcher, logger *slog.Logger) error {
 	for _, sc := range cfg.Schedules {
 		sc := sc // capture loop variable
 		text := "[Scheduled trigger: " + sc.Name + "]"
@@ -494,6 +451,142 @@ func runServe(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("registering schedule %q: %w", sc.Name, err)
 		}
 	}
+	return nil
+}
+
+func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logger *slog.Logger) error {
+	keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
+	if ksErr != nil {
+		return fmt.Errorf("initializing api key store: %w", ksErr)
+	}
+
+	existingKeys, _ := keyStore.List(ctx)
+	hasActiveKey := len(cfg.API.Keys) > 0
+	for _, k := range existingKeys {
+		if !k.Revoked {
+			hasActiveKey = true
+			break
+		}
+	}
+	if !hasActiveKey {
+		logger.Warn("no API keys found — web dashboard login will fail",
+			"hint", "run: denkeeper keys create <name>",
+		)
+	}
+
+	deps.KeyStore = keyStore
+	apiServer := api.New(cfg.API, deps, logger)
+	go func() {
+		if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("api server error", "error", err)
+		}
+	}()
+	return nil
+}
+
+func runServe(_ *cobra.Command, _ []string) error {
+	path := cfgFile
+	if path == "" {
+		path = config.DefaultConfigPath()
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	logger := initLogger(cfg)
+
+	// Init memory store (shared across all agents)
+	memory, err := agent.NewSQLiteMemoryStore(cfg.Memory.DBPath)
+	if err != nil {
+		return fmt.Errorf("initializing memory store: %w", err)
+	}
+	defer func() { _ = memory.Close() }()
+
+	// Init approval store (same WAL database file as memory store)
+	approvalStore, err := approval.NewSQLiteStore(cfg.Memory.DBPath)
+	if err != nil {
+		return fmt.Errorf("initializing approval store: %w", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+
+	if n, expErr := approvalStore.ExpirePending(context.Background()); expErr != nil {
+		logger.Warn("failed to expire pending approvals", "error", expErr)
+	} else if n > 0 {
+		logger.Info("expired pending approvals from previous run", "count", n)
+	}
+
+	approvalManager := approval.NewManager(approvalStore, logger)
+
+	clients := initLLMClients(cfg)
+	voiceOpts := initVoiceOpts(cfg, logger)
+
+	adapters, tgAdapter, err := initAdapters(cfg, logger, voiceOpts)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	approvalManager.StartExpiryWorker(ctx, time.Hour)
+
+	sharedToolMgr, cleanups, err := initSharedTools(ctx, cfg, logger)
+	for _, fn := range cleanups {
+		defer fn()
+	}
+	if err != nil {
+		return err
+	}
+
+	// Load global skills
+	globalSkills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
+	if err != nil {
+		logger.Warn("global skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
+	} else if len(globalSkills) > 0 {
+		logger.Info("global skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(globalSkills))
+	}
+
+	sched := scheduler.New(logger)
+
+	// Build per-agent engines
+	engines := make(map[string]*agent.Engine, len(cfg.Agents))
+	var bindings []agent.Binding
+	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
+
+	abc := agentBuildCtx{
+		cfg:             cfg,
+		llm:             clients,
+		memory:          memory,
+		sharedToolMgr:   sharedToolMgr,
+		approvalManager: approvalManager,
+		globalSkills:    globalSkills,
+		sched:           sched,
+		adapters:        adapters,
+		dispatcher:      dispatcher,
+		logger:          logger,
+	}
+
+	for _, ac := range cfg.Agents {
+		e, agentBindings, buildErr := buildAgentEngine(ctx, ac, abc)
+		if buildErr != nil {
+			return buildErr
+		}
+		engines[ac.Name] = e
+		bindings = append(bindings, agentBindings...)
+	}
+
+	// Re-create dispatcher with the fully wired engines and bindings.
+	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
+
+	if tgAdapter != nil {
+		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
+	}
+
+	if err := registerSchedules(ctx, cfg, sched, dispatcher, logger); err != nil {
+		return err
+	}
 	sched.Start()
 	defer sched.Stop()
 
@@ -506,44 +599,18 @@ func runServe(_ *cobra.Command, _ []string) error {
 		cancel()
 	}()
 
-	// Start API server (if enabled)
 	if cfg.API.Enabled {
-		// Initialize API key store (same WAL database as memory/approval store).
-		keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
-		if ksErr != nil {
-			return fmt.Errorf("initializing api key store: %w", ksErr)
-		}
-
-		// First-run check: warn when the web dashboard will be inaccessible.
-		existingKeys, _ := keyStore.List(ctx)
-		hasActiveKey := len(cfg.API.Keys) > 0 // TOML-defined keys count too
-		for _, k := range existingKeys {
-			if !k.Revoked {
-				hasActiveKey = true
-				break
-			}
-		}
-		if !hasActiveKey {
-			logger.Warn("no API keys found — web dashboard login will fail",
-				"hint", "run: denkeeper keys create <name>",
-			)
-		}
-
-		apiServer := api.New(cfg.API, api.Deps{
+		if err := startAPIServer(ctx, cfg, api.Deps{
 			Dispatcher:  dispatcher,
 			Scheduler:   sched,
-			CostTracker: costTracker,
+			CostTracker: clients.cost,
 			Memory:      memory,
 			Config:      cfg,
 			Approvals:   approvalManager,
 			WebHandler:  web.Handler(),
-			KeyStore:    keyStore,
-		}, logger)
-		go func() {
-			if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("api server error", "error", err)
-			}
-		}()
+		}, logger); err != nil {
+			return err
+		}
 	}
 
 	logger.Info("denkeeper starting",
@@ -554,4 +621,3 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	return dispatcher.Run(ctx)
 }
-
