@@ -206,6 +206,23 @@ func (ks *KeyStore) HasActiveKey(ctx context.Context) (bool, error) {
 	return count > 0, nil
 }
 
+// Delete permanently removes a revoked key from the store.
+// Returns an error if the key does not exist or is still active (not revoked).
+func (ks *KeyStore) Delete(ctx context.Context, id string) error {
+	res, err := ks.db.ExecContext(ctx,
+		`DELETE FROM api_keys WHERE id = ? AND revoked_at IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting key: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("key not found or still active")
+	}
+	return nil
+}
+
 // Rotate revokes the existing key and creates a replacement with the same name and scopes.
 // Returns the new record and plaintext key.
 func (ks *KeyStore) Rotate(ctx context.Context, id string) (APIKeyRecord, string, error) {

@@ -93,6 +93,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
 	mux.HandleFunc("POST /api/v1/keys", s.RequireScope("admin", s.handleCreateKey))
 	mux.HandleFunc("DELETE /api/v1/keys/{id}", s.RequireScope("admin", s.handleRevokeKey))
+	mux.HandleFunc("DELETE /api/v1/keys/{id}/permanent", s.RequireScope("admin", s.handleDeleteKey))
 	mux.HandleFunc("POST /api/v1/keys/{id}/rotate", s.RequireScope("admin", s.handleRotateKey))
 
 	// Web dashboard — catch-all for non-API paths (more-specific /api/v1/ routes always win).
@@ -794,6 +795,19 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if err := s.deps.KeyStore.Revoke(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteKey handles DELETE /api/v1/keys/{id}/permanent.
+func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
+	if !s.keyStoreRequired(w) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.deps.KeyStore.Delete(r.Context(), id); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}

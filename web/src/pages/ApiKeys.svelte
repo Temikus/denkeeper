@@ -15,7 +15,7 @@
   let newKeyId = ''
 
   // Confirm action state
-  let confirmAction = null // { type: 'revoke'|'rotate', id, name }
+  let confirmAction = null // { type: 'revoke'|'rotate'|'delete', id, name }
   let actionLoading = false
   let rotatedKey = ''
 
@@ -77,6 +77,21 @@
     try {
       const res = await api.rotateKey(confirmAction.id)
       rotatedKey = res.key
+      confirmAction = null
+      await loadKeys()
+    } catch (e) {
+      error = e.message
+    } finally {
+      actionLoading = false
+    }
+  }
+
+  async function confirmDelete() {
+    if (!confirmAction) return
+    actionLoading = true
+    error = ''
+    try {
+      await api.deleteKey(confirmAction.id)
       confirmAction = null
       await loadKeys()
     } catch (e) {
@@ -179,6 +194,10 @@
                 <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'revoke', id: key.id, name: key.name } }}>
                   Revoke
                 </button>
+              {:else}
+                <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'delete', id: key.id, name: key.name } }}>
+                  Delete
+                </button>
               {/if}
             </td>
           </tr>
@@ -230,6 +249,15 @@
         <div class="modal-actions">
           <button class="btn-danger" onclick={confirmRevoke} disabled={actionLoading}>
             {actionLoading ? 'Revoking…' : 'Revoke'}
+          </button>
+          <button class="btn-ghost" onclick={() => confirmAction = null}>Cancel</button>
+        </div>
+      {:else if confirmAction.type === 'delete'}
+        <h2>Delete Key</h2>
+        <p>Permanently delete <strong>{confirmAction.name}</strong>? This will remove the key record entirely.</p>
+        <div class="modal-actions">
+          <button class="btn-danger" onclick={confirmDelete} disabled={actionLoading}>
+            {actionLoading ? 'Deleting…' : 'Delete'}
           </button>
           <button class="btn-ghost" onclick={() => confirmAction = null}>Cancel</button>
         </div>

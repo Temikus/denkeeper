@@ -78,6 +78,7 @@ export const api = {
   }),
   revokeKey: id => apiFetch(`/api/v1/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   rotateKey: id => apiFetch(`/api/v1/keys/${encodeURIComponent(id)}/rotate`, { method: 'POST' }),
+  deleteKey: id => apiFetch(`/api/v1/keys/${encodeURIComponent(id)}/permanent`, { method: 'DELETE' }),
 
   // Chat with SSE streaming.
   // onChunk(text) is called for each content chunk.
