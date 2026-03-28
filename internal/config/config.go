@@ -23,6 +23,17 @@ type Config struct {
 	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Voice     VoiceConfig           `toml:"voice"`
 	API       APIConfig             `toml:"api"`
+	Security  SecurityConfig        `toml:"security"`
+}
+
+// SecurityConfig controls plugin signature verification.
+type SecurityConfig struct {
+	// TrustedKeys is a list of file paths to PEM-encoded Ed25519 public keys.
+	// Plugins signed by any of these keys are trusted.
+	TrustedKeys []string `toml:"trusted_keys"`
+	// AllowUnsigned controls whether unsigned plugins are allowed.
+	// Defaults to true. Set to false to require all plugins to be signed.
+	AllowUnsigned *bool `toml:"allow_unsigned"`
 }
 
 // DiscordConfig configures the Discord bot adapter.
@@ -124,10 +135,9 @@ type ToolConfig struct {
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.
 // Unlike [tools.*] entries (raw MCP servers), plugins participate in permission
-// checks and lifecycle management. Docker sandboxing is planned for a future release.
+// checks and lifecycle management.
 type PluginConfig struct {
-	// Type is the execution strategy. Only "subprocess" is supported currently.
-	// "docker" is reserved for future sandboxed execution.
+	// Type is the execution strategy: "subprocess" or "docker".
 	Type    string            `toml:"type"`
 	Command string            `toml:"command"`
 	Args    []string          `toml:"args"`
@@ -135,6 +145,23 @@ type PluginConfig struct {
 	// Capabilities declares contracts this plugin satisfies.
 	// Currently only "tools" is meaningful — registers the plugin as an MCP server.
 	Capabilities []string `toml:"capabilities"`
+
+	// Docker-specific fields (only used when type = "docker").
+
+	// Image is the Docker/OCI image to run (e.g. "myregistry/mcp-plugin:v1").
+	// Required for docker plugins.
+	Image string `toml:"image"`
+	// MemoryLimit is the container memory limit (e.g. "256m", "1g").
+	// Passed directly to --memory. Optional; no limit if empty.
+	MemoryLimit string `toml:"memory_limit"`
+	// CPULimit is the container CPU limit (e.g. "0.5", "2").
+	// Passed directly to --cpus. Optional; no limit if empty.
+	CPULimit string `toml:"cpu_limit"`
+	// Network is the Docker network mode. Defaults to "none" (fully isolated).
+	// Valid values: "none", "host", "bridge", or a named network.
+	Network string `toml:"network"`
+	// Volumes is a list of bind mounts in Docker format ("host:container[:ro]").
+	Volumes []string `toml:"volumes"`
 }
 
 // SessionConfig controls the default permission tier for agent sessions.
@@ -332,6 +359,12 @@ func applyDefaults(cfg *Config) {
 
 	if cfg.Voice.TTSVoice == "" && cfg.Voice.TTSProvider != "" {
 		cfg.Voice.TTSVoice = "alloy"
+	}
+
+	// Default to allowing unsigned plugins.
+	if cfg.Security.AllowUnsigned == nil {
+		t := true
+		cfg.Security.AllowUnsigned = &t
 	}
 
 	if cfg.API.Enabled && cfg.API.Listen == "" {
@@ -680,19 +713,24 @@ func validateTools(tools map[string]ToolConfig) error {
 }
 
 // validPluginTypes are the recognised type values for plugins.
-// "docker" is accepted in config (rejected at runtime) to ease future upgrades.
 var validPluginTypes = map[string]bool{"subprocess": true, "docker": true}
 
 func validatePlugins(plugins map[string]PluginConfig, tools map[string]ToolConfig) error {
 	for name, pc := range plugins {
 		if pc.Type == "" {
-			return fmt.Errorf("config: plugins.%s: type is required (must be \"subprocess\")", name)
+			return fmt.Errorf("config: plugins.%s: type is required (\"subprocess\" or \"docker\")", name)
 		}
 		if !validPluginTypes[pc.Type] {
 			return fmt.Errorf("config: plugins.%s: invalid type %q", name, pc.Type)
 		}
-		if pc.Command == "" {
-			return fmt.Errorf("config: plugins.%s: command is required", name)
+		if pc.Type == "docker" {
+			if pc.Image == "" {
+				return fmt.Errorf("config: plugins.%s: image is required for docker plugins", name)
+			}
+		} else {
+			if pc.Command == "" {
+				return fmt.Errorf("config: plugins.%s: command is required", name)
+			}
 		}
 		if _, exists := tools[name]; exists {
 			return fmt.Errorf("config: plugins.%s: name conflicts with tools.%s", name, name)

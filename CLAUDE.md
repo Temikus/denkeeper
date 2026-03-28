@@ -106,11 +106,13 @@ Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_sched
 
 ## Plugin System
 
-`internal/plugin/` provides subprocess-based plugins with capability declarations.
+`internal/plugin/` provides plugins with two execution strategies and Ed25519 signature verification.
 
+- **Subprocess** (`type = "subprocess"`): trusted plugins run as child processes with direct MCP stdio.
+- **Docker** (`type = "docker"`): sandboxed plugins run in Docker/Podman containers via `docker run -i --rm`. Containers are hardened with `--cap-drop ALL`, `--read-only`, `--security-opt no-new-privileges`, and `--network none` (default). Configurable `memory_limit`, `cpu_limit`, `network`, and `volumes`.
+- **Signature verification**: `[security]` config section with `trusted_keys` (PEM public key paths) and `allow_unsigned` (default true). Ed25519 signatures are checked for subprocess plugin binaries during Load. Library functions in `internal/security/signing.go`: `GenerateKeyPair`, `Sign`, `Verify`, `SignFile`, `VerifyFile`, `LoadTrustedKeys`, PEM marshaling/parsing.
 - Plugins declare capabilities in TOML config (e.g. `capabilities = ["tools"]`).
-- The Manager spawns plugin subprocesses at startup and wires them into the engine.
-- Docker sandboxing is planned but not yet implemented.
+- The Manager validates, optionally verifies signatures, then spawns processes and wires them into the engine via the shared `tool.Manager`.
 
 ## UI/UX Standards
 
@@ -182,12 +184,15 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
 - LLM providers: OpenRouter (production), Ollama (local), Anthropic (direct). Telegram and Discord adapters.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
-- MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial, no Docker sandboxing yet).
-- Plugin system: subprocess plugins with capability declarations (Docker sandboxing planned).
+- MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial).
+- Plugin system: subprocess plugins and Docker-sandboxed plugins with capability declarations. Docker plugins run via `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none` by default. Configurable resource limits (`memory_limit`, `cpu_limit`), network mode, and bind mounts.
+- Plugin signing: Ed25519 signature verification for subprocess plugin binaries. Configurable via `[security]` with `trusted_keys` (PEM public key files) and `allow_unsigned` (default true). Includes `SignFile`/`VerifyFile` library, PEM key marshaling, and `LoadTrustedKeys` for key management.
 - External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
 - Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, and permission tier inspection.
 - Web dashboard: embedded Svelte SPA (9 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD.
 - CI/CD: golangci-lint, govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
-- Next: Hugo documentation website.
+- Documentation website: Hugo + Doks (Thulite) under `/website`, with getting-started guides, concept docs, and reference pages. GitHub Pages CI via `deploy-website.yml`. One-liner install script at `website/static/install.sh`.
+- systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
+- Next: CLI commands for plugin signing (`denkeeper plugin keygen/sign/verify`), documentation website domain setup, Kubernetes sandbox runtime backend.
 - See `design/denkeeper-prd.md` for the full roadmap.

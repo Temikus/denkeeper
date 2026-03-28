@@ -1,0 +1,19 @@
+title = "Denkeeper"
+description = "A security-first, single-binary personal AI agent. Runs on a Raspberry Pi."
+images = ["cover.png"]
+
+[doks]
+  sectionFooter = false
+  docsVersioning = false
+  breadcrumb = true
+  headlineAnchor = true
+  scrollSpy = true
+  search = true
+  colorMode = "auto"
+  darkColorMode = true
+  repo = "https://github.com/Temikus/denkeeper"
+  editURL = "/edit/main/website/content"
+  lastMod = false
+
+[social]
+  github = "https://github.com/Temikus/denkeeper"

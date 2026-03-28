@@ -1,0 +1,3 @@
+# Overrides for production environment
+# Update this when denkeeper.io is live
+baseurl = "https://temikus.github.io/denkeeper/"

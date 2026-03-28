@@ -1,0 +1,30 @@
+{
+  "name": "denkeeper-website",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Denkeeper documentation and marketing website",
+  "author": "Temikus",
+  "license": "Apache-2.0",
+  "scripts": {
+    "create": "hugo new",
+    "dev": "hugo server --disableFastRender --noHTTPCache",
+    "format": "prettier **/** -w -c",
+    "build": "hugo --minify --gc",
+    "preview": "vite preview --outDir public"
+  },
+  "dependencies": {
+    "@thulite/doks-core": "^1.9.3",
+    "thulite": "^2.6.5"
+  },
+  "overrides": {
+    "minimatch": "^10.2.2",
+    "glob": "^13.0.6"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "vite": "^7.3.1"
+  },
+  "engines": {
+    "node": ">=24.13.0"
+  }
+}

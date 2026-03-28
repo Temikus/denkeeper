@@ -1325,19 +1325,44 @@ capabilities = ["tools"]
 }
 
 func TestParse_PluginDockerTypeAcceptedInConfig(t *testing.T) {
-	// "docker" is syntactically valid in config; it is rejected at plugin.Manager.Load time
-	// with a clear "not yet implemented" error. This lets users pre-configure docker plugins
-	// without a config-level error when upgrading to a future release.
 	tomlData := []byte(baseConfig + `
 [plugins.sandboxed]
 type         = "docker"
-command      = "ghcr.io/example/plugin:latest"
+image        = "ghcr.io/example/plugin:latest"
+memory_limit = "256m"
+cpu_limit    = "0.5"
+network      = "none"
+volumes      = ["/data:/mnt/data:ro"]
+capabilities = ["tools"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected docker plugin to be accepted, got: %v", err)
+	}
+	p := cfg.Plugins["sandboxed"]
+	if p.Image != "ghcr.io/example/plugin:latest" {
+		t.Errorf("Image = %q, want ghcr.io/example/plugin:latest", p.Image)
+	}
+	if p.MemoryLimit != "256m" {
+		t.Errorf("MemoryLimit = %q, want 256m", p.MemoryLimit)
+	}
+	if p.CPULimit != "0.5" {
+		t.Errorf("CPULimit = %q, want 0.5", p.CPULimit)
+	}
+}
+
+func TestParse_PluginDockerMissingImage_ReturnsError(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[plugins.bad-docker]
+type         = "docker"
+command      = "something"
 capabilities = ["tools"]
 `)
 
 	_, err := Parse(tomlData)
-	if err != nil {
-		t.Fatalf("expected docker type to be accepted in config, got: %v", err)
+	if err == nil {
+		t.Fatal("expected error for docker plugin without image, got nil")
 	}
 }
 
@@ -1626,5 +1651,57 @@ func TestDefaultConfigPath(t *testing.T) {
 	want := filepath.Join(home, ".denkeeper", "denkeeper.toml")
 	if got != want {
 		t.Errorf("DefaultConfigPath() = %q, want %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Security config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_SecurityConfig_Defaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Security.AllowUnsigned == nil || !*cfg.Security.AllowUnsigned {
+		t.Error("expected AllowUnsigned to default to true")
+	}
+	if len(cfg.Security.TrustedKeys) != 0 {
+		t.Errorf("expected no trusted keys by default, got %d", len(cfg.Security.TrustedKeys))
+	}
+}
+
+func TestParse_SecurityConfig_ExplicitValues(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[security]
+trusted_keys = ["~/.denkeeper/keys/pub1.pub", "~/.denkeeper/keys/pub2.pub"]
+allow_unsigned = false
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Security.TrustedKeys) != 2 {
+		t.Fatalf("expected 2 trusted keys, got %d", len(cfg.Security.TrustedKeys))
+	}
+	if cfg.Security.TrustedKeys[0] != "~/.denkeeper/keys/pub1.pub" {
+		t.Errorf("trusted_keys[0] = %q, want ~/.denkeeper/keys/pub1.pub", cfg.Security.TrustedKeys[0])
+	}
+	if cfg.Security.AllowUnsigned == nil || *cfg.Security.AllowUnsigned {
+		t.Error("expected AllowUnsigned to be false")
+	}
+}
+
+func TestParse_SecurityConfig_AllowUnsignedTrue(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[security]
+allow_unsigned = true
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Security.AllowUnsigned == nil || !*cfg.Security.AllowUnsigned {
+		t.Error("expected AllowUnsigned to be true")
 	}
 }

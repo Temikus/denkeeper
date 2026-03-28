@@ -254,7 +254,20 @@ func runServe(_ *cobra.Command, _ []string) error {
 			existingToolNames[name] = true
 		}
 
-		pluginMgr := plugin.NewManager(logger)
+		// Set up plugin signature verification if trusted keys are configured.
+		var verifyOpts *plugin.VerifyOpts
+		if len(cfg.Security.TrustedKeys) > 0 {
+			trustedKeys, keyErr := security.LoadTrustedKeys(cfg.Security.TrustedKeys)
+			if keyErr != nil {
+				return fmt.Errorf("loading trusted plugin keys: %w", keyErr)
+			}
+			verifyOpts = &plugin.VerifyOpts{
+				TrustedKeys:   trustedKeys,
+				AllowUnsigned: cfg.Security.AllowUnsigned != nil && *cfg.Security.AllowUnsigned,
+			}
+		}
+
+		pluginMgr := plugin.NewManager(logger, verifyOpts)
 		if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
 			return fmt.Errorf("loading plugins: %w", err)
 		}

@@ -2,30 +2,40 @@ package plugin
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/security"
 )
 
 // mockToolRegistrar records RegisterServer calls and can simulate failures.
 type mockToolRegistrar struct {
-	registered []string
+	registered []registeredServer
 	failNames  map[string]bool
 }
 
-func (m *mockToolRegistrar) RegisterServer(_ context.Context, name, _ string, _ []string, _ map[string]string) error {
+type registeredServer struct {
+	name    string
+	command string
+	args    []string
+}
+
+func (m *mockToolRegistrar) RegisterServer(_ context.Context, name, command string, args []string, _ map[string]string) error {
 	if m.failNames[name] {
 		return errors.New("mock: simulated failure")
 	}
-	m.registered = append(m.registered, name)
+	m.registered = append(m.registered, registeredServer{name: name, command: command, args: args})
 	return nil
 }
 
 func newTestManager() *Manager {
-	return NewManager(slog.Default())
+	return NewManager(slog.Default(), nil)
 }
 
 func TestLoad_SubprocessWithToolsCapability_Succeeds(t *testing.T) {
@@ -42,18 +52,76 @@ func TestLoad_SubprocessWithToolsCapability_Succeeds(t *testing.T) {
 	}
 }
 
-func TestLoad_DockerType_ReturnsNotImplementedError(t *testing.T) {
+func TestLoad_DockerType_Succeeds(t *testing.T) {
 	mgr := newTestManager()
 	plugins := map[string]config.PluginConfig{
-		"docker-plugin": {Type: "docker", Command: "some-image", Capabilities: []string{"tools"}},
+		"docker-plugin": {
+			Type:         "docker",
+			Image:        "myregistry/mcp-plugin:v1",
+			MemoryLimit:  "256m",
+			CPULimit:     "0.5",
+			Network:      "none",
+			Capabilities: []string{"tools"},
+		},
+	}
+
+	// This test will fail if Docker is not on PATH, which is expected in CI.
+	// We override checkDockerAvailable by testing Load with a subprocess-only variant
+	// or accept the failure gracefully.
+	err := mgr.Load(plugins, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "docker CLI not found") {
+			t.Skip("docker not available, skipping")
+		}
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if mgr.Count() != 1 {
+		t.Fatalf("expected Count() == 1, got %d", mgr.Count())
+	}
+	p := mgr.plugins[0]
+	if p.Image != "myregistry/mcp-plugin:v1" {
+		t.Errorf("expected image 'myregistry/mcp-plugin:v1', got %q", p.Image)
+	}
+	if p.Network != "none" {
+		t.Errorf("expected network 'none', got %q", p.Network)
+	}
+}
+
+func TestLoad_DockerType_MissingImage_ReturnsError(t *testing.T) {
+	mgr := newTestManager()
+	plugins := map[string]config.PluginConfig{
+		"bad-docker": {Type: "docker", Command: "something", Capabilities: []string{"tools"}},
 	}
 
 	err := mgr.Load(plugins, nil)
 	if err == nil {
-		t.Fatal("expected error for docker type, got nil")
+		t.Fatal("expected error for missing image, got nil")
 	}
-	if got := err.Error(); !strings.Contains(got, "not yet implemented") {
-		t.Errorf("expected error to contain 'not yet implemented', got: %s", got)
+	if !strings.Contains(err.Error(), "image is required") {
+		t.Errorf("expected error about missing image, got: %s", err.Error())
+	}
+}
+
+func TestLoad_DockerType_DefaultsNetworkToNone(t *testing.T) {
+	mgr := newTestManager()
+	plugins := map[string]config.PluginConfig{
+		"docker-plugin": {
+			Type:         "docker",
+			Image:        "test:latest",
+			Capabilities: []string{"tools"},
+			// Network intentionally omitted.
+		},
+	}
+
+	err := mgr.Load(plugins, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "docker CLI not found") {
+			t.Skip("docker not available, skipping")
+		}
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if mgr.plugins[0].Network != "none" {
+		t.Errorf("expected default network 'none', got %q", mgr.plugins[0].Network)
 	}
 }
 
@@ -136,6 +204,79 @@ func TestStart_ToolsCapability_RegistersWithToolManager(t *testing.T) {
 	}
 }
 
+func TestStart_DockerPlugin_RegistersAsDockerRun(t *testing.T) {
+	mgr := newTestManager()
+	// Manually load a Docker plugin (skip Load to avoid Docker CLI check).
+	mgr.plugins = []Plugin{
+		{
+			Name:         "docker-mcp",
+			Type:         TypeDocker,
+			Image:        "mcp-plugin:latest",
+			MemoryLimit:  "128m",
+			CPULimit:     "0.5",
+			Network:      "none",
+			Capabilities: []Capability{CapabilityTools},
+			Env:          map[string]string{"API_KEY": "test123"},
+		},
+	}
+
+	mock := &mockToolRegistrar{}
+	if err := mgr.Start(context.Background(), mock); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(mock.registered) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(mock.registered))
+	}
+
+	reg := mock.registered[0]
+	if reg.command != "docker" {
+		t.Errorf("expected command 'docker', got %q", reg.command)
+	}
+
+	// Verify key docker run flags are present in args.
+	argsStr := strings.Join(reg.args, " ")
+	for _, expected := range []string{"run", "--rm", "-i", "--network none", "--memory 128m", "--cpus 0.5", "--cap-drop ALL", "--read-only", "mcp-plugin:latest"} {
+		if !strings.Contains(argsStr, expected) {
+			t.Errorf("expected args to contain %q, got: %s", expected, argsStr)
+		}
+	}
+	if !strings.Contains(argsStr, "-e API_KEY=test123") {
+		t.Errorf("expected args to contain env var, got: %s", argsStr)
+	}
+}
+
+func TestStart_DockerPlugin_WithCommandOverride(t *testing.T) {
+	mgr := newTestManager()
+	mgr.plugins = []Plugin{
+		{
+			Name:         "docker-custom",
+			Type:         TypeDocker,
+			Image:        "mcp-plugin:latest",
+			Command:      "/usr/local/bin/custom-entrypoint",
+			Args:         []string{"--verbose"},
+			Network:      "bridge",
+			Capabilities: []Capability{CapabilityTools},
+		},
+	}
+
+	mock := &mockToolRegistrar{}
+	if err := mgr.Start(context.Background(), mock); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	reg := mock.registered[0]
+	argsStr := strings.Join(reg.args, " ")
+	if !strings.Contains(argsStr, "--network bridge") {
+		t.Errorf("expected network bridge, got: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "/usr/local/bin/custom-entrypoint") {
+		t.Errorf("expected command override in args, got: %s", argsStr)
+	}
+	if !strings.Contains(argsStr, "--verbose") {
+		t.Errorf("expected plugin args, got: %s", argsStr)
+	}
+}
+
 func TestStart_PluginFailure_LogsErrorAndContinues(t *testing.T) {
 	mgr := newTestManager()
 	plugins := map[string]config.PluginConfig{
@@ -152,7 +293,7 @@ func TestStart_PluginFailure_LogsErrorAndContinues(t *testing.T) {
 		t.Fatal("expected error from failing plugin, got nil")
 	}
 	// The successful plugin should still be registered.
-	if len(mock.registered) != 1 || mock.registered[0] != "plugin-ok" {
+	if len(mock.registered) != 1 || mock.registered[0].name != "plugin-ok" {
 		t.Errorf("expected 'plugin-ok' to be registered, got: %v", mock.registered)
 	}
 }
@@ -176,3 +317,183 @@ func TestStart_NoEffectiveCapability_DoesNotRegister(t *testing.T) {
 	}
 }
 
+func TestBuildDockerArgs_FullConfig(t *testing.T) {
+	p := Plugin{
+		Image:       "mcp-server:v2",
+		MemoryLimit: "512m",
+		CPULimit:    "1.0",
+		Network:     "host",
+		Volumes:     []string{"/data:/mnt/data:ro"},
+		Env:         map[string]string{"TOKEN": "abc"},
+		Command:     "/bin/serve",
+		Args:        []string{"--port", "9000"},
+	}
+
+	args := buildDockerArgs(p)
+	argsStr := strings.Join(args, " ")
+
+	for _, expected := range []string{
+		"run", "--rm", "-i",
+		"--network host",
+		"--memory 512m",
+		"--cpus 1.0",
+		"--cap-drop ALL",
+		"--read-only",
+		"--security-opt no-new-privileges",
+		"-v /data:/mnt/data:ro",
+		"-e TOKEN=abc",
+		"mcp-server:v2",
+		"/bin/serve",
+		"--port", "9000",
+	} {
+		if !strings.Contains(argsStr, expected) {
+			t.Errorf("expected args to contain %q, got: %s", expected, argsStr)
+		}
+	}
+}
+
+func TestBuildDockerArgs_MinimalConfig(t *testing.T) {
+	p := Plugin{
+		Image: "simple-mcp:latest",
+	}
+
+	args := buildDockerArgs(p)
+	argsStr := strings.Join(args, " ")
+
+	if !strings.Contains(argsStr, "--network none") {
+		t.Errorf("expected default network none, got: %s", argsStr)
+	}
+	if strings.Contains(argsStr, "--memory") {
+		t.Errorf("expected no --memory flag, got: %s", argsStr)
+	}
+	if strings.Contains(argsStr, "--cpus") {
+		t.Errorf("expected no --cpus flag, got: %s", argsStr)
+	}
+	// Image should be the last positional arg before any command.
+	if !strings.Contains(argsStr, "simple-mcp:latest") {
+		t.Errorf("expected image in args, got: %s", argsStr)
+	}
+}
+
+// --- Signature verification tests ---
+
+func TestLoad_SignedPlugin_Verified(t *testing.T) {
+	// Create a fake plugin binary and sign it.
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "signed-plugin")
+	if err := os.WriteFile(pluginPath, []byte("#!/bin/sh\necho hello"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	pub, priv, err := security.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	if err := security.SignFile(priv, pluginPath); err != nil {
+		t.Fatalf("SignFile: %v", err)
+	}
+
+	opts := &VerifyOpts{
+		TrustedKeys:   []ed25519.PublicKey{pub},
+		AllowUnsigned: false,
+	}
+	mgr := NewManager(slog.Default(), opts)
+	plugins := map[string]config.PluginConfig{
+		"signed": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
+	}
+
+	if err := mgr.Load(plugins, nil); err != nil {
+		t.Fatalf("Load should succeed for signed plugin: %v", err)
+	}
+}
+
+func TestLoad_UnsignedPlugin_RejectedWhenRequired(t *testing.T) {
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "unsigned-plugin")
+	if err := os.WriteFile(pluginPath, []byte("#!/bin/sh\necho hello"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	pub, _, _ := security.GenerateKeyPair()
+	opts := &VerifyOpts{
+		TrustedKeys:   []ed25519.PublicKey{pub},
+		AllowUnsigned: false,
+	}
+	mgr := NewManager(slog.Default(), opts)
+	plugins := map[string]config.PluginConfig{
+		"unsigned": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
+	}
+
+	err := mgr.Load(plugins, nil)
+	if err == nil {
+		t.Fatal("expected error for unsigned plugin when allow_unsigned=false")
+	}
+	if !strings.Contains(err.Error(), "signature verification failed") {
+		t.Errorf("expected signature verification error, got: %v", err)
+	}
+}
+
+func TestLoad_UnsignedPlugin_AllowedWhenPermitted(t *testing.T) {
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "unsigned-plugin")
+	if err := os.WriteFile(pluginPath, []byte("#!/bin/sh\necho hello"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	pub, _, _ := security.GenerateKeyPair()
+	opts := &VerifyOpts{
+		TrustedKeys:   []ed25519.PublicKey{pub},
+		AllowUnsigned: true,
+	}
+	mgr := NewManager(slog.Default(), opts)
+	plugins := map[string]config.PluginConfig{
+		"unsigned": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
+	}
+
+	if err := mgr.Load(plugins, nil); err != nil {
+		t.Fatalf("Load should succeed when allow_unsigned=true: %v", err)
+	}
+}
+
+func TestLoad_NoVerifyOpts_SkipsVerification(t *testing.T) {
+	mgr := NewManager(slog.Default(), nil)
+	plugins := map[string]config.PluginConfig{
+		"unverified": {Type: "subprocess", Command: "/usr/bin/whatever", Capabilities: []string{"tools"}},
+	}
+
+	if err := mgr.Load(plugins, nil); err != nil {
+		t.Fatalf("Load should succeed without verify opts: %v", err)
+	}
+}
+
+func TestLoad_VerifyBinary_CommandNotOnPath_SkipsVerification(t *testing.T) {
+	pub, _, _ := security.GenerateKeyPair()
+	opts := &VerifyOpts{
+		TrustedKeys:   []ed25519.PublicKey{pub},
+		AllowUnsigned: false,
+	}
+	mgr := NewManager(slog.Default(), opts)
+	plugins := map[string]config.PluginConfig{
+		// Command that won't be found on PATH — verifyBinary should skip (not error).
+		"missing-binary": {Type: "subprocess", Command: "nonexistent-binary-12345", Capabilities: []string{"tools"}},
+	}
+
+	if err := mgr.Load(plugins, nil); err != nil {
+		t.Fatalf("Load should succeed when binary not on PATH (deferred check): %v", err)
+	}
+}
+
+func TestLoad_UnsupportedType_ReturnsError(t *testing.T) {
+	mgr := newTestManager()
+	plugins := map[string]config.PluginConfig{
+		"bad-type": {Type: "kubernetes", Command: "whatever", Capabilities: []string{"tools"}},
+	}
+
+	err := mgr.Load(plugins, nil)
+	if err == nil {
+		t.Fatal("expected error for unsupported type, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported type") {
+		t.Errorf("expected 'unsupported type' in error, got: %v", err)
+	}
+}

@@ -54,3 +54,8 @@ internal/web/dist/
 
 # Node.js
 web/node_modules/
+website/node_modules/
+website/public/
+website/resources/
+website/.hugo_build.lock
+hugo_stats.json

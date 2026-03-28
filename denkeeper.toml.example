@@ -253,26 +253,71 @@ format = "text"
 # ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
-# Plugins are enhanced subprocess wrappers that declare their capabilities
-# explicitly. Unlike [tools.*] entries (raw MCP servers), plugins participate
-# in permission checks and lifecycle management.
+# Plugins declare capabilities explicitly and participate in permission checks
+# and lifecycle management. Two execution strategies:
 #
-# Required fields:
-#   type         - execution strategy; currently only "subprocess" is supported
-#                  ("docker" sandboxing is planned for a future release)
-#   command      - path to the plugin binary
-#   capabilities - list of contracts the plugin satisfies; currently only "tools"
-#                  is meaningful (registers the plugin as an MCP server)
+#   "subprocess" — trusted, runs as a child process with direct MCP stdio
+#   "docker"     — sandboxed, runs in a Docker/Podman container with isolation
 #
-# Optional fields:
-#   args         - command-line arguments passed to the plugin binary
+# Subprocess required fields:
+#   type, command, capabilities
+#
+# Docker required fields:
+#   type, image, capabilities
+#
+# Docker optional fields:
+#   command      - entrypoint override (default: image ENTRYPOINT)
+#   args         - arguments passed to the entrypoint
+#   memory_limit - container memory limit (e.g. "256m", "1g")
+#   cpu_limit    - container CPU limit (e.g. "0.5", "2")
+#   network      - Docker network mode (default: "none" — fully isolated)
+#   volumes      - bind mounts in Docker format ("host:container[:ro]")
+#
+# Common optional fields:
+#   args         - command-line arguments
 #   env          - environment variable overrides (values support $VAR expansion)
 #
 # Plugin names must not conflict with [tools.*] entry names.
 
+# --- Subprocess plugin (trusted) ---
 # [plugins.web-scraper]
 # type         = "subprocess"
 # command      = "denkeeper-plugin-scraper"
 # args         = ["--headless"]
 # env          = { CHROMIUM_PATH = "/usr/bin/chromium" }
 # capabilities = ["tools"]
+
+# --- Docker plugin (sandboxed) ---
+# Requires Docker or Podman on the host.
+# The container runs with --cap-drop ALL, --read-only, --network none by default.
+# [plugins.code-runner]
+# type         = "docker"
+# image        = "ghcr.io/example/mcp-code-runner:latest"
+# memory_limit = "256m"
+# cpu_limit    = "0.5"
+# network      = "none"
+# volumes      = ["/tmp/denkeeper-data:/data:ro"]
+# env          = { API_KEY = "$CODE_RUNNER_KEY" }
+# capabilities = ["tools"]
+
+# ---------------------------------------------------------------------------
+# Security — Plugin Signature Verification
+# ---------------------------------------------------------------------------
+# When trusted_keys is configured, denkeeper verifies Ed25519 signatures of
+# subprocess plugin binaries on startup. Each plugin binary must have a
+# matching .sig file alongside it.
+#
+# Generate a signing key pair:
+#   denkeeper plugin keygen --out ~/.denkeeper/keys/publisher
+#   # Creates publisher.pub (distribute) and publisher.key (keep secret)
+#
+# Sign a plugin:
+#   denkeeper plugin sign --key ~/.denkeeper/keys/publisher.key /usr/bin/my-plugin
+#   # Creates /usr/bin/my-plugin.sig
+#
+# allow_unsigned = true  (default) — unsigned plugins produce a warning
+# allow_unsigned = false — unsigned plugins are rejected at startup
+
+# [security]
+# trusted_keys  = ["~/.denkeeper/keys/publisher.pub"]
+# allow_unsigned = true

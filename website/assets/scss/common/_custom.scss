@@ -1,0 +1,17 @@
+// Put your custom SCSS code here
+body {
+  background-image: var(--bg-gradient);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-size: 1rem;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  padding-bottom: 3rem;
+}
+
+h1, p {
+  margin: 0 0 1rem;
+}
