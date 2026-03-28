@@ -1,17 +1,50 @@
 // Put your custom SCSS code here
-body {
-  background-image: var(--bg-gradient);
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  font-size: 1rem;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+
+// Hero section on homepage
+.section-hero {
+  padding-top: 4rem;
   padding-bottom: 3rem;
+
+  h1 {
+    font-size: 2.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 1.5rem;
+  }
+
+  .lead {
+    font-size: 1.25rem;
+    color: var(--bs-secondary-color);
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
 }
 
-h1, p {
-  margin: 0 0 1rem;
+// Feature cards on homepage
+.section-features {
+  .feature-icon {
+    font-size: 2rem;
+    margin-bottom: 0.75rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  p {
+    color: var(--bs-secondary-color);
+  }
+}
+
+// Install snippet styling
+.install-command {
+  max-width: 560px;
+  margin-left: auto;
+  margin-right: auto;
+
+  pre {
+    border-radius: 0.5rem;
+  }
 }

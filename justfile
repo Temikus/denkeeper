@@ -102,11 +102,11 @@ clean-ui:
 
 # Build the documentation website
 build-website:
-    cd website && npm install && npm run build
+    cd website && rm -rf resources/_gen && npm install && npm run build
 
 # Run the Hugo dev server for the documentation website
 dev-website:
-    cd website && npm install && npm run dev
+    cd website && rm -rf resources/_gen && npm install && npm run dev
 
 # Count lines of Go code (source and test separately)
 loc:

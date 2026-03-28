@@ -37,13 +37,13 @@
   source = "archetypes"
   target = "archetypes"
 
-## assets — doks-core assets, then thulite core, then project overrides (last wins)
+## assets — thulite core first, then doks-core overrides, then project overrides (last wins)
 [[mounts]]
-  source = "node_modules/@thulite/doks-core/assets"
+  source = "node_modules/@thulite/core/assets"
   target = "assets"
 
 [[mounts]]
-  source = "node_modules/@thulite/core/assets"
+  source = "node_modules/@thulite/doks-core/assets"
   target = "assets"
 
 [[mounts]]
