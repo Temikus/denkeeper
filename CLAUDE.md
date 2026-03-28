@@ -22,10 +22,10 @@ just check                    # fmt-check + vet + lint + test (CI equivalent)
 Denkeeper is a single-binary personal AI agent with multi-agent routing. Messages flow through:
 
 ```
-Adapter (Telegram) → Dispatcher → Engine (per agent) → LLM Router → Provider (OpenRouter)
-                                       ↕                    ↕
-                                   MemoryStore          CostTracker
-                                   (SQLite)
+Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenRouter/Ollama)
+                                               ↕                    ↕
+                                           MemoryStore          CostTracker
+                                           (SQLite)
 ```
 
 **Dispatcher** (`internal/agent/dispatcher.go`) routes incoming messages to the correct Engine based on adapter bindings (`"telegram"` wildcard or `"telegram:12345"` specific). Falls back to the `"default"` agent.
@@ -38,8 +38,8 @@ The pipeline steps are: check permissions → get/create conversation → store 
 
 **Three key interfaces** define the extension points:
 
-- `adapter.Adapter` — platform integrations (Telegram implemented; add new ones here)
-- `llm.Provider` — LLM backends (OpenRouter and Ollama implemented; add new ones under `internal/llm/`)
+- `adapter.Adapter` — platform integrations (Telegram and Discord implemented; add new ones here)
+- `llm.Provider` — LLM backends (Anthropic, OpenRouter, and Ollama implemented; add new ones under `internal/llm/`)
 - `agent.MemoryStore` — conversation persistence (SQLite implemented)
 
 **Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters` (bindings), `llm_model` (optional override), and `session_tier` (optional override). Backward compatible: if no `[[agents]]` section exists, a single `"default"` agent is synthesized from `[agent]`/`[session]`.
@@ -144,7 +144,7 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` at build time via `//go:embed dist`.
 
 - Served at the root path when `[api] enabled = true`.
-- 7 pages: Login, Overview, Approvals, Sessions, Schedules, Skills, Agents.
+- 9 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Agents, API Keys.
 - Agent detail page shows persona directory, loaded sections (soul/user/memory), and MCP tool names.
 - **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. The CI workflows already handle this.
 - Local dev: `just build-ui` (build once) or `just web-dev` (Vite dev server with hot-reload). `just build-full` builds web then binary in one step.

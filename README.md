@@ -105,7 +105,7 @@ cosign verify \
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
-- **Plugin system** — subprocess plugins with capability declarations; tools capability wires plugin tools into the agent's LLM loop
+- **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, agent context viewer, and API key management
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
@@ -179,7 +179,8 @@ Key sections:
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
 | `[tools.*]` | MCP tool server definitions |
-| `[plugins.*]` | Subprocess plugin definitions (capability declarations) |
+| `[plugins.*]` | Plugin definitions — subprocess or Docker-sandboxed (capability declarations) |
+| `[security]` | Ed25519 plugin signing config (`trusted_keys`, `allow_unsigned`) |
 | `[voice]` | STT/TTS configuration (OpenAI) |
 | `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys with scopes) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
@@ -279,6 +280,8 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/health` | — | Health check (no auth) |
+| `GET` | `/api/v1/setup` | — | First-run setup status |
+| `POST` | `/api/v1/setup` | — | Initialize first-run configuration |
 | `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
 | `GET` | `/api/v1/sessions` | `sessions:read` | List all conversations |
 | `GET` | `/api/v1/sessions/{id}/messages` | `sessions:read` | Get messages for a session |
@@ -293,6 +296,11 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/approvals/{id}` | `approvals:read` | Get a single approval request |
 | `POST` | `/api/v1/approvals/{id}/approve` | `approvals:write` | Approve a pending request |
 | `POST` | `/api/v1/approvals/{id}/deny` | `approvals:write` | Deny a pending request |
+| `GET` | `/api/v1/keys` | `admin` | List API keys (secrets not returned) |
+| `POST` | `/api/v1/keys` | `admin` | Create a new API key |
+| `DELETE` | `/api/v1/keys/{id}` | `admin` | Revoke an API key |
+| `DELETE` | `/api/v1/keys/{id}/permanent` | `admin` | Permanently delete a revoked key |
+| `POST` | `/api/v1/keys/{id}/rotate` | `admin` | Rotate an API key |
 
 **Chat example:**
 
@@ -357,9 +365,9 @@ internal/
     openrouter/      OpenRouter client
     ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
-  plugin/            Subprocess plugin manager
+  plugin/            Plugin manager (subprocess and Docker-sandboxed)
   scheduler/         Cron and interval scheduling
-  security/          Permission engine (tiers)
+  security/          Permission engine (tiers) and Ed25519 plugin signing
   skill/             Skill file loader, trigger matching, merging
   tool/              MCP tool server manager
   voice/             STT/TTS provider interface
@@ -412,8 +420,10 @@ Denkeeper is built in phases:
 - [x] CI/CD pipeline (golangci-lint, govulncheck, cosign signing, SBOM generation)
 - [x] One-liner install script + systemd service unit
 
-**Phase 5 — Documentation**
-- [ ] Hugo documentation website
+**Phase 5 — Documentation** ✅
+- [x] Hugo documentation website (Hugo + Doks theme, deployed via GitHub Pages at [denkeeper.io](https://denkeeper.io))
+- [x] Getting-started guides, concept docs, and reference pages
+- [x] One-liner install script hosted at `get.denkeeper.io`
 
 ## License
 

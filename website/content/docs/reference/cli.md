@@ -2,7 +2,7 @@
 title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-03-29T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -63,3 +63,11 @@ Lists all API keys with their names, scopes, and creation dates. The key secret 
 | `--name` | Key name to revoke (required) |
 
 Revocation is immediate — the key stops working as soon as the command completes.
+
+### `denkeeper keys delete`
+
+| Flag | Description |
+|---|---|
+| `--name` | Key name to permanently delete (required) |
+
+Permanently removes a revoked key from the database. Only revoked keys can be deleted.

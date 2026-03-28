@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-03-29T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -138,11 +138,26 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `type` | string | *required* | `"subprocess"` |
-| `command` | string | *required* | Plugin binary path |
+| `type` | string | *required* | `"subprocess"` or `"docker"` |
+| `command` | string | *required* | Plugin binary path (subprocess) or Docker image (docker) |
 | `args` | string[] | — | Command-line arguments |
 | `env` | map | — | Environment variable overrides |
 | `capabilities` | string[] | *required* | `["tools"]` |
+| `memory_limit` | string | — | Docker container memory limit (e.g., `"256m"`) |
+| `cpu_limit` | string | — | Docker container CPU limit (e.g., `"0.5"`) |
+| `network` | string | `"none"` | Docker network mode (`"none"`, `"bridge"`, etc.) |
+| `volumes` | string[] | — | Docker bind mounts |
+
+Subprocess plugins run as child processes with direct MCP stdio. Docker plugins run in hardened containers with `--cap-drop ALL`, `--read-only`, `--security-opt no-new-privileges`, and `--network none` by default.
+
+## `[security]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `trusted_keys` | string[] | — | Paths to PEM-encoded Ed25519 public key files |
+| `allow_unsigned` | bool | `true` | Allow unsigned subprocess plugin binaries |
+
+When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
 
 ## `[tools.*]`
 

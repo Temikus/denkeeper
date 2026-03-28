@@ -2,7 +2,7 @@
 title: "Security"
 description: "Denkeeper's security model: threat model, permissions, and sandboxing."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-03-29T00:00:00+00:00
 draft: false
 weight: 50
 toc: true
@@ -20,7 +20,7 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Unauthorized access to the bot | Telegram: `allowed_users` allowlist. Discord: `allowed_users` allowlist. API: scoped bearer tokens |
 | Tool abuse | Permission tiers control tool access; restricted mode limits to read-only tools |
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
-| Plugin escape | Subprocess isolation now, Docker sandboxing planned |
+| Plugin escape | Subprocess isolation and Docker sandboxing (`--cap-drop ALL`, `--read-only`, `--network none`); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
 
 ## Adapter security

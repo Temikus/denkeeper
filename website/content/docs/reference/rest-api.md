@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-03-29T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -60,11 +60,67 @@ data: {"type":"done","session_id":"abc123"}
 
 ## Sessions
 
+### `GET /api/v1/sessions`
+
+**Scope:** `sessions:read`
+
+List all conversations.
+
+### `GET /api/v1/sessions/{id}/messages`
+
+**Scope:** `sessions:read`
+
+Get all messages for a session.
+
 ### `DELETE /api/v1/sessions/{id}`
 
 **Scope:** `sessions:read`
 
 Delete a conversation and all its messages. Returns `204 No Content`. Idempotent.
+
+## Agents
+
+### `GET /api/v1/agents`
+
+**Scope:** `admin`
+
+List all agents with metadata.
+
+### `GET /api/v1/agents/{name}`
+
+**Scope:** `admin`
+
+Get agent details including persona directory, loaded persona sections, and MCP tool names.
+
+## Skills
+
+### `GET /api/v1/skills`
+
+**Scope:** `skills:read`
+
+List all skills across all agents.
+
+### `GET /api/v1/skills/{agent}`
+
+**Scope:** `skills:read`
+
+List skills for a specific agent.
+
+## Schedules
+
+### `GET /api/v1/schedules`
+
+**Scope:** `schedules:read`
+
+List all schedules with next/last run times.
+
+## Costs
+
+### `GET /api/v1/costs`
+
+**Scope:** `costs:read`
+
+Get cost summary.
 
 ## Approvals
 
@@ -92,6 +148,16 @@ Approve a pending request.
 
 Deny a pending request.
 
+## Setup
+
+### `GET /api/v1/setup`
+
+No authentication required. Returns the first-run setup status.
+
+### `POST /api/v1/setup`
+
+No authentication required. Initialize the first-run configuration.
+
 ## API Keys
 
 ### `POST /api/v1/keys`
@@ -106,11 +172,23 @@ Create a new API key. The plaintext key is returned once in the response.
 
 List all API keys (secrets are never returned).
 
-### `DELETE /api/v1/keys/{name}`
+### `DELETE /api/v1/keys/{id}`
 
 **Scope:** `admin`
 
-Revoke an API key by name.
+Revoke an API key by ID.
+
+### `DELETE /api/v1/keys/{id}/permanent`
+
+**Scope:** `admin`
+
+Permanently delete a revoked API key.
+
+### `POST /api/v1/keys/{id}/rotate`
+
+**Scope:** `admin`
+
+Rotate an API key. Returns the new plaintext key once.
 
 ## Authentication
 

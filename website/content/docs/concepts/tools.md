@@ -2,7 +2,7 @@
 title: "Tools (MCP)"
 description: "External tool servers connected via the Model Context Protocol."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-03-29T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -43,3 +43,12 @@ Tool execution respects the agent's permission tier:
 ## Config MCP server
 
 Each agent also has access to a built-in MCP server that exposes Denkeeper's own configuration: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, and `get_permission_tier`.
+
+## Plugins
+
+Plugins extend the agent with external processes. Two execution strategies are available:
+
+- **Subprocess** (`type = "subprocess"`) — trusted plugins run as child processes with direct MCP stdio
+- **Docker** (`type = "docker"`) — sandboxed plugins run in Docker/Podman containers with `--cap-drop ALL`, `--read-only`, `--network none` by default
+
+Subprocess plugins can optionally be verified with Ed25519 signatures. See the [security](/docs/concepts/security/) and [config reference](/docs/reference/config/) pages for details.
