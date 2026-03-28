@@ -143,6 +143,46 @@ func TestKeyStore_Revoke_AlreadyRevoked(t *testing.T) {
 	}
 }
 
+func TestKeyStore_Delete(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+
+	rec, _, _ := ks.Create(ctx, "deleteme", []string{"chat"})
+	_ = ks.Revoke(ctx, rec.ID)
+
+	if err := ks.Delete(ctx, rec.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Should be completely gone from List.
+	recs, _ := ks.List(ctx)
+	for _, r := range recs {
+		if r.ID == rec.ID {
+			t.Error("deleted key should not appear in List")
+		}
+	}
+}
+
+func TestKeyStore_Delete_ActiveKey(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+
+	rec, _, _ := ks.Create(ctx, "still-active", []string{"chat"})
+
+	if err := ks.Delete(ctx, rec.ID); err == nil {
+		t.Error("expected error deleting an active (non-revoked) key")
+	}
+}
+
+func TestKeyStore_Delete_NotFound(t *testing.T) {
+	ks := testKeyStore(t)
+	ctx := context.Background()
+
+	if err := ks.Delete(ctx, "nonexistent"); err == nil {
+		t.Error("expected error deleting a nonexistent key")
+	}
+}
+
 func TestKeyStore_Rotate(t *testing.T) {
 	ks := testKeyStore(t)
 	ctx := context.Background()
@@ -293,6 +333,66 @@ func TestHandleRevokeKey_NotFound(t *testing.T) {
 	srv := New(testAdminConfig(), deps, testLogger())
 
 	req := httptest.NewRequest("DELETE", "/api/v1/keys/nonexistent-id", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleDeleteKey(t *testing.T) {
+	ks := testKeyStore(t)
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(testAdminConfig(), deps, testLogger())
+
+	ctx := context.Background()
+	rec, _, _ := ks.Create(ctx, "todelete", []string{"chat"})
+	_ = ks.Revoke(ctx, rec.ID) // must be revoked first
+
+	req := httptest.NewRequest("DELETE", "/api/v1/keys/"+rec.ID+"/permanent", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+
+	// Verify it's gone from the list.
+	keys, _ := ks.List(ctx)
+	for _, k := range keys {
+		if k.ID == rec.ID {
+			t.Fatal("deleted key still present in list")
+		}
+	}
+}
+
+func TestHandleDeleteKey_ActiveKeyRejected(t *testing.T) {
+	ks := testKeyStore(t)
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(testAdminConfig(), deps, testLogger())
+
+	ctx := context.Background()
+	rec, _, _ := ks.Create(ctx, "active", []string{"chat"})
+
+	req := httptest.NewRequest("DELETE", "/api/v1/keys/"+rec.ID+"/permanent", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for active key", w.Code)
+	}
+}
+
+func TestHandleDeleteKey_NotFound(t *testing.T) {
+	ks := testKeyStore(t)
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(testAdminConfig(), deps, testLogger())
+
+	req := httptest.NewRequest("DELETE", "/api/v1/keys/nonexistent/permanent", nil)
 	req.Header.Set("Authorization", "Bearer admin-token")
 	w := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(w, req)
