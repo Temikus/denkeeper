@@ -483,6 +483,34 @@ func TestLoad_VerifyBinary_CommandNotOnPath_SkipsVerification(t *testing.T) {
 	}
 }
 
+func TestStart_EmptyPluginList_NoError(t *testing.T) {
+	mgr := newTestManager()
+	mock := &mockToolRegistrar{}
+	if err := mgr.Start(context.Background(), mock); err != nil {
+		t.Fatalf("expected no error for empty plugin list, got: %v", err)
+	}
+	if len(mock.registered) != 0 {
+		t.Errorf("expected no registrations, got %d", len(mock.registered))
+	}
+}
+
+func TestStart_MultipleFailures_ReturnsFirstError(t *testing.T) {
+	mgr := newTestManager()
+	mgr.plugins = []Plugin{
+		{Name: "fail-1", Type: TypeSubprocess, Command: "/usr/bin/fail1", Capabilities: []Capability{CapabilityTools}},
+		{Name: "fail-2", Type: TypeSubprocess, Command: "/usr/bin/fail2", Capabilities: []Capability{CapabilityTools}},
+	}
+
+	mock := &mockToolRegistrar{failNames: map[string]bool{"fail-1": true, "fail-2": true}}
+	err := mgr.Start(context.Background(), mock)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "fail-1") {
+		t.Errorf("expected first error to reference 'fail-1', got: %v", err)
+	}
+}
+
 func TestLoad_UnsupportedType_ReturnsError(t *testing.T) {
 	mgr := newTestManager()
 	plugins := map[string]config.PluginConfig{

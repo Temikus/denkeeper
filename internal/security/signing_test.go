@@ -335,3 +335,60 @@ func TestParsePrivateKeyPEM_NoPEMBlock(t *testing.T) {
 		t.Fatal("expected error for non-PEM data, got nil")
 	}
 }
+
+func TestSignFile_FileNotFound(t *testing.T) {
+	_, priv, _ := GenerateKeyPair()
+	err := SignFile(priv, "/nonexistent/path/plugin")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+func TestVerifyFile_FileNotFound(t *testing.T) {
+	pub, _, _ := GenerateKeyPair()
+	err := VerifyFile([]ed25519.PublicKey{pub}, "/nonexistent/path/plugin")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+func TestVerifyFile_EmptyTrustedKeys(t *testing.T) {
+	dir := t.TempDir()
+	pluginPath := filepath.Join(dir, "plugin")
+	if err := os.WriteFile(pluginPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, priv, _ := GenerateKeyPair()
+	if err := SignFile(priv, pluginPath); err != nil {
+		t.Fatalf("SignFile: %v", err)
+	}
+
+	err := VerifyFile([]ed25519.PublicKey{}, pluginPath)
+	if err == nil {
+		t.Fatal("expected error when no trusted keys provided, got nil")
+	}
+}
+
+func TestLoadTrustedKeys_EmptyPaths(t *testing.T) {
+	keys, err := LoadTrustedKeys([]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys, got %d", len(keys))
+	}
+}
+
+func TestLoadTrustedKeys_MixedValidInvalid(t *testing.T) {
+	pub, _, _ := GenerateKeyPair()
+	dir := t.TempDir()
+	validPath := filepath.Join(dir, "valid.pub")
+	if err := os.WriteFile(validPath, MarshalPublicKeyPEM(pub), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadTrustedKeys([]string{validPath, "/nonexistent/key.pub"})
+	if err == nil {
+		t.Fatal("expected error when second path is invalid, got nil")
+	}
+}

@@ -70,7 +70,20 @@ func TestHandler_ImmutableCacheOnHashedAsset(t *testing.T) {
 		t.Skip("no hashed assets in dist — run 'just build-ui' first")
 	}
 
-	assetPath := "/assets/" + entries[0].Name()
+	// Pick the first entry whose name contains no spaces (iCloud sync
+	// duplicates like "file 2.js" break URL construction).
+	var assetName string
+	for _, e := range entries {
+		if !strings.Contains(e.Name(), " ") {
+			assetName = e.Name()
+			break
+		}
+	}
+	if assetName == "" {
+		t.Skip("no usable hashed asset found (all contain spaces)")
+	}
+
+	assetPath := "/assets/" + assetName
 	h := Handler()
 	req := httptest.NewRequest(http.MethodGet, assetPath, nil)
 	rec := httptest.NewRecorder()
