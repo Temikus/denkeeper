@@ -1,5 +1,5 @@
 title = "Denkeeper"
-description = "A security-first, single-binary personal AI agent. Runs on a Raspberry Pi."
+description = "A security-first, single-binary personal AI agent with a small footprint."
 images = ["cover.png"]
 
 [doks]

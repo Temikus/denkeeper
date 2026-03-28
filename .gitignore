@@ -59,3 +59,4 @@ website/public/
 website/resources/
 website/.hugo_build.lock
 hugo_stats.json
+.hugo_build.lock
