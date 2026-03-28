@@ -13,6 +13,12 @@ body.home .navbar {
   border-bottom: 0;
 }
 
+// ---- Navbar logo ----
+.navbar-logo {
+  margin-right: 0.4rem;
+  vertical-align: -0.15em;
+}
+
 // ---- Hero section ----
 .section-hero {
   padding-top: 5rem;
@@ -25,6 +31,10 @@ body.home .navbar {
     margin-left: auto;
     margin-right: auto;
     line-height: 1.7;
+  }
+
+  .hero-logo {
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
   }
 
   .btn-cta {
@@ -134,9 +144,20 @@ body.home .navbar {
   }
 }
 
-// ---- Footer warm tinting ----
+// ---- Footer ----
 .footer {
   border-top: 1px solid #e8dcc8;
+}
+
+.footer-brand a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.footer-logo {
+  vertical-align: -0.15em;
 }
 
 // ---- Dark mode overrides ----

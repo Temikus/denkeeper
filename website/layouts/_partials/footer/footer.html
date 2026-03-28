@@ -1,0 +1,24 @@
+<footer class="footer text-muted">
+  <div class="container-{{ site.Params.doks.containerBreakpoint | default "lg" }}">
+    <div class="row align-items-center">
+      <div class="col-lg-8 text-lg-start">
+        <ul class="list-inline mb-lg-0">
+          <li class="list-inline-item footer-brand">
+            <a href="{{ relLangURL "" }}">
+              <img src="/logo.png" alt="Denkeeper" width="20" height="20" class="footer-logo">
+              <span class="text-muted">{{ .Site.Title }}</span>
+            </a>
+          </li>
+          {{ range .Site.Menus.footer -}}
+            <li class="list-inline-item"><a class="text-muted" href="{{ .URL | relURL }}">{{ .Name }}</a></li>
+          {{- end }}
+        </ul>
+      </div>
+      <div class="col-lg-8 text-lg-end">
+        <ul class="list-inline mb-0">
+          <li class="list-inline-item">{{ site.Params.footer | safeHTML }}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</footer>
