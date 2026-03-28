@@ -50,7 +50,7 @@
     <button
       class="filter-btn"
       class:active={filter === f}
-      on:click={() => { filter = f; load() }}
+      onclick={() => { filter = f; load() }}
     >{filterLabels[f]}</button>
   {/each}
 </div>
@@ -79,8 +79,8 @@
           <td class="date">{fmtDate(a.expires_at)}</td>
           <td class="actions">
             {#if a.status === 'pending'}
-              <button class="btn-ok"  on:click={() => resolve(a.id, true)}>Approve</button>
-              <button class="btn-bad" on:click={() => resolve(a.id, false)}>Deny</button>
+              <button class="btn-ok"  onclick={() => resolve(a.id, true)}>Approve</button>
+              <button class="btn-bad" onclick={() => resolve(a.id, false)}>Deny</button>
             {/if}
           </td>
         </tr>

@@ -104,7 +104,7 @@
 <div class="page">
   <div class="header">
     <h1>API Keys</h1>
-    <button class="btn-primary" on:click={() => { showCreate = true; newKeyPlaintext = ''; rotatedKey = '' }}>
+    <button class="btn-primary" onclick={() => { showCreate = true; newKeyPlaintext = ''; rotatedKey = '' }}>
       + Create Key
     </button>
   </div>
@@ -119,9 +119,9 @@
       <strong>New key created — copy it now, it will not be shown again:</strong>
       <div class="key-display">
         <code>{newKeyPlaintext}</code>
-        <button class="btn-copy" on:click={() => copyToClipboard(newKeyPlaintext)}>Copy</button>
+        <button class="btn-copy" onclick={() => copyToClipboard(newKeyPlaintext)}>Copy</button>
       </div>
-      <button class="dismiss" on:click={() => newKeyPlaintext = ''}>Dismiss</button>
+      <button class="dismiss" onclick={() => newKeyPlaintext = ''}>Dismiss</button>
     </div>
   {/if}
 
@@ -131,9 +131,9 @@
       <strong>Key rotated — copy the new key now, it will not be shown again:</strong>
       <div class="key-display">
         <code>{rotatedKey}</code>
-        <button class="btn-copy" on:click={() => copyToClipboard(rotatedKey)}>Copy</button>
+        <button class="btn-copy" onclick={() => copyToClipboard(rotatedKey)}>Copy</button>
       </div>
-      <button class="dismiss" on:click={() => rotatedKey = ''}>Dismiss</button>
+      <button class="dismiss" onclick={() => rotatedKey = ''}>Dismiss</button>
     </div>
   {/if}
 
@@ -173,10 +173,10 @@
             </td>
             <td class="actions">
               {#if !key.revoked}
-                <button class="btn-sm" on:click={() => { confirmAction = { type: 'rotate', id: key.id, name: key.name } }}>
+                <button class="btn-sm" onclick={() => { confirmAction = { type: 'rotate', id: key.id, name: key.name } }}>
                   Rotate
                 </button>
-                <button class="btn-sm danger" on:click={() => { confirmAction = { type: 'revoke', id: key.id, name: key.name } }}>
+                <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'revoke', id: key.id, name: key.name } }}>
                   Revoke
                 </button>
               {/if}
@@ -190,7 +190,8 @@
 
 <!-- Create Key Modal -->
 {#if showCreate}
-  <div class="overlay" on:click|self={() => showCreate = false} role="dialog" aria-modal="true">
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) showCreate = false }} role="dialog" aria-modal="true">
     <div class="modal">
       <h2>Create API Key</h2>
       <label>
@@ -202,17 +203,17 @@
         <div class="scope-grid">
           {#each ALL_SCOPES as scope}
             <label class="scope-check">
-              <input type="checkbox" checked={createScopes.includes(scope)} on:change={() => toggleScope(scope)} />
+              <input type="checkbox" checked={createScopes.includes(scope)} onchange={() => toggleScope(scope)} />
               {scope}
             </label>
           {/each}
         </div>
       </fieldset>
       <div class="modal-actions">
-        <button class="btn-primary" on:click={createKey} disabled={creating || !createName.trim() || createScopes.length === 0}>
+        <button class="btn-primary" onclick={createKey} disabled={creating || !createName.trim() || createScopes.length === 0}>
           {creating ? 'Creating…' : 'Create'}
         </button>
-        <button class="btn-ghost" on:click={() => showCreate = false}>Cancel</button>
+        <button class="btn-ghost" onclick={() => showCreate = false}>Cancel</button>
       </div>
     </div>
   </div>
@@ -220,25 +221,26 @@
 
 <!-- Confirm Revoke / Rotate Modal -->
 {#if confirmAction}
-  <div class="overlay" on:click|self={() => confirmAction = null} role="dialog" aria-modal="true">
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmAction = null }} role="dialog" aria-modal="true">
     <div class="modal">
       {#if confirmAction.type === 'revoke'}
         <h2>Revoke Key</h2>
         <p>Revoke <strong>{confirmAction.name}</strong>? This cannot be undone — any clients using this key will lose access immediately.</p>
         <div class="modal-actions">
-          <button class="btn-danger" on:click={confirmRevoke} disabled={actionLoading}>
+          <button class="btn-danger" onclick={confirmRevoke} disabled={actionLoading}>
             {actionLoading ? 'Revoking…' : 'Revoke'}
           </button>
-          <button class="btn-ghost" on:click={() => confirmAction = null}>Cancel</button>
+          <button class="btn-ghost" onclick={() => confirmAction = null}>Cancel</button>
         </div>
       {:else}
         <h2>Rotate Key</h2>
         <p>Rotate <strong>{confirmAction.name}</strong>? The existing key will be revoked and a new key will be issued.</p>
         <div class="modal-actions">
-          <button class="btn-primary" on:click={confirmRotate} disabled={actionLoading}>
+          <button class="btn-primary" onclick={confirmRotate} disabled={actionLoading}>
             {actionLoading ? 'Rotating…' : 'Rotate'}
           </button>
-          <button class="btn-ghost" on:click={() => confirmAction = null}>Cancel</button>
+          <button class="btn-ghost" onclick={() => confirmAction = null}>Cancel</button>
         </div>
       {/if}
     </div>

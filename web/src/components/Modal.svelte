@@ -1,17 +1,16 @@
 <script>
-  export let title = ''
-  export let onClose = () => {}
+  let { title = '', onClose = () => {}, children } = $props()
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
-<div class="overlay" on:click|self={onClose} role="dialog" aria-modal="true" aria-label={title}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose() }} role="dialog" aria-modal="true" aria-label={title}>
   <div class="modal">
     <div class="modal-header">
       <h2>{title}</h2>
-      <button class="close" on:click={onClose} aria-label="Close">✕</button>
+      <button class="close" onclick={onClose} aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
-      <slot />
+      {@render children()}
     </div>
   </div>
 </div>

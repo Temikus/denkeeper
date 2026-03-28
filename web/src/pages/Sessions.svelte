@@ -50,17 +50,17 @@
 <div class="layout">
   <aside class="list">
     {#each sessions as s}
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="item"
         class:active={selected?.id === s.id}
-        on:click={() => selectSession(s)}
+        onclick={() => selectSession(s)}
         role="button"
         tabindex="0"
       >
         <div class="sid">{s.id.slice(0, 14)}</div>
         <div class="smeta">{fmtDate(s.updated_at || s.created_at)}</div>
-        <button class="del" on:click|stopPropagation={() => deleteSession(s.id)} title="Delete session">✕</button>
+        <button class="del" onclick={(e) => { e.stopPropagation(); deleteSession(s.id) }} title="Delete session">✕</button>
       </div>
     {/each}
     {#if sessions.length === 0 && !error}

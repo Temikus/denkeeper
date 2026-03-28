@@ -1,5 +1,5 @@
 <script>
-  export let active = 'overview'
+  let { active = 'overview' } = $props()
   import { navigate } from '../router.js'
   import { token } from '../store.js'
 
@@ -24,13 +24,13 @@
   <ul>
     {#each links as l}
       <li class:active={active === l.id}>
-        <a href={'#/' + l.id} on:click|preventDefault={() => navigate(l.id)}>
+        <a href={'#/' + l.id} onclick={(e) => { e.preventDefault(); navigate(l.id) }}>
           {l.label}
         </a>
       </li>
     {/each}
   </ul>
-  <button class="logout" on:click={logout}>Logout</button>
+  <button class="logout" onclick={logout}>Logout</button>
 </nav>
 
 <style>

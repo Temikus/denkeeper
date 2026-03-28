@@ -150,11 +150,11 @@
         type="password"
         placeholder="API key (dk_...)"
         bind:value={keyInput}
-        on:keydown={handleLoginKeydown}
+        onkeydown={handleLoginKeydown}
         autocomplete="current-password"
         disabled={loginLoading}
       />
-      <button on:click={handleLogin} disabled={loginLoading}>
+      <button onclick={handleLogin} disabled={loginLoading}>
         {loginLoading ? 'Signing in…' : 'Sign in'}
       </button>
       <p class="hint">
@@ -169,14 +169,14 @@
       {#if setupError}
         <p class="error">{setupError}</p>
       {/if}
-      <label class="field-label">Key name</label>
+      <span class="field-label">Key name</span>
       <input
         type="text"
         placeholder="admin"
         bind:value={setupName}
         disabled={setupLoading}
       />
-      <label class="field-label">Scopes</label>
+      <span class="field-label">Scopes</span>
       <div class="scopes-grid">
         {#each ALL_SCOPES as { value, label }}
           <label class="scope-item">
@@ -185,7 +185,7 @@
           </label>
         {/each}
       </div>
-      <button on:click={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
+      <button onclick={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
         {setupLoading ? 'Creating…' : 'Create key'}
       </button>
 
@@ -194,9 +194,9 @@
       <p class="subtitle">Copy it now — it will not be shown again.</p>
       <div class="key-box">
         <code class="key-text">{revealedKey}</code>
-        <button class="copy-btn" on:click={copyKey}>{copied ? '✓' : 'Copy'}</button>
+        <button class="copy-btn" onclick={copyKey}>{copied ? '✓' : 'Copy'}</button>
       </div>
-      <button on:click={proceedToLogin}>Log in with this key</button>
+      <button onclick={proceedToLogin}>Log in with this key</button>
     {/if}
 
   </div>
@@ -207,7 +207,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
+    height: 100vh;
     background: var(--bg);
   }
   .card {
@@ -223,7 +223,7 @@
   h1 { font-size: 22px; font-weight: 700; color: var(--accent); }
   .subtitle { color: var(--text-muted); font-size: 13px; }
   .error { color: var(--danger); font-size: 13px; }
-  .field-label { font-size: 12px; color: var(--text-muted); margin-bottom: -8px; }
+  .field-label { font-size: 12px; color: var(--text-muted); margin-bottom: -8px; display: block; }
   input[type="text"],
   input[type="password"] {
     padding: 10px 12px;
@@ -253,12 +253,12 @@
   button {
     padding: 10px;
     background: var(--accent);
+    color: #fff;
     border: none;
     border-radius: var(--radius);
-    color: #fff;
+    cursor: pointer;
     font-size: 14px;
     font-weight: 600;
-    cursor: pointer;
   }
   button:hover:not(:disabled) { background: var(--accent-hover); }
   button:disabled { opacity: 0.6; cursor: default; }
