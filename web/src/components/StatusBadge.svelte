@@ -1,12 +1,12 @@
 <script>
-  export let status = ''
-  $: cls = {
+  let { status = '' } = $props()
+  let cls = $derived({
     pending:  'warn',
     approved: 'success',
     denied:   'danger',
     expired:  'muted',
     ok:       'success',
-  }[status] || 'muted'
+  }[status] || 'muted')
 </script>
 
 <span class="badge {cls}">{status}</span>

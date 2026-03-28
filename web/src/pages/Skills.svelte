@@ -3,22 +3,22 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
-  let skills = []
-  let filter = ''
-  let error = ''
+  let skills = $state([])
+  let filter = $state('')
+  let error = $state('')
 
   onMount(async () => {
     try { skills = (await api.skills()) || [] }
     catch(e) { error = e.message }
   })
 
-  $: filtered = filter.trim()
+  let filtered = $derived(filter.trim()
     ? skills.filter(s =>
         s.name.includes(filter) ||
         s.agent.includes(filter) ||
         (s.description || '').toLowerCase().includes(filter.toLowerCase())
       )
-    : skills
+    : skills)
 </script>
 
 <h1 class="page-title">Skills</h1>

@@ -35,11 +35,11 @@
 <div class="layout">
   <aside class="list">
     {#each agents as a}
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="item"
         class:active={selected?.name === a.name}
-        on:click={() => selectAgent(a)}
+        onclick={() => selectAgent(a)}
         role="button"
         tabindex="0"
       >

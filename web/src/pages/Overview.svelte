@@ -35,11 +35,11 @@
       <div class="label">Agents</div>
       <div class="value">{data.agents.length}</div>
     </div>
-    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
       class="card clickable"
       class:alert={data.pendingCount > 0}
-      on:click={() => navigate('approvals')}
+      onclick={() => navigate('approvals')}
       role="button"
       tabindex="0"
     >
@@ -64,8 +64,8 @@
     <h2 class="section-title">Agents</h2>
     <div class="agent-grid">
       {#each data.agents as a}
-        <!-- svelte-ignore a11y-click-events-have-key-events -->
-        <div class="agent-card" on:click={() => navigate('agents')} role="button" tabindex="0">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="agent-card" onclick={() => navigate('agents')} role="button" tabindex="0">
           <div class="agent-name">{a.name}</div>
           <div class="agent-meta">
             <span class="tier">{a.permission_tier}</span>

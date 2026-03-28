@@ -105,7 +105,7 @@
         <span class="muted">New session</span>
       {/if}
     </span>
-    <button class="btn-ghost" on:click={newSession}>New Session</button>
+    <button class="btn-ghost" onclick={newSession}>New Session</button>
   </div>
 
   <!-- Message list -->
@@ -131,12 +131,12 @@
     <div class="input-row">
       <textarea
         bind:value={input}
-        on:keydown={handleKeydown}
+        onkeydown={handleKeydown}
         placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
         rows="3"
         disabled={sending}
       ></textarea>
-      <button class="btn-send" on:click={send} disabled={sending || !input.trim()}>
+      <button class="btn-send" onclick={send} disabled={sending || !input.trim()}>
         {sending ? '…' : 'Send'}
       </button>
     </div>

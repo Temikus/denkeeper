@@ -13,7 +13,7 @@
   import ApiKeys from './pages/ApiKeys.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
-  $: route = $currentRoute.split('/')[0]
+  let route = $derived($currentRoute.split('/')[0])
 </script>
 
 {#if !$isAuthenticated}
