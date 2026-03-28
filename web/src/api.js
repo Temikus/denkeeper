@@ -70,6 +70,22 @@ export const api = {
     return r.json()
   }),
 
+  // Tools & Plugins
+  listTools: () => apiFetch('/api/v1/tools'),
+  getTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`),
+  addTool: (name, command, args, env) => apiFetch('/api/v1/tools', {
+    method: 'POST',
+    body: JSON.stringify({ name, command, args: args || [], env: env || {} }),
+  }),
+  removeTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  listPlugins: () => apiFetch('/api/v1/plugins'),
+  getPlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`),
+  addPlugin: cfg => apiFetch('/api/v1/plugins', {
+    method: 'POST',
+    body: JSON.stringify(cfg),
+  }),
+  removePlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   // API Keys
   listKeys: () => apiFetch('/api/v1/keys'),
   createKey: (name, scopes) => apiFetch('/api/v1/keys', {

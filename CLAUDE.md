@@ -178,6 +178,39 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 - Config: `[llm.anthropic]` with `api_key` and optional `base_url` (for Bedrock/Vertex).
 - When `default_provider = "anthropic"`, OpenRouter API key is not required.
 
+## Tool Lifecycle Management
+
+`internal/tool/lifecycle.go` provides runtime add/remove of MCP tools and plugins without restarting the process.
+
+- **LifecycleManager** wraps `tool.Manager` and coordinates: validation, MCP server spawn/stop, TOML config persistence (atomic read-modify-write via `config_writer.go`).
+- **Config is source of truth**: Changes are persisted to `denkeeper.toml` immediately. On restart, the same state loads.
+- **Max tools limit**: `max_tools` in config (default 50, combined tools + plugins).
+- **tool.Manager** gained: `UnregisterServer(name)`, `ServerNames()`, `ServerInfo(name)` with `sync.RWMutex` for thread safety.
+
+### Config MCP tools (agent-initiated)
+
+Six new tools in `configmcp`: `tool_list`, `tool_add`, `tool_remove`, `plugin_list`, `plugin_add`, `plugin_remove`. Follow the `applyOrSubmit` pattern:
+- `autonomous` → immediate execution
+- `supervised` → approval required (ActionKindInstallTool)
+- `restricted` → denied
+
+### REST API endpoints (operator/programmatic)
+
+| Endpoint | Scope |
+|----------|-------|
+| `GET /api/v1/tools` | `tools:read` |
+| `GET /api/v1/tools/{name}` | `tools:read` |
+| `POST /api/v1/tools` | `tools:write` |
+| `DELETE /api/v1/tools/{name}` | `tools:write` |
+| `GET /api/v1/plugins` | `tools:read` |
+| `GET /api/v1/plugins/{name}` | `tools:read` |
+| `POST /api/v1/plugins` | `tools:write` |
+| `DELETE /api/v1/plugins/{name}` | `tools:write` |
+
+### Web dashboard
+
+Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove dialogs, status indicators. 10th page in the SPA.
+
 ## Current State (Phase 4 complete)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
@@ -187,10 +220,11 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial).
 - Plugin system: subprocess plugins and Docker-sandboxed plugins with capability declarations. Docker plugins run via `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none` by default. Configurable resource limits (`memory_limit`, `cpu_limit`), network mode, and bind mounts.
 - Plugin signing: Ed25519 signature verification for subprocess plugin binaries. Configurable via `[security]` with `trusted_keys` (PEM public key files) and `allow_unsigned` (default true). Includes `SignFile`/`VerifyFile` library, PEM key marshaling, and `LoadTrustedKeys` for key management.
-- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
-- Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
-- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, and permission tier inspection.
-- Web dashboard: embedded Svelte SPA (9 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD.
+- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management), tool/plugin CRUD (`tools:read`/`tools:write` scopes). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
+- Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule / install_tool directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
+- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, permission tier inspection, and tool/plugin management (add/remove/list).
+- Tool lifecycle management: runtime add/remove of MCP tools and plugins via LifecycleManager, with atomic TOML config persistence, max_tools limit, and thread-safe tool.Manager.
+- Web dashboard: embedded Svelte SPA (10 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD. Tools page supports add/remove of MCP tools and plugins.
 - CI/CD: golangci-lint, govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
 - Documentation website: Hugo + Doks (Thulite) under `/website`, with getting-started guides, concept docs, and reference pages. GitHub Pages CI via `deploy-website.yml`. One-liner install script at `website/static/install.sh`.
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
@@ -65,6 +66,79 @@ func (s *Server) registerTools() {
 		Description: "Return all registered agent schedules.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, s.handleScheduleList)
+
+	// Tool & plugin management tools.
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "tool_list",
+		Description: "List all MCP tools currently available to you, grouped by server.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+	}, s.handleToolList)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "tool_add",
+		Description: "Add a new MCP tool server. The server process will be started immediately.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name":    {"type": "string",  "description": "Unique name for the tool (used as [tools.<name>] in config)"},
+				"command": {"type": "string",  "description": "Path to the MCP server binary"},
+				"args":    {"type": "array", "items": {"type": "string"}, "description": "Command-line arguments"},
+				"env":     {"type": "object", "additionalProperties": {"type": "string"}, "description": "Environment variables"}
+			},
+			"required": ["name", "command"]
+		}`),
+	}, s.handleToolAdd)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "tool_remove",
+		Description: "Remove an MCP tool server. The server process will be stopped immediately.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Name of the tool to remove"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handleToolRemove)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "plugin_list",
+		Description: "List all plugins and their status.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+	}, s.handlePluginList)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "plugin_add",
+		Description: "Add a new plugin. Subprocess plugins execute directly; Docker plugins run in a container.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name":         {"type": "string"},
+				"type":         {"type": "string", "enum": ["subprocess", "docker"]},
+				"command":      {"type": "string", "description": "Binary path (subprocess) or entrypoint override (docker)"},
+				"image":        {"type": "string", "description": "Docker image (required for docker type)"},
+				"args":         {"type": "array", "items": {"type": "string"}},
+				"env":          {"type": "object", "additionalProperties": {"type": "string"}},
+				"capabilities": {"type": "array", "items": {"type": "string"}, "description": "e.g. ['tools']"},
+				"memory_limit": {"type": "string", "description": "Docker memory limit (e.g. '256m')"},
+				"cpu_limit":    {"type": "string", "description": "Docker CPU limit (e.g. '0.5')"},
+				"network":      {"type": "string", "description": "Docker network mode (default: 'none')"}
+			},
+			"required": ["name", "type"]
+		}`),
+	}, s.handlePluginAdd)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "plugin_remove",
+		Description: "Remove a plugin. The process or container will be stopped.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Name of the plugin to remove"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handlePluginRemove)
 }
 
 // --------------------------------------------------------------------------
@@ -282,6 +356,208 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 		return toolError("marshaling schedules: " + err.Error()), nil
 	}
 	return toolText(string(data)), nil
+}
+
+// --------------------------------------------------------------------------
+// Tool & plugin handlers
+// --------------------------------------------------------------------------
+
+func (s *Server) handleToolList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolText("[]"), nil
+	}
+
+	tools := s.deps.LifecycleMgr.ListTools()
+	data, err := json.MarshalIndent(tools, "", "  ")
+	if err != nil {
+		return toolError("marshaling tools: " + err.Error()), nil
+	}
+	return toolText(string(data)), nil
+}
+
+func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolError("tool_add is not available: no lifecycle manager configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("tool_add is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name    string            `json:"name"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+	if strings.TrimSpace(input.Command) == "" {
+		return toolError("command is required"), nil
+	}
+
+	cfg := config.ToolConfig{
+		Command: input.Command,
+		Args:    input.Args,
+		Env:     input.Env,
+	}
+
+	lm := s.deps.LifecycleMgr
+	summary := fmt.Sprintf("Install tool: %s (%s)", input.Name, input.Command)
+
+	payload, _ := toml.Marshal(map[string]any{
+		"name":    input.Name,
+		"command": input.Command,
+		"args":    input.Args,
+		"env":     input.Env,
+	})
+
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		return lm.AddTool(ctx, input.Name, cfg)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
+		summary, strings.TrimSpace(string(payload)), applyFn)
+}
+
+func (s *Server) handleToolRemove(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolError("tool_remove is not available: no lifecycle manager configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("tool_remove is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	lm := s.deps.LifecycleMgr
+	summary := "Remove tool: " + input.Name
+
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		return lm.RemoveTool(ctx, input.Name)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
+		summary, input.Name, applyFn)
+}
+
+func (s *Server) handlePluginList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolText("[]"), nil
+	}
+
+	plugins := s.deps.LifecycleMgr.ListPlugins()
+	data, err := json.MarshalIndent(plugins, "", "  ")
+	if err != nil {
+		return toolError("marshaling plugins: " + err.Error()), nil
+	}
+	return toolText(string(data)), nil
+}
+
+func (s *Server) handlePluginAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolError("plugin_add is not available: no lifecycle manager configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("plugin_add is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name         string            `json:"name"`
+		Type         string            `json:"type"`
+		Command      string            `json:"command"`
+		Image        string            `json:"image"`
+		Args         []string          `json:"args"`
+		Env          map[string]string `json:"env"`
+		Capabilities []string          `json:"capabilities"`
+		MemoryLimit  string            `json:"memory_limit"`
+		CPULimit     string            `json:"cpu_limit"`
+		Network      string            `json:"network"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+	if input.Type != "subprocess" && input.Type != "docker" {
+		return toolError("type must be \"subprocess\" or \"docker\""), nil
+	}
+
+	cfg := config.PluginConfig{
+		Type:         input.Type,
+		Command:      input.Command,
+		Image:        input.Image,
+		Args:         input.Args,
+		Env:          input.Env,
+		Capabilities: input.Capabilities,
+		MemoryLimit:  input.MemoryLimit,
+		CPULimit:     input.CPULimit,
+		Network:      input.Network,
+	}
+
+	lm := s.deps.LifecycleMgr
+	summary := fmt.Sprintf("Install plugin: %s (%s)", input.Name, input.Type)
+
+	payload, _ := toml.Marshal(map[string]any{
+		"name": input.Name,
+		"type": input.Type,
+	})
+
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		return lm.AddPlugin(ctx, input.Name, cfg)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
+		summary, strings.TrimSpace(string(payload)), applyFn)
+}
+
+func (s *Server) handlePluginRemove(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolError("plugin_remove is not available: no lifecycle manager configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("plugin_remove is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	lm := s.deps.LifecycleMgr
+	summary := "Remove plugin: " + input.Name
+
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		return lm.RemovePlugin(ctx, input.Name)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
+		summary, input.Name, applyFn)
 }
 
 // --------------------------------------------------------------------------

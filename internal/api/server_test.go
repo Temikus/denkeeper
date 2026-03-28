@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // mockProvider implements llm.Provider for testing.
@@ -111,6 +113,7 @@ func allScopesKey() config.APIKeyConfig {
 			"skills:read", "skills:write",
 			"schedules:read", "schedules:write",
 			"approvals:read", "approvals:write",
+			"tools:read", "tools:write",
 		},
 	}
 }
@@ -1338,5 +1341,228 @@ func TestWebHandler_APIRoutesNotIntercepted(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Errorf("health status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tool & plugin endpoints
+// ---------------------------------------------------------------------------
+
+func testLifecycleMgr(t *testing.T) *tool.LifecycleManager {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := dir + "/denkeeper.toml"
+	_ = os.WriteFile(cfgPath, []byte("[telegram]\ntoken = \"test\"\n"), 0644)
+	mgr := tool.NewManager(testLogger())
+	return tool.NewLifecycleManager(mgr, cfgPath, 50, testLogger())
+}
+
+func TestListTools_NilLifecycleMgr_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = nil
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestListTools_Empty(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	tools, ok := body["tools"].([]any)
+	if !ok {
+		t.Fatal("expected tools array in response")
+	}
+	if len(tools) != 0 {
+		t.Errorf("expected empty tools array, got %d", len(tools))
+	}
+}
+
+func TestListPlugins_Empty(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/plugins"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding body: %v", err)
+	}
+	plugins, ok := body["plugins"].([]any)
+	if !ok {
+		t.Fatal("expected plugins array in response")
+	}
+	if len(plugins) != 0 {
+		t.Errorf("expected empty plugins array, got %d", len(plugins))
+	}
+}
+
+func TestAddTool_MissingName(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"command": "/usr/bin/test"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tools", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAddTool_MissingCommand(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"name": "my-tool"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tools", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAddPlugin_InvalidType(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"name": "bad-plugin", "type": "invalid"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/plugins", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRemoveTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/tools/nonexistent"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools/nonexistent"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetPlugin_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/plugins/nonexistent"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestToolsEndpoints_RequireScope(t *testing.T) {
+	// Key with no tool scopes should be rejected.
+	noToolsKey := config.APIKeyConfig{
+		Name:   "no-tools",
+		Key:    "dk-test-key",
+		Scopes: []string{"health", "chat"},
+	}
+	cfg := testConfig(noToolsKey)
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	// GET /api/v1/tools requires tools:read
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /tools without scope: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// POST /api/v1/tools requires tools:write
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tools", strings.NewReader(`{"name":"x","command":"y"}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("POST /tools without scope: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestRemovePlugin_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/plugins/nonexistent"))
+
+	// RemovePlugin is idempotent — removing a non-existent plugin succeeds silently.
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 }

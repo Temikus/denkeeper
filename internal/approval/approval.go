@@ -38,6 +38,9 @@ const (
 
 	// ActionKindModifySchedule is a request to register a new schedule entry at runtime.
 	ActionKindModifySchedule ActionKind = "modify_schedule"
+
+	// ActionKindInstallTool is a request to add or remove an MCP tool or plugin at runtime.
+	ActionKindInstallTool ActionKind = "install_tool"
 )
 
 // Request is the persisted record of a pending or resolved approval.

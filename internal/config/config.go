@@ -20,6 +20,7 @@ type Config struct {
 	Agents    []AgentInstanceConfig `toml:"agents"`
 	Schedules []ScheduleConfig      `toml:"schedules"`
 	Tools     map[string]ToolConfig   `toml:"tools"`
+	MaxTools  int                     `toml:"max_tools"` // combined limit for tools + plugins; 0 = default (50)
 	Plugins   map[string]PluginConfig `toml:"plugins"`
 	Voice     VoiceConfig           `toml:"voice"`
 	API       APIConfig             `toml:"api"`
@@ -664,6 +665,7 @@ var validAPIScopes = map[string]bool{
 	"skills:read": true, "skills:write": true,
 	"schedules:read": true, "schedules:write": true,
 	"approvals:read": true, "approvals:write": true,
+	"tools:read": true, "tools:write": true,
 	"health": true, "admin": true,
 }
 

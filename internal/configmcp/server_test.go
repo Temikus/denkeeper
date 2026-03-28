@@ -392,3 +392,192 @@ func TestScheduleList_AfterAdd(t *testing.T) {
 		t.Errorf("unexpected schedule name: %v", listed[0]["name"])
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: tool discovery includes new tools
+// --------------------------------------------------------------------------
+
+func TestServer_ListTools_IncludesToolAndPluginTools(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	expected := map[string]bool{
+		"tool_list":     false,
+		"tool_add":      false,
+		"tool_remove":   false,
+		"plugin_list":   false,
+		"plugin_add":    false,
+		"plugin_remove": false,
+	}
+	for _, tool := range result.Tools {
+		if _, ok := expected[tool.Name]; ok {
+			expected[tool.Name] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Errorf("tool %q not listed", name)
+		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: tool_list
+// --------------------------------------------------------------------------
+
+func TestToolList_Empty(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "tool_list", map[string]any{})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	// With no lifecycle manager, returns empty array.
+	if text != "[]" {
+		t.Errorf("expected empty array, got %q", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: tool_add (restricted tier)
+// --------------------------------------------------------------------------
+
+func TestToolAdd_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	text, isErr := callTool(t, session, "tool_add", map[string]any{
+		"name":    "blocked-tool",
+		"command": "/usr/bin/blocked",
+	})
+	if !isErr {
+		t.Fatalf("expected error in restricted mode, got: %s", text)
+	}
+}
+
+func TestToolAdd_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "tool_add", map[string]any{
+		"command": "/usr/bin/test",
+	})
+	if !isErr {
+		t.Fatalf("expected error for missing name, got: %s", text)
+	}
+}
+
+func TestToolAdd_MissingCommand(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "tool_add", map[string]any{
+		"name": "no-cmd",
+	})
+	if !isErr {
+		t.Fatalf("expected error for missing command, got: %s", text)
+	}
+}
+
+func TestToolAdd_NoLifecycleManager(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.LifecycleMgr = nil
+	})
+	text, isErr := callTool(t, session, "tool_add", map[string]any{
+		"name":    "test",
+		"command": "/bin/test",
+	})
+	if !isErr {
+		t.Fatalf("expected error when lifecycle manager is nil, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: tool_remove (restricted tier)
+// --------------------------------------------------------------------------
+
+func TestToolRemove_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	text, isErr := callTool(t, session, "tool_remove", map[string]any{
+		"name": "some-tool",
+	})
+	if !isErr {
+		t.Fatalf("expected error in restricted mode, got: %s", text)
+	}
+}
+
+func TestToolRemove_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "tool_remove", map[string]any{})
+	if !isErr {
+		t.Fatalf("expected error for missing name, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: plugin_list
+// --------------------------------------------------------------------------
+
+func TestPluginList_Empty(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "plugin_list", map[string]any{})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if text != "[]" {
+		t.Errorf("expected empty array, got %q", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: plugin_add (restricted tier)
+// --------------------------------------------------------------------------
+
+func TestPluginAdd_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	text, isErr := callTool(t, session, "plugin_add", map[string]any{
+		"name": "blocked-plugin",
+		"type": "subprocess",
+	})
+	if !isErr {
+		t.Fatalf("expected error in restricted mode, got: %s", text)
+	}
+}
+
+func TestPluginAdd_InvalidType(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "plugin_add", map[string]any{
+		"name": "bad-type",
+		"type": "invalid",
+	})
+	if !isErr {
+		t.Fatalf("expected error for invalid type, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: plugin_remove (restricted tier)
+// --------------------------------------------------------------------------
+
+func TestPluginRemove_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	text, isErr := callTool(t, session, "plugin_remove", map[string]any{
+		"name": "some-plugin",
+	})
+	if !isErr {
+		t.Fatalf("expected error in restricted mode, got: %s", text)
+	}
+}
+
+func TestPluginRemove_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "plugin_remove", map[string]any{})
+	if !isErr {
+		t.Fatalf("expected error for missing name, got: %s", text)
+	}
+}

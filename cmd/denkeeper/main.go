@@ -260,6 +260,7 @@ type agentBuildCtx struct {
 	llm             llmClients
 	memory          agent.MemoryStore
 	sharedToolMgr   *tool.Manager
+	lifecycleMgr    *tool.LifecycleManager
 	approvalManager *approval.Manager
 	globalSkills    []skill.Skill
 	sched           *scheduler.Scheduler
@@ -369,6 +370,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		HandleMessage:  e.HandleMessage,
 		Approvals:      abc.approvalManager,
 		PermissionTier: e.PermissionTier,
+		LifecycleMgr:   abc.lifecycleMgr,
 		Logger:         abc.logger,
 	})
 	cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
@@ -540,6 +542,19 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Ensure shared tool manager exists for the lifecycle manager.
+	if sharedToolMgr == nil {
+		sharedToolMgr = tool.NewManager(logger)
+		defer func() { _ = sharedToolMgr.Close() }()
+	}
+
+	lifecycleMgr := tool.NewLifecycleManager(sharedToolMgr, path, cfg.MaxTools, logger)
+
+	// Track plugins loaded at startup so ListPlugins can report them.
+	for name, pc := range cfg.Plugins {
+		lifecycleMgr.TrackPlugin(name, pc)
+	}
+
 	// Load global skills
 	globalSkills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
 	if err != nil {
@@ -560,6 +575,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		llm:             clients,
 		memory:          memory,
 		sharedToolMgr:   sharedToolMgr,
+		lifecycleMgr:    lifecycleMgr,
 		approvalManager: approvalManager,
 		globalSkills:    globalSkills,
 		sched:           sched,
@@ -601,13 +617,14 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	if cfg.API.Enabled {
 		if err := startAPIServer(ctx, cfg, api.Deps{
-			Dispatcher:  dispatcher,
-			Scheduler:   sched,
-			CostTracker: clients.cost,
-			Memory:      memory,
-			Config:      cfg,
-			Approvals:   approvalManager,
-			WebHandler:  web.Handler(),
+			Dispatcher:   dispatcher,
+			Scheduler:    sched,
+			CostTracker:  clients.cost,
+			Memory:       memory,
+			Config:       cfg,
+			Approvals:    approvalManager,
+			LifecycleMgr: lifecycleMgr,
+			WebHandler:   web.Handler(),
 		}, logger); err != nil {
 			return err
 		}

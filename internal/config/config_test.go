@@ -1221,6 +1221,44 @@ scopes = ["health", "superadmin"]
 	}
 }
 
+func TestParse_APIKeyToolScopes_Valid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[[api.keys]]
+name = "tool-admin"
+key = "dk-tool-key"
+scopes = ["tools:read", "tools:write"]
+`)
+
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for tools:read/write scopes: %v", err)
+	}
+}
+
+func TestParse_MaxTools(t *testing.T) {
+	tomlData := []byte(`
+max_tools = 25
+
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxTools != 25 {
+		t.Errorf("MaxTools = %d, want 25", cfg.MaxTools)
+	}
+}
+
 func TestParse_OllamaProvider_NoAPIKeyRequired(t *testing.T) {
 	// When default_provider is "ollama", no OpenRouter API key should be required.
 	tomlData := []byte(`

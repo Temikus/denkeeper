@@ -10,6 +10,7 @@
   import Schedules from './pages/Schedules.svelte'
   import Skills from './pages/Skills.svelte'
   import Chat from './pages/Chat.svelte'
+  import Tools from './pages/Tools.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -34,6 +35,8 @@
         <Schedules />
       {:else if route === 'skills'}
         <Skills />
+      {:else if route === 'tools'}
+        <Tools />
       {:else if route === 'chat'}
         <Chat />
       {:else if route === 'keys'}

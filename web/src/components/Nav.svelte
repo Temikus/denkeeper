@@ -11,6 +11,7 @@
     { id: 'sessions',  label: 'Sessions' },
     { id: 'schedules', label: 'Schedules' },
     { id: 'skills',    label: 'Skills' },
+    { id: 'tools',     label: 'Tools' },
     { id: 'keys',      label: 'API Keys' },
   ]
 

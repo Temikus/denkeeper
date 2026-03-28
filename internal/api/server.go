@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // Deps holds the application dependencies the API server needs to serve data.
@@ -28,10 +29,11 @@ type Deps struct {
 	Scheduler   *scheduler.Scheduler
 	CostTracker *llm.CostTracker
 	Memory      agent.MemoryStore
-	Config      *config.Config
-	Approvals   *approval.Manager // nil = approval endpoints return 503
-	WebHandler  http.Handler      // nil = no web dashboard served
-	KeyStore    *KeyStore          // nil = API key CRUD endpoints return 503
+	Config       *config.Config
+	Approvals    *approval.Manager        // nil = approval endpoints return 503
+	LifecycleMgr *tool.LifecycleManager   // nil = tool CRUD endpoints return 503
+	WebHandler   http.Handler             // nil = no web dashboard served
+	KeyStore     *KeyStore                // nil = API key CRUD endpoints return 503
 }
 
 // Server is the external REST API server.
@@ -88,6 +90,16 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/approvals/{id}", s.RequireScope("approvals:read", s.handleGetApproval))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.RequireScope("approvals:write", s.handleResolveApproval(true)))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/deny", s.RequireScope("approvals:write", s.handleResolveApproval(false)))
+
+	// Tool & plugin management endpoints.
+	mux.HandleFunc("GET /api/v1/tools", s.RequireScope("tools:read", s.handleListTools))
+	mux.HandleFunc("GET /api/v1/tools/{name}", s.RequireScope("tools:read", s.handleGetTool))
+	mux.HandleFunc("POST /api/v1/tools", s.RequireScope("tools:write", s.handleAddTool))
+	mux.HandleFunc("DELETE /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleRemoveTool))
+	mux.HandleFunc("GET /api/v1/plugins", s.RequireScope("tools:read", s.handleListPlugins))
+	mux.HandleFunc("GET /api/v1/plugins/{name}", s.RequireScope("tools:read", s.handleGetPlugin))
+	mux.HandleFunc("POST /api/v1/plugins", s.RequireScope("tools:write", s.handleAddPlugin))
+	mux.HandleFunc("DELETE /api/v1/plugins/{name}", s.RequireScope("tools:write", s.handleRemovePlugin))
 
 	// API key management endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
@@ -689,6 +701,190 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string
 }
 
 // ---------------------------------------------------------------------------
+// Tool & plugin handlers
+// ---------------------------------------------------------------------------
+
+// lifecycleRequired writes 503 when the lifecycle manager is not configured.
+func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
+	if s.deps.LifecycleMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tool management not configured"})
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleListTools(w http.ResponseWriter, _ *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	tools := s.deps.LifecycleMgr.ListTools()
+	if tools == nil {
+		tools = []tool.ServerStatus{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	info, ok := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tool not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	var body struct {
+		Name    string            `json:"name"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if strings.TrimSpace(body.Command) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "command is required"})
+		return
+	}
+
+	cfg := config.ToolConfig{
+		Command: body.Command,
+		Args:    body.Args,
+		Env:     body.Env,
+	}
+
+	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
+		s.logger.Error("adding tool", "name", body.Name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(body.Name)
+	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.LifecycleMgr.RemoveTool(r.Context(), name); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListPlugins(w http.ResponseWriter, _ *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	plugins := s.deps.LifecycleMgr.ListPlugins()
+	if plugins == nil {
+		plugins = []tool.PluginStatus{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plugins": plugins})
+}
+
+func (s *Server) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	plugins := s.deps.LifecycleMgr.ListPlugins()
+	for _, p := range plugins {
+		if p.Name == name {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "plugin not found"})
+}
+
+func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	var body struct {
+		Name         string            `json:"name"`
+		Type         string            `json:"type"`
+		Command      string            `json:"command"`
+		Image        string            `json:"image"`
+		Args         []string          `json:"args"`
+		Env          map[string]string `json:"env"`
+		Capabilities []string          `json:"capabilities"`
+		MemoryLimit  string            `json:"memory_limit"`
+		CPULimit     string            `json:"cpu_limit"`
+		Network      string            `json:"network"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if body.Type != "subprocess" && body.Type != "docker" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "type must be \"subprocess\" or \"docker\""})
+		return
+	}
+
+	cfg := config.PluginConfig{
+		Type:         body.Type,
+		Command:      body.Command,
+		Image:        body.Image,
+		Args:         body.Args,
+		Env:          body.Env,
+		Capabilities: body.Capabilities,
+		MemoryLimit:  body.MemoryLimit,
+		CPULimit:     body.CPULimit,
+		Network:      body.Network,
+	}
+
+	if err := s.deps.LifecycleMgr.AddPlugin(r.Context(), body.Name, cfg); err != nil {
+		s.logger.Error("adding plugin", "name", body.Name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Return the newly created plugin status.
+	plugins := s.deps.LifecycleMgr.ListPlugins()
+	for _, p := range plugins {
+		if p.Name == body.Name {
+			writeJSON(w, http.StatusCreated, p)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"name": body.Name, "status": "connected"})
+}
+
+func (s *Server) handleRemovePlugin(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.LifecycleMgr.RemovePlugin(r.Context(), name); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
 // Key input validation
 // ---------------------------------------------------------------------------
 
@@ -703,6 +899,8 @@ var ValidScopes = map[string]struct{}{
 	"schedules:read":  {},
 	"approvals:read":  {},
 	"approvals:write": {},
+	"tools:read":      {},
+	"tools:write":     {},
 	"health":          {},
 }
 

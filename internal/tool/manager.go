@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -16,11 +17,23 @@ import (
 // serverConn tracks a connected MCP server subprocess and its session.
 type serverConn struct {
 	name    string
+	command string   // binary path (empty for in-process sessions)
+	args    []string // command-line arguments
 	session *mcp.ClientSession
+}
+
+// ServerStatus exposes metadata about a registered MCP server.
+type ServerStatus struct {
+	Name      string
+	Command   string
+	Args      []string
+	ToolNames []string
+	Status    string // "connected", "error", "stopped"
 }
 
 // Manager manages MCP tool server connections and tool execution.
 type Manager struct {
+	mu       sync.RWMutex
 	servers  map[string]*serverConn // keyed by config name (e.g. "web-search")
 	toolMap  map[string]*serverConn // keyed by MCP tool name → owning server
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
@@ -57,8 +70,12 @@ func (m *Manager) RegisterServer(ctx context.Context, name, command string, args
 		return fmt.Errorf("connecting to MCP server %q: %w", name, err)
 	}
 
-	sc := &serverConn{name: name, session: session}
+	sc := &serverConn{name: name, command: command, args: args, session: session}
+
+	m.mu.Lock()
 	m.servers[name] = sc
+	m.mu.Unlock()
+
 	return m.discoverTools(ctx, sc)
 }
 
@@ -70,6 +87,9 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 		_ = sc.session.Close()
 		return fmt.Errorf("listing tools from MCP server %q: %w", sc.name, err)
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	for _, tool := range result.Tools {
 		// Convert InputSchema (*jsonschema.Schema) to map[string]any for OpenAI format.
@@ -99,7 +119,11 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 // spawning a subprocess. Use this for in-process servers (e.g. configmcp).
 func (m *Manager) RegisterSession(ctx context.Context, name string, session *mcp.ClientSession) error {
 	sc := &serverConn{name: name, session: session}
+
+	m.mu.Lock()
 	m.servers[name] = sc
+	m.mu.Unlock()
+
 	return m.discoverTools(ctx, sc)
 }
 
@@ -108,6 +132,12 @@ func (m *Manager) RegisterSession(ctx context.Context, name string, session *mcp
 // which is safe for concurrent use. Use this to give per-agent managers
 // access to shared external MCP servers without re-spawning subprocesses.
 func (m *Manager) AdoptFrom(source *Manager) {
+	source.mu.RLock()
+	defer source.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for name, sc := range source.servers {
 		m.servers[name] = sc
 	}
@@ -119,11 +149,15 @@ func (m *Manager) AdoptFrom(source *Manager) {
 
 // ToolDefs returns OpenAI-format tool definitions for all registered tools.
 func (m *Manager) ToolDefs() []llm.ToolDef {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.toolDefs
 }
 
 // ToolNames returns the names of all registered MCP tools.
 func (m *Manager) ToolNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	names := make([]string, len(m.toolDefs))
 	for i, td := range m.toolDefs {
 		names[i] = td.Function.Name
@@ -133,7 +167,9 @@ func (m *Manager) ToolNames() []string {
 
 // Execute runs a single tool call and returns the text result.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
+	m.mu.RLock()
 	sc, ok := m.toolMap[call.Function.Name]
+	m.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
 	}
@@ -171,8 +207,81 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	return text, nil
 }
 
+// UnregisterServer stops the MCP server for the given config name,
+// removes its tools from the tool map, and closes the connection.
+// Returns an error if the server is not registered.
+func (m *Manager) UnregisterServer(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sc, ok := m.servers[name]
+	if !ok {
+		return fmt.Errorf("server %q is not registered", name)
+	}
+
+	// Remove tool definitions contributed by this server.
+	var remaining []llm.ToolDef
+	for _, td := range m.toolDefs {
+		if owner, exists := m.toolMap[td.Function.Name]; exists && owner == sc {
+			delete(m.toolMap, td.Function.Name)
+			continue
+		}
+		remaining = append(remaining, td)
+	}
+	m.toolDefs = remaining
+
+	delete(m.servers, name)
+
+	if sc.session != nil {
+		if err := sc.session.Close(); err != nil {
+			return fmt.Errorf("closing MCP server %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// ServerNames returns the names of all registered MCP servers.
+func (m *Manager) ServerNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.servers))
+	for name := range m.servers {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ServerInfo returns metadata about a registered server.
+// The second return value is false if the server is not registered.
+func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sc, ok := m.servers[name]
+	if !ok {
+		return ServerStatus{}, false
+	}
+
+	var toolNames []string
+	for tn, owner := range m.toolMap {
+		if owner == sc {
+			toolNames = append(toolNames, tn)
+		}
+	}
+
+	return ServerStatus{
+		Name:      sc.name,
+		Command:   sc.command,
+		Args:      sc.args,
+		ToolNames: toolNames,
+		Status:    "connected",
+	}, true
+}
+
 // Close shuts down all MCP server connections.
 func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var firstErr error
 	for name, sc := range m.servers {
 		if err := sc.session.Close(); err != nil && firstErr == nil {

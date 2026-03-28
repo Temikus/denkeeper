@@ -19,6 +19,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // Deps holds the runtime dependencies injected into the Config MCP server.
@@ -52,6 +53,10 @@ type Deps struct {
 	// PermissionTier returns the current effective tier for the agent
 	// ("autonomous", "supervised", or "restricted").
 	PermissionTier func() string
+
+	// LifecycleMgr is the shared tool/plugin lifecycle manager. If nil,
+	// tool_add/tool_remove/plugin_add/plugin_remove are disabled.
+	LifecycleMgr *tool.LifecycleManager
 
 	Logger *slog.Logger
 }
