@@ -65,3 +65,18 @@ default_provider = "openrouter"
 		t.Errorf("resolveDBPath = %q, want %q", got, want)
 	}
 }
+
+func TestResolveDBPath_MalformedTOML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte(`not valid toml {{{{`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got := resolveDBPath(cfgPath)
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".denkeeper", "data", "memory.db")
+	if got != want {
+		t.Errorf("resolveDBPath = %q, want default %q", got, want)
+	}
+}

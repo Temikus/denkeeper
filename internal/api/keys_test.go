@@ -698,6 +698,48 @@ func TestHandleSetupInit_NoKeyStore_Returns503(t *testing.T) {
 	}
 }
 
+func TestHandleSetupStatus_NoKeyStore_Returns503(t *testing.T) {
+	deps := testDeps()
+	// KeyStore is nil.
+	srv := New(testConfig(), deps, testLogger())
+
+	req := httptest.NewRequest("GET", "/api/v1/setup", nil)
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestHandleSetupInit_InvalidJSON(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks)
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{invalid`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed JSON", w.Code)
+	}
+}
+
+func TestHandleSetupInit_ConflictWhenTOMLKeyExists(t *testing.T) {
+	ks := testKeyStore(t)
+	srv := testSetupServer(t, ks, config.APIKeyConfig{Name: "toml", Key: "toml-secret", Scopes: []string{"admin"}})
+
+	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"name":"admin","scopes":["admin"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 when TOML key satisfies setup", w.Code)
+	}
+}
+
 func TestAuthenticate_UpdatesLastUsedAt(t *testing.T) {
 	ks := testKeyStore(t)
 	deps := testDeps()

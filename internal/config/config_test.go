@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1603,5 +1604,27 @@ base_url   = "https://custom.anthropic.proxy"
 	}
 	if cfg.LLM.Anthropic.BaseURL != "https://custom.anthropic.proxy" {
 		t.Errorf("anthropic base_url = %q, want https://custom.anthropic.proxy", cfg.LLM.Anthropic.BaseURL)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Default path helpers
+// ---------------------------------------------------------------------------
+
+func TestDefaultDBPath(t *testing.T) {
+	got := DefaultDBPath()
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".denkeeper", "data", "memory.db")
+	if got != want {
+		t.Errorf("DefaultDBPath() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigPath(t *testing.T) {
+	got := DefaultConfigPath()
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".denkeeper", "denkeeper.toml")
+	if got != want {
+		t.Errorf("DefaultConfigPath() = %q, want %q", got, want)
 	}
 }
