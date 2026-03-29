@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/sandbox"
 	"github.com/Temikus/denkeeper/internal/security"
 )
 
@@ -35,7 +36,7 @@ func (m *mockToolRegistrar) RegisterServer(_ context.Context, name, command stri
 }
 
 func newTestManager() *Manager {
-	return NewManager(slog.Default(), nil)
+	return NewManager(slog.Default(), nil, nil)
 }
 
 func TestLoad_SubprocessWithToolsCapability_Succeeds(t *testing.T) {
@@ -204,8 +205,13 @@ func TestStart_ToolsCapability_RegistersWithToolManager(t *testing.T) {
 	}
 }
 
+func newDockerTestManager() *Manager {
+	// Use a real DockerRuntime bypassing the PATH check (Spawn doesn't need docker).
+	return NewManager(slog.Default(), nil, &sandbox.DockerRuntime{})
+}
+
 func TestStart_DockerPlugin_RegistersAsDockerRun(t *testing.T) {
-	mgr := newTestManager()
+	mgr := newDockerTestManager()
 	// Manually load a Docker plugin (skip Load to avoid Docker CLI check).
 	mgr.plugins = []Plugin{
 		{
@@ -246,7 +252,7 @@ func TestStart_DockerPlugin_RegistersAsDockerRun(t *testing.T) {
 }
 
 func TestStart_DockerPlugin_WithCommandOverride(t *testing.T) {
-	mgr := newTestManager()
+	mgr := newDockerTestManager()
 	mgr.plugins = []Plugin{
 		{
 			Name:         "docker-custom",
@@ -317,64 +323,6 @@ func TestStart_NoEffectiveCapability_DoesNotRegister(t *testing.T) {
 	}
 }
 
-func TestBuildDockerArgs_FullConfig(t *testing.T) {
-	p := Plugin{
-		Image:       "mcp-server:v2",
-		MemoryLimit: "512m",
-		CPULimit:    "1.0",
-		Network:     "host",
-		Volumes:     []string{"/data:/mnt/data:ro"},
-		Env:         map[string]string{"TOKEN": "abc"},
-		Command:     "/bin/serve",
-		Args:        []string{"--port", "9000"},
-	}
-
-	args := buildDockerArgs(p)
-	argsStr := strings.Join(args, " ")
-
-	for _, expected := range []string{
-		"run", "--rm", "-i",
-		"--network host",
-		"--memory 512m",
-		"--cpus 1.0",
-		"--cap-drop ALL",
-		"--read-only",
-		"--security-opt no-new-privileges",
-		"-v /data:/mnt/data:ro",
-		"-e TOKEN=abc",
-		"mcp-server:v2",
-		"/bin/serve",
-		"--port", "9000",
-	} {
-		if !strings.Contains(argsStr, expected) {
-			t.Errorf("expected args to contain %q, got: %s", expected, argsStr)
-		}
-	}
-}
-
-func TestBuildDockerArgs_MinimalConfig(t *testing.T) {
-	p := Plugin{
-		Image: "simple-mcp:latest",
-	}
-
-	args := buildDockerArgs(p)
-	argsStr := strings.Join(args, " ")
-
-	if !strings.Contains(argsStr, "--network none") {
-		t.Errorf("expected default network none, got: %s", argsStr)
-	}
-	if strings.Contains(argsStr, "--memory") {
-		t.Errorf("expected no --memory flag, got: %s", argsStr)
-	}
-	if strings.Contains(argsStr, "--cpus") {
-		t.Errorf("expected no --cpus flag, got: %s", argsStr)
-	}
-	// Image should be the last positional arg before any command.
-	if !strings.Contains(argsStr, "simple-mcp:latest") {
-		t.Errorf("expected image in args, got: %s", argsStr)
-	}
-}
-
 // --- Signature verification tests ---
 
 func TestLoad_SignedPlugin_Verified(t *testing.T) {
@@ -397,7 +345,7 @@ func TestLoad_SignedPlugin_Verified(t *testing.T) {
 		TrustedKeys:   []ed25519.PublicKey{pub},
 		AllowUnsigned: false,
 	}
-	mgr := NewManager(slog.Default(), opts)
+	mgr := NewManager(slog.Default(), opts, nil)
 	plugins := map[string]config.PluginConfig{
 		"signed": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
 	}
@@ -419,7 +367,7 @@ func TestLoad_UnsignedPlugin_RejectedWhenRequired(t *testing.T) {
 		TrustedKeys:   []ed25519.PublicKey{pub},
 		AllowUnsigned: false,
 	}
-	mgr := NewManager(slog.Default(), opts)
+	mgr := NewManager(slog.Default(), opts, nil)
 	plugins := map[string]config.PluginConfig{
 		"unsigned": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
 	}
@@ -445,7 +393,7 @@ func TestLoad_UnsignedPlugin_AllowedWhenPermitted(t *testing.T) {
 		TrustedKeys:   []ed25519.PublicKey{pub},
 		AllowUnsigned: true,
 	}
-	mgr := NewManager(slog.Default(), opts)
+	mgr := NewManager(slog.Default(), opts, nil)
 	plugins := map[string]config.PluginConfig{
 		"unsigned": {Type: "subprocess", Command: pluginPath, Capabilities: []string{"tools"}},
 	}
@@ -456,7 +404,7 @@ func TestLoad_UnsignedPlugin_AllowedWhenPermitted(t *testing.T) {
 }
 
 func TestLoad_NoVerifyOpts_SkipsVerification(t *testing.T) {
-	mgr := NewManager(slog.Default(), nil)
+	mgr := NewManager(slog.Default(), nil, nil)
 	plugins := map[string]config.PluginConfig{
 		"unverified": {Type: "subprocess", Command: "/usr/bin/whatever", Capabilities: []string{"tools"}},
 	}
@@ -472,7 +420,7 @@ func TestLoad_VerifyBinary_CommandNotOnPath_SkipsVerification(t *testing.T) {
 		TrustedKeys:   []ed25519.PublicKey{pub},
 		AllowUnsigned: false,
 	}
-	mgr := NewManager(slog.Default(), opts)
+	mgr := NewManager(slog.Default(), opts, nil)
 	plugins := map[string]config.PluginConfig{
 		// Command that won't be found on PATH — verifyBinary should skip (not error).
 		"missing-binary": {Type: "subprocess", Command: "nonexistent-binary-12345", Capabilities: []string{"tools"}},

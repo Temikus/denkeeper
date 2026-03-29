@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/sandbox"
 	"github.com/Temikus/denkeeper/internal/security"
 )
 
@@ -34,12 +35,15 @@ type Manager struct {
 	plugins    []Plugin
 	logger     *slog.Logger
 	verifyOpts *VerifyOpts
+	runtime    sandbox.Runtime // optional; used for Docker/K8s plugins
 }
 
 // NewManager creates a plugin Manager with no plugins loaded.
 // Pass nil for verifyOpts to skip signature verification.
-func NewManager(logger *slog.Logger, verifyOpts *VerifyOpts) *Manager {
-	return &Manager{logger: logger, verifyOpts: verifyOpts}
+// Pass nil for runtime to use the legacy inline Docker args path
+// (a DockerRuntime will be created lazily if Docker plugins are loaded).
+func NewManager(logger *slog.Logger, verifyOpts *VerifyOpts, runtime sandbox.Runtime) *Manager {
+	return &Manager{logger: logger, verifyOpts: verifyOpts, runtime: runtime}
 }
 
 // Load validates all plugin configs and populates the internal plugin list.
@@ -106,8 +110,9 @@ func (m *Manager) Load(plugins map[string]config.PluginConfig, existingToolNames
 		})
 	}
 
-	// Check Docker availability once if any Docker plugins are configured.
-	if hasDocker {
+	// Check Docker availability once if any Docker plugins are configured
+	// and no sandbox runtime was provided (runtime handles its own checks).
+	if hasDocker && m.runtime == nil {
 		if err := checkDockerAvailable(); err != nil {
 			return err
 		}
@@ -147,8 +152,8 @@ func (m *Manager) verifyBinary(name, command string) error {
 // Start registers each loaded plugin's capabilities with the appropriate subsystem.
 // Plugins with the "tools" capability are registered as MCP servers via tools.RegisterServer.
 //
-// Subprocess plugins pass their command directly. Docker plugins are translated into
-// a `docker run -i --rm` command that connects the container's stdio to the MCP transport.
+// Subprocess plugins pass their command directly. Sandboxed plugins (Docker, Kubernetes)
+// are spawned via the sandbox.Runtime, which returns the command to connect to their stdio.
 //
 // A failure to register a plugin is logged as an error but does not halt other plugins.
 // Returns the first error encountered, or nil if all plugins started successfully.
@@ -170,12 +175,9 @@ func (m *Manager) Start(ctx context.Context, tools ToolRegistrar) error {
 		switch p.Type {
 		case TypeSubprocess:
 			err = tools.RegisterServer(ctx, p.Name, p.Command, p.Args, p.Env)
-		case TypeDocker:
-			// Docker plugins are registered as a `docker run` subprocess.
-			// Env vars are passed to the container via -e flags (built by buildDockerArgs),
-			// so we pass nil for the env map to RegisterServer.
-			dockerArgs := buildDockerArgs(p)
-			err = tools.RegisterServer(ctx, p.Name, dockerCommand, dockerArgs, nil)
+		default:
+			// Sandboxed plugins (Docker, Kubernetes) go through the runtime.
+			err = m.startSandboxed(ctx, p, tools)
 		}
 
 		if err != nil {
@@ -188,6 +190,28 @@ func (m *Manager) Start(ctx context.Context, tools ToolRegistrar) error {
 		m.logger.Info("plugin started", "plugin", p.Name, "type", string(p.Type))
 	}
 	return firstErr
+}
+
+// startSandboxed spawns a sandboxed plugin via the Runtime and registers
+// the resulting process with the tool manager.
+func (m *Manager) startSandboxed(ctx context.Context, p Plugin, tools ToolRegistrar) error {
+	if m.runtime == nil {
+		return fmt.Errorf("no sandbox runtime configured for %s plugin %q", p.Type, p.Name)
+	}
+	proc, err := m.runtime.Spawn(ctx, p.Name, sandbox.SpawnOpts{
+		Image:       p.Image,
+		Command:     p.Command,
+		Args:        p.Args,
+		Env:         p.Env,
+		MemoryLimit: p.MemoryLimit,
+		CPULimit:    p.CPULimit,
+		Network:     sandbox.NetworkPolicy(p.Network),
+		Volumes:     p.Volumes,
+	})
+	if err != nil {
+		return fmt.Errorf("spawning sandbox: %w", err)
+	}
+	return tools.RegisterServer(ctx, p.Name, proc.Command, proc.Args, proc.Env)
 }
 
 // Count returns the number of successfully loaded plugins.

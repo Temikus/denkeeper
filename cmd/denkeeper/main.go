@@ -29,6 +29,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
+	"github.com/Temikus/denkeeper/internal/sandbox"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -296,7 +297,17 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 			}
 		}
 
-		pluginMgr := plugin.NewManager(logger, verifyOpts)
+		// Create sandbox runtime for Docker/K8s plugins.
+		var sandboxRT sandbox.Runtime
+		if hasDockerPlugins(cfg.Plugins) {
+			rt, rtErr := sandbox.NewDockerRuntime()
+			if rtErr != nil {
+				return nil, cleanups, rtErr
+			}
+			sandboxRT = rt
+		}
+
+		pluginMgr := plugin.NewManager(logger, verifyOpts, sandboxRT)
 		if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
 			return nil, cleanups, fmt.Errorf("loading plugins: %w", err)
 		}
@@ -307,6 +318,16 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	}
 
 	return sharedToolMgr, cleanups, nil
+}
+
+// hasDockerPlugins returns true if any plugin in the map uses the docker type.
+func hasDockerPlugins(plugins map[string]config.PluginConfig) bool {
+	for _, pc := range plugins {
+		if pc.Type == "docker" {
+			return true
+		}
+	}
+	return false
 }
 
 // agentBuildCtx holds all the shared state needed to build per-agent engines.
