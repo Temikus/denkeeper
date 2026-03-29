@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o /denkeeper ./cmd/denkeeper
 
 # Stage 3: Runtime
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /denkeeper /usr/local/bin/denkeeper
 VOLUME ["/data"]
