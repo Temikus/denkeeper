@@ -328,6 +328,160 @@ func TestScheduler_MultipleFiresUpdateLastRun(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RegisterAndStart tests
+// ---------------------------------------------------------------------------
+
+func TestScheduler_RegisterAndStart_Fires(t *testing.T) {
+	s := New(discardLogger())
+	s.Start()
+	defer s.Stop()
+
+	fired := make(chan Entry, 1)
+	err := s.RegisterAndStart(Config{
+		Name:     "hot-add",
+		Type:     "agent",
+		Schedule: "@every 20ms",
+		Enabled:  true,
+	}, func(e Entry) {
+		select {
+		case fired <- e:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("RegisterAndStart: %v", err)
+	}
+
+	select {
+	case e := <-fired:
+		if e.Name != "hot-add" {
+			t.Errorf("Name = %q, want hot-add", e.Name)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("RegisterAndStart entry did not fire within 500ms")
+	}
+}
+
+func TestScheduler_RegisterAndStart_Disabled(t *testing.T) {
+	s := New(discardLogger())
+	s.Start()
+	defer s.Stop()
+
+	fired := make(chan struct{}, 1)
+	err := s.RegisterAndStart(Config{
+		Name:     "disabled-hot",
+		Type:     "agent",
+		Schedule: "@every 10ms",
+		Enabled:  false,
+	}, func(Entry) { fired <- struct{}{} })
+	if err != nil {
+		t.Fatalf("RegisterAndStart: %v", err)
+	}
+
+	select {
+	case <-fired:
+		t.Fatal("disabled entry should not fire")
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestScheduler_RegisterAndStart_Duplicate(t *testing.T) {
+	s := New(discardLogger())
+	s.Start()
+	defer s.Stop()
+
+	_ = s.RegisterAndStart(Config{Name: "dup", Type: "agent", Schedule: "@daily", Enabled: true}, func(Entry) {})
+	err := s.RegisterAndStart(Config{Name: "dup", Type: "agent", Schedule: "@daily", Enabled: true}, func(Entry) {})
+	if err == nil {
+		t.Fatal("expected error for duplicate name")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unregister / GetEntry tests
+// ---------------------------------------------------------------------------
+
+func TestScheduler_GetEntry(t *testing.T) {
+	s := New(discardLogger())
+
+	_ = s.Register(Config{Name: "j1", Type: "agent", Schedule: "@daily", Enabled: true, Skill: "greet"}, func(Entry) {})
+
+	e, ok := s.GetEntry("j1")
+	if !ok {
+		t.Fatal("GetEntry returned false for existing entry")
+	}
+	if e.Name != "j1" || e.Skill != "greet" {
+		t.Errorf("GetEntry = %+v, want name=j1, skill=greet", e)
+	}
+
+	_, ok = s.GetEntry("nonexistent")
+	if ok {
+		t.Error("GetEntry returned true for nonexistent entry")
+	}
+}
+
+func TestScheduler_Unregister(t *testing.T) {
+	s := New(discardLogger())
+
+	_ = s.Register(Config{Name: "removable", Type: "agent", Schedule: "@every 1h", Enabled: true}, func(Entry) {})
+
+	if err := s.Unregister("removable"); err != nil {
+		t.Fatalf("Unregister: %v", err)
+	}
+
+	if len(s.Entries()) != 0 {
+		t.Error("expected 0 entries after Unregister")
+	}
+}
+
+func TestScheduler_Unregister_NotFound(t *testing.T) {
+	s := New(discardLogger())
+
+	if err := s.Unregister("ghost"); err == nil {
+		t.Fatal("expected error for nonexistent entry")
+	}
+}
+
+func TestScheduler_Unregister_StopsRunningEntry(t *testing.T) {
+	s := New(discardLogger())
+
+	fired := make(chan struct{}, 10)
+	_ = s.Register(Config{Name: "fast", Type: "agent", Schedule: "@every 15ms", Enabled: true}, func(Entry) {
+		fired <- struct{}{}
+	})
+
+	s.Start()
+	defer s.Stop()
+
+	// Wait for at least one fire.
+	select {
+	case <-fired:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("schedule did not fire")
+	}
+
+	// Unregister — the goroutine should stop.
+	if err := s.Unregister("fast"); err != nil {
+		t.Fatalf("Unregister: %v", err)
+	}
+
+	// Drain any pending fires.
+	time.Sleep(50 * time.Millisecond)
+	for len(fired) > 0 {
+		<-fired
+	}
+
+	// No more fires should arrive.
+	select {
+	case <-fired:
+		t.Error("schedule fired after Unregister")
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

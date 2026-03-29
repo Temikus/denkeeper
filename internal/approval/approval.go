@@ -41,6 +41,9 @@ const (
 
 	// ActionKindInstallTool is a request to add or remove an MCP tool or plugin at runtime.
 	ActionKindInstallTool ActionKind = "install_tool"
+
+	// ActionKindModifyConfig is a request to change a runtime configuration setting (e.g. fallback rules).
+	ActionKindModifyConfig ActionKind = "modify_config"
 )
 
 // Request is the persisted record of a pending or resolved approval.

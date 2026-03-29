@@ -366,6 +366,56 @@ type agentBuildCtx struct {
 	logger          *slog.Logger
 }
 
+// connectConfigMCP creates the per-agent Config MCP server, connects it, and
+// registers its tools into the agent's tool manager.
+func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent.Engine, router *llm.Router, toolMgr *tool.Manager, abc agentBuildCtx) error {
+	costTracker := abc.llm.cost
+	cmcpSrv := configmcp.New(configmcp.Deps{
+		AgentName:      agentName,
+		AgentSkillsDir: skillsDir,
+		GetSkills:      e.Skills,
+		AppendSkill:    e.AppendSkill,
+		Sched:          abc.sched,
+		HandleMessage:  e.HandleMessage,
+		Approvals:      abc.approvalManager,
+		PermissionTier: e.PermissionTier,
+		LifecycleMgr:   abc.lifecycleMgr,
+		KVStore:        abc.kvStore,
+		CostSummary: func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{
+				GlobalCost:    costTracker.GlobalCost(),
+				MaxPerSession: costTracker.MaxBudgetPerSession(),
+				SessionCosts:  costTracker.AllSessionCosts(),
+			}
+		},
+		SetFallbacks: func(rules []configmcp.FallbackRuleInput) {
+			converted := make([]llm.FallbackRule, len(rules))
+			for i, r := range rules {
+				converted[i] = llm.FallbackRule{
+					Trigger:    r.Trigger,
+					Action:     r.Action,
+					Provider:   r.Provider,
+					Model:      r.Model,
+					Threshold:  r.Threshold,
+					MaxRetries: r.MaxRetries,
+					Backoff:    r.Backoff,
+				}
+			}
+			router.SetFallbacks(converted)
+		},
+		Logger: abc.logger,
+	})
+	session, err := cmcpSrv.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("starting config MCP for agent %q: %w", agentName, err)
+	}
+	if err := toolMgr.RegisterSession(ctx, "config-"+agentName, session); err != nil {
+		return fmt.Errorf("registering config MCP for agent %q: %w", agentName, err)
+	}
+	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
+	return nil
+}
+
 func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
 	// Per-agent persona
 	var p *persona.Persona
@@ -458,27 +508,9 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	e.SetScheduler(abc.sched)
 
 	// Connect per-agent Config MCP server and register its tools.
-	cmcpSrv := configmcp.New(configmcp.Deps{
-		AgentName:      ac.Name,
-		AgentSkillsDir: agentSkillsDir,
-		GetSkills:      e.Skills,
-		AppendSkill:    e.AppendSkill,
-		Sched:          abc.sched,
-		HandleMessage:  e.HandleMessage,
-		Approvals:      abc.approvalManager,
-		PermissionTier: e.PermissionTier,
-		LifecycleMgr:   abc.lifecycleMgr,
-		KVStore:        abc.kvStore,
-		Logger:         abc.logger,
-	})
-	cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
-	if cmcpErr != nil {
-		return nil, nil, fmt.Errorf("starting config MCP for agent %q: %w", ac.Name, cmcpErr)
+	if err := connectConfigMCP(ctx, ac.Name, agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
+		return nil, nil, err
 	}
-	if err := agentToolMgr.RegisterSession(ctx, "config-"+ac.Name, cmcpSession); err != nil {
-		return nil, nil, fmt.Errorf("registering config MCP for agent %q: %w", ac.Name, err)
-	}
-	abc.logger.Info("config MCP registered", "agent", ac.Name, "tools", len(agentToolMgr.ToolDefs()))
 
 	agentRouter.SetTools(agentToolMgr.ToolDefs())
 

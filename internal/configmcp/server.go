@@ -62,7 +62,33 @@ type Deps struct {
 	// KVStore is the per-agent key-value store. If nil, kv_* tools are disabled.
 	KVStore kv.Store
 
+	// CostSummary returns a snapshot of cost tracking data. If nil,
+	// get_cost_summary is disabled.
+	CostSummary func() CostSummaryData
+
+	// SetFallbacks replaces the LLM router's fallback rule list. If nil,
+	// set_fallback is disabled.
+	SetFallbacks func(rules []FallbackRuleInput)
+
 	Logger *slog.Logger
+}
+
+// CostSummaryData holds the data returned by the get_cost_summary tool.
+type CostSummaryData struct {
+	GlobalCost    float64            `json:"global_cost"`
+	MaxPerSession float64            `json:"max_per_session"`
+	SessionCosts  map[string]float64 `json:"session_costs"`
+}
+
+// FallbackRuleInput describes a single fallback rule as provided by the agent.
+type FallbackRuleInput struct {
+	Trigger    string  `json:"trigger"`
+	Action     string  `json:"action"`
+	Provider   string  `json:"provider,omitempty"`
+	Model      string  `json:"model,omitempty"`
+	Threshold  float64 `json:"threshold,omitempty"`
+	MaxRetries int     `json:"max_retries,omitempty"`
+	Backoff    string  `json:"backoff,omitempty"`
 }
 
 // Server is the in-process Config MCP server for a single agent.

@@ -69,7 +69,7 @@ The pipeline steps are: check permissions → get/create conversation → store 
 - Interval: `@every 5m`, `@every 1h30m`
 - Cron (5-field): `0 8 * * 1-5`
 
-Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messages to agents via `Dispatcher.Dispatch(ctx, agentName, msg)`. Schedules have an `agent` field (defaults to `"default"`).
+Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messages to agents via `Dispatcher.Dispatch(ctx, agentName, msg)`. Schedules have an `agent` field (defaults to `"default"`). Per-entry context cancellation supports `Unregister(name)` for runtime schedule removal and `GetEntry(name)` for lookups.
 
 ## External REST API
 
@@ -102,7 +102,7 @@ Four action kinds: `user_update`, `create_skill`, `modify_schedule`, `install_to
 
 `internal/configmcp/` provides a per-agent in-process MCP server that lets the LLM modify its own configuration at runtime (supervised or autonomous tier).
 
-Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`. In supervised mode mutation tools submit to the approval Manager rather than acting directly.
+Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `schedule_update`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`, `set_fallback`, `get_cost_summary`. In supervised mode mutation tools submit to the approval Manager rather than acting directly.
 
 ## Agent KV Store
 
@@ -261,5 +261,6 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
 - CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
-- Next: Browser automation (Phase 5), Config MCP tools (`update_schedule`, `set_fallback`, `get_cost_summary`).
+- Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
+- Next: Browser automation (Phase 5).
 - See `design/denkeeper-prd.md` for the full roadmap.

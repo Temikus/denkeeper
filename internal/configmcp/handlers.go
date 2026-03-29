@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,66 @@ func (s *Server) registerTools() {
 			"required": ["name"]
 		}`),
 	}, s.handlePluginRemove)
+
+	// Schedule update tool.
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "schedule_update",
+		Description: "Update an existing schedule's properties. Only provided fields are changed; omitted fields keep their current values.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name":         {"type": "string",  "description": "Name of the schedule to update"},
+				"schedule":     {"type": "string",  "description": "New timing expression"},
+				"skill":        {"type": "string",  "description": "New skill name"},
+				"channel":      {"type": "string",  "description": "New delivery channel (adapter:externalID)"},
+				"session_mode": {"type": "string",  "description": "shared or isolated"},
+				"session_tier": {"type": "string",  "description": "Permission tier override"},
+				"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
+				"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handleScheduleUpdate)
+
+	// Fallback configuration tool.
+	if s.deps.SetFallbacks != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "set_fallback",
+			Description: "Replace the LLM router's fallback rules. Pass an empty array to clear all rules.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"rules": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"trigger":     {"type": "string",  "enum": ["error", "rate_limit", "low_funds"]},
+								"action":      {"type": "string",  "enum": ["switch_provider", "switch_model", "wait_and_retry"]},
+								"provider":    {"type": "string",  "description": "Target provider (for switch_provider)"},
+								"model":       {"type": "string",  "description": "Target model (for switch_model)"},
+								"threshold":   {"type": "number",  "description": "USD remaining (for low_funds)"},
+								"max_retries": {"type": "integer", "description": "Retry count (for wait_and_retry)"},
+								"backoff":     {"type": "string",  "enum": ["exponential", "constant"]}
+							},
+							"required": ["trigger", "action"]
+						},
+						"description": "Ordered list of fallback rules"
+					}
+				},
+				"required": ["rules"]
+			}`),
+		}, s.handleSetFallback)
+	}
+
+	// Cost summary tool.
+	if s.deps.CostSummary != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "get_cost_summary",
+			Description: "Return current cost tracking data: global cost, per-session costs, and budget limit.",
+			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+		}, s.handleGetCostSummary)
+	}
 
 	// KV store tools (registered only when a KVStore is provided).
 	if s.deps.KVStore != nil {
@@ -278,26 +339,6 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("building schedule payload: " + err.Error()), nil
 	}
 
-	schedRef := s.deps.Sched
-	handleMsg := s.deps.HandleMessage
-
-	adapterName := input.Channel[:colonIdx]
-	externalID := input.Channel[colonIdx+1:]
-
-	text := "[Scheduled trigger: " + input.Name + "]"
-	if input.Skill != "" {
-		text = "[Scheduled: " + input.Skill + "]"
-	}
-
-	baseMsg := adapter.IncomingMessage{
-		Adapter:     adapterName,
-		ExternalID:  externalID,
-		UserName:    "scheduler",
-		Text:        text,
-		SkillName:   input.Skill,
-		SessionTier: input.SessionTier,
-	}
-
 	cfg := scheduler.Config{
 		Name:        input.Name,
 		Type:        string(scheduler.ScheduleTypeAgent),
@@ -310,17 +351,12 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		Enabled:     enabled,
 	}
 
+	schedRef := s.deps.Sched
+	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
+
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		return schedRef.RegisterAndStart(cfg, func(entry scheduler.Entry) {
-			msg := baseMsg
-			if entry.SessionMode == "isolated" {
-				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
-			}
-			if err := handleMsg(context.Background(), msg); err != nil {
-				logger.Error("scheduled job failed", "name", entry.Name, "error", err)
-			}
-		})
+		return schedRef.RegisterAndStart(cfg, buildScheduleJob(cfg, handleMsg, logger))
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
@@ -361,6 +397,171 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 		return toolError("marshaling schedules: " + err.Error()), nil
 	}
 	return toolText(string(data)), nil
+}
+
+// scheduleUpdateInput holds the parsed arguments for schedule_update.
+type scheduleUpdateInput struct {
+	Name        string   `json:"name"`
+	Schedule    *string  `json:"schedule"`
+	Skill       *string  `json:"skill"`
+	Channel     *string  `json:"channel"`
+	SessionMode *string  `json:"session_mode"`
+	SessionTier *string  `json:"session_tier"`
+	Tags        []string `json:"tags"`
+	Enabled     *bool    `json:"enabled"`
+}
+
+// mergeScheduleUpdate applies partial updates from input onto an existing entry
+// and returns the merged scheduler.Config plus the channel parts. Returns an
+// error string if validation fails.
+func mergeScheduleUpdate(existing scheduler.Entry, input scheduleUpdateInput) (scheduler.Config, string) {
+	expr := existing.Expr
+	if input.Schedule != nil {
+		expr = *input.Schedule
+	}
+	if err := scheduler.ValidateExpr(expr); err != nil {
+		return scheduler.Config{}, "invalid schedule expression: " + err.Error()
+	}
+	skill := existing.Skill
+	if input.Skill != nil {
+		skill = *input.Skill
+	}
+	channel := existing.Channel
+	if input.Channel != nil {
+		channel = *input.Channel
+	}
+	colonIdx := strings.IndexByte(channel, ':')
+	if colonIdx <= 0 || colonIdx == len(channel)-1 {
+		return scheduler.Config{}, fmt.Sprintf("channel %q is not in adapter:externalID format", channel)
+	}
+	sessionMode := existing.SessionMode
+	if input.SessionMode != nil {
+		sessionMode = *input.SessionMode
+	}
+	sessionTier := existing.SessionTier
+	if input.SessionTier != nil {
+		sessionTier = *input.SessionTier
+	}
+	enabled := existing.Enabled
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	tags := existing.Tags
+	if input.Tags != nil {
+		tags = input.Tags
+	}
+
+	return scheduler.Config{
+		Name:        input.Name,
+		Type:        string(scheduler.ScheduleTypeAgent),
+		Schedule:    expr,
+		Skill:       skill,
+		SessionTier: sessionTier,
+		SessionMode: sessionMode,
+		Channel:     channel,
+		Tags:        tags,
+		Enabled:     enabled,
+	}, ""
+}
+
+func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.Sched == nil {
+		return toolError("schedule_update is not available: no scheduler configured"), nil
+	}
+	if s.deps.HandleMessage == nil {
+		return toolError("schedule_update is not available: no message handler configured"), nil
+	}
+	if s.deps.PermissionTier() == "restricted" {
+		return toolError("schedule_update is not available in restricted mode"), nil
+	}
+
+	var input scheduleUpdateInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	existing, ok := s.deps.Sched.GetEntry(input.Name)
+	if !ok {
+		return toolError(fmt.Sprintf("schedule %q not found", input.Name)), nil
+	}
+
+	cfg, errMsg := mergeScheduleUpdate(existing, input)
+	if errMsg != "" {
+		return toolError(errMsg), nil
+	}
+
+	payload, err := buildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
+		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled)
+	if err != nil {
+		return toolError("building schedule payload: " + err.Error()), nil
+	}
+
+	schedRef := s.deps.Sched
+	handleMsg := s.deps.HandleMessage
+	logger := s.deps.Logger
+
+	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
+		if err := schedRef.Unregister(input.Name); err != nil {
+			return fmt.Errorf("unregistering old schedule: %w", err)
+		}
+		return schedRef.RegisterAndStart(cfg, buildScheduleJob(cfg, handleMsg, logger))
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
+		"Update schedule: "+input.Name, payload, applyFn)
+}
+
+func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("set_fallback is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Rules []FallbackRuleInput `json:"rules"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+
+	// Validate rules.
+	for i, r := range input.Rules {
+		switch r.Trigger {
+		case "error", "rate_limit", "low_funds":
+		default:
+			return toolError(fmt.Sprintf("rules[%d]: trigger must be error, rate_limit, or low_funds", i)), nil
+		}
+		switch r.Action {
+		case "switch_provider", "switch_model", "wait_and_retry":
+		default:
+			return toolError(fmt.Sprintf("rules[%d]: action must be switch_provider, switch_model, or wait_and_retry", i)), nil
+		}
+	}
+
+	payload, _ := json.Marshal(input.Rules)
+
+	setFn := s.deps.SetFallbacks
+	rules := input.Rules
+	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
+		setFn(rules)
+		return nil
+	})
+
+	summary := fmt.Sprintf("Set %d fallback rule(s)", len(input.Rules))
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifyConfig,
+		summary, string(payload), applyFn)
+}
+
+func (s *Server) handleGetCostSummary(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data := s.deps.CostSummary()
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return toolError("marshaling cost summary: " + err.Error()), nil
+	}
+	return toolText(string(out)), nil
 }
 
 // --------------------------------------------------------------------------
@@ -692,6 +893,38 @@ func buildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// buildScheduleJob returns a JobFunc that dispatches a message when the
+// schedule fires. Used by both schedule_add and schedule_update.
+func buildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger) scheduler.JobFunc {
+	colonIdx := strings.IndexByte(cfg.Channel, ':')
+	adapterName := cfg.Channel[:colonIdx]
+	externalID := cfg.Channel[colonIdx+1:]
+
+	text := "[Scheduled trigger: " + cfg.Name + "]"
+	if cfg.Skill != "" {
+		text = "[Scheduled: " + cfg.Skill + "]"
+	}
+
+	baseMsg := adapter.IncomingMessage{
+		Adapter:     adapterName,
+		ExternalID:  externalID,
+		UserName:    "scheduler",
+		Text:        text,
+		SkillName:   cfg.Skill,
+		SessionTier: cfg.SessionTier,
+	}
+
+	return func(entry scheduler.Entry) {
+		msg := baseMsg
+		if entry.SessionMode == "isolated" {
+			msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
+		}
+		if err := handleMsg(context.Background(), msg); err != nil {
+			logger.Error("scheduled job failed", "name", entry.Name, "error", err)
+		}
+	}
 }
 
 func toolText(text string) *mcp.CallToolResult {

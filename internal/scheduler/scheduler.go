@@ -96,8 +96,10 @@ type Scheduler struct {
 
 type internalEntry struct {
 	Entry
-	job  JobFunc
-	expr *parsedExpr
+	job    JobFunc
+	expr   *parsedExpr
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // New creates a Scheduler. All schedule times are interpreted in UTC.
@@ -133,6 +135,7 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 		return fmt.Errorf("scheduler: schedule %q: %w", cfg.Name, err)
 	}
 
+	entryCtx, entryCancel := context.WithCancel(s.ctx)
 	e := &internalEntry{
 		Entry: Entry{
 			Name:        cfg.Name,
@@ -145,8 +148,10 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 			Tags:        cfg.Tags,
 			Enabled:     cfg.Enabled,
 		},
-		job:  job,
-		expr: expr,
+		job:    job,
+		expr:   expr,
+		ctx:    entryCtx,
+		cancel: entryCancel,
 	}
 
 	if cfg.Enabled {
@@ -181,6 +186,7 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 		return fmt.Errorf("scheduler: schedule %q: %w", cfg.Name, err)
 	}
 
+	entryCtx, entryCancel := context.WithCancel(s.ctx)
 	e := &internalEntry{
 		Entry: Entry{
 			Name:        cfg.Name,
@@ -193,8 +199,10 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 			Tags:        cfg.Tags,
 			Enabled:     cfg.Enabled,
 		},
-		job:  job,
-		expr: expr,
+		job:    job,
+		expr:   expr,
+		ctx:    entryCtx,
+		cancel: entryCancel,
 	}
 
 	if cfg.Enabled {
@@ -300,6 +308,37 @@ func (s *Scheduler) EntriesByTag(tag string) []Entry {
 	return out
 }
 
+// GetEntry returns a snapshot of the named entry and true, or a zero value and
+// false if not found.
+func (s *Scheduler) GetEntry(name string) (Entry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.entries[name]
+	if !ok {
+		return Entry{}, false
+	}
+	return e.Entry, true
+}
+
+// Unregister stops and removes a named schedule entry. If the entry is running,
+// its goroutine is cancelled asynchronously. Returns an error if the name is
+// not found.
+func (s *Scheduler) Unregister(name string) error {
+	s.mu.Lock()
+	e, exists := s.entries[name]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("scheduler: schedule %q not found", name)
+	}
+	if e.cancel != nil {
+		e.cancel()
+	}
+	delete(s.entries, name)
+	s.mu.Unlock()
+	s.logger.Info("schedule unregistered", "name", name)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Internal run loops
 // ---------------------------------------------------------------------------
@@ -320,7 +359,7 @@ func (s *Scheduler) runInterval(e *internalEntry) {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-e.ctx.Done():
 			return
 		case t := <-ticker.C:
 			now := t.UTC()
@@ -347,7 +386,7 @@ func (s *Scheduler) runCron(e *internalEntry) {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
 			now := time.Now().UTC()

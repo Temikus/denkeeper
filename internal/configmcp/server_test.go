@@ -971,3 +971,451 @@ func TestKVList_AllowedInRestrictedTier(t *testing.T) {
 		t.Fatal("kv_list should be allowed in restricted mode")
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: schedule_update
+// --------------------------------------------------------------------------
+
+func TestScheduleUpdate_Success(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	// First, add a schedule.
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "updatable",
+		"schedule": "@every 1h",
+		"channel":  "telegram:12345",
+		"skill":    "old-skill",
+	})
+	if isErr {
+		t.Fatal("schedule_add failed")
+	}
+
+	// Update only the skill and schedule expression.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":     "updatable",
+		"schedule": "@daily",
+		"skill":    "new-skill",
+	})
+	if isErr {
+		t.Fatalf("schedule_update error: %s", text)
+	}
+	if !strings.Contains(text, "Update schedule") {
+		t.Errorf("expected update confirmation, got: %s", text)
+	}
+
+	// Verify the schedule was updated in the list.
+	listText, _ := callTool(t, session, "schedule_list", map[string]any{})
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("parsing schedule_list: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(listed))
+	}
+	if listed[0]["skill"] != "new-skill" {
+		t.Errorf("skill = %v, want new-skill", listed[0]["skill"])
+	}
+	if listed[0]["schedule"] != "@daily" {
+		t.Errorf("schedule = %v, want @daily", listed[0]["schedule"])
+	}
+	// Channel should be preserved from original.
+	if listed[0]["channel"] != "telegram:12345" {
+		t.Errorf("channel = %v, want telegram:12345", listed[0]["channel"])
+	}
+}
+
+func TestScheduleUpdate_NotFound(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":     "nonexistent",
+		"schedule": "@daily",
+	})
+	if !isErr {
+		t.Fatal("expected error for nonexistent schedule")
+	}
+}
+
+func TestScheduleUpdate_InvalidExpression(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	callTool(t, session, "schedule_add", map[string]any{
+		"name": "expr-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":     "expr-test",
+		"schedule": "bad-expr",
+	})
+	if !isErr {
+		t.Fatal("expected error for invalid expression")
+	}
+}
+
+func TestScheduleUpdate_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "blocked",
+	})
+	if !isErr {
+		t.Fatal("expected error in restricted mode")
+	}
+}
+
+func TestScheduleUpdate_NoScheduler(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.Sched = nil
+		d.HandleMessage = nil
+	})
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "test",
+	})
+	if !isErr {
+		t.Fatal("expected error when scheduler is nil")
+	}
+}
+
+func TestScheduleUpdate_EnableDisable(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	callTool(t, session, "schedule_add", map[string]any{
+		"name": "toggle", "schedule": "@daily", "channel": "telegram:1", "enabled": true,
+	})
+
+	// Disable the schedule.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":    "toggle",
+		"enabled": false,
+	})
+	if isErr {
+		t.Fatalf("schedule_update error: %s", text)
+	}
+
+	listText, _ := callTool(t, session, "schedule_list", map[string]any{})
+	var listed []map[string]any
+	_ = json.Unmarshal([]byte(listText), &listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(listed))
+	}
+	if listed[0]["enabled"] != false {
+		t.Errorf("enabled = %v, want false", listed[0]["enabled"])
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: set_fallback
+// --------------------------------------------------------------------------
+
+func TestSetFallback_Success(t *testing.T) {
+	var captured []configmcp.FallbackRuleInput
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {
+			captured = rules
+		}
+	})
+
+	text, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{
+			{"trigger": "rate_limit", "action": "wait_and_retry", "max_retries": 3, "backoff": "exponential"},
+			{"trigger": "error", "action": "switch_provider", "provider": "ollama"},
+		},
+	})
+	if isErr {
+		t.Fatalf("set_fallback error: %s", text)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 rules captured, got %d", len(captured))
+	}
+	if captured[0].Trigger != "rate_limit" {
+		t.Errorf("rule[0].Trigger = %q, want rate_limit", captured[0].Trigger)
+	}
+	if captured[1].Provider != "ollama" {
+		t.Errorf("rule[1].Provider = %q, want ollama", captured[1].Provider)
+	}
+}
+
+func TestSetFallback_ClearRules(t *testing.T) {
+	var captured []configmcp.FallbackRuleInput
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {
+			captured = rules
+		}
+	})
+
+	text, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{},
+	})
+	if isErr {
+		t.Fatalf("set_fallback error: %s", text)
+	}
+	if len(captured) != 0 {
+		t.Errorf("expected 0 rules, got %d", len(captured))
+	}
+	if !strings.Contains(text, "0 fallback") {
+		t.Errorf("unexpected message: %s", text)
+	}
+}
+
+func TestSetFallback_InvalidTrigger(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {}
+	})
+
+	_, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{
+			{"trigger": "invalid", "action": "wait_and_retry"},
+		},
+	})
+	if !isErr {
+		t.Fatal("expected error for invalid trigger")
+	}
+}
+
+func TestSetFallback_InvalidAction(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {}
+	})
+
+	_, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{
+			{"trigger": "error", "action": "explode"},
+		},
+	})
+	if !isErr {
+		t.Fatal("expected error for invalid action")
+	}
+}
+
+func TestSetFallback_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {}
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{},
+	})
+	if !isErr {
+		t.Fatal("expected error in restricted mode")
+	}
+}
+
+func TestSetFallback_NotAvailable(t *testing.T) {
+	session, _ := newTestServer(t, nil) // no SetFallbacks
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range result.Tools {
+		if tool.Name == "set_fallback" {
+			t.Error("set_fallback should not be listed when SetFallbacks is nil")
+		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: get_cost_summary
+// --------------------------------------------------------------------------
+
+func TestGetCostSummary_Success(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{
+				GlobalCost:    1.23,
+				MaxPerSession: 5.0,
+				SessionCosts:  map[string]float64{"sess-1": 0.45, "sess-2": 0.78},
+			}
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result["global_cost"] != 1.23 {
+		t.Errorf("global_cost = %v, want 1.23", result["global_cost"])
+	}
+	if result["max_per_session"] != 5.0 {
+		t.Errorf("max_per_session = %v, want 5", result["max_per_session"])
+	}
+	sessions, ok := result["session_costs"].(map[string]any)
+	if !ok {
+		t.Fatalf("session_costs not a map: %T", result["session_costs"])
+	}
+	if sessions["sess-1"] != 0.45 {
+		t.Errorf("sess-1 cost = %v, want 0.45", sessions["sess-1"])
+	}
+}
+
+func TestGetCostSummary_NotAvailable(t *testing.T) {
+	session, _ := newTestServer(t, nil) // no CostSummary
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range result.Tools {
+		if tool.Name == "get_cost_summary" {
+			t.Error("get_cost_summary should not be listed when CostSummary is nil")
+		}
+	}
+}
+
+func TestGetCostSummary_EmptySessions(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{
+				GlobalCost:    0,
+				MaxPerSession: 10.0,
+				SessionCosts:  map[string]float64{},
+			}
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result["global_cost"] != 0.0 {
+		t.Errorf("global_cost = %v, want 0", result["global_cost"])
+	}
+}
+
+func TestGetCostSummary_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 0.5}
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary should be allowed in restricted mode, got error: %s", text)
+	}
+	if !strings.Contains(text, "0.5") {
+		t.Errorf("expected cost data, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: supervised tier approvals for new tools
+// --------------------------------------------------------------------------
+
+func TestSetFallback_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	approvalMgr := approval.NewManager(store, newTestLogger(t))
+
+	var applied bool
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+		d.Approvals = approvalMgr
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {
+			applied = true
+		}
+	})
+
+	text, isErr := callTool(t, session, "set_fallback", map[string]any{
+		"rules": []map[string]any{
+			{"trigger": "error", "action": "switch_model", "model": "gpt-4"},
+		},
+	})
+	if isErr {
+		t.Fatalf("set_fallback error: %s", text)
+	}
+	if !strings.Contains(text, "pproval") && !strings.Contains(text, "ubmit") {
+		t.Errorf("expected approval submission message, got: %s", text)
+	}
+
+	// Should NOT have been applied yet.
+	if applied {
+		t.Error("fallback rules should not be applied before approval")
+	}
+
+	// A pending approval should exist.
+	requests, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("listing approvals: %v", err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(requests))
+	}
+	if requests[0].Kind != approval.ActionKindModifyConfig {
+		t.Errorf("approval kind = %q, want modify_config", requests[0].Kind)
+	}
+}
+
+func TestScheduleUpdate_InvalidChannel(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	callTool(t, session, "schedule_add", map[string]any{
+		"name": "chan-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":    "chan-test",
+		"channel": "bad-no-colon",
+	})
+	if !isErr {
+		t.Fatal("expected error for invalid channel format in update")
+	}
+}
+
+func TestScheduleUpdate_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	_, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"schedule": "@daily",
+	})
+	if !isErr {
+		t.Fatal("expected error for missing name")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: tool discovery includes new tools
+// --------------------------------------------------------------------------
+
+func TestServer_ListTools_IncludesNewTools(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SetFallbacks = func(rules []configmcp.FallbackRuleInput) {}
+		d.CostSummary = func() configmcp.CostSummaryData { return configmcp.CostSummaryData{} }
+	})
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	expected := map[string]bool{
+		"schedule_update":  false,
+		"set_fallback":     false,
+		"get_cost_summary": false,
+	}
+	for _, tool := range result.Tools {
+		if _, ok := expected[tool.Name]; ok {
+			expected[tool.Name] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Errorf("tool %q not listed", name)
+		}
+	}
+}
