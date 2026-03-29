@@ -53,6 +53,28 @@ jobs:
           # Add at: github.com/Temikus/denkeeper/settings/secrets/actions
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+  helm:
+    name: Helm Chart
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Set chart version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version: .*/version: ${VERSION}/" deploy/helm/denkeeper/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${VERSION}\"/" deploy/helm/denkeeper/Chart.yaml
+      - name: Package chart
+        run: helm package deploy/helm/denkeeper --destination "$RUNNER_TEMP"
+      - name: Push chart to GHCR
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm push "$RUNNER_TEMP/denkeeper-${VERSION}.tgz" oci://ghcr.io/temikus/charts
+
   docker:
     name: Docker
     needs: test
