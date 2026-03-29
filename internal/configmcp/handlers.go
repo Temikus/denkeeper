@@ -139,6 +139,11 @@ func (s *Server) registerTools() {
 			"required": ["name"]
 		}`),
 	}, s.handlePluginRemove)
+
+	// KV store tools (registered only when a KVStore is provided).
+	if s.deps.KVStore != nil {
+		s.registerKVTools()
+	}
 }
 
 // --------------------------------------------------------------------------

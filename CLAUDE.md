@@ -102,7 +102,19 @@ Three action kinds: `user_update`, `create_skill`, `modify_schedule`. Default TT
 
 `internal/configmcp/` provides a per-agent in-process MCP server that lets the LLM modify its own configuration at runtime (supervised or autonomous tier).
 
-Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `get_permission_tier`. In supervised mode these tools still submit to the approval Manager rather than acting directly.
+Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`. In supervised mode mutation tools submit to the approval Manager rather than acting directly.
+
+## Agent KV Store
+
+`internal/kv/` provides per-agent key-value storage with optional TTL, exposed via Config MCP tools.
+
+- **SQLite-backed**: shares the same WAL database as conversations and approvals.
+- **Per-agent scoped**: agents cannot access each other's keys (enforced at store level).
+- **TTL-native**: keys can have an expiry; expired keys are invisible to reads and lazily cleaned up by a background worker.
+- **Permission-aware**: reads (`kv_get`, `kv_list`) allowed for all tiers; writes (`kv_set`, `kv_delete`, `kv_set_nx`) denied for restricted tier.
+- **Atomic SetNX**: `kv_set_nx` is the primitive for distributed locks — set-if-not-exists with optional TTL.
+- **Config**: `[kv]` section with `max_keys_per_agent` (default 1000), `max_value_bytes` (default 64KB), `cleanup_interval` (default "1h").
+- See `design/kv-store.md` for the full design and use-case examples.
 
 ## Plugin System
 
@@ -222,11 +234,13 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Plugin signing: Ed25519 signature verification for subprocess plugin binaries. Configurable via `[security]` with `trusted_keys` (PEM public key files) and `allow_unsigned` (default true). Includes `SignFile`/`VerifyFile` library, PEM key marshaling, and `LoadTrustedKeys` for key management.
 - External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management), tool/plugin CRUD (`tools:read`/`tools:write` scopes). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule / install_tool directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
-- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, permission tier inspection, and tool/plugin management (add/remove/list).
+- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, permission tier inspection, tool/plugin management (add/remove/list), and KV store operations (get/set/delete/list/set_nx).
 - Tool lifecycle management: runtime add/remove of MCP tools and plugins via LifecycleManager, with atomic TOML config persistence, max_tools limit, and thread-safe tool.Manager.
 - Web dashboard: embedded Svelte SPA (10 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD. Tools page supports add/remove of MCP tools and plugins.
 - CI/CD: golangci-lint, govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
 - Documentation website: Hugo + Doks (Thulite) under `/website`, with getting-started guides, concept docs, and reference pages. GitHub Pages CI via `deploy-website.yml`. One-liner install script at `website/static/install.sh`.
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
-- Next: CLI commands for plugin signing (`denkeeper plugin keygen/sign/verify`), documentation website domain setup, Kubernetes sandbox runtime backend.
+- CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
+- Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
+- Next: Documentation website domain setup, Kubernetes sandbox runtime backend, cyclomatic complexity reduction (threshold 25 → 20).
 - See `design/denkeeper-prd.md` for the full roadmap.

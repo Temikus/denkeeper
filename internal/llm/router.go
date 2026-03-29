@@ -76,43 +76,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	// 1. Apply low_funds fallbacks pre-call (first matching rule wins).
-	activeProvider := provider
-	activeModel := r.defaultModel
-
-	for _, rule := range r.fallbacks {
-		if rule.Trigger != "low_funds" {
-			continue
-		}
-		balance, err := r.cachedBalance(ctx, activeProvider)
-		if err != nil {
-			slog.Warn("could not fetch provider balance, skipping low_funds rule",
-				"provider", activeProvider.Name(), "error", err)
-			continue
-		}
-		if balance == -1 || balance >= rule.Threshold {
-			continue // unlimited or sufficient funds
-		}
-		slog.Info("low_funds fallback triggered",
-			"session", sessionID,
-			"provider", activeProvider.Name(),
-			"balance", balance,
-			"threshold", rule.Threshold,
-			"action", rule.Action,
-		)
-		switch rule.Action {
-		case "switch_model":
-			activeModel = rule.Model
-		case "switch_provider":
-			fp, fpOK := r.providers[rule.Provider]
-			if !fpOK {
-				slog.Warn("low_funds fallback provider not registered, skipping",
-					"provider", rule.Provider)
-				continue
-			}
-			activeProvider = fp
-		}
-		break // first matching low_funds rule wins
-	}
+	activeProvider, activeModel := r.applyLowFundsFallback(ctx, sessionID, provider)
 
 	// 2. Make the primary call.
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
@@ -128,80 +92,119 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	// 4. Apply error/rate_limit fallbacks in declaration order.
-	for _, rule := range r.fallbacks {
-		switch rule.Trigger {
-		case "low_funds":
-			continue // pre-call only
-
-		case "rate_limit":
-			if !isRateLimit(err) {
-				continue // not a 429
-			}
-			slog.Info("rate_limit fallback triggered",
-				"session", sessionID, "action", rule.Action, "error", err)
-			switch rule.Action {
-			case "wait_and_retry":
-				err = doWaitAndRetry(ctx, rule.MaxRetries, rule.Backoff, func() error {
-					resp, err = activeProvider.ChatCompletion(ctx, req)
-					return err
-				})
-			case "switch_provider":
-				fp, fpOK := r.providers[rule.Provider]
-				if !fpOK {
-					slog.Warn("rate_limit fallback provider not registered, skipping",
-						"provider", rule.Provider)
-					continue
-				}
-				fbModel := activeModel
-				if rule.Model != "" {
-					fbModel = rule.Model
-				}
-				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages, Tools: r.tools})
-			case "switch_model":
-				resp, err = activeProvider.ChatCompletion(ctx,
-					ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
-			}
-
-		case "error":
-			if isRateLimit(err) {
-				continue // rate_limit rules handle 429
-			}
-			if !isRetryable(err) {
-				continue
-			}
-			slog.Info("error fallback triggered",
-				"session", sessionID, "action", rule.Action, "original_error", err)
-			switch rule.Action {
-			case "switch_provider":
-				fp, fpOK := r.providers[rule.Provider]
-				if !fpOK {
-					slog.Warn("error fallback provider not registered, skipping",
-						"provider", rule.Provider)
-					continue
-				}
-				fbModel := activeModel
-				if rule.Model != "" {
-					fbModel = rule.Model
-				}
-				resp, err = fp.ChatCompletion(ctx, ChatRequest{Model: fbModel, Messages: messages, Tools: r.tools})
-			case "switch_model":
-				resp, err = activeProvider.ChatCompletion(ctx,
-					ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
-			}
-		}
-
-		if err == nil {
-			break // fallback succeeded
-		}
-		slog.Warn("fallback also failed, trying next", "session", sessionID, "error", err)
-	}
-
+	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, err)
 	if err != nil {
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
 	r.costTracker.Record(sessionID, tokenCost(resp))
 	return resp, nil
+}
+
+// applyLowFundsFallback checks low_funds rules and returns the provider/model
+// to use for the primary call. First matching rule wins.
+func (r *Router) applyLowFundsFallback(ctx context.Context, sessionID string, provider Provider) (Provider, string) {
+	activeProvider := provider
+	activeModel := r.defaultModel
+
+	for _, rule := range r.fallbacks {
+		if rule.Trigger != "low_funds" {
+			continue
+		}
+		balance, err := r.cachedBalance(ctx, activeProvider)
+		if err != nil {
+			slog.Warn("could not fetch provider balance, skipping low_funds rule",
+				"provider", activeProvider.Name(), "error", err)
+			continue
+		}
+		if balance == -1 || balance >= rule.Threshold {
+			continue
+		}
+		slog.Info("low_funds fallback triggered",
+			"session", sessionID, "provider", activeProvider.Name(),
+			"balance", balance, "threshold", rule.Threshold, "action", rule.Action)
+		switch rule.Action {
+		case "switch_model":
+			activeModel = rule.Model
+		case "switch_provider":
+			if fp, ok := r.providers[rule.Provider]; ok {
+				activeProvider = fp
+			} else {
+				slog.Warn("low_funds fallback provider not registered, skipping", "provider", rule.Provider)
+				continue
+			}
+		}
+		break
+	}
+	return activeProvider, activeModel
+}
+
+// applyErrorFallbacks iterates error/rate_limit fallback rules after a failed
+// primary call. Returns the successful response or the last error encountered.
+func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, lastErr error) (*ChatResponse, error) {
+	var resp *ChatResponse
+	err := lastErr
+
+	for _, rule := range r.fallbacks {
+		if rule.Trigger == "low_funds" {
+			continue
+		}
+		if !r.fallbackMatchesError(rule, err) {
+			continue
+		}
+		slog.Info("fallback triggered",
+			"session", sessionID, "trigger", rule.Trigger, "action", rule.Action, "error", err)
+
+		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages)
+		if err == nil {
+			return resp, nil
+		}
+		slog.Warn("fallback also failed, trying next", "session", sessionID, "error", err)
+	}
+	return nil, err
+}
+
+// fallbackMatchesError checks whether a fallback rule applies to the given error.
+func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
+	switch rule.Trigger {
+	case "rate_limit":
+		return isRateLimit(err)
+	case "error":
+		return !isRateLimit(err) && isRetryable(err)
+	}
+	return false
+}
+
+// executeFallbackAction performs a single fallback action and returns the result.
+func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message) (*ChatResponse, error) {
+	switch rule.Action {
+	case "wait_and_retry":
+		var resp *ChatResponse
+		var callErr error
+		req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
+		retryErr := doWaitAndRetry(ctx, rule.MaxRetries, rule.Backoff, func() error {
+			resp, callErr = activeProvider.ChatCompletion(ctx, req)
+			return callErr
+		})
+		return resp, retryErr
+
+	case "switch_provider":
+		fp, ok := r.providers[rule.Provider]
+		if !ok {
+			slog.Warn("fallback provider not registered, skipping", "provider", rule.Provider)
+			return nil, fmt.Errorf("fallback provider %q not registered", rule.Provider)
+		}
+		model := activeModel
+		if rule.Model != "" {
+			model = rule.Model
+		}
+		return fp.ChatCompletion(ctx, ChatRequest{Model: model, Messages: messages, Tools: r.tools})
+
+	case "switch_model":
+		return activeProvider.ChatCompletion(ctx, ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
+	}
+
+	return nil, fmt.Errorf("unknown fallback action %q", rule.Action)
 }
 
 func (r *Router) HealthCheck(ctx context.Context) error {

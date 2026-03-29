@@ -60,6 +60,10 @@ type Engine struct {
 	globalSkillsDir string               // base global skills dir (for merge on reload)
 	sched           *scheduler.Scheduler // nil = SCHEDULE_ADD directives silently stripped
 
+	// lastPendingApproval holds the approval request from the most recent
+	// chatWithApproval call, used by HandleMessage to attach inline buttons.
+	lastPendingApproval *approval.Request
+
 	logger *slog.Logger
 }
 
@@ -489,52 +493,18 @@ func (e *Engine) processDirective(ctx context.Context, perms *security.Permissio
 // both the response text and any approval request that was created during this
 // call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
 func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage) (string, *approval.Request, error) {
-	// Resolve effective permissions: per-message override or global default.
-	perms := e.permissions
-	if msg.SessionTier != "" {
-		if !security.ValidTier(msg.SessionTier) {
-			e.logger.Warn("ignoring invalid session tier, using global",
-				"session_tier", msg.SessionTier,
-				"global_tier", e.permissions.Tier(),
-			)
-		} else if msg.SessionTier != e.permissions.Tier() {
-			override, err := security.NewPermissionEngine(msg.SessionTier)
-			if err != nil {
-				e.logger.Warn("failed to create override permissions", "error", err)
-			} else {
-				perms = override
-				e.logger.Info("using per-schedule permission tier",
-					"tier", msg.SessionTier,
-					"global_tier", e.permissions.Tier(),
-				)
-			}
-		}
-	}
-
+	perms := e.resolvePermissions(msg)
 	if !perms.CanExecute("chat") {
 		return "", nil, fmt.Errorf("chat action not permitted")
 	}
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
-	// Get or create conversation — use explicit ID if provided (isolated sessions),
-	// otherwise derive it from the agent name, adapter, and external chat ID.
-	var convID string
-	if msg.ConversationID != "" {
-		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
-			return "", nil, fmt.Errorf("getting conversation: %w", err)
-		}
-		convID = msg.ConversationID
-	} else {
-		var err error
-		// Namespace conversations by agent name so each agent has its own history.
-		convID, err = e.memory.GetOrCreateConversation(ctx, e.name+":"+msg.Adapter, msg.ExternalID)
-		if err != nil {
-			return "", nil, fmt.Errorf("getting conversation: %w", err)
-		}
+	convID, err := e.resolveConversation(ctx, msg)
+	if err != nil {
+		return "", nil, err
 	}
 
-	// Store incoming message
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:    "user",
 		Content: msg.Text,
@@ -542,131 +512,24 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, fmt.Errorf("storing user message: %w", err)
 	}
 
-	// Load conversation history
 	history, err := e.memory.GetMessages(ctx, convID, maxContextMessages)
 	if err != nil {
 		return "", nil, fmt.Errorf("loading history: %w", err)
 	}
 
-	// Build LLM messages: system prompt + history
 	llmMessages := make([]llm.Message, 0, len(history)+1)
 	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms, msg)})
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
 
-	// Call LLM
-	resp, err := e.router.Complete(ctx, convID, llmMessages)
+	resp, _, err := e.runLLMWithTools(ctx, convID, perms, llmMessages)
 	if err != nil {
-		return "", nil, fmt.Errorf("LLM completion: %w", err)
+		return "", nil, err
 	}
 
-	// Tool-call loop: keep calling tools until the LLM produces a text response.
-	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
-		if round >= maxToolRounds {
-			return "", nil, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
-		}
-		if e.tools == nil {
-			return "", nil, fmt.Errorf("LLM requested tool calls but no tool manager configured")
-		}
-		if !perms.CanExecute("use_tools") {
-			return "", nil, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
-		}
+	responseText := e.processResponseDirectives(ctx, resp, perms, msg, convID)
 
-		// Append the assistant's tool-call message to history.
-		llmMessages = append(llmMessages, llm.Message{
-			Role:      "assistant",
-			ToolCalls: resp.ToolCalls,
-		})
-
-		// Execute each tool call serially, append results.
-		for _, tc := range resp.ToolCalls {
-			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
-			result, execErr := e.tools.Execute(ctx, tc)
-			if execErr != nil {
-				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "error", execErr)
-				result = fmt.Sprintf("Tool error: %v", execErr)
-			}
-			llmMessages = append(llmMessages, llm.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
-		}
-
-		// Call LLM again with tool results.
-		resp, err = e.router.Complete(ctx, convID, llmMessages)
-		if err != nil {
-			return "", nil, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
-		}
-	}
-
-	// Extract and strip any memory update directive before storing/sending.
-	responseText, memUpdate := extractMemoryUpdate(resp.Content)
-
-	// Persist memory update if present and permitted.
-	if memUpdate != "" && e.persona != nil && perms.CanExecute("write_memory") {
-		if err := e.persona.UpdateMemory(memUpdate); err != nil {
-			e.logger.Warn("failed to persist memory update", "error", err)
-		} else {
-			e.logger.Info("memory updated", "bytes", len(memUpdate))
-		}
-	}
-
-	// Extract and process directives (user update, skill creation, schedule addition).
-	responseText, userUpdate := extractUserUpdate(responseText)
-	responseText, skillPayload := extractSkillCreate(responseText)
-	responseText, schedPayload := extractScheduleAdd(responseText)
-
-	var pendingApproval *approval.Request
-
-	// User profile update requires a persona with a directory.
-	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
-		personaRef := e.persona
-		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
-			payload:     userUpdate,
-			kind:        approval.ActionKindUserUpdate,
-			description: "Update user profile (USER.md)",
-			pendingMsg:  "\n\n_Proposed user profile update is pending your approval._",
-			logLabel:    "user update",
-			externalID:  msg.ExternalID,
-			adapter:     msg.Adapter,
-			convID:      convID,
-			applyFn: func(_ context.Context, payload string) error {
-				return personaRef.Save("user", payload)
-			},
-		}, responseText)
-	}
-
-	if skillPayload != "" && pendingApproval == nil {
-		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
-			payload:     skillPayload,
-			kind:        approval.ActionKindCreateSkill,
-			description: "Create new skill",
-			pendingMsg:  "\n\n_Proposed skill creation is pending your approval._",
-			logLabel:    "skill create",
-			externalID:  msg.ExternalID,
-			adapter:     msg.Adapter,
-			convID:      convID,
-			applyFn:     func(_ context.Context, payload string) error { return e.applySkillCreate(payload) },
-		}, responseText)
-	}
-
-	if schedPayload != "" && pendingApproval == nil {
-		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
-			payload:     schedPayload,
-			kind:        approval.ActionKindModifySchedule,
-			description: "Add new schedule",
-			pendingMsg:  "\n\n_Proposed schedule addition is pending your approval._",
-			logLabel:    "schedule add",
-			externalID:  msg.ExternalID,
-			adapter:     msg.Adapter,
-			convID:      convID,
-			applyFn:     func(_ context.Context, payload string) error { return e.applyScheduleAdd(payload) },
-		}, responseText)
-	}
-
-	// Store assistant response (without any directives).
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:       "assistant",
 		Content:    responseText,
@@ -676,7 +539,144 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	}
 
 	e.logger.Info("chat complete", "adapter", msg.Adapter, "tokens", resp.TokensUsed.Total)
-	return responseText, pendingApproval, nil
+	return responseText, e.lastPendingApproval, nil
+}
+
+// resolvePermissions returns the effective permission engine for the message,
+// considering per-schedule tier overrides.
+func (e *Engine) resolvePermissions(msg adapter.IncomingMessage) *security.PermissionEngine {
+	if msg.SessionTier == "" {
+		return e.permissions
+	}
+	if !security.ValidTier(msg.SessionTier) {
+		e.logger.Warn("ignoring invalid session tier, using global",
+			"session_tier", msg.SessionTier, "global_tier", e.permissions.Tier())
+		return e.permissions
+	}
+	if msg.SessionTier == e.permissions.Tier() {
+		return e.permissions
+	}
+	override, err := security.NewPermissionEngine(msg.SessionTier)
+	if err != nil {
+		e.logger.Warn("failed to create override permissions", "error", err)
+		return e.permissions
+	}
+	e.logger.Info("using per-schedule permission tier",
+		"tier", msg.SessionTier, "global_tier", e.permissions.Tier())
+	return override
+}
+
+// resolveConversation returns the conversation ID for the message, creating
+// the conversation if necessary.
+func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
+	if msg.ConversationID != "" {
+		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
+			return "", fmt.Errorf("getting conversation: %w", err)
+		}
+		return msg.ConversationID, nil
+	}
+	convID, err := e.memory.GetOrCreateConversation(ctx, e.name+":"+msg.Adapter, msg.ExternalID)
+	if err != nil {
+		return "", fmt.Errorf("getting conversation: %w", err)
+	}
+	return convID, nil
+}
+
+// runLLMWithTools makes the LLM call and runs the tool-call loop until the
+// LLM produces a text response.
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, llmMessages []llm.Message) (*llm.ChatResponse, []llm.Message, error) {
+	resp, err := e.router.Complete(ctx, convID, llmMessages)
+	if err != nil {
+		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
+	}
+
+	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
+		if round >= maxToolRounds {
+			return nil, llmMessages, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+		}
+		if e.tools == nil {
+			return nil, llmMessages, fmt.Errorf("LLM requested tool calls but no tool manager configured")
+		}
+		if !perms.CanExecute("use_tools") {
+			return nil, llmMessages, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+		}
+
+		llmMessages = append(llmMessages, llm.Message{Role: "assistant", ToolCalls: resp.ToolCalls})
+		for _, tc := range resp.ToolCalls {
+			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
+			result, execErr := e.tools.Execute(ctx, tc)
+			if execErr != nil {
+				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "error", execErr)
+				result = fmt.Sprintf("Tool error: %v", execErr)
+			}
+			llmMessages = append(llmMessages, llm.Message{
+				Role: "tool", Content: result, ToolCallID: tc.ID,
+			})
+		}
+
+		resp, err = e.router.Complete(ctx, convID, llmMessages)
+		if err != nil {
+			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+		}
+	}
+	return resp, llmMessages, nil
+}
+
+// processResponseDirectives extracts memory updates, user updates, skill
+// creation, and schedule addition directives from the LLM response. Returns
+// the cleaned response text. Sets e.lastPendingApproval if an approval was
+// created.
+func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatResponse, perms *security.PermissionEngine, msg adapter.IncomingMessage, convID string) string {
+	responseText, memUpdate := extractMemoryUpdate(resp.Content)
+	if memUpdate != "" && e.persona != nil && perms.CanExecute("write_memory") {
+		if err := e.persona.UpdateMemory(memUpdate); err != nil {
+			e.logger.Warn("failed to persist memory update", "error", err)
+		} else {
+			e.logger.Info("memory updated", "bytes", len(memUpdate))
+		}
+	}
+
+	responseText, userUpdate := extractUserUpdate(responseText)
+	responseText, skillPayload := extractSkillCreate(responseText)
+	responseText, schedPayload := extractScheduleAdd(responseText)
+
+	e.lastPendingApproval = nil
+
+	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
+		personaRef := e.persona
+		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload: userUpdate, kind: approval.ActionKindUserUpdate,
+			description: "Update user profile (USER.md)",
+			pendingMsg: "\n\n_Proposed user profile update is pending your approval._",
+			logLabel: "user update", externalID: msg.ExternalID,
+			adapter: msg.Adapter, convID: convID,
+			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("user", payload) },
+		}, responseText)
+	}
+
+	if skillPayload != "" && e.lastPendingApproval == nil {
+		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload: skillPayload, kind: approval.ActionKindCreateSkill,
+			description: "Create new skill",
+			pendingMsg: "\n\n_Proposed skill creation is pending your approval._",
+			logLabel: "skill create", externalID: msg.ExternalID,
+			adapter: msg.Adapter, convID: convID,
+			applyFn: func(_ context.Context, payload string) error { return e.applySkillCreate(payload) },
+		}, responseText)
+	}
+
+	if schedPayload != "" && e.lastPendingApproval == nil {
+		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload: schedPayload, kind: approval.ActionKindModifySchedule,
+			description: "Add new schedule",
+			pendingMsg: "\n\n_Proposed schedule addition is pending your approval._",
+			logLabel: "schedule add", externalID: msg.ExternalID,
+			adapter: msg.Adapter, convID: convID,
+			applyFn: func(_ context.Context, payload string) error { return e.applyScheduleAdd(payload) },
+		}, responseText)
+	}
+
+	return responseText
 }
 
 // HandleMessage processes a single incoming message and sends the response

@@ -15,6 +15,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
@@ -579,5 +580,394 @@ func TestPluginRemove_MissingName(t *testing.T) {
 	text, isErr := callTool(t, session, "plugin_remove", map[string]any{})
 	if !isErr {
 		t.Fatalf("expected error for missing name, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Helpers: KV store
+// --------------------------------------------------------------------------
+
+func newTestServerWithKV(t *testing.T, overrides func(*configmcp.Deps)) (*mcp.ClientSession, *configmcp.Deps) {
+	t.Helper()
+	kvStore, err := kv.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	t.Cleanup(func() { _ = kvStore.Close() })
+
+	return newTestServer(t, func(d *configmcp.Deps) {
+		d.KVStore = kvStore
+		if overrides != nil {
+			overrides(d)
+		}
+	})
+}
+
+// --------------------------------------------------------------------------
+// Tests: KV tool discovery
+// --------------------------------------------------------------------------
+
+func TestServer_ListTools_IncludesKVTools(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	expected := map[string]bool{
+		"kv_get":    false,
+		"kv_set":    false,
+		"kv_delete": false,
+		"kv_list":   false,
+		"kv_set_nx": false,
+	}
+	for _, tool := range result.Tools {
+		if _, ok := expected[tool.Name]; ok {
+			expected[tool.Name] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Errorf("kv tool %q not listed", name)
+		}
+	}
+}
+
+func TestServer_ListTools_NoKVToolsWithoutStore(t *testing.T) {
+	session, _ := newTestServer(t, nil) // no KV store
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	for _, tool := range result.Tools {
+		if strings.HasPrefix(tool.Name, "kv_") {
+			t.Errorf("kv tool %q should not be listed without KV store", tool.Name)
+		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: kv_get / kv_set
+// --------------------------------------------------------------------------
+
+func TestKVSetAndGet(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	text, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key":   "greeting",
+		"value": "hello",
+	})
+	if isErr {
+		t.Fatalf("kv_set error: %s", text)
+	}
+
+	text, isErr = callTool(t, session, "kv_get", map[string]any{
+		"key": "greeting",
+	})
+	if isErr {
+		t.Fatalf("kv_get error: %s", text)
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing kv_get result: %v", err)
+	}
+	if result["value"] != "hello" {
+		t.Errorf("kv_get value = %q, want %q", result["value"], "hello")
+	}
+}
+
+func TestKVGet_NotFound(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	text, isErr := callTool(t, session, "kv_get", map[string]any{
+		"key": "missing",
+	})
+	if isErr {
+		t.Fatalf("kv_get error: %s", text)
+	}
+	if !strings.Contains(text, "null") {
+		t.Errorf("expected null value for missing key, got %q", text)
+	}
+}
+
+func TestKVGet_MissingKey(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_get", map[string]any{})
+	if !isErr {
+		t.Fatal("expected error for missing key argument")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: kv_set with TTL
+// --------------------------------------------------------------------------
+
+func TestKVSet_WithTTL(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	text, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key":   "temp",
+		"value": "ephemeral",
+		"ttl":   "1h",
+	})
+	if isErr {
+		t.Fatalf("kv_set with TTL error: %s", text)
+	}
+
+	text, isErr = callTool(t, session, "kv_get", map[string]any{
+		"key": "temp",
+	})
+	if isErr {
+		t.Fatalf("kv_get error: %s", text)
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result["value"] != "ephemeral" {
+		t.Errorf("value = %q, want %q", result["value"], "ephemeral")
+	}
+}
+
+func TestKVSet_InvalidTTL(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key":   "k",
+		"value": "v",
+		"ttl":   "not-a-duration",
+	})
+	if !isErr {
+		t.Fatal("expected error for invalid TTL")
+	}
+}
+
+func TestKVSet_NegativeTTL(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key":   "k",
+		"value": "v",
+		"ttl":   "-5m",
+	})
+	if !isErr {
+		t.Fatal("expected error for negative TTL")
+	}
+}
+
+func TestKVSetNX_NegativeTTL(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_set_nx", map[string]any{
+		"key":   "k",
+		"value": "v",
+		"ttl":   "-1s",
+	})
+	if !isErr {
+		t.Fatal("expected error for negative TTL")
+	}
+}
+
+func TestKVSet_EmptyKey(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key":   "",
+		"value": "v",
+	})
+	if !isErr {
+		t.Fatal("expected error for empty key")
+	}
+}
+
+func TestKVDelete_EmptyKey(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	_, isErr := callTool(t, session, "kv_delete", map[string]any{
+		"key": "",
+	})
+	if !isErr {
+		t.Fatal("expected error for empty key")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: kv_delete
+// --------------------------------------------------------------------------
+
+func TestKVDelete(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	callTool(t, session, "kv_set", map[string]any{"key": "k", "value": "v"})
+
+	text, isErr := callTool(t, session, "kv_delete", map[string]any{"key": "k"})
+	if isErr {
+		t.Fatalf("kv_delete error: %s", text)
+	}
+
+	text, _ = callTool(t, session, "kv_get", map[string]any{"key": "k"})
+	if !strings.Contains(text, "null") {
+		t.Errorf("expected null after delete, got %q", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: kv_list
+// --------------------------------------------------------------------------
+
+func TestKVList_Empty(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	text, isErr := callTool(t, session, "kv_list", map[string]any{})
+	if isErr {
+		t.Fatalf("kv_list error: %s", text)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	entries, _ := result["entries"].([]any)
+	if len(entries) != 0 {
+		t.Errorf("expected empty entries, got %d", len(entries))
+	}
+}
+
+func TestKVList_WithPrefix(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	callTool(t, session, "kv_set", map[string]any{"key": "lock:a", "value": "1"})
+	callTool(t, session, "kv_set", map[string]any{"key": "lock:b", "value": "2"})
+	callTool(t, session, "kv_set", map[string]any{"key": "cache:x", "value": "3"})
+
+	text, isErr := callTool(t, session, "kv_list", map[string]any{"prefix": "lock:"})
+	if isErr {
+		t.Fatalf("kv_list error: %s", text)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	entries, _ := result["entries"].([]any)
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries with prefix 'lock:', got %d", len(entries))
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: kv_set_nx
+// --------------------------------------------------------------------------
+
+func TestKVSetNX_Success(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	text, isErr := callTool(t, session, "kv_set_nx", map[string]any{
+		"key":   "lock:job",
+		"value": "owner1",
+		"ttl":   "5m",
+	})
+	if isErr {
+		t.Fatalf("kv_set_nx error: %s", text)
+	}
+
+	var result map[string]bool
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if !result["acquired"] {
+		t.Error("expected acquired=true on new key")
+	}
+}
+
+func TestKVSetNX_AlreadyExists(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	callTool(t, session, "kv_set_nx", map[string]any{
+		"key": "lock:job", "value": "owner1",
+	})
+
+	text, isErr := callTool(t, session, "kv_set_nx", map[string]any{
+		"key": "lock:job", "value": "owner2",
+	})
+	if isErr {
+		t.Fatalf("kv_set_nx error: %s", text)
+	}
+
+	var result map[string]bool
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result["acquired"] {
+		t.Error("expected acquired=false for existing key")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: KV permission tiers
+// --------------------------------------------------------------------------
+
+func TestKVSet_RestrictedTier(t *testing.T) {
+	session, _ := newTestServerWithKV(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "kv_set", map[string]any{
+		"key": "k", "value": "v",
+	})
+	if !isErr {
+		t.Fatal("expected error in restricted mode")
+	}
+}
+
+func TestKVDelete_RestrictedTier(t *testing.T) {
+	session, _ := newTestServerWithKV(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "kv_delete", map[string]any{"key": "k"})
+	if !isErr {
+		t.Fatal("expected error in restricted mode")
+	}
+}
+
+func TestKVSetNX_RestrictedTier(t *testing.T) {
+	session, _ := newTestServerWithKV(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "kv_set_nx", map[string]any{
+		"key": "k", "value": "v",
+	})
+	if !isErr {
+		t.Fatal("expected error in restricted mode")
+	}
+}
+
+func TestKVGet_AllowedInRestrictedTier(t *testing.T) {
+	session, _ := newTestServerWithKV(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "kv_get", map[string]any{"key": "k"})
+	if isErr {
+		t.Fatal("kv_get should be allowed in restricted mode")
+	}
+}
+
+func TestKVList_AllowedInRestrictedTier(t *testing.T) {
+	session, _ := newTestServerWithKV(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	_, isErr := callTool(t, session, "kv_list", map[string]any{})
+	if isErr {
+		t.Fatal("kv_list should be allowed in restricted mode")
 	}
 }

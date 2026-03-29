@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
@@ -70,7 +71,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -262,6 +263,7 @@ type agentBuildCtx struct {
 	sharedToolMgr   *tool.Manager
 	lifecycleMgr    *tool.LifecycleManager
 	approvalManager *approval.Manager
+	kvStore         kv.Store
 	globalSkills    []skill.Skill
 	sched           *scheduler.Scheduler
 	adapters        []adapter.Adapter
@@ -371,6 +373,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		Approvals:      abc.approvalManager,
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
+		KVStore:        abc.kvStore,
 		Logger:         abc.logger,
 	})
 	cmcpSession, cmcpErr := cmcpSrv.Connect(ctx)
@@ -521,6 +524,16 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	approvalManager := approval.NewManager(approvalStore, logger)
 
+	// Init KV store (same WAL database file as memory/approval stores)
+	kvStore, err := kv.NewSQLiteStore(cfg.Memory.DBPath,
+		kv.WithMaxKeysPerAgent(cfg.KV.MaxKeysPerAgent),
+		kv.WithMaxValueBytes(cfg.KV.MaxValueBytes),
+	)
+	if err != nil {
+		return fmt.Errorf("initializing kv store: %w", err)
+	}
+	defer func() { _ = kvStore.Close() }()
+
 	clients := initLLMClients(cfg)
 	voiceOpts := initVoiceOpts(cfg, logger)
 
@@ -533,6 +546,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 	defer cancel()
 
 	approvalManager.StartExpiryWorker(ctx, time.Hour)
+
+	kvCleanupInterval, _ := time.ParseDuration(cfg.KV.CleanupInterval)
+	if kvCleanupInterval <= 0 {
+		kvCleanupInterval = time.Hour
+	}
+	startKVCleanupWorker(ctx, kvStore, kvCleanupInterval, logger)
 
 	sharedToolMgr, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
@@ -577,6 +596,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		sharedToolMgr:   sharedToolMgr,
 		lifecycleMgr:    lifecycleMgr,
 		approvalManager: approvalManager,
+		kvStore:         kvStore,
 		globalSkills:    globalSkills,
 		sched:           sched,
 		adapters:        adapters,
@@ -637,4 +657,23 @@ func runServe(_ *cobra.Command, _ []string) error {
 	)
 
 	return dispatcher.Run(ctx)
+}
+
+// startKVCleanupWorker runs a background goroutine that periodically removes
+// expired KV entries. Mirrors the approval expiry worker pattern.
+func startKVCleanupWorker(ctx context.Context, store *kv.SQLiteStore, interval time.Duration, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := store.Cleanup(ctx); err != nil {
+					logger.Warn("kv cleanup failed", "error", err)
+				}
+			}
+		}
+	}()
 }

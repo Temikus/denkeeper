@@ -25,6 +25,7 @@ type Config struct {
 	Voice     VoiceConfig           `toml:"voice"`
 	API       APIConfig             `toml:"api"`
 	Security  SecurityConfig        `toml:"security"`
+	KV        KVConfig              `toml:"kv"`
 }
 
 // SecurityConfig controls plugin signature verification.
@@ -224,6 +225,16 @@ type MemoryConfig struct {
 	DBPath string `toml:"db_path"`
 }
 
+// KVConfig configures the per-agent key-value store.
+type KVConfig struct {
+	// MaxKeysPerAgent limits the number of keys each agent can store (0 = unlimited).
+	MaxKeysPerAgent int `toml:"max_keys_per_agent"`
+	// MaxValueBytes limits the size of each value in bytes.
+	MaxValueBytes int `toml:"max_value_bytes"`
+	// CleanupInterval is how often expired keys are purged (Go duration string).
+	CleanupInterval string `toml:"cleanup_interval"`
+}
+
 type LogConfig struct {
 	Level  string `toml:"level"`
 	Format string `toml:"format"`
@@ -305,15 +316,16 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
-	if cfg.LLM.DefaultProvider == "" {
-		cfg.LLM.DefaultProvider = "openrouter"
-	}
-	if cfg.LLM.DefaultModel == "" {
-		cfg.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
-	}
-	if cfg.LLM.MaxCostPerSession == 0 {
-		cfg.LLM.MaxCostPerSession = 1.0
-	}
+	applyScalarDefaults(cfg)
+	applyLLMDefaults(cfg)
+	expandEnvVars(cfg)
+	applyMiscDefaults(cfg)
+	synthesizeDefaultAgent(cfg)
+	applyAgentDefaults(cfg)
+	applyScheduleDefaults(cfg)
+}
+
+func applyScalarDefaults(cfg *Config) {
 	if cfg.Memory.DBPath == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Memory.DBPath = filepath.Join(home, ".denkeeper", "data", "memory.db")
@@ -335,67 +347,90 @@ func applyDefaults(cfg *Config) {
 	if cfg.Session.Tier == "" {
 		cfg.Session.Tier = "supervised"
 	}
+}
 
+func applyLLMDefaults(cfg *Config) {
+	if cfg.LLM.DefaultProvider == "" {
+		cfg.LLM.DefaultProvider = "openrouter"
+	}
+	if cfg.LLM.DefaultModel == "" {
+		cfg.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
+	}
+	if cfg.LLM.MaxCostPerSession == 0 {
+		cfg.LLM.MaxCostPerSession = 1.0
+	}
 	for i := range cfg.LLM.Fallbacks {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
 			cfg.LLM.Fallbacks[i].Backoff = "exponential"
 		}
 	}
+}
 
-	// Expand environment variables in tool env values.
+func expandEnvVars(cfg *Config) {
 	for name, tc := range cfg.Tools {
 		for k, v := range tc.Env {
 			tc.Env[k] = os.ExpandEnv(v)
 		}
 		cfg.Tools[name] = tc
 	}
-
-	// Expand environment variables in plugin env values.
 	for name, pc := range cfg.Plugins {
 		for k, v := range pc.Env {
 			pc.Env[k] = os.ExpandEnv(v)
 		}
 		cfg.Plugins[name] = pc
 	}
+}
 
+func applyMiscDefaults(cfg *Config) {
 	if cfg.Voice.TTSVoice == "" && cfg.Voice.TTSProvider != "" {
 		cfg.Voice.TTSVoice = "alloy"
 	}
-
-	// Default to allowing unsigned plugins.
 	if cfg.Security.AllowUnsigned == nil {
 		t := true
 		cfg.Security.AllowUnsigned = &t
 	}
-
+	if cfg.KV.MaxKeysPerAgent == 0 {
+		cfg.KV.MaxKeysPerAgent = 1000
+	}
+	if cfg.KV.MaxValueBytes == 0 {
+		cfg.KV.MaxValueBytes = 65536
+	}
+	if cfg.KV.CleanupInterval == "" {
+		cfg.KV.CleanupInterval = "1h"
+	}
 	if cfg.API.Enabled && cfg.API.Listen == "" {
 		cfg.API.Listen = ":8080"
 	}
+}
 
-	// Multi-agent backward compat: if no [[agents]] defined, synthesize a
-	// single "default" agent from the legacy [agent]/[session] config.
-	// Build adapter bindings from which adapters are configured.
-	if len(cfg.Agents) == 0 {
-		var defaultAdapters []string
-		if cfg.Telegram.Token != "" {
-			defaultAdapters = append(defaultAdapters, "telegram")
-		}
-		if cfg.Discord.Token != "" {
-			defaultAdapters = append(defaultAdapters, "discord")
-		}
-		if len(defaultAdapters) == 0 {
-			defaultAdapters = []string{"telegram"} // placeholder; validated later
-		}
-		cfg.Agents = []AgentInstanceConfig{{
-			Name:        "default",
-			Description: "Default agent",
-			PersonaDir:  cfg.Agent.PersonaDir,
-			SkillsDir:   cfg.Agent.SkillsDir,
-			Adapters:    defaultAdapters,
-			SessionTier: cfg.Session.Tier,
-		}}
+// synthesizeDefaultAgent provides backward-compatible multi-agent support:
+// if no [[agents]] defined, synthesize a single "default" agent from the
+// legacy [agent]/[session] config.
+func synthesizeDefaultAgent(cfg *Config) {
+	if len(cfg.Agents) != 0 {
+		return
 	}
+	var defaultAdapters []string
+	if cfg.Telegram.Token != "" {
+		defaultAdapters = append(defaultAdapters, "telegram")
+	}
+	if cfg.Discord.Token != "" {
+		defaultAdapters = append(defaultAdapters, "discord")
+	}
+	if len(defaultAdapters) == 0 {
+		defaultAdapters = []string{"telegram"} // placeholder; validated later
+	}
+	cfg.Agents = []AgentInstanceConfig{{
+		Name:        "default",
+		Description: "Default agent",
+		PersonaDir:  cfg.Agent.PersonaDir,
+		SkillsDir:   cfg.Agent.SkillsDir,
+		Adapters:    defaultAdapters,
+		SessionTier: cfg.Session.Tier,
+	}}
+}
 
+func applyAgentDefaults(cfg *Config) {
 	for i := range cfg.Agents {
 		a := &cfg.Agents[i]
 		if a.PersonaDir == "" {
@@ -403,7 +438,9 @@ func applyDefaults(cfg *Config) {
 			a.PersonaDir = filepath.Join(home, ".denkeeper", "agents", a.Name)
 		}
 	}
+}
 
+func applyScheduleDefaults(cfg *Config) {
 	trueVal := true
 	for i := range cfg.Schedules {
 		s := &cfg.Schedules[i]

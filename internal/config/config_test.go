@@ -1743,3 +1743,140 @@ allow_unsigned = true
 		t.Error("expected AllowUnsigned to be true")
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: KV config
+// --------------------------------------------------------------------------
+
+func TestParse_KVDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.KV.MaxKeysPerAgent != 1000 {
+		t.Errorf("KV.MaxKeysPerAgent = %d, want 1000", cfg.KV.MaxKeysPerAgent)
+	}
+	if cfg.KV.MaxValueBytes != 65536 {
+		t.Errorf("KV.MaxValueBytes = %d, want 65536", cfg.KV.MaxValueBytes)
+	}
+	if cfg.KV.CleanupInterval != "1h" {
+		t.Errorf("KV.CleanupInterval = %q, want %q", cfg.KV.CleanupInterval, "1h")
+	}
+}
+
+func TestParse_KVExplicitValues(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[kv]
+max_keys_per_agent = 500
+max_value_bytes = 32768
+cleanup_interval = "30m"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.KV.MaxKeysPerAgent != 500 {
+		t.Errorf("KV.MaxKeysPerAgent = %d, want 500", cfg.KV.MaxKeysPerAgent)
+	}
+	if cfg.KV.MaxValueBytes != 32768 {
+		t.Errorf("KV.MaxValueBytes = %d, want 32768", cfg.KV.MaxValueBytes)
+	}
+	if cfg.KV.CleanupInterval != "30m" {
+		t.Errorf("KV.CleanupInterval = %q, want %q", cfg.KV.CleanupInterval, "30m")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: synthesizeDefaultAgent backward compatibility
+// --------------------------------------------------------------------------
+
+func TestSynthesizeDefaultAgent_TelegramOnly(t *testing.T) {
+	cfg := &Config{
+		Telegram: TelegramConfig{Token: "tok"},
+		Agent:    AgentConfig{PersonaDir: "/p", SkillsDir: "/s"},
+		Session:  SessionConfig{Tier: "autonomous"},
+	}
+	synthesizeDefaultAgent(cfg)
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+	}
+	a := cfg.Agents[0]
+	if a.Name != "default" {
+		t.Errorf("Name = %q, want %q", a.Name, "default")
+	}
+	if len(a.Adapters) != 1 || a.Adapters[0] != "telegram" {
+		t.Errorf("Adapters = %v, want [telegram]", a.Adapters)
+	}
+	if a.SessionTier != "autonomous" {
+		t.Errorf("SessionTier = %q, want %q", a.SessionTier, "autonomous")
+	}
+}
+
+func TestSynthesizeDefaultAgent_BothAdapters(t *testing.T) {
+	cfg := &Config{
+		Telegram: TelegramConfig{Token: "tok"},
+		Discord:  DiscordConfig{Token: "dtok"},
+		Session:  SessionConfig{Tier: "supervised"},
+	}
+	synthesizeDefaultAgent(cfg)
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+	}
+	if len(cfg.Agents[0].Adapters) != 2 {
+		t.Errorf("expected 2 adapters, got %v", cfg.Agents[0].Adapters)
+	}
+}
+
+func TestSynthesizeDefaultAgent_ExplicitAgentsNotOverridden(t *testing.T) {
+	cfg := &Config{
+		Agents: []AgentInstanceConfig{{Name: "custom"}},
+	}
+	synthesizeDefaultAgent(cfg)
+
+	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "custom" {
+		t.Errorf("explicit agents should not be overridden, got %v", cfg.Agents)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: expandEnvVars
+// --------------------------------------------------------------------------
+
+func TestExpandEnvVars_Tools(t *testing.T) {
+	t.Setenv("TEST_TOOL_KEY", "secret-value")
+
+	cfg := &Config{
+		Tools: map[string]ToolConfig{
+			"test": {
+				Command: "test-cmd",
+				Env:     map[string]string{"API_KEY": "$TEST_TOOL_KEY"},
+			},
+		},
+	}
+	expandEnvVars(cfg)
+
+	if cfg.Tools["test"].Env["API_KEY"] != "secret-value" {
+		t.Errorf("env var not expanded: got %q", cfg.Tools["test"].Env["API_KEY"])
+	}
+}
+
+func TestExpandEnvVars_Plugins(t *testing.T) {
+	t.Setenv("TEST_PLUGIN_KEY", "plugin-secret")
+
+	cfg := &Config{
+		Plugins: map[string]PluginConfig{
+			"test": {
+				Type:    "subprocess",
+				Command: "test-cmd",
+				Env:     map[string]string{"TOKEN": "$TEST_PLUGIN_KEY"},
+			},
+		},
+	}
+	expandEnvVars(cfg)
+
+	if cfg.Plugins["test"].Env["TOKEN"] != "plugin-secret" {
+		t.Errorf("env var not expanded: got %q", cfg.Plugins["test"].Env["TOKEN"])
+	}
+}
