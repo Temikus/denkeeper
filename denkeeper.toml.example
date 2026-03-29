@@ -321,3 +321,18 @@ format = "text"
 # [security]
 # trusted_keys  = ["~/.denkeeper/keys/publisher.pub"]
 # allow_unsigned = true
+
+# ---------------------------------------------------------------------------
+# Sandbox Runtime — Backend for Docker-type plugins
+# ---------------------------------------------------------------------------
+# Selects how Docker-type plugins are executed. Default is "docker" which uses
+# the local Docker/Podman daemon. "kubernetes" creates ephemeral Pods with
+# hardened security contexts.
+
+# [sandbox]
+# runtime = "docker"    # "docker" (default) or "kubernetes"
+
+# [sandbox.kubernetes]
+# namespace     = "denkeeper-sandboxes"   # K8s namespace for sandbox Pods
+# kubeconfig    = ""                       # Path to kubeconfig (empty = in-cluster)
+# runtime_class = ""                       # RuntimeClassName (e.g., "gvisor", "kata")

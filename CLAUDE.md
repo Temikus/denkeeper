@@ -243,7 +243,7 @@ Six new tools in `configmcp`: `tool_list`, `tool_add`, `tool_remove`, `plugin_li
 
 Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove dialogs, status indicators. 10th page in the SPA.
 
-## Current State (Phase 4 complete)
+## Current State (Phase 5 complete)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
@@ -264,5 +264,5 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
 - Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path, Helm chart (`deploy/helm/denkeeper/`), non-root Docker container (UID 65534), docker-compose with port mapping.
-- Next: Browser automation (Phase 5).
+- Next: Browser automation (Phase 6).
 - See `design/denkeeper-prd.md` for the full roadmap.

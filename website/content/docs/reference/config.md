@@ -169,6 +169,24 @@ When `allow_unsigned = false`, all subprocess plugin binaries must have a valid 
 
 Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
 
+## `[sandbox]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `runtime` | string | `"docker"` | Sandbox backend: `"docker"` or `"kubernetes"` |
+
+Selects the runtime backend for sandboxed (Docker-type) plugins.
+
+## `[sandbox.kubernetes]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `namespace` | string | `"denkeeper-sandboxes"` | Kubernetes namespace for sandbox Pods |
+| `kubeconfig` | string | — | Path to kubeconfig file (empty uses in-cluster config) |
+| `runtime_class` | string | — | RuntimeClassName for gVisor or Kata Containers |
+
+The Kubernetes backend creates ephemeral Pods with init-container network isolation, dropped capabilities, read-only root filesystem, and Pod Security Admission labels. Supports both in-cluster (ServiceAccount) and out-of-cluster (kubeconfig) authentication.
+
 ## `[tools.*]`
 
 | Key | Type | Default | Description |

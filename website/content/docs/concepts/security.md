@@ -20,7 +20,7 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Unauthorized access to the bot | Telegram: `allowed_users` allowlist. Discord: `allowed_users` allowlist. API: scoped bearer tokens |
 | Tool abuse | Permission tiers control tool access; restricted mode limits to read-only tools |
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
-| Plugin escape | Subprocess isolation and Docker sandboxing (`--cap-drop ALL`, `--read-only`, `--network none`); Ed25519 signature verification |
+| Plugin escape | Subprocess isolation and sandboxed execution via Docker (`--cap-drop ALL`, `--read-only`, `--network none`) or Kubernetes (ephemeral Pods with init-container network isolation, Pod Security Admission, optional gVisor/Kata); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
 
 ## Adapter security

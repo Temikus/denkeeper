@@ -55,10 +55,12 @@ All runtime changes are persisted to the TOML config file, so they survive resta
 Each agent has access to a built-in MCP server that exposes Denkeeper's own configuration:
 
 - **Skills**: `list_skills`, `create_skill`
-- **Schedules**: `list_schedules`, `add_schedule`
+- **Schedules**: `list_schedules`, `add_schedule`, `schedule_update`
 - **Tools**: `tool_list`, `tool_add`, `tool_remove`
 - **Plugins**: `plugin_list`, `plugin_add`, `plugin_remove`
 - **KV store**: `kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`
+- **Fallback**: `set_fallback`
+- **Costs**: `get_cost_summary`
 - **Info**: `get_permission_tier`
 
 ### Agent KV store
@@ -78,6 +80,10 @@ KV reads are allowed for all permission tiers. Writes are denied for restricted 
 Plugins extend the agent with external processes. Two execution strategies are available:
 
 - **Subprocess** (`type = "subprocess"`) — trusted plugins run as child processes with direct MCP stdio
-- **Docker** (`type = "docker"`) — sandboxed plugins run in Docker/Podman containers with `--cap-drop ALL`, `--read-only`, `--network none` by default
+- **Docker** (`type = "docker"`) — sandboxed plugins run via the configurable sandbox runtime:
+  - **Docker** (default) — `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none`
+  - **Kubernetes** — ephemeral Pods with init-container network isolation, dropped capabilities, read-only root filesystem, Pod Security Admission labels, and optional gVisor/Kata RuntimeClass
+
+Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/config/) for all sandbox options.
 
 Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli/), and [config reference](/docs/reference/config/) pages for details.
