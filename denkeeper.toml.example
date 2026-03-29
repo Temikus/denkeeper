@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------------------
 
 [telegram]
-# Bot token from @BotFather
+# Bot token from @BotFather (or set DENKEEPER_TELEGRAM_TOKEN env var)
 token = "YOUR_TELEGRAM_BOT_TOKEN"
 # Security: only these Telegram user IDs can interact with the bot.
 # Find your ID by messaging @userinfobot on Telegram.
@@ -16,7 +16,7 @@ allowed_users = [123456789]
 # [discord]
 # # Discord bot token from the Discord Developer Portal.
 # # Set this to enable the Discord adapter (DM and guild channel support).
-# token = "YOUR_DISCORD_BOT_TOKEN"
+# token = "YOUR_DISCORD_BOT_TOKEN"  # Or set DENKEEPER_DISCORD_TOKEN env var
 # # Security: only these Discord user snowflake IDs can interact with the bot.
 # # Right-click a user in Discord (developer mode enabled) to copy their ID.
 # allowed_users = ["123456789012345678"]
@@ -30,13 +30,13 @@ default_model = "anthropic/claude-sonnet-4-20250514"
 max_cost_per_session = 1.0
 
 [llm.openrouter]
-# API key from https://openrouter.ai/keys
+# API key from https://openrouter.ai/keys (or set DENKEEPER_LLM_OPENROUTER_API_KEY env var)
 api_key = "YOUR_OPENROUTER_API_KEY"
 
 # [llm.anthropic]
 # # Direct Anthropic API key (sk-ant-...). Set default_provider = "anthropic" above.
 # # Bypasses OpenRouter; requires no llm.openrouter.api_key when set as the provider.
-# api_key = "YOUR_ANTHROPIC_API_KEY"
+# api_key = "YOUR_ANTHROPIC_API_KEY"  # Or set DENKEEPER_LLM_ANTHROPIC_API_KEY env var
 # # Optional: override the API endpoint (e.g. for Bedrock/Vertex proxies).
 # # base_url = "https://api.anthropic.com"
 

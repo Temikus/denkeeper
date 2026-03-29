@@ -52,7 +52,8 @@ The pipeline steps are: check permissions → get/create conversation → store 
 - **Structured logging**: `log/slog` everywhere, with contextual fields.
 - **Context propagation**: All I/O functions accept `context.Context`.
 - **Concurrency**: Channels for message passing between components; `sync.Mutex` for shared state (e.g., `CostTracker`).
-- **Config validation**: Three-phase pattern in `config.go` — parse TOML → apply defaults → validate.
+- **Config validation**: Three-phase pattern in `config.go` — parse TOML → apply defaults (including env overrides) → validate.
+- **Env var overrides**: `applyEnvOverrides()` in `config.go` reads an explicit allowlist of `DENKEEPER_*` env vars (secrets + key config fields). Runs after TOML defaults but before validation. Config path: `DENKEEPER_CONFIG` env var in `main.go`.
 
 ## Testing Patterns
 
@@ -262,5 +263,6 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
+- Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path, Helm chart (`deploy/helm/denkeeper/`), non-root Docker container (UID 65534), docker-compose with port mapping.
 - Next: Browser automation (Phase 5).
 - See `design/denkeeper-prd.md` for the full roadmap.

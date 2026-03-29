@@ -14,8 +14,9 @@ Denkeeper is configured via a single TOML file, typically at `~/.denkeeper/denke
 
 Denkeeper searches for the config in this order:
 
-1. `--config` flag (explicit path)
-2. `~/.denkeeper/denkeeper.toml`
+1. `--config` / `-c` flag (explicit path)
+2. `DENKEEPER_CONFIG` environment variable
+3. `~/.denkeeper/denkeeper.toml`
 
 When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denkeeper.toml`.
 
@@ -43,13 +44,35 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 | `[tools.*]` | MCP tool server definitions |
 | `[kv]` | Agent KV store limits |
 
-## Environment variable expansion
+## Environment variable overrides
 
-String values support `$VAR` and `${VAR}` expansion. This is useful for keeping secrets out of the config file:
+Secrets and select config fields can be set via `DENKEEPER_*` environment variables. These take precedence over values in the TOML file, enabling the standard Kubernetes pattern of a ConfigMap for config and a Secret for credentials.
+
+| Env Var | Config Field |
+|---------|-------------|
+| `DENKEEPER_TELEGRAM_TOKEN` | `telegram.token` |
+| `DENKEEPER_DISCORD_TOKEN` | `discord.token` |
+| `DENKEEPER_LLM_PROVIDER` | `llm.default_provider` |
+| `DENKEEPER_LLM_MODEL` | `llm.default_model` |
+| `DENKEEPER_LLM_OPENROUTER_API_KEY` | `llm.openrouter.api_key` |
+| `DENKEEPER_LLM_ANTHROPIC_API_KEY` | `llm.anthropic.api_key` |
+| `DENKEEPER_LLM_ANTHROPIC_BASE_URL` | `llm.anthropic.base_url` |
+| `DENKEEPER_LLM_OLLAMA_BASE_URL` | `llm.ollama.base_url` |
+| `DENKEEPER_VOICE_OPENAI_API_KEY` | `voice.openai.api_key` |
+| `DENKEEPER_LOG_LEVEL` | `log.level` |
+| `DENKEEPER_LOG_FORMAT` | `log.format` |
+| `DENKEEPER_MEMORY_DB_PATH` | `memory.db_path` |
+| `DENKEEPER_API_ENABLED` | `api.enabled` (accepts `"true"` or `"1"`) |
+| `DENKEEPER_API_LISTEN` | `api.listen` |
+| `DENKEEPER_SESSION_TIER` | `session.tier` |
+
+### In-value expansion
+
+Additionally, string values in tool and plugin `env` maps support `$VAR` and `${VAR}` expansion:
 
 ```toml
-[llm.openrouter]
-api_key = "$OPENROUTER_API_KEY"
+[tools.my-tool]
+env = { API_KEY = "$MY_SECRET" }
 ```
 
 ## Validation

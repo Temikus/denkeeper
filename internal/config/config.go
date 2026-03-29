@@ -337,6 +337,7 @@ func Parse(data []byte) (*Config, error) {
 func applyDefaults(cfg *Config) {
 	applyScalarDefaults(cfg)
 	applyLLMDefaults(cfg)
+	applyEnvOverrides(cfg)
 	expandEnvVars(cfg)
 	applyMiscDefaults(cfg)
 	synthesizeDefaultAgent(cfg)
@@ -388,6 +389,58 @@ func applyLLMDefaults(cfg *Config) {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
 			cfg.LLM.Fallbacks[i].Backoff = "exponential"
 		}
+	}
+}
+
+// applyEnvOverrides allows specific config fields to be set via environment
+// variables. This enables the standard Kubernetes pattern of injecting secrets
+// via env vars while keeping non-secret config in a ConfigMap-mounted file.
+// Only the explicitly listed DENKEEPER_* variables are read (allowlist).
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("DENKEEPER_TELEGRAM_TOKEN"); v != "" {
+		cfg.Telegram.Token = v
+	}
+	if v := os.Getenv("DENKEEPER_DISCORD_TOKEN"); v != "" {
+		cfg.Discord.Token = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_PROVIDER"); v != "" {
+		cfg.LLM.DefaultProvider = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_MODEL"); v != "" {
+		cfg.LLM.DefaultModel = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_OPENROUTER_API_KEY"); v != "" {
+		cfg.LLM.OpenRouter.APIKey = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_ANTHROPIC_API_KEY"); v != "" {
+		cfg.LLM.Anthropic.APIKey = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_ANTHROPIC_BASE_URL"); v != "" {
+		cfg.LLM.Anthropic.BaseURL = v
+	}
+	if v := os.Getenv("DENKEEPER_LLM_OLLAMA_BASE_URL"); v != "" {
+		cfg.LLM.Ollama.BaseURL = v
+	}
+	if v := os.Getenv("DENKEEPER_VOICE_OPENAI_API_KEY"); v != "" {
+		cfg.Voice.OpenAI.APIKey = v
+	}
+	if v := os.Getenv("DENKEEPER_LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
+	}
+	if v := os.Getenv("DENKEEPER_LOG_FORMAT"); v != "" {
+		cfg.Log.Format = v
+	}
+	if v := os.Getenv("DENKEEPER_MEMORY_DB_PATH"); v != "" {
+		cfg.Memory.DBPath = v
+	}
+	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
+		cfg.API.Enabled = true
+	}
+	if v := os.Getenv("DENKEEPER_API_LISTEN"); v != "" {
+		cfg.API.Listen = v
+	}
+	if v := os.Getenv("DENKEEPER_SESSION_TIER"); v != "" {
+		cfg.Session.Tier = v
 	}
 }
 

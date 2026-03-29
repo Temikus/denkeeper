@@ -619,6 +619,9 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 func runServe(_ *cobra.Command, _ []string) error {
 	path := cfgFile
 	if path == "" {
+		path = os.Getenv("DENKEEPER_CONFIG")
+	}
+	if path == "" {
 		path = config.DefaultConfigPath()
 	}
 

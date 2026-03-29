@@ -1844,6 +1844,134 @@ func TestSynthesizeDefaultAgent_ExplicitAgentsNotOverridden(t *testing.T) {
 // Tests: expandEnvVars
 // --------------------------------------------------------------------------
 
+func TestApplyEnvOverrides_TelegramToken(t *testing.T) {
+	t.Setenv("DENKEEPER_TELEGRAM_TOKEN", "env-token-123")
+
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+
+	if cfg.Telegram.Token != "env-token-123" {
+		t.Errorf("telegram token = %q, want %q", cfg.Telegram.Token, "env-token-123")
+	}
+}
+
+func TestApplyEnvOverrides_DoesNotOverrideWhenUnset(t *testing.T) {
+	cfg := &Config{
+		Telegram: TelegramConfig{Token: "toml-token"},
+		LLM: LLMConfig{
+			DefaultProvider: "openrouter",
+			OpenRouter:      OpenRouterConfig{APIKey: "toml-key"},
+		},
+	}
+	applyEnvOverrides(cfg)
+
+	if cfg.Telegram.Token != "toml-token" {
+		t.Errorf("telegram token = %q, want %q", cfg.Telegram.Token, "toml-token")
+	}
+	if cfg.LLM.OpenRouter.APIKey != "toml-key" {
+		t.Errorf("openrouter api_key = %q, want %q", cfg.LLM.OpenRouter.APIKey, "toml-key")
+	}
+}
+
+func TestApplyEnvOverrides_APIEnabledBoolParsing(t *testing.T) {
+	// "true" should enable
+	t.Setenv("DENKEEPER_API_ENABLED", "true")
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+	if !cfg.API.Enabled {
+		t.Error("API.Enabled should be true when env is \"true\"")
+	}
+
+	// "1" should enable
+	t.Setenv("DENKEEPER_API_ENABLED", "1")
+	cfg = &Config{}
+	applyEnvOverrides(cfg)
+	if !cfg.API.Enabled {
+		t.Error("API.Enabled should be true when env is \"1\"")
+	}
+
+	// "yes" should NOT enable (strict parsing)
+	t.Setenv("DENKEEPER_API_ENABLED", "yes")
+	cfg = &Config{}
+	applyEnvOverrides(cfg)
+	if cfg.API.Enabled {
+		t.Error("API.Enabled should be false when env is \"yes\" (strict parsing)")
+	}
+}
+
+func TestApplyEnvOverrides_AllSecrets(t *testing.T) {
+	t.Setenv("DENKEEPER_TELEGRAM_TOKEN", "tg-token")
+	t.Setenv("DENKEEPER_DISCORD_TOKEN", "dc-token")
+	t.Setenv("DENKEEPER_LLM_OPENROUTER_API_KEY", "or-key")
+	t.Setenv("DENKEEPER_LLM_ANTHROPIC_API_KEY", "ant-key")
+	t.Setenv("DENKEEPER_VOICE_OPENAI_API_KEY", "oai-key")
+	t.Setenv("DENKEEPER_LLM_PROVIDER", "anthropic")
+	t.Setenv("DENKEEPER_LLM_MODEL", "claude-opus")
+	t.Setenv("DENKEEPER_LLM_ANTHROPIC_BASE_URL", "https://custom.api")
+	t.Setenv("DENKEEPER_LLM_OLLAMA_BASE_URL", "http://ollama:11434")
+	t.Setenv("DENKEEPER_LOG_LEVEL", "debug")
+	t.Setenv("DENKEEPER_LOG_FORMAT", "json")
+	t.Setenv("DENKEEPER_MEMORY_DB_PATH", "/custom/db.sqlite")
+	t.Setenv("DENKEEPER_API_ENABLED", "true")
+	t.Setenv("DENKEEPER_API_LISTEN", ":9090")
+	t.Setenv("DENKEEPER_SESSION_TIER", "autonomous")
+
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"Telegram.Token", cfg.Telegram.Token, "tg-token"},
+		{"Discord.Token", cfg.Discord.Token, "dc-token"},
+		{"LLM.OpenRouter.APIKey", cfg.LLM.OpenRouter.APIKey, "or-key"},
+		{"LLM.Anthropic.APIKey", cfg.LLM.Anthropic.APIKey, "ant-key"},
+		{"Voice.OpenAI.APIKey", cfg.Voice.OpenAI.APIKey, "oai-key"},
+		{"LLM.DefaultProvider", cfg.LLM.DefaultProvider, "anthropic"},
+		{"LLM.DefaultModel", cfg.LLM.DefaultModel, "claude-opus"},
+		{"LLM.Anthropic.BaseURL", cfg.LLM.Anthropic.BaseURL, "https://custom.api"},
+		{"LLM.Ollama.BaseURL", cfg.LLM.Ollama.BaseURL, "http://ollama:11434"},
+		{"Log.Level", cfg.Log.Level, "debug"},
+		{"Log.Format", cfg.Log.Format, "json"},
+		{"Memory.DBPath", cfg.Memory.DBPath, "/custom/db.sqlite"},
+		{"API.Listen", cfg.API.Listen, ":9090"},
+		{"Session.Tier", cfg.Session.Tier, "autonomous"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	if !cfg.API.Enabled {
+		t.Error("API.Enabled should be true")
+	}
+}
+
+func TestApplyEnvOverrides_FullPipeline(t *testing.T) {
+	t.Setenv("DENKEEPER_TELEGRAM_TOKEN", "env-tg-token")
+	t.Setenv("DENKEEPER_LLM_ANTHROPIC_API_KEY", "env-ant-key")
+
+	tomlData := []byte(`
+[telegram]
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Telegram.Token != "env-tg-token" {
+		t.Errorf("telegram token = %q, want %q", cfg.Telegram.Token, "env-tg-token")
+	}
+	if cfg.LLM.Anthropic.APIKey != "env-ant-key" {
+		t.Errorf("anthropic api_key = %q, want %q", cfg.LLM.Anthropic.APIKey, "env-ant-key")
+	}
+}
+
 func TestExpandEnvVars_Tools(t *testing.T) {
 	t.Setenv("TEST_TOOL_KEY", "secret-value")
 

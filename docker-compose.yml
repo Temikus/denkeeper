@@ -2,5 +2,14 @@ services:
   denkeeper:
     build: .
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/data
+    # Environment variable overrides for secrets (optional).
+    # Uncomment and set values to avoid storing secrets in denkeeper.toml.
+    # See: https://temikus.github.io/denkeeper/docs/getting-started/configuration/
+    # environment:
+    #   DENKEEPER_TELEGRAM_TOKEN: ""
+    #   DENKEEPER_LLM_ANTHROPIC_API_KEY: ""
+    #   DENKEEPER_LLM_OPENROUTER_API_KEY: ""

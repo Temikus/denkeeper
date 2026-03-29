@@ -1,0 +1,12 @@
+apiVersion: v2
+name: denkeeper
+description: A personal AI agent with multi-agent routing
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Temikus/denkeeper
+sources:
+  - https://github.com/Temikus/denkeeper
+maintainers:
+  - name: Temikus
+    url: https://github.com/Temikus

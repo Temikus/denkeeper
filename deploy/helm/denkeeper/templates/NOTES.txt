@@ -1,0 +1,23 @@
+Denkeeper has been deployed!
+
+1. Get the application URL:
+{{- if eq .Values.service.type "ClusterIP" }}
+  kubectl port-forward svc/{{ include "denkeeper.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  kubectl get svc {{ include "denkeeper.fullname" . }} -w
+{{- end }}
+
+2. Health check:
+  curl http://localhost:{{ .Values.service.port }}/api/v1/health
+
+3. Secrets:
+{{- if .Values.existingSecret }}
+  Using existing secret: {{ .Values.existingSecret }}
+{{- else }}
+  Secrets are managed by the chart. Set values in values.yaml under `secrets:`,
+  or switch to an existing secret with `existingSecret: <name>`.
+{{- end }}
+
+For configuration details, see:
+  https://temikus.github.io/denkeeper/docs/getting-started/configuration/

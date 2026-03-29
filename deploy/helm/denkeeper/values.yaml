@@ -1,0 +1,75 @@
+# Default values for denkeeper.
+# See https://temikus.github.io/denkeeper/docs/getting-started/configuration/
+
+# SQLite is single-writer — do not increase beyond 1.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/temikus/denkeeper
+  # Defaults to Chart.appVersion if empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Secrets injected as DENKEEPER_* env vars.
+# Set values here, or point existingSecret to a pre-existing Kubernetes Secret.
+# For stronger isolation, use an external secret manager (External Secrets Operator,
+# Vault Agent) and reference it via existingSecret.
+secrets:
+  telegramToken: ""
+  discordToken: ""
+  llmOpenrouterApiKey: ""
+  llmAnthropicApiKey: ""
+  voiceOpenaiApiKey: ""
+
+# -- Name of a pre-existing Secret containing DENKEEPER_* keys.
+# When set, the chart-managed Secret is not created. The referenced Secret
+# must exist in the release namespace or the pod will fail to start.
+existingSecret: ""
+
+# -- Non-secret config rendered into the ConfigMap's denkeeper.toml.
+# Only non-sensitive settings belong here. Secrets are injected via env vars.
+config:
+  log:
+    level: "info"
+    format: "json"
+  llm:
+    default_provider: "anthropic"
+    default_model: "anthropic/claude-sonnet-4-20250514"
+  api:
+    enabled: true
+    listen: ":8080"
+  session:
+    tier: "supervised"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+  accessModes:
+    - ReadWriteOnce
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+
+namespace:
+  create: false
+  name: denkeeper

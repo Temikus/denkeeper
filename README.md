@@ -166,7 +166,9 @@ just serve
 
 ### Configuration
 
-Denkeeper uses a single TOML file (default `~/.denkeeper/denkeeper.toml`). See [`denkeeper.toml.example`](denkeeper.toml.example) for all options.
+Denkeeper uses a single TOML file (default `~/.denkeeper/denkeeper.toml`). See [`denkeeper.toml.example`](denkeeper.toml.example) for all options. The config path can be set via `--config` flag or `DENKEEPER_CONFIG` env var.
+
+**Health check**: `GET /api/v1/health` returns `{"status":"ok"}` with no authentication required. Use this for Docker `HEALTHCHECK` or Kubernetes liveness/readiness probes (requires `api.enabled = true`).
 
 Key sections:
 
@@ -190,6 +192,31 @@ Key sections:
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
+
+### Environment Variables
+
+Secrets and select config fields can be set via environment variables, which take precedence over values in `denkeeper.toml`. This enables the standard Kubernetes pattern of using a ConfigMap for config and a Secret for credentials.
+
+| Env Var | Config Field |
+|---------|-------------|
+| `DENKEEPER_CONFIG` | Config file path (replaces `--config` flag) |
+| `DENKEEPER_TELEGRAM_TOKEN` | `telegram.token` |
+| `DENKEEPER_DISCORD_TOKEN` | `discord.token` |
+| `DENKEEPER_LLM_PROVIDER` | `llm.default_provider` |
+| `DENKEEPER_LLM_MODEL` | `llm.default_model` |
+| `DENKEEPER_LLM_OPENROUTER_API_KEY` | `llm.openrouter.api_key` |
+| `DENKEEPER_LLM_ANTHROPIC_API_KEY` | `llm.anthropic.api_key` |
+| `DENKEEPER_LLM_ANTHROPIC_BASE_URL` | `llm.anthropic.base_url` |
+| `DENKEEPER_LLM_OLLAMA_BASE_URL` | `llm.ollama.base_url` |
+| `DENKEEPER_VOICE_OPENAI_API_KEY` | `voice.openai.api_key` |
+| `DENKEEPER_LOG_LEVEL` | `log.level` |
+| `DENKEEPER_LOG_FORMAT` | `log.format` |
+| `DENKEEPER_MEMORY_DB_PATH` | `memory.db_path` |
+| `DENKEEPER_API_ENABLED` | `api.enabled` (accepts `"true"` or `"1"`) |
+| `DENKEEPER_API_LISTEN` | `api.listen` |
+| `DENKEEPER_SESSION_TIER` | `session.tier` |
+
+A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) for Kubernetes deployments.
 
 ### Skills
 

@@ -30,4 +30,5 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /denkeeper /usr/local/bin/denkeeper
 VOLUME ["/data"]
+USER 65534
 ENTRYPOINT ["denkeeper", "serve", "--config", "/data/denkeeper.toml"]
