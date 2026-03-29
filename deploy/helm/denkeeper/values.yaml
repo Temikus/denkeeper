@@ -26,8 +26,14 @@ secrets:
 # must exist in the release namespace or the pod will fail to start.
 existingSecret: ""
 
-# -- Non-secret config rendered into the ConfigMap's denkeeper.toml.
+# -- Non-secret config rendered into the ConfigMap's denkeeper.toml via toToml.
+# Any key added here becomes a TOML section automatically — no template changes needed.
 # Only non-sensitive settings belong here. Secrets are injected via env vars.
+#
+# Bootstrap behaviour: on first pod start the ConfigMap is copied to the PVC at
+# /data/denkeeper.toml. After that the file lives independently and is writeable
+# by the app (runtime tool/plugin mutations persist across restarts). To re-seed
+# from Helm values, delete /data/denkeeper.toml and restart the pod.
 config:
   log:
     level: "info"
@@ -40,6 +46,39 @@ config:
     listen: ":8080"
   session:
     tier: "supervised"
+
+  # -- Adapter config (tokens are injected via secrets, add non-secret fields here).
+  # telegram:
+  #   allowed_users: [111222333]
+  # discord:
+  #   allowed_users: ["123456789012345678"]
+
+  # -- Agent defaults and multi-agent routing.
+  # agent:
+  #   persona_dir: "/data/persona"
+  # agents:
+  #   - name: "default"
+  #     persona_dir: "/data/persona/default"
+  #     adapters: ["telegram"]
+  #     llm_model: "anthropic/claude-sonnet-4-20250514"
+
+  # -- Scheduled tasks.
+  # schedules:
+  #   - name: "morning-check"
+  #     cron: "0 8 * * *"
+  #     agent: "default"
+  #     message: "Good morning! Any updates?"
+
+  # -- Other sections: memory, voice, kv, sandbox, security, tools, plugins.
+  # memory:
+  #   path: "/data/memory.db"
+  # kv:
+  #   max_keys_per_agent: 1000
+  #   max_value_bytes: 65536
+  # sandbox:
+  #   runtime: "docker"
+  #   kubernetes:
+  #     namespace: "denkeeper-sandboxes"
 
 persistence:
   enabled: true

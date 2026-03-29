@@ -1,3 +1,4 @@
+{{- include "denkeeper.validate" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
 {{- fail "replicaCount must be 1 — SQLite does not support concurrent writers" }}
 {{- end }}
@@ -24,10 +25,21 @@ spec:
       initContainers:
         - name: init-data-dir
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          command: ["sh", "-c", "chown 65534:65534 /data"]
+          command:
+            - sh
+            - -c
+            - |
+              chown 65534:65534 /data
+              if [ ! -f /data/denkeeper.toml ]; then
+                cp /config/denkeeper.toml /data/denkeeper.toml
+                chown 65534:65534 /data/denkeeper.toml
+              fi
           securityContext:
             runAsUser: 0
           volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
             - name: data
               mountPath: /data
       {{- end }}
@@ -59,10 +71,6 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
-            - name: config
-              mountPath: /data/denkeeper.toml
-              subPath: denkeeper.toml
-              readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /data

@@ -19,5 +19,12 @@ Denkeeper has been deployed!
   or switch to an existing secret with `existingSecret: <name>`.
 {{- end }}
 
+4. Configuration (bootstrap model):
+  The ConfigMap is copied to /data/denkeeper.toml on the PVC on first start only.
+  After that the file is writeable and lives independently (runtime changes persist).
+  To re-apply Helm values to an existing deployment:
+    kubectl exec <pod> -- rm /data/denkeeper.toml
+    kubectl rollout restart deployment/{{ include "denkeeper.fullname" . }}
+
 For configuration details, see:
   https://temikus.github.io/denkeeper/docs/getting-started/configuration/
