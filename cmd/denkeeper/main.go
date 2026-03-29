@@ -299,12 +299,17 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 
 		// Create sandbox runtime for Docker/K8s plugins.
 		var sandboxRT sandbox.Runtime
-		if hasDockerPlugins(cfg.Plugins) {
-			rt, rtErr := sandbox.NewDockerRuntime()
+		if hasSandboxedPlugins(cfg.Plugins) {
+			rt, rtErr := createSandboxRuntime(cfg, logger)
 			if rtErr != nil {
 				return nil, cleanups, rtErr
 			}
 			sandboxRT = rt
+			cleanups = append(cleanups, func() {
+				if err := rt.Close(); err != nil {
+					logger.Error("closing sandbox runtime", "error", err)
+				}
+			})
 		}
 
 		pluginMgr := plugin.NewManager(logger, verifyOpts, sandboxRT)
@@ -320,14 +325,29 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	return sharedToolMgr, cleanups, nil
 }
 
-// hasDockerPlugins returns true if any plugin in the map uses the docker type.
-func hasDockerPlugins(plugins map[string]config.PluginConfig) bool {
+// hasSandboxedPlugins returns true if any plugin in the map uses the docker type
+// (which is handled by the sandbox runtime — Docker or Kubernetes).
+func hasSandboxedPlugins(plugins map[string]config.PluginConfig) bool {
 	for _, pc := range plugins {
 		if pc.Type == "docker" {
 			return true
 		}
 	}
 	return false
+}
+
+// createSandboxRuntime creates the appropriate sandbox.Runtime based on config.
+func createSandboxRuntime(cfg *config.Config, logger *slog.Logger) (sandbox.Runtime, error) {
+	switch cfg.Sandbox.Runtime {
+	case "kubernetes":
+		return sandbox.NewKubernetesRuntime(sandbox.KubernetesConfig{
+			Namespace:    cfg.Sandbox.Kubernetes.Namespace,
+			Kubeconfig:   cfg.Sandbox.Kubernetes.Kubeconfig,
+			RuntimeClass: cfg.Sandbox.Kubernetes.RuntimeClass,
+		}, logger)
+	default: // "docker"
+		return sandbox.NewDockerRuntime()
+	}
 }
 
 // agentBuildCtx holds all the shared state needed to build per-agent engines.

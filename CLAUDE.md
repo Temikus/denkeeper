@@ -121,10 +121,29 @@ Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_sched
 `internal/plugin/` provides plugins with two execution strategies and Ed25519 signature verification.
 
 - **Subprocess** (`type = "subprocess"`): trusted plugins run as child processes with direct MCP stdio.
-- **Docker** (`type = "docker"`): sandboxed plugins run in Docker/Podman containers via `docker run -i --rm`. Containers are hardened with `--cap-drop ALL`, `--read-only`, `--security-opt no-new-privileges`, and `--network none` (default). Configurable `memory_limit`, `cpu_limit`, `network`, and `volumes`.
+- **Docker** (`type = "docker"`): sandboxed plugins run via the `sandbox.Runtime` interface. The Docker backend uses `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--security-opt no-new-privileges`, and `--network none` (default). Configurable `memory_limit`, `cpu_limit`, `network`, and `volumes`.
+- **Sandbox runtime**: `internal/sandbox/` provides a pluggable `Runtime` interface for sandboxed plugin execution. Backends: `DockerRuntime` (standalone, default) and `KubernetesRuntime` (K8s-native). Config: `[sandbox] runtime = "docker"` or `"kubernetes"`. See below.
 - **Signature verification**: `[security]` config section with `trusted_keys` (PEM public key paths) and `allow_unsigned` (default true). Ed25519 signatures are checked for subprocess plugin binaries during Load. Library functions in `internal/security/signing.go`: `GenerateKeyPair`, `Sign`, `Verify`, `SignFile`, `VerifyFile`, `LoadTrustedKeys`, PEM marshaling/parsing.
 - Plugins declare capabilities in TOML config (e.g. `capabilities = ["tools"]`).
-- The Manager validates, optionally verifies signatures, then spawns processes and wires them into the engine via the shared `tool.Manager`.
+- The Manager validates, optionally verifies signatures, then spawns processes via the sandbox runtime and wires them into the engine via the shared `tool.Manager`.
+
+## Sandbox Runtime
+
+`internal/sandbox/` provides the pluggable sandbox runtime interface for executing MCP server plugins in isolated environments.
+
+- **Interface**: `Runtime` with `Spawn(ctx, name, opts)`, `Stop(ctx, name)`, `Close()`. `Spawn` returns a `Process` (command + args) whose stdin/stdout carry MCP JSON-RPC.
+- **DockerRuntime**: builds `docker run -i --rm` commands. Default for standalone installs.
+- **KubernetesRuntime**: creates ephemeral Pods in a dedicated namespace (`denkeeper-sandboxes` by default). Uses `kubectl exec -i` for MCP stdio. Features:
+  - Init container with `CAP_NET_ADMIN` sets iptables rules for network isolation (none/egress/full).
+  - Main container drops ALL capabilities, read-only root FS, runAsNonRoot, no privilege escalation, seccomp RuntimeDefault.
+  - Pod Security Admission: enforce=baseline (allows init container), warn/audit=restricted.
+  - Optional RuntimeClassName (gVisor, Kata) via `[sandbox.kubernetes] runtime_class`.
+  - Supports in-cluster (ServiceAccount) and out-of-cluster (kubeconfig) auth.
+  - Crash recovery: deletes stale pods from previous runs before recreating.
+  - Deterministic pod names from plugin name (DNS-1123 compliant).
+  - AutomountServiceAccountToken disabled.
+  - Resource limits set as requests=limits for Guaranteed QoS.
+- **Config**: `[sandbox]` section with `runtime` ("docker" or "kubernetes") and `[sandbox.kubernetes]` with `namespace`, `kubeconfig`, `runtime_class`.
 
 ## UI/UX Standards
 
@@ -230,7 +249,7 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - LLM providers: OpenRouter (production), Ollama (local), Anthropic (direct). Telegram and Discord adapters.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial).
-- Plugin system: subprocess plugins and Docker-sandboxed plugins with capability declarations. Docker plugins run via `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none` by default. Configurable resource limits (`memory_limit`, `cpu_limit`), network mode, and bind mounts.
+- Plugin system: subprocess plugins and sandboxed plugins with capability declarations. Sandboxed plugins use the `sandbox.Runtime` interface with two backends: DockerRuntime (default, `docker run -i --rm`) and KubernetesRuntime (creates ephemeral Pods with init-container network isolation, PSA labels, and optional gVisor/Kata RuntimeClass). Both hardened with dropped capabilities, read-only root FS, and network isolation.
 - Plugin signing: Ed25519 signature verification for subprocess plugin binaries. Configurable via `[security]` with `trusted_keys` (PEM public key files) and `allow_unsigned` (default true). Includes `SignFile`/`VerifyFile` library, PEM key marshaling, and `LoadTrustedKeys` for key management.
 - External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management), tool/plugin CRUD (`tools:read`/`tools:write` scopes). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule / install_tool directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
@@ -242,5 +261,5 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
 - CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
-- Next: Kubernetes sandbox runtime backend, cyclomatic complexity reduction (threshold 25 → 20).
+- Next: Browser automation (Phase 5), Config MCP tools (`update_schedule`, `set_fallback`, `get_cost_summary`).
 - See `design/denkeeper-prd.md` for the full roadmap.

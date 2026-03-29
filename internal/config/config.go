@@ -26,6 +26,25 @@ type Config struct {
 	API       APIConfig               `toml:"api"`
 	Security  SecurityConfig          `toml:"security"`
 	KV        KVConfig                `toml:"kv"`
+	Sandbox   SandboxConfig           `toml:"sandbox"`
+}
+
+// SandboxConfig selects the runtime backend for sandboxed (Docker-type) plugins.
+type SandboxConfig struct {
+	// Runtime selects the sandbox backend: "docker" (default) or "kubernetes".
+	Runtime string `toml:"runtime"`
+	// Kubernetes holds Kubernetes-specific sandbox settings.
+	Kubernetes KubernetesSandboxConfig `toml:"kubernetes"`
+}
+
+// KubernetesSandboxConfig configures the Kubernetes sandbox runtime backend.
+type KubernetesSandboxConfig struct {
+	// Namespace is the Kubernetes namespace for sandbox Pods. Default: "denkeeper-sandboxes".
+	Namespace string `toml:"namespace"`
+	// Kubeconfig is the path to a kubeconfig file. Empty uses in-cluster config.
+	Kubeconfig string `toml:"kubeconfig"`
+	// RuntimeClass is the Kubernetes RuntimeClassName for sandbox Pods (e.g. "gvisor", "kata").
+	RuntimeClass string `toml:"runtime_class"`
 }
 
 // SecurityConfig controls plugin signature verification.
@@ -347,6 +366,12 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.Session.Tier == "" {
 		cfg.Session.Tier = "supervised"
 	}
+	if cfg.Sandbox.Runtime == "" {
+		cfg.Sandbox.Runtime = "docker"
+	}
+	if cfg.Sandbox.Kubernetes.Namespace == "" {
+		cfg.Sandbox.Kubernetes.Namespace = "denkeeper-sandboxes"
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -535,6 +560,16 @@ func validate(cfg *Config) error {
 	}
 	if err := validateAPI(&cfg.API); err != nil {
 		return err
+	}
+	return validateSandbox(&cfg.Sandbox)
+}
+
+func validateSandbox(s *SandboxConfig) error {
+	switch s.Runtime {
+	case "docker", "kubernetes":
+		// valid
+	default:
+		return fmt.Errorf("config: sandbox.runtime: invalid value %q — must be \"docker\" or \"kubernetes\"", s.Runtime)
 	}
 	return nil
 }
