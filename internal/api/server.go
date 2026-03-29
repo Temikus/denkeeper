@@ -25,15 +25,15 @@ import (
 
 // Deps holds the application dependencies the API server needs to serve data.
 type Deps struct {
-	Dispatcher  *agent.Dispatcher
-	Scheduler   *scheduler.Scheduler
-	CostTracker *llm.CostTracker
-	Memory      agent.MemoryStore
+	Dispatcher   *agent.Dispatcher
+	Scheduler    *scheduler.Scheduler
+	CostTracker  *llm.CostTracker
+	Memory       agent.MemoryStore
 	Config       *config.Config
-	Approvals    *approval.Manager        // nil = approval endpoints return 503
-	LifecycleMgr *tool.LifecycleManager   // nil = tool CRUD endpoints return 503
-	WebHandler   http.Handler             // nil = no web dashboard served
-	KeyStore     *KeyStore                // nil = API key CRUD endpoints return 503
+	Approvals    *approval.Manager      // nil = approval endpoints return 503
+	LifecycleMgr *tool.LifecycleManager // nil = tool CRUD endpoints return 503
+	WebHandler   http.Handler           // nil = no web dashboard served
+	KeyStore     *KeyStore              // nil = API key CRUD endpoints return 503
 }
 
 // Server is the external REST API server.

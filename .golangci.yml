@@ -12,5 +12,5 @@ linters:
     errcheck:
       check-type-assertions: true
     gocyclo:
-      min-complexity: 25
+      min-complexity: 20
 

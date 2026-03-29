@@ -53,7 +53,7 @@ type Store interface {
 
 // SQLiteStore implements Store using SQLite.
 type SQLiteStore struct {
-	db             *sqlx.DB
+	db              *sqlx.DB
 	maxKeysPerAgent int
 	maxValueBytes   int
 }
@@ -89,7 +89,7 @@ func NewSQLiteStore(dbPath string, opts ...Option) (*SQLiteStore, error) {
 	}
 
 	s := &SQLiteStore{
-		db:             db,
+		db:              db,
 		maxKeysPerAgent: MaxKeysPerAgent,
 		maxValueBytes:   MaxValueBytes,
 	}
@@ -112,7 +112,7 @@ func NewInMemoryStore(opts ...Option) (*SQLiteStore, error) {
 	}
 
 	s := &SQLiteStore{
-		db:             db,
+		db:              db,
 		maxKeysPerAgent: MaxKeysPerAgent,
 		maxValueBytes:   MaxValueBytes,
 	}

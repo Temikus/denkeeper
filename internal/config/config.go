@@ -10,22 +10,22 @@ import (
 )
 
 type Config struct {
-	Telegram  TelegramConfig        `toml:"telegram"`
-	Discord   DiscordConfig         `toml:"discord"`
-	LLM       LLMConfig             `toml:"llm"`
-	Memory    MemoryConfig          `toml:"memory"`
-	Log       LogConfig             `toml:"log"`
-	Agent     AgentConfig           `toml:"agent"`
-	Session   SessionConfig         `toml:"session"`
-	Agents    []AgentInstanceConfig `toml:"agents"`
-	Schedules []ScheduleConfig      `toml:"schedules"`
+	Telegram  TelegramConfig          `toml:"telegram"`
+	Discord   DiscordConfig           `toml:"discord"`
+	LLM       LLMConfig               `toml:"llm"`
+	Memory    MemoryConfig            `toml:"memory"`
+	Log       LogConfig               `toml:"log"`
+	Agent     AgentConfig             `toml:"agent"`
+	Session   SessionConfig           `toml:"session"`
+	Agents    []AgentInstanceConfig   `toml:"agents"`
+	Schedules []ScheduleConfig        `toml:"schedules"`
 	Tools     map[string]ToolConfig   `toml:"tools"`
 	MaxTools  int                     `toml:"max_tools"` // combined limit for tools + plugins; 0 = default (50)
 	Plugins   map[string]PluginConfig `toml:"plugins"`
-	Voice     VoiceConfig           `toml:"voice"`
-	API       APIConfig             `toml:"api"`
-	Security  SecurityConfig        `toml:"security"`
-	KV        KVConfig              `toml:"kv"`
+	Voice     VoiceConfig             `toml:"voice"`
+	API       APIConfig               `toml:"api"`
+	Security  SecurityConfig          `toml:"security"`
+	KV        KVConfig                `toml:"kv"`
 }
 
 // SecurityConfig controls plugin signature verification.

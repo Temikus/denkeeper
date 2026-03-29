@@ -647,8 +647,8 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: userUpdate, kind: approval.ActionKindUserUpdate,
 			description: "Update user profile (USER.md)",
-			pendingMsg: "\n\n_Proposed user profile update is pending your approval._",
-			logLabel: "user update", externalID: msg.ExternalID,
+			pendingMsg:  "\n\n_Proposed user profile update is pending your approval._",
+			logLabel:    "user update", externalID: msg.ExternalID,
 			adapter: msg.Adapter, convID: convID,
 			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("user", payload) },
 		}, responseText)
@@ -658,8 +658,8 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: skillPayload, kind: approval.ActionKindCreateSkill,
 			description: "Create new skill",
-			pendingMsg: "\n\n_Proposed skill creation is pending your approval._",
-			logLabel: "skill create", externalID: msg.ExternalID,
+			pendingMsg:  "\n\n_Proposed skill creation is pending your approval._",
+			logLabel:    "skill create", externalID: msg.ExternalID,
 			adapter: msg.Adapter, convID: convID,
 			applyFn: func(_ context.Context, payload string) error { return e.applySkillCreate(payload) },
 		}, responseText)
@@ -669,8 +669,8 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: schedPayload, kind: approval.ActionKindModifySchedule,
 			description: "Add new schedule",
-			pendingMsg: "\n\n_Proposed schedule addition is pending your approval._",
-			logLabel: "schedule add", externalID: msg.ExternalID,
+			pendingMsg:  "\n\n_Proposed schedule addition is pending your approval._",
+			logLabel:    "schedule add", externalID: msg.ExternalID,
 			adapter: msg.Adapter, convID: convID,
 			applyFn: func(_ context.Context, payload string) error { return e.applyScheduleAdd(payload) },
 		}, responseText)

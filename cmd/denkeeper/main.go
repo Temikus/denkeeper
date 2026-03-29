@@ -97,6 +97,60 @@ type llmClients struct {
 	fallbacks  []llm.FallbackRule
 }
 
+// stores holds the initialized persistence stores and the approval manager.
+type stores struct {
+	memory          agent.MemoryStore
+	approvalStore   *approval.SQLiteStore
+	approvalManager *approval.Manager
+	kvStore         *kv.SQLiteStore
+}
+
+// initStores creates the memory, approval, and KV stores that share a single
+// WAL SQLite database. It also expires stale pending approvals from any
+// previous run.
+func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
+	memory, err := agent.NewSQLiteMemoryStore(cfg.Memory.DBPath)
+	if err != nil {
+		return stores{}, fmt.Errorf("initializing memory store: %w", err)
+	}
+
+	approvalStore, err := approval.NewSQLiteStore(cfg.Memory.DBPath)
+	if err != nil {
+		_ = memory.Close()
+		return stores{}, fmt.Errorf("initializing approval store: %w", err)
+	}
+
+	if n, expErr := approvalStore.ExpirePending(context.Background()); expErr != nil {
+		logger.Warn("failed to expire pending approvals", "error", expErr)
+	} else if n > 0 {
+		logger.Info("expired pending approvals from previous run", "count", n)
+	}
+
+	kvStore, err := kv.NewSQLiteStore(cfg.Memory.DBPath,
+		kv.WithMaxKeysPerAgent(cfg.KV.MaxKeysPerAgent),
+		kv.WithMaxValueBytes(cfg.KV.MaxValueBytes),
+	)
+	if err != nil {
+		_ = approvalStore.Close()
+		_ = memory.Close()
+		return stores{}, fmt.Errorf("initializing kv store: %w", err)
+	}
+
+	return stores{
+		memory:          memory,
+		approvalStore:   approvalStore,
+		approvalManager: approval.NewManager(approvalStore, logger),
+		kvStore:         kvStore,
+	}, nil
+}
+
+// closeStores closes all persistence stores in reverse order.
+func (s stores) Close() {
+	_ = s.kvStore.Close()
+	_ = s.approvalStore.Close()
+	_ = s.memory.Close()
+}
+
 func initLogger(cfg *config.Config) *slog.Logger {
 	var logLevel slog.Level
 	switch cfg.Log.Level {
@@ -502,37 +556,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	logger := initLogger(cfg)
 
-	// Init memory store (shared across all agents)
-	memory, err := agent.NewSQLiteMemoryStore(cfg.Memory.DBPath)
+	st, err := initStores(cfg, logger)
 	if err != nil {
-		return fmt.Errorf("initializing memory store: %w", err)
+		return err
 	}
-	defer func() { _ = memory.Close() }()
-
-	// Init approval store (same WAL database file as memory store)
-	approvalStore, err := approval.NewSQLiteStore(cfg.Memory.DBPath)
-	if err != nil {
-		return fmt.Errorf("initializing approval store: %w", err)
-	}
-	defer func() { _ = approvalStore.Close() }()
-
-	if n, expErr := approvalStore.ExpirePending(context.Background()); expErr != nil {
-		logger.Warn("failed to expire pending approvals", "error", expErr)
-	} else if n > 0 {
-		logger.Info("expired pending approvals from previous run", "count", n)
-	}
-
-	approvalManager := approval.NewManager(approvalStore, logger)
-
-	// Init KV store (same WAL database file as memory/approval stores)
-	kvStore, err := kv.NewSQLiteStore(cfg.Memory.DBPath,
-		kv.WithMaxKeysPerAgent(cfg.KV.MaxKeysPerAgent),
-		kv.WithMaxValueBytes(cfg.KV.MaxValueBytes),
-	)
-	if err != nil {
-		return fmt.Errorf("initializing kv store: %w", err)
-	}
-	defer func() { _ = kvStore.Close() }()
+	defer st.Close()
 
 	clients := initLLMClients(cfg)
 	voiceOpts := initVoiceOpts(cfg, logger)
@@ -545,13 +573,13 @@ func runServe(_ *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	approvalManager.StartExpiryWorker(ctx, time.Hour)
+	st.approvalManager.StartExpiryWorker(ctx, time.Hour)
 
 	kvCleanupInterval, _ := time.ParseDuration(cfg.KV.CleanupInterval)
 	if kvCleanupInterval <= 0 {
 		kvCleanupInterval = time.Hour
 	}
-	startKVCleanupWorker(ctx, kvStore, kvCleanupInterval, logger)
+	startKVCleanupWorker(ctx, st.kvStore, kvCleanupInterval, logger)
 
 	sharedToolMgr, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
@@ -592,11 +620,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 	abc := agentBuildCtx{
 		cfg:             cfg,
 		llm:             clients,
-		memory:          memory,
+		memory:          st.memory,
 		sharedToolMgr:   sharedToolMgr,
 		lifecycleMgr:    lifecycleMgr,
-		approvalManager: approvalManager,
-		kvStore:         kvStore,
+		approvalManager: st.approvalManager,
+		kvStore:         st.kvStore,
 		globalSkills:    globalSkills,
 		sched:           sched,
 		adapters:        adapters,
@@ -617,7 +645,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
 
 	if tgAdapter != nil {
-		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalManager, logger))
+		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(st.approvalManager, logger))
 	}
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, logger); err != nil {
@@ -640,9 +668,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 			Dispatcher:   dispatcher,
 			Scheduler:    sched,
 			CostTracker:  clients.cost,
-			Memory:       memory,
+			Memory:       st.memory,
 			Config:       cfg,
-			Approvals:    approvalManager,
+			Approvals:    st.approvalManager,
 			LifecycleMgr: lifecycleMgr,
 			WebHandler:   web.Handler(),
 		}, logger); err != nil {

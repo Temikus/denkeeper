@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	defaultBaseURL    = "https://api.anthropic.com"
-	anthropicVersion  = "2023-06-01"
-	messagesEndpoint  = "/v1/messages"
+	defaultBaseURL   = "https://api.anthropic.com"
+	anthropicVersion = "2023-06-01"
+	messagesEndpoint = "/v1/messages"
 )
 
 // Client implements llm.Provider against the Anthropic Messages API.
