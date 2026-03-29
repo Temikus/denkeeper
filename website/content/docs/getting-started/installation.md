@@ -62,9 +62,23 @@ Run with a bind-mounted config:
 ```bash
 docker run -d \
   --name denkeeper \
-  -v ~/.denkeeper:/home/denkeeper/.denkeeper \
-  ghcr.io/temikus/denkeeper:latest serve
+  -v ~/.denkeeper:/data \
+  ghcr.io/temikus/denkeeper:latest
 ```
+
+The container reads config from the `DENKEEPER_CONFIG` env var (default `/data/denkeeper.toml`). Override with `-e DENKEEPER_CONFIG=/path/to/config.toml`.
+
+## Helm (Kubernetes)
+
+A Helm chart is available in the repository:
+
+```bash
+helm install denkeeper deploy/helm/denkeeper/ \
+  --set secrets.llmAnthropicApiKey=sk-ant-... \
+  --set secrets.telegramToken=123456:ABC...
+```
+
+The chart supports Ingress, PVC persistence, secrets management (or `existingSecret` for external secret managers), and security-hardened pod defaults. See [`deploy/helm/denkeeper/values.yaml`](https://github.com/Temikus/denkeeper/blob/main/deploy/helm/denkeeper/values.yaml) for all options.
 
 ## From source
 

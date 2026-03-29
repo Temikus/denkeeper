@@ -64,6 +64,18 @@ docker run -d --name denkeeper \
   ghcr.io/temikus/denkeeper:latest
 ```
 
+The container reads config from `DENKEEPER_CONFIG` (default `/data/denkeeper.toml`). Override with `-e DENKEEPER_CONFIG=/path/to/config.toml`.
+
+### Helm (Kubernetes)
+
+A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) with support for Ingress, PVC persistence, secrets management, and security-hardened pod defaults:
+
+```sh
+helm install denkeeper deploy/helm/denkeeper/ \
+  --set secrets.llmAnthropicApiKey=sk-ant-... \
+  --set secrets.telegramToken=123456:ABC...
+```
+
 ### Homebrew (macOS)
 
 ```sh
