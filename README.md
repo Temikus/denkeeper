@@ -106,12 +106,15 @@ cosign verify \
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
 - **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
-- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, agent context viewer, and API key management
+- **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
+- **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
+- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, and API key management
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
-- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions) require explicit human approval via chat buttons (Telegram/Discord) or REST API
-- **Config MCP server** — per-agent in-process MCP tools let the LLM list/create skills, list/add schedules, and inspect its own permission tier at runtime
-- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, and approval CRUD
+- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
+- **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
+- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, approval CRUD, tool/plugin CRUD, and API key management
+- **CLI plugin signing** — `denkeeper plugin keygen/sign/verify` commands for Ed25519 plugin binary signing and verification
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
 
 ## Architecture
@@ -184,6 +187,7 @@ Key sections:
 | `[voice]` | STT/TTS configuration (OpenAI) |
 | `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys with scopes) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
+| `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
 
@@ -273,7 +277,7 @@ key  = "dk-your-secret-key"
 scopes = ["chat", "sessions:read", "costs:read"]
 ```
 
-**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`, `approvals:read`, `approvals:write`
+**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`
 
 **Endpoints:**
 
@@ -301,6 +305,14 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `DELETE` | `/api/v1/keys/{id}` | `admin` | Revoke an API key |
 | `DELETE` | `/api/v1/keys/{id}/permanent` | `admin` | Permanently delete a revoked key |
 | `POST` | `/api/v1/keys/{id}/rotate` | `admin` | Rotate an API key |
+| `GET` | `/api/v1/tools` | `tools:read` | List MCP tool servers |
+| `GET` | `/api/v1/tools/{name}` | `tools:read` | Get tool server details |
+| `POST` | `/api/v1/tools` | `tools:write` | Add a tool server |
+| `DELETE` | `/api/v1/tools/{name}` | `tools:write` | Remove a tool server |
+| `GET` | `/api/v1/plugins` | `tools:read` | List plugins |
+| `GET` | `/api/v1/plugins/{name}` | `tools:read` | Get plugin details |
+| `POST` | `/api/v1/plugins` | `tools:write` | Add a plugin |
+| `DELETE` | `/api/v1/plugins/{name}` | `tools:write` | Remove a plugin |
 
 **Chat example:**
 
@@ -359,7 +371,8 @@ internal/
   api/               External REST API server
   approval/          Approval workflow manager, store, registry, and callback handler
   config/            TOML config parsing and validation
-  configmcp/         Per-agent Config MCP server (skill/schedule/tier tools)
+  configmcp/         Per-agent Config MCP server (skill/schedule/tier/tool/KV tools)
+  kv/                Per-agent key-value store with TTL
   llm/               Provider interface, router, cost tracking
     anthropic/       Anthropic direct client
     openrouter/      OpenRouter client
@@ -406,10 +419,13 @@ Denkeeper is built in phases:
 **Phase 3 — Extensibility** ✅
 - [x] REST API chat endpoint — `POST /api/v1/chat` with JSON response and SSE streaming, `session_id` for conversation continuity, `DELETE /api/v1/sessions/:id`
 - [x] Approval workflows — supervised-tier Telegram inline buttons (Approve/Deny) + REST API (`GET|POST /api/v1/approvals/...`); TTL expiry, stale callback UX, keyboard auto-removal on resolution
-- [x] Config MCP server — per-agent in-process MCP tools for skill and schedule self-modification
+- [x] Config MCP server — per-agent in-process MCP tools for skill, schedule, tool, plugin, and KV self-modification
 - [x] Ollama LLM provider — local inference with conditional OpenRouter API key validation
-- [x] Plugin system — subprocess plugins with capability declarations (`capabilities = ["tools"]`); Docker sandboxing planned
-- [x] Web dashboard — embedded Svelte UI with overview, sessions, approvals, schedules, skills, and agent context viewer (persona status + MCP tool names)
+- [x] Plugin system — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification
+- [x] Runtime tool management — add/remove MCP tools and plugins at runtime; REST API CRUD (`tools:read`/`tools:write` scopes); TOML config persistence
+- [x] Agent KV store — per-agent SQLite-backed key-value storage with TTL, exposed as Config MCP tools
+- [x] CLI plugin signing — `denkeeper plugin keygen/sign/verify` commands for Ed25519 binary signing
+- [x] Web dashboard — embedded Svelte UI with overview, chat, sessions, approvals, schedules, skills, tools, agents, and API key management
 
 **Phase 4 — Polish** ✅
 - [x] Discord adapter — DM and guild channel support, allowlist, typing indicator, action-row approval buttons

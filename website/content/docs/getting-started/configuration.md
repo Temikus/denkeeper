@@ -39,7 +39,9 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 | `[[api.keys]]` | API key definitions |
 | `[[schedules]]` | Recurring task schedules |
 | `[plugins.*]` | Plugin definitions |
+| `[security]` | Plugin signing (trusted keys, allow unsigned) |
 | `[tools.*]` | MCP tool server definitions |
+| `[kv]` | Agent KV store limits |
 
 ## Environment variable expansion
 

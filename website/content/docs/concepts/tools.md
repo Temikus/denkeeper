@@ -40,9 +40,38 @@ Tool execution respects the agent's permission tier:
 - **Supervised** — tools execute without approval (future: configurable per-tool approval)
 - **Restricted** — only read-only tools are available
 
+## Runtime tool management
+
+Tools and plugins can be added and removed at runtime without restarting:
+
+- **Config MCP tools**: The agent can self-manage tools via `tool_add`, `tool_remove`, `tool_list`, `plugin_add`, `plugin_remove`, `plugin_list` (respects permission tiers — restricted denies, supervised requires approval)
+- **REST API**: `POST/DELETE /api/v1/tools` and `POST/DELETE /api/v1/plugins` with `tools:write` scope
+- **Web dashboard**: The Tools page provides a UI for managing tools and plugins
+
+All runtime changes are persisted to the TOML config file, so they survive restarts.
+
 ## Config MCP server
 
-Each agent also has access to a built-in MCP server that exposes Denkeeper's own configuration: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, and `get_permission_tier`.
+Each agent has access to a built-in MCP server that exposes Denkeeper's own configuration:
+
+- **Skills**: `list_skills`, `create_skill`
+- **Schedules**: `list_schedules`, `add_schedule`
+- **Tools**: `tool_list`, `tool_add`, `tool_remove`
+- **Plugins**: `plugin_list`, `plugin_add`, `plugin_remove`
+- **KV store**: `kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`
+- **Info**: `get_permission_tier`
+
+### Agent KV store
+
+The KV store provides per-agent key-value storage with optional TTL. It's useful for:
+
+- **Locks**: "I'm already processing this task, don't start another" (via `kv_set_nx`)
+- **Counters**: Track how many times something has happened
+- **Caches**: Remember recent API results with automatic expiry
+- **State machines**: Track multi-step workflow progress
+- **Cross-session coordination**: Check if a daily routine already ran today
+
+KV reads are allowed for all permission tiers. Writes are denied for restricted tier. Configure limits in the `[kv]` config section.
 
 ## Plugins
 
@@ -51,4 +80,4 @@ Plugins extend the agent with external processes. Two execution strategies are a
 - **Subprocess** (`type = "subprocess"`) — trusted plugins run as child processes with direct MCP stdio
 - **Docker** (`type = "docker"`) — sandboxed plugins run in Docker/Podman containers with `--cap-drop ALL`, `--read-only`, `--network none` by default
 
-Subprocess plugins can optionally be verified with Ed25519 signatures. See the [security](/docs/concepts/security/) and [config reference](/docs/reference/config/) pages for details.
+Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli/), and [config reference](/docs/reference/config/) pages for details.

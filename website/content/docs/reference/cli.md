@@ -71,3 +71,51 @@ Revocation is immediate — the key stops working as soon as the command complet
 | `--name` | Key name to permanently delete (required) |
 
 Permanently removes a revoked key from the database. Only revoked keys can be deleted.
+
+## `denkeeper plugin`
+
+Manage Ed25519 plugin signing. These commands help you sign and verify plugin binaries for secure distribution.
+
+### `denkeeper plugin keygen <name>`
+
+Generate an Ed25519 key pair for plugin signing.
+
+```bash
+denkeeper plugin keygen my-plugin
+denkeeper plugin keygen my-plugin --output /path/to/keys
+```
+
+| Flag | Description |
+|---|---|
+| `--output` | Output directory for key files (default: current directory) |
+
+Creates two files: `<name>.pub` (public key, PEM) and `<name>.key` (private key, PEM, mode 0600).
+
+### `denkeeper plugin sign <binary>`
+
+Sign a plugin binary with an Ed25519 private key.
+
+```bash
+denkeeper plugin sign ./my-plugin --key my-plugin.key
+```
+
+| Flag | Description |
+|---|---|
+| `--key` | Path to private key file (required) |
+
+Creates a detached signature file `<binary>.sig`.
+
+### `denkeeper plugin verify <binary>`
+
+Verify a plugin binary's signature against one or more public keys.
+
+```bash
+denkeeper plugin verify ./my-plugin --key my-plugin.pub
+denkeeper plugin verify ./my-plugin --key key1.pub --key key2.pub
+```
+
+| Flag | Description |
+|---|---|
+| `--key` | Path to public key file (required, repeatable) |
+
+Exits with code 0 if the signature is valid for any of the provided keys.

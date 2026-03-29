@@ -200,6 +200,66 @@ curl -H "Authorization: Bearer dk_yourkey" https://localhost:8080/api/v1/approva
 
 API keys are scoped — a key with only `chat` scope cannot access `/api/v1/approvals`.
 
+## Tools & Plugins
+
+### `GET /api/v1/tools`
+
+**Scope:** `tools:read`
+
+List all configured MCP tool servers.
+
+### `GET /api/v1/tools/{name}`
+
+**Scope:** `tools:read`
+
+Get details for a specific tool server.
+
+### `POST /api/v1/tools`
+
+**Scope:** `tools:write`
+
+Add a new MCP tool server. The tool is started immediately and its configuration is persisted to TOML.
+
+**Request body:**
+
+```json
+{
+  "name": "filesystem",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+}
+```
+
+### `DELETE /api/v1/tools/{name}`
+
+**Scope:** `tools:write`
+
+Remove a tool server. The process is stopped and the configuration is removed from TOML.
+
+### `GET /api/v1/plugins`
+
+**Scope:** `tools:read`
+
+List all configured plugins.
+
+### `GET /api/v1/plugins/{name}`
+
+**Scope:** `tools:read`
+
+Get details for a specific plugin.
+
+### `POST /api/v1/plugins`
+
+**Scope:** `tools:write`
+
+Add a new plugin (subprocess or Docker).
+
+### `DELETE /api/v1/plugins/{name}`
+
+**Scope:** `tools:write`
+
+Remove a plugin.
+
 ## Rate limiting
 
 Per-key rate limiting is configured via `api.rate_limit` (requests per second). When exceeded, the API returns `429 Too Many Requests`.

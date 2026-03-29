@@ -96,7 +96,7 @@ Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messa
 
 Flow: Engine produces a directive → supervised tier submits to Manager → Manager persists row + registers closure → Engine attaches Approve/Deny inline keyboard buttons to the outgoing message → user clicks → Telegram adapter routes callback to `Handler.Resolve` → Manager resolves + invokes closure → original message keyboard is cleared.
 
-Three action kinds: `user_update`, `create_skill`, `modify_schedule`. Default TTL: 24 h (background worker ticks hourly).
+Four action kinds: `user_update`, `create_skill`, `modify_schedule`, `install_tool`. Default TTL: 24 h (background worker ticks hourly).
 
 ## Config MCP Server
 
@@ -156,7 +156,7 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` at build time via `//go:embed dist`.
 
 - Served at the root path when `[api] enabled = true`.
-- 9 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Agents, API Keys.
+- 10 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Agents, API Keys.
 - Agent detail page shows persona directory, loaded sections (soul/user/memory), and MCP tool names.
 - **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. The CI workflows already handle this.
 - Local dev: `just build-ui` (build once) or `just web-dev` (Vite dev server with hot-reload). `just build-full` builds web then binary in one step.
@@ -242,5 +242,5 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
 - CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
-- Next: Documentation website domain setup, Kubernetes sandbox runtime backend, cyclomatic complexity reduction (threshold 25 → 20).
+- Next: Kubernetes sandbox runtime backend, cyclomatic complexity reduction (threshold 25 → 20).
 - See `design/denkeeper-prd.md` for the full roadmap.

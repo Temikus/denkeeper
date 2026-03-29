@@ -159,6 +159,16 @@ Subprocess plugins run as child processes with direct MCP stdio. Docker plugins 
 
 When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
 
+## `[kv]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `max_keys_per_agent` | int | `1000` | Maximum keys per agent |
+| `max_value_bytes` | int | `65536` | Maximum value size in bytes (64 KB) |
+| `cleanup_interval` | string | `"1h"` | Background cleanup interval for expired keys |
+
+Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
+
 ## `[tools.*]`
 
 | Key | Type | Default | Description |
@@ -166,3 +176,5 @@ When `allow_unsigned = false`, all subprocess plugin binaries must have a valid 
 | `command` | string | *required* | MCP server command |
 | `args` | string[] | — | Command arguments |
 | `env` | map | — | Environment variables |
+
+Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
