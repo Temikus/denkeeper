@@ -87,14 +87,24 @@ docker-down:
 
 # Build the web dashboard (requires Node.js and npm)
 build-ui:
-    cd web && npm install && npm run build
+    #!/usr/bin/env sh
+    cd web
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm run build
 
 # Full build: web dashboard then Go binary
 build-full: build-ui build
 
 # Run the Vite dev server (proxies /api to localhost:8080)
 dev-ui:
-    cd web && npm install && npm run dev
+    #!/usr/bin/env sh
+    cd web
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm run dev
 
 # Remove frontend build artifacts and node_modules
 clean-ui:
@@ -102,11 +112,23 @@ clean-ui:
 
 # Build the documentation website
 build-website:
-    cd website && rm -rf resources/_gen && npm install && npm run build
+    #!/usr/bin/env sh
+    cd website
+    rm -rf resources/_gen
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm run build
 
 # Run the Hugo dev server for the documentation website
 dev-website:
-    cd website && rm -rf resources/_gen && npm install && npm run dev
+    #!/usr/bin/env sh
+    cd website
+    rm -rf resources/_gen
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm run dev
 
 # Tag and push a release (usage: just release patch|minor|major)
 release bump:

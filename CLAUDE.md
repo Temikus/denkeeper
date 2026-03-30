@@ -178,7 +178,7 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 - Served at the root path when `[api] enabled = true`.
 - 10 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Agents, API Keys.
 - Agent detail page shows persona directory, loaded sections (soul/user/memory), and MCP tool names.
-- **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. The CI workflows already handle this.
+- **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. CI handles this via a dedicated `build-ui` job that builds once and shares the result as a GitHub Actions artifact to all downstream jobs (lint, test, vuln, build matrix). Go module and build caches are also configured.
 - Local dev: `just build-ui` (build once) or `just web-dev` (Vite dev server with hot-reload). `just build-full` builds web then binary in one step.
 
 ## Telegram UX

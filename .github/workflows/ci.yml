@@ -7,16 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint
+  build-ui:
+    name: Build Web UI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Build web UI
         run: cd web && npm ci && npm run build
+      - name: Upload web UI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
+          retention-days: 1
+
+  lint:
+    name: Lint
+    needs: build-ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download web UI
+        uses: actions/download-artifact@v4
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -24,15 +44,25 @@ jobs:
 
   test:
     name: Test
+    needs: build-ui
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - name: Download web UI
+        uses: actions/download-artifact@v4
         with:
-          node-version: lts/*
-      - name: Build web UI
-        run: cd web && npm ci && npm run build
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage
         uses: actions/upload-artifact@v7
@@ -42,20 +72,31 @@ jobs:
 
   vuln:
     name: Security Scan
+    needs: build-ui
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - name: Download web UI
+        uses: actions/download-artifact@v4
         with:
-          node-version: lts/*
-      - name: Build web UI
-        run: cd web && npm ci && npm run build
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   build:
     name: Build
+    needs: build-ui
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -68,12 +109,22 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - name: Download web UI
+        uses: actions/download-artifact@v4
         with:
-          node-version: lts/*
-      - name: Build web UI
-        run: cd web && npm ci && npm run build
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-
+            go-${{ runner.os }}-
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}

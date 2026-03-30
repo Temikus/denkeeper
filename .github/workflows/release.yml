@@ -12,33 +12,71 @@ permissions:
   attestations: write    # Required for actions/attest-build-provenance
 
 jobs:
-  test:
-    name: Test
+  build-ui:
+    name: Build Web UI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Build web UI
         run: cd web && npm ci && npm run build
+      - name: Upload web UI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
+          retention-days: 1
+
+  test:
+    name: Test
+    needs: build-ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download web UI
+        uses: actions/download-artifact@v4
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       - run: go test -race ./...
 
   release:
     name: Release
-    needs: test
+    needs: [test, build-ui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: Download web UI
+        uses: actions/download-artifact@v4
         with:
-          node-version: lts/*
-      - name: Build web UI
-        run: cd web && npm ci && npm run build
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       # cosign for keyless signing of the checksums file
       - uses: sigstore/cosign-installer@v3
       # syft for SBOM generation (goreleaser sboms: section shells out to syft)
