@@ -10,7 +10,7 @@ RUN npm run build
 
 # Stage 2: Build Go binary
 # Go cross-compiles natively — no need for QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
