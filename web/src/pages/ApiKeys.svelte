@@ -22,6 +22,7 @@
   const ALL_SCOPES = [
     'chat', 'admin', 'sessions:read', 'costs:read',
     'skills:read', 'schedules:read', 'approvals:read', 'approvals:write',
+    'tools:read', 'tools:write',
   ]
 
   async function loadKeys() {
