@@ -138,6 +138,69 @@ func TestHealth_ReturnsOK(t *testing.T) {
 	}
 }
 
+// logRecord captures slog output for assertions.
+type logRecord struct {
+	Level   slog.Level
+	Message string
+}
+
+// capturingHandler is a slog.Handler that stores records in a slice.
+type capturingHandler struct {
+	records *[]logRecord
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, logRecord{Level: r.Level, Message: r.Message})
+	return nil
+}
+func (h *capturingHandler) WithAttrs(_ []slog.Attr) slog.Handler  { return h }
+func (h *capturingHandler) WithGroup(_ string) slog.Handler        { return h }
+
+func TestHealth_LoggedAtDebugLevel(t *testing.T) {
+	var records []logRecord
+	logger := slog.New(&capturingHandler{records: &records})
+	srv := New(testConfig(), testDeps(), logger)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srv.middlewareLogging(mux)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+
+	if len(records) != 1 {
+		t.Fatalf("expected 1 log record, got %d", len(records))
+	}
+	if records[0].Level != slog.LevelDebug {
+		t.Errorf("health log level = %v, want %v", records[0].Level, slog.LevelDebug)
+	}
+}
+
+func TestNonHealthEndpoint_LoggedAtInfoLevel(t *testing.T) {
+	var records []logRecord
+	logger := slog.New(&capturingHandler{records: &records})
+	srv := New(testConfig(), testDeps(), logger)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/agents", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srv.middlewareLogging(mux)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil))
+
+	if len(records) != 1 {
+		t.Fatalf("expected 1 log record, got %d", len(records))
+	}
+	if records[0].Level != slog.LevelInfo {
+		t.Errorf("non-health log level = %v, want %v", records[0].Level, slog.LevelInfo)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
