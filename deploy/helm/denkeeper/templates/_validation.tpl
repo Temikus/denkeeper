@@ -25,6 +25,19 @@ These mirror the runtime checks in internal/config/config.go:validate().
   {{- end }}
 {{- end }}
 
+{{/* Telegram allowed_users entries must be integers, not floats or strings */}}
+{{- if (dig "telegram" "allowed_users" nil .Values.config) }}
+  {{- range $user := dig "telegram" "allowed_users" list .Values.config }}
+    {{- if not (kindIs "float64" $user) }}
+      {{- if not (kindIs "int64" $user) }}
+        {{- if not (kindIs "int" $user) }}
+          {{- fail (printf "config.telegram.allowed_users entries must be integers, got %v (%s)" $user (kindOf $user)) }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
 {{/* At least one adapter must be configured (skip when using existingSecret — we can't inspect its contents) */}}
 {{- if not .Values.existingSecret }}
   {{- if and (not .Values.secrets.telegramToken) (not .Values.secrets.discordToken) }}

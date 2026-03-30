@@ -1787,6 +1787,137 @@ cleanup_interval = "30m"
 }
 
 // --------------------------------------------------------------------------
+// Tests: float-to-int normalisation (Helm toToml compatibility)
+// --------------------------------------------------------------------------
+
+func TestParse_FloatToIntCoercion_AllowedUsers(t *testing.T) {
+	// Helm's toToml renders YAML integers as TOML floats because YAML
+	// values flow through Go as float64. Verify Parse handles this.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [3.87956986e+08]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Telegram.AllowedUsers) != 1 || cfg.Telegram.AllowedUsers[0] != 387956986 {
+		t.Errorf("allowed_users = %v, want [387956986]", cfg.Telegram.AllowedUsers)
+	}
+}
+
+func TestParse_FloatToIntCoercion_DecimalFloat(t *testing.T) {
+	// Same as above but with decimal notation instead of scientific.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [387956986.0]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Telegram.AllowedUsers) != 1 || cfg.Telegram.AllowedUsers[0] != 387956986 {
+		t.Errorf("allowed_users = %v, want [387956986]", cfg.Telegram.AllowedUsers)
+	}
+}
+
+func TestParse_FloatToIntCoercion_PreservesRealFloats(t *testing.T) {
+	// Ensure float64 fields like max_cost_per_session are not mangled.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [3.87956986e+08]
+
+[llm]
+max_cost_per_session = 2.5
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.MaxCostPerSession != 2.5 {
+		t.Errorf("max_cost_per_session = %f, want 2.5", cfg.LLM.MaxCostPerSession)
+	}
+}
+
+func TestParse_FloatToIntCoercion_MultipleUsers(t *testing.T) {
+	// Multiple float-encoded user IDs should all convert.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [1.0, 3.87956986e+08, 42.0]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []int64{1, 387956986, 42}
+	if len(cfg.Telegram.AllowedUsers) != len(want) {
+		t.Fatalf("allowed_users length = %d, want %d", len(cfg.Telegram.AllowedUsers), len(want))
+	}
+	for i, w := range want {
+		if cfg.Telegram.AllowedUsers[i] != w {
+			t.Errorf("allowed_users[%d] = %d, want %d", i, cfg.Telegram.AllowedUsers[i], w)
+		}
+	}
+}
+
+func TestParse_FloatToIntCoercion_NestedTables(t *testing.T) {
+	// Floats in nested tables (e.g. max_keys_per_agent) should also be fixed.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [1.0]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[kv]
+max_keys_per_agent = 500.0
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.KV.MaxKeysPerAgent != 500 {
+		t.Errorf("kv.max_keys_per_agent = %d, want 500", cfg.KV.MaxKeysPerAgent)
+	}
+}
+
+func TestParse_NormalIntegers_NoNormalisationNeeded(t *testing.T) {
+	// Plain integers should work without triggering normalisation.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [387956986]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Telegram.AllowedUsers) != 1 || cfg.Telegram.AllowedUsers[0] != 387956986 {
+		t.Errorf("allowed_users = %v, want [387956986]", cfg.Telegram.AllowedUsers)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Tests: synthesizeDefaultAgent backward compatibility
 // --------------------------------------------------------------------------
 
