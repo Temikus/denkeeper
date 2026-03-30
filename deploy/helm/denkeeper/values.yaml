@@ -69,9 +69,9 @@ config:
   #     agent: "default"
   #     message: "Good morning! Any updates?"
 
-  # -- Other sections: memory, voice, kv, sandbox, security, tools, plugins.
-  # memory:
-  #   path: "/data/memory.db"
+  # -- Memory store (SQLite). db_path must be on a writable, persistent volume.
+  memory:
+    db_path: "/data/memory.db"
   # kv:
   #   max_keys_per_agent: 1000
   #   max_value_bytes: 65536
