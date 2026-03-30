@@ -22,6 +22,8 @@
     'schedules:read': true,
     'approvals:read': true,
     'approvals:write': true,
+    'tools:read': true,
+    'tools:write': true,
   }
   let setupError = ''
   let setupLoading = false
@@ -39,6 +41,8 @@
     { value: 'schedules:read',  label: 'schedules:read' },
     { value: 'approvals:read',  label: 'approvals:read' },
     { value: 'approvals:write', label: 'approvals:write' },
+    { value: 'tools:read',     label: 'tools:read' },
+    { value: 'tools:write',    label: 'tools:write' },
   ]
 
   onMount(async () => {
@@ -160,7 +164,8 @@
       <p class="hint">
         The key must have scopes: <code>admin</code>, <code>sessions:read</code>,
         <code>costs:read</code>, <code>skills:read</code>, <code>schedules:read</code>,
-        <code>approvals:read</code>, <code>approvals:write</code>.
+        <code>approvals:read</code>, <code>approvals:write</code>,
+        <code>tools:read</code>, <code>tools:write</code>.
       </p>
 
     {:else if mode === 'setup'}
