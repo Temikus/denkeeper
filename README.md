@@ -418,6 +418,7 @@ internal/
     ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
   plugin/            Plugin manager (subprocess and Docker-sandboxed)
+  sandbox/           Pluggable sandbox runtime (Docker and Kubernetes backends)
   scheduler/         Cron and interval scheduling
   security/          Permission engine (tiers) and Ed25519 plugin signing
   skill/             Skill file loader, trigger matching, merging
@@ -479,6 +480,13 @@ Denkeeper is built in phases:
 - [x] Hugo documentation website (Hugo + Doks theme, deployed via GitHub Pages at [denkeeper.io](https://denkeeper.io))
 - [x] Getting-started guides, concept docs, and reference pages
 - [x] One-liner install script hosted at `get.denkeeper.io`
+
+**Phase 6 — Browser Automation** (planned)
+- [ ] Browser automation — first-party Docker plugin with headless Chromium + Playwright MCP server
+- [ ] Persistent browser profiles — per-agent encrypted profile storage with volume mounts
+- [ ] URL allowlist enforcement — egress filtering at plugin level, configurable per-agent
+- [ ] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns
+- [ ] Screenshot-to-text fallback — DOM extraction pipeline for non-vision LLMs
 
 ## License
 
