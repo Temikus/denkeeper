@@ -1178,7 +1178,12 @@ func (s *Server) middlewareLogging(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		s.logger.Info("api request",
+
+		level := slog.LevelInfo
+		if r.URL.Path == "/api/v1/health" {
+			level = slog.LevelDebug
+		}
+		s.logger.Log(r.Context(), level, "api request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.status,
