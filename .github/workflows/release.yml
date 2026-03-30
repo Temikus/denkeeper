@@ -115,10 +115,15 @@ jobs:
 
   docker:
     name: Docker
-    needs: test
+    needs: [test, build-ui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Download web UI
+        uses: actions/download-artifact@v4
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
@@ -143,8 +148,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/temikus/denkeeper:buildcache
+          cache-to: type=registry,ref=ghcr.io/temikus/denkeeper:buildcache,mode=max
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}

@@ -1,5 +1,6 @@
 # Stage 1: Build web dashboard
-FROM node:22-alpine AS frontend
+# Runs on the build host's native arch (no QEMU).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci --prefer-offline || npm install
@@ -8,7 +9,11 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS builder
+# Go cross-compiles natively — no need for QEMU emulation.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
@@ -21,7 +26,7 @@ COPY . .
 COPY --from=frontend /src/internal/web/dist ./internal/web/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /denkeeper ./cmd/denkeeper
 
