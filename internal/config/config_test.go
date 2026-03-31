@@ -2139,3 +2139,202 @@ func TestExpandEnvVars_Plugins(t *testing.T) {
 		t.Errorf("env var not expanded: got %q", cfg.Plugins["test"].Env["TOKEN"])
 	}
 }
+
+func TestParse_WebDefaults(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Web.Search.Provider != "duckduckgo" {
+		t.Errorf("search provider = %q, want %q", cfg.Web.Search.Provider, "duckduckgo")
+	}
+	if cfg.Web.Search.MaxResults != 5 {
+		t.Errorf("max_results = %d, want 5", cfg.Web.Search.MaxResults)
+	}
+	if cfg.Web.Fetch.Timeout != "30s" {
+		t.Errorf("timeout = %q, want %q", cfg.Web.Fetch.Timeout, "30s")
+	}
+	if cfg.Web.Fetch.MaxSizeBytes != 5242880 {
+		t.Errorf("max_size_bytes = %d, want 5242880", cfg.Web.Fetch.MaxSizeBytes)
+	}
+	if cfg.Web.Fetch.UserAgent != "Denkeeper/1.0 (+https://denkeeper.io)" {
+		t.Errorf("user_agent = %q, want default", cfg.Web.Fetch.UserAgent)
+	}
+}
+
+func TestParse_WebTavilyRequiresAPIKey(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+
+[web.search]
+provider = "tavily"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for tavily without api_key")
+	}
+	if !strings.Contains(err.Error(), "api_key is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_WebTavilyWithAPIKey(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+
+[web.search]
+provider = "tavily"
+api_key = "tvly-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Web.Search.Provider != "tavily" {
+		t.Errorf("provider = %q, want %q", cfg.Web.Search.Provider, "tavily")
+	}
+	if cfg.Web.Search.APIKey != "tvly-test-key" {
+		t.Errorf("api_key = %q, want %q", cfg.Web.Search.APIKey, "tvly-test-key")
+	}
+}
+
+func TestParse_WebInvalidProvider(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+
+[web.search]
+provider = "google"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for unsupported search provider")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_WebDisabledSkipsValidation(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = false
+
+[web.search]
+provider = "invalid-provider"
+`)
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error when web disabled, got: %v", err)
+	}
+}
+
+func TestParse_WebSearchAPIKeyEnvOverride(t *testing.T) {
+	t.Setenv("DENKEEPER_SEARCH_API_KEY", "env-search-key")
+
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+
+[web.search]
+provider = "tavily"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Web.Search.APIKey != "env-search-key" {
+		t.Errorf("api_key = %q, want %q", cfg.Web.Search.APIKey, "env-search-key")
+	}
+}
+
+func TestParse_WebFetchConfig(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = true
+
+[web.fetch]
+timeout = "15s"
+max_size_bytes = 1048576
+user_agent = "CustomBot/2.0"
+respect_robots_txt = true
+respect_agents_txt = true
+
+[web.fetch.jina]
+enabled = true
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Web.Fetch.Timeout != "15s" {
+		t.Errorf("timeout = %q, want %q", cfg.Web.Fetch.Timeout, "15s")
+	}
+	if cfg.Web.Fetch.MaxSizeBytes != 1048576 {
+		t.Errorf("max_size_bytes = %d, want 1048576", cfg.Web.Fetch.MaxSizeBytes)
+	}
+	if cfg.Web.Fetch.UserAgent != "CustomBot/2.0" {
+		t.Errorf("user_agent = %q, want %q", cfg.Web.Fetch.UserAgent, "CustomBot/2.0")
+	}
+	if !cfg.Web.Fetch.RespectRobotsTxt {
+		t.Error("respect_robots_txt should be true")
+	}
+	if !cfg.Web.Fetch.RespectAgentsTxt {
+		t.Error("respect_agents_txt should be true")
+	}
+	if !cfg.Web.Fetch.Jina.Enabled {
+		t.Error("jina.enabled should be true")
+	}
+}
+
+func TestParse_BrowserDefaults(t *testing.T) {
+	tomlData := []byte(baseConfig)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Browser.Enabled {
+		t.Error("browser should be disabled by default")
+	}
+	if cfg.Browser.Image != "ghcr.io/temikus/denkeeper-browser:latest" {
+		t.Errorf("browser image = %q, want default", cfg.Browser.Image)
+	}
+	if cfg.Browser.MemoryLimit != "512m" {
+		t.Errorf("memory_limit = %q, want %q", cfg.Browser.MemoryLimit, "512m")
+	}
+	if cfg.Browser.CPULimit != "1" {
+		t.Errorf("cpu_limit = %q, want %q", cfg.Browser.CPULimit, "1")
+	}
+}
+
+func TestParse_BrowserCustomConfig(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[browser]
+enabled = true
+image = "custom-registry/browser:v2"
+memory_limit = "1g"
+cpu_limit = "2"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Browser.Enabled {
+		t.Error("browser should be enabled")
+	}
+	if cfg.Browser.Image != "custom-registry/browser:v2" {
+		t.Errorf("image = %q, want custom", cfg.Browser.Image)
+	}
+	if cfg.Browser.MemoryLimit != "1g" {
+		t.Errorf("memory_limit = %q, want %q", cfg.Browser.MemoryLimit, "1g")
+	}
+	if cfg.Browser.CPULimit != "2" {
+		t.Errorf("cpu_limit = %q, want %q", cfg.Browser.CPULimit, "2")
+	}
+}

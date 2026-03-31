@@ -180,6 +180,42 @@ format = "text"
 # scopes = ["health", "costs:read"]
 
 # ---------------------------------------------------------------------------
+# Web Capabilities — Search & Fetch
+# ---------------------------------------------------------------------------
+# Adds web_search and web_fetch MCP tools to every agent. Lightweight and
+# stateless — no Docker required.
+
+# [web]
+# enabled = true
+
+# [web.search]
+# provider = "duckduckgo"          # "duckduckgo" (default, no key) or "tavily"
+# api_key  = ""                    # Required for tavily (or DENKEEPER_SEARCH_API_KEY env var)
+# max_results = 5                  # Default 5, max 10
+
+# [web.fetch]
+# timeout          = "30s"
+# max_size_bytes   = 5242880       # 5MB
+# user_agent       = "Denkeeper/1.0 (+https://denkeeper.io)"
+# respect_robots_txt = false       # Check robots.txt before fetching
+# respect_agents_txt = false       # Check agents.txt before fetching
+
+# [web.fetch.jina]
+# enabled = false                  # Enable Jina Reader fallback for JS-heavy pages
+
+# ---------------------------------------------------------------------------
+# Browser Automation (Docker)
+# ---------------------------------------------------------------------------
+# Full Playwright-based browser control in a hardened Docker container.
+# Requires Docker on the host. Registers Playwright MCP tools automatically.
+
+# [browser]
+# enabled      = false
+# image        = "ghcr.io/temikus/denkeeper-browser:latest"
+# memory_limit = "512m"
+# cpu_limit    = "1"
+
+# ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
 # Each [[schedules]] entry defines a recurring task.

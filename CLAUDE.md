@@ -105,6 +105,26 @@ Four action kinds: `user_update`, `create_skill`, `modify_schedule`, `install_to
 
 Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `schedule_update`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`, `set_fallback`, `get_cost_summary`. In supervised mode mutation tools submit to the approval Manager rather than acting directly.
 
+## Web MCP Server
+
+`internal/webmcp/` provides a per-agent in-process MCP server for web search and URL fetching. Follows the same pattern as `configmcp`: no subprocess, runs in-process via `mcp.NewInMemoryTransports`.
+
+- **Two MCP tools**: `web_search` (query the web) and `web_fetch` (fetch URL content as Markdown with pagination).
+- **Search providers** (`internal/websearch/`): DuckDuckGo (default, no API key) and Tavily (premium, requires API key). Extensible `Provider` interface for future backends.
+- **URL fetching** (`internal/webfetch/`): Go HTTP client with built-in HTML-to-Markdown conversion (`html-to-markdown/v2`). Supports configurable size limits, timeouts, and optional robots.txt/agents.txt compliance. Optional Jina Reader fallback for JS-heavy pages via `ChainFetcher`.
+- **Permission-aware**: restricted tier is denied. Both tools check `PermissionTier()`.
+- **Pagination**: `web_fetch` truncates content to 8000 chars with `has_more` + `total_length` fields; callers use `start_index` for subsequent pages.
+- **Config**: `[web] enabled = true` with `[web.search]` (provider, api_key, max_results) and `[web.fetch]` (timeout, max_size_bytes, user_agent, respect_robots_txt, respect_agents_txt, jina.enabled).
+- **Env override**: `DENKEEPER_SEARCH_API_KEY` → `web.search.api_key`.
+
+## Browser Automation
+
+Browser automation uses the official Playwright MCP server (`@playwright/mcp`) running in a hardened Docker container. Auto-registered when `[browser] enabled = true`.
+
+- **Config**: `[browser]` with `enabled`, `image` (default `ghcr.io/temikus/denkeeper-browser:latest`), `memory_limit` (default "512m"), `cpu_limit` (default "1").
+- **Sandbox**: reuses the shared `sandbox.Runtime` (Docker or Kubernetes). Network policy = egress (outbound HTTP required for browsing).
+- **Hardened image** (`ghcr.io/temikus/denkeeper-browser`): lives in a separate repo (`Temikus/denkeeper-browser`), users can plug any custom MCP-compliant browser image.
+
 ## Agent KV Store
 
 `internal/kv/` provides per-agent key-value storage with optional TTL, exposed via Config MCP tools.
@@ -243,7 +263,7 @@ Six new tools in `configmcp`: `tool_list`, `tool_add`, `tool_remove`, `plugin_li
 
 Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove dialogs, status indicators. 10th page in the SPA.
 
-## Current State (Phase 5 complete)
+## Current State (Phase 5 complete, Phase 6 web capabilities in progress)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
@@ -264,5 +284,7 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
 - Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path (also used as Dockerfile entrypoint default), Helm chart (`deploy/helm/denkeeper/`) with Ingress support, non-root Docker container (UID 65534), docker-compose with port mapping.
-- Next: Browser automation (Phase 6).
+- Web search & fetch: in-process Web MCP server (`internal/webmcp/`) with `web_search` and `web_fetch` tools. Search providers: DuckDuckGo (default) and Tavily. Fetch: built-in HTML-to-Markdown, optional Jina Reader fallback, configurable robots.txt/agents.txt compliance. Config: `[web]` section with `DENKEEPER_SEARCH_API_KEY` env override.
+- Browser automation config: `[browser]` section with auto-registration as Docker-based MCP server via shared sandbox runtime. Image: `ghcr.io/temikus/denkeeper-browser:latest` (hardened wrapper repo planned).
+- Next: Build hardened browser image repo (`Temikus/denkeeper-browser`), Phase 6 remaining items.
 - See `design/denkeeper-prd.md` for the full roadmap.

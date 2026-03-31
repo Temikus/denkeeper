@@ -28,6 +28,60 @@ type Config struct {
 	Security  SecurityConfig          `toml:"security"`
 	KV        KVConfig                `toml:"kv"`
 	Sandbox   SandboxConfig           `toml:"sandbox"`
+	Web       WebConfig               `toml:"web"`
+	Browser   BrowserConfig           `toml:"browser"`
+}
+
+// WebConfig controls built-in web search and URL fetching tools.
+type WebConfig struct {
+	// Enabled controls whether web tools are available to agents. Default: false.
+	Enabled bool            `toml:"enabled"`
+	Search  WebSearchConfig `toml:"search"`
+	Fetch   WebFetchConfig  `toml:"fetch"`
+}
+
+// WebSearchConfig configures the web search provider.
+type WebSearchConfig struct {
+	// Provider selects the search backend: "duckduckgo" (default) or "tavily".
+	Provider string `toml:"provider"`
+	// APIKey is required for providers that need authentication (e.g. Tavily).
+	APIKey string `toml:"api_key"`
+	// MaxResults is the default number of search results to return. Default: 5.
+	MaxResults int `toml:"max_results"`
+}
+
+// WebFetchConfig configures URL fetching and content extraction.
+type WebFetchConfig struct {
+	// Timeout is the HTTP request timeout as a Go duration string. Default: "30s".
+	Timeout string `toml:"timeout"`
+	// MaxSizeBytes limits the response body size. Default: 5242880 (5MB).
+	MaxSizeBytes int64 `toml:"max_size_bytes"`
+	// UserAgent is the HTTP User-Agent header. Default: "Denkeeper/1.0 (+https://denkeeper.io)".
+	UserAgent string `toml:"user_agent"`
+	// RespectRobotsTxt checks robots.txt before fetching. Default: false.
+	RespectRobotsTxt bool `toml:"respect_robots_txt"`
+	// RespectAgentsTxt checks agents.txt before fetching. Default: false.
+	RespectAgentsTxt bool `toml:"respect_agents_txt"`
+	// Jina configures optional Jina Reader integration for JS-heavy pages.
+	Jina JinaFetchConfig `toml:"jina"`
+}
+
+// JinaFetchConfig configures the optional Jina Reader enhanced fetcher.
+type JinaFetchConfig struct {
+	// Enabled activates Jina Reader as a fallback for JS-heavy pages. Default: false.
+	Enabled bool `toml:"enabled"`
+}
+
+// BrowserConfig controls the Playwright-based browser automation Docker plugin.
+type BrowserConfig struct {
+	// Enabled controls whether browser automation is available. Default: false.
+	Enabled bool `toml:"enabled"`
+	// Image is the Docker/OCI image for the browser plugin. Default: "ghcr.io/temikus/denkeeper-browser:latest".
+	Image string `toml:"image"`
+	// MemoryLimit is the container memory limit. Default: "512m".
+	MemoryLimit string `toml:"memory_limit"`
+	// CPULimit is the container CPU limit. Default: "1".
+	CPULimit string `toml:"cpu_limit"`
 }
 
 // SandboxConfig selects the runtime backend for sandboxed (Docker-type) plugins.
@@ -500,6 +554,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("DENKEEPER_SESSION_TIER"); v != "" {
 		cfg.Session.Tier = v
 	}
+	if v := os.Getenv("DENKEEPER_SEARCH_API_KEY"); v != "" {
+		cfg.Web.Search.APIKey = v
+	}
 }
 
 func expandEnvVars(cfg *Config) {
@@ -536,6 +593,38 @@ func applyMiscDefaults(cfg *Config) {
 	}
 	if cfg.API.Enabled && cfg.API.Listen == "" {
 		cfg.API.Listen = ":8080"
+	}
+	applyWebDefaults(cfg)
+	applyBrowserDefaults(cfg)
+}
+
+func applyWebDefaults(cfg *Config) {
+	if cfg.Web.Search.Provider == "" {
+		cfg.Web.Search.Provider = "duckduckgo"
+	}
+	if cfg.Web.Search.MaxResults == 0 {
+		cfg.Web.Search.MaxResults = 5
+	}
+	if cfg.Web.Fetch.Timeout == "" {
+		cfg.Web.Fetch.Timeout = "30s"
+	}
+	if cfg.Web.Fetch.MaxSizeBytes == 0 {
+		cfg.Web.Fetch.MaxSizeBytes = 5242880 // 5MB
+	}
+	if cfg.Web.Fetch.UserAgent == "" {
+		cfg.Web.Fetch.UserAgent = "Denkeeper/1.0 (+https://denkeeper.io)"
+	}
+}
+
+func applyBrowserDefaults(cfg *Config) {
+	if cfg.Browser.Image == "" {
+		cfg.Browser.Image = "ghcr.io/temikus/denkeeper-browser:latest"
+	}
+	if cfg.Browser.MemoryLimit == "" {
+		cfg.Browser.MemoryLimit = "512m"
+	}
+	if cfg.Browser.CPULimit == "" {
+		cfg.Browser.CPULimit = "1"
 	}
 }
 
@@ -672,7 +761,32 @@ func validate(cfg *Config) error {
 	if err := validateAPI(&cfg.API); err != nil {
 		return err
 	}
+	if err := validateWeb(&cfg.Web); err != nil {
+		return err
+	}
 	return validateSandbox(&cfg.Sandbox)
+}
+
+// validWebSearchProviders is the set of supported web search provider names.
+var validWebSearchProviders = map[string]bool{
+	"duckduckgo": true,
+	"tavily":     true,
+}
+
+func validateWeb(w *WebConfig) error {
+	if !w.Enabled {
+		return nil
+	}
+	if !validWebSearchProviders[w.Search.Provider] {
+		return fmt.Errorf("config: web.search.provider: unsupported provider %q — must be one of: duckduckgo, tavily", w.Search.Provider)
+	}
+	if w.Search.Provider == "tavily" && w.Search.APIKey == "" {
+		return fmt.Errorf("config: web.search.api_key is required when using tavily provider")
+	}
+	if w.Search.MaxResults < 1 || w.Search.MaxResults > 20 {
+		return fmt.Errorf("config: web.search.max_results must be between 1 and 20, got %d", w.Search.MaxResults)
+	}
+	return nil
 }
 
 func validateSandbox(s *SandboxConfig) error {

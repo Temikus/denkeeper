@@ -36,6 +36,9 @@ import (
 	"github.com/Temikus/denkeeper/internal/tool"
 	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
 	"github.com/Temikus/denkeeper/internal/web"
+	"github.com/Temikus/denkeeper/internal/webfetch"
+	"github.com/Temikus/denkeeper/internal/webmcp"
+	"github.com/Temikus/denkeeper/internal/websearch"
 )
 
 // Build-time variables set via ldflags.
@@ -263,9 +266,16 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	var sharedToolMgr *tool.Manager
 	var cleanups []cleanupFunc
 
+	// Helper to ensure sharedToolMgr is initialised exactly once.
+	ensureToolMgr := func() {
+		if sharedToolMgr == nil {
+			sharedToolMgr = tool.NewManager(logger)
+			cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
+		}
+	}
+
 	if len(cfg.Tools) > 0 {
-		sharedToolMgr = tool.NewManager(logger)
-		cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
+		ensureToolMgr()
 		for name, tc := range cfg.Tools {
 			if err := sharedToolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
 				return nil, cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
@@ -274,11 +284,27 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 		}
 	}
 
-	if len(cfg.Plugins) > 0 {
-		if sharedToolMgr == nil {
-			sharedToolMgr = tool.NewManager(logger)
-			cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
+	// Shared sandbox runtime — created on first need (plugins or browser).
+	var sandboxRT sandbox.Runtime
+	ensureSandboxRT := func() error {
+		if sandboxRT != nil {
+			return nil
 		}
+		rt, rtErr := createSandboxRuntime(cfg, logger)
+		if rtErr != nil {
+			return rtErr
+		}
+		sandboxRT = rt
+		cleanups = append(cleanups, func() {
+			if err := rt.Close(); err != nil {
+				logger.Error("closing sandbox runtime", "error", err)
+			}
+		})
+		return nil
+	}
+
+	if len(cfg.Plugins) > 0 {
+		ensureToolMgr()
 
 		existingToolNames := make(map[string]bool, len(cfg.Tools))
 		for name := range cfg.Tools {
@@ -298,18 +324,10 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 		}
 
 		// Create sandbox runtime for Docker/K8s plugins.
-		var sandboxRT sandbox.Runtime
 		if hasSandboxedPlugins(cfg.Plugins) {
-			rt, rtErr := createSandboxRuntime(cfg, logger)
-			if rtErr != nil {
-				return nil, cleanups, rtErr
+			if err := ensureSandboxRT(); err != nil {
+				return nil, cleanups, err
 			}
-			sandboxRT = rt
-			cleanups = append(cleanups, func() {
-				if err := rt.Close(); err != nil {
-					logger.Error("closing sandbox runtime", "error", err)
-				}
-			})
 		}
 
 		pluginMgr := plugin.NewManager(logger, verifyOpts, sandboxRT)
@@ -322,7 +340,37 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 		logger.Info("plugins loaded", "count", pluginMgr.Count())
 	}
 
+	// Browser automation — auto-register as a Docker-based MCP server.
+	if cfg.Browser.Enabled {
+		ensureToolMgr()
+		if err := ensureSandboxRT(); err != nil {
+			return nil, cleanups, fmt.Errorf("browser sandbox runtime: %w", err)
+		}
+		if err := registerBrowser(ctx, cfg, sandboxRT, sharedToolMgr, logger); err != nil {
+			return nil, cleanups, err
+		}
+	}
+
 	return sharedToolMgr, cleanups, nil
+}
+
+// registerBrowser spawns the browser automation container and registers its MCP tools.
+func registerBrowser(ctx context.Context, cfg *config.Config, rt sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) error {
+	proc, err := rt.Spawn(ctx, "denkeeper-browser", sandbox.SpawnOpts{
+		Image:       cfg.Browser.Image,
+		Args:        []string{"--headless", "--browser", "chromium", "--no-sandbox"},
+		Network:     sandbox.NetworkEgress,
+		MemoryLimit: cfg.Browser.MemoryLimit,
+		CPULimit:    cfg.Browser.CPULimit,
+	})
+	if err != nil {
+		return fmt.Errorf("starting browser plugin: %w", err)
+	}
+	if err := toolMgr.RegisterServer(ctx, "browser", proc.Command, proc.Args, proc.Env); err != nil {
+		return fmt.Errorf("registering browser tools: %w", err)
+	}
+	logger.Info("browser automation registered", "image", cfg.Browser.Image)
+	return nil
 }
 
 // hasSandboxedPlugins returns true if any plugin in the map uses the docker type
@@ -414,6 +462,64 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	}
 	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
 	return nil
+}
+
+// connectWebMCP creates the per-agent Web MCP server (search + fetch tools),
+// connects it, and registers its tools into the agent's tool manager.
+func connectWebMCP(ctx context.Context, agentName string, cfg *config.Config, permTier func() string, toolMgr *tool.Manager, logger *slog.Logger) error {
+	if !cfg.Web.Enabled {
+		return nil
+	}
+
+	var searchProvider websearch.Provider
+	sp, err := websearch.NewProvider(cfg.Web.Search)
+	if err != nil {
+		logger.Warn("web search provider not available", "error", err)
+	} else {
+		searchProvider = sp
+	}
+
+	fetcher := buildWebFetcher(cfg.Web.Fetch, logger)
+
+	srv := webmcp.New(webmcp.Deps{
+		SearchProvider: searchProvider,
+		Fetcher:        fetcher,
+		PermissionTier: permTier,
+		Logger:         logger,
+	})
+	session, err := srv.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("starting web MCP for agent %q: %w", agentName, err)
+	}
+	if err := toolMgr.RegisterSession(ctx, "web-"+agentName, session); err != nil {
+		return fmt.Errorf("registering web MCP for agent %q: %w", agentName, err)
+	}
+	logger.Info("web MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
+	return nil
+}
+
+// buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
+func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
+	timeout, err := time.ParseDuration(fc.Timeout)
+	if err != nil {
+		timeout = 30 * time.Second
+	}
+
+	primary := webfetch.NewDefaultFetcher(webfetch.Options{
+		Timeout:          timeout,
+		MaxSizeBytes:     fc.MaxSizeBytes,
+		UserAgent:        fc.UserAgent,
+		RespectRobotsTxt: fc.RespectRobotsTxt,
+		RespectAgentsTxt: fc.RespectAgentsTxt,
+		Logger:           logger,
+	})
+
+	if !fc.Jina.Enabled {
+		return primary
+	}
+
+	jina := webfetch.NewJinaFetcher(timeout, logger)
+	return webfetch.NewChainFetcher(primary, jina, logger)
 }
 
 func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
@@ -509,6 +615,11 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	// Connect per-agent Config MCP server and register its tools.
 	if err := connectConfigMCP(ctx, ac.Name, agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
+		return nil, nil, err
+	}
+
+	// Connect per-agent Web MCP server (search + fetch) if enabled.
+	if err := connectWebMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
 		return nil, nil, err
 	}
 
