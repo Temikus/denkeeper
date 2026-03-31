@@ -25,6 +25,70 @@
     'tools:read', 'tools:write',
   ]
 
+  // Resource groups for the permissions UI
+  const RESOURCE_GROUPS = [
+    { name: 'Chat', desc: 'Send messages to agents', levels: ['none', 'full'], scopes: { full: ['chat'] } },
+    { name: 'Admin', desc: 'Administrative operations', levels: ['none', 'full'], scopes: { full: ['admin'] } },
+    { name: 'Sessions', desc: 'View conversation history', levels: ['none', 'read'], scopes: { read: ['sessions:read'] } },
+    { name: 'Costs', desc: 'View usage and cost data', levels: ['none', 'read'], scopes: { read: ['costs:read'] } },
+    { name: 'Skills', desc: 'View agent skills', levels: ['none', 'read'], scopes: { read: ['skills:read'] } },
+    { name: 'Schedules', desc: 'View scheduled tasks', levels: ['none', 'read'], scopes: { read: ['schedules:read'] } },
+    { name: 'Approvals', desc: 'Manage approval workflows', levels: ['none', 'read', 'readwrite'], scopes: { read: ['approvals:read'], readwrite: ['approvals:read', 'approvals:write'] } },
+    { name: 'Tools', desc: 'Manage MCP tools and plugins', levels: ['none', 'read', 'readwrite'], scopes: { read: ['tools:read'], readwrite: ['tools:read', 'tools:write'] } },
+  ]
+
+  // Track permission level per resource group
+  let resourceLevels = {}
+  function resetResourceLevels() {
+    resourceLevels = {}
+    RESOURCE_GROUPS.forEach(g => resourceLevels[g.name] = 'none')
+  }
+  resetResourceLevels()
+
+  function setResourceLevel(groupName, level) {
+    resourceLevels[groupName] = level
+    resourceLevels = resourceLevels // trigger reactivity
+    syncScopesFromLevels()
+  }
+
+  function syncScopesFromLevels() {
+    const scopes = new Set()
+    RESOURCE_GROUPS.forEach(g => {
+      const level = resourceLevels[g.name]
+      if (level !== 'none' && g.scopes[level]) {
+        g.scopes[level].forEach(s => scopes.add(s))
+      }
+    })
+    createScopes = [...scopes]
+  }
+
+  function setAllRead() {
+    RESOURCE_GROUPS.forEach(g => {
+      if (g.levels.includes('read')) resourceLevels[g.name] = 'read'
+      else if (g.levels.includes('full')) resourceLevels[g.name] = 'full'
+    })
+    resourceLevels = resourceLevels
+    syncScopesFromLevels()
+  }
+
+  function setFullAccess() {
+    RESOURCE_GROUPS.forEach(g => {
+      if (g.levels.includes('readwrite')) resourceLevels[g.name] = 'readwrite'
+      else if (g.levels.includes('read')) resourceLevels[g.name] = 'read'
+      else if (g.levels.includes('full')) resourceLevels[g.name] = 'full'
+    })
+    resourceLevels = resourceLevels
+    syncScopesFromLevels()
+  }
+
+  function levelLabel(level) {
+    if (level === 'none') return 'None'
+    if (level === 'read') return 'Read'
+    if (level === 'readwrite') return 'Read & Write'
+    if (level === 'full') return 'Full'
+    return level
+  }
+
   async function loadKeys() {
     loading = true
     error = ''
@@ -102,14 +166,6 @@
     }
   }
 
-  function toggleScope(scope) {
-    if (createScopes.includes(scope)) {
-      createScopes = createScopes.filter(s => s !== scope)
-    } else {
-      createScopes = [...createScopes, scope]
-    }
-  }
-
   function copyToClipboard(text) {
     navigator.clipboard.writeText(text).catch(() => {})
   }
@@ -120,7 +176,7 @@
 <div class="page">
   <div class="header">
     <h1>API Keys</h1>
-    <button class="btn-primary" onclick={() => { showCreate = true; newKeyPlaintext = ''; rotatedKey = '' }}>
+    <button class="btn-primary" onclick={() => { showCreate = true; newKeyPlaintext = ''; rotatedKey = ''; createName = ''; resetResourceLevels(); createScopes = [] }}>
       + Create Key
     </button>
   </div>
@@ -187,19 +243,21 @@
                 <span class="tag active">Active</span>
               {/if}
             </td>
-            <td class="actions">
-              {#if !key.revoked}
-                <button class="btn-sm" onclick={() => { confirmAction = { type: 'rotate', id: key.id, name: key.name } }}>
-                  Rotate
-                </button>
-                <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'revoke', id: key.id, name: key.name } }}>
-                  Revoke
-                </button>
-              {:else}
-                <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'delete', id: key.id, name: key.name } }}>
-                  Delete
-                </button>
-              {/if}
+            <td>
+              <div class="actions">
+                {#if !key.revoked}
+                  <button class="btn-sm" onclick={() => { confirmAction = { type: 'rotate', id: key.id, name: key.name } }}>
+                    Rotate
+                  </button>
+                  <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'revoke', id: key.id, name: key.name } }}>
+                    Revoke
+                  </button>
+                {:else}
+                  <button class="btn-sm danger" onclick={() => { confirmAction = { type: 'delete', id: key.id, name: key.name } }}>
+                    Delete
+                  </button>
+                {/if}
+              </div>
             </td>
           </tr>
         {/each}
@@ -212,28 +270,82 @@
 {#if showCreate}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) showCreate = false }} role="dialog" aria-modal="true">
-    <div class="modal">
-      <h2>Create API Key</h2>
-      <label>
-        Name
-        <input type="text" bind:value={createName} placeholder="e.g. my-client" />
-      </label>
-      <fieldset>
-        <legend>Scopes</legend>
-        <div class="scope-grid">
-          {#each ALL_SCOPES as scope}
-            <label class="scope-check">
-              <input type="checkbox" checked={createScopes.includes(scope)} onchange={() => toggleScope(scope)} />
-              {scope}
-            </label>
-          {/each}
+    <div class="modal create-modal">
+      <div class="create-header">
+        <div class="create-header-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
         </div>
-      </fieldset>
-      <div class="modal-actions">
-        <button class="btn-primary" onclick={createKey} disabled={creating || !createName.trim() || createScopes.length === 0}>
-          {creating ? 'Creating…' : 'Create'}
-        </button>
-        <button class="btn-ghost" onclick={() => showCreate = false}>Cancel</button>
+        <div>
+          <h2>Create API Key</h2>
+          <p class="create-subtitle">Generate a new key for API access</p>
+        </div>
+        <button class="btn-close" onclick={() => showCreate = false}>&times;</button>
+      </div>
+
+      <div class="create-body">
+        <hr class="divider" />
+
+        <label class="name-label">
+          Name
+          <input type="text" bind:value={createName} placeholder="e.g. my-client" />
+        </label>
+
+        <div class="permissions-section">
+          <div class="permissions-header">
+            <div>
+              <h3>Permissions</h3>
+              <p class="permissions-desc">Configure what this API key can access.</p>
+            </div>
+            <div class="quick-links">
+              <button class="btn-link" onclick={setAllRead}>Read All</button>
+              <span class="link-sep">|</span>
+              <button class="btn-link" onclick={setFullAccess}>Full Access</button>
+            </div>
+          </div>
+
+          <div class="resource-list">
+            {#each RESOURCE_GROUPS as group}
+              <div class="resource-row">
+                <div class="resource-info">
+                  <span class="resource-name">{group.name}</span>
+                  <span class="resource-desc">{group.desc}</span>
+                </div>
+                <div class="segment-control">
+                  {#each group.levels as level}
+                    <button
+                      class="segment-btn"
+                      class:active={resourceLevels[group.name] === level}
+                      onclick={() => setResourceLevel(group.name, level)}
+                    >
+                      {levelLabel(level)}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        {#if createScopes.length === 0}
+          <div class="banner warning">
+            This API key currently has no permissions. It won't be able to access any resources.
+          </div>
+        {/if}
+      </div>
+
+      <div class="create-footer">
+        <p class="footer-note">Your API key will only be shown once after creation.</p>
+        <div class="footer-actions">
+          <button class="btn-ghost" onclick={() => showCreate = false}>Cancel</button>
+          <button class="btn-primary btn-generate" onclick={createKey} disabled={creating || !createName.trim() || createScopes.length === 0}>
+            {#if creating}
+              Creating…
+            {:else}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Generate Key
+            {/if}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -320,10 +432,16 @@
     padding: 0;
   }
 
-  table { width: 100%; border-collapse: collapse; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
   td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   tr.revoked td { opacity: 0.5; }
+  th:nth-child(1), td:nth-child(1) { width: 14%; } /* Name */
+  th:nth-child(2), td:nth-child(2) { width: 34%; } /* Scopes */
+  th:nth-child(3), td:nth-child(3) { width: 12%; white-space: nowrap; } /* Created */
+  th:nth-child(4), td:nth-child(4) { width: 12%; white-space: nowrap; } /* Last Used */
+  th:nth-child(5), td:nth-child(5) { width: 10%; white-space: nowrap; } /* Status */
+  th:nth-child(6), td:nth-child(6) { width: 18%; white-space: nowrap; } /* Actions */
 
   .pill { display: inline-block; background: var(--border); color: var(--text-muted); padding: 2px 6px; border-radius: 4px; font-size: 11px; margin: 2px 2px 2px 0; }
   .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
@@ -407,9 +525,141 @@
     font-size: 14px;
   }
   .modal input[type="text"]:focus { outline: none; border-color: var(--accent); }
-  fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 20px; }
-  legend { padding: 0 6px; color: var(--text-muted); font-size: 12px; }
-  .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .scope-check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* Create modal specific */
+  .create-modal { width: 560px; padding: 0; max-height: 90vh; display: flex; flex-direction: column; }
+  .create-modal h2 { margin-bottom: 0; }
+  .create-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .create-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 24px 28px 0;
+    flex-shrink: 0;
+  }
+  .create-header-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: rgba(var(--accent-rgb, 108, 92, 231), 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .create-subtitle { color: var(--text-muted); font-size: 13px; margin: 2px 0 0 !important; }
+  .btn-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .btn-close:hover { color: var(--text); }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0 0; }
+  .name-label { padding: 16px 28px 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted); }
+
+  .permissions-section { padding: 20px 28px 0; }
+  .permissions-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .permissions-header h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  .permissions-desc { color: var(--text-muted); font-size: 12px; margin: 2px 0 0 !important; }
+  .quick-links { display: flex; align-items: center; gap: 8px; }
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+  }
+  .btn-link:hover { text-decoration: underline; }
+  .link-sep { color: var(--border); font-size: 13px; }
+
+  .resource-list {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .resource-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+  }
+  .resource-row:not(:last-child) { border-bottom: 1px solid var(--border); }
+  .resource-info { display: flex; flex-direction: column; gap: 1px; }
+  .resource-name { font-size: 13px; font-weight: 600; }
+  .resource-desc { font-size: 11px; color: var(--text-muted); }
+
+  .segment-control {
+    display: flex;
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 2px;
+    gap: 2px;
+  }
+  .segment-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: calc(var(--radius) - 2px);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .segment-btn:hover { color: var(--text); }
+  .segment-btn.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    font-weight: 600;
+  }
+
+  .banner.warning {
+    background: rgba(255, 193, 7, 0.1);
+    border: 1px solid rgba(255, 193, 7, 0.35);
+    color: var(--text);
+    font-size: 13px;
+    margin: 16px 28px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .banner.warning::before {
+    content: '\26A0';
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .create-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 28px 24px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+  }
+  .footer-note { color: var(--text-muted); font-size: 12px; margin: 0 !important; }
+  .footer-actions { display: flex; gap: 10px; align-items: center; }
+  .btn-generate {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 </style>
