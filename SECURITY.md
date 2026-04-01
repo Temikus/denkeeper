@@ -2,14 +2,12 @@
 
 ## Supported Versions
 
-Denkeeper is pre-1.0 software. Security fixes are applied to the **latest release only**.
+Security is a core principle of Denkeeper and we rigorously apply security patches across the project. As the project is still pre-1.0, we highly recommend staying on the **latest release** to receive all security updates. We will endeavour to provide the best security experience for everyone.
 
 | Version | Supported          |
 |---------|--------------------|
 | latest  | :white_check_mark: |
-| < latest| :x:                |
-
-Upgrade to the latest release to receive all security patches.
+| < latest| Best-effort        |
 
 ## Reporting a Vulnerability
 
