@@ -23,7 +23,7 @@ import (
 type FetchResult struct {
 	URL          string `json:"url"`
 	Title        string `json:"title"`
-	Content      string `json:"content"`       // Markdown
+	Content      string `json:"content"` // Markdown
 	ContentType  string `json:"content_type"`
 	BytesFetched int    `json:"bytes_fetched"`
 }

@@ -82,9 +82,9 @@ func (s *Server) handleWebSearch(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 
 	resp, _ := json.Marshal(map[string]any{
-		"provider":    s.deps.SearchProvider.Name(),
+		"provider":     s.deps.SearchProvider.Name(),
 		"result_count": len(out),
-		"results":     out,
+		"results":      out,
 	})
 
 	return toolText(string(resp)), nil

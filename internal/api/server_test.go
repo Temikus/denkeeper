@@ -154,8 +154,8 @@ func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
 	*h.records = append(*h.records, logRecord{Level: r.Level, Message: r.Message})
 	return nil
 }
-func (h *capturingHandler) WithAttrs(_ []slog.Attr) slog.Handler  { return h }
-func (h *capturingHandler) WithGroup(_ string) slog.Handler        { return h }
+func (h *capturingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func TestHealth_LoggedAtDebugLevel(t *testing.T) {
 	var records []logRecord
