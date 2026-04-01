@@ -162,6 +162,7 @@ jobs:
         with:
           image: "ghcr.io/temikus/denkeeper@${{ steps.build.outputs.digest }}"
           severity-cutoff: "high"
+          only-fixed: "true"
           output-format: "sarif"
       - name: Upload container scan SARIF
         uses: github/codeql-action/upload-sarif@v3

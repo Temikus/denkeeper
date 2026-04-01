@@ -75,6 +75,7 @@ jobs:
         with:
           path: "."
           severity-cutoff: "high"
+          only-fixed: "true"
           output-format: "sarif"
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
