@@ -1,6 +1,6 @@
 # Stage 1: Build web dashboard
 # Runs on the build host's native arch (no QEMU).
-FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:25-alpine AS frontend
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci --prefer-offline || npm install
