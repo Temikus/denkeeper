@@ -251,7 +251,7 @@ func parseCronPart(s string, min, max int) (bitset, error) {
 
 	var result bitset
 	for i := start; i <= end; i += step {
-		result |= 1 << uint(i)
+		result |= 1 << uint(i) // #nosec G115 -- i is bounded by cron field range (max 59)
 	}
 	return result, nil
 }

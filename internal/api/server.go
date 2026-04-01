@@ -678,7 +678,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string
 			_ = json.Unmarshal([]byte(sk.ScopesJSON), &scopes)
 			for _, sc := range scopes {
 				if sc == scope {
-					go s.deps.KeyStore.TouchLastUsed(context.Background(), sk.ID)
+					go s.deps.KeyStore.TouchLastUsed(context.WithoutCancel(ctx), sk.ID)
 					return sk.Name, true
 				}
 			}

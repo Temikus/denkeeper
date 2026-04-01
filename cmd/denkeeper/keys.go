@@ -134,7 +134,7 @@ func resolveDBPath(cfgPath string) string {
 		Memory partialMemory `toml:"memory"`
 	}
 
-	data, err := os.ReadFile(cfgPath)
+	data, err := os.ReadFile(cfgPath) // #nosec G304 -- path from CLI flag / config, not user input
 	if err == nil {
 		var cfg partialConfig
 		if toml.Unmarshal(data, &cfg) == nil && cfg.Memory.DBPath != "" {

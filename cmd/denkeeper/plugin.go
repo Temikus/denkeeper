@@ -82,7 +82,7 @@ func runPluginKeygen(name, outDir string) error {
 	pubPath := filepath.Join(outDir, name+".pub")
 	keyPath := filepath.Join(outDir, name+".key")
 
-	if err := os.WriteFile(pubPath, security.MarshalPublicKeyPEM(pub), 0o644); err != nil {
+	if err := os.WriteFile(pubPath, security.MarshalPublicKeyPEM(pub), 0o644); err != nil { // #nosec G306 -- public keys are meant to be world-readable
 		return fmt.Errorf("writing public key to %s: %w", pubPath, err)
 	}
 
@@ -100,7 +100,7 @@ func runPluginKeygen(name, outDir string) error {
 func runPluginSign(binaryPath, keyPath string) error {
 	fmt.Printf("Signing %s…\n", binaryPath)
 
-	keyData, err := os.ReadFile(keyPath)
+	keyData, err := os.ReadFile(keyPath) // #nosec G304 -- path from CLI flag, not user input
 	if err != nil {
 		return fmt.Errorf("reading private key %s: %w", keyPath, err)
 	}

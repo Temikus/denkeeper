@@ -135,7 +135,7 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 		return fmt.Errorf("scheduler: schedule %q: %w", cfg.Name, err)
 	}
 
-	entryCtx, entryCancel := context.WithCancel(s.ctx)
+	entryCtx, entryCancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel is stored in entry.cancel and called in Unregister/Stop
 	e := &internalEntry{
 		Entry: Entry{
 			Name:        cfg.Name,
@@ -186,7 +186,7 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 		return fmt.Errorf("scheduler: schedule %q: %w", cfg.Name, err)
 	}
 
-	entryCtx, entryCancel := context.WithCancel(s.ctx)
+	entryCtx, entryCancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel is stored in entry.cancel and called in Unregister/Stop
 	e := &internalEntry{
 		Entry: Entry{
 			Name:        cfg.Name,

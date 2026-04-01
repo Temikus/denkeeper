@@ -98,7 +98,7 @@ func ParsePrivateKeyPEM(data []byte) (ed25519.PrivateKey, error) {
 func LoadTrustedKeys(paths []string) ([]ed25519.PublicKey, error) {
 	keys := make([]ed25519.PublicKey, 0, len(paths))
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- paths from config trusted_keys list
 		if err != nil {
 			return nil, fmt.Errorf("reading trusted key %q: %w", path, err)
 		}
@@ -114,13 +114,13 @@ func LoadTrustedKeys(paths []string) ([]ed25519.PublicKey, error) {
 // VerifyFile reads a file and its detached signature (.sig), then verifies
 // the signature against the trusted keys. Returns nil if verification succeeds.
 func VerifyFile(trustedKeys []ed25519.PublicKey, filePath string) error {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) // #nosec G304 -- plugin binary path from config / CLI
 	if err != nil {
 		return fmt.Errorf("reading file %q: %w", filePath, err)
 	}
 
 	sigPath := filePath + SignatureFileExtension
-	sig, err := os.ReadFile(sigPath)
+	sig, err := os.ReadFile(sigPath) // #nosec G304 -- derived from plugin binary path above
 	if err != nil {
 		return fmt.Errorf("reading signature %q: %w — run 'denkeeper plugin sign' to create one", sigPath, err)
 	}
@@ -133,14 +133,14 @@ func VerifyFile(trustedKeys []ed25519.PublicKey, filePath string) error {
 
 // SignFile reads a file and writes a detached Ed25519 signature to filePath.sig.
 func SignFile(privateKey ed25519.PrivateKey, filePath string) error {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) // #nosec G304 -- plugin binary path from CLI
 	if err != nil {
 		return fmt.Errorf("reading file %q: %w", filePath, err)
 	}
 
 	sig := Sign(privateKey, data)
 	sigPath := filePath + SignatureFileExtension
-	if err := os.WriteFile(sigPath, sig, 0o644); err != nil {
+	if err := os.WriteFile(sigPath, sig, 0o644); err != nil { // #nosec G306,G703 -- signatures are public verification data; sigPath derived from CLI arg, not user input
 		return fmt.Errorf("writing signature %q: %w", sigPath, err)
 	}
 	return nil

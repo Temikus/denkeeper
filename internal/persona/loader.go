@@ -37,7 +37,7 @@ func Load(dir string) (*Persona, error) {
 		return nil, fmt.Errorf("persona: %s is not a directory", dir)
 	}
 
-	soul, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	soul, err := os.ReadFile(filepath.Join(dir, "SOUL.md")) // #nosec G304 -- dir from config, filenames are constants
 	if err != nil {
 		return nil, fmt.Errorf("persona: reading SOUL.md: %w", err)
 	}
@@ -55,11 +55,11 @@ func Load(dir string) (*Persona, error) {
 		},
 	}
 
-	if data, err := os.ReadFile(filepath.Join(dir, "USER.md")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(dir, "USER.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
 		p.User = strings.TrimSpace(string(data))
 	}
 
-	if data, err := os.ReadFile(filepath.Join(dir, "MEMORY.md")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(dir, "MEMORY.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
 		p.Memory = strings.TrimSpace(string(data))
 	}
 
@@ -80,7 +80,7 @@ func (p *Persona) Save(section, content string) error {
 	target := filepath.Join(p.dir, filename)
 	tmp := target + ".tmp"
 	trimmed := strings.TrimSpace(content)
-	if err := os.WriteFile(tmp, []byte(trimmed+"\n"), 0644); err != nil {
+	if err := os.WriteFile(tmp, []byte(trimmed+"\n"), 0600); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("persona: writing %s: %w", filename, err)
 	}

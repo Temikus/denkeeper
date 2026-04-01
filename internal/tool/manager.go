@@ -52,7 +52,7 @@ func NewManager(logger *slog.Logger) *Manager {
 // RegisterServer spawns an MCP server subprocess, connects to it over stdio,
 // and discovers its available tools.
 func (m *Manager) RegisterServer(ctx context.Context, name, command string, args []string, env map[string]string) error {
-	cmd := exec.Command(command, args...)
+	cmd := exec.Command(command, args...) // #nosec G204 -- MCP tool servers are spawned from config-declared commands
 	// Inherit the current process environment and overlay tool-specific vars.
 	cmd.Env = os.Environ()
 	for k, v := range env {

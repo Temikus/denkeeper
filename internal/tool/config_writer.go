@@ -146,7 +146,7 @@ func removePluginFromConfig(path, name string) error {
 
 // readRawConfig reads a TOML file into a generic map.
 func readRawConfig(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- TOML config path from startup
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}

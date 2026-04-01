@@ -18,12 +18,9 @@ linters:
       excludes:
         - G101 # False positives on test data credentials
         - G104 # Duplicates errcheck linter
-        - G115 # Safe integer conversions in bitset operations
-        - G118 # Cancel funcs stored in structs, not leaked
         - G120 # Test-only mock HTTP handlers don't need body size limits
-        - G204 # MCP tool manager intentionally spawns subprocesses
-        - G301 # 0755 directory permissions are intentional
-        - G304 # File paths from config, not user input
-        - G306 # 0644 file permissions are intentional
-        - G703 # Taint false positives on derived paths (e.g. signing.go sigPath)
+  exclusions:
+    rules:
+      - linters: [gosec]
+        path: _test\.go
 

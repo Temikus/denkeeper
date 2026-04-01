@@ -829,13 +829,13 @@ func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 		return fmt.Errorf("skill name is required")
 	}
 
-	if err := os.MkdirAll(agentSkillsDir, 0755); err != nil {
+	if err := os.MkdirAll(agentSkillsDir, 0750); err != nil {
 		return fmt.Errorf("creating skills directory: %w", err)
 	}
 
 	filename := filepath.Join(agentSkillsDir, s.Name+".md")
 	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0644); err != nil {
+	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("writing skill file: %w", err)
 	}

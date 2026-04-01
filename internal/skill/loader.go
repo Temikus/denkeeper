@@ -124,7 +124,7 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 			path = filepath.Join(dir, entry.Name())
 		}
 
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- path from persona_dir config walking
 		if err != nil {
 			logger.Warn("skill: could not read file", "path", path, "error", err)
 			continue

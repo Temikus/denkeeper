@@ -366,7 +366,7 @@ type ScheduleConfig struct {
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- config file path from CLI flag / env var
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
