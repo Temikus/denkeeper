@@ -10,6 +10,7 @@ permissions:
   packages: write
   id-token: write        # Required for cosign keyless OIDC signing and build attestations
   attestations: write    # Required for actions/attest-build-provenance
+  security-events: write # Required for Grype SARIF upload
 
 jobs:
   build-ui:
@@ -154,6 +155,19 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ github.event.head_commit.timestamp }}
+      # Scan the pushed image for vulnerabilities before signing
+      - name: Scan container image
+        uses: anchore/scan-action@v7
+        id: grype-scan
+        with:
+          image: "ghcr.io/temikus/denkeeper@${{ steps.build.outputs.digest }}"
+          fail-on: "high"
+          output-format: "sarif"
+      - name: Upload container scan SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.grype-scan.outputs.sarif }}
       # Sign by digest (immutable) rather than tag (mutable)
       - name: Sign Docker image
         run: |

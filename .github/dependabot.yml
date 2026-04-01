@@ -5,15 +5,29 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    reviewers:
+      - "Temikus"
 
   # Dockerfile base images
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+    reviewers:
+      - "Temikus"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    reviewers:
+      - "Temikus"
+
+  # Web dashboard (Svelte)
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "Temikus"
