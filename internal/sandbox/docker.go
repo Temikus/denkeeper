@@ -54,6 +54,16 @@ func (d *DockerRuntime) Spawn(_ context.Context, _ string, opts SpawnOpts) (*Pro
 	args = append(args, "--read-only")
 	args = append(args, "--security-opt", "no-new-privileges")
 
+	// Tmpfs mounts (e.g. for /tmp in read-only containers).
+	for _, t := range opts.Tmpfs {
+		args = append(args, "--tmpfs", t)
+	}
+
+	// Shared memory size (e.g. for Chromium).
+	if opts.ShmSize != "" {
+		args = append(args, "--shm-size", opts.ShmSize)
+	}
+
 	// Bind mounts.
 	for _, v := range opts.Volumes {
 		args = append(args, "-v", v)

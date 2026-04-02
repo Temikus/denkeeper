@@ -121,9 +121,12 @@ Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_sched
 
 Browser automation uses the official Playwright MCP server (`@playwright/mcp`) running in a hardened Docker container. Auto-registered when `[browser] enabled = true`.
 
-- **Config**: `[browser]` with `enabled`, `image` (default `ghcr.io/temikus/denkeeper-browser:latest`), `memory_limit` (default "512m"), `cpu_limit` (default "1").
-- **Sandbox**: reuses the shared `sandbox.Runtime` (Docker or Kubernetes). Network policy = egress (outbound HTTP required for browsing).
+- **Config**: `[browser]` with `enabled`, `image` (default `ghcr.io/temikus/denkeeper-browser:latest`), `memory_limit` (default "512m"), `cpu_limit` (default "1"), `profile_dir` (default "data/browser-profiles"), `session_ttl` (default "10m"), `max_pages` (default 5).
+- **URL allowlist**: `[browser.url_allowlist]` with `domains` list. Empty = unrestricted. Supports wildcards (`*.example.com`). Per-agent override via `browser_url_allowlist` in `[[agents]]`. Always blocks link-local (169.254.x.x), loopback, and cloud metadata endpoints. Domain matching logic in `internal/browser/allowlist.go`.
+- **Persistent profiles**: per-agent profile directories under `~/.denkeeper/data/browser-profiles/<agent>/`. Auto-created with 0o700 permissions. Bind-mounted into the container at `/data/profile`. Stores cookies, localStorage, and session data across browser invocations.
+- **Sandbox**: reuses the shared `sandbox.Runtime` (Docker or Kubernetes). Network policy = egress (outbound HTTP required for browsing). Container runs with `--read-only`, tmpfs at `/tmp` (64MB), and `/dev/shm` (64MB) for Chromium.
 - **Hardened image** (`ghcr.io/temikus/denkeeper-browser`): lives in a separate repo (`Temikus/denkeeper-browser`), users can plug any custom MCP-compliant browser image.
+- **Orchestrator skill**: `agents/default/skills/browser-orchestrator.md` — always-active skill teaching agents multi-step browser workflow patterns, with guidance for both vision and non-vision LLMs.
 
 ## Agent KV Store
 
@@ -153,6 +156,7 @@ Browser automation uses the official Playwright MCP server (`@playwright/mcp`) r
 `internal/sandbox/` provides the pluggable sandbox runtime interface for executing MCP server plugins in isolated environments.
 
 - **Interface**: `Runtime` with `Spawn(ctx, name, opts)`, `Stop(ctx, name)`, `Close()`. `Spawn` returns a `Process` (command + args) whose stdin/stdout carry MCP JSON-RPC.
+- **SpawnOpts**: `Image`, `Command`, `Args`, `Env`, `MemoryLimit`, `CPULimit`, `Network`, `Volumes`, `Tmpfs` (Docker `--tmpfs` / K8s emptyDir Memory), `ShmSize` (Docker `--shm-size` / K8s `/dev/shm` emptyDir Memory with sizeLimit).
 - **DockerRuntime**: builds `docker run -i --rm` commands. Default for standalone installs.
 - **KubernetesRuntime**: creates ephemeral Pods in a dedicated namespace (`denkeeper-sandboxes` by default). Uses `kubectl exec -i` for MCP stdio. Features:
   - Init container with `CAP_NET_ADMIN` sets iptables rules for network isolation (none/egress/full).
@@ -263,7 +267,7 @@ Six new tools in `configmcp`: `tool_list`, `tool_add`, `tool_remove`, `plugin_li
 
 Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove dialogs, status indicators. 10th page in the SPA.
 
-## Current State (Phase 5 complete, Phase 6 web capabilities in progress)
+## Current State (Phase 6 browser automation in progress)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
@@ -286,7 +290,8 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
 - Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path (also used as Dockerfile entrypoint default), Helm chart (`deploy/helm/denkeeper/`) with Ingress support, non-root Docker container (UID 65534), docker-compose with port mapping.
 - Web search & fetch: in-process Web MCP server (`internal/webmcp/`) with `web_search` and `web_fetch` tools. Search providers: DuckDuckGo (default) and Tavily. Fetch: built-in HTML-to-Markdown, optional Jina Reader fallback, configurable robots.txt/agents.txt compliance. Config: `[web]` section with `DENKEEPER_SEARCH_API_KEY` env override.
-- Browser automation config: `[browser]` section with auto-registration as Docker-based MCP server via shared sandbox runtime. Image: `ghcr.io/temikus/denkeeper-browser:latest`.
-- Browser image: separate repo [`Temikus/denkeeper-browser`](https://github.com/Temikus/denkeeper-browser) — hardened Docker image with `@playwright/mcp` (stdio transport), non-root user (UID 10001), multi-arch (amd64/arm64), cosign-signed with SLSA attestations. Known issue: `SpawnOpts` lacks `Tmpfs`/`ShmSize` fields needed for `--read-only` + Chromium; follow-up required.
-- Next: Add tmpfs/shm support to SpawnOpts for browser, then remaining Phase 5 items (URL allowlist, persistent profiles, browser orchestrator skill).
+- Browser automation: `[browser]` section with auto-registration as Docker-based MCP server via shared sandbox runtime. Image: `ghcr.io/temikus/denkeeper-browser:latest`. Tmpfs (`/tmp:size=64m`) and ShmSize (`64m`) for read-only container + Chromium compatibility. Per-agent persistent profile directories (`data/browser-profiles/`) bind-mounted at `/data/profile`. URL allowlist (`[browser.url_allowlist]`) with wildcard domain matching and link-local/metadata blocking (`internal/browser/allowlist.go`). Per-agent override via `browser_url_allowlist` in `[[agents]]`. Browser orchestrator skill (`agents/default/skills/browser-orchestrator.md`) for multi-step workflows.
+- Browser image: separate repo [`Temikus/denkeeper-browser`](https://github.com/Temikus/denkeeper-browser) — hardened Docker image with `@playwright/mcp` (stdio transport), non-root user (UID 10001), multi-arch (amd64/arm64), cosign-signed with SLSA attestations.
+- Cyclomatic complexity: gocyclo threshold lowered from 20 to 15. All non-test functions ≤ 15.
+- Next: Screenshot-to-text fallback (readability heuristics in browser image for non-vision LLMs).
 - See `design/denkeeper-prd.md` for the full roadmap.

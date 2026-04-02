@@ -116,10 +116,8 @@ func (lm *LifecycleManager) RemoveTool(ctx context.Context, name string) error {
 
 // AddPlugin validates, optionally spawns, registers, and persists the
 // [plugins.<name>] section.
-func (lm *LifecycleManager) AddPlugin(ctx context.Context, name string, cfg config.PluginConfig) error {
-	if err := validateToolName(name); err != nil {
-		return err
-	}
+// validatePluginConfig checks that a plugin config has valid type and required fields.
+func validatePluginConfig(cfg config.PluginConfig) error {
 	if cfg.Type != "subprocess" && cfg.Type != "docker" {
 		return fmt.Errorf("type must be \"subprocess\" or \"docker\"")
 	}
@@ -128,6 +126,38 @@ func (lm *LifecycleManager) AddPlugin(ctx context.Context, name string, cfg conf
 	}
 	if cfg.Type == "docker" && cfg.Image == "" {
 		return fmt.Errorf("image is required for docker plugins")
+	}
+	return nil
+}
+
+// hasToolsCapability returns true if the plugin declares a "tools" capability.
+func hasToolsCapability(cfg config.PluginConfig) bool {
+	for _, c := range cfg.Capabilities {
+		if c == "tools" {
+			return true
+		}
+	}
+	return false
+}
+
+// registerPluginServer registers the plugin's MCP server based on its type.
+func (lm *LifecycleManager) registerPluginServer(ctx context.Context, name string, cfg config.PluginConfig) error {
+	switch cfg.Type {
+	case "subprocess":
+		return lm.toolMgr.RegisterServer(ctx, name, cfg.Command, cfg.Args, cfg.Env)
+	case "docker":
+		dockerArgs := buildPluginDockerArgs(cfg)
+		return lm.toolMgr.RegisterServer(ctx, name, "docker", dockerArgs, nil)
+	}
+	return nil
+}
+
+func (lm *LifecycleManager) AddPlugin(ctx context.Context, name string, cfg config.PluginConfig) error {
+	if err := validateToolName(name); err != nil {
+		return err
+	}
+	if err := validatePluginConfig(cfg); err != nil {
+		return err
 	}
 
 	lm.mu.Lock()
@@ -140,26 +170,10 @@ func (lm *LifecycleManager) AddPlugin(ctx context.Context, name string, cfg conf
 		return err
 	}
 
-	// Register as MCP server if plugin has "tools" capability.
-	hasTools := false
-	for _, c := range cfg.Capabilities {
-		if c == "tools" {
-			hasTools = true
-			break
-		}
-	}
-
+	hasTools := hasToolsCapability(cfg)
 	if hasTools {
-		switch cfg.Type {
-		case "subprocess":
-			if err := lm.toolMgr.RegisterServer(ctx, name, cfg.Command, cfg.Args, cfg.Env); err != nil {
-				return fmt.Errorf("starting plugin %q: %w", name, err)
-			}
-		case "docker":
-			dockerArgs := buildPluginDockerArgs(cfg)
-			if err := lm.toolMgr.RegisterServer(ctx, name, "docker", dockerArgs, nil); err != nil {
-				return fmt.Errorf("starting docker plugin %q: %w", name, err)
-			}
+		if err := lm.registerPluginServer(ctx, name, cfg); err != nil {
+			return fmt.Errorf("starting plugin %q: %w", name, err)
 		}
 	}
 

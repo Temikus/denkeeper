@@ -71,6 +71,23 @@ func TestDockerRuntime_Spawn_EnvVars(t *testing.T) {
 	assertContains(t, proc.Args, "-e", "API_KEY=secret")
 }
 
+func TestDockerRuntime_Spawn_TmpfsAndShmSize(t *testing.T) {
+	rt := &DockerRuntime{}
+
+	proc, err := rt.Spawn(context.Background(), "browser-plugin", SpawnOpts{
+		Image:   "browser:v1",
+		Tmpfs:   []string{"/tmp:size=64m", "/run"},
+		ShmSize: "128m",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertContains(t, proc.Args, "--tmpfs", "/tmp:size=64m")
+	assertContains(t, proc.Args, "--tmpfs", "/run")
+	assertContains(t, proc.Args, "--shm-size", "128m")
+}
+
 func TestDockerRuntime_Spawn_MissingImage(t *testing.T) {
 	rt := &DockerRuntime{}
 

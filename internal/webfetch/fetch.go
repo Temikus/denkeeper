@@ -105,6 +105,26 @@ func NewDefaultFetcher(opts Options) *DefaultFetcher {
 func (f *DefaultFetcher) Name() string { return "default" }
 
 // Fetch retrieves a URL and converts its content to Markdown.
+// checkCompliance verifies that the URL is not blocked by robots.txt or agents.txt.
+func (f *DefaultFetcher) checkCompliance(ctx context.Context, parsed *url.URL) error {
+	rawURL := parsed.String()
+	if f.opts.RespectRobotsTxt {
+		if blocked, err := f.isBlockedByRobots(ctx, parsed); err != nil {
+			f.opts.Logger.Warn("robots.txt check failed, proceeding", "url", rawURL, "error", err)
+		} else if blocked {
+			return fmt.Errorf("blocked by robots.txt: %s", rawURL)
+		}
+	}
+	if f.opts.RespectAgentsTxt {
+		if blocked, err := f.isBlockedByAgents(ctx, parsed); err != nil {
+			f.opts.Logger.Warn("agents.txt check failed, proceeding", "url", rawURL, "error", err)
+		} else if blocked {
+			return fmt.Errorf("blocked by agents.txt: %s", rawURL)
+		}
+	}
+	return nil
+}
+
 func (f *DefaultFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -114,20 +134,8 @@ func (f *DefaultFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult
 		return nil, fmt.Errorf("unsupported scheme %q: only http and https are supported", parsed.Scheme)
 	}
 
-	// Check robots.txt / agents.txt if configured.
-	if f.opts.RespectRobotsTxt {
-		if blocked, err := f.isBlockedByRobots(ctx, parsed); err != nil {
-			f.opts.Logger.Warn("robots.txt check failed, proceeding", "url", rawURL, "error", err)
-		} else if blocked {
-			return nil, fmt.Errorf("blocked by robots.txt: %s", rawURL)
-		}
-	}
-	if f.opts.RespectAgentsTxt {
-		if blocked, err := f.isBlockedByAgents(ctx, parsed); err != nil {
-			f.opts.Logger.Warn("agents.txt check failed, proceeding", "url", rawURL, "error", err)
-		} else if blocked {
-			return nil, fmt.Errorf("blocked by agents.txt: %s", rawURL)
-		}
+	if err := f.checkCompliance(ctx, parsed); err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)

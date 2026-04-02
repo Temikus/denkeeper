@@ -157,6 +157,113 @@ func TestKubernetesRuntime_Spawn_CommandAndResources(t *testing.T) {
 	}
 }
 
+func TestKubernetesRuntime_Spawn_TmpfsVolumes(t *testing.T) {
+	rt := newTestK8sRuntime("")
+
+	_, err := rt.Spawn(context.Background(), "tmpfs-plugin", SpawnOpts{
+		Image: "img:v1",
+		Tmpfs: []string{"/tmp:size=64m", "/run"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn error: %v", err)
+	}
+
+	pod, err := rt.client.CoreV1().Pods("test-sandboxes").Get(
+		context.Background(), "denkeeper-tmpfs-plugin", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("getting pod: %v", err)
+	}
+
+	// Should have 2 tmpfs volumes.
+	var tmpfsVols int
+	for _, v := range pod.Spec.Volumes {
+		if strings.HasPrefix(v.Name, "tmpfs-") && v.VolumeSource.EmptyDir != nil &&
+			v.VolumeSource.EmptyDir.Medium == corev1.StorageMediumMemory {
+			tmpfsVols++
+		}
+	}
+	if tmpfsVols != 2 {
+		t.Errorf("expected 2 tmpfs volumes, got %d", tmpfsVols)
+	}
+
+	// Check size limit on first tmpfs.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "tmpfs-0" {
+			if v.VolumeSource.EmptyDir.SizeLimit == nil {
+				t.Error("expected sizeLimit on tmpfs-0")
+			} else if v.VolumeSource.EmptyDir.SizeLimit.String() != "64M" {
+				t.Errorf("tmpfs-0 sizeLimit = %s, want 64M", v.VolumeSource.EmptyDir.SizeLimit.String())
+			}
+		}
+		if v.Name == "tmpfs-1" && v.VolumeSource.EmptyDir.SizeLimit != nil {
+			t.Error("tmpfs-1 should not have a sizeLimit")
+		}
+	}
+
+	// Check volume mounts.
+	c := pod.Spec.Containers[0]
+	mountPaths := make(map[string]bool)
+	for _, m := range c.VolumeMounts {
+		mountPaths[m.MountPath] = true
+	}
+	if !mountPaths["/tmp"] {
+		t.Error("missing /tmp mount")
+	}
+	if !mountPaths["/run"] {
+		t.Error("missing /run mount")
+	}
+}
+
+func TestKubernetesRuntime_Spawn_ShmSize(t *testing.T) {
+	rt := newTestK8sRuntime("")
+
+	_, err := rt.Spawn(context.Background(), "shm-plugin", SpawnOpts{
+		Image:   "img:v1",
+		ShmSize: "128M",
+	})
+	if err != nil {
+		t.Fatalf("Spawn error: %v", err)
+	}
+
+	pod, err := rt.client.CoreV1().Pods("test-sandboxes").Get(
+		context.Background(), "denkeeper-shm-plugin", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("getting pod: %v", err)
+	}
+
+	// Should have a dshm volume.
+	var found bool
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "dshm" {
+			found = true
+			if v.VolumeSource.EmptyDir == nil {
+				t.Fatal("dshm volume is not emptyDir")
+			}
+			if v.VolumeSource.EmptyDir.Medium != corev1.StorageMediumMemory {
+				t.Error("dshm medium should be Memory")
+			}
+			if v.VolumeSource.EmptyDir.SizeLimit == nil || v.VolumeSource.EmptyDir.SizeLimit.String() != "128M" {
+				t.Errorf("dshm sizeLimit = %v, want 128M", v.VolumeSource.EmptyDir.SizeLimit)
+			}
+		}
+	}
+	if !found {
+		t.Error("missing dshm volume")
+	}
+
+	// Check /dev/shm mount.
+	c := pod.Spec.Containers[0]
+	var shmMounted bool
+	for _, m := range c.VolumeMounts {
+		if m.MountPath == "/dev/shm" && m.Name == "dshm" {
+			shmMounted = true
+		}
+	}
+	if !shmMounted {
+		t.Error("missing /dev/shm volume mount")
+	}
+}
+
 func TestKubernetesRuntime_Spawn_ReturnedProcess(t *testing.T) {
 	rt := newTestK8sRuntime("")
 
@@ -408,6 +515,30 @@ func TestPodName_Sanitization(t *testing.T) {
 		// Must be valid DNS-1123 label.
 		if len(got) > 63 {
 			t.Errorf("podName(%q) length %d > 63", tt.input, len(got))
+		}
+	}
+}
+
+func TestParseTmpfsSpec(t *testing.T) {
+	tests := []struct {
+		spec      string
+		wantPath  string
+		wantLimit string
+	}{
+		{"/tmp", "/tmp", ""},
+		{"/tmp:size=64m", "/tmp", "64M"},
+		{"/run:size=128M,noexec", "/run", "128M"},
+		{"/cache:noexec,size=1g", "/cache", "1G"},
+		{"/var:rw", "/var", ""},
+	}
+
+	for _, tt := range tests {
+		path, limit := parseTmpfsSpec(tt.spec)
+		if path != tt.wantPath {
+			t.Errorf("parseTmpfsSpec(%q) path = %q, want %q", tt.spec, path, tt.wantPath)
+		}
+		if limit != tt.wantLimit {
+			t.Errorf("parseTmpfsSpec(%q) limit = %q, want %q", tt.spec, limit, tt.wantLimit)
 		}
 	}
 }

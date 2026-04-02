@@ -24,6 +24,8 @@ type SpawnOpts struct {
 	CPULimit    string            // CPU limit (e.g. "0.5", "2")
 	Network     NetworkPolicy     // network access level
 	Volumes     []string          // bind mounts ("host:container[:ro]")
+	Tmpfs       []string          // tmpfs mounts (e.g. "/tmp:size=64m") — Docker: --tmpfs, K8s: emptyDir{medium:Memory}
+	ShmSize     string            // /dev/shm size (e.g. "64m") — Docker: --shm-size, K8s: emptyDir{medium:Memory,sizeLimit}
 }
 
 // Process describes how to connect to a spawned sandbox's stdin/stdout

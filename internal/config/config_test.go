@@ -2311,6 +2311,18 @@ func TestParse_BrowserDefaults(t *testing.T) {
 	if cfg.Browser.CPULimit != "1" {
 		t.Errorf("cpu_limit = %q, want %q", cfg.Browser.CPULimit, "1")
 	}
+	if cfg.Browser.ProfileDir != "data/browser-profiles" {
+		t.Errorf("profile_dir = %q, want %q", cfg.Browser.ProfileDir, "data/browser-profiles")
+	}
+	if cfg.Browser.SessionTTL != "10m" {
+		t.Errorf("session_ttl = %q, want %q", cfg.Browser.SessionTTL, "10m")
+	}
+	if cfg.Browser.MaxPages != 5 {
+		t.Errorf("max_pages = %d, want 5", cfg.Browser.MaxPages)
+	}
+	if len(cfg.Browser.URLAllowlist.Domains) != 0 {
+		t.Errorf("url_allowlist.domains should be empty by default, got %v", cfg.Browser.URLAllowlist.Domains)
+	}
 }
 
 func TestParse_BrowserCustomConfig(t *testing.T) {
@@ -2320,6 +2332,12 @@ enabled = true
 image = "custom-registry/browser:v2"
 memory_limit = "1g"
 cpu_limit = "2"
+profile_dir = "/custom/profiles"
+session_ttl = "30m"
+max_pages = 10
+
+[browser.url_allowlist]
+domains = ["github.com", "*.example.com"]
 `)
 	cfg, err := Parse(tomlData)
 	if err != nil {
@@ -2336,5 +2354,55 @@ cpu_limit = "2"
 	}
 	if cfg.Browser.CPULimit != "2" {
 		t.Errorf("cpu_limit = %q, want %q", cfg.Browser.CPULimit, "2")
+	}
+	if cfg.Browser.ProfileDir != "/custom/profiles" {
+		t.Errorf("profile_dir = %q, want /custom/profiles", cfg.Browser.ProfileDir)
+	}
+	if cfg.Browser.SessionTTL != "30m" {
+		t.Errorf("session_ttl = %q, want 30m", cfg.Browser.SessionTTL)
+	}
+	if cfg.Browser.MaxPages != 10 {
+		t.Errorf("max_pages = %d, want 10", cfg.Browser.MaxPages)
+	}
+	if len(cfg.Browser.URLAllowlist.Domains) != 2 {
+		t.Fatalf("url_allowlist.domains length = %d, want 2", len(cfg.Browser.URLAllowlist.Domains))
+	}
+	if cfg.Browser.URLAllowlist.Domains[0] != "github.com" {
+		t.Errorf("domains[0] = %q, want github.com", cfg.Browser.URLAllowlist.Domains[0])
+	}
+}
+
+func TestParse_AgentBrowserURLAllowlist(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/tmp/default"
+adapters = ["telegram:111"]
+
+[[agents]]
+name = "work"
+persona_dir = "/tmp/work"
+adapters = ["telegram:222"]
+browser_url_allowlist = ["github.com", "*.atlassian.net"]
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var workAgent *AgentInstanceConfig
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Name == "work" {
+			workAgent = &cfg.Agents[i]
+			break
+		}
+	}
+	if workAgent == nil {
+		t.Fatal("work agent not found")
+	}
+	if len(workAgent.BrowserURLAllowlist) != 2 {
+		t.Fatalf("browser_url_allowlist length = %d, want 2", len(workAgent.BrowserURLAllowlist))
+	}
+	if workAgent.BrowserURLAllowlist[0] != "github.com" {
+		t.Errorf("browser_url_allowlist[0] = %q, want github.com", workAgent.BrowserURLAllowlist[0])
 	}
 }

@@ -482,12 +482,12 @@ Denkeeper is built in phases:
 - [x] Getting-started guides, concept docs, and reference pages
 - [x] One-liner install script hosted at `get.denkeeper.io`
 
-**Phase 6 — Browser Automation** (planned)
-- [ ] Browser automation — first-party Docker plugin with headless Chromium + Playwright MCP server
-- [ ] Persistent browser profiles — per-agent encrypted profile storage with volume mounts
-- [ ] URL allowlist enforcement — egress filtering at plugin level, configurable per-agent
-- [ ] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns
-- [ ] Screenshot-to-text fallback — DOM extraction pipeline for non-vision LLMs
+**Phase 6 — Browser Automation** (in progress)
+- [x] Browser automation — first-party Docker plugin with headless Chromium + Playwright MCP server, tmpfs/shm support for read-only containers
+- [x] Persistent browser profiles — per-agent profile storage with volume mounts
+- [x] URL allowlist enforcement — per-agent domain filtering with wildcard support, link-local/metadata blocking
+- [x] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns (vision + non-vision LLMs)
+- [ ] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
 
 ## License
 

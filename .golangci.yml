@@ -13,7 +13,7 @@ linters:
     errcheck:
       check-type-assertions: true
     gocyclo:
-      min-complexity: 20
+      min-complexity: 15
     gosec:
       excludes:
         - G101 # False positives on test data credentials

@@ -305,39 +305,14 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 
 	if len(cfg.Plugins) > 0 {
 		ensureToolMgr()
-
-		existingToolNames := make(map[string]bool, len(cfg.Tools))
-		for name := range cfg.Tools {
-			existingToolNames[name] = true
-		}
-
-		var verifyOpts *plugin.VerifyOpts
-		if len(cfg.Security.TrustedKeys) > 0 {
-			trustedKeys, keyErr := security.LoadTrustedKeys(cfg.Security.TrustedKeys)
-			if keyErr != nil {
-				return nil, cleanups, fmt.Errorf("loading trusted plugin keys: %w", keyErr)
-			}
-			verifyOpts = &plugin.VerifyOpts{
-				TrustedKeys:   trustedKeys,
-				AllowUnsigned: cfg.Security.AllowUnsigned != nil && *cfg.Security.AllowUnsigned,
-			}
-		}
-
-		// Create sandbox runtime for Docker/K8s plugins.
 		if hasSandboxedPlugins(cfg.Plugins) {
 			if err := ensureSandboxRT(); err != nil {
 				return nil, cleanups, err
 			}
 		}
-
-		pluginMgr := plugin.NewManager(logger, verifyOpts, sandboxRT)
-		if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
-			return nil, cleanups, fmt.Errorf("loading plugins: %w", err)
+		if err := loadPlugins(ctx, cfg, sandboxRT, sharedToolMgr, logger); err != nil {
+			return nil, cleanups, err
 		}
-		if err := pluginMgr.Start(ctx, sharedToolMgr); err != nil {
-			logger.Warn("one or more plugins failed to start", "error", err)
-		}
-		logger.Info("plugins loaded", "count", pluginMgr.Count())
 	}
 
 	// Browser automation — auto-register as a Docker-based MCP server.
@@ -354,14 +329,66 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	return sharedToolMgr, cleanups, nil
 }
 
+// loadPlugins initializes and starts configured plugins, registering their MCP tools.
+func loadPlugins(ctx context.Context, cfg *config.Config, sandboxRT sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) error {
+	existingToolNames := make(map[string]bool, len(cfg.Tools))
+	for name := range cfg.Tools {
+		existingToolNames[name] = true
+	}
+
+	var verifyOpts *plugin.VerifyOpts
+	if len(cfg.Security.TrustedKeys) > 0 {
+		trustedKeys, keyErr := security.LoadTrustedKeys(cfg.Security.TrustedKeys)
+		if keyErr != nil {
+			return fmt.Errorf("loading trusted plugin keys: %w", keyErr)
+		}
+		verifyOpts = &plugin.VerifyOpts{
+			TrustedKeys:   trustedKeys,
+			AllowUnsigned: cfg.Security.AllowUnsigned != nil && *cfg.Security.AllowUnsigned,
+		}
+	}
+
+	pluginMgr := plugin.NewManager(logger, verifyOpts, sandboxRT)
+	if err := pluginMgr.Load(cfg.Plugins, existingToolNames); err != nil {
+		return fmt.Errorf("loading plugins: %w", err)
+	}
+	if err := pluginMgr.Start(ctx, toolMgr); err != nil {
+		logger.Warn("one or more plugins failed to start", "error", err)
+	}
+	logger.Info("plugins loaded", "count", pluginMgr.Count())
+	return nil
+}
+
 // registerBrowser spawns the browser automation container and registers its MCP tools.
 func registerBrowser(ctx context.Context, cfg *config.Config, rt sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) error {
+	// Resolve the browser profile base directory to an absolute path.
+	profileDir := cfg.Browser.ProfileDir
+	if !filepath.IsAbs(profileDir) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolving browser profile dir: %w", err)
+		}
+		profileDir = filepath.Join(home, ".denkeeper", profileDir)
+	}
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		return fmt.Errorf("creating browser profile dir %q: %w", profileDir, err)
+	}
+
+	env := map[string]string{}
+	if len(cfg.Browser.URLAllowlist.Domains) > 0 {
+		env["BROWSER_URL_ALLOWLIST"] = strings.Join(cfg.Browser.URLAllowlist.Domains, ",")
+	}
+
 	proc, err := rt.Spawn(ctx, "denkeeper-browser", sandbox.SpawnOpts{
 		Image:       cfg.Browser.Image,
 		Args:        []string{"--headless", "--browser", "chromium", "--no-sandbox"},
 		Network:     sandbox.NetworkEgress,
 		MemoryLimit: cfg.Browser.MemoryLimit,
 		CPULimit:    cfg.Browser.CPULimit,
+		Env:         env,
+		Tmpfs:       []string{"/tmp:size=64m"},
+		ShmSize:     "64m",
+		Volumes:     []string{profileDir + ":/data/profile"},
 	})
 	if err != nil {
 		return fmt.Errorf("starting browser plugin: %w", err)
@@ -369,7 +396,10 @@ func registerBrowser(ctx context.Context, cfg *config.Config, rt sandbox.Runtime
 	if err := toolMgr.RegisterServer(ctx, "browser", proc.Command, proc.Args, proc.Env); err != nil {
 		return fmt.Errorf("registering browser tools: %w", err)
 	}
-	logger.Info("browser automation registered", "image", cfg.Browser.Image)
+	logger.Info("browser automation registered",
+		"image", cfg.Browser.Image,
+		"profile_dir", profileDir,
+	)
 	return nil
 }
 
@@ -522,23 +552,21 @@ func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fet
 	return webfetch.NewChainFetcher(primary, jina, logger)
 }
 
-func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
-	// Per-agent persona
-	var p *persona.Persona
-	loadedPersona, pErr := persona.Load(ac.PersonaDir)
-	if pErr != nil {
-		abc.logger.Warn("persona files not loaded, using default prompt", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
-	} else {
-		p = loadedPersona
-		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
-	}
+// agentSkillResult holds the resolved skills and directories for an agent.
+type agentSkillResult struct {
+	skills          []skill.Skill
+	agentSkillsDir  string
+	globalSkillsDir string
+}
 
-	// Per-agent skills: merge global + agent-specific (from persona_dir/skills/)
+// loadAgentSkills merges global and agent-specific skills.
+func loadAgentSkills(ac config.AgentInstanceConfig, abc agentBuildCtx) agentSkillResult {
 	agentSkillsDir := filepath.Join(ac.PersonaDir, "skills")
 	agentSkills, sErr := skill.LoadDir(agentSkillsDir, abc.logger)
 	if sErr != nil {
 		abc.logger.Debug("no agent-specific skills", "agent", ac.Name, "dir", agentSkillsDir)
 	}
+
 	effectiveGlobal := abc.globalSkills
 	effectiveGlobalSkillsDir := abc.cfg.Agent.SkillsDir
 	if ac.SkillsDir != "" && ac.SkillsDir != abc.cfg.Agent.SkillsDir {
@@ -550,10 +578,62 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 			effectiveGlobalSkillsDir = ac.SkillsDir
 		}
 	}
-	mergedSkills := skill.MergeSkills(effectiveGlobal, agentSkills)
-	if len(mergedSkills) > 0 {
-		abc.logger.Info("skills loaded for agent", "agent", ac.Name, "count", len(mergedSkills))
+
+	merged := skill.MergeSkills(effectiveGlobal, agentSkills)
+	if len(merged) > 0 {
+		abc.logger.Info("skills loaded for agent", "agent", ac.Name, "count", len(merged))
 	}
+
+	return agentSkillResult{
+		skills:          merged,
+		agentSkillsDir:  agentSkillsDir,
+		globalSkillsDir: effectiveGlobalSkillsDir,
+	}
+}
+
+// buildAgentRouter creates a per-agent LLM router with provider registrations.
+func buildAgentRouter(model string, abc agentBuildCtx) *llm.Router {
+	router := llm.NewRouter(abc.cfg.LLM.DefaultProvider, model, abc.llm.cost)
+	router.RegisterProvider(abc.llm.ollama)
+	if abc.llm.openRouter != nil {
+		router.RegisterProvider(abc.llm.openRouter)
+	}
+	if abc.llm.anthropic != nil {
+		router.RegisterProvider(abc.llm.anthropic)
+	}
+	if len(abc.llm.fallbacks) > 0 {
+		router.SetFallbacks(abc.llm.fallbacks)
+	}
+	return router
+}
+
+// buildAllAgents creates an Engine for each configured agent and collects their bindings.
+func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, abc agentBuildCtx) (map[string]*agent.Engine, []agent.Binding, error) {
+	engines := make(map[string]*agent.Engine, len(agents))
+	var bindings []agent.Binding
+	for _, ac := range agents {
+		e, agentBindings, buildErr := buildAgentEngine(ctx, ac, abc)
+		if buildErr != nil {
+			return nil, nil, buildErr
+		}
+		engines[ac.Name] = e
+		bindings = append(bindings, agentBindings...)
+	}
+	return engines, bindings, nil
+}
+
+func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
+	// Per-agent persona
+	var p *persona.Persona
+	loadedPersona, pErr := persona.Load(ac.PersonaDir)
+	if pErr != nil {
+		abc.logger.Warn("persona files not loaded, using default prompt", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
+	} else {
+		p = loadedPersona
+		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
+	}
+
+	sr := loadAgentSkills(ac, abc)
 
 	// Per-agent permission tier (fall back to global session.tier)
 	tier := abc.cfg.Session.Tier
@@ -565,29 +645,16 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		return nil, nil, fmt.Errorf("initializing permissions for agent %q: %w", ac.Name, pErr)
 	}
 
-	// Per-agent tool manager: adopt shared external tools then add the
-	// per-agent Config MCP server so skill/schedule tools are agent-scoped.
 	agentToolMgr := tool.NewManager(abc.logger)
 	if abc.sharedToolMgr != nil {
 		agentToolMgr.AdoptFrom(abc.sharedToolMgr)
 	}
 
-	// Per-agent LLM router (with optional model override)
 	model := abc.cfg.LLM.DefaultModel
 	if ac.LLMModel != "" {
 		model = ac.LLMModel
 	}
-	agentRouter := llm.NewRouter(abc.cfg.LLM.DefaultProvider, model, abc.llm.cost)
-	agentRouter.RegisterProvider(abc.llm.ollama)
-	if abc.llm.openRouter != nil {
-		agentRouter.RegisterProvider(abc.llm.openRouter)
-	}
-	if abc.llm.anthropic != nil {
-		agentRouter.RegisterProvider(abc.llm.anthropic)
-	}
-	if len(abc.llm.fallbacks) > 0 {
-		agentRouter.SetFallbacks(abc.llm.fallbacks)
-	}
+	agentRouter := buildAgentRouter(model, abc)
 
 	sendVia := func(ctx context.Context, msg adapter.OutgoingMessage) error {
 		name := msg.Adapter
@@ -605,20 +672,17 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		permissions,
 		p,
 		persona.DefaultPrompt,
-		mergedSkills,
+		sr.skills,
 		agentToolMgr,
 		abc.approvalManager,
 		abc.logger,
 	)
-	e.SetSkillDirs(agentSkillsDir, effectiveGlobalSkillsDir)
+	e.SetSkillDirs(sr.agentSkillsDir, sr.globalSkillsDir)
 	e.SetScheduler(abc.sched)
 
-	// Connect per-agent Config MCP server and register its tools.
-	if err := connectConfigMCP(ctx, ac.Name, agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
+	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
 	}
-
-	// Connect per-agent Web MCP server (search + fetch) if enabled.
 	if err := connectWebMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
 		return nil, nil, err
 	}
@@ -634,7 +698,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		"agent", ac.Name,
 		"model", model,
 		"tier", tier,
-		"skills", len(mergedSkills),
+		"skills", len(sr.skills),
 	)
 
 	return e, bindings, nil
@@ -727,14 +791,19 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 	return nil
 }
 
+// resolveConfigPath returns the config file path from the CLI flag, env var, or default.
+func resolveConfigPath() string {
+	if cfgFile != "" {
+		return cfgFile
+	}
+	if envPath := os.Getenv("DENKEEPER_CONFIG"); envPath != "" {
+		return envPath
+	}
+	return config.DefaultConfigPath()
+}
+
 func runServe(_ *cobra.Command, _ []string) error {
-	path := cfgFile
-	if path == "" {
-		path = os.Getenv("DENKEEPER_CONFIG")
-	}
-	if path == "" {
-		path = config.DefaultConfigPath()
-	}
+	path := resolveConfigPath()
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -762,11 +831,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	st.approvalManager.StartExpiryWorker(ctx, time.Hour)
 
-	kvCleanupInterval, _ := time.ParseDuration(cfg.KV.CleanupInterval)
-	if kvCleanupInterval <= 0 {
-		kvCleanupInterval = time.Hour
-	}
-	startKVCleanupWorker(ctx, st.kvStore, kvCleanupInterval, logger)
+	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
 
 	sharedToolMgr, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
@@ -799,11 +864,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	sched := scheduler.New(logger)
 
-	// Build per-agent engines
-	engines := make(map[string]*agent.Engine, len(cfg.Agents))
-	var bindings []agent.Binding
 	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
-
 	abc := agentBuildCtx{
 		cfg:             cfg,
 		llm:             clients,
@@ -819,13 +880,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 		logger:          logger,
 	}
 
-	for _, ac := range cfg.Agents {
-		e, agentBindings, buildErr := buildAgentEngine(ctx, ac, abc)
-		if buildErr != nil {
-			return buildErr
-		}
-		engines[ac.Name] = e
-		bindings = append(bindings, agentBindings...)
+	engines, bindings, err := buildAllAgents(ctx, cfg.Agents, abc)
+	if err != nil {
+		return err
 	}
 
 	// Re-create dispatcher with the fully wired engines and bindings.
@@ -872,6 +929,15 @@ func runServe(_ *cobra.Command, _ []string) error {
 	)
 
 	return dispatcher.Run(ctx)
+}
+
+// kvCleanupDuration parses a duration string and falls back to 1 hour.
+func kvCleanupDuration(s string) time.Duration {
+	d, _ := time.ParseDuration(s)
+	if d <= 0 {
+		return time.Hour
+	}
+	return d
 }
 
 // startKVCleanupWorker runs a background goroutine that periodically removes

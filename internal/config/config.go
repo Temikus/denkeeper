@@ -82,6 +82,23 @@ type BrowserConfig struct {
 	MemoryLimit string `toml:"memory_limit"`
 	// CPULimit is the container CPU limit. Default: "1".
 	CPULimit string `toml:"cpu_limit"`
+	// ProfileDir is the base directory for per-agent browser profiles, relative to the data directory.
+	// Default: "data/browser-profiles".
+	ProfileDir string `toml:"profile_dir"`
+	// SessionTTL is the duration after which an idle browser session is closed. Default: "10m".
+	SessionTTL string `toml:"session_ttl"`
+	// MaxPages is the maximum number of concurrent pages per agent. Default: 5.
+	MaxPages int `toml:"max_pages"`
+	// URLAllowlist restricts which domains the browser can navigate to.
+	// Empty list means unrestricted. Supports wildcards: "*.example.com".
+	URLAllowlist BrowserURLAllowlist `toml:"url_allowlist"`
+}
+
+// BrowserURLAllowlist defines domain restrictions for browser navigation.
+type BrowserURLAllowlist struct {
+	// Domains is the list of allowed domains. Empty = unrestricted.
+	// Supports wildcards: "*.example.com" matches all subdomains.
+	Domains []string `toml:"domains"`
 }
 
 // SandboxConfig selects the runtime backend for sandboxed (Docker-type) plugins.
@@ -187,6 +204,10 @@ type AgentInstanceConfig struct {
 
 	// SessionTier overrides the global session.tier for this agent.
 	SessionTier string `toml:"session_tier"`
+
+	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
+	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
+	BrowserURLAllowlist []string `toml:"browser_url_allowlist"`
 }
 
 // VoiceConfig controls speech-to-text and text-to-speech.
@@ -508,54 +529,32 @@ func applyLLMDefaults(cfg *Config) {
 // variables. This enables the standard Kubernetes pattern of injecting secrets
 // via env vars while keeping non-secret config in a ConfigMap-mounted file.
 // Only the explicitly listed DENKEEPER_* variables are read (allowlist).
+// envOverride sets *target to the value of the named environment variable, if set.
+func envOverride(name string, target *string) {
+	if v := os.Getenv(name); v != "" {
+		*target = v
+	}
+}
+
 func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("DENKEEPER_TELEGRAM_TOKEN"); v != "" {
-		cfg.Telegram.Token = v
-	}
-	if v := os.Getenv("DENKEEPER_DISCORD_TOKEN"); v != "" {
-		cfg.Discord.Token = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_PROVIDER"); v != "" {
-		cfg.LLM.DefaultProvider = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_MODEL"); v != "" {
-		cfg.LLM.DefaultModel = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_OPENROUTER_API_KEY"); v != "" {
-		cfg.LLM.OpenRouter.APIKey = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_ANTHROPIC_API_KEY"); v != "" {
-		cfg.LLM.Anthropic.APIKey = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_ANTHROPIC_BASE_URL"); v != "" {
-		cfg.LLM.Anthropic.BaseURL = v
-	}
-	if v := os.Getenv("DENKEEPER_LLM_OLLAMA_BASE_URL"); v != "" {
-		cfg.LLM.Ollama.BaseURL = v
-	}
-	if v := os.Getenv("DENKEEPER_VOICE_OPENAI_API_KEY"); v != "" {
-		cfg.Voice.OpenAI.APIKey = v
-	}
-	if v := os.Getenv("DENKEEPER_LOG_LEVEL"); v != "" {
-		cfg.Log.Level = v
-	}
-	if v := os.Getenv("DENKEEPER_LOG_FORMAT"); v != "" {
-		cfg.Log.Format = v
-	}
-	if v := os.Getenv("DENKEEPER_MEMORY_DB_PATH"); v != "" {
-		cfg.Memory.DBPath = v
-	}
+	envOverride("DENKEEPER_TELEGRAM_TOKEN", &cfg.Telegram.Token)
+	envOverride("DENKEEPER_DISCORD_TOKEN", &cfg.Discord.Token)
+	envOverride("DENKEEPER_LLM_PROVIDER", &cfg.LLM.DefaultProvider)
+	envOverride("DENKEEPER_LLM_MODEL", &cfg.LLM.DefaultModel)
+	envOverride("DENKEEPER_LLM_OPENROUTER_API_KEY", &cfg.LLM.OpenRouter.APIKey)
+	envOverride("DENKEEPER_LLM_ANTHROPIC_API_KEY", &cfg.LLM.Anthropic.APIKey)
+	envOverride("DENKEEPER_LLM_ANTHROPIC_BASE_URL", &cfg.LLM.Anthropic.BaseURL)
+	envOverride("DENKEEPER_LLM_OLLAMA_BASE_URL", &cfg.LLM.Ollama.BaseURL)
+	envOverride("DENKEEPER_VOICE_OPENAI_API_KEY", &cfg.Voice.OpenAI.APIKey)
+	envOverride("DENKEEPER_LOG_LEVEL", &cfg.Log.Level)
+	envOverride("DENKEEPER_LOG_FORMAT", &cfg.Log.Format)
+	envOverride("DENKEEPER_MEMORY_DB_PATH", &cfg.Memory.DBPath)
+	envOverride("DENKEEPER_API_LISTEN", &cfg.API.Listen)
+	envOverride("DENKEEPER_SESSION_TIER", &cfg.Session.Tier)
+	envOverride("DENKEEPER_SEARCH_API_KEY", &cfg.Web.Search.APIKey)
+
 	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
 		cfg.API.Enabled = true
-	}
-	if v := os.Getenv("DENKEEPER_API_LISTEN"); v != "" {
-		cfg.API.Listen = v
-	}
-	if v := os.Getenv("DENKEEPER_SESSION_TIER"); v != "" {
-		cfg.Session.Tier = v
-	}
-	if v := os.Getenv("DENKEEPER_SEARCH_API_KEY"); v != "" {
-		cfg.Web.Search.APIKey = v
 	}
 }
 
@@ -625,6 +624,15 @@ func applyBrowserDefaults(cfg *Config) {
 	}
 	if cfg.Browser.CPULimit == "" {
 		cfg.Browser.CPULimit = "1"
+	}
+	if cfg.Browser.ProfileDir == "" {
+		cfg.Browser.ProfileDir = "data/browser-profiles"
+	}
+	if cfg.Browser.SessionTTL == "" {
+		cfg.Browser.SessionTTL = "10m"
+	}
+	if cfg.Browser.MaxPages == 0 {
+		cfg.Browser.MaxPages = 5
 	}
 }
 
@@ -717,13 +725,11 @@ func needsAnthropic(cfg *Config) bool {
 	return cfg.LLM.DefaultProvider == "anthropic"
 }
 
-func validate(cfg *Config) error {
-	// Telegram is required only when a token is set. If no token is set we skip
-	// Telegram-specific validation so Discord-only deployments are valid.
+// validateAdaptersAndProviders checks adapter tokens, allowed-user lists, and LLM provider keys.
+func validateAdaptersAndProviders(cfg *Config) error {
 	if cfg.Telegram.Token != "" && len(cfg.Telegram.AllowedUsers) == 0 {
 		return fmt.Errorf("config: telegram.allowed_users must not be empty when telegram.token is set (security requirement)")
 	}
-	// At least one adapter must be configured.
 	if cfg.Telegram.Token == "" && cfg.Discord.Token == "" {
 		return fmt.Errorf("config: at least one adapter must be configured (telegram.token or discord.token)")
 	}
@@ -735,6 +741,13 @@ func validate(cfg *Config) error {
 	}
 	if needsAnthropic(cfg) && cfg.LLM.Anthropic.APIKey == "" {
 		return fmt.Errorf("config: llm.anthropic.api_key is required when using anthropic provider")
+	}
+	return nil
+}
+
+func validate(cfg *Config) error {
+	if err := validateAdaptersAndProviders(cfg); err != nil {
+		return err
 	}
 	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
 		return err

@@ -235,3 +235,64 @@ func TestInitAdapters_NoAdapters(t *testing.T) {
 		t.Error("expected nil telegram adapter")
 	}
 }
+
+// --- resolveConfigPath tests ---
+
+func TestResolveConfigPath_FromFlag(t *testing.T) {
+	orig := cfgFile
+	defer func() { cfgFile = orig }()
+
+	cfgFile = "/custom/path.toml"
+	if got := resolveConfigPath(); got != "/custom/path.toml" {
+		t.Errorf("resolveConfigPath() = %q, want /custom/path.toml", got)
+	}
+}
+
+func TestResolveConfigPath_FromEnv(t *testing.T) {
+	orig := cfgFile
+	defer func() { cfgFile = orig }()
+	cfgFile = ""
+
+	t.Setenv("DENKEEPER_CONFIG", "/env/path.toml")
+	if got := resolveConfigPath(); got != "/env/path.toml" {
+		t.Errorf("resolveConfigPath() = %q, want /env/path.toml", got)
+	}
+}
+
+func TestResolveConfigPath_Default(t *testing.T) {
+	orig := cfgFile
+	defer func() { cfgFile = orig }()
+	cfgFile = ""
+
+	t.Setenv("DENKEEPER_CONFIG", "")
+	got := resolveConfigPath()
+	if got == "" {
+		t.Error("resolveConfigPath() should not return empty string")
+	}
+}
+
+// --- kvCleanupDuration tests ---
+
+func TestKVCleanupDuration_Valid(t *testing.T) {
+	if got := kvCleanupDuration("30m"); got.String() != "30m0s" {
+		t.Errorf("kvCleanupDuration(30m) = %v, want 30m", got)
+	}
+}
+
+func TestKVCleanupDuration_Empty(t *testing.T) {
+	if got := kvCleanupDuration(""); got.String() != "1h0m0s" {
+		t.Errorf("kvCleanupDuration('') = %v, want 1h", got)
+	}
+}
+
+func TestKVCleanupDuration_Invalid(t *testing.T) {
+	if got := kvCleanupDuration("not-a-duration"); got.String() != "1h0m0s" {
+		t.Errorf("kvCleanupDuration(invalid) = %v, want 1h (fallback)", got)
+	}
+}
+
+func TestKVCleanupDuration_Zero(t *testing.T) {
+	if got := kvCleanupDuration("0s"); got.String() != "1h0m0s" {
+		t.Errorf("kvCleanupDuration(0s) = %v, want 1h (fallback for non-positive)", got)
+	}
+}

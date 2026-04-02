@@ -370,6 +370,12 @@ func buildPodSpec(podName, pluginName, namespace, runtimeClass string, opts Spaw
 			ReadOnly:  readOnly,
 		})
 	}
+
+	// Tmpfs and /dev/shm mounts.
+	tmpfsVols, tmpfsMounts := buildTmpfsVolumes(opts)
+	volumes = append(volumes, tmpfsVols...)
+	volumeMounts = append(volumeMounts, tmpfsMounts...)
+
 	container.VolumeMounts = volumeMounts
 
 	// Init container for network isolation.
@@ -464,6 +470,77 @@ func podName(name string) string {
 }
 
 var invalidDNSChars = regexp.MustCompile(`[^a-z0-9-]`)
+
+// buildTmpfsVolumes creates K8s volumes and mounts for Tmpfs entries and ShmSize.
+func buildTmpfsVolumes(opts SpawnOpts) ([]corev1.Volume, []corev1.VolumeMount) {
+	var volumes []corev1.Volume
+	var mounts []corev1.VolumeMount
+
+	for i, t := range opts.Tmpfs {
+		volName := fmt.Sprintf("tmpfs-%d", i)
+		mountPath, sizeLimit := parseTmpfsSpec(t)
+		vol := corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				},
+			},
+		}
+		if sizeLimit != "" {
+			if q, err := resource.ParseQuantity(sizeLimit); err == nil {
+				vol.VolumeSource.EmptyDir.SizeLimit = &q
+			}
+		}
+		volumes = append(volumes, vol)
+		mounts = append(mounts, corev1.VolumeMount{Name: volName, MountPath: mountPath})
+	}
+
+	if opts.ShmSize != "" {
+		vol := corev1.Volume{
+			Name: "dshm",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium: corev1.StorageMediumMemory,
+				},
+			},
+		}
+		if q, err := resource.ParseQuantity(opts.ShmSize); err == nil {
+			vol.VolumeSource.EmptyDir.SizeLimit = &q
+		}
+		volumes = append(volumes, vol)
+		mounts = append(mounts, corev1.VolumeMount{Name: "dshm", MountPath: "/dev/shm"})
+	}
+
+	return volumes, mounts
+}
+
+// parseTmpfsSpec splits a Docker-style tmpfs spec "mountpath[:opts]" into the
+// mount path and an optional size limit. Recognizes "size=64m" in the options
+// and converts Docker-style sizes (e.g. "64m") to Kubernetes quantities ("64M").
+func parseTmpfsSpec(spec string) (mountPath, sizeLimit string) {
+	parts := strings.SplitN(spec, ":", 2)
+	mountPath = parts[0]
+	if len(parts) < 2 {
+		return mountPath, ""
+	}
+	for _, opt := range strings.Split(parts[1], ",") {
+		if strings.HasPrefix(opt, "size=") {
+			sizeLimit = dockerSizeToK8s(strings.TrimPrefix(opt, "size="))
+		}
+	}
+	return mountPath, sizeLimit
+}
+
+// dockerSizeToK8s converts Docker-style size suffixes (k/m/g) to Kubernetes
+// quantity suffixes (K/M/G). Passes through already-valid K8s quantities.
+func dockerSizeToK8s(s string) string {
+	if s == "" {
+		return s
+	}
+	replacer := strings.NewReplacer("k", "K", "m", "M", "g", "G")
+	return replacer.Replace(s)
+}
 
 // parseVolumeSpec splits a Docker-style volume spec "host:container[:ro]"
 // into its components.
