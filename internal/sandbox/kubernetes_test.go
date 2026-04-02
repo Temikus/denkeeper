@@ -177,8 +177,8 @@ func TestKubernetesRuntime_Spawn_TmpfsVolumes(t *testing.T) {
 	// Should have 2 tmpfs volumes.
 	var tmpfsVols int
 	for _, v := range pod.Spec.Volumes {
-		if strings.HasPrefix(v.Name, "tmpfs-") && v.VolumeSource.EmptyDir != nil &&
-			v.VolumeSource.EmptyDir.Medium == corev1.StorageMediumMemory {
+		if strings.HasPrefix(v.Name, "tmpfs-") && v.EmptyDir != nil &&
+			v.EmptyDir.Medium == corev1.StorageMediumMemory {
 			tmpfsVols++
 		}
 	}
@@ -189,13 +189,13 @@ func TestKubernetesRuntime_Spawn_TmpfsVolumes(t *testing.T) {
 	// Check size limit on first tmpfs.
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "tmpfs-0" {
-			if v.VolumeSource.EmptyDir.SizeLimit == nil {
+			if v.EmptyDir.SizeLimit == nil {
 				t.Error("expected sizeLimit on tmpfs-0")
-			} else if v.VolumeSource.EmptyDir.SizeLimit.String() != "64M" {
-				t.Errorf("tmpfs-0 sizeLimit = %s, want 64M", v.VolumeSource.EmptyDir.SizeLimit.String())
+			} else if v.EmptyDir.SizeLimit.String() != "64M" {
+				t.Errorf("tmpfs-0 sizeLimit = %s, want 64M", v.EmptyDir.SizeLimit.String())
 			}
 		}
-		if v.Name == "tmpfs-1" && v.VolumeSource.EmptyDir.SizeLimit != nil {
+		if v.Name == "tmpfs-1" && v.EmptyDir.SizeLimit != nil {
 			t.Error("tmpfs-1 should not have a sizeLimit")
 		}
 	}
@@ -236,14 +236,14 @@ func TestKubernetesRuntime_Spawn_ShmSize(t *testing.T) {
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "dshm" {
 			found = true
-			if v.VolumeSource.EmptyDir == nil {
+			if v.EmptyDir == nil {
 				t.Fatal("dshm volume is not emptyDir")
 			}
-			if v.VolumeSource.EmptyDir.Medium != corev1.StorageMediumMemory {
+			if v.EmptyDir.Medium != corev1.StorageMediumMemory {
 				t.Error("dshm medium should be Memory")
 			}
-			if v.VolumeSource.EmptyDir.SizeLimit == nil || v.VolumeSource.EmptyDir.SizeLimit.String() != "128M" {
-				t.Errorf("dshm sizeLimit = %v, want 128M", v.VolumeSource.EmptyDir.SizeLimit)
+			if v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.String() != "128M" {
+				t.Errorf("dshm sizeLimit = %v, want 128M", v.EmptyDir.SizeLimit)
 			}
 		}
 	}

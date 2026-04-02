@@ -489,7 +489,7 @@ func buildTmpfsVolumes(opts SpawnOpts) ([]corev1.Volume, []corev1.VolumeMount) {
 		}
 		if sizeLimit != "" {
 			if q, err := resource.ParseQuantity(sizeLimit); err == nil {
-				vol.VolumeSource.EmptyDir.SizeLimit = &q
+				vol.EmptyDir.SizeLimit = &q
 			}
 		}
 		volumes = append(volumes, vol)
@@ -506,7 +506,7 @@ func buildTmpfsVolumes(opts SpawnOpts) ([]corev1.Volume, []corev1.VolumeMount) {
 			},
 		}
 		if q, err := resource.ParseQuantity(opts.ShmSize); err == nil {
-			vol.VolumeSource.EmptyDir.SizeLimit = &q
+			vol.EmptyDir.SizeLimit = &q
 		}
 		volumes = append(volumes, vol)
 		mounts = append(mounts, corev1.VolumeMount{Name: "dshm", MountPath: "/dev/shm"})
