@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
@@ -273,7 +274,7 @@ func initAdapters(cfg *config.Config, logger *slog.Logger, voiceOpts *telegram.V
 // cleanupFunc is a function to be called on shutdown.
 type cleanupFunc func()
 
-func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*tool.Manager, []cleanupFunc, error) {
+func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*tool.Manager, string, []cleanupFunc, error) {
 	var sharedToolMgr *tool.Manager
 	var cleanups []cleanupFunc
 
@@ -289,7 +290,7 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 		ensureToolMgr()
 		for name, tc := range cfg.Tools {
 			if err := sharedToolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
-				return nil, cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
+				return nil, "", cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
 			}
 			logger.Info("tool server registered", "name", name, "command", tc.Command)
 		}
@@ -318,26 +319,29 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 		ensureToolMgr()
 		if hasSandboxedPlugins(cfg.Plugins) {
 			if err := ensureSandboxRT(); err != nil {
-				return nil, cleanups, err
+				return nil, "", cleanups, err
 			}
 		}
 		if err := loadPlugins(ctx, cfg, sandboxRT, sharedToolMgr, logger); err != nil {
-			return nil, cleanups, err
+			return nil, "", cleanups, err
 		}
 	}
 
-	// Browser automation — auto-register as a Docker-based MCP server.
+	// Browser automation — resolve profile dir and register as Docker-based MCP server.
+	var browserProfileDir string
 	if cfg.Browser.Enabled {
 		ensureToolMgr()
 		if err := ensureSandboxRT(); err != nil {
-			return nil, cleanups, fmt.Errorf("browser sandbox runtime: %w", err)
+			return nil, "", cleanups, fmt.Errorf("browser sandbox runtime: %w", err)
 		}
-		if err := registerBrowser(ctx, cfg, sandboxRT, sharedToolMgr, logger); err != nil {
-			return nil, cleanups, err
+		var err error
+		browserProfileDir, err = setupBrowser(ctx, cfg, sandboxRT, sharedToolMgr, logger)
+		if err != nil {
+			return nil, "", cleanups, err
 		}
 	}
 
-	return sharedToolMgr, cleanups, nil
+	return sharedToolMgr, browserProfileDir, cleanups, nil
 }
 
 // loadPlugins initializes and starts configured plugins, registering their MCP tools.
@@ -370,21 +374,38 @@ func loadPlugins(ctx context.Context, cfg *config.Config, sandboxRT sandbox.Runt
 	return nil
 }
 
-// registerBrowser spawns the browser automation container and registers its MCP tools.
-func registerBrowser(ctx context.Context, cfg *config.Config, rt sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) error {
-	// Resolve the browser profile base directory to an absolute path.
+// resolveBrowserProfileDir resolves the browser profile base directory to an
+// absolute path, creating it if necessary.
+func resolveBrowserProfileDir(cfg *config.Config) (string, error) {
 	profileDir := cfg.Browser.ProfileDir
 	if !filepath.IsAbs(profileDir) {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("resolving browser profile dir: %w", err)
+			return "", fmt.Errorf("resolving browser profile dir: %w", err)
 		}
 		profileDir = filepath.Join(home, ".denkeeper", profileDir)
 	}
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
-		return fmt.Errorf("creating browser profile dir %q: %w", profileDir, err)
+		return "", fmt.Errorf("creating browser profile dir %q: %w", profileDir, err)
 	}
+	return profileDir, nil
+}
 
+// setupBrowser resolves the profile directory and registers the browser MCP server.
+// Returns the resolved profile directory path.
+func setupBrowser(ctx context.Context, cfg *config.Config, rt sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) (string, error) {
+	profileDir, err := resolveBrowserProfileDir(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := registerBrowser(ctx, cfg, profileDir, rt, toolMgr, logger); err != nil {
+		return "", err
+	}
+	return profileDir, nil
+}
+
+// registerBrowser spawns the browser automation container and registers its MCP tools.
+func registerBrowser(ctx context.Context, cfg *config.Config, profileDir string, rt sandbox.Runtime, toolMgr *tool.Manager, logger *slog.Logger) error {
 	env := map[string]string{}
 	if len(cfg.Browser.URLAllowlist.Domains) > 0 {
 		env["BROWSER_URL_ALLOWLIST"] = strings.Join(cfg.Browser.URLAllowlist.Domains, ",")
@@ -441,18 +462,19 @@ func createSandboxRuntime(cfg *config.Config, logger *slog.Logger) (sandbox.Runt
 
 // agentBuildCtx holds all the shared state needed to build per-agent engines.
 type agentBuildCtx struct {
-	cfg             *config.Config
-	llm             llmClients
-	memory          agent.MemoryStore
-	sharedToolMgr   *tool.Manager
-	lifecycleMgr    *tool.LifecycleManager
-	approvalManager *approval.Manager
-	kvStore         kv.Store
-	globalSkills    []skill.Skill
-	sched           *scheduler.Scheduler
-	adapters        []adapter.Adapter
-	dispatcher      *agent.Dispatcher
-	logger          *slog.Logger
+	cfg              *config.Config
+	llm              llmClients
+	memory           agent.MemoryStore
+	sharedToolMgr    *tool.Manager
+	lifecycleMgr     *tool.LifecycleManager
+	approvalManager  *approval.Manager
+	kvStore          kv.Store
+	browserProfiles  *browser.ProfileService
+	globalSkills     []skill.Skill
+	sched            *scheduler.Scheduler
+	adapters         []adapter.Adapter
+	dispatcher       *agent.Dispatcher
+	logger           *slog.Logger
 }
 
 // connectConfigMCP creates the per-agent Config MCP server, connects it, and
@@ -492,7 +514,8 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 			}
 			router.SetFallbacks(converted)
 		},
-		Logger: abc.logger,
+		BrowserProfiles: abc.browserProfiles,
+		Logger:          abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
 	if err != nil {
@@ -847,7 +870,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
 
-	sharedToolMgr, cleanups, err := initSharedTools(ctx, cfg, logger)
+	sharedToolMgr, browserProfileDir, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
 		defer fn()
 	}
@@ -868,28 +891,25 @@ func runServe(_ *cobra.Command, _ []string) error {
 		lifecycleMgr.TrackPlugin(name, pc)
 	}
 
-	// Load global skills
-	globalSkills, err := skill.LoadDir(cfg.Agent.SkillsDir, logger)
-	if err != nil {
-		logger.Warn("global skill loading error", "dir", cfg.Agent.SkillsDir, "error", err)
-	} else if len(globalSkills) > 0 {
-		logger.Info("global skills loaded", "dir", cfg.Agent.SkillsDir, "count", len(globalSkills))
-	}
+	globalSkills := loadGlobalSkills(cfg.Agent.SkillsDir, logger)
 
 	sched := scheduler.New(logger)
 
+	browserProfiles := newBrowserProfiles(cfg, browserProfileDir, logger)
+
 	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
 	abc := agentBuildCtx{
-		cfg:             cfg,
-		llm:             clients,
-		memory:          st.memory,
-		sharedToolMgr:   sharedToolMgr,
-		lifecycleMgr:    lifecycleMgr,
-		approvalManager: st.approvalManager,
-		kvStore:         st.kvStore,
-		globalSkills:    globalSkills,
-		sched:           sched,
-		adapters:        adapters,
+		cfg:              cfg,
+		llm:              clients,
+		memory:           st.memory,
+		sharedToolMgr:    sharedToolMgr,
+		lifecycleMgr:     lifecycleMgr,
+		approvalManager:  st.approvalManager,
+		kvStore:          st.kvStore,
+		browserProfiles:  browserProfiles,
+		globalSkills:     globalSkills,
+		sched:            sched,
+		adapters:         adapters,
 		dispatcher:      dispatcher,
 		logger:          logger,
 	}
@@ -923,14 +943,15 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	if cfg.API.Enabled {
 		if err := startAPIServer(ctx, cfg, api.Deps{
-			Dispatcher:   dispatcher,
-			Scheduler:    sched,
-			CostTracker:  clients.cost,
-			Memory:       st.memory,
-			Config:       cfg,
-			Approvals:    st.approvalManager,
-			LifecycleMgr: lifecycleMgr,
-			WebHandler:   web.Handler(),
+			Dispatcher:      dispatcher,
+			Scheduler:       sched,
+			CostTracker:     clients.cost,
+			Memory:          st.memory,
+			Config:          cfg,
+			Approvals:       st.approvalManager,
+			LifecycleMgr:    lifecycleMgr,
+			BrowserProfiles: browserProfiles,
+			WebHandler:      web.Handler(),
 		}, logger); err != nil {
 			return err
 		}
@@ -952,6 +973,29 @@ func kvCleanupDuration(s string) time.Duration {
 		return time.Hour
 	}
 	return d
+}
+
+// newBrowserProfiles creates a ProfileService when browser automation is
+// enabled and a profile directory was resolved. Returns nil otherwise.
+func newBrowserProfiles(cfg *config.Config, profileDir string, logger *slog.Logger) *browser.ProfileService {
+	if cfg.Browser.Enabled && profileDir != "" {
+		return browser.NewProfileService(profileDir, logger)
+	}
+	return nil
+}
+
+// loadGlobalSkills loads skills from the given directory, logging warnings on
+// error. Returns nil if no skills are found or on error.
+func loadGlobalSkills(dir string, logger *slog.Logger) []skill.Skill {
+	skills, err := skill.LoadDir(dir, logger)
+	if err != nil {
+		logger.Warn("global skill loading error", "dir", dir, "error", err)
+		return nil
+	}
+	if len(skills) > 0 {
+		logger.Info("global skills loaded", "dir", dir, "count", len(skills))
+	}
+	return skills
 }
 
 // startKVCleanupWorker runs a background goroutine that periodically removes

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -114,6 +115,7 @@ func allScopesKey() config.APIKeyConfig {
 			"schedules:read", "schedules:write",
 			"approvals:read", "approvals:write",
 			"tools:read", "tools:write",
+			"browser:read", "browser:write",
 		},
 	}
 }
@@ -1627,5 +1629,208 @@ func TestRemovePlugin_NotFound(t *testing.T) {
 	// RemovePlugin is idempotent — removing a non-existent plugin succeeds silently.
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Browser profile & session endpoints
+// ---------------------------------------------------------------------------
+
+func TestBrowserProfiles_List_NoBrowser(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	// BrowserProfiles is nil by default — should return 503.
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/profiles"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestBrowserProfiles_List(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/agent-a", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/agent-a/data", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/profiles"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp struct {
+		Profiles []struct {
+			Agent string `json:"agent"`
+		} `json:"profiles"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Profiles) != 1 || resp.Profiles[0].Agent != "agent-a" {
+		t.Errorf("unexpected profiles: %+v", resp.Profiles)
+	}
+}
+
+func TestBrowserProfiles_Get_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/profiles/ghost"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestBrowserProfiles_Delete(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := dir + "/deleteme"
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentDir+"/data", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/browser/profiles/deleteme"))
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
+		t.Error("expected directory to be removed")
+	}
+}
+
+func TestBrowserSessions_NoBrowser(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/sessions"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestBrowserConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	deps.Config.Browser = config.BrowserConfig{
+		Enabled:     true,
+		Image:       "ghcr.io/temikus/denkeeper-browser:latest",
+		MemoryLimit: "512m",
+		CPULimit:    "1",
+		ProfileDir:  "data/browser-profiles",
+		SessionTTL:  "10m",
+		MaxPages:    5,
+	}
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/config"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp config.BrowserConfig
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Image != "ghcr.io/temikus/denkeeper-browser:latest" {
+		t.Errorf("unexpected image: %s", resp.Image)
+	}
+	if resp.MaxPages != 5 {
+		t.Errorf("unexpected max_pages: %d", resp.MaxPages)
+	}
+}
+
+func TestBrowserProfiles_Get(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := dir + "/myagent"
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentDir+"/state.json", make([]byte, 256), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/profiles/myagent"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var info struct {
+		Agent     string `json:"agent"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Agent != "myagent" {
+		t.Errorf("agent = %q, want %q", info.Agent, "myagent")
+	}
+	if info.SizeBytes < 256 {
+		t.Errorf("size_bytes = %d, want >= 256", info.SizeBytes)
+	}
+}
+
+func TestBrowserProfiles_Delete_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/browser/profiles/ghost"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestBrowserConfig_NoBrowser(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/browser/config"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }

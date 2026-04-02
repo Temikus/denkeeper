@@ -97,13 +97,13 @@ Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messa
 
 Flow: Engine produces a directive → supervised tier submits to Manager → Manager persists row + registers closure → Engine attaches Approve/Deny inline keyboard buttons to the outgoing message → user clicks → Telegram adapter routes callback to `Handler.Resolve` → Manager resolves + invokes closure → original message keyboard is cleared.
 
-Four action kinds: `user_update`, `create_skill`, `modify_schedule`, `install_tool`. Default TTL: 24 h (background worker ticks hourly).
+Five action kinds: `user_update`, `create_skill`, `modify_schedule`, `install_tool`, `browser_profile`. Default TTL: 24 h (background worker ticks hourly).
 
 ## Config MCP Server
 
 `internal/configmcp/` provides a per-agent in-process MCP server that lets the LLM modify its own configuration at runtime (supervised or autonomous tier).
 
-Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `schedule_update`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`, `set_fallback`, `get_cost_summary`. In supervised mode mutation tools submit to the approval Manager rather than acting directly.
+Available MCP tools: `list_skills`, `create_skill`, `list_schedules`, `add_schedule`, `schedule_update`, `get_permission_tier`, `tool_list`/`tool_add`/`tool_remove`, `plugin_list`/`plugin_add`/`plugin_remove`, `kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`, `browser_profile_list`/`browser_profile_info`/`browser_profile_clear`/`browser_profile_delete`, `set_fallback`, `get_cost_summary`. In supervised mode mutation tools submit to the approval Manager rather than acting directly. `browser_profile_delete` always requires approval regardless of tier.
 
 ## Web MCP Server
 
@@ -290,7 +290,7 @@ Six new tools in `configmcp`: `tool_list`, `tool_add`, `tool_remove`, `plugin_li
 
 Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove dialogs, status indicators. 10th page in the SPA.
 
-## Current State (Phase 6 browser automation in progress)
+## Current State (Phase 6 browser automation complete)
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
@@ -299,11 +299,11 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial).
 - Plugin system: subprocess plugins and sandboxed plugins with capability declarations. Sandboxed plugins use the `sandbox.Runtime` interface with two backends: DockerRuntime (default, `docker run -i --rm`) and KubernetesRuntime (creates ephemeral Pods with init-container network isolation, PSA labels, and optional gVisor/Kata RuntimeClass). Both hardened with dropped capabilities, read-only root FS, and network isolation.
 - Plugin signing: Ed25519 signature verification for subprocess plugin binaries. Configurable via `[security]` with `trusted_keys` (PEM public key files) and `allow_unsigned` (default true). Includes `SignFile`/`VerifyFile` library, PEM key marshaling, and `LoadTrustedKeys` for key management.
-- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management), tool/plugin CRUD (`tools:read`/`tools:write` scopes). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
+- External REST API: auth, rate limiting, CORS, TLS, health, read-only data endpoints, chat endpoint with SSE streaming, session deletion, approval CRUD, API key CRUD (runtime key management), tool/plugin CRUD (`tools:read`/`tools:write` scopes), browser profile/session/config endpoints (`browser:read`/`browser:write` scopes). Agent detail endpoint exposes `tool_names`, `persona_dir`, and `persona_sections`.
 - Approval workflows: TTL-based supervised approvals for user_update / create_skill / modify_schedule / install_tool directives, with Telegram inline keyboard buttons (Approve/Deny) and keyboard auto-removal on resolution.
-- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, permission tier inspection, tool/plugin management (add/remove/list), and KV store operations (get/set/delete/list/set_nx).
+- Config MCP server: per-agent in-process MCP tools for skill listing/creation, schedule listing/addition, permission tier inspection, tool/plugin management (add/remove/list), KV store operations (get/set/delete/list/set_nx), and browser profile management (list/info/clear/delete).
 - Tool lifecycle management: runtime add/remove of MCP tools and plugins via LifecycleManager, with atomic TOML config persistence, max_tools limit, and thread-safe tool.Manager.
-- Web dashboard: embedded Svelte SPA (10 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD. Tools page supports add/remove of MCP tools and plugins.
+- Web dashboard: embedded Svelte SPA (11 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, Agents, API Keys) served via the API server. Chat page supports SSE streaming. API Keys page supports full CRUD. Tools page supports add/remove of MCP tools and plugins. Browser page shows active sessions, profile management (delete with confirmation), and read-only configuration summary.
 - CI/CD: golangci-lint (with gosec SAST), govulncheck, cosign signing, SBOM generation, GoReleaser with .deb/.rpm/.tar.gz, Homebrew tap, Docker (ghcr.io) with SLSA provenance. Web UI is built in CI before any Go step.
 - Security scanning: dedicated `security.yml` workflow with gosec (SAST, SARIF → GitHub Security tab), Gitleaks (secret detection), and Grype (Anchore, filesystem vulnerability scan). Grype container image scan in `release.yml` before cosign signing. Dependabot for gomod/npm/docker/github-actions weekly updates.
 - Documentation website: Hugo + Doks (Thulite) under `/website`, with getting-started guides, concept docs, and reference pages. GitHub Pages CI via `deploy-website.yml`. One-liner install script at `website/static/install.sh`.
@@ -314,9 +314,9 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
 - Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path (also used as Dockerfile entrypoint default), Helm chart (`deploy/helm/denkeeper/`) with Ingress support, non-root Docker container (UID 65534), docker-compose with port mapping.
 - Web search & fetch: in-process Web MCP server (`internal/webmcp/`) with `web_search` and `web_fetch` tools. Search providers: DuckDuckGo (default) and Tavily. Fetch: built-in HTML-to-Markdown, optional Jina Reader fallback, configurable robots.txt/agents.txt compliance. Config: `[web]` section with `DENKEEPER_SEARCH_API_KEY` env override.
-- Browser automation: `[browser]` section with auto-registration as Docker-based MCP server via shared sandbox runtime. Image: `ghcr.io/temikus/denkeeper-browser:latest`. Tmpfs (`/tmp:size=64m`) and ShmSize (`64m`) for read-only container + Chromium compatibility. Per-agent persistent profile directories (`data/browser-profiles/`) bind-mounted at `/data/profile`. URL allowlist (`[browser.url_allowlist]`) with wildcard domain matching and link-local/metadata blocking (`internal/browser/allowlist.go`). Per-agent override via `browser_url_allowlist` in `[[agents]]`. Browser orchestrator skill (`agents/default/skills/browser-orchestrator.md`) for multi-step workflows.
+- Browser automation: `[browser]` section with auto-registration as Docker-based MCP server via shared sandbox runtime. Image: `ghcr.io/temikus/denkeeper-browser:latest`. Tmpfs (`/tmp:size=64m`) and ShmSize (`64m`) for read-only container + Chromium compatibility. Per-agent persistent profile directories (`data/browser-profiles/`) bind-mounted at `/data/profile`. URL allowlist (`[browser.url_allowlist]`) with wildcard domain matching and link-local/metadata blocking (`internal/browser/allowlist.go`). Per-agent override via `browser_url_allowlist` in `[[agents]]`. Browser orchestrator skill (`agents/default/skills/browser-orchestrator.md`) for multi-step workflows. Profile management via `ProfileService` (`internal/browser/profile.go`) — shared between Config MCP tools and REST API, with cookie domain extraction from Chromium SQLite DB.
 - Browser image: separate repo [`Temikus/denkeeper-browser`](https://github.com/Temikus/denkeeper-browser) — hardened Docker image wrapping `@playwright/mcp` with a custom MCP server that proxies all upstream Playwright tools and adds `browser_extract_text` (Mozilla Readability + Markdown conversion + form extraction) and `browser_extract_html` (CSS selector-based). Non-root user (UID 10001), multi-arch (amd64/arm64), cosign-signed with SLSA attestations.
 - Screenshot-to-text: `browser_extract_text` MCP tool in the browser image provides readability-based DOM extraction for non-vision LLMs. Supports `mode` (readability/all/auto), `include_forms`, `selector` scoping, and `max_length` truncation. Returns Markdown-formatted content. Auto mode tries Readability first, falls back to all visible text for SPAs/dashboards.
 - Cyclomatic complexity: gocyclo threshold lowered from 20 to 15. All non-test functions ≤ 15.
-- Next: Browser REST API endpoints (profile/session management) and dashboard Browser tab. See PRD §19.
+- Next: See PRD §19 for full roadmap. Browser automation (Phase 6) is complete.
 - See `design/denkeeper-prd.md` for the full roadmap.

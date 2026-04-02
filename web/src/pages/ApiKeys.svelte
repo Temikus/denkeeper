@@ -35,6 +35,7 @@
     { name: 'Schedules', desc: 'View scheduled tasks', levels: ['none', 'read'], scopes: { read: ['schedules:read'] } },
     { name: 'Approvals', desc: 'Manage approval workflows', levels: ['none', 'read', 'readwrite'], scopes: { read: ['approvals:read'], readwrite: ['approvals:read', 'approvals:write'] } },
     { name: 'Tools', desc: 'Manage MCP tools and plugins', levels: ['none', 'read', 'readwrite'], scopes: { read: ['tools:read'], readwrite: ['tools:read', 'tools:write'] } },
+    { name: 'Browser', desc: 'Manage browser profiles and sessions', levels: ['none', 'read', 'readwrite'], scopes: { read: ['browser:read'], readwrite: ['browser:read', 'browser:write'] } },
   ]
 
   // Track permission level per resource group

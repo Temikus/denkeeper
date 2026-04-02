@@ -12,6 +12,7 @@
     { id: 'schedules', label: 'Schedules' },
     { id: 'skills',    label: 'Skills' },
     { id: 'tools',     label: 'Tools' },
+    { id: 'browser',   label: 'Browser' },
     { id: 'keys',      label: 'API Keys' },
   ]
 

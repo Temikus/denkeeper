@@ -44,6 +44,9 @@ const (
 
 	// ActionKindModifyConfig is a request to change a runtime configuration setting (e.g. fallback rules).
 	ActionKindModifyConfig ActionKind = "modify_config"
+
+	// ActionKindBrowserProfile is a request to clear or delete a browser profile.
+	ActionKindBrowserProfile ActionKind = "browser_profile"
 )
 
 // Request is the persisted record of a pending or resolved approval.

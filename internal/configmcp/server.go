@@ -17,6 +17,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -69,6 +70,10 @@ type Deps struct {
 	// SetFallbacks replaces the LLM router's fallback rule list. If nil,
 	// set_fallback is disabled.
 	SetFallbacks func(rules []FallbackRuleInput)
+
+	// BrowserProfiles is the shared browser profile service. If nil,
+	// browser_profile_* tools are disabled.
+	BrowserProfiles *browser.ProfileService
 
 	Logger *slog.Logger
 }

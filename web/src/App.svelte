@@ -11,6 +11,7 @@
   import Skills from './pages/Skills.svelte'
   import Chat from './pages/Chat.svelte'
   import Tools from './pages/Tools.svelte'
+  import Browser from './pages/Browser.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -37,6 +38,8 @@
         <Skills />
       {:else if route === 'tools'}
         <Tools />
+      {:else if route === 'browser'}
+        <Browser />
       {:else if route === 'chat'}
         <Chat />
       {:else if route === 'keys'}

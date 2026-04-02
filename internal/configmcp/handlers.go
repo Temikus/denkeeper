@@ -205,6 +205,11 @@ func (s *Server) registerTools() {
 	if s.deps.KVStore != nil {
 		s.registerKVTools()
 	}
+
+	// Browser profile tools (registered only when browser automation is enabled).
+	if s.deps.BrowserProfiles != nil {
+		s.registerBrowserTools()
+	}
 }
 
 // --------------------------------------------------------------------------

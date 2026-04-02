@@ -17,6 +17,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -30,10 +31,11 @@ type Deps struct {
 	CostTracker  *llm.CostTracker
 	Memory       agent.MemoryStore
 	Config       *config.Config
-	Approvals    *approval.Manager      // nil = approval endpoints return 503
-	LifecycleMgr *tool.LifecycleManager // nil = tool CRUD endpoints return 503
-	WebHandler   http.Handler           // nil = no web dashboard served
-	KeyStore     *KeyStore              // nil = API key CRUD endpoints return 503
+	Approvals       *approval.Manager       // nil = approval endpoints return 503
+	LifecycleMgr    *tool.LifecycleManager  // nil = tool CRUD endpoints return 503
+	BrowserProfiles *browser.ProfileService // nil = browser endpoints return 503
+	WebHandler      http.Handler            // nil = no web dashboard served
+	KeyStore        *KeyStore               // nil = API key CRUD endpoints return 503
 }
 
 // Server is the external REST API server.
@@ -100,6 +102,13 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/plugins/{name}", s.RequireScope("tools:read", s.handleGetPlugin))
 	mux.HandleFunc("POST /api/v1/plugins", s.RequireScope("tools:write", s.handleAddPlugin))
 	mux.HandleFunc("DELETE /api/v1/plugins/{name}", s.RequireScope("tools:write", s.handleRemovePlugin))
+
+	// Browser profile and session endpoints.
+	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))
+	mux.HandleFunc("GET /api/v1/browser/profiles/{name}", s.RequireScope("browser:read", s.handleGetBrowserProfile))
+	mux.HandleFunc("DELETE /api/v1/browser/profiles/{name}", s.RequireScope("browser:write", s.handleDeleteBrowserProfile))
+	mux.HandleFunc("GET /api/v1/browser/sessions", s.RequireScope("browser:read", s.handleListBrowserSessions))
+	mux.HandleFunc("GET /api/v1/browser/config", s.RequireScope("browser:read", s.handleBrowserConfig))
 
 	// API key management endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
@@ -901,6 +910,8 @@ var ValidScopes = map[string]struct{}{
 	"approvals:write": {},
 	"tools:read":      {},
 	"tools:write":     {},
+	"browser:read":    {},
+	"browser:write":   {},
 	"health":          {},
 }
 
@@ -918,6 +929,98 @@ func ValidateKeyInput(name string, scopes []string) error {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Browser profile & session handlers
+// ---------------------------------------------------------------------------
+
+// browserRequired writes 503 when the BrowserProfiles service is not configured.
+func (s *Server) browserRequired(w http.ResponseWriter) bool {
+	if s.deps.BrowserProfiles == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser automation not configured"})
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleListBrowserProfiles(w http.ResponseWriter, r *http.Request) {
+	if !s.browserRequired(w) {
+		return
+	}
+	profiles, err := s.deps.BrowserProfiles.List(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleGetBrowserProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.browserRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	info, err := s.deps.BrowserProfiles.Info(r.Context(), name)
+	if err != nil {
+		if err == browser.ErrProfileNotFound {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) handleDeleteBrowserProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.browserRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.BrowserProfiles.Delete(r.Context(), name); err != nil {
+		if err == browser.ErrProfileNotFound {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "profile not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type browserSessionInfo struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	ToolCount int    `json:"tool_count"`
+}
+
+func (s *Server) handleListBrowserSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.browserRequired(w) {
+		return
+	}
+	var sessions []browserSessionInfo
+	if s.deps.LifecycleMgr != nil {
+		info, ok := s.deps.LifecycleMgr.ToolManager().ServerInfo("browser")
+		if ok {
+			sessions = append(sessions, browserSessionInfo{
+				Name:      "browser",
+				Status:    info.Status,
+				ToolCount: len(info.ToolNames),
+			})
+		}
+	}
+	if sessions == nil {
+		sessions = []browserSessionInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func (s *Server) handleBrowserConfig(w http.ResponseWriter, _ *http.Request) {
+	if !s.browserRequired(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.Config.Browser)
 }
 
 // keyStoreRequired writes 503 when the KeyStore is not configured.

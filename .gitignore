@@ -3,6 +3,7 @@ pkg/*
 !pkg/.gitkeep
 
 # Binaries
+/denkeeper
 *.exe
 *.dll
 *.so
