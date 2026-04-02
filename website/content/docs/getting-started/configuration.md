@@ -30,6 +30,7 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 | `[llm.openrouter]` | OpenRouter API key |
 | `[llm.anthropic]` | Direct Anthropic API key |
 | `[llm.ollama]` | Ollama base URL |
+| `[llm.openai]` | OpenAI-compatible API key and endpoint |
 | `[[llm.fallback]]` | Fallback strategies (low funds, rate limit, error) |
 | `[session]` | Default permission tier |
 | `[[agents]]` | Multi-agent definitions |
@@ -58,6 +59,8 @@ Secrets and select config fields can be set via `DENKEEPER_*` environment variab
 | `DENKEEPER_LLM_ANTHROPIC_API_KEY` | `llm.anthropic.api_key` |
 | `DENKEEPER_LLM_ANTHROPIC_BASE_URL` | `llm.anthropic.base_url` |
 | `DENKEEPER_LLM_OLLAMA_BASE_URL` | `llm.ollama.base_url` |
+| `DENKEEPER_LLM_OPENAI_API_KEY` | `llm.openai.api_key` |
+| `DENKEEPER_LLM_OPENAI_BASE_URL` | `llm.openai.base_url` |
 | `DENKEEPER_VOICE_OPENAI_API_KEY` | `voice.openai.api_key` |
 | `DENKEEPER_LOG_LEVEL` | `log.level` |
 | `DENKEEPER_LOG_FORMAT` | `log.format` |

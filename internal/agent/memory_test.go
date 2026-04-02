@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMemoryStore_GetOrCreateConversation(t *testing.T) {
@@ -281,5 +282,119 @@ func TestMemoryStore_MultipleConversations(t *testing.T) {
 	}
 	if len(got2) != 1 || got2[0].Content != "msg for conv2" {
 		t.Errorf("conv2 messages leaked or wrong: %+v", got2)
+	}
+}
+
+func TestConversationCost_Sum(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "cost-test")
+
+	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi", Cost: 0.001})
+	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hey", Cost: 0.002})
+	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "bye", Cost: 0.003})
+
+	cost, err := store.ConversationCost(ctx, convID)
+	if err != nil {
+		t.Fatalf("ConversationCost: %v", err)
+	}
+	if cost < 0.005 || cost > 0.007 {
+		t.Errorf("cost = %f, want ~0.006", cost)
+	}
+}
+
+func TestConversationCost_NoMessages(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "empty-cost")
+
+	cost, err := store.ConversationCost(ctx, convID)
+	if err != nil {
+		t.Fatalf("ConversationCost: %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("cost = %f, want 0", cost)
+	}
+}
+
+func TestPruneConversations_RemovesOld(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	// Create two conversations: one old, one new.
+	oldID, _ := store.GetOrCreateConversation(ctx, "telegram", "old-conv")
+	_ = store.AddMessage(ctx, oldID, StoredMessage{Role: "user", Content: "old msg"})
+
+	// Backdate the old conversation.
+	_, _ = store.db.ExecContext(ctx, `UPDATE conversations SET created_at = datetime('now', '-60 days') WHERE id = ?`, oldID)
+
+	newID, _ := store.GetOrCreateConversation(ctx, "telegram", "new-conv")
+	_ = store.AddMessage(ctx, newID, StoredMessage{Role: "user", Content: "new msg"})
+
+	// Prune conversations older than 30 days.
+	cutoff := time.Now().Add(-30 * 24 * time.Hour) // 30 days
+	pruned, err := store.PruneConversations(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneConversations: %v", err)
+	}
+	if pruned != 1 {
+		t.Errorf("pruned = %d, want 1", pruned)
+	}
+
+	// Verify old is gone, new remains.
+	convos, _ := store.ListConversations(ctx)
+	if len(convos) != 1 {
+		t.Fatalf("remaining conversations = %d, want 1", len(convos))
+	}
+	if convos[0].ID != newID {
+		t.Errorf("remaining conversation = %q, want %q", convos[0].ID, newID)
+	}
+
+	// Verify old messages are gone too.
+	msgs, _ := store.GetMessages(ctx, oldID, 100)
+	if len(msgs) != 0 {
+		t.Errorf("old messages remain: %d", len(msgs))
+	}
+}
+
+func TestCountConversationsBefore(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "telegram", "a")
+	_, _ = store.db.ExecContext(ctx, `UPDATE conversations SET created_at = datetime('now', '-60 days') WHERE id = 'telegram:a'`)
+
+	_, _ = store.GetOrCreateConversation(ctx, "telegram", "b")
+	_, _ = store.db.ExecContext(ctx, `UPDATE conversations SET created_at = datetime('now', '-60 days') WHERE id = 'telegram:b'`)
+
+	_, _ = store.GetOrCreateConversation(ctx, "telegram", "c") // recent
+
+	cutoff := time.Now().Add(-30 * 24 * time.Hour) // 30 days
+	count, err := store.CountConversationsBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("CountConversationsBefore: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
 	}
 }

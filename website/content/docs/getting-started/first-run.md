@@ -18,7 +18,7 @@ denkeeper setup
 
 This walks you through:
 
-1. Choosing an LLM provider (OpenRouter, Anthropic, or Ollama)
+1. Choosing an LLM provider (OpenRouter, Anthropic, Ollama, or OpenAI)
 2. Entering your API key
 3. Configuring a Telegram bot token
 4. Setting your Telegram user ID for the allowlist

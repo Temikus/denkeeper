@@ -234,6 +234,29 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 - Config: `[llm.anthropic]` with `api_key` and optional `base_url` (for Bedrock/Vertex).
 - When `default_provider = "anthropic"`, OpenRouter API key is not required.
 
+## OpenAI-Compatible LLM Provider
+
+`internal/llm/openai/` implements `llm.Provider` for the OpenAI Chat Completions API.
+
+- Raw HTTP implementation (same pattern as OpenRouter/Ollama — OpenAI wire format).
+- Compatible with any OpenAI-format endpoint: OpenAI direct, Azure OpenAI, vLLM, LiteLLM.
+- Auth: `Authorization: Bearer {key}` + optional `OpenAI-Organization` header.
+- Config: `[llm.openai]` with `api_key`, optional `base_url` (default `https://api.openai.com/v1`), optional `organization`.
+- Env overrides: `DENKEEPER_LLM_OPENAI_API_KEY`, `DENKEEPER_LLM_OPENAI_BASE_URL`.
+- Validation: `needsOpenAI()` checks both default provider and fallback rules (same pattern as `needsOpenRouter`).
+
+## Session Management CLI
+
+`cmd/denkeeper/sessions.go` provides offline session inspection and maintenance.
+
+- `denkeeper sessions list` — tabular view of all sessions with adapter, message count, cost, creation date.
+- `denkeeper sessions show <id>` — message thread with timestamps and content preview.
+- `denkeeper sessions delete <id> [--yes]` — delete with confirmation prompt.
+- `denkeeper sessions export <id> [--format text|json]` — full transcript to stdout.
+- `denkeeper sessions prune --older-than <duration> [--yes]` — bulk delete old sessions.
+- Uses `resolveDBPath()` (same as `keys` command) to locate the SQLite database.
+- Three concrete methods on `SQLiteMemoryStore`: `ConversationCost`, `CountConversationsBefore`, `PruneConversations` (not on the interface).
+
 ## Tool Lifecycle Management
 
 `internal/tool/lifecycle.go` provides runtime add/remove of MCP tools and plugins without restarting the process.
@@ -271,7 +294,7 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 
 - Multi-agent routing: Dispatcher routes messages to named agents via adapter bindings. Each agent has its own persona, skills, LLM model, and permission tier.
 - Three permission tiers: autonomous, supervised, restricted (configurable via TOML, per-agent or global).
-- LLM providers: OpenRouter (production), Ollama (local), Anthropic (direct). Telegram and Discord adapters.
+- LLM providers: OpenRouter (production), Ollama (local), Anthropic (direct), OpenAI (direct and compatible endpoints — Azure OpenAI, vLLM, LiteLLM). Telegram and Discord adapters.
 - Persona system (load/write), skill system (trigger-based filtering, per-agent merge), scheduler (per-schedule agent targeting, session modes), fallback strategies, cost tracking, voice (STT/TTS) are all implemented.
 - MCP tool support: engine spawns MCP stdio servers at startup, discovers tools, passes them to the LLM, executes tool calls in an agentic loop (serial).
 - Plugin system: subprocess plugins and sandboxed plugins with capability declarations. Sandboxed plugins use the `sandbox.Runtime` interface with two backends: DockerRuntime (default, `docker run -i --rm`) and KubernetesRuntime (creates ephemeral Pods with init-container network isolation, PSA labels, and optional gVisor/Kata RuntimeClass). Both hardened with dropped capabilities, read-only root FS, and network isolation.
@@ -286,6 +309,7 @@ Tools page (`/dashboard/tools`) with MCP tools and plugins tables, add/remove di
 - Documentation website: Hugo + Doks (Thulite) under `/website`, with getting-started guides, concept docs, and reference pages. GitHub Pages CI via `deploy-website.yml`. One-liner install script at `website/static/install.sh`.
 - systemd service: hardened unit file with security directives, pre/post install scripts, wired into GoReleaser nfpm packaging.
 - CLI plugin signing: `denkeeper plugin keygen <name>` (generate Ed25519 key pair), `denkeeper plugin sign <binary> -k <key>` (create detached `.sig`), `denkeeper plugin verify <binary> -k <pubkey>` (verify signature). Wraps `internal/security/signing.go`.
+- CLI session management: `denkeeper sessions [list|show|delete|export|prune]` for offline inspection, export, and maintenance of conversation sessions. Three concrete methods on `SQLiteMemoryStore` (`ConversationCost`, `CountConversationsBefore`, `PruneConversations`).
 - Agent KV store: per-agent key-value storage with TTL (`internal/kv/`), exposed as five Config MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`). SQLite-backed (shared WAL DB), background cleanup worker, configurable limits (`[kv]` section).
 - Config MCP tools: `schedule_update` (partial updates with unregister/re-register), `set_fallback` (replace LLM router fallback rules at runtime), `get_cost_summary` (read-only cost tracker snapshot). All respect permission tiers.
 - Deployment improvements: env var overrides (`DENKEEPER_*`) for secrets and key config fields, `DENKEEPER_CONFIG` for config path (also used as Dockerfile entrypoint default), Helm chart (`deploy/helm/denkeeper/`) with Ingress support, non-root Docker container (UID 65534), docker-compose with port mapping.

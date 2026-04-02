@@ -2040,6 +2040,8 @@ func TestApplyEnvOverrides_AllSecrets(t *testing.T) {
 	t.Setenv("DENKEEPER_LLM_MODEL", "claude-opus")
 	t.Setenv("DENKEEPER_LLM_ANTHROPIC_BASE_URL", "https://custom.api")
 	t.Setenv("DENKEEPER_LLM_OLLAMA_BASE_URL", "http://ollama:11434")
+	t.Setenv("DENKEEPER_LLM_OPENAI_API_KEY", "oai-llm-key")
+	t.Setenv("DENKEEPER_LLM_OPENAI_BASE_URL", "https://custom.openai.example.com/v1")
 	t.Setenv("DENKEEPER_LOG_LEVEL", "debug")
 	t.Setenv("DENKEEPER_LOG_FORMAT", "json")
 	t.Setenv("DENKEEPER_MEMORY_DB_PATH", "/custom/db.sqlite")
@@ -2064,6 +2066,8 @@ func TestApplyEnvOverrides_AllSecrets(t *testing.T) {
 		{"LLM.DefaultModel", cfg.LLM.DefaultModel, "claude-opus"},
 		{"LLM.Anthropic.BaseURL", cfg.LLM.Anthropic.BaseURL, "https://custom.api"},
 		{"LLM.Ollama.BaseURL", cfg.LLM.Ollama.BaseURL, "http://ollama:11434"},
+		{"LLM.OpenAI.APIKey", cfg.LLM.OpenAI.APIKey, "oai-llm-key"},
+		{"LLM.OpenAI.BaseURL", cfg.LLM.OpenAI.BaseURL, "https://custom.openai.example.com/v1"},
 		{"Log.Level", cfg.Log.Level, "debug"},
 		{"Log.Format", cfg.Log.Format, "json"},
 		{"Memory.DBPath", cfg.Memory.DBPath, "/custom/db.sqlite"},
@@ -2404,5 +2408,114 @@ browser_url_allowlist = ["github.com", "*.atlassian.net"]
 	}
 	if workAgent.BrowserURLAllowlist[0] != "github.com" {
 		t.Errorf("browser_url_allowlist[0] = %q, want github.com", workAgent.BrowserURLAllowlist[0])
+	}
+}
+
+func TestParse_OpenAIProvider_Valid(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "openai"
+
+[llm.openai]
+api_key = "sk-test-key"
+base_url = "https://custom.openai.example.com/v1"
+organization = "org-test123"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for openai provider config: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "openai" {
+		t.Errorf("default_provider = %q, want openai", cfg.LLM.DefaultProvider)
+	}
+	if cfg.LLM.OpenAI.APIKey != "sk-test-key" {
+		t.Errorf("openai api_key = %q, want sk-test-key", cfg.LLM.OpenAI.APIKey)
+	}
+	if cfg.LLM.OpenAI.BaseURL != "https://custom.openai.example.com/v1" {
+		t.Errorf("openai base_url = %q, want https://custom.openai.example.com/v1", cfg.LLM.OpenAI.BaseURL)
+	}
+	if cfg.LLM.OpenAI.Organization != "org-test123" {
+		t.Errorf("openai organization = %q, want org-test123", cfg.LLM.OpenAI.Organization)
+	}
+}
+
+func TestParse_OpenAIProvider_MissingAPIKey(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "openai"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for openai provider without api_key")
+	}
+	if !strings.Contains(err.Error(), "llm.openai.api_key") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_OpenAIProvider_NoOtherKeysRequired(t *testing.T) {
+	// When using openai provider, openrouter.api_key and anthropic.api_key should NOT be required.
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "openai"
+
+[llm.openai]
+api_key = "sk-test-key"
+`)
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error when other provider keys absent with openai provider: %v", err)
+	}
+}
+
+func TestParse_OpenAIProvider_FallbackRequiresKey(t *testing.T) {
+	// When openai appears as a fallback provider, its API key is required.
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "ollama"
+
+[[llm.fallback]]
+trigger = "error"
+action = "switch_provider"
+provider = "openai"
+model = "gpt-4o"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when openai is fallback provider without api_key")
+	}
+	if !strings.Contains(err.Error(), "llm.openai.api_key") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyEnvOverrides_OpenAI(t *testing.T) {
+	t.Setenv("DENKEEPER_LLM_OPENAI_API_KEY", "env-oai-key")
+	t.Setenv("DENKEEPER_LLM_OPENAI_BASE_URL", "https://env.openai.example.com/v1")
+
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+
+	if cfg.LLM.OpenAI.APIKey != "env-oai-key" {
+		t.Errorf("LLM.OpenAI.APIKey = %q, want env-oai-key", cfg.LLM.OpenAI.APIKey)
+	}
+	if cfg.LLM.OpenAI.BaseURL != "https://env.openai.example.com/v1" {
+		t.Errorf("LLM.OpenAI.BaseURL = %q, want https://env.openai.example.com/v1", cfg.LLM.OpenAI.BaseURL)
 	}
 }

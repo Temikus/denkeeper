@@ -26,6 +26,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
+	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -75,7 +76,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -97,6 +98,7 @@ type llmClients struct {
 	openRouter *openrouter.Client
 	ollama     *ollama.Client
 	anthropic  *anthropicllm.Client
+	openAI     *openaillm.Client
 	cost       *llm.CostTracker
 	fallbacks  []llm.FallbackRule
 }
@@ -187,6 +189,14 @@ func initLLMClients(cfg *config.Config) llmClients {
 	if cfg.LLM.Anthropic.APIKey != "" {
 		anthropicClient = anthropicllm.New(cfg.LLM.Anthropic.APIKey)
 	}
+	var openAIClient *openaillm.Client
+	if cfg.LLM.OpenAI.APIKey != "" {
+		if cfg.LLM.OpenAI.BaseURL != "" {
+			openAIClient = openaillm.NewWithBaseURL(cfg.LLM.OpenAI.APIKey, cfg.LLM.OpenAI.BaseURL)
+		} else {
+			openAIClient = openaillm.New(cfg.LLM.OpenAI.APIKey)
+		}
+	}
 
 	var fallbackRules []llm.FallbackRule
 	if len(cfg.LLM.Fallbacks) > 0 {
@@ -208,6 +218,7 @@ func initLLMClients(cfg *config.Config) llmClients {
 		openRouter: orClient,
 		ollama:     ollamaClient,
 		anthropic:  anthropicClient,
+		openAI:     openAIClient,
 		cost:       llm.NewCostTracker(cfg.LLM.MaxCostPerSession),
 		fallbacks:  fallbackRules,
 	}
@@ -600,6 +611,9 @@ func buildAgentRouter(model string, abc agentBuildCtx) *llm.Router {
 	}
 	if abc.llm.anthropic != nil {
 		router.RegisterProvider(abc.llm.anthropic)
+	}
+	if abc.llm.openAI != nil {
+		router.RegisterProvider(abc.llm.openAI)
 	}
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)

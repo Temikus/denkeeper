@@ -72,6 +72,71 @@ Revocation is immediate — the key stops working as soon as the command complet
 
 Permanently removes a revoked key from the database. Only revoked keys can be deleted.
 
+## `denkeeper sessions`
+
+Manage conversation sessions stored in the memory database.
+
+### `denkeeper sessions list`
+
+List all sessions with metadata.
+
+```bash
+denkeeper sessions list
+denkeeper sessions list --config /path/to/denkeeper.toml
+```
+
+Displays a table with session ID, adapter, external ID, message count, cost, and creation date.
+
+### `denkeeper sessions show <session-id>`
+
+Display all messages in a session.
+
+```bash
+denkeeper sessions show "telegram:12345"
+```
+
+Shows each message with timestamp, role, and content (truncated to 120 characters).
+
+### `denkeeper sessions delete <session-id>`
+
+Delete a session and all its messages.
+
+```bash
+denkeeper sessions delete "telegram:12345"
+denkeeper sessions delete "telegram:12345" --yes
+```
+
+| Flag | Description |
+|---|---|
+| `--yes`, `-y` | Skip confirmation prompt |
+
+### `denkeeper sessions export <session-id>`
+
+Export a session transcript to stdout.
+
+```bash
+denkeeper sessions export "telegram:12345"
+denkeeper sessions export "telegram:12345" --format json > session.json
+```
+
+| Flag | Description |
+|---|---|
+| `--format`, `-f` | Output format: `text` (default) or `json` |
+
+### `denkeeper sessions prune`
+
+Delete sessions older than a specified duration.
+
+```bash
+denkeeper sessions prune --older-than 720h
+denkeeper sessions prune --older-than 720h --yes
+```
+
+| Flag | Description |
+|---|---|
+| `--older-than` | Duration threshold (e.g., `720h` for 30 days). Required. |
+| `--yes`, `-y` | Skip confirmation prompt |
+
 ## `denkeeper plugin`
 
 Manage Ed25519 plugin signing. These commands help you sign and verify plugin binaries for secure distribution.

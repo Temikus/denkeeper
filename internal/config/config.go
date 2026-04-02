@@ -282,6 +282,7 @@ type LLMConfig struct {
 	OpenRouter        OpenRouterConfig `toml:"openrouter"`
 	Ollama            OllamaConfig     `toml:"ollama"`
 	Anthropic         AnthropicConfig  `toml:"anthropic"`
+	OpenAI            OpenAIConfig     `toml:"openai"`
 	MaxCostPerSession float64          `toml:"max_cost_per_session"`
 	Fallbacks         []FallbackConfig `toml:"fallback"`
 }
@@ -292,6 +293,17 @@ type AnthropicConfig struct {
 	APIKey string `toml:"api_key"`
 	// BaseURL overrides the default API endpoint. Useful for Bedrock/Vertex proxies.
 	BaseURL string `toml:"base_url"`
+}
+
+// OpenAIConfig configures the OpenAI-compatible LLM provider.
+// Works with OpenAI, Azure OpenAI, vLLM, LiteLLM, and any OpenAI-format endpoint.
+type OpenAIConfig struct {
+	// APIKey is the OpenAI API key. Required to enable the provider.
+	APIKey string `toml:"api_key"`
+	// BaseURL overrides the default API endpoint. Useful for Azure, vLLM, etc.
+	BaseURL string `toml:"base_url"`
+	// Organization is the optional OpenAI organization ID.
+	Organization string `toml:"organization"`
 }
 
 // FallbackConfig defines a single fallback rule for the LLM router.
@@ -545,6 +557,8 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_LLM_ANTHROPIC_API_KEY", &cfg.LLM.Anthropic.APIKey)
 	envOverride("DENKEEPER_LLM_ANTHROPIC_BASE_URL", &cfg.LLM.Anthropic.BaseURL)
 	envOverride("DENKEEPER_LLM_OLLAMA_BASE_URL", &cfg.LLM.Ollama.BaseURL)
+	envOverride("DENKEEPER_LLM_OPENAI_API_KEY", &cfg.LLM.OpenAI.APIKey)
+	envOverride("DENKEEPER_LLM_OPENAI_BASE_URL", &cfg.LLM.OpenAI.BaseURL)
 	envOverride("DENKEEPER_VOICE_OPENAI_API_KEY", &cfg.Voice.OpenAI.APIKey)
 	envOverride("DENKEEPER_LOG_LEVEL", &cfg.Log.Level)
 	envOverride("DENKEEPER_LOG_FORMAT", &cfg.Log.Format)
@@ -725,6 +739,20 @@ func needsAnthropic(cfg *Config) bool {
 	return cfg.LLM.DefaultProvider == "anthropic"
 }
 
+// needsOpenAI reports whether the config references the openai provider
+// in either the default provider or any fallback rule, meaning an API key is required.
+func needsOpenAI(cfg *Config) bool {
+	if cfg.LLM.DefaultProvider == "openai" {
+		return true
+	}
+	for _, f := range cfg.LLM.Fallbacks {
+		if f.Provider == "openai" {
+			return true
+		}
+	}
+	return false
+}
+
 // validateAdaptersAndProviders checks adapter tokens, allowed-user lists, and LLM provider keys.
 func validateAdaptersAndProviders(cfg *Config) error {
 	if cfg.Telegram.Token != "" && len(cfg.Telegram.AllowedUsers) == 0 {
@@ -741,6 +769,9 @@ func validateAdaptersAndProviders(cfg *Config) error {
 	}
 	if needsAnthropic(cfg) && cfg.LLM.Anthropic.APIKey == "" {
 		return fmt.Errorf("config: llm.anthropic.api_key is required when using anthropic provider")
+	}
+	if needsOpenAI(cfg) && cfg.LLM.OpenAI.APIKey == "" {
+		return fmt.Errorf("config: llm.openai.api_key is required when using openai provider")
 	}
 	return nil
 }

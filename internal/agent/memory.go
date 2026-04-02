@@ -183,6 +183,44 @@ func (s *SQLiteMemoryStore) DeleteConversation(ctx context.Context, convID strin
 	return nil
 }
 
+// ConversationCost returns the total cost of all messages in a conversation.
+func (s *SQLiteMemoryStore) ConversationCost(ctx context.Context, convID string) (float64, error) {
+	var cost float64
+	err := s.db.GetContext(ctx, &cost,
+		`SELECT COALESCE(SUM(cost), 0) FROM messages WHERE conversation_id = ?`, convID)
+	if err != nil {
+		return 0, fmt.Errorf("computing conversation cost: %w", err)
+	}
+	return cost, nil
+}
+
+// CountConversationsBefore returns the number of conversations created before the given time.
+func (s *SQLiteMemoryStore) CountConversationsBefore(ctx context.Context, before time.Time) (int, error) {
+	var count int
+	err := s.db.GetContext(ctx, &count,
+		`SELECT COUNT(*) FROM conversations WHERE created_at < ?`, before)
+	if err != nil {
+		return 0, fmt.Errorf("counting old conversations: %w", err)
+	}
+	return count, nil
+}
+
+// PruneConversations deletes all conversations (and their messages) created before the given time.
+// Returns the number of conversations deleted.
+func (s *SQLiteMemoryStore) PruneConversations(ctx context.Context, before time.Time) (int, error) {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE created_at < ?)`, before); err != nil {
+		return 0, fmt.Errorf("deleting old messages: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations WHERE created_at < ?`, before)
+	if err != nil {
+		return 0, fmt.Errorf("deleting old conversations: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
 func (s *SQLiteMemoryStore) Close() error {
 	return s.db.Close()
 }

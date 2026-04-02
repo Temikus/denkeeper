@@ -28,7 +28,7 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `default_provider` | string | `"openrouter"` | `"openrouter"`, `"anthropic"`, or `"ollama"` |
+| `default_provider` | string | `"openrouter"` | `"openrouter"`, `"anthropic"`, `"ollama"`, or `"openai"` |
 | `default_model` | string | — | Model identifier (format depends on provider) |
 | `max_cost_per_session` | float | `0` (unlimited) | Maximum estimated cost per session in USD |
 
@@ -50,6 +50,16 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `base_url` | string | `"http://localhost:11434"` | Ollama server URL |
+
+## `[llm.openai]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `api_key` | string | *required* | OpenAI API key |
+| `base_url` | string | `"https://api.openai.com/v1"` | API endpoint override (for Azure OpenAI, vLLM, LiteLLM, etc.) |
+| `organization` | string | — | OpenAI organization ID (optional) |
+
+Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 
 ## `[[llm.fallback]]`
 
