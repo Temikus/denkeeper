@@ -172,7 +172,9 @@ type APIKeyConfig struct {
 
 	// Scopes controls what this key can access.
 	// Valid scopes: "chat", "sessions:read", "costs:read", "skills:read",
-	// "skills:write", "schedules:read", "schedules:write", "health", "admin".
+	// "skills:write", "schedules:read", "schedules:write", "approvals:read",
+	// "approvals:write", "tools:read", "tools:write", "browser:read",
+	// "browser:write", "health", "admin".
 	Scopes []string `toml:"scopes"`
 }
 
@@ -1007,6 +1009,7 @@ var validAPIScopes = map[string]bool{
 	"schedules:read": true, "schedules:write": true,
 	"approvals:read": true, "approvals:write": true,
 	"tools:read": true, "tools:write": true,
+	"browser:read": true, "browser:write": true,
 	"health": true, "admin": true,
 }
 
