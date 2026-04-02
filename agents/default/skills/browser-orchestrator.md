@@ -25,10 +25,22 @@ You have access to browser automation tools for interacting with web pages. Foll
 - After filling a form, screenshot to verify the values are correct before submitting.
 
 **If you do NOT support vision:**
-- Use `browser_extract_text` to read page content.
+- Use `browser_extract_text` to read page content. It returns Markdown-formatted text with preserved headings, lists, tables, and links.
 - Use `browser_extract_html` with a CSS selector when you need structural information.
 - Target elements by CSS selector or text content, not visual position.
 - After each action, use `browser_extract_text` to verify the page changed as expected.
+
+## Content Extraction
+
+`browser_extract_text` uses readability heuristics to extract clean article content, with an automatic fallback to all visible text for non-article pages (dashboards, SPAs, etc.).
+
+**Parameters:**
+- `mode`: `"auto"` (default, recommended) tries readability first, falls back to all-text. Use `"readability"` for articles or `"all"` for dashboards/SPAs.
+- `include_forms`: `true` (default) appends form field descriptions — labels, types, values, and submit buttons. Essential for form-filling tasks.
+- `selector`: CSS selector to scope extraction to a page region. Omit for the whole page.
+- `max_length`: truncates at 16000 chars by default. The response includes `truncated` and `total_length` fields for pagination.
+
+`browser_extract_html` returns raw HTML for a CSS selector — use it when you need precise DOM structure (e.g., parsing a table, scraping specific elements).
 
 ## Form Filling
 
@@ -65,7 +77,7 @@ When a task spans multiple pages (e.g., search → click result → extract data
 
 - **Be explicit with selectors**: Prefer `#id` or `[data-testid="..."]` over fragile class-based selectors.
 - **Wait before acting**: Use `browser_wait` for dynamic content rather than assuming the page is ready.
-- **Minimize screenshots**: Each screenshot is a large payload. Only screenshot when you need visual context.
+- **Extract text before screenshots**: Prefer `browser_extract_text` to reduce token usage; use screenshots only when layout/visual context matters.
 - **Close when done**: Always close the browser session to free resources.
 - **Respect rate limits**: Add reasonable pauses between rapid page loads to avoid being blocked.
 - **Report progress**: For long workflows, tell the user what step you're on.

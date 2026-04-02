@@ -487,7 +487,7 @@ Denkeeper is built in phases:
 - [x] Persistent browser profiles — per-agent profile storage with volume mounts
 - [x] URL allowlist enforcement — per-agent domain filtering with wildcard support, link-local/metadata blocking
 - [x] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns (vision + non-vision LLMs)
-- [ ] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
+- [x] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
 
 ## License
 
