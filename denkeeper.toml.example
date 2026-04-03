@@ -180,13 +180,15 @@ format = "text"
 # scopes = ["health", "costs:read"]
 
 # ---------------------------------------------------------------------------
-# Web Capabilities — Search & Fetch
+# Web Capabilities — Search & Fetch (ENABLED BY DEFAULT)
 # ---------------------------------------------------------------------------
 # Adds web_search and web_fetch MCP tools to every agent. Lightweight and
-# stateless — no Docker required.
+# stateless — no Docker required. Uses free DuckDuckGo search out of the box.
+#
+# Web tools are enabled by default. Set enabled = false to disable.
 
 # [web]
-# enabled = true
+# enabled = true                   # default: true (set to false to disable)
 
 # [web.search]
 # provider = "duckduckgo"          # "duckduckgo" (default, no key) or "tavily"
