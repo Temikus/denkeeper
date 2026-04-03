@@ -1,0 +1,302 @@
+/* ==========================================================================
+   Shared design-system classes for the Denkeeper dashboard.
+   Imported globally via App.svelte — every page can use these without
+   duplicating styles in component <style> blocks.
+   ========================================================================== */
+
+/* ---------- Buttons ------------------------------------------------------ */
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-ghost {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+.btn-ghost:hover { border-color: var(--text-muted); }
+
+.btn-sm {
+  background: var(--border);
+  border: none;
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  margin-right: 4px;
+  transition: background 0.15s;
+}
+.btn-sm:hover { background: var(--accent); color: #fff; }
+.btn-sm.danger:hover { background: var(--danger); }
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.btn-danger:hover:not(:disabled) { opacity: 0.85; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-save {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.btn-save:hover { background: var(--accent-hover); }
+.btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---------- Confirmation modal (destructive actions) --------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fade-in 0.15s ease;
+}
+
+.confirm-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 28px;
+  width: 460px;
+  max-width: 90vw;
+  animation: scale-in 0.15s ease;
+}
+.confirm-modal h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+.confirm-modal p  { color: var(--text-muted); margin-bottom: 20px; line-height: 1.6; }
+.confirm-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---------- Tables ------------------------------------------------------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th,
+.table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.table th {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ---------- Inline edit panel -------------------------------------------- */
+
+.inline-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease;
+}
+.inline-panel.open {
+  grid-template-rows: 1fr;
+}
+.inline-panel-inner {
+  overflow: hidden;
+}
+
+.inline-form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.inline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.inline-form input[type="text"],
+.inline-form input[type="number"],
+.inline-form select,
+.inline-form textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.inline-form input[type="text"]:focus,
+.inline-form input[type="number"]:focus,
+.inline-form select:focus,
+.inline-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.inline-form input:disabled,
+.inline-form select:disabled,
+.inline-form textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.inline-form textarea {
+  font-family: monospace;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 120px;
+}
+.inline-form .form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.inline-form .row {
+  display: flex;
+  gap: 16px;
+}
+.inline-form .row label {
+  flex: 1;
+}
+.inline-form .toggle-row {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+  cursor: pointer;
+}
+.inline-form .toggle-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+.inline-form .hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---------- Utilities ---------------------------------------------------- */
+
+.muted { color: var(--text-muted); }
+.mono  { font-family: monospace; }
+.hint  { font-size: 11px; color: var(--text-muted); }
+
+.pill {
+  display: inline-block;
+  background: var(--border);
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  margin: 2px 2px 2px 0;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.status-dot.green { background: var(--success); }
+.status-dot.red   { background: var(--danger); }
+.status-dot.grey  { background: var(--text-muted); }
+
+.save-ok {
+  font-size: 12px;
+  color: var(--success);
+  font-weight: 500;
+}
+
+/* ---------- Page layout -------------------------------------------------- */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* ---------- Banners ------------------------------------------------------ */
+
+.banner {
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.banner.error {
+  background: rgba(224, 92, 110, 0.15);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.banner.success {
+  background: rgba(76, 175, 125, 0.12);
+  border: 1px solid var(--success);
+  color: var(--text);
+}
+.banner.warning {
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  color: var(--text);
+}
+
+/* ---------- Animations --------------------------------------------------- */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* ---------- Reduced motion ----------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

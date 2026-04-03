@@ -17,6 +17,7 @@
   import KV from './pages/KV.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
   import Costs from './pages/Costs.svelte'
+  import './shared.css'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
