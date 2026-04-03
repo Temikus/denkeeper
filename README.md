@@ -127,7 +127,10 @@ cosign verify \
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
 - **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
 - **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, approval CRUD, tool/plugin CRUD, and API key management
+- **Dashboard authentication** — password login (bcrypt), OAuth2/OIDC SSO (PKCE), session cookies (AES-256-GCM)
+- **OpenTelemetry observability** — Prometheus `/metrics` endpoint and optional OTLP trace export
 - **CLI plugin signing** — `denkeeper plugin keygen/sign/verify` commands for Ed25519 plugin binary signing and verification
+- **CLI password hashing** — `denkeeper passwd` generates a bcrypt hash for dashboard password login
 - **Personality** — ships with a [`SOUL.md`](agents/default/SOUL.md) that gives the agent character (editable)
 
 ## Architecture
@@ -201,6 +204,8 @@ Key sections:
 | `[security]` | Ed25519 plugin signing config (`trusted_keys`, `allow_unsigned`) |
 | `[voice]` | STT/TTS configuration (OpenAI) |
 | `[api]` | External REST API (listen addr, TLS, CORS, rate limiting, API keys with scopes) |
+| `[api.auth]` | Dashboard authentication (bcrypt password, session secret, OIDC SSO) |
+| `[otel]` | OpenTelemetry observability (Prometheus metrics, OTLP trace export) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
 | `[memory]` | SQLite database path |
@@ -228,6 +233,10 @@ Secrets and select config fields can be set via environment variables, which tak
 | `DENKEEPER_API_ENABLED` | `api.enabled` (accepts `"true"` or `"1"`) |
 | `DENKEEPER_API_LISTEN` | `api.listen` |
 | `DENKEEPER_SESSION_TIER` | `session.tier` |
+| `DENKEEPER_API_AUTH_SESSION_SECRET` | `api.auth.session_secret` (AES-256 hex key) |
+| `DENKEEPER_OIDC_CLIENT_ID` | `api.auth.oidc.client_id` |
+| `DENKEEPER_OIDC_CLIENT_SECRET` | `api.auth.oidc.client_secret` |
+| `DENKEEPER_OTEL_TRACES_ENDPOINT` | `otel.traces_endpoint` (OTLP HTTP endpoint) |
 
 A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) for Kubernetes deployments.
 

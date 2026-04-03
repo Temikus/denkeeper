@@ -2,7 +2,7 @@
 title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-29T00:00:00+00:00
+lastmod: 2026-04-03T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -136,6 +136,22 @@ denkeeper sessions prune --older-than 720h --yes
 |---|---|
 | `--older-than` | Duration threshold (e.g., `720h` for 30 days). Required. |
 | `--yes`, `-y` | Skip confirmation prompt |
+
+## `denkeeper passwd`
+
+Generate a bcrypt hash for dashboard password login.
+
+```bash
+denkeeper passwd
+```
+
+Reads the password interactively with confirmation. Also accepts piped stdin for scripted use:
+
+```bash
+echo "my-password" | denkeeper passwd
+```
+
+Outputs a bcrypt hash (cost 13) suitable for the `api.auth.password_hash` config field.
 
 ## `denkeeper plugin`
 

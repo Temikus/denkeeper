@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -19,6 +20,11 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const maxContextMessages = 50
@@ -65,6 +71,13 @@ type Engine struct {
 	lastPendingApproval *approval.Request
 
 	logger *slog.Logger
+
+	// OTel instrumentation (global no-ops when OTel is disabled).
+	tracer       trace.Tracer
+	mMessages    metric.Int64Counter
+	mSessions    metric.Int64UpDownCounter
+	mChatDur     metric.Float64Histogram
+	mToolCalls   metric.Int64Counter
 }
 
 func NewEngine(
@@ -80,6 +93,18 @@ func NewEngine(
 	approvals *approval.Manager,
 	logger *slog.Logger,
 ) *Engine {
+	meter := otel.Meter("denkeeper.agent")
+	tracer := otel.Tracer("denkeeper.agent")
+	msgs, _ := meter.Int64Counter("denkeeper.messages",
+		metric.WithDescription("Messages processed"))
+	sessions, _ := meter.Int64UpDownCounter("denkeeper.sessions.active",
+		metric.WithDescription("Active chat sessions"))
+	chatDur, _ := meter.Float64Histogram("denkeeper.chat.duration",
+		metric.WithDescription("Chat pipeline latency in seconds"),
+		metric.WithUnit("s"))
+	toolCalls, _ := meter.Int64Counter("denkeeper.tool_calls",
+		metric.WithDescription("Tool calls executed"))
+
 	return &Engine{
 		name:           name,
 		router:         router,
@@ -92,6 +117,11 @@ func NewEngine(
 		tools:          tools,
 		approvals:      approvals,
 		logger:         logger.With("agent", name),
+		tracer:         tracer,
+		mMessages:      msgs,
+		mSessions:      sessions,
+		mChatDur:       chatDur,
+		mToolCalls:     toolCalls,
 	}
 }
 
@@ -583,6 +613,20 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, fmt.Errorf("chat action not permitted")
 	}
 
+	agentAttr := attribute.String("agent", e.name)
+	adapterAttr := attribute.String("adapter", msg.Adapter)
+	e.mMessages.Add(ctx, 1, metric.WithAttributes(agentAttr, adapterAttr))
+	e.mSessions.Add(ctx, 1, metric.WithAttributes(agentAttr))
+	defer e.mSessions.Add(ctx, -1, metric.WithAttributes(agentAttr))
+
+	ctx, span := e.tracer.Start(ctx, "agent.chat",
+		trace.WithAttributes(agentAttr, adapterAttr))
+	defer span.End()
+	chatStart := time.Now()
+	defer func() {
+		e.mChatDur.Record(ctx, time.Since(chatStart).Seconds(), metric.WithAttributes(agentAttr))
+	}()
+
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
 	convID, err := e.resolveConversation(ctx, msg)
@@ -688,6 +732,9 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 
 		llmMessages = append(llmMessages, llm.Message{Role: "assistant", ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
+			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("agent", e.name),
+				attribute.String("tool_name", tc.Function.Name)))
 			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
 			result, execErr := e.tools.Execute(ctx, tc)
 			if execErr != nil {

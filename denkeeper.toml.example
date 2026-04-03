@@ -179,6 +179,29 @@ format = "text"
 # key    = "dk-monitoring-key-here"
 # scopes = ["health", "costs:read"]
 
+# --- OpenTelemetry Observability ---
+# [otel]
+# enabled = false
+# traces_endpoint = ""          # OTLP HTTP endpoint, e.g. "http://localhost:4318"
+# service_name = "denkeeper"
+
+# --- Dashboard Authentication ---
+# Password login: generate a hash with `denkeeper passwd`
+# [api.auth]
+# password_hash = ""            # bcrypt hash from `denkeeper passwd`
+# session_secret = ""           # hex-encoded AES-256 key (64 hex chars); generate with: openssl rand -hex 32
+# session_max_age = "24h"
+#
+# OAuth2/OIDC SSO (optional)
+# [api.auth.oidc]
+# enabled = false
+# issuer = ""                   # e.g. "https://accounts.google.com"
+# client_id = ""
+# client_secret = ""
+# redirect_url = ""             # e.g. "https://denkeeper.example.com/auth/callback"
+# scopes = ["openid", "email", "profile"]
+# allowed_emails = []           # required non-empty when enabled
+
 # ---------------------------------------------------------------------------
 # Web Capabilities — Search & Fetch (ENABLED BY DEFAULT)
 # ---------------------------------------------------------------------------

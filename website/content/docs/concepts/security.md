@@ -2,7 +2,7 @@
 title: "Security"
 description: "Denkeeper's security model: threat model, permissions, and sandboxing."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-29T00:00:00+00:00
+lastmod: 2026-04-03T00:00:00+00:00
 draft: false
 weight: 50
 toc: true
@@ -45,6 +45,32 @@ The REST API uses scoped bearer tokens with constant-time comparison:
 - Per-key rate limiting via token bucket
 - Optional TLS with configurable cert/key
 - CORS origin allowlist
+
+## Dashboard authentication
+
+The web dashboard and REST API support two authentication mechanisms that can be used independently or together.
+
+### Bearer tokens
+
+Existing API key authentication (`Authorization: Bearer dk_...`). Keys are scoped and managed via `denkeeper keys`. See [API security](#api-security) above.
+
+### Session cookies
+
+Session-based authentication for the web dashboard. Cookies are AES-256-GCM encrypted with `HttpOnly`, `Secure`, and `SameSite=Lax` attributes. The encryption key is configured via `api.auth.session_secret` (a 64-character hex string).
+
+### Password login
+
+Local password authentication using bcrypt (cost 13). Generate the hash with `denkeeper passwd` and set it in `api.auth.password_hash`. Login attempts are rate limited to 5 per 15 minutes per IP address. CSRF protection is enforced via Origin header validation on `POST /auth/login`.
+
+### OIDC single sign-on
+
+OpenID Connect authentication using Authorization Code flow with PKCE (S256 challenge method). Configure under `[api.auth.oidc]`. Requirements:
+
+- The OIDC provider must return an `email_verified: true` claim.
+- The user's email must appear in the `allowed_emails` list (case-insensitive matching).
+- A nonce is included in the authorization request and verified in the ID token.
+
+Supported providers include any standard OIDC-compliant identity provider (Google, Okta, Auth0, Keycloak, etc.).
 
 ## systemd hardening
 

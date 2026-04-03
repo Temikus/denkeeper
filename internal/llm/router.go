@@ -6,6 +6,11 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // FallbackRule describes a single fallback step the router will attempt.
@@ -36,6 +41,13 @@ type Router struct {
 	tools           []ToolDef
 	balanceCache    map[string]balanceCacheEntry
 	mu              sync.Mutex // protects balanceCache
+
+	// OTel instrumentation (global no-ops when OTel is disabled).
+	tracer       trace.Tracer
+	mDuration    metric.Float64Histogram
+	mTokens      metric.Int64Counter
+	mCost        metric.Float64Counter
+	mErrors      metric.Int64Counter
 }
 
 // DefaultModel returns the router's default model name.
@@ -45,12 +57,31 @@ func (r *Router) DefaultModel() string { return r.defaultModel }
 func (r *Router) SetDefaultModel(model string) { r.defaultModel = model }
 
 func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *Router {
+	meter := otel.Meter("denkeeper.llm")
+	tracer := otel.Tracer("denkeeper.llm")
+
+	dur, _ := meter.Float64Histogram("denkeeper.llm.duration",
+		metric.WithDescription("LLM call latency in seconds"),
+		metric.WithUnit("s"))
+	tok, _ := meter.Int64Counter("denkeeper.llm.tokens",
+		metric.WithDescription("LLM tokens consumed"))
+	cost, _ := meter.Float64Counter("denkeeper.llm.cost",
+		metric.WithDescription("LLM cost in USD"),
+		metric.WithUnit("USD"))
+	errs, _ := meter.Int64Counter("denkeeper.llm.errors",
+		metric.WithDescription("LLM call errors"))
+
 	return &Router{
 		providers:       make(map[string]Provider),
 		defaultProvider: defaultProvider,
 		defaultModel:    defaultModel,
 		costTracker:     costTracker,
 		balanceCache:    make(map[string]balanceCacheEntry),
+		tracer:          tracer,
+		mDuration:       dur,
+		mTokens:         tok,
+		mCost:           cost,
+		mErrors:         errs,
 	}
 }
 
@@ -78,6 +109,20 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 		return nil, fmt.Errorf("session %q exceeded cost budget", sessionID)
 	}
 
+	ctx, span := r.tracer.Start(ctx, "llm.complete",
+		trace.WithAttributes(
+			attribute.String("llm.provider", r.defaultProvider),
+			attribute.String("llm.model", r.defaultModel),
+			attribute.String("session.id", sessionID),
+		))
+	defer span.End()
+	start := time.Now()
+
+	attrs := metric.WithAttributes(
+		attribute.String("provider", r.defaultProvider),
+		attribute.String("model", r.defaultModel),
+	)
+
 	// 1. Apply low_funds fallbacks pre-call (first matching rule wins).
 	activeProvider, activeModel := r.applyLowFundsFallback(ctx, sessionID, provider)
 
@@ -85,23 +130,43 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
+		r.recordOTelSuccess(start, resp, attrs)
 		r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 		return resp, nil
 	}
 
 	// 3. Non-retryable errors skip all fallbacks immediately.
 	if !isRetryable(err) {
+		r.mErrors.Add(ctx, 1, attrs)
+		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
 	// 4. Apply error/rate_limit fallbacks in declaration order.
 	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, err)
 	if err != nil {
+		r.mErrors.Add(ctx, 1, attrs)
+		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
+	r.recordOTelSuccess(start, resp, attrs)
 	r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 	return resp, nil
+}
+
+// recordOTelSuccess records duration, token, and cost metrics for a successful LLM call.
+func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, attrs metric.MeasurementOption) {
+	ctx := context.Background()
+	r.mDuration.Record(ctx, time.Since(start).Seconds(), attrs)
+	r.mTokens.Add(ctx, int64(resp.TokensUsed.Prompt), attrs,
+		metric.WithAttributes(attribute.String("direction", "prompt")))
+	r.mTokens.Add(ctx, int64(resp.TokensUsed.Completion), attrs,
+		metric.WithAttributes(attribute.String("direction", "completion")))
+	cost := tokenCost(resp)
+	if cost > 0 {
+		r.mCost.Add(ctx, cost, attrs)
+	}
 }
 
 // applyLowFundsFallback checks low_funds rules and returns the provider/model

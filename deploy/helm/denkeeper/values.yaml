@@ -21,6 +21,9 @@ secrets:
   llmAnthropicApiKey: ""
   voiceOpenaiApiKey: ""
   searchApiKey: ""          # required only for Tavily search provider
+  sessionSecret: ""         # DENKEEPER_API_AUTH_SESSION_SECRET (hex-encoded AES-256 key, 64 hex chars)
+  oidcClientId: ""          # DENKEEPER_OIDC_CLIENT_ID
+  oidcClientSecret: ""      # DENKEEPER_OIDC_CLIENT_SECRET
 
 # -- Name of a pre-existing Secret containing DENKEEPER_* keys.
 # When set, the chart-managed Secret is not created. The referenced Secret
@@ -42,9 +45,25 @@ config:
   llm:
     default_provider: "anthropic"
     default_model: "anthropic/claude-sonnet-4-20250514"
+  otel:
+    enabled: false
+    traces_endpoint: ""      # OTLP HTTP endpoint, e.g., "http://otel-collector:4318"
+    service_name: "denkeeper"
   api:
     enabled: true
     listen: ":8080"
+    auth:
+      password_hash: ""      # bcrypt hash from `denkeeper passwd`
+      session_secret: ""     # hex-encoded AES-256 key (64 hex chars); prefer secrets.sessionSecret
+      session_max_age: "24h"
+      oidc:
+        enabled: false
+        issuer: ""
+        client_id: ""        # prefer secrets.oidcClientId
+        client_secret: ""    # prefer secrets.oidcClientSecret
+        redirect_url: ""
+        scopes: ["openid", "email", "profile"]
+        allowed_emails: []
   session:
     tier: "supervised"
 

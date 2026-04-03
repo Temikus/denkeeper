@@ -7,6 +7,11 @@ import (
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Binding maps an adapter pattern to an agent name.
@@ -25,6 +30,10 @@ type Dispatcher struct {
 	adapters map[string]adapter.Adapter // adapter name → adapter instance
 	incoming chan adapter.IncomingMessage
 	logger   *slog.Logger
+
+	// OTel instrumentation.
+	tracer    trace.Tracer
+	mDispatch metric.Int64Counter
 }
 
 // NewDispatcher creates a Dispatcher from a set of named engines, bindings,
@@ -52,12 +61,19 @@ func NewDispatcher(
 		adapterMap[a.Name()] = a
 	}
 
+	meter := otel.Meter("denkeeper.dispatcher")
+	tracer := otel.Tracer("denkeeper.dispatcher")
+	dispatch, _ := meter.Int64Counter("denkeeper.dispatch",
+		metric.WithDescription("Messages dispatched to agents"))
+
 	return &Dispatcher{
 		agents:   agents,
 		specific: specific,
 		wildcard: wildcard,
 		adapters: adapterMap,
 		incoming: make(chan adapter.IncomingMessage, 64),
+		tracer:   tracer,
+		mDispatch: dispatch,
 		logger:   logger,
 	}
 }
@@ -144,9 +160,18 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 				d.logger.Warn("no agent found for message, dropping", "adapter", msg.Adapter, "external_id", msg.ExternalID)
 				continue
 			}
-			if err := e.HandleMessage(ctx, msg); err != nil {
+			d.mDispatch.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("adapter", msg.Adapter),
+				attribute.String("agent", e.Name())))
+			msgCtx, span := d.tracer.Start(ctx, "dispatcher.route",
+				trace.WithAttributes(
+					attribute.String("adapter", msg.Adapter),
+					attribute.String("agent", e.Name())))
+			if err := e.HandleMessage(msgCtx, msg); err != nil {
 				d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
+				span.RecordError(err)
 			}
+			span.End()
 		}
 	}
 }

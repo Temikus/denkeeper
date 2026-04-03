@@ -1,7 +1,8 @@
 <script>
   let { active = 'overview' } = $props()
   import { navigate } from '../router.js'
-  import { token } from '../store.js'
+  import { token, authMode } from '../store.js'
+  import { api } from '../api.js'
 
   const links = [
     { id: 'overview',  label: 'Overview' },
@@ -19,7 +20,9 @@
   ]
 
   function logout() {
+    api.logout().catch(() => {})
     token.clear()
+    authMode.set(null)
   }
 </script>
 

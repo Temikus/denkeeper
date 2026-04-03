@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
+	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
@@ -77,7 +79,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -821,6 +823,12 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 	}
 
 	deps.KeyStore = keyStore
+
+	// Initialize auth subsystem if configured.
+	if err := initAPIAuth(ctx, cfg, &deps, logger); err != nil {
+		return fmt.Errorf("initializing auth: %w", err)
+	}
+
 	apiServer := api.New(cfg.API, deps, logger)
 	go func() {
 		if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
@@ -850,6 +858,16 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	logger := initLogger(cfg)
+
+	otelShutdown, err := dkotel.Setup(dkotel.Config{
+		Enabled:        cfg.OTel.Enabled,
+		TracesEndpoint: cfg.OTel.TracesEndpoint,
+		ServiceName:    cfg.OTel.ServiceName,
+	}, logger)
+	if err != nil {
+		return fmt.Errorf("initializing otel: %w", err)
+	}
+	defer func() { _ = otelShutdown(context.Background()) }()
 
 	st, err := initStores(cfg, logger)
 	if err != nil {
@@ -944,6 +962,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}()
 
 	if cfg.API.Enabled {
+		var metricsHandler http.Handler
+		if cfg.OTel.Enabled {
+			metricsHandler = dkotel.PrometheusHandler()
+		}
 		if err := startAPIServer(ctx, cfg, api.Deps{
 			Dispatcher:      dispatcher,
 			Scheduler:       sched,
@@ -954,6 +976,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			LifecycleMgr:    lifecycleMgr,
 			BrowserProfiles: browserProfiles,
 			WebHandler:      web.Handler(),
+			MetricsHandler:  metricsHandler,
 			KVStore:         st.kvStore,
 			ConfigPath:      path,
 		}, logger); err != nil {
@@ -1000,6 +1023,45 @@ func loadGlobalSkills(dir string, logger *slog.Logger) []skill.Skill {
 		logger.Info("global skills loaded", "dir", dir, "count", len(skills))
 	}
 	return skills
+}
+
+// initAPIAuth sets up session-based auth (password + OIDC) on the API deps when configured.
+func initAPIAuth(ctx context.Context, cfg *config.Config, deps *api.Deps, logger *slog.Logger) error {
+	auth := cfg.API.Auth
+	hasPassword := auth.PasswordHash != ""
+	hasOIDC := auth.OIDC.Enabled
+
+	if !hasPassword && !hasOIDC {
+		return nil
+	}
+
+	maxAge, _ := time.ParseDuration(auth.SessionMaxAge) // validated in config
+	secure := cfg.API.TLS                                // Secure cookies only when TLS is enabled
+	sm, err := api.NewSessionManager(auth.SessionSecret, maxAge, secure)
+	if err != nil {
+		return fmt.Errorf("creating session manager: %w", err)
+	}
+	deps.Sessions = sm
+
+	if hasPassword {
+		deps.PasswordHash = auth.PasswordHash
+		logger.Info("dashboard password login enabled")
+	}
+
+	if hasOIDC {
+		oidcCfg := auth.OIDC
+		provider, oidcErr := api.NewOIDCProvider(ctx,
+			oidcCfg.Issuer, oidcCfg.ClientID, oidcCfg.ClientSecret,
+			oidcCfg.RedirectURL, oidcCfg.Scopes, oidcCfg.AllowedEmails,
+			sm, logger)
+		if oidcErr != nil {
+			return fmt.Errorf("initializing OIDC provider: %w", oidcErr)
+		}
+		deps.OIDCProvider = provider
+		logger.Info("dashboard OIDC login enabled", "issuer", oidcCfg.Issuer)
+	}
+
+	return nil
 }
 
 // startKVCleanupWorker runs a background goroutine that periodically removes

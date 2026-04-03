@@ -19,5 +19,11 @@ function createTokenStore() {
 
 export const token = createTokenStore()
 
-// true when the user has a token stored (does not validate the key server-side).
-export const isAuthenticated = derived(token, $t => $t.length > 0)
+// Auth mode: 'token' (API key), 'session' (cookie-based), or null.
+export const authMode = writable(null)
+
+// true when the user has a token stored or is session-authenticated.
+export const isAuthenticated = derived(
+  [token, authMode],
+  ([$t, $m]) => $t.length > 0 || $m === 'session'
+)

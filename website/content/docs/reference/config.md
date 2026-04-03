@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-29T00:00:00+00:00
+lastmod: 2026-04-03T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -206,3 +206,41 @@ The Kubernetes backend creates ephemeral Pods with init-container network isolat
 | `env` | map | — | Environment variables |
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
+
+## `[otel]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable OpenTelemetry instrumentation |
+| `traces_endpoint` | string | — | OTLP HTTP endpoint for trace export (e.g. `"http://localhost:4318"`) |
+| `service_name` | string | `"denkeeper"` | Service name for the OTel resource |
+
+Env override: `DENKEEPER_OTEL_TRACES_ENDPOINT` sets `traces_endpoint`.
+
+When enabled, Prometheus metrics are exposed at `GET /metrics` (no auth required). Traces are only exported when `traces_endpoint` is set.
+
+## `[api.auth]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `password_hash` | string | — | bcrypt hash from `denkeeper passwd` CLI |
+| `session_secret` | string | — | Hex-encoded AES-256 key (64 hex chars). Generate with `openssl rand -hex 32` |
+| `session_max_age` | string | `"24h"` | Session cookie lifetime |
+
+Env override: `DENKEEPER_API_AUTH_SESSION_SECRET` sets `session_secret`.
+
+## `[api.auth.oidc]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable OIDC SSO |
+| `issuer` | string | — | OIDC provider issuer URL (e.g. `"https://accounts.google.com"`) |
+| `client_id` | string | — | OAuth2 client ID |
+| `client_secret` | string | — | OAuth2 client secret |
+| `redirect_url` | string | — | Callback URL (e.g. `"https://denkeeper.example.com/auth/callback"`) |
+| `scopes` | string[] | `["openid","email","profile"]` | OAuth2 scopes |
+| `allowed_emails` | string[] | — | Email allowlist. Required non-empty when enabled. Case-insensitive. |
+
+Env overrides: `DENKEEPER_OIDC_CLIENT_ID` sets `client_id`, `DENKEEPER_OIDC_CLIENT_SECRET` sets `client_secret`.
+
+Requires `email_verified: true` claim from the OIDC provider. Uses Authorization Code flow with PKCE (S256).

@@ -36,9 +36,13 @@ type Deps struct {
 	LifecycleMgr    *tool.LifecycleManager  // nil = tool CRUD endpoints return 503
 	BrowserProfiles *browser.ProfileService // nil = browser endpoints return 503
 	WebHandler      http.Handler            // nil = no web dashboard served
+	MetricsHandler  http.Handler            // nil = no /metrics endpoint
 	KeyStore        *KeyStore               // nil = API key CRUD endpoints return 503
 	KVStore         kv.Store                // nil = KV endpoints return 503
 	ConfigPath      string                  // TOML config path for schedule persistence
+	Sessions        *SessionManager         // nil = no session-based auth
+	OIDCProvider    *OIDCProvider           // nil = no OIDC endpoints
+	PasswordHash    string                  // bcrypt hash for password login
 }
 
 // Server is the external REST API server.
@@ -56,21 +60,36 @@ type Server struct {
 	// TOCTOU race where two concurrent requests both see setup_required=true
 	// and both succeed in creating a key.
 	setupMu sync.Mutex
+
+	// Auth: session-based login (password + OIDC).
+	sessions     *SessionManager
+	passwordHash string
+	oidcProvider *OIDCProvider
+	loginLimiter *loginRateLimiter
 }
 
 // New creates a new API server. The server is not started until Run is called.
 func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:      cfg,
-		deps:     deps,
-		logger:   logger,
-		limiters: make(map[string]*rateLimiter),
+		cfg:          cfg,
+		deps:         deps,
+		logger:       logger,
+		limiters:     make(map[string]*rateLimiter),
+		sessions:     deps.Sessions,
+		passwordHash: deps.PasswordHash,
+		oidcProvider: deps.OIDCProvider,
+		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
 	}
 
 	mux := http.NewServeMux()
 
 	// Health endpoint — no auth required.
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+
+	// Prometheus metrics endpoint — no auth required.
+	if deps.MetricsHandler != nil {
+		mux.Handle("GET /metrics", deps.MetricsHandler)
+	}
 
 	// Setup endpoints — no auth required; only functional when no keys exist.
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
@@ -134,6 +153,16 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/keys/{id}", s.RequireScope("admin", s.handleRevokeKey))
 	mux.HandleFunc("DELETE /api/v1/keys/{id}/permanent", s.RequireScope("admin", s.handleDeleteKey))
 	mux.HandleFunc("POST /api/v1/keys/{id}/rotate", s.RequireScope("admin", s.handleRotateKey))
+
+	// Auth endpoints — no auth required (login/logout/session check).
+	mux.HandleFunc("GET /auth/config", s.handleAuthConfig)
+	mux.HandleFunc("POST /auth/login", s.handlePasswordLogin)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/session", s.handleSessionCheck)
+	if s.oidcProvider != nil {
+		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
+		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)
+	}
 
 	// Web dashboard — catch-all for non-API paths (more-specific /api/v1/ routes always win).
 	if deps.WebHandler != nil {
@@ -726,6 +755,27 @@ func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerF
 // given scope. SQLite-managed keys are checked first, then TOML keys.
 // Returns the key name and true if valid.
 func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string) (string, bool) {
+	// 1. Try Bearer token authentication first.
+	if name, ok := s.authenticateBearer(ctx, r, scope); ok {
+		return name, true
+	}
+
+	// 2. Fall back to session cookie authentication.
+	if s.sessions != nil {
+		if sess, err := s.sessions.Read(r); err == nil {
+			for _, sc := range sess.Scopes {
+				if sc == scope {
+					return sess.Email, true
+				}
+			}
+			return "", false // session valid but scope missing
+		}
+	}
+
+	return "", false
+}
+
+func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope string) (string, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		return "", false

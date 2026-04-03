@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-29T00:00:00+00:00
+lastmod: 2026-04-03T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -277,13 +277,89 @@ Rotate an API key. Returns the new plaintext key once.
 
 ## Authentication
 
-All requests (except health) require a bearer token:
+All API endpoints (except health, setup, auth, and metrics) require authentication. Two mechanisms are supported:
+
+1. **Bearer token** — `Authorization: Bearer dk_...` header. API keys are scoped; a key with only `chat` scope cannot access `/api/v1/approvals`.
+2. **Session cookie** — set by the password or OIDC login flow. Used by the web dashboard.
 
 ```bash
 curl -H "Authorization: Bearer dk_yourkey" https://localhost:8080/api/v1/approvals
 ```
 
-API keys are scoped — a key with only `chat` scope cannot access `/api/v1/approvals`.
+## Auth Endpoints
+
+These endpoints do not require authentication.
+
+### `GET /auth/config`
+
+Returns the server's authentication configuration.
+
+```json
+{
+  "password_enabled": true,
+  "oidc_enabled": false
+}
+```
+
+### `POST /auth/login`
+
+Password login. Sets a session cookie on success.
+
+**Request body:**
+
+```json
+{
+  "password": "your-password"
+}
+```
+
+**Response:**
+
+```json
+{
+  "authenticated": true,
+  "email": "admin"
+}
+```
+
+Rate limited: 5 attempts per 15 minutes per IP. Returns `429 Too Many Requests` when exceeded.
+
+### `POST /auth/logout`
+
+Clears the session cookie.
+
+```json
+{
+  "ok": true
+}
+```
+
+### `GET /auth/session`
+
+Check the current session status.
+
+```json
+{
+  "authenticated": true,
+  "email": "user@example.com"
+}
+```
+
+Returns `{"authenticated": false}` when no valid session exists.
+
+### `GET /auth/oidc/login`
+
+Redirects to the OIDC provider's authorization endpoint. Only available when `[api.auth.oidc] enabled = true`.
+
+### `GET /auth/callback`
+
+OIDC callback. Exchanges the authorization code, verifies the ID token (including nonce), creates a session cookie, and redirects to `/#/overview`.
+
+## Metrics
+
+### `GET /metrics`
+
+Prometheus metrics endpoint. No authentication required. Only available when `[otel] enabled = true`.
 
 ## Tools & Plugins
 

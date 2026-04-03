@@ -1,19 +1,25 @@
 <script>
   import { onMount } from 'svelte'
-  import { token } from '../store.js'
+  import { token, authMode } from '../store.js'
   import { api } from '../api.js'
 
   // mode: 'loading' | 'login' | 'setup' | 'reveal'
-  let mode = 'loading'
+  let mode = $state('loading')
+
+  // Auth config from server.
+  let passwordEnabled = $state(false)
+  let oidcEnabled = $state(false)
 
   // Login state
-  let keyInput = ''
-  let loginError = ''
-  let loginLoading = false
+  let keyInput = $state('')
+  let passwordInput = $state('')
+  let loginError = $state('')
+  let loginLoading = $state(false)
+  let showApiKey = $state(false)
 
   // Setup state
-  let setupName = 'admin'
-  let setupScopes = {
+  let setupName = $state('admin')
+  let setupScopes = $state({
     admin: true,
     chat: true,
     'sessions:read': true,
@@ -24,13 +30,13 @@
     'approvals:write': true,
     'tools:read': true,
     'tools:write': true,
-  }
-  let setupError = ''
-  let setupLoading = false
+  })
+  let setupError = $state('')
+  let setupLoading = $state(false)
 
   // Reveal state (after successful setup)
-  let revealedKey = ''
-  let copied = false
+  let revealedKey = $state('')
+  let copied = $state(false)
 
   const ALL_SCOPES = [
     { value: 'admin',           label: 'admin' },
@@ -46,18 +52,50 @@
   ]
 
   onMount(async () => {
-    try {
-      const status = await api.setupStatus()
-      mode = status.setup_required ? 'setup' : 'login'
-    } catch {
-      // If setup status check fails, fall back to login.
+    // Fetch auth config and setup status in parallel.
+    const [authCfg, setupStatus] = await Promise.all([
+      api.authConfig().catch(() => ({ password_enabled: false, oidc_enabled: false })),
+      api.setupStatus().catch(() => ({ setup_required: false })),
+    ])
+
+    passwordEnabled = authCfg.password_enabled
+    oidcEnabled = authCfg.oidc_enabled
+
+    if (setupStatus.setup_required) {
+      mode = 'setup'
+    } else {
+      // If neither password nor OIDC is configured, show API key login directly.
+      showApiKey = !passwordEnabled && !oidcEnabled
       mode = 'login'
     }
   })
 
-  // --- Login ---
+  // --- Password Login ---
 
-  async function handleLogin() {
+  async function handlePasswordLogin() {
+    loginError = ''
+    if (!passwordInput.trim()) {
+      loginError = 'Password is required.'
+      return
+    }
+    loginLoading = true
+    try {
+      await api.passwordLogin(passwordInput.trim())
+      authMode.set('session')
+    } catch (e) {
+      loginError = e.message || 'Login failed.'
+    } finally {
+      loginLoading = false
+    }
+  }
+
+  function handlePasswordKeydown(e) {
+    if (e.key === 'Enter') handlePasswordLogin()
+  }
+
+  // --- API Key Login ---
+
+  async function handleKeyLogin() {
     loginError = ''
     if (!keyInput.trim()) {
       loginError = 'API key is required.'
@@ -84,8 +122,14 @@
     }
   }
 
-  function handleLoginKeydown(e) {
-    if (e.key === 'Enter') handleLogin()
+  function handleKeyKeydown(e) {
+    if (e.key === 'Enter') handleKeyLogin()
+  }
+
+  // --- SSO ---
+
+  function handleSSO() {
+    window.location.href = '/auth/oidc/login'
   }
 
   // --- Setup ---
@@ -133,6 +177,7 @@
 
   function proceedToLogin() {
     keyInput = revealedKey
+    showApiKey = true
     mode = 'login'
   }
 </script>
@@ -142,31 +187,63 @@
 
     {#if mode === 'loading'}
       <h1>Denkeeper</h1>
-      <p class="subtitle">Loading…</p>
+      <p class="subtitle">Loading...</p>
 
     {:else if mode === 'login'}
       <h1>Denkeeper</h1>
-      <p class="subtitle">Enter your API key to access the dashboard.</p>
+
       {#if loginError}
         <p class="error">{loginError}</p>
       {/if}
-      <input
-        type="password"
-        placeholder="API key (dk_...)"
-        bind:value={keyInput}
-        onkeydown={handleLoginKeydown}
-        autocomplete="current-password"
-        disabled={loginLoading}
-      />
-      <button onclick={handleLogin} disabled={loginLoading}>
-        {loginLoading ? 'Signing in…' : 'Sign in'}
-      </button>
-      <p class="hint">
-        The key must have scopes: <code>admin</code>, <code>sessions:read</code>,
-        <code>costs:read</code>, <code>skills:read</code>, <code>schedules:read</code>,
-        <code>approvals:read</code>, <code>approvals:write</code>,
-        <code>tools:read</code>, <code>tools:write</code>.
-      </p>
+
+      {#if oidcEnabled}
+        <button class="sso-btn" onclick={handleSSO}>Sign in with SSO</button>
+      {/if}
+
+      {#if passwordEnabled}
+        <p class="subtitle">Enter your password to access the dashboard.</p>
+        <input
+          type="password"
+          placeholder="Password"
+          bind:value={passwordInput}
+          onkeydown={handlePasswordKeydown}
+          autocomplete="current-password"
+          disabled={loginLoading}
+        />
+        <button onclick={handlePasswordLogin} disabled={loginLoading}>
+          {loginLoading ? 'Signing in...' : 'Sign in'}
+        </button>
+      {/if}
+
+      {#if (passwordEnabled || oidcEnabled) && !showApiKey}
+        <button class="link-btn" onclick={() => showApiKey = true}>
+          Advanced: API Key
+        </button>
+      {/if}
+
+      {#if showApiKey}
+        {#if passwordEnabled || oidcEnabled}
+          <hr class="divider" />
+        {/if}
+        <p class="subtitle">Enter your API key to access the dashboard.</p>
+        <input
+          type="password"
+          placeholder="API key (dk_...)"
+          bind:value={keyInput}
+          onkeydown={handleKeyKeydown}
+          autocomplete="off"
+          disabled={loginLoading}
+        />
+        <button onclick={handleKeyLogin} disabled={loginLoading}>
+          {loginLoading ? 'Signing in...' : 'Sign in with API key'}
+        </button>
+        <p class="hint">
+          The key must have scopes: <code>admin</code>, <code>sessions:read</code>,
+          <code>costs:read</code>, <code>skills:read</code>, <code>schedules:read</code>,
+          <code>approvals:read</code>, <code>approvals:write</code>,
+          <code>tools:read</code>, <code>tools:write</code>.
+        </p>
+      {/if}
 
     {:else if mode === 'setup'}
       <h1>Welcome to Denkeeper</h1>
@@ -191,15 +268,15 @@
         {/each}
       </div>
       <button onclick={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
-        {setupLoading ? 'Creating…' : 'Create key'}
+        {setupLoading ? 'Creating...' : 'Create key'}
       </button>
 
     {:else if mode === 'reveal'}
       <h1>Your API key</h1>
-      <p class="subtitle">Copy it now — it will not be shown again.</p>
+      <p class="subtitle">Copy it now -- it will not be shown again.</p>
       <div class="key-box">
         <code class="key-text">{revealedKey}</code>
-        <button class="copy-btn" onclick={copyKey}>{copied ? '✓' : 'Copy'}</button>
+        <button class="copy-btn" onclick={copyKey}>{copied ? 'Copied' : 'Copy'}</button>
       </div>
       <button onclick={proceedToLogin}>Log in with this key</button>
     {/if}
@@ -267,6 +344,23 @@
   }
   button:hover:not(:disabled) { background: var(--accent-hover); }
   button:disabled { opacity: 0.6; cursor: default; }
+  .sso-btn {
+    background: var(--success);
+  }
+  .sso-btn:hover { background: #5bc68d; }
+  .link-btn {
+    background: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 400;
+    padding: 6px;
+  }
+  .link-btn:hover { color: var(--text); background: none; }
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 4px 0;
+  }
   .key-box {
     display: flex;
     align-items: center;

@@ -2520,3 +2520,173 @@ func TestApplyEnvOverrides_OpenAI(t *testing.T) {
 		t.Errorf("LLM.OpenAI.BaseURL = %q, want https://env.openai.example.com/v1", cfg.LLM.OpenAI.BaseURL)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: Auth config validation
+// --------------------------------------------------------------------------
+
+func TestValidateAuth_PasswordRequiresSessionSecret(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+password_hash = "$2a$13$somehashvaluehere"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when password_hash set without session_secret")
+	}
+	if !strings.Contains(err.Error(), "session_secret is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAuth_OIDCRequiresSessionSecret(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth.oidc]
+enabled = true
+issuer = "https://accounts.google.com"
+client_id = "my-client-id"
+client_secret = "my-client-secret"
+redirect_url = "https://example.com/auth/callback"
+allowed_emails = ["user@example.com"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when OIDC enabled without session_secret")
+	}
+	if !strings.Contains(err.Error(), "session_secret is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAuth_InvalidPasswordHashPrefix(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+password_hash = "plaintext-not-bcrypt"
+session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for password_hash without bcrypt prefix")
+	}
+	if !strings.Contains(err.Error(), "must be a bcrypt hash") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAuth_OIDCMissingIssuer(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[api.auth.oidc]
+enabled = true
+client_id = "my-client-id"
+client_secret = "my-client-secret"
+redirect_url = "https://example.com/auth/callback"
+allowed_emails = ["user@example.com"]
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when OIDC enabled without issuer")
+	}
+	if !strings.Contains(err.Error(), "issuer is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAuth_OIDCEmptyAllowedEmails(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[api.auth.oidc]
+enabled = true
+issuer = "https://accounts.google.com"
+client_id = "my-client-id"
+client_secret = "my-client-secret"
+redirect_url = "https://example.com/auth/callback"
+allowed_emails = []
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error when OIDC enabled with empty allowed_emails")
+	}
+	if !strings.Contains(err.Error(), "allowed_emails must not be empty") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAuth_ValidPasswordOnly(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+password_hash = "$2a$13$somehashvalueherethatis.validlookingbcrypthashstring"
+session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+`)
+
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for valid password-only auth config: %v", err)
+	}
+}
+
+func TestValidateAuth_InvalidSessionMaxAge(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = true
+
+[api.auth]
+password_hash = "$2b$13$somehashvalueherethatis.validlookingbcrypthashstring"
+session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_max_age = "not-a-duration"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid session_max_age duration")
+	}
+	if !strings.Contains(err.Error(), "session_max_age") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: OTel config
+// --------------------------------------------------------------------------
+
+func TestValidateOTel_DefaultServiceName(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[otel]
+enabled = true
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OTel.ServiceName != "denkeeper" {
+		t.Errorf("OTel.ServiceName = %q, want %q", cfg.OTel.ServiceName, "denkeeper")
+	}
+}

@@ -1,6 +1,8 @@
 <script>
-  import { isAuthenticated } from './store.js'
+  import { onMount } from 'svelte'
+  import { isAuthenticated, authMode } from './store.js'
   import { currentRoute } from './router.js'
+  import { api } from './api.js'
   import Nav from './components/Nav.svelte'
   import Login from './pages/Login.svelte'
   import Overview from './pages/Overview.svelte'
@@ -18,6 +20,18 @@
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
+
+  // On mount, check if we have a valid session cookie (e.g. after OIDC redirect).
+  onMount(async () => {
+    try {
+      const sess = await api.sessionCheck()
+      if (sess.authenticated) {
+        authMode.set('session')
+      }
+    } catch {
+      // Session check failed — fall through to login.
+    }
+  })
 </script>
 
 {#if !$isAuthenticated}

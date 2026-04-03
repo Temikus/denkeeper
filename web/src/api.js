@@ -1,7 +1,11 @@
 import { get } from 'svelte/store'
-import { token } from './store.js'
+import { token, authMode } from './store.js'
 
 function authHeaders() {
+  // When using session cookies, no Authorization header needed.
+  if (get(authMode) === 'session') {
+    return { 'Content-Type': 'application/json' }
+  }
   return {
     'Authorization': `Bearer ${get(token)}`,
     'Content-Type': 'application/json',
@@ -16,6 +20,7 @@ async function apiFetch(path, options = {}) {
 
   if (res.status === 401) {
     token.clear()
+    authMode.set(null)
     throw new Error('Unauthorized — please log in again')
   }
   if (!res.ok) {
@@ -188,4 +193,20 @@ export const api = {
       }
     }
   },
+
+  // Auth endpoints (no auth required).
+  authConfig: () => fetch('/auth/config').then(r => r.json()),
+  passwordLogin: (password) => fetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}))
+      throw new Error(body.error || `HTTP ${r.status}`)
+    }
+    return r.json()
+  }),
+  logout: () => fetch('/auth/logout', { method: 'POST' }).then(r => r.json()),
+  sessionCheck: () => fetch('/auth/session').then(r => r.json()),
 }

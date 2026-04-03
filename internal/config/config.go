@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -30,6 +31,18 @@ type Config struct {
 	Sandbox   SandboxConfig           `toml:"sandbox"`
 	Web       WebConfig               `toml:"web"`
 	Browser   BrowserConfig           `toml:"browser"`
+	OTel      OTelConfig              `toml:"otel"`
+}
+
+// OTelConfig controls OpenTelemetry observability instrumentation.
+type OTelConfig struct {
+	// Enabled activates OTel metric collection and Prometheus /metrics endpoint. Default: false.
+	Enabled bool `toml:"enabled"`
+	// TracesEndpoint is the OTLP HTTP endpoint for trace export (e.g. "localhost:4318").
+	// When empty, tracing is disabled even if Enabled is true.
+	TracesEndpoint string `toml:"traces_endpoint"`
+	// ServiceName is the OTel service name. Default: "denkeeper".
+	ServiceName string `toml:"service_name"`
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -163,6 +176,41 @@ type APIConfig struct {
 
 	// Keys defines API keys with scoped permissions.
 	Keys []APIKeyConfig `toml:"keys"`
+
+	// Auth configures optional password and OIDC authentication for the dashboard.
+	Auth APIAuthConfig `toml:"auth"`
+}
+
+// APIAuthConfig configures password and OIDC authentication.
+type APIAuthConfig struct {
+	// PasswordHash is a bcrypt hash of the dashboard password. Generated via `denkeeper passwd`.
+	PasswordHash string `toml:"password_hash"`
+	// SessionSecret is a hex-encoded AES key (≥32 bytes) for encrypting session cookies.
+	// Required when either password or OIDC auth is configured.
+	SessionSecret string `toml:"session_secret"`
+	// SessionMaxAge is the session cookie lifetime as a Go duration string. Default: "24h".
+	SessionMaxAge string `toml:"session_max_age"`
+	// OIDC configures optional OpenID Connect SSO.
+	OIDC OIDCConfig `toml:"oidc"`
+}
+
+// OIDCConfig configures the OpenID Connect SSO provider.
+type OIDCConfig struct {
+	// Enabled activates OIDC login.
+	Enabled bool `toml:"enabled"`
+	// Issuer is the OIDC discovery URL (e.g. "https://accounts.google.com").
+	Issuer string `toml:"issuer"`
+	// ClientID is the OAuth2 client ID.
+	ClientID string `toml:"client_id"`
+	// ClientSecret is the OAuth2 client secret.
+	ClientSecret string `toml:"client_secret"`
+	// RedirectURL is the callback URL (e.g. "https://myserver/auth/callback").
+	RedirectURL string `toml:"redirect_url"`
+	// Scopes requested from the OIDC provider. Default: ["openid", "email", "profile"].
+	Scopes []string `toml:"scopes"`
+	// AllowedEmails restricts login to these email addresses (case-insensitive).
+	// Required when OIDC is enabled.
+	AllowedEmails []string `toml:"allowed_emails"`
 }
 
 // APIKeyConfig defines a single API key with named scopes.
@@ -523,6 +571,9 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.Sandbox.Kubernetes.Namespace == "" {
 		cfg.Sandbox.Kubernetes.Namespace = "denkeeper-sandboxes"
 	}
+	if cfg.OTel.ServiceName == "" {
+		cfg.OTel.ServiceName = "denkeeper"
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -571,6 +622,10 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_API_LISTEN", &cfg.API.Listen)
 	envOverride("DENKEEPER_SESSION_TIER", &cfg.Session.Tier)
 	envOverride("DENKEEPER_SEARCH_API_KEY", &cfg.Web.Search.APIKey)
+	envOverride("DENKEEPER_OTEL_TRACES_ENDPOINT", &cfg.OTel.TracesEndpoint)
+	envOverride("DENKEEPER_API_AUTH_SESSION_SECRET", &cfg.API.Auth.SessionSecret)
+	envOverride("DENKEEPER_OIDC_CLIENT_ID", &cfg.API.Auth.OIDC.ClientID)
+	envOverride("DENKEEPER_OIDC_CLIENT_SECRET", &cfg.API.Auth.OIDC.ClientSecret)
 
 	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
 		cfg.API.Enabled = true
@@ -612,8 +667,18 @@ func applyMiscDefaults(cfg *Config) {
 	if cfg.API.Enabled && cfg.API.Listen == "" {
 		cfg.API.Listen = ":8080"
 	}
+	applyAuthDefaults(cfg)
 	applyWebDefaults(cfg)
 	applyBrowserDefaults(cfg)
+}
+
+func applyAuthDefaults(cfg *Config) {
+	if cfg.API.Auth.SessionMaxAge == "" {
+		cfg.API.Auth.SessionMaxAge = "24h"
+	}
+	if cfg.API.Auth.OIDC.Enabled && len(cfg.API.Auth.OIDC.Scopes) == 0 {
+		cfg.API.Auth.OIDC.Scopes = []string{"openid", "email", "profile"}
+	}
 }
 
 func applyWebDefaults(cfg *Config) {
@@ -1053,6 +1118,54 @@ func validateAPI(api *APIConfig) error {
 			}
 		}
 	}
+	if err := validateAuth(&api.Auth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAuth(auth *APIAuthConfig) error {
+	hasPassword := auth.PasswordHash != ""
+	hasOIDC := auth.OIDC.Enabled
+
+	if !hasPassword && !hasOIDC {
+		return nil // no auth configured — API key only
+	}
+
+	// Session secret required when either auth method is active.
+	if auth.SessionSecret == "" {
+		return fmt.Errorf("config: api.auth.session_secret is required when password or OIDC auth is configured")
+	}
+
+	if hasPassword {
+		if !strings.HasPrefix(auth.PasswordHash, "$2a$") && !strings.HasPrefix(auth.PasswordHash, "$2b$") {
+			return fmt.Errorf("config: api.auth.password_hash must be a bcrypt hash (starts with $2a$ or $2b$)")
+		}
+	}
+
+	if hasOIDC {
+		o := &auth.OIDC
+		if o.Issuer == "" {
+			return fmt.Errorf("config: api.auth.oidc.issuer is required when OIDC is enabled")
+		}
+		if o.ClientID == "" {
+			return fmt.Errorf("config: api.auth.oidc.client_id is required when OIDC is enabled")
+		}
+		if o.ClientSecret == "" {
+			return fmt.Errorf("config: api.auth.oidc.client_secret is required when OIDC is enabled")
+		}
+		if o.RedirectURL == "" {
+			return fmt.Errorf("config: api.auth.oidc.redirect_url is required when OIDC is enabled")
+		}
+		if len(o.AllowedEmails) == 0 {
+			return fmt.Errorf("config: api.auth.oidc.allowed_emails must not be empty when OIDC is enabled")
+		}
+	}
+
+	if _, err := time.ParseDuration(auth.SessionMaxAge); err != nil {
+		return fmt.Errorf("config: api.auth.session_max_age: invalid duration %q: %w", auth.SessionMaxAge, err)
+	}
+
 	return nil
 }
 
