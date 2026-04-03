@@ -41,9 +41,28 @@ export const api = {
   // Skills
   skills: () => apiFetch('/api/v1/skills'),
   skillsByAgent: agent => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}`),
+  getSkill: (agent, name) => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`),
+  addSkill: (agent, data) => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateSkill: (agent, name, data) => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  deleteSkill: (agent, name) => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Schedules
   schedules: () => apiFetch('/api/v1/schedules'),
+  addSchedule: data => apiFetch('/api/v1/schedules', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateSchedule: (name, data) => apiFetch(`/api/v1/schedules/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  deleteSchedule: name => apiFetch(`/api/v1/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Sessions
   sessions: () => apiFetch('/api/v1/sessions'),

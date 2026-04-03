@@ -134,6 +134,114 @@ image = "test"
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Schedule config persistence
+// ---------------------------------------------------------------------------
+
+func TestAddScheduleToConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddScheduleToConfig(path, "daily-report", "@daily", "greet", "telegram:123", "isolated", "", "default", nil, true)
+	if err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "daily-report") {
+		t.Errorf("config missing schedule name; content:\n%s", content)
+	}
+	if !strings.Contains(content, "@daily") {
+		t.Errorf("config missing schedule expression; content:\n%s", content)
+	}
+}
+
+func TestAddScheduleToConfig_WithTags(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddScheduleToConfig(path, "tagged", "@hourly", "", "telegram:1", "", "", "", []string{"tag1", "tag2"}, true)
+	if err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "tag1") || !strings.Contains(content, "tag2") {
+		t.Errorf("config missing tags; content:\n%s", content)
+	}
+}
+
+func TestUpdateScheduleInConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddScheduleToConfig(path, "update-me", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	err := UpdateScheduleInConfig(path, "update-me", "@hourly", "skill1", "telegram:1", "shared", "", "", nil, false)
+	if err != nil {
+		t.Fatalf("UpdateScheduleInConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "@hourly") {
+		t.Errorf("config not updated to @hourly; content:\n%s", content)
+	}
+	if strings.Contains(content, "@daily") {
+		t.Errorf("config still contains old @daily; content:\n%s", content)
+	}
+}
+
+func TestUpdateScheduleInConfig_NotFound(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := UpdateScheduleInConfig(path, "nonexistent", "@daily", "", "telegram:1", "", "", "", nil, true)
+	if err == nil {
+		t.Fatal("expected error for nonexistent schedule, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err.Error())
+	}
+}
+
+func TestRemoveScheduleFromConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddScheduleToConfig(path, "keep", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+	if err := AddScheduleToConfig(path, "remove-me", "@hourly", "", "telegram:2", "", "", "", nil, true); err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	if err := RemoveScheduleFromConfig(path, "remove-me"); err != nil {
+		t.Fatalf("RemoveScheduleFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "remove-me") {
+		t.Errorf("config still contains removed schedule; content:\n%s", content)
+	}
+	if !strings.Contains(content, "keep") {
+		t.Errorf("config missing kept schedule; content:\n%s", content)
+	}
+}
+
+func TestRemoveScheduleFromConfig_LastEntry(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddScheduleToConfig(path, "only-one", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	if err := RemoveScheduleFromConfig(path, "only-one"); err != nil {
+		t.Fatalf("RemoveScheduleFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "schedules") {
+		t.Errorf("config should not contain schedules key after removing last entry; content:\n%s", content)
+	}
+}
+
 func TestRoundTrip_AddThenRemove(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "keep-me"

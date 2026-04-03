@@ -462,19 +462,19 @@ func createSandboxRuntime(cfg *config.Config, logger *slog.Logger) (sandbox.Runt
 
 // agentBuildCtx holds all the shared state needed to build per-agent engines.
 type agentBuildCtx struct {
-	cfg              *config.Config
-	llm              llmClients
-	memory           agent.MemoryStore
-	sharedToolMgr    *tool.Manager
-	lifecycleMgr     *tool.LifecycleManager
-	approvalManager  *approval.Manager
-	kvStore          kv.Store
-	browserProfiles  *browser.ProfileService
-	globalSkills     []skill.Skill
-	sched            *scheduler.Scheduler
-	adapters         []adapter.Adapter
-	dispatcher       *agent.Dispatcher
-	logger           *slog.Logger
+	cfg             *config.Config
+	llm             llmClients
+	memory          agent.MemoryStore
+	sharedToolMgr   *tool.Manager
+	lifecycleMgr    *tool.LifecycleManager
+	approvalManager *approval.Manager
+	kvStore         kv.Store
+	browserProfiles *browser.ProfileService
+	globalSkills    []skill.Skill
+	sched           *scheduler.Scheduler
+	adapters        []adapter.Adapter
+	dispatcher      *agent.Dispatcher
+	logger          *slog.Logger
 }
 
 // connectConfigMCP creates the per-agent Config MCP server, connects it, and
@@ -486,6 +486,8 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		AgentSkillsDir: skillsDir,
 		GetSkills:      e.Skills,
 		AppendSkill:    e.AppendSkill,
+		GetSkill:       e.GetSkill,
+		UpdateSkill:    e.UpdateSkill,
 		Sched:          abc.sched,
 		HandleMessage:  e.HandleMessage,
 		Approvals:      abc.approvalManager,
@@ -899,17 +901,17 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
 	abc := agentBuildCtx{
-		cfg:              cfg,
-		llm:              clients,
-		memory:           st.memory,
-		sharedToolMgr:    sharedToolMgr,
-		lifecycleMgr:     lifecycleMgr,
-		approvalManager:  st.approvalManager,
-		kvStore:          st.kvStore,
-		browserProfiles:  browserProfiles,
-		globalSkills:     globalSkills,
-		sched:            sched,
-		adapters:         adapters,
+		cfg:             cfg,
+		llm:             clients,
+		memory:          st.memory,
+		sharedToolMgr:   sharedToolMgr,
+		lifecycleMgr:    lifecycleMgr,
+		approvalManager: st.approvalManager,
+		kvStore:         st.kvStore,
+		browserProfiles: browserProfiles,
+		globalSkills:    globalSkills,
+		sched:           sched,
+		adapters:        adapters,
 		dispatcher:      dispatcher,
 		logger:          logger,
 	}
@@ -952,6 +954,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			LifecycleMgr:    lifecycleMgr,
 			BrowserProfiles: browserProfiles,
 			WebHandler:      web.Handler(),
+			ConfigPath:      path,
 		}, logger); err != nil {
 			return err
 		}

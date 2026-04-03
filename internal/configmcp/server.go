@@ -40,6 +40,14 @@ type Deps struct {
 	// AppendSkill adds a skill to the agent's in-memory skill list.
 	AppendSkill func(skill.Skill)
 
+	// GetSkill returns a single skill by name and true, or zero value and false.
+	// If nil, skill_get is disabled.
+	GetSkill func(string) (skill.Skill, bool)
+
+	// UpdateSkill replaces an existing skill by name. Returns false if not found.
+	// If nil, skill_update is disabled.
+	UpdateSkill func(string, skill.Skill) bool
+
 	// Sched is the shared scheduler instance. If nil, schedule_add is disabled.
 	Sched *scheduler.Scheduler
 

@@ -1419,3 +1419,129 @@ func TestServer_ListTools_IncludesNewTools(t *testing.T) {
 		}
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: skill_get
+// --------------------------------------------------------------------------
+
+func TestSkillGet_Success(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "greet" {
+				return skill.Skill{
+					Name:        "greet",
+					Description: "Greeting skill",
+					Version:     "1.0",
+					Triggers:    []string{"command:hello"},
+					Body:        "# Hello\nSay hello!",
+				}, true
+			}
+			return skill.Skill{}, false
+		}
+	})
+
+	text, isErr := callTool(t, session, "skill_get", map[string]string{"name": "greet"})
+	if isErr {
+		t.Fatalf("skill_get returned error: %s", text)
+	}
+	if !strings.Contains(text, "greet") {
+		t.Errorf("response missing skill name: %s", text)
+	}
+	if !strings.Contains(text, "Hello") {
+		t.Errorf("response missing body content: %s", text)
+	}
+}
+
+func TestSkillGet_NotFound(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(_ string) (skill.Skill, bool) {
+			return skill.Skill{}, false
+		}
+	})
+
+	text, isErr := callTool(t, session, "skill_get", map[string]string{"name": "nonexistent"})
+	if !isErr {
+		t.Errorf("expected error for nonexistent skill, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: skill_update
+// --------------------------------------------------------------------------
+
+func TestSkillUpdate_Success(t *testing.T) {
+	var mu sync.RWMutex
+	var updatedName string
+	var updatedSkill skill.Skill
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		// Ensure skills dir exists.
+		if err := os.MkdirAll(d.AgentSkillsDir, 0755); err != nil {
+			t.Fatalf("creating skills dir: %v", err)
+		}
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			mu.RLock()
+			defer mu.RUnlock()
+			if name == "greet" {
+				return skill.Skill{
+					Name:        "greet",
+					Description: "Greeting skill",
+					Version:     "1.0",
+					Triggers:    []string{"command:hello"},
+					Body:        "# Hello\nSay hello!",
+				}, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(name string, s skill.Skill) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			updatedName = name
+			updatedSkill = s
+			return true
+		}
+		d.PermissionTier = func() string { return "autonomous" }
+	})
+
+	text, isErr := callTool(t, session, "skill_update", map[string]any{
+		"name":    "greet",
+		"version": "2.0",
+		"body":    "# Updated\nNew content",
+	})
+	if isErr {
+		t.Fatalf("skill_update returned error: %s", text)
+	}
+
+	mu.RLock()
+	defer mu.RUnlock()
+	if updatedName != "greet" {
+		t.Errorf("UpdateSkill called with name %q, want greet", updatedName)
+	}
+	if updatedSkill.Version != "2.0" {
+		t.Errorf("updated version = %q, want 2.0", updatedSkill.Version)
+	}
+}
+
+func TestSkillUpdate_Restricted(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "greet" {
+				return skill.Skill{Name: "greet", Body: "# Test"}, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(_ string, _ skill.Skill) bool { return true }
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	text, isErr := callTool(t, session, "skill_update", map[string]any{
+		"name": "greet",
+		"body": "# Modified",
+	})
+	if !isErr {
+		t.Errorf("expected error for restricted tier, got: %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "denied") && !strings.Contains(strings.ToLower(text), "restricted") {
+		t.Errorf("error should mention denied/restricted: %s", text)
+	}
+}

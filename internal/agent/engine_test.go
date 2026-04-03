@@ -17,6 +17,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -2026,5 +2027,160 @@ func TestEngine_ToolNames_WithToolManager(t *testing.T) {
 	}
 	if len(eng.ToolNames()) != 0 {
 		t.Errorf("ToolNames() = %v, want empty slice", eng.ToolNames())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Skill mutation methods
+// ---------------------------------------------------------------------------
+
+func TestEngine_GetSkill(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{
+			{Name: "greet", Description: "Greeting", Version: "1.0"},
+			{Name: "help", Description: "Help system", Version: "2.0"},
+		}, nil, nil, testLogger())
+
+	sk, ok := eng.GetSkill("greet")
+	if !ok {
+		t.Fatal("GetSkill should find 'greet'")
+	}
+	if sk.Name != "greet" || sk.Version != "1.0" {
+		t.Errorf("GetSkill returned %+v, want greet/1.0", sk)
+	}
+}
+
+func TestEngine_GetSkill_NotFound(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{{Name: "greet"}}, nil, nil, testLogger())
+
+	_, ok := eng.GetSkill("nonexistent")
+	if ok {
+		t.Error("GetSkill should return false for nonexistent skill")
+	}
+}
+
+func TestEngine_UpdateSkill(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{{Name: "greet", Version: "1.0"}}, nil, nil, testLogger())
+
+	ok := eng.UpdateSkill("greet", skill.Skill{Name: "greet", Version: "2.0", Description: "Updated"})
+	if !ok {
+		t.Fatal("UpdateSkill should return true for existing skill")
+	}
+
+	sk, found := eng.GetSkill("greet")
+	if !found {
+		t.Fatal("skill should still exist after update")
+	}
+	if sk.Version != "2.0" || sk.Description != "Updated" {
+		t.Errorf("updated skill = %+v, want version 2.0 / Updated", sk)
+	}
+}
+
+func TestEngine_UpdateSkill_NotFound(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	ok := eng.UpdateSkill("nonexistent", skill.Skill{Name: "nonexistent"})
+	if ok {
+		t.Error("UpdateSkill should return false for nonexistent skill")
+	}
+}
+
+func TestEngine_RemoveSkill(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{
+			{Name: "greet"},
+			{Name: "help"},
+		}, nil, nil, testLogger())
+
+	ok := eng.RemoveSkill("greet")
+	if !ok {
+		t.Fatal("RemoveSkill should return true for existing skill")
+	}
+
+	_, found := eng.GetSkill("greet")
+	if found {
+		t.Error("skill should not exist after removal")
+	}
+
+	// Other skill should remain.
+	_, found = eng.GetSkill("help")
+	if !found {
+		t.Error("other skill should still exist")
+	}
+}
+
+func TestEngine_RemoveSkill_NotFound(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	ok := eng.RemoveSkill("nonexistent")
+	if ok {
+		t.Error("RemoveSkill should return false for nonexistent skill")
+	}
+}
+
+func TestEngine_SkillsDir(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+	eng.SetSkillDirs("/tmp/agent-skills", "/tmp/global-skills")
+
+	if eng.SkillsDir() != "/tmp/agent-skills" {
+		t.Errorf("SkillsDir() = %q, want /tmp/agent-skills", eng.SkillsDir())
 	}
 }

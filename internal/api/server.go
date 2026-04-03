@@ -26,16 +26,17 @@ import (
 
 // Deps holds the application dependencies the API server needs to serve data.
 type Deps struct {
-	Dispatcher   *agent.Dispatcher
-	Scheduler    *scheduler.Scheduler
-	CostTracker  *llm.CostTracker
-	Memory       agent.MemoryStore
-	Config       *config.Config
+	Dispatcher      *agent.Dispatcher
+	Scheduler       *scheduler.Scheduler
+	CostTracker     *llm.CostTracker
+	Memory          agent.MemoryStore
+	Config          *config.Config
 	Approvals       *approval.Manager       // nil = approval endpoints return 503
 	LifecycleMgr    *tool.LifecycleManager  // nil = tool CRUD endpoints return 503
 	BrowserProfiles *browser.ProfileService // nil = browser endpoints return 503
 	WebHandler      http.Handler            // nil = no web dashboard served
 	KeyStore        *KeyStore               // nil = API key CRUD endpoints return 503
+	ConfigPath      string                  // TOML config path for schedule persistence
 }
 
 // Server is the external REST API server.
@@ -82,7 +83,14 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
 	mux.HandleFunc("GET /api/v1/skills", s.RequireScope("skills:read", s.handleSkills))
 	mux.HandleFunc("GET /api/v1/skills/{agent}", s.RequireScope("skills:read", s.handleSkillsByAgent))
+	mux.HandleFunc("GET /api/v1/skills/{agent}/{name}", s.RequireScope("skills:read", s.handleGetSkill))
+	mux.HandleFunc("POST /api/v1/skills/{agent}", s.RequireScope("skills:write", s.handleCreateSkill))
+	mux.HandleFunc("PUT /api/v1/skills/{agent}/{name}", s.RequireScope("skills:write", s.handleUpdateSkill))
+	mux.HandleFunc("DELETE /api/v1/skills/{agent}/{name}", s.RequireScope("skills:write", s.handleDeleteSkill))
 	mux.HandleFunc("GET /api/v1/schedules", s.RequireScope("schedules:read", s.handleSchedules))
+	mux.HandleFunc("POST /api/v1/schedules", s.RequireScope("schedules:write", s.handleCreateSchedule))
+	mux.HandleFunc("PATCH /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleUpdateSchedule))
+	mux.HandleFunc("DELETE /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleDeleteSchedule))
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
@@ -905,7 +913,9 @@ var ValidScopes = map[string]struct{}{
 	"sessions:read":   {},
 	"costs:read":      {},
 	"skills:read":     {},
+	"skills:write":    {},
 	"schedules:read":  {},
+	"schedules:write": {},
 	"approvals:read":  {},
 	"approvals:write": {},
 	"tools:read":      {},

@@ -144,6 +144,117 @@ func removePluginFromConfig(path, name string) error {
 	return writeRawConfig(path, raw)
 }
 
+// ---------------------------------------------------------------------------
+// Schedule config persistence
+// ---------------------------------------------------------------------------
+
+// scheduleToMap converts schedule fields to a generic map for TOML serialization.
+func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) map[string]any {
+	m := map[string]any{
+		"name":     name,
+		"type":     "agent",
+		"schedule": schedExpr,
+		"channel":  channel,
+		"enabled":  enabled,
+	}
+	if skillName != "" {
+		m["skill"] = skillName
+	}
+	if sessionMode != "" {
+		m["session_mode"] = sessionMode
+	}
+	if sessionTier != "" {
+		m["session_tier"] = sessionTier
+	}
+	if agent != "" {
+		m["agent"] = agent
+	}
+	if len(tags) > 0 {
+		// Convert to []any for TOML array compatibility.
+		t := make([]any, len(tags))
+		for i, v := range tags {
+			t[i] = v
+		}
+		m["tags"] = t
+	}
+	return m
+}
+
+// AddScheduleToConfig appends a [[schedules]] entry to the TOML config.
+func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+
+	schedules := rawSchedules(raw)
+	schedules = append(schedules, entry)
+	raw["schedules"] = schedules
+	return writeRawConfig(path, raw)
+}
+
+// UpdateScheduleInConfig replaces a [[schedules]] entry matched by name.
+func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+
+	schedules := rawSchedules(raw)
+	found := false
+	for i, s := range schedules {
+		if m, ok := s.(map[string]any); ok && m["name"] == name {
+			schedules[i] = entry
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("schedule %q not found in config", name)
+	}
+	raw["schedules"] = schedules
+	return writeRawConfig(path, raw)
+}
+
+// RemoveScheduleFromConfig removes a [[schedules]] entry matched by name.
+func RemoveScheduleFromConfig(path, name string) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	schedules := rawSchedules(raw)
+	filtered := make([]any, 0, len(schedules))
+	for _, s := range schedules {
+		if m, ok := s.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	if len(filtered) == 0 {
+		delete(raw, "schedules")
+	} else {
+		raw["schedules"] = filtered
+	}
+	return writeRawConfig(path, raw)
+}
+
+// rawSchedules extracts the schedules array from the raw config map.
+func rawSchedules(raw map[string]any) []any {
+	switch v := raw["schedules"].(type) {
+	case []any:
+		return v
+	case nil:
+		return nil
+	default:
+		return nil
+	}
+}
+
 // readRawConfig reads a TOML file into a generic map.
 func readRawConfig(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- TOML config path from startup
@@ -153,6 +264,9 @@ func readRawConfig(path string) (map[string]any, error) {
 	var raw map[string]any
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if raw == nil {
+		raw = make(map[string]any)
 	}
 	return raw, nil
 }

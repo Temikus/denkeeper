@@ -43,6 +43,38 @@ func (s *Server) registerTools() {
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, s.handleSkillList)
 
+	if s.deps.GetSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_get",
+			Description: "Return the full details of a skill including its body content.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Name of the skill to retrieve"}
+				},
+				"required": ["name"]
+			}`),
+		}, s.handleSkillGet)
+	}
+
+	if s.deps.UpdateSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_update",
+			Description: "Update an existing skill's content. In supervised mode the update is submitted for user approval.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name":        {"type": "string",  "description": "Name of the skill to update (must already exist)"},
+					"description":{"type": "string",  "description": "New description (omit to keep current)"},
+					"version":     {"type": "string",  "description": "New version (omit to keep current)"},
+					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current)"},
+					"body":        {"type": "string",  "description": "New markdown body (omit to keep current)"}
+				},
+				"required": ["name"]
+			}`),
+		}, s.handleSkillUpdate)
+	}
+
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_add",
 		Description: "Register a new recurring schedule for this agent. In supervised mode it is submitted for user approval.",
@@ -248,11 +280,11 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 		version = "1.0.0"
 	}
 
-	payload := buildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body)
+	payload := BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body)
 
 	deps := s.deps
 	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		return applySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p)
+		return ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p)
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
@@ -283,6 +315,101 @@ func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mc
 		return toolError("marshaling skills: " + err.Error()), nil
 	}
 	return toolText(string(data)), nil
+}
+
+func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	sk, ok := s.deps.GetSkill(input.Name)
+	if !ok {
+		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
+	}
+
+	type skillDetail struct {
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Version     string   `json:"version"`
+		Triggers    []string `json:"triggers"`
+		Body        string   `json:"body"`
+	}
+
+	data, err := json.MarshalIndent(skillDetail{
+		Name:        sk.Name,
+		Description: sk.Description,
+		Version:     sk.Version,
+		Triggers:    sk.Triggers,
+		Body:        sk.Body,
+	}, "", "  ")
+	if err != nil {
+		return toolError("marshaling skill: " + err.Error()), nil
+	}
+	return toolText(string(data)), nil
+}
+
+func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.AgentSkillsDir == "" {
+		return toolError("skill_update is not available: no agent skills directory configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("skill_update is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name        string   `json:"name"`
+		Description *string  `json:"description"`
+		Version     *string  `json:"version"`
+		Triggers    []string `json:"triggers"`
+		Body        *string  `json:"body"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	existing, ok := s.deps.GetSkill(input.Name)
+	if !ok {
+		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
+	}
+
+	// Merge: use existing values for omitted fields.
+	description := existing.Description
+	if input.Description != nil {
+		description = *input.Description
+	}
+	version := existing.Version
+	if input.Version != nil {
+		version = *input.Version
+	}
+	triggers := existing.Triggers
+	if input.Triggers != nil {
+		triggers = input.Triggers
+	}
+	body := existing.Body
+	if input.Body != nil {
+		body = *input.Body
+	}
+
+	payload := BuildSkillPayload(input.Name, description, version, triggers, body)
+
+	deps := s.deps
+	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
+		return ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, input.Name, p)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
+		"Update skill: "+input.Name, payload, applyFn)
 }
 
 func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -338,7 +465,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		sessionMode = "isolated"
 	}
 
-	payload, err := buildSchedulePayload(input.Name, input.Schedule, input.Skill,
+	payload, err := BuildSchedulePayload(input.Name, input.Schedule, input.Skill,
 		input.Channel, sessionMode, input.SessionTier, input.Tags, enabled)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
@@ -361,7 +488,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	logger := s.deps.Logger
 
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		return schedRef.RegisterAndStart(cfg, buildScheduleJob(cfg, handleMsg, logger))
+		return schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger))
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
@@ -404,8 +531,10 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 	return toolText(string(data)), nil
 }
 
-// scheduleUpdateInput holds the parsed arguments for schedule_update.
-type scheduleUpdateInput struct {
+// ScheduleUpdateInput holds the parsed arguments for schedule_update.
+// ScheduleUpdateInput holds the parsed arguments for schedule_update.
+// Exported so the REST API can reuse it.
+type ScheduleUpdateInput struct {
 	Name        string   `json:"name"`
 	Schedule    *string  `json:"schedule"`
 	Skill       *string  `json:"skill"`
@@ -416,10 +545,10 @@ type scheduleUpdateInput struct {
 	Enabled     *bool    `json:"enabled"`
 }
 
-// mergeScheduleUpdate applies partial updates from input onto an existing entry
+// MergeScheduleUpdate applies partial updates from input onto an existing entry
 // and returns the merged scheduler.Config plus the channel parts. Returns an
 // error string if validation fails.
-func mergeScheduleUpdate(existing scheduler.Entry, input scheduleUpdateInput) (scheduler.Config, string) {
+func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (scheduler.Config, string) {
 	expr := existing.Expr
 	if input.Schedule != nil {
 		expr = *input.Schedule
@@ -480,7 +609,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		return toolError("schedule_update is not available in restricted mode"), nil
 	}
 
-	var input scheduleUpdateInput
+	var input ScheduleUpdateInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
 		return toolError("invalid arguments: " + err.Error()), nil
 	}
@@ -493,12 +622,12 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		return toolError(fmt.Sprintf("schedule %q not found", input.Name)), nil
 	}
 
-	cfg, errMsg := mergeScheduleUpdate(existing, input)
+	cfg, errMsg := MergeScheduleUpdate(existing, input)
 	if errMsg != "" {
 		return toolError(errMsg), nil
 	}
 
-	payload, err := buildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
+	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
 		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
@@ -512,7 +641,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		if err := schedRef.Unregister(input.Name); err != nil {
 			return fmt.Errorf("unregistering old schedule: %w", err)
 		}
-		return schedRef.RegisterAndStart(cfg, buildScheduleJob(cfg, handleMsg, logger))
+		return schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger))
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
@@ -821,9 +950,9 @@ func applyOrSubmit(
 	}
 }
 
-// applySkillCreate writes the skill file to disk and appends it to the
+// ApplySkillCreate writes the skill file to disk and appends it to the
 // in-memory skill list.
-func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger interface {
+func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger interface {
 	Info(string, ...any)
 }, payload string) error {
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
@@ -854,8 +983,34 @@ func applySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	return nil
 }
 
-// buildSkillPayload constructs the canonical +++ frontmatter + body format.
-func buildSkillPayload(name, description, version string, triggers []string, body string) string {
+// ApplySkillUpdate writes the updated skill file to disk and replaces it in
+// the in-memory skill list.
+func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skill) bool, logger interface {
+	Info(string, ...any)
+}, name string, payload string) error {
+	s, err := skill.ParseFile("(runtime)", []byte(payload))
+	if err != nil {
+		return fmt.Errorf("parsing skill: %w", err)
+	}
+
+	filename := filepath.Join(agentSkillsDir, name+".md")
+	tmp := filename + ".tmp"
+	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+	if err := os.Rename(tmp, filename); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("committing skill file: %w", err)
+	}
+
+	updateSkill(name, *s)
+	logger.Info("skill updated via config MCP", "name", name, "file", filename)
+	return nil
+}
+
+// BuildSkillPayload constructs the canonical +++ frontmatter + body format.
+func BuildSkillPayload(name, description, version string, triggers []string, body string) string {
 	type fm struct {
 		Name        string   `toml:"name"`
 		Description string   `toml:"description,omitempty"`
@@ -871,9 +1026,9 @@ func buildSkillPayload(name, description, version string, triggers []string, bod
 	return "+++\n" + strings.TrimSpace(string(data)) + "\n+++\n\n" + strings.TrimSpace(body)
 }
 
-// buildSchedulePayload marshals the schedule config to TOML for storage as
+// BuildSchedulePayload marshals the schedule config to TOML for storage as
 // approval payload.
-func buildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled bool) (string, error) {
+func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled bool) (string, error) {
 	type payload struct {
 		Name        string   `toml:"name"`
 		Schedule    string   `toml:"schedule"`
@@ -900,9 +1055,9 @@ func buildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 	return strings.TrimSpace(string(data)), nil
 }
 
-// buildScheduleJob returns a JobFunc that dispatches a message when the
+// BuildScheduleJob returns a JobFunc that dispatches a message when the
 // schedule fires. Used by both schedule_add and schedule_update.
-func buildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger) scheduler.JobFunc {
+func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger) scheduler.JobFunc {
 	colonIdx := strings.IndexByte(cfg.Channel, ':')
 	adapterName := cfg.Channel[:colonIdx]
 	externalID := cfg.Channel[colonIdx+1:]

@@ -134,6 +134,49 @@ func (e *Engine) AppendSkill(s skill.Skill) {
 	e.skills = append(e.skills, s)
 }
 
+// RemoveSkill removes a skill by name from the engine's in-memory skill list.
+// Returns false if the skill was not found.
+func (e *Engine) RemoveSkill(name string) bool {
+	e.skillsMu.Lock()
+	defer e.skillsMu.Unlock()
+	for i, s := range e.skills {
+		if s.Name == name {
+			e.skills = append(e.skills[:i], e.skills[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateSkill replaces an existing skill by name in the engine's in-memory
+// skill list. Returns false if the skill was not found.
+func (e *Engine) UpdateSkill(name string, updated skill.Skill) bool {
+	e.skillsMu.Lock()
+	defer e.skillsMu.Unlock()
+	for i, s := range e.skills {
+		if s.Name == name {
+			e.skills[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// GetSkill returns a skill by name and true, or a zero value and false if not found.
+func (e *Engine) GetSkill(name string) (skill.Skill, bool) {
+	e.skillsMu.RLock()
+	defer e.skillsMu.RUnlock()
+	for _, s := range e.skills {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return skill.Skill{}, false
+}
+
+// SkillsDir returns the directory where agent-specific skill files are stored.
+func (e *Engine) SkillsDir() string { return e.agentSkillsDir }
+
 // HasTools returns true if the agent has MCP tools configured.
 func (e *Engine) HasTools() bool { return e.tools != nil }
 

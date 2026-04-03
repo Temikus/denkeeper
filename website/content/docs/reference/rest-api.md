@@ -106,6 +106,52 @@ List all skills across all agents.
 
 List skills for a specific agent.
 
+### `GET /api/v1/skills/{agent}/{name}`
+
+**Scope:** `skills:read`
+
+Get full skill details including body content.
+
+### `POST /api/v1/skills/{agent}`
+
+**Scope:** `skills:write`
+
+Create a new skill. The skill file is written to the agent's skills directory and registered in memory.
+
+**Request body:**
+
+```json
+{
+  "name": "daily-report",
+  "description": "Generate daily summary",
+  "version": "1.0.0",
+  "triggers": ["command:report"],
+  "body": "# Daily Report\nGenerate a summary of today's events."
+}
+```
+
+### `PUT /api/v1/skills/{agent}/{name}`
+
+**Scope:** `skills:write`
+
+Update an existing skill. Fields are merged with existing values — only provided fields are changed.
+
+**Request body:**
+
+```json
+{
+  "description": "Updated description",
+  "version": "2.0.0",
+  "body": "# Updated content"
+}
+```
+
+### `DELETE /api/v1/skills/{agent}/{name}`
+
+**Scope:** `skills:write`
+
+Delete a skill. Removes it from memory and deletes the skill file. Returns `204 No Content`.
+
 ## Schedules
 
 ### `GET /api/v1/schedules`
@@ -113,6 +159,45 @@ List skills for a specific agent.
 **Scope:** `schedules:read`
 
 List all schedules with next/last run times.
+
+### `POST /api/v1/schedules`
+
+**Scope:** `schedules:write`
+
+Create a new schedule. The schedule is registered in the scheduler and persisted to TOML config.
+
+**Request body:**
+
+```json
+{
+  "name": "morning-report",
+  "schedule": "@daily",
+  "channel": "telegram:123456",
+  "skill": "daily-report",
+  "session_mode": "isolated",
+  "session_tier": "autonomous",
+  "agent": "default",
+  "tags": ["reporting"],
+  "enabled": true
+}
+```
+
+- `schedule`: cron expression (`0 8 * * 1-5`), named (`@daily`, `@hourly`), or interval (`@every 5m`).
+- `channel`: format `adapter:externalID` (e.g. `telegram:123456`).
+- `session_mode`: `isolated` (default) or `shared`.
+- `enabled`: defaults to `true` if omitted.
+
+### `PATCH /api/v1/schedules/{name}`
+
+**Scope:** `schedules:write`
+
+Partially update a schedule. Only provided fields are changed. The schedule is unregistered and re-registered with the new configuration.
+
+### `DELETE /api/v1/schedules/{name}`
+
+**Scope:** `schedules:write`
+
+Delete a schedule. Unregisters it from the scheduler and removes it from the TOML config. Returns `204 No Content`.
 
 ## Costs
 
