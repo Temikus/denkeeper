@@ -45,6 +45,9 @@ Thumbs.db
 # ai tooling
 .claude
 
+# Git worktrees
+.worktrees/
+
 # design
 design/
 
