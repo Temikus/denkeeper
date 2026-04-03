@@ -20,6 +20,7 @@ secrets:
   llmOpenrouterApiKey: ""
   llmAnthropicApiKey: ""
   voiceOpenaiApiKey: ""
+  searchApiKey: ""          # required only for Tavily search provider
 
 # -- Name of a pre-existing Secret containing DENKEEPER_* keys.
 # When set, the chart-managed Secret is not created. The referenced Secret
@@ -68,6 +69,15 @@ config:
   #     cron: "0 8 * * *"
   #     agent: "default"
   #     message: "Good morning! Any updates?"
+
+  # -- Web search & fetch (enabled by default with free DuckDuckGo search).
+  # web:
+  #   enabled: true          # set to false to disable web tools
+  #   search:
+  #     provider: "duckduckgo"
+  #     # provider: "tavily"  # requires searchApiKey in secrets
+  #   fetch:
+  #     timeout: "30s"
 
   # -- Memory store (SQLite). db_path must be on a writable, persistent volume.
   memory:

@@ -34,8 +34,11 @@ type Config struct {
 
 // WebConfig controls built-in web search and URL fetching tools.
 type WebConfig struct {
-	// Enabled controls whether web tools are available to agents. Default: false.
-	Enabled bool            `toml:"enabled"`
+	// Enabled controls whether web tools are available to agents. Default: true.
+	// Use a pointer so that an omitted field can be distinguished from an
+	// explicit false, allowing applyDefaults to set the value to true when
+	// unspecified.
+	Enabled *bool           `toml:"enabled"`
 	Search  WebSearchConfig `toml:"search"`
 	Fetch   WebFetchConfig  `toml:"fetch"`
 }
@@ -614,6 +617,10 @@ func applyMiscDefaults(cfg *Config) {
 }
 
 func applyWebDefaults(cfg *Config) {
+	if cfg.Web.Enabled == nil {
+		trueVal := true
+		cfg.Web.Enabled = &trueVal
+	}
 	if cfg.Web.Search.Provider == "" {
 		cfg.Web.Search.Provider = "duckduckgo"
 	}
@@ -820,7 +827,7 @@ var validWebSearchProviders = map[string]bool{
 }
 
 func validateWeb(w *WebConfig) error {
-	if !w.Enabled {
+	if w.Enabled != nil && !*w.Enabled {
 		return nil
 	}
 	if !validWebSearchProviders[w.Search.Provider] {

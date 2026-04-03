@@ -2144,14 +2144,15 @@ func TestExpandEnvVars_Plugins(t *testing.T) {
 	}
 }
 
-func TestParse_WebDefaults(t *testing.T) {
-	tomlData := []byte(baseConfig + `
-[web]
-enabled = true
-`)
+func TestParse_WebEnabledByDefault(t *testing.T) {
+	// Web should be enabled even without an explicit [web] section.
+	tomlData := []byte(baseConfig)
 	cfg, err := Parse(tomlData)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Web.Enabled == nil || !*cfg.Web.Enabled {
+		t.Error("web.enabled should default to true")
 	}
 	if cfg.Web.Search.Provider != "duckduckgo" {
 		t.Errorf("search provider = %q, want %q", cfg.Web.Search.Provider, "duckduckgo")

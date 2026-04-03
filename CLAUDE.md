@@ -118,7 +118,7 @@ Available MCP tools: `list_skills`, `create_skill`, `skill_get`, `skill_update`,
 - **URL fetching** (`internal/webfetch/`): Go HTTP client with built-in HTML-to-Markdown conversion (`html-to-markdown/v2`). Supports configurable size limits, timeouts, and optional robots.txt/agents.txt compliance. Optional Jina Reader fallback for JS-heavy pages via `ChainFetcher`.
 - **Permission-aware**: restricted tier is denied. Both tools check `PermissionTier()`.
 - **Pagination**: `web_fetch` truncates content to 8000 chars with `has_more` + `total_length` fields; callers use `start_index` for subsequent pages.
-- **Config**: `[web] enabled = true` with `[web.search]` (provider, api_key, max_results) and `[web.fetch]` (timeout, max_size_bytes, user_agent, respect_robots_txt, respect_agents_txt, jina.enabled).
+- **Config**: `[web]` section — enabled by default (set `enabled = false` to disable). `[web.search]` (provider, api_key, max_results) and `[web.fetch]` (timeout, max_size_bytes, user_agent, respect_robots_txt, respect_agents_txt, jina.enabled).
 - **Env override**: `DENKEEPER_SEARCH_API_KEY` → `web.search.api_key`.
 
 ## Browser Automation

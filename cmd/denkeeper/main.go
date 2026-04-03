@@ -533,7 +533,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 // connectWebMCP creates the per-agent Web MCP server (search + fetch tools),
 // connects it, and registers its tools into the agent's tool manager.
 func connectWebMCP(ctx context.Context, agentName string, cfg *config.Config, permTier func() string, toolMgr *tool.Manager, logger *slog.Logger) error {
-	if !cfg.Web.Enabled {
+	if cfg.Web.Enabled != nil && !*cfg.Web.Enabled {
 		return nil
 	}
 
