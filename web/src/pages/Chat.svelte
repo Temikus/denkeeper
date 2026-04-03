@@ -12,12 +12,51 @@
   let sending = false
   let error = ''
   let messagesEl
+  let restoring = false
+
+  const STORAGE_KEY = 'dk_chat_session'
+
+  function saveSession() {
+    if (!sessionId) return
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        sessionId,
+        agent: selectedAgent,
+      }))
+    } catch (_) { /* quota exceeded — ignore */ }
+  }
+
+  async function restoreSession() {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (!saved.sessionId) return
+
+      restoring = true
+      const history = await api.sessionMessages(saved.sessionId)
+      if (!history || history.length === 0) return
+
+      sessionId = saved.sessionId
+      if (saved.agent) selectedAgent = saved.agent
+      messages = history.map(m => ({
+        role: m.role === 'assistant' ? 'agent' : 'user',
+        text: m.content,
+      }))
+      await tick()
+      scrollBottom()
+    } catch (_) {
+      // session gone or API error — start fresh
+    } finally {
+      restoring = false
+    }
+  }
 
   async function loadAgents() {
     try {
       const res = await api.agents()
       agents = res || []
-      if (agents.length > 0) {
+      if (agents.length > 0 && !sessionId) {
         selectedAgent = agents[0].name
       }
     } catch (e) {
@@ -29,6 +68,7 @@
     sessionId = ''
     messages = []
     error = ''
+    sessionStorage.removeItem(STORAGE_KEY)
   }
 
   async function send() {
@@ -55,6 +95,7 @@
           sessionId = doneSessionId
           agentMsg.streaming = false
           messages = messages
+          saveSession()
         }
       )
     } catch (e) {
@@ -81,7 +122,10 @@
     }
   }
 
-  onMount(loadAgents)
+  onMount(async () => {
+    await restoreSession()
+    await loadAgents()
+  })
 </script>
 
 <div class="chat-shell">
@@ -110,7 +154,11 @@
 
   <!-- Message list -->
   <div class="messages" bind:this={messagesEl}>
-    {#if messages.length === 0}
+    {#if restoring}
+      <div class="empty">
+        <p class="muted">Restoring session…</p>
+      </div>
+    {:else if messages.length === 0}
       <div class="empty">
         <p>Send a message to start a conversation.</p>
       </div>
