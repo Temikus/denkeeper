@@ -471,7 +471,6 @@
   }
   .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
   .stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
-  .mono { font-family: monospace; font-size: 12px; }
 
   /* Tier badge */
   .tier-badge {
@@ -551,15 +550,6 @@
   .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
   .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   .editor-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
-  .btn-save {
-    background: var(--accent); color: white; border: none;
-    padding: 6px 16px; border-radius: var(--radius); cursor: pointer;
-    font-size: 13px; font-weight: 500;
-  }
-  .btn-save:hover { background: var(--accent-hover); }
-  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
-  .save-ok { font-size: 12px; color: var(--success); font-weight: 500; }
-
   /* Config form */
   .config-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
   .config-row { display: flex; flex-direction: column; gap: 4px; }

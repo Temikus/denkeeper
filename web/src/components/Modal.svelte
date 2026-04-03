@@ -1,3 +1,6 @@
+<!-- DEPRECATED: Prefer inline editing panels (.inline-panel/.inline-form from shared.css).
+     Use confirmation modals (.confirm-modal) only for destructive actions.
+     This component is retained for backwards compatibility. -->
 <script>
   let { title = '', onClose = () => {}, children } = $props()
 </script>
