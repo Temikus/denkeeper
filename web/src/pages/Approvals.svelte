@@ -8,6 +8,7 @@
   let approvals = []
   let error = ''
   let timer
+  let resolvingId = ''
 
   async function load() {
     try {
@@ -25,12 +26,15 @@
   onDestroy(() => clearInterval(timer))
 
   async function resolve(id, approve) {
+    resolvingId = id
     try {
       if (approve) await api.approveApproval(id)
       else         await api.denyApproval(id)
       await load()
     } catch(e) {
       error = e.message
+    } finally {
+      resolvingId = ''
     }
   }
 
@@ -79,8 +83,12 @@
           <td class="date">{fmtDate(a.expires_at)}</td>
           <td class="actions">
             {#if a.status === 'pending'}
-              <button class="btn-ok"  onclick={() => resolve(a.id, true)}>Approve</button>
-              <button class="btn-bad" onclick={() => resolve(a.id, false)}>Deny</button>
+              <button class="btn-ok" onclick={() => resolve(a.id, true)} disabled={resolvingId === a.id}>
+                {resolvingId === a.id ? '...' : 'Approve'}
+              </button>
+              <button class="btn-bad" onclick={() => resolve(a.id, false)} disabled={resolvingId === a.id}>
+                {resolvingId === a.id ? '...' : 'Deny'}
+              </button>
             {/if}
           </td>
         </tr>
