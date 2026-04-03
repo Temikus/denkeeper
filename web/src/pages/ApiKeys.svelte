@@ -271,7 +271,7 @@
 {#if showCreate}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) showCreate = false }} role="dialog" aria-modal="true">
-    <div class="modal create-modal">
+    <div class="create-modal">
       <div class="create-header">
         <div class="create-header-icon">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
@@ -356,7 +356,7 @@
 {#if confirmAction}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmAction = null }} role="dialog" aria-modal="true">
-    <div class="modal">
+    <div class="confirm-modal">
       {#if confirmAction.type === 'revoke'}
         <h2>Revoke Key</h2>
         <p>Revoke <strong>{confirmAction.name}</strong>? This cannot be undone — any clients using this key will lose access immediately.</p>
@@ -393,14 +393,6 @@
   .page { max-width: 900px; }
   .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
   h1 { font-size: 20px; font-weight: 600; }
-
-  .banner {
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    margin-bottom: 16px;
-  }
-  .banner.error { background: rgba(224,92,110,0.15); border: 1px solid var(--danger); color: var(--danger); }
-  .banner.success { background: rgba(76,175,125,0.12); border: 1px solid var(--success); color: var(--text); }
 
   .key-display {
     display: flex;
@@ -444,80 +436,28 @@
   th:nth-child(5), td:nth-child(5) { width: 10%; white-space: nowrap; } /* Status */
   th:nth-child(6), td:nth-child(6) { width: 18%; white-space: nowrap; } /* Actions */
 
-  .pill { display: inline-block; background: var(--border); color: var(--text-muted); padding: 2px 6px; border-radius: 4px; font-size: 11px; margin: 2px 2px 2px 0; }
   .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
   .tag.active { background: rgba(76,175,125,0.2); color: var(--success); }
   .tag.revoked { background: rgba(224,92,110,0.15); color: var(--danger); }
 
-  .mono { font-family: monospace; }
-  .muted { color: var(--text-muted); }
   .actions { display: flex; gap: 6px; }
 
-  .btn-primary {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-ghost {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .btn-ghost:hover { border-color: var(--text-muted); }
-  .btn-sm {
-    background: var(--border);
-    border: none;
-    color: var(--text);
-    padding: 4px 10px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 12px;
-  }
-  .btn-sm:hover { background: var(--accent); }
-  .btn-sm.danger:hover { background: var(--danger); }
-  .btn-danger {
-    background: var(--danger);
-    color: #fff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .btn-danger:hover:not(:disabled) { opacity: 0.85; }
-  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-  .modal {
+  /* Create modal — uses global .overlay for backdrop */
+  .create-modal {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 28px;
-    width: 460px;
+    width: 560px;
     max-width: 90vw;
+    padding: 0;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
   }
-  .modal h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
-  .modal p { color: var(--text-muted); margin-bottom: 20px; line-height: 1.6; }
-  .modal label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); }
-  .modal input[type="text"] {
+  .create-modal h2 { font-size: 16px; font-weight: 600; margin-bottom: 0; }
+  .create-modal p { color: var(--text-muted); margin-bottom: 20px; line-height: 1.6; }
+  .create-modal label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); }
+  .create-modal input[type="text"] {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -525,12 +465,7 @@
     padding: 8px 12px;
     font-size: 14px;
   }
-  .modal input[type="text"]:focus { outline: none; border-color: var(--accent); }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-
-  /* Create modal specific */
-  .create-modal { width: 560px; padding: 0; max-height: 90vh; display: flex; flex-direction: column; }
-  .create-modal h2 { margin-bottom: 0; }
+  .create-modal input[type="text"]:focus { outline: none; border-color: var(--accent); }
   .create-body {
     overflow-y: auto;
     flex: 1;
@@ -632,17 +567,14 @@
     font-weight: 600;
   }
 
-  .banner.warning {
-    background: rgba(255, 193, 7, 0.1);
-    border: 1px solid rgba(255, 193, 7, 0.35);
-    color: var(--text);
-    font-size: 13px;
+  /* Override global banner.warning positioning inside create modal */
+  .create-body .banner.warning {
     margin: 16px 28px 0;
     display: flex;
     align-items: center;
     gap: 8px;
   }
-  .banner.warning::before {
+  .create-body .banner.warning::before {
     content: '\26A0';
     font-size: 16px;
     flex-shrink: 0;

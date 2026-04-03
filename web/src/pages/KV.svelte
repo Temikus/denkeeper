@@ -165,7 +165,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="overlay" onclick={() => confirmDelete = null} role="dialog" tabindex="-1">
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="confirm-modal" onclick={(e) => e.stopPropagation()}>
       <h3>Delete key?</h3>
       <p>Are you sure you want to delete <code>{confirmDelete}</code> from agent <strong>{selectedAgent}</strong>?</p>
       <div class="modal-actions">
@@ -178,7 +178,6 @@
 
 <style>
   .page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
-  .muted { color: var(--text-muted); }
   .controls { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
   .control-label { font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
   .control-label select, .control-label input {
@@ -203,7 +202,6 @@
   .row { cursor: pointer; }
   .row:hover { background: rgba(255,255,255,0.02); }
   .row.expanded { background: rgba(79,142,247,0.05); }
-  .mono { font-family: monospace; }
   .key-cell { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .ttl-cell { white-space: nowrap; width: 60px; }
@@ -218,33 +216,10 @@
     white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto;
   }
   .expanded-meta { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
-  .btn-ghost {
-    background: none; border: 1px solid var(--border); color: var(--text-muted);
-    padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font-size: 13px;
-  }
-  .btn-ghost:hover { color: var(--text); border-color: var(--text-muted); }
-  .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-sm {
-    padding: 3px 8px; font-size: 12px; border-radius: var(--radius);
-    border: none; cursor: pointer;
-  }
-  .btn-danger {
-    background: var(--danger); color: white; border: none;
-    padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 13px;
-  }
-  .btn-danger:hover { filter: brightness(1.1); }
-  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-sm.btn-danger { padding: 3px 8px; font-size: 12px; }
-  .overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
-    display: flex; align-items: center; justify-content: center; z-index: 100;
-  }
-  .modal {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 24px; width: 400px; max-width: 90vw;
-  }
-  .modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
-  .modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
-  .modal code { background: var(--bg); padding: 2px 6px; border-radius: 3px; font-size: 12px; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* KV confirm-modal overrides (uses h3 instead of h2, tighter spacing) */
+  .confirm-modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+  .confirm-modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+  .confirm-modal code { background: var(--bg); padding: 2px 6px; border-radius: 3px; font-size: 12px; }
 </style>

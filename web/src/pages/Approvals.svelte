@@ -100,9 +100,6 @@
   }
   .filter-btn:hover  { color: var(--text); border-color: var(--text-muted); }
   .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(79,142,247,0.1); }
-  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .table th, .table td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; }
-  .table th { color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 500; }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
   .summary { max-width: 280px; }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }

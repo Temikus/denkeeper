@@ -71,7 +71,7 @@
 <h1>Browser</h1>
 
 {#if error}
-  <div class="banner">{error}</div>
+  <div class="banner error">{error}</div>
 {/if}
 
 <!-- Active Sessions -->
@@ -204,7 +204,7 @@
 {#if confirmAction}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmAction = null }} role="dialog" aria-modal="true">
-    <div class="modal">
+    <div class="confirm-modal">
       <h2>Delete Profile</h2>
       <p>
         Permanently delete the browser profile for <strong>{confirmAction.agent}</strong>?
@@ -228,16 +228,6 @@
   .section-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   .section-header h2 { margin-bottom: 0; }
 
-  .banner {
-    background: rgba(224,92,110,0.12);
-    border: 1px solid var(--danger);
-    color: var(--danger);
-    border-radius: var(--radius);
-    padding: 10px 14px;
-    margin-bottom: 16px;
-    font-size: 13px;
-  }
-
   table { width: 100%; border-collapse: collapse; }
   th {
     text-align: left;
@@ -255,18 +245,7 @@
     vertical-align: middle;
   }
 
-  .mono { font-family: monospace; font-size: 13px; }
-  .muted { color: var(--text-muted); }
-
-  .pill {
-    display: inline-block;
-    background: var(--border);
-    color: var(--text-muted);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    margin: 2px 2px 2px 0;
-  }
+  .mono { font-size: 13px; }
 
   .status {
     display: inline-block;
@@ -303,62 +282,4 @@
   .config-value {
     font-size: 14px;
   }
-
-  /* Buttons */
-  .btn-sm {
-    background: var(--border);
-    border: none;
-    color: var(--text);
-    padding: 4px 10px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 12px;
-  }
-  .btn-sm:hover { background: var(--accent); }
-  .btn-sm.danger:hover { background: var(--danger); }
-
-  .btn-danger {
-    background: var(--danger);
-    color: #fff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .btn-danger:hover:not(:disabled) { opacity: 0.85; }
-  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .btn-ghost {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .btn-ghost:hover { border-color: var(--text-muted); }
-
-  /* Modal */
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-  .modal {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 28px;
-    width: 460px;
-    max-width: 90vw;
-  }
-  .modal h2 { margin-bottom: 12px; }
-  .modal p { margin-bottom: 16px; color: var(--text-muted); font-size: 13px; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
