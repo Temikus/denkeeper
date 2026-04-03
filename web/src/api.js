@@ -35,6 +35,12 @@ export const api = {
   agents: () => apiFetch('/api/v1/agents'),
   agent: name => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`),
 
+  // Agent config mutation
+  updateAgentConfig: (name, data) => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+
   // Costs
   costs: () => apiFetch('/api/v1/costs'),
 

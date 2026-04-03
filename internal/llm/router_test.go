@@ -633,3 +633,21 @@ func TestRouter_Fallback_BalanceCached(t *testing.T) {
 		t.Errorf("FundsRemaining called %d times, want 1 (cached)", counting.balanceCalls)
 	}
 }
+
+func TestRouter_SetDefaultModel(t *testing.T) {
+	ct := NewCostTracker(10.0)
+	r := NewRouter("mock", "original-model", ct)
+	r.RegisterProvider(&mockProvider{
+		name:     "mock",
+		response: &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 1}},
+	})
+
+	if r.DefaultModel() != "original-model" {
+		t.Fatalf("initial model = %q, want original-model", r.DefaultModel())
+	}
+
+	r.SetDefaultModel("updated-model")
+	if r.DefaultModel() != "updated-model" {
+		t.Errorf("model after set = %q, want updated-model", r.DefaultModel())
+	}
+}

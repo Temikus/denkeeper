@@ -82,6 +82,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Data endpoints — require auth with appropriate scopes.
 	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
 	mux.HandleFunc("GET /api/v1/agents/{name}", s.RequireScope("admin", s.handleAgent))
+	mux.HandleFunc("PATCH /api/v1/agents/{name}", s.RequireScope("agents:write", s.handleAgentConfigUpdate))
 	mux.HandleFunc("GET /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:read", s.handleGetPersona))
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
@@ -152,6 +153,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	}
 
 	return s
+}
+
+// HTTPHandler returns the server's HTTP handler for use in tests.
+func (s *Server) HTTPHandler() http.Handler {
+	return s.httpServer.Handler
 }
 
 // Run starts the server and blocks until ctx is cancelled. It performs a

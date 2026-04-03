@@ -2291,6 +2291,77 @@ func TestEngine_RemoveSkill_NotFound(t *testing.T) {
 	}
 }
 
+func TestEngine_SetPermissionTier(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("supervised")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if eng.PermissionTier() != "supervised" {
+		t.Fatalf("initial tier = %q, want supervised", eng.PermissionTier())
+	}
+
+	if err := eng.SetPermissionTier("autonomous"); err != nil {
+		t.Fatalf("SetPermissionTier: %v", err)
+	}
+	if eng.PermissionTier() != "autonomous" {
+		t.Errorf("tier after set = %q, want autonomous", eng.PermissionTier())
+	}
+
+	if err := eng.SetPermissionTier("restricted"); err != nil {
+		t.Fatalf("SetPermissionTier restricted: %v", err)
+	}
+	if eng.PermissionTier() != "restricted" {
+		t.Errorf("tier after set = %q, want restricted", eng.PermissionTier())
+	}
+}
+
+func TestEngine_SetPermissionTier_Invalid(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("supervised")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if err := eng.SetPermissionTier("superuser"); err == nil {
+		t.Fatal("expected error for invalid tier")
+	}
+	// Original tier should be preserved after invalid set.
+	if eng.PermissionTier() != "supervised" {
+		t.Errorf("tier = %q after invalid set, want supervised (unchanged)", eng.PermissionTier())
+	}
+}
+
+func TestEngine_SetModel(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if eng.ModelName() != "test-model" {
+		t.Fatalf("initial model = %q, want test-model", eng.ModelName())
+	}
+
+	eng.SetModel("new-model-v2")
+	if eng.ModelName() != "new-model-v2" {
+		t.Errorf("model after set = %q, want new-model-v2", eng.ModelName())
+	}
+}
+
 func TestEngine_SkillsDir(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()

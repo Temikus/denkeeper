@@ -243,6 +243,51 @@ func RemoveScheduleFromConfig(path, name string) error {
 	return writeRawConfig(path, raw)
 }
 
+// ---------------------------------------------------------------------------
+// Agent config persistence
+// ---------------------------------------------------------------------------
+
+// UpdateAgentInConfig updates fields of an [[agents]] entry matched by name.
+// Only keys present in changes are applied (partial update).
+func UpdateAgentInConfig(path, name string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	agents := rawAgents(raw)
+	found := false
+	for i, a := range agents {
+		m, ok := a.(map[string]any)
+		if !ok || m["name"] != name {
+			continue
+		}
+		for k, v := range changes {
+			m[k] = v
+		}
+		agents[i] = m
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("agent %q not found in config", name)
+	}
+	raw["agents"] = agents
+	return writeRawConfig(path, raw)
+}
+
+// rawAgents extracts the agents array from the raw config map.
+func rawAgents(raw map[string]any) []any {
+	switch v := raw["agents"].(type) {
+	case []any:
+		return v
+	case nil:
+		return nil
+	default:
+		return nil
+	}
+}
+
 // rawSchedules extracts the schedules array from the raw config map.
 func rawSchedules(raw map[string]any) []any {
 	switch v := raw["schedules"].(type) {

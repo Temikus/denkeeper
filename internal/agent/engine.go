@@ -120,6 +120,21 @@ func (e *Engine) PermissionTier() string { return e.permissions.Tier() }
 // ModelName returns the agent's default LLM model.
 func (e *Engine) ModelName() string { return e.router.DefaultModel() }
 
+// SetPermissionTier replaces the engine's permission engine with one for the new tier.
+func (e *Engine) SetPermissionTier(tier string) error {
+	newPerms, err := security.NewPermissionEngine(tier)
+	if err != nil {
+		return err
+	}
+	e.permissions = newPerms
+	return nil
+}
+
+// SetModel changes the engine's default LLM model.
+func (e *Engine) SetModel(model string) {
+	e.router.SetDefaultModel(model)
+}
+
 // Skills returns the agent's loaded skills (global + agent-specific, merged).
 func (e *Engine) Skills() []skill.Skill {
 	e.skillsMu.RLock()

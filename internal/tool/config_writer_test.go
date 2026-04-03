@@ -242,6 +242,82 @@ func TestRemoveScheduleFromConfig_LastEntry(t *testing.T) {
 	}
 }
 
+func TestUpdateAgentInConfig(t *testing.T) {
+	path := writeTestConfig(t, `[api]
+enabled = true
+
+[[agents]]
+name = "default"
+session_tier = "supervised"
+llm_model = "old-model"
+description = "Original"
+`)
+
+	changes := map[string]any{
+		"session_tier": "autonomous",
+		"llm_model":    "new-model-v2",
+		"description":  "Updated description",
+	}
+	if err := UpdateAgentInConfig(path, "default", changes); err != nil {
+		t.Fatalf("UpdateAgentInConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "autonomous") {
+		t.Errorf("config missing updated session_tier; content:\n%s", content)
+	}
+	if !strings.Contains(content, "new-model-v2") {
+		t.Errorf("config missing updated llm_model; content:\n%s", content)
+	}
+	if !strings.Contains(content, "Updated description") {
+		t.Errorf("config missing updated description; content:\n%s", content)
+	}
+	// Existing keys should be preserved.
+	if !strings.Contains(content, "enabled = true") {
+		t.Errorf("existing [api] config lost; content:\n%s", content)
+	}
+}
+
+func TestUpdateAgentInConfig_NotFound(t *testing.T) {
+	path := writeTestConfig(t, `[[agents]]
+name = "default"
+session_tier = "supervised"
+`)
+
+	err := UpdateAgentInConfig(path, "nonexistent", map[string]any{"session_tier": "autonomous"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err.Error())
+	}
+}
+
+func TestUpdateAgentInConfig_PartialUpdate(t *testing.T) {
+	path := writeTestConfig(t, `[[agents]]
+name = "myagent"
+session_tier = "supervised"
+llm_model = "keep-this"
+description = "keep-this-too"
+`)
+
+	// Only update description, other fields should be preserved.
+	if err := UpdateAgentInConfig(path, "myagent", map[string]any{"description": "changed"}); err != nil {
+		t.Fatalf("UpdateAgentInConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "changed") {
+		t.Errorf("config missing updated description; content:\n%s", content)
+	}
+	if !strings.Contains(content, "keep-this") {
+		t.Errorf("llm_model was lost during partial update; content:\n%s", content)
+	}
+	if !strings.Contains(content, "supervised") {
+		t.Errorf("session_tier was lost during partial update; content:\n%s", content)
+	}
+}
+
 func TestRoundTrip_AddThenRemove(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "keep-me"

@@ -34,6 +34,7 @@
     expandedSection = null
     try {
       detail = await api.agent(a.name)
+      initConfigForm(detail)
     } catch(e) {
       error = e.message
     }
@@ -80,6 +81,53 @@
       groups[prefix].push(t)
     }
     return groups
+  }
+
+  // Agent config editing state
+  let configTier = $state('')
+  let configModel = $state('')
+  let configDescription = $state('')
+  let configAllowlist = $state('')
+  let configSaving = $state(false)
+  let configSaveOk = $state(false)
+
+  function initConfigForm(d) {
+    configTier = d.permission_tier || 'supervised'
+    configModel = d.model || ''
+    configDescription = ''
+    configAllowlist = ''
+    // Try to get description and allowlist from the config
+    if (agents.length) {
+      const agentConf = agents.find(a => a.name === d.name)
+      if (agentConf) {
+        configDescription = agentConf.description || ''
+        configAllowlist = (agentConf.browser_url_allowlist || []).join(', ')
+      }
+    }
+  }
+
+  async function saveConfig() {
+    if (!detail) return
+    configSaving = true
+    configSaveOk = false
+    try {
+      const data = {}
+      if (configTier !== detail.permission_tier) data.session_tier = configTier
+      if (configModel !== detail.model) data.llm_model = configModel
+      if (configDescription !== undefined) data.description = configDescription
+      const allowlistArr = configAllowlist.split(',').map(s => s.trim()).filter(Boolean)
+      data.browser_url_allowlist = allowlistArr
+      await api.updateAgentConfig(detail.name, data)
+      // Refresh detail.
+      detail = await api.agent(detail.name)
+      agents = (await api.agents()) || []
+      configSaveOk = true
+      setTimeout(() => configSaveOk = false, 3000)
+    } catch(e) {
+      error = e.message
+    } finally {
+      configSaving = false
+    }
   }
 
   const defaultSections = ['soul', 'user', 'memory']
@@ -261,6 +309,51 @@
               </div>
             {/if}
           {/each}
+        </div>
+      </div>
+
+      <!-- Agent Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            Configuration
+          </div>
+        </div>
+        <div class="config-form">
+          <div class="config-row">
+            <label class="config-label" for="cfg-tier">Permission Tier</label>
+            <select id="cfg-tier" class="config-input" bind:value={configTier}>
+              <option value="autonomous">Autonomous</option>
+              <option value="supervised">Supervised</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </div>
+          <div class="config-row">
+            <label class="config-label" for="cfg-model">LLM Model</label>
+            <input id="cfg-model" class="config-input" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
+          </div>
+          <div class="config-row">
+            <label class="config-label" for="cfg-desc">Description</label>
+            <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
+          </div>
+          <div class="config-row">
+            <label class="config-label" for="cfg-allowlist">Browser URL Allowlist</label>
+            <input id="cfg-allowlist" class="config-input" type="text" bind:value={configAllowlist} placeholder="e.g. *.example.com, api.service.io" />
+            <span class="config-hint">Comma-separated domains. Empty = unrestricted.</span>
+          </div>
+          <div class="config-row">
+            <label class="config-label">Adapters</label>
+            <div class="config-readonly">{(detail.adapters || []).join(', ') || '—'} <span class="config-hint">(requires restart)</span></div>
+          </div>
+          <div class="config-actions">
+            <button class="btn-save" onclick={saveConfig} disabled={configSaving}>
+              {configSaving ? 'Saving…' : 'Save Config'}
+            </button>
+            {#if configSaveOk}
+              <span class="save-ok">Saved</span>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -466,6 +559,20 @@
   .btn-save:hover { background: var(--accent-hover); }
   .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
   .save-ok { font-size: 12px; color: var(--success); font-weight: 500; }
+
+  /* Config form */
+  .config-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .config-row { display: flex; flex-direction: column; gap: 4px; }
+  .config-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .config-input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); padding: 8px 12px; font-size: 13px; font-family: monospace;
+  }
+  .config-input:focus { outline: none; border-color: var(--accent); }
+  select.config-input { cursor: pointer; }
+  .config-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
+  .config-readonly { font-size: 13px; font-family: monospace; color: var(--text); padding: 8px 0; }
+  .config-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 
   /* Capabilities */
   .capabilities-list { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }

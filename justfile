@@ -25,6 +25,10 @@ test-cover:
 test-cover-html: test-cover
     go tool cover -html=coverage.out
 
+# Run integration tests (requires -tags=integration)
+test-integration:
+    go test -race -v -tags=integration ./internal/integration/...
+
 # Run tests for a specific package (e.g. just test-pkg internal/agent)
 test-pkg pkg:
     go test -race -v ./{{pkg}}/...

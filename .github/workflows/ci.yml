@@ -64,6 +64,8 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
       - run: go test -race -coverprofile=coverage.out ./...
+      - name: Integration tests
+        run: go test -race -v -tags=integration ./internal/integration/...
       - name: Upload coverage
         uses: actions/upload-artifact@v7
         with:

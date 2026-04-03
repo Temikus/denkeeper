@@ -41,6 +41,9 @@ type Router struct {
 // DefaultModel returns the router's default model name.
 func (r *Router) DefaultModel() string { return r.defaultModel }
 
+// SetDefaultModel changes the router's default model for subsequent requests.
+func (r *Router) SetDefaultModel(model string) { r.defaultModel = model }
+
 func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *Router {
 	return &Router{
 		providers:       make(map[string]Provider),
