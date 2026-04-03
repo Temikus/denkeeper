@@ -32,6 +32,7 @@
     detail = null
     expandedGroup = null
     expandedSection = null
+    editingConfig = false
     try {
       detail = await api.agent(a.name)
       initConfigForm(detail)
@@ -84,6 +85,7 @@
   }
 
   // Agent config editing state
+  let editingConfig = $state(false)
   let configTier = $state('')
   let configModel = $state('')
   let configDescription = $state('')
@@ -96,7 +98,6 @@
     configModel = d.model || ''
     configDescription = ''
     configAllowlist = ''
-    // Try to get description and allowlist from the config
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
       if (agentConf) {
@@ -104,6 +105,17 @@
         configAllowlist = (agentConf.browser_url_allowlist || []).join(', ')
       }
     }
+  }
+
+  function startEditConfig() {
+    initConfigForm(detail)
+    editingConfig = true
+    configSaveOk = false
+  }
+
+  function cancelEditConfig() {
+    editingConfig = false
+    configSaveOk = false
   }
 
   async function saveConfig() {
@@ -118,9 +130,9 @@
       const allowlistArr = configAllowlist.split(',').map(s => s.trim()).filter(Boolean)
       data.browser_url_allowlist = allowlistArr
       await api.updateAgentConfig(detail.name, data)
-      // Refresh detail.
       detail = await api.agent(detail.name)
       agents = (await api.agents()) || []
+      editingConfig = false
       configSaveOk = true
       setTimeout(() => configSaveOk = false, 3000)
     } catch(e) {
@@ -185,9 +197,25 @@
             {#if detail.model}· {detail.model}{/if}
           </p>
         </div>
+        <div class="header-actions">
+          {#if configSaveOk}
+            <span class="save-ok">Saved</span>
+          {/if}
+          {#if editingConfig}
+            <button class="btn-save" onclick={saveConfig} disabled={configSaving}>
+              {configSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button class="btn-ghost btn-ghost-sm" onclick={cancelEditConfig}>Cancel</button>
+          {:else}
+            <button class="btn-ghost btn-ghost-sm" onclick={startEditConfig}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Edit
+            </button>
+          {/if}
+        </div>
       </div>
 
-      <!-- Stats cards -->
+      <!-- Stats cards — inline editable -->
       <div class="stat-cards">
         <div class="stat-card">
           <div class="stat-icon" style="background: rgba(79,142,247,0.12); color: var(--accent);">
@@ -195,7 +223,11 @@
           </div>
           <div class="stat-text">
             <div class="stat-label">MODEL</div>
-            <div class="stat-value mono">{detail.model || '—'}</div>
+            {#if editingConfig}
+              <input class="stat-input mono" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
+            {:else}
+              <div class="stat-value mono">{detail.model || '—'}</div>
+            {/if}
           </div>
         </div>
         <div class="stat-card">
@@ -204,9 +236,17 @@
           </div>
           <div class="stat-text">
             <div class="stat-label">PERMISSION</div>
-            <div class="stat-value">
-              <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
-            </div>
+            {#if editingConfig}
+              <select class="stat-input" bind:value={configTier}>
+                <option value="autonomous">Autonomous</option>
+                <option value="supervised">Supervised</option>
+                <option value="restricted">Restricted</option>
+              </select>
+            {:else}
+              <div class="stat-value">
+                <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
+              </div>
+            {/if}
           </div>
         </div>
         <div class="stat-card">
@@ -233,6 +273,27 @@
           <div class="stat-text">
             <div class="stat-label">ADAPTERS</div>
             <div class="stat-value">{(detail.adapters || []).join(', ') || '—'}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Extra config fields — shown inline below stats when editing -->
+      <div class="inline-panel" class:open={editingConfig}>
+        <div class="inline-panel-inner">
+          <div class="extra-config">
+            <div class="extra-config-row">
+              <label class="extra-config-label" for="cfg-desc">Description</label>
+              <input id="cfg-desc" class="stat-input" type="text" bind:value={configDescription} placeholder="Agent description" />
+            </div>
+            <div class="extra-config-row">
+              <label class="extra-config-label" for="cfg-allowlist">Browser URL Allowlist</label>
+              <input id="cfg-allowlist" class="stat-input" type="text" bind:value={configAllowlist} placeholder="e.g. *.example.com, api.service.io" />
+              <span class="hint">Comma-separated domains. Empty = unrestricted.</span>
+            </div>
+            <div class="extra-config-row">
+              <span class="extra-config-label">Adapters</span>
+              <span class="stat-value mono">{(detail.adapters || []).join(', ') || '—'} <span class="hint">(requires restart)</span></span>
+            </div>
           </div>
         </div>
       </div>
@@ -309,51 +370,6 @@
               </div>
             {/if}
           {/each}
-        </div>
-      </div>
-
-      <!-- Agent Configuration -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-            Configuration
-          </div>
-        </div>
-        <div class="config-form">
-          <div class="config-row">
-            <label class="config-label" for="cfg-tier">Permission Tier</label>
-            <select id="cfg-tier" class="config-input" bind:value={configTier}>
-              <option value="autonomous">Autonomous</option>
-              <option value="supervised">Supervised</option>
-              <option value="restricted">Restricted</option>
-            </select>
-          </div>
-          <div class="config-row">
-            <label class="config-label" for="cfg-model">LLM Model</label>
-            <input id="cfg-model" class="config-input" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
-          </div>
-          <div class="config-row">
-            <label class="config-label" for="cfg-desc">Description</label>
-            <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
-          </div>
-          <div class="config-row">
-            <label class="config-label" for="cfg-allowlist">Browser URL Allowlist</label>
-            <input id="cfg-allowlist" class="config-input" type="text" bind:value={configAllowlist} placeholder="e.g. *.example.com, api.service.io" />
-            <span class="config-hint">Comma-separated domains. Empty = unrestricted.</span>
-          </div>
-          <div class="config-row">
-            <label class="config-label">Adapters</label>
-            <div class="config-readonly">{(detail.adapters || []).join(', ') || '—'} <span class="config-hint">(requires restart)</span></div>
-          </div>
-          <div class="config-actions">
-            <button class="btn-save" onclick={saveConfig} disabled={configSaving}>
-              {configSaving ? 'Saving…' : 'Save Config'}
-            </button>
-            {#if configSaveOk}
-              <span class="save-ok">Saved</span>
-            {/if}
-          </div>
         </div>
       </div>
 
@@ -454,6 +470,8 @@
   .agent-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
   .agent-name { font-size: 28px; font-weight: 700; margin: 0; line-height: 1.2; }
   .agent-subtitle { font-size: 14px; color: var(--text-muted); margin: 4px 0 0; }
+  .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .btn-ghost-sm { padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 
   /* Stat cards */
   .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
@@ -550,19 +568,21 @@
   .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
   .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   .editor-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
-  /* Config form */
-  .config-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
-  .config-row { display: flex; flex-direction: column; gap: 4px; }
-  .config-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
-  .config-input {
+  /* Inline stat editing */
+  .stat-input {
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-    color: var(--text); padding: 8px 12px; font-size: 13px; font-family: monospace;
+    color: var(--text); padding: 5px 8px; font-size: 12px; width: 100%; margin-top: 2px;
   }
-  .config-input:focus { outline: none; border-color: var(--accent); }
-  select.config-input { cursor: pointer; }
-  .config-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
-  .config-readonly { font-size: 13px; font-family: monospace; color: var(--text); padding: 8px 0; }
-  .config-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .stat-input:focus { outline: none; border-color: var(--accent); }
+  select.stat-input { cursor: pointer; }
+
+  /* Extra config fields (shown below stats when editing) */
+  .extra-config {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px 0 4px;
+  }
+  .extra-config-row { display: flex; flex-direction: column; gap: 4px; }
+  .extra-config-label { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
 
   /* Capabilities */
   .capabilities-list { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }
