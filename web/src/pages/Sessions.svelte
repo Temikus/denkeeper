@@ -8,6 +8,8 @@
   let messages = []
   let error = ''
   let loadingMsgs = false
+  let confirmDeleteId = null
+  let deletingSession = false
 
   onMount(async () => {
     try {
@@ -29,13 +31,16 @@
     }
   }
 
-  async function deleteSession(id) {
-    if (!confirm(`Delete session ${id.slice(0,12)}? This cannot be undone.`)) return
+  async function deleteSession() {
+    if (!confirmDeleteId) return
+    deletingSession = true
     try {
-      await api.deleteSession(id)
-      sessions = sessions.filter(s => s.id !== id)
-      if (selected?.id === id) { selected = null; messages = [] }
+      await api.deleteSession(confirmDeleteId)
+      sessions = sessions.filter(s => s.id !== confirmDeleteId)
+      if (selected?.id === confirmDeleteId) { selected = null; messages = [] }
+      confirmDeleteId = null
     } catch(e) { error = e.message }
+    finally { deletingSession = false }
   }
 
   function fmtDate(s) {
@@ -60,7 +65,7 @@
       >
         <div class="sid">{s.id.slice(0, 14)}</div>
         <div class="smeta">{fmtDate(s.updated_at || s.created_at)}</div>
-        <button class="del" onclick={(e) => { e.stopPropagation(); deleteSession(s.id) }} title="Delete session">✕</button>
+        <button class="del" onclick={(e) => { e.stopPropagation(); confirmDeleteId = s.id }} title="Delete session">✕</button>
       </div>
     {/each}
     {#if sessions.length === 0 && !error}
@@ -87,6 +92,22 @@
     {/if}
   </section>
 </div>
+
+{#if confirmDeleteId}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDeleteId = null }} role="dialog" aria-modal="true">
+    <div class="confirm-modal">
+      <h2>Delete Session</h2>
+      <p>Delete session <strong>{confirmDeleteId.slice(0, 12)}</strong>? This cannot be undone.</p>
+      <div class="modal-actions">
+        <button class="btn-danger" onclick={deleteSession} disabled={deletingSession}>
+          {deletingSession ? 'Deleting...' : 'Delete'}
+        </button>
+        <button class="btn-ghost" onclick={() => confirmDeleteId = null}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
