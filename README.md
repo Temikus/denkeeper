@@ -5,6 +5,7 @@
 <p align="center">
   <a href="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Temikus/denkeeper/actions/workflows/security.yml"><img src="https://github.com/Temikus/denkeeper/actions/workflows/security.yml/badge.svg" alt="Security"></a>
+<a href="https://app.fossa.com/projects/git%2Bgithub.com%2FTemikus%2Fdenkeeper?ref=badge_shield" alt="FOSSA Status"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2FTemikus%2Fdenkeeper.svg?type=shield"/></a>
   <a href="https://github.com/Temikus/denkeeper/releases/latest"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper?label=release" alt="Latest Release"></a>
   <a href="https://github.com/Temikus/denkeeper/pkgs/container/denkeeper"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper?label=ghcr.io&logo=docker" alt="Docker Image"></a>
   <a href="https://goreportcard.com/report/github.com/Temikus/denkeeper"><img src="https://goreportcard.com/badge/github.com/Temikus/denkeeper" alt="Go Report Card"></a>
@@ -14,6 +15,9 @@
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
 Denkeeper connects to your Telegram or Discord, routes messages through LLM providers via [Anthropic](https://anthropic.com), [OpenRouter](https://openrouter.ai), or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FTemikus%2Fdenkeeper.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FTemikus%2Fdenkeeper?ref=badge_large)
 
 ## Installation
 
