@@ -211,6 +211,33 @@ func (e *Engine) PersonaSections() map[string]bool {
 	}
 }
 
+// PersonaSection returns the content and editability of a specific persona section.
+// Returns ("", false, false) if no persona is configured or section is unknown.
+func (e *Engine) PersonaSection(section string) (content string, editable bool, ok bool) {
+	if e.persona == nil {
+		return "", false, false
+	}
+	switch strings.ToLower(section) {
+	case "soul":
+		return e.persona.Soul, e.persona.IsEditable("soul"), true
+	case "user":
+		return e.persona.User, e.persona.IsEditable("user"), true
+	case "memory":
+		return e.persona.Memory, e.persona.IsEditable("memory"), true
+	default:
+		return "", false, false
+	}
+}
+
+// SavePersonaSection writes content to the named persona section.
+// Returns an error if no persona is configured.
+func (e *Engine) SavePersonaSection(section, content string) error {
+	if e.persona == nil {
+		return fmt.Errorf("no persona configured for agent %q", e.name)
+	}
+	return e.persona.Save(section, content)
+}
+
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending trigger-matched skill instructions and the
 // memory update directive when the engine has write_memory permission.

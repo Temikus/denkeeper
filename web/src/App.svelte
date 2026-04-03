@@ -12,6 +12,7 @@
   import Chat from './pages/Chat.svelte'
   import Tools from './pages/Tools.svelte'
   import Browser from './pages/Browser.svelte'
+  import KV from './pages/KV.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -40,6 +41,8 @@
         <Tools />
       {:else if route === 'browser'}
         <Browser />
+      {:else if route === 'kv'}
+        <KV />
       {:else if route === 'chat'}
         <Chat />
       {:else if route === 'keys'}

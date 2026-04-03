@@ -13,6 +13,7 @@
     { id: 'skills',    label: 'Skills' },
     { id: 'tools',     label: 'Tools' },
     { id: 'browser',   label: 'Browser' },
+    { id: 'kv',        label: 'KV Store' },
     { id: 'keys',      label: 'API Keys' },
   ]
 

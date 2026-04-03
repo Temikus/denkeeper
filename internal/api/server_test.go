@@ -111,11 +111,13 @@ func allScopesKey() config.APIKeyConfig {
 		Scopes: []string{
 			"health", "admin", "chat",
 			"sessions:read", "costs:read",
+			"agents:read", "agents:write",
 			"skills:read", "skills:write",
 			"schedules:read", "schedules:write",
 			"approvals:read", "approvals:write",
 			"tools:read", "tools:write",
 			"browser:read", "browser:write",
+			"kv:read", "kv:write",
 		},
 	}
 }

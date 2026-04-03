@@ -105,6 +105,21 @@ export const api = {
   }),
   removePlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
+  // Persona
+  getPersona: (agent, section) => apiFetch(`/api/v1/agents/${encodeURIComponent(agent)}/persona/${encodeURIComponent(section)}`),
+  updatePersona: (agent, section, content) => apiFetch(`/api/v1/agents/${encodeURIComponent(agent)}/persona/${encodeURIComponent(section)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  }),
+
+  // KV Store
+  kvList: (agent, prefix) => {
+    const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
+    return apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}${params}`)
+  },
+  kvGet: (agent, key) => apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}/${encodeURIComponent(key)}`),
+  kvDelete: (agent, key) => apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+
   // Browser
   browserProfiles: () => apiFetch('/api/v1/browser/profiles'),
   browserProfile: name => apiFetch(`/api/v1/browser/profiles/${encodeURIComponent(name)}`),

@@ -4,8 +4,29 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { navigate } from '../router.js'
 
-  let data = null
-  let error = ''
+  let data = $state(null)
+  let error = $state('')
+  let sortBy = $state('cost')
+  let sortAsc = $state(false)
+
+  let sortedSessions = $derived(
+    data && data.costs.session_costs
+      ? Object.entries(data.costs.session_costs).sort((a, b) =>
+          sortBy === 'cost'
+            ? (sortAsc ? a[1] - b[1] : b[1] - a[1])
+            : (sortAsc ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]))
+        )
+      : []
+  )
+
+  function toggleSort(col) {
+    if (sortBy === col) {
+      sortAsc = !sortAsc
+    } else {
+      sortBy = col
+      sortAsc = col === 'id'
+    }
+  }
 
   onMount(async () => {
     try {
@@ -60,6 +81,36 @@
     </div>
   </div>
 
+  {#if sortedSessions.length > 0}
+    <h2 class="section-title">Cost Breakdown</h2>
+    <div class="cost-table-wrapper">
+      <table class="cost-table">
+        <thead>
+          <tr>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <th class="sortable" onclick={() => toggleSort('id')} role="columnheader" tabindex="0">
+              Session ID
+              {#if sortBy === 'id'}<span class="sort-arrow">{sortAsc ? '\u25B2' : '\u25BC'}</span>{/if}
+            </th>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <th class="sortable" onclick={() => toggleSort('cost')} role="columnheader" tabindex="0">
+              Cost
+              {#if sortBy === 'cost'}<span class="sort-arrow">{sortAsc ? '\u25B2' : '\u25BC'}</span>{/if}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each sortedSessions as [id, cost]}
+            <tr>
+              <td class="mono session-id">{id}</td>
+              <td class="mono">${cost.toFixed(6)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+
   {#if data.agents.length > 0}
     <h2 class="section-title">Agents</h2>
     <div class="agent-grid">
@@ -101,6 +152,26 @@
   .value { font-size: 28px; font-weight: 700; }
   .value.ok   { color: var(--success); }
   .value.warn { color: var(--warn); }
+  .cost-table-wrapper {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+  }
+  .cost-table { width: 100%; border-collapse: collapse; }
+  .cost-table th {
+    text-align: left; padding: 10px 14px; font-size: 11px;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border); user-select: none;
+  }
+  .cost-table th.sortable { cursor: pointer; }
+  .cost-table th.sortable:hover { color: var(--text); }
+  .cost-table td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .cost-table tr:last-child td { border-bottom: none; }
+  .cost-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .mono { font-family: monospace; }
+  .session-id { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sort-arrow { margin-left: 4px; font-size: 10px; }
   .agent-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

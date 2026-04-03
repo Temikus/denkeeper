@@ -19,6 +19,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -36,6 +37,7 @@ type Deps struct {
 	BrowserProfiles *browser.ProfileService // nil = browser endpoints return 503
 	WebHandler      http.Handler            // nil = no web dashboard served
 	KeyStore        *KeyStore               // nil = API key CRUD endpoints return 503
+	KVStore         kv.Store                // nil = KV endpoints return 503
 	ConfigPath      string                  // TOML config path for schedule persistence
 }
 
@@ -80,6 +82,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Data endpoints — require auth with appropriate scopes.
 	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
 	mux.HandleFunc("GET /api/v1/agents/{name}", s.RequireScope("admin", s.handleAgent))
+	mux.HandleFunc("GET /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:read", s.handleGetPersona))
+	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
 	mux.HandleFunc("GET /api/v1/skills", s.RequireScope("skills:read", s.handleSkills))
 	mux.HandleFunc("GET /api/v1/skills/{agent}", s.RequireScope("skills:read", s.handleSkillsByAgent))
@@ -117,6 +121,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/browser/profiles/{name}", s.RequireScope("browser:write", s.handleDeleteBrowserProfile))
 	mux.HandleFunc("GET /api/v1/browser/sessions", s.RequireScope("browser:read", s.handleListBrowserSessions))
 	mux.HandleFunc("GET /api/v1/browser/config", s.RequireScope("browser:read", s.handleBrowserConfig))
+
+	// KV store endpoints.
+	mux.HandleFunc("GET /api/v1/kv/{agent}", s.RequireScope("kv:read", s.handleListKV))
+	mux.HandleFunc("GET /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:read", s.handleGetKV))
+	mux.HandleFunc("DELETE /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:write", s.handleDeleteKV))
 
 	// API key management endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
@@ -912,6 +921,8 @@ var ValidScopes = map[string]struct{}{
 	"chat":            {},
 	"sessions:read":   {},
 	"costs:read":      {},
+	"agents:read":     {},
+	"agents:write":    {},
 	"skills:read":     {},
 	"skills:write":    {},
 	"schedules:read":  {},
@@ -922,6 +933,8 @@ var ValidScopes = map[string]struct{}{
 	"tools:write":     {},
 	"browser:read":    {},
 	"browser:write":   {},
+	"kv:read":         {},
+	"kv:write":        {},
 	"health":          {},
 }
 

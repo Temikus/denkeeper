@@ -3,11 +3,19 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
-  let agents = []
-  let selected = null
-  let detail = null
-  let error = ''
-  let expandedGroup = null
+  let agents = $state([])
+  let selected = $state(null)
+  let detail = $state(null)
+  let error = $state('')
+  let expandedGroup = $state(null)
+
+  // Persona editing state
+  let expandedSection = $state(null)
+  let sectionContent = $state('')
+  let sectionEditable = $state(false)
+  let sectionLoading = $state(false)
+  let sectionSaving = $state(false)
+  let sectionSaveOk = $state(false)
 
   onMount(async () => {
     try {
@@ -23,10 +31,42 @@
     selected = a
     detail = null
     expandedGroup = null
+    expandedSection = null
     try {
       detail = await api.agent(a.name)
     } catch(e) {
       error = e.message
+    }
+  }
+
+  async function toggleSection(sec, loaded) {
+    if (!loaded) return
+    if (expandedSection === sec) { expandedSection = null; return }
+    sectionLoading = true
+    sectionSaveOk = false
+    try {
+      const data = await api.getPersona(detail.name, sec)
+      sectionContent = data.content
+      sectionEditable = data.editable
+      expandedSection = sec
+    } catch(e) {
+      error = e.message
+    } finally {
+      sectionLoading = false
+    }
+  }
+
+  async function saveSection() {
+    sectionSaving = true
+    sectionSaveOk = false
+    try {
+      await api.updatePersona(detail.name, expandedSection, sectionContent)
+      sectionSaveOk = true
+      setTimeout(() => sectionSaveOk = false, 3000)
+    } catch(e) {
+      error = e.message
+    } finally {
+      sectionSaving = false
     }
   }
 
@@ -163,7 +203,17 @@
 
         <div class="persona-sections">
           {#each personaSections(detail) as { name: sec, loaded }}
-            <div class="persona-section" class:loaded class:missing={!loaded}>
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_tabindex -->
+            <div
+              class="persona-section"
+              class:loaded
+              class:missing={!loaded}
+              class:clickable={loaded}
+              class:active={expandedSection === sec}
+              onclick={() => toggleSection(sec, loaded)}
+              role={loaded ? 'button' : undefined}
+              tabindex={loaded ? 0 : undefined}
+            >
               <div class="section-header">
                 <span class="section-icon">
                   {#if sec === 'soul'}
@@ -178,11 +228,38 @@
                 <span class="section-source">← {sec.toUpperCase()}.md</span>
               </div>
               {#if loaded}
-                <div class="section-status loaded-status">Loaded</div>
+                <div class="section-status loaded-status">{expandedSection === sec ? '\u25BC' : '\u25B6'} Loaded</div>
               {:else}
                 <div class="section-status missing-status">Missing</div>
               {/if}
             </div>
+
+            {#if expandedSection === sec}
+              <div class="section-editor">
+                {#if sectionLoading}
+                  <p class="editor-loading">Loading…</p>
+                {:else}
+                  <textarea
+                    class="editor-textarea"
+                    bind:value={sectionContent}
+                    readonly={!sectionEditable}
+                    rows="12"
+                  ></textarea>
+                  <div class="editor-footer">
+                    {#if !sectionEditable}
+                      <span class="editor-hint">Read-only — this section cannot be edited via the dashboard.</span>
+                    {:else}
+                      <button class="btn-save" onclick={(e) => { e.stopPropagation(); saveSection() }} disabled={sectionSaving}>
+                        {sectionSaving ? 'Saving…' : 'Save'}
+                      </button>
+                      {#if sectionSaveOk}
+                        <span class="save-ok">Saved</span>
+                      {/if}
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -358,6 +435,37 @@
   .missing-status { color: var(--danger); font-style: italic; }
   .persona-section.missing { border-style: dashed; opacity: 0.6; }
   .persona-section.missing:hover { opacity: 0.8; }
+  .persona-section.clickable { cursor: pointer; }
+  .persona-section.clickable:hover { border-color: var(--accent); }
+  .persona-section.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
+
+  /* Persona editor */
+  .section-editor {
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.01);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    margin-top: -1px;
+  }
+  .editor-loading { color: var(--text-muted); font-size: 13px; }
+  .editor-textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); padding: 10px 12px;
+    font-family: monospace; font-size: 12px; resize: vertical; line-height: 1.5;
+  }
+  .editor-textarea:focus { outline: none; border-color: var(--accent); }
+  .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
+  .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .editor-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
+  .btn-save {
+    background: var(--accent); color: white; border: none;
+    padding: 6px 16px; border-radius: var(--radius); cursor: pointer;
+    font-size: 13px; font-weight: 500;
+  }
+  .btn-save:hover { background: var(--accent-hover); }
+  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+  .save-ok { font-size: 12px; color: var(--success); font-weight: 500; }
 
   /* Capabilities */
   .capabilities-list { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }

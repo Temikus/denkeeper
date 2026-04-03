@@ -1993,6 +1993,129 @@ func TestEngine_PersonaSections_AllSections(t *testing.T) {
 	}
 }
 
+func TestEngine_PersonaSection_Success(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "USER.md"), []byte("User info."), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("Memory data."), 0600)
+	p, _ := persona.Load(dir)
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	content, editable, ok := eng.PersonaSection("soul")
+	if !ok {
+		t.Fatal("PersonaSection('soul') returned ok=false")
+	}
+	if content != "You are helpful." {
+		t.Errorf("soul content = %q, want %q", content, "You are helpful.")
+	}
+	if editable {
+		t.Error("soul should not be editable")
+	}
+
+	content, editable, ok = eng.PersonaSection("memory")
+	if !ok {
+		t.Fatal("PersonaSection('memory') returned ok=false")
+	}
+	if content != "Memory data." {
+		t.Errorf("memory content = %q, want %q", content, "Memory data.")
+	}
+	if !editable {
+		t.Error("memory should be editable")
+	}
+}
+
+func TestEngine_PersonaSection_NoPersona(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	_, _, ok := eng.PersonaSection("soul")
+	if ok {
+		t.Error("PersonaSection should return ok=false when persona is nil")
+	}
+}
+
+func TestEngine_PersonaSection_UnknownSection(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test."), 0600)
+	p, _ := persona.Load(dir)
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	_, _, ok := eng.PersonaSection("evil")
+	if ok {
+		t.Error("PersonaSection should return ok=false for unknown section")
+	}
+}
+
+func TestEngine_SavePersonaSection_Success(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test."), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("Old."), 0600)
+	p, _ := persona.Load(dir)
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
+
+	if err := eng.SavePersonaSection("memory", "Updated."); err != nil {
+		t.Fatalf("SavePersonaSection: %v", err)
+	}
+
+	content, _, ok := eng.PersonaSection("memory")
+	if !ok {
+		t.Fatal("PersonaSection after save returned ok=false")
+	}
+	if content != "Updated." {
+		t.Errorf("content = %q, want %q", content, "Updated.")
+	}
+}
+
+func TestEngine_SavePersonaSection_NoPersona(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(1.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
+
+	if err := eng.SavePersonaSection("memory", "data"); err == nil {
+		t.Error("SavePersonaSection should return error when persona is nil")
+	}
+}
+
 func TestEngine_ToolNames_NoTools(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()

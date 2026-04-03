@@ -954,6 +954,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			LifecycleMgr:    lifecycleMgr,
 			BrowserProfiles: browserProfiles,
 			WebHandler:      web.Handler(),
+			KVStore:         st.kvStore,
 			ConfigPath:      path,
 		}, logger); err != nil {
 			return err
