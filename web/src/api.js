@@ -42,7 +42,7 @@ export const api = {
   }),
 
   // Costs
-  costs: () => apiFetch('/api/v1/costs'),
+  costs: (agent) => apiFetch(`/api/v1/costs${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
 
   // Skills
   skills: () => apiFetch('/api/v1/skills'),

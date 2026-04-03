@@ -85,7 +85,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
-		r.costTracker.Record(sessionID, tokenCost(resp))
+		r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 		return resp, nil
 	}
 
@@ -100,7 +100,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
-	r.costTracker.Record(sessionID, tokenCost(resp))
+	r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 	return resp, nil
 }
 

@@ -14,6 +14,7 @@
     { id: 'tools',     label: 'Tools' },
     { id: 'browser',   label: 'Browser' },
     { id: 'kv',        label: 'KV Store' },
+    { id: 'costs',     label: 'Costs' },
     { id: 'keys',      label: 'API Keys' },
   ]
 

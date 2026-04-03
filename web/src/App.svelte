@@ -14,6 +14,7 @@
   import Browser from './pages/Browser.svelte'
   import KV from './pages/KV.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
+  import Costs from './pages/Costs.svelte'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
@@ -45,6 +46,8 @@
         <KV />
       {:else if route === 'chat'}
         <Chat />
+      {:else if route === 'costs'}
+        <Costs />
       {:else if route === 'keys'}
         <ApiKeys />
       {:else}

@@ -287,15 +287,49 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleCosts returns cost tracking data.
-func (s *Server) handleCosts(w http.ResponseWriter, _ *http.Request) {
-	sessions := s.deps.CostTracker.AllSessionCosts()
+// handleCosts returns cost tracking data with per-agent breakdown.
+func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
+	sessions := s.deps.CostTracker.AllSessionStats()
+	agentFilter := r.URL.Query().Get("agent")
+
+	// Filter by agent if requested.
+	filtered := make(map[string]llm.SessionStats, len(sessions))
+	for id, stats := range sessions {
+		if agentFilter == "" || agentFromSession(id) == agentFilter {
+			filtered[id] = stats
+		}
+	}
+
+	byAgent := s.deps.CostTracker.AgentCosts()
+	if agentFilter != "" {
+		var one []llm.AgentStats
+		for _, a := range byAgent {
+			if a.Agent == agentFilter {
+				one = append(one, a)
+				break
+			}
+		}
+		byAgent = one
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_cost":     s.deps.CostTracker.GlobalCost(),
 		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(),
-		"session_count":   len(sessions),
-		"session_costs":   sessions,
+		"session_count":   len(filtered),
+		"session_costs":   s.deps.CostTracker.AllSessionCosts(),
+		"session_stats":   filtered,
+		"by_agent":        byAgent,
 	})
+}
+
+// agentFromSession extracts the agent name from a session ID ("agent:adapter:ext").
+func agentFromSession(id string) string {
+	for i, c := range id {
+		if c == ':' {
+			return id[:i]
+		}
+	}
+	return id
 }
 
 // handleSkills lists all skills across all agents (deduplicated by name).

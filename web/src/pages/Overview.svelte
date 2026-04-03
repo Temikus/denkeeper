@@ -67,7 +67,8 @@
       <div class="label">Pending Approvals</div>
       <div class="value" class:warn={data.pendingCount > 0}>{data.pendingCount}</div>
     </div>
-    <div class="card">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="card clickable" onclick={() => navigate('costs')} role="button" tabindex="0">
       <div class="label">Total Cost</div>
       <div class="value">${data.costs.global_cost.toFixed(4)}</div>
     </div>
