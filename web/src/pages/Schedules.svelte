@@ -7,8 +7,8 @@
   let loading = true
   let error = ''
 
-  // Add/Edit modal
-  let showModal = false
+  // Inline add/edit panel
+  let showForm = false
   let editingName = null // null = add mode, string = edit mode
   let formName = ''
   let formSchedule = ''
@@ -48,7 +48,7 @@
     formAgent = 'default'
     formTags = ''
     formEnabled = true
-    showModal = true
+    showForm = true
   }
 
   function openEdit(s) {
@@ -62,7 +62,11 @@
     formAgent = s.agent || 'default'
     formTags = (s.tags || []).join(', ')
     formEnabled = s.enabled
-    showModal = true
+    showForm = true
+  }
+
+  function closeForm() {
+    showForm = false
   }
 
   async function saveSchedule() {
@@ -95,7 +99,7 @@
           enabled: formEnabled,
         })
       }
-      showModal = false
+      showForm = false
       await loadData()
     } catch (e) {
       error = e.message
@@ -125,12 +129,77 @@
 </script>
 
 <div class="page">
-  <div class="header">
+  <div class="page-header">
     <h1 class="page-title">Schedules</h1>
     <button class="btn-primary" onclick={openAdd}>+ Add Schedule</button>
   </div>
 
   <ErrorBanner message={error} />
+
+  <!-- Inline Add/Edit Panel -->
+  <div class="inline-panel" class:open={showForm}>
+    <div class="inline-panel-inner">
+      <div class="inline-form">
+        <h2 class="form-title">{editingName ? 'Edit Schedule' : 'Add Schedule'}</h2>
+        <label>
+          Name
+          <input type="text" bind:value={formName} placeholder="e.g. daily-report" disabled={!!editingName} />
+        </label>
+        <label>
+          Schedule Expression
+          <input type="text" bind:value={formSchedule} placeholder="@daily, @every 5m, or 0 8 * * 1-5" />
+          <span class="hint">@daily, @hourly, @every 5m, or 5-field cron</span>
+        </label>
+        <label>
+          Skill <span class="hint">(optional)</span>
+          <input type="text" bind:value={formSkill} placeholder="Skill name to invoke" />
+        </label>
+        <label>
+          Channel
+          <input type="text" bind:value={formChannel} placeholder="adapter:externalID (e.g. telegram:123456)" />
+        </label>
+        <div class="row">
+          <label>
+            Session Mode
+            <select bind:value={formSessionMode}>
+              <option value="isolated">Isolated</option>
+              <option value="shared">Shared</option>
+            </select>
+          </label>
+          <label>
+            Session Tier <span class="hint">(optional)</span>
+            <select bind:value={formSessionTier}>
+              <option value="">Default</option>
+              <option value="autonomous">Autonomous</option>
+              <option value="supervised">Supervised</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </label>
+        </div>
+        {#if !editingName}
+          <label>
+            Agent
+            <input type="text" bind:value={formAgent} placeholder="default" />
+          </label>
+        {/if}
+        <label>
+          Tags <span class="hint">(comma-separated)</span>
+          <input type="text" bind:value={formTags} placeholder="e.g. reporting, daily" />
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" bind:checked={formEnabled} />
+          Enabled
+        </label>
+        <div class="form-actions">
+          <button class="btn-primary" onclick={saveSchedule}
+            disabled={saving || !formName.trim() || !formSchedule.trim() || !formChannel.trim()}>
+            {saving ? 'Saving...' : (editingName ? 'Update' : 'Add Schedule')}
+          </button>
+          <button class="btn-ghost" onclick={closeForm}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   {#if loading}
     <p class="muted">Loading...</p>
@@ -170,77 +239,11 @@
   {/if}
 </div>
 
-<!-- Add/Edit Schedule Modal -->
-{#if showModal}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) showModal = false }} role="dialog" aria-modal="true">
-    <div class="modal wide">
-      <h2>{editingName ? 'Edit Schedule' : 'Add Schedule'}</h2>
-      <label>
-        Name
-        <input type="text" bind:value={formName} placeholder="e.g. daily-report" disabled={!!editingName} />
-      </label>
-      <label>
-        Schedule Expression
-        <input type="text" bind:value={formSchedule} placeholder="@daily, @every 5m, or 0 8 * * 1-5" />
-        <span class="hint">@daily, @hourly, @every 5m, or 5-field cron</span>
-      </label>
-      <label>
-        Skill <span class="hint">(optional)</span>
-        <input type="text" bind:value={formSkill} placeholder="Skill name to invoke" />
-      </label>
-      <label>
-        Channel
-        <input type="text" bind:value={formChannel} placeholder="adapter:externalID (e.g. telegram:123456)" />
-      </label>
-      <div class="row">
-        <label>
-          Session Mode
-          <select bind:value={formSessionMode}>
-            <option value="isolated">Isolated</option>
-            <option value="shared">Shared</option>
-          </select>
-        </label>
-        <label>
-          Session Tier <span class="hint">(optional)</span>
-          <select bind:value={formSessionTier}>
-            <option value="">Default</option>
-            <option value="autonomous">Autonomous</option>
-            <option value="supervised">Supervised</option>
-            <option value="restricted">Restricted</option>
-          </select>
-        </label>
-      </div>
-      {#if !editingName}
-        <label>
-          Agent
-          <input type="text" bind:value={formAgent} placeholder="default" />
-        </label>
-      {/if}
-      <label>
-        Tags <span class="hint">(comma-separated)</span>
-        <input type="text" bind:value={formTags} placeholder="e.g. reporting, daily" />
-      </label>
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={formEnabled} />
-        Enabled
-      </label>
-      <div class="modal-actions">
-        <button class="btn-primary" onclick={saveSchedule}
-          disabled={saving || !formName.trim() || !formSchedule.trim() || !formChannel.trim()}>
-          {saving ? 'Saving...' : (editingName ? 'Update' : 'Add Schedule')}
-        </button>
-        <button class="btn-ghost" onclick={() => showModal = false}>Cancel</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <!-- Delete Confirmation -->
 {#if confirmDelete}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDelete = null }} role="dialog" aria-modal="true">
-    <div class="modal">
+    <div class="confirm-modal">
       <h2>Delete Schedule</h2>
       <p>Delete <strong>{confirmDelete}</strong>? This will stop the schedule and remove it from the configuration.</p>
       <div class="modal-actions">
@@ -255,44 +258,11 @@
 
 <style>
   .page { max-width: 1100px; }
-  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .page-title { font-size: 20px; font-weight: 700; }
-  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .table th, .table td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; }
-  .table th { color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 500; white-space: nowrap; }
+  .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   .name { font-weight: 600; }
   .expr { font-family: monospace; font-size: 12px; white-space: nowrap; }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border); margin-right: 4px; vertical-align: middle; }
   .dot.on { background: var(--success); }
-  .muted { color: var(--text-muted); font-size: 13px; }
   .actions { white-space: nowrap; }
-
-  .btn-primary { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
-  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-ghost { background: none; border: 1px solid var(--border); color: var(--text); padding: 8px 16px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
-  .btn-ghost:hover { border-color: var(--text-muted); }
-  .btn-sm { background: var(--border); border: none; color: var(--text); padding: 4px 10px; border-radius: var(--radius); cursor: pointer; font-size: 12px; margin-right: 4px; }
-  .btn-sm:hover { background: var(--accent); color: #fff; }
-  .btn-sm.danger:hover { background: var(--danger); }
-  .btn-danger { background: var(--danger); color: #fff; border: none; padding: 8px 16px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
-  .btn-danger:hover:not(:disabled) { opacity: 0.85; }
-  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
-  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 28px; width: 460px; max-width: 90vw; }
-  .modal.wide { width: 520px; }
-  .modal h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
-  .modal p { color: var(--text-muted); margin-bottom: 20px; line-height: 1.6; }
-  .modal label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); }
-  .modal input[type="text"], .modal select { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 8px 12px; font-size: 14px; }
-  .modal input[type="text"]:focus, .modal select:focus { outline: none; border-color: var(--accent); }
-  .modal input[type="text"]:disabled { opacity: 0.5; cursor: not-allowed; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
-  .hint { font-size: 11px; color: var(--text-muted); }
-  .row { display: flex; gap: 16px; }
-  .row label { flex: 1; }
-  .toggle-row { flex-direction: row !important; align-items: center; gap: 8px !important; cursor: pointer; }
-  .toggle-row input[type="checkbox"] { width: 16px; height: 16px; }
 </style>
