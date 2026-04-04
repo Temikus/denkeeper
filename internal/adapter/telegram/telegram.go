@@ -99,7 +99,19 @@ func (a *Adapter) SetCallbackResolver(r adapter.CallbackResolver) {
 	a.callbackResolver = r
 }
 
+// clearStalePollSession calls deleteWebhook to terminate any lingering
+// getUpdates connection from a previous instance. DropPendingUpdates=false
+// ensures no queued messages are lost.
+func (a *Adapter) clearStalePollSession() {
+	delWH := tgbotapi.DeleteWebhookConfig{DropPendingUpdates: false}
+	if _, err := a.bot.Request(delWH); err != nil {
+		slog.Warn("failed to clear stale webhook/poll session", "error", err)
+	}
+}
+
 func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMessage) error {
+	a.clearStalePollSession()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30
 
