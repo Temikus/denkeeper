@@ -42,8 +42,7 @@
     }
   }
 
-  async function toggleSection(sec, loaded) {
-    if (!loaded) return
+  async function toggleSection(sec) {
     if (expandedSection === sec) { expandedSection = null; return }
     sectionLoading = true
     sectionSaveOk = false
@@ -319,11 +318,10 @@
               class="persona-section"
               class:loaded
               class:missing={!loaded}
-              class:clickable={loaded}
               class:active={expandedSection === sec}
-              onclick={() => toggleSection(sec, loaded)}
-              role={loaded ? 'button' : undefined}
-              tabindex={loaded ? 0 : undefined}
+              onclick={() => toggleSection(sec)}
+              role="button"
+              tabindex="0"
             >
               <div class="section-header">
                 <span class="section-icon">
@@ -341,7 +339,7 @@
               {#if loaded}
                 <div class="section-status loaded-status">{expandedSection === sec ? '\u25BC' : '\u25B6'} Loaded</div>
               {:else}
-                <div class="section-status missing-status">Missing</div>
+                <div class="section-status missing-status">{expandedSection === sec ? '\u25BC' : '\u25B6'} Not created</div>
               {/if}
             </div>
 
@@ -548,10 +546,10 @@
   .section-status { font-size: 12px; font-weight: 500; }
   .loaded-status { color: var(--success); }
   .missing-status { color: var(--danger); font-style: italic; }
-  .persona-section.missing { border-style: dashed; opacity: 0.6; }
-  .persona-section.missing:hover { opacity: 0.8; }
-  .persona-section.clickable { cursor: pointer; }
-  .persona-section.clickable:hover { border-color: var(--accent); }
+  .persona-section { cursor: pointer; }
+  .persona-section:hover { border-color: var(--accent); }
+  .persona-section.missing { border-style: dashed; opacity: 0.7; }
+  .persona-section.missing:hover { opacity: 1; }
   .persona-section.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
 
   /* Persona editor */
