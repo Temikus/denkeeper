@@ -1,11 +1,15 @@
 <script>
-  import { onMount, tick } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
   import { chatState, sendMessage, newSession, setAgent, initChat } from '../chatStore.js'
 
   let agents = $state([])
   let input = $state('')
   let messagesEl
+
+  // Pending approvals from all adapters (polled).
+  let pendingApprovals = $state([])
+  let pollTimer
 
   async function loadAgents() {
     try {
@@ -14,6 +18,29 @@
       await initChat(agents)
     } catch (e) {
       // non-fatal — default will still work
+    }
+  }
+
+  async function loadPendingApprovals() {
+    try {
+      const all = await api.approvals('pending')
+      pendingApprovals = (all || []).filter(a => a.kind === 'tool_call')
+    } catch (_) {}
+  }
+
+  async function resolvePending(appr, approve, autoApproveScope) {
+    appr._resolving = true
+    pendingApprovals = [...pendingApprovals]
+    try {
+      if (approve) {
+        await api.approveApproval(appr.id, autoApproveScope || undefined)
+      } else {
+        await api.denyApproval(appr.id)
+      }
+      await loadPendingApprovals()
+    } catch (_) {
+      appr._resolving = false
+      pendingApprovals = [...pendingApprovals]
     }
   }
 
@@ -64,7 +91,12 @@
     tick().then(scrollBottom)
   })
 
-  onMount(loadAgents)
+  onMount(() => {
+    loadAgents()
+    loadPendingApprovals()
+    pollTimer = setInterval(loadPendingApprovals, 5000)
+  })
+  onDestroy(() => clearInterval(pollTimer))
 </script>
 
 <div class="chat-shell">
@@ -90,6 +122,27 @@
     </span>
     <button class="btn-ghost" onclick={newSession}>New Session</button>
   </div>
+
+  <!-- Pending approvals banner (polled, cross-adapter) -->
+  {#if pendingApprovals.length > 0}
+    <div class="pending-banner">
+      <span class="pending-label">Pending approvals ({pendingApprovals.length})</span>
+      {#each pendingApprovals as appr}
+        <div class="approval-card pending">
+          <span class="approval-icon">?</span>
+          <div class="pending-info">
+            <span class="tool-name">{appr.summary}</span>
+            <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
+          </div>
+          <div class="approval-actions">
+            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving}>Approve</button>
+            <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving}>Deny</button>
+            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Always approve this tool for this agent">Always</button>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Message list -->
   <div class="messages" bind:this={messagesEl}>
@@ -200,6 +253,41 @@
   }
   .session-label { font-size: 12px; color: var(--text-muted); flex: 1; }
   .session-label code { font-family: monospace; font-size: 11px; }
+
+  .pending-banner {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    margin-top: 8px;
+    background: rgba(200, 78, 53, 0.06);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+  }
+  .pending-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    margin-bottom: 2px;
+  }
+  .pending-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .pending-info .tool-name {
+    font-size: 12px;
+    word-break: break-word;
+  }
+  .pending-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
 
   .messages {
     flex: 1;
