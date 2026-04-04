@@ -203,8 +203,8 @@ Every user-facing feature — web dashboard pages, CLI output, and adapter messa
 
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` at build time via `//go:embed dist`.
 
-- Served at the root path when `[api] enabled = true`.
-- 12 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, KV Store, Agents, API Keys.
+- Served at the root path (the API server is enabled by default).
+- 13 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, KV Store, Costs, Agents, API Keys.
 - Agent detail page shows persona directory, loaded sections (soul/user/memory), and MCP tool names.
 - **CI requirement**: The web UI must be built (`npm ci && npm run build` in `web/`) before any Go step that embeds it, including `go build`, `go test`, and `govulncheck`. CI handles this via a dedicated `build-ui` job that builds once and shares the result as a GitHub Actions artifact to all downstream jobs (lint, test, vuln, build matrix). Go module and build caches are also configured.
 - Local dev: `just build-ui` (build once) or `just web-dev` (Vite dev server with hot-reload). `just build-full` builds web then binary in one step.

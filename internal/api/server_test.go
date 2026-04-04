@@ -40,9 +40,11 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 func testConfig(keys ...config.APIKeyConfig) config.APIConfig {
 	return config.APIConfig{
-		Enabled: true,
+		Enabled: boolPtr(true),
 		Listen:  ":0",
 		Keys:    keys,
 	}

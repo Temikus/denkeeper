@@ -22,11 +22,11 @@ import (
 // serverConn tracks a connected MCP server subprocess and its session.
 type serverConn struct {
 	name      string
-	command   string             // binary path (empty for in-process or SSE sessions)
-	args      []string           // command-line arguments
-	transport string             // "stdio", "sse", or "" (in-process)
-	url       string             // remote server URL (SSE only)
-	cfg       config.ToolConfig  // stored for restart
+	command   string            // binary path (empty for in-process or SSE sessions)
+	args      []string          // command-line arguments
+	transport string            // "stdio", "sse", or "" (in-process)
+	url       string            // remote server URL (SSE only)
+	cfg       config.ToolConfig // stored for restart
 	session   *mcp.ClientSession
 }
 

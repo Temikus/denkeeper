@@ -122,7 +122,7 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | bool | `false` | Enable the REST API server |
+| `enabled` | bool | `true` | Enable the REST API server and web dashboard |
 | `listen` | string | `":8080"` | Bind address |
 | `tls` | bool | `false` | Enable HTTPS |
 | `cert_file` | string | — | TLS certificate path |

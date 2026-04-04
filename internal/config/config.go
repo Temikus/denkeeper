@@ -310,9 +310,9 @@ type ToolConfig struct {
 	Command            string            `toml:"command"`
 	Args               []string          `toml:"args"`
 	Env                map[string]string `toml:"env"`
-	Transport          string            `toml:"transport"`             // "stdio" (default) or "sse"
-	URL                string            `toml:"url"`                   // required for sse transport
-	Headers            map[string]string `toml:"headers"`               // optional HTTP headers for sse
+	Transport          string            `toml:"transport"`            // "stdio" (default) or "sse"
+	URL                string            `toml:"url"`                  // required for sse transport
+	Headers            map[string]string `toml:"headers"`              // optional HTTP headers for sse
 	RequestTimeoutSecs int               `toml:"request_timeout_secs"` // per-server override (0 = use global)
 }
 

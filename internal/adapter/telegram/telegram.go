@@ -99,13 +99,15 @@ func (a *Adapter) SetCallbackResolver(r adapter.CallbackResolver) {
 	a.callbackResolver = r
 }
 
-// clearStalePollSession calls deleteWebhook to terminate any lingering
-// getUpdates connection from a previous instance. DropPendingUpdates=false
-// ensures no queued messages are lost.
+// clearStalePollSession forces Telegram to drop any lingering getUpdates
+// long-poll from a previous instance by issuing a short-timeout getUpdates
+// call. The 409 Conflict (if any) lands here instead of in the main loop,
+// and Telegram's server-side session is reset so the next call succeeds.
 func (a *Adapter) clearStalePollSession() {
-	delWH := tgbotapi.DeleteWebhookConfig{DropPendingUpdates: false}
-	if _, err := a.bot.Request(delWH); err != nil {
-		slog.Warn("failed to clear stale webhook/poll session", "error", err)
+	probe := tgbotapi.NewUpdate(0)
+	probe.Timeout = 1 // 1-second timeout — just enough to evict the stale session
+	if _, err := a.bot.GetUpdates(probe); err != nil {
+		slog.Info("cleared stale telegram poll session", "error", err)
 	}
 }
 

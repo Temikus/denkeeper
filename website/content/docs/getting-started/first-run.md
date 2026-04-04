@@ -69,7 +69,7 @@ Send a message to your bot in Telegram. You should see a response within a few s
 
 ## Web dashboard setup
 
-If you have the API enabled (`[api] enabled = true` in your config), the web dashboard offers a streamlined first-run setup.
+The API and web dashboard are enabled by default. On first run, the web dashboard offers a streamlined setup flow.
 
 When Denkeeper starts with no API keys and no password configured, it generates a **one-time setup PIN** and logs it to the console:
 

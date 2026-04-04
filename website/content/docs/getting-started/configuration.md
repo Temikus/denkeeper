@@ -65,7 +65,7 @@ Secrets and select config fields can be set via `DENKEEPER_*` environment variab
 | `DENKEEPER_LOG_LEVEL` | `log.level` |
 | `DENKEEPER_LOG_FORMAT` | `log.format` |
 | `DENKEEPER_MEMORY_DB_PATH` | `memory.db_path` |
-| `DENKEEPER_API_ENABLED` | `api.enabled` (accepts `"true"` or `"1"`) |
+| `DENKEEPER_API_ENABLED` | `api.enabled` (accepts `"true"`/`"1"` to enable, `"false"`/`"0"` to disable) |
 | `DENKEEPER_API_LISTEN` | `api.listen` |
 | `DENKEEPER_SESSION_TIER` | `session.tier` |
 

@@ -313,11 +313,10 @@ channel = "telegram:YOUR_CHAT_ID"
 
 ### REST API
 
-Enable the API with `[api] enabled = true` in your config. All endpoints (except `/health`) require a `Bearer` token matching a configured API key.
+The API server and web dashboard are enabled by default (listening on `:8080`). All endpoints (except `/health`) require a `Bearer` token matching a configured API key.
 
 ```toml
 [api]
-enabled = true
 listen = "0.0.0.0:8080"
 
 [[api.keys]]
