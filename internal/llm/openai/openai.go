@@ -14,6 +14,42 @@ import (
 
 const defaultBaseURL = "https://api.openai.com/v1"
 
+// modelPricing holds per-million-token pricing (input, output) in USD.
+type modelPricing struct {
+	inputPerMTok  float64
+	outputPerMTok float64
+}
+
+// pricingTable maps model name prefixes to their per-million-token pricing.
+// Prices from https://platform.openai.com/docs/pricing
+var pricingTable = []struct {
+	prefix  string
+	pricing modelPricing
+}{
+	{"gpt-4.1-nano", modelPricing{0.10, 0.40}},
+	{"gpt-4.1-mini", modelPricing{0.40, 1.60}},
+	{"gpt-4.1", modelPricing{2.0, 8.0}},
+	{"gpt-4o-mini", modelPricing{0.15, 0.60}},
+	{"gpt-4o", modelPricing{2.50, 10.0}},
+	{"o4-mini", modelPricing{1.10, 4.40}},
+	{"o3-mini", modelPricing{1.10, 4.40}},
+	{"o3", modelPricing{2.0, 8.0}},
+	{"o1-mini", modelPricing{1.10, 4.40}},
+	{"o1", modelPricing{15.0, 60.0}},
+}
+
+// estimateCost returns the estimated USD cost based on model pricing.
+// Returns 0 if the model is unrecognized (e.g. vLLM or LiteLLM endpoints).
+func estimateCost(model string, inputTokens, outputTokens int) float64 {
+	for _, entry := range pricingTable {
+		if strings.HasPrefix(model, entry.prefix) {
+			return float64(inputTokens)/1_000_000*entry.pricing.inputPerMTok +
+				float64(outputTokens)/1_000_000*entry.pricing.outputPerMTok
+		}
+	}
+	return 0
+}
+
 // Client implements llm.Provider for the OpenAI Chat Completions API.
 // Compatible with any OpenAI-format endpoint (OpenAI, Azure OpenAI, vLLM, LiteLLM).
 type Client struct {
@@ -125,6 +161,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 			Completion: apiResp.Usage.CompletionTokens,
 			Total:      apiResp.Usage.TotalTokens,
 		},
+		CostUSD: estimateCost(apiResp.Model, apiResp.Usage.PromptTokens, apiResp.Usage.CompletionTokens),
 	}, nil
 }
 

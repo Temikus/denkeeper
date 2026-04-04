@@ -428,3 +428,36 @@ func TestFundsRemaining_HTTPError(t *testing.T) {
 		t.Fatal("expected error for non-200 response")
 	}
 }
+
+func TestChatCompletion_CostUSD_FromUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := apiResponse{
+			ID:    "chatcmpl-cost",
+			Model: "anthropic/claude-sonnet-4-5",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+				Cost:             0.00045,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "anthropic/claude-sonnet-4-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.CostUSD != 0.00045 {
+		t.Errorf("CostUSD = %f, want 0.00045", resp.CostUSD)
+	}
+}

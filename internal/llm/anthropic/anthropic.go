@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -19,6 +20,40 @@ const (
 	anthropicVersion = "2023-06-01"
 	messagesEndpoint = "/v1/messages"
 )
+
+// modelPricing holds per-million-token pricing (input, output) in USD.
+type modelPricing struct {
+	inputPerMTok  float64
+	outputPerMTok float64
+}
+
+// pricingTable maps model name prefixes to their per-million-token pricing.
+// Prices from https://docs.anthropic.com/en/docs/about-claude/models
+var pricingTable = []struct {
+	prefix  string
+	pricing modelPricing
+}{
+	{"claude-opus-4", modelPricing{15.0, 75.0}},
+	{"claude-sonnet-4", modelPricing{3.0, 15.0}},
+	{"claude-3-7-sonnet", modelPricing{3.0, 15.0}},
+	{"claude-3-5-sonnet", modelPricing{3.0, 15.0}},
+	{"claude-3-5-haiku", modelPricing{0.80, 4.0}},
+	{"claude-3-opus", modelPricing{15.0, 75.0}},
+	{"claude-3-sonnet", modelPricing{3.0, 15.0}},
+	{"claude-3-haiku", modelPricing{0.25, 1.25}},
+}
+
+// estimateCost returns the estimated USD cost based on model pricing.
+// Returns 0 if the model is unrecognized.
+func estimateCost(model string, inputTokens, outputTokens int) float64 {
+	for _, entry := range pricingTable {
+		if strings.HasPrefix(model, entry.prefix) {
+			return float64(inputTokens)/1_000_000*entry.pricing.inputPerMTok +
+				float64(outputTokens)/1_000_000*entry.pricing.outputPerMTok
+		}
+	}
+	return 0
+}
 
 // Client implements llm.Provider against the Anthropic Messages API.
 type Client struct {
@@ -219,6 +254,7 @@ func (c *Client) parseResponse(r *apiResponse) (*llm.ChatResponse, error) {
 			Completion: r.Usage.OutputTokens,
 			Total:      r.Usage.InputTokens + r.Usage.OutputTokens,
 		},
+		CostUSD: estimateCost(r.Model, r.Usage.InputTokens, r.Usage.OutputTokens),
 	}
 
 	for _, block := range r.Content {

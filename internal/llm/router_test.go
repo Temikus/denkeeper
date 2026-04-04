@@ -718,3 +718,24 @@ func TestRouter_SetDefaultModel(t *testing.T) {
 		t.Errorf("model after set = %q, want updated-model", r.DefaultModel())
 	}
 }
+
+func TestTokenCost_PrefersProviderCost(t *testing.T) {
+	resp := &ChatResponse{
+		CostUSD:    0.00123,
+		TokensUsed: TokenUsage{Total: 1000},
+	}
+	if got := TokenCost(resp); got != 0.00123 {
+		t.Errorf("TokenCost with CostUSD = %f, want 0.00123", got)
+	}
+}
+
+func TestTokenCost_FallbackEstimate(t *testing.T) {
+	resp := &ChatResponse{
+		CostUSD:    0,
+		TokensUsed: TokenUsage{Total: 1000},
+	}
+	want := float64(1000) / 1000.0 * 0.01
+	if got := TokenCost(resp); got != want {
+		t.Errorf("TokenCost fallback = %f, want %f", got, want)
+	}
+}

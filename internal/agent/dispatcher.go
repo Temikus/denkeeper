@@ -167,7 +167,17 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 				trace.WithAttributes(
 					attribute.String("adapter", msg.Adapter),
 					attribute.String("agent", e.Name())))
-			if err := e.HandleMessage(msgCtx, msg); err != nil {
+
+			// Refresh adapter typing indicator on thinking/tool_start events
+			// so the user sees continuous activity during long processing.
+			onEvent := func(evt ChatEvent) {
+				if evt.Type == "thinking" || evt.Type == "tool_start" {
+					if a, ok := d.adapters[msg.Adapter]; ok {
+						_ = a.SendTyping(msgCtx, msg.ExternalID)
+					}
+				}
+			}
+			if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
 				d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
 				span.RecordError(err)
 			}

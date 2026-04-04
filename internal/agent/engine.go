@@ -561,11 +561,14 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
 type ChatEvent struct {
-	Type     string `json:"type"`                  // "tool_start", "tool_end"
-	Tool     string `json:"tool,omitempty"`        // tool name
-	Round    int    `json:"round,omitempty"`       // 1-based tool round
-	Duration int64  `json:"duration_ms,omitempty"` // tool execution time
-	Error    string `json:"error,omitempty"`       // tool error (if any)
+	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage"
+	Tool     string  `json:"tool,omitempty"`        // tool name
+	Round    int     `json:"round,omitempty"`       // 1-based tool round
+	Duration int64   `json:"duration_ms,omitempty"` // tool execution time
+	Error    string  `json:"error,omitempty"`       // tool error (if any)
+	Text     string  `json:"text,omitempty"`        // human-readable status message
+	Tokens   int     `json:"tokens,omitempty"`      // total tokens used (usage event)
+	CostUSD  float64 `json:"cost_usd,omitempty"`    // estimated cost in USD (usage event)
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -690,6 +693,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, err
 	}
 
+	if onEvent != nil {
+		onEvent(ChatEvent{
+			Type:    "usage",
+			Tokens:  resp.TokensUsed.Total,
+			CostUSD: llm.TokenCost(resp),
+		})
+	}
+
 	e.logger.Info("llm response received",
 		"adapter", msg.Adapter,
 		"finish_reason", resp.FinishReason,
@@ -779,10 +790,23 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 // LLM produces a text response. If onEvent is non-nil, it is called for each
 // tool execution start/end so the caller can stream status to the client.
 func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "thinking"})
+	}
+
 	resp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
 		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
 	}
+
+	// Accumulate tokens and cost across all rounds so the caller sees the
+	// full picture, not just the final round's usage.
+	var totalUsage llm.TokenUsage
+	var totalCost float64
+	totalUsage.Prompt += resp.TokensUsed.Prompt
+	totalUsage.Completion += resp.TokensUsed.Completion
+	totalUsage.Total += resp.TokensUsed.Total
+	totalCost += resp.CostUSD
 
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		if round >= maxToolRounds {
@@ -832,10 +856,19 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 			})
 		}
 
+		if onEvent != nil {
+			onEvent(ChatEvent{Type: "thinking", Round: round + 1, Text: "Processing tool results..."})
+		}
+
 		resp, err = e.router.Complete(ctx, convID, llmMessages)
 		if err != nil {
 			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
+
+		totalUsage.Prompt += resp.TokensUsed.Prompt
+		totalUsage.Completion += resp.TokensUsed.Completion
+		totalUsage.Total += resp.TokensUsed.Total
+		totalCost += resp.CostUSD
 
 		e.logger.Info("tool round complete",
 			"round", round+1,
@@ -845,6 +878,10 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 			"tokens_total", resp.TokensUsed.Total,
 		)
 	}
+
+	// Replace per-round usage with accumulated totals.
+	resp.TokensUsed = totalUsage
+	resp.CostUSD = totalCost
 	return resp, llmMessages, nil
 }
 
@@ -925,11 +962,17 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 }
 
 // HandleMessage processes a single incoming message and sends the response
-// back via the adapter's SendFunc. It delegates the full pipeline to
-// chatWithApproval so it can attach inline keyboard buttons when an approval
-// was created during this call.
+// back via the adapter's SendFunc. It delegates to HandleMessageWithEvents
+// with a nil event callback.
 func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
-	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg, nil)
+	return e.HandleMessageWithEvents(ctx, msg, nil)
+}
+
+// HandleMessageWithEvents is like HandleMessage but calls onEvent for
+// intermediate pipeline events (thinking, tool calls, usage). The Dispatcher
+// uses this to refresh adapter typing indicators during processing.
+func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) error {
+	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg, onEvent)
 	if err != nil {
 		return err
 	}

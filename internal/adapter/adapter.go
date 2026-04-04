@@ -66,5 +66,8 @@ type Adapter interface {
 	Name() string
 	Start(ctx context.Context, incoming chan<- IncomingMessage) error
 	Send(ctx context.Context, msg OutgoingMessage) error
+	// SendTyping sends a typing/activity indicator to the given chat.
+	// Used by the Dispatcher to keep the indicator alive during long processing.
+	SendTyping(ctx context.Context, externalID string) error
 	Stop() error
 }

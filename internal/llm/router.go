@@ -150,7 +150,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 			"tokens_total", resp.TokensUsed.Total,
 		)
 		r.recordOTelSuccess(start, resp, attrs)
-		r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+		r.costTracker.RecordWithTokens(sessionID, TokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 		return resp, nil
 	}
 
@@ -170,7 +170,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	r.recordOTelSuccess(start, resp, attrs)
-	r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+	r.costTracker.RecordWithTokens(sessionID, TokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 	return resp, nil
 }
 
@@ -182,7 +182,7 @@ func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, attrs me
 		metric.WithAttributes(attribute.String("direction", "prompt")))
 	r.mTokens.Add(ctx, int64(resp.TokensUsed.Completion), attrs,
 		metric.WithAttributes(attribute.String("direction", "completion")))
-	cost := tokenCost(resp)
+	cost := TokenCost(resp)
 	if cost > 0 {
 		r.mCost.Add(ctx, cost, attrs)
 	}
@@ -362,7 +362,12 @@ func doWaitAndRetry(ctx context.Context, maxRetries int, backoff string, fn func
 	return err
 }
 
-// tokenCost returns the estimated USD cost for a chat response.
-func tokenCost(resp *ChatResponse) float64 {
+// TokenCost returns the USD cost for a chat response. If the provider reported
+// a real cost (CostUSD > 0), that value is used. Otherwise falls back to a
+// rough estimate of $0.01 per 1K tokens.
+func TokenCost(resp *ChatResponse) float64 {
+	if resp.CostUSD > 0 {
+		return resp.CostUSD
+	}
 	return float64(resp.TokensUsed.Total) / 1000.0 * 0.01
 }

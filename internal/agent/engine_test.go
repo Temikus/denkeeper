@@ -2661,32 +2661,50 @@ func TestEngine_ChatWithEvents_ToolCallEvents(t *testing.T) {
 		t.Errorf("response = %q, want %q", text, "It's sunny and 3pm.")
 	}
 
-	// Expect 4 events: tool_start, tool_end, tool_start, tool_end (2 tools in 1 round).
-	if len(events) != 4 {
-		t.Fatalf("got %d events, want 4: %+v", len(events), events)
+	// Expect 7 events: thinking, tool_start, tool_end, tool_start, tool_end, thinking, usage.
+	if len(events) != 7 {
+		t.Fatalf("got %d events, want 7: %+v", len(events), events)
+	}
+
+	// Initial thinking event before first LLM call.
+	if events[0].Type != "thinking" {
+		t.Errorf("event[0] = %+v, want thinking", events[0])
 	}
 
 	// First tool: get_weather
-	if events[0].Type != "tool_start" || events[0].Tool != "get_weather" || events[0].Round != 1 {
-		t.Errorf("event[0] = %+v, want tool_start/get_weather/round=1", events[0])
+	if events[1].Type != "tool_start" || events[1].Tool != "get_weather" || events[1].Round != 1 {
+		t.Errorf("event[1] = %+v, want tool_start/get_weather/round=1", events[1])
 	}
-	if events[1].Type != "tool_end" || events[1].Tool != "get_weather" || events[1].Round != 1 {
-		t.Errorf("event[1] = %+v, want tool_end/get_weather/round=1", events[1])
+	if events[2].Type != "tool_end" || events[2].Tool != "get_weather" || events[2].Round != 1 {
+		t.Errorf("event[2] = %+v, want tool_end/get_weather/round=1", events[2])
 	}
 	// tool_end should have error since tool is unknown
-	if events[1].Error == "" {
-		t.Error("event[1].Error should be non-empty for unknown tool")
+	if events[2].Error == "" {
+		t.Error("event[2].Error should be non-empty for unknown tool")
 	}
-	if events[1].Duration < 0 {
-		t.Errorf("event[1].Duration = %d, want >= 0", events[1].Duration)
+	if events[2].Duration < 0 {
+		t.Errorf("event[2].Duration = %d, want >= 0", events[2].Duration)
 	}
 
 	// Second tool: get_time
-	if events[2].Type != "tool_start" || events[2].Tool != "get_time" || events[2].Round != 1 {
-		t.Errorf("event[2] = %+v, want tool_start/get_time/round=1", events[2])
+	if events[3].Type != "tool_start" || events[3].Tool != "get_time" || events[3].Round != 1 {
+		t.Errorf("event[3] = %+v, want tool_start/get_time/round=1", events[3])
 	}
-	if events[3].Type != "tool_end" || events[3].Tool != "get_time" || events[3].Round != 1 {
-		t.Errorf("event[3] = %+v, want tool_end/get_time/round=1", events[3])
+	if events[4].Type != "tool_end" || events[4].Tool != "get_time" || events[4].Round != 1 {
+		t.Errorf("event[4] = %+v, want tool_end/get_time/round=1", events[4])
+	}
+
+	// Thinking before second LLM call (processing tool results).
+	if events[5].Type != "thinking" || events[5].Round != 1 || events[5].Text != "Processing tool results..." {
+		t.Errorf("event[5] = %+v, want thinking/round=1", events[5])
+	}
+
+	// Usage event with accumulated totals.
+	if events[6].Type != "usage" || events[6].Tokens != 35 {
+		t.Errorf("event[6] = %+v, want usage/tokens=35", events[6])
+	}
+	if events[6].CostUSD <= 0 {
+		t.Errorf("event[6].CostUSD = %f, want > 0", events[6].CostUSD)
 	}
 }
 

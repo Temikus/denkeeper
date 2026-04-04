@@ -110,6 +110,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 			Completion: apiResp.Usage.CompletionTokens,
 			Total:      apiResp.Usage.TotalTokens,
 		},
+		CostUSD: apiResp.Usage.Cost,
 	}, nil
 }
 
@@ -251,9 +252,10 @@ type apiChoice struct {
 }
 
 type apiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	TotalTokens      int     `json:"total_tokens"`
+	Cost             float64 `json:"cost"` // real cost reported by OpenRouter
 }
 
 type keyResponse struct {

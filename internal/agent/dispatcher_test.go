@@ -198,7 +198,8 @@ func (m *mockAdapter) Send(_ context.Context, msg adapter.OutgoingMessage) error
 	m.sent = append(m.sent, msg)
 	return nil
 }
-func (m *mockAdapter) Stop() error { return nil }
+func (m *mockAdapter) SendTyping(_ context.Context, _ string) error { return nil }
+func (m *mockAdapter) Stop() error                                  { return nil }
 
 func TestDispatcher_SendFor(t *testing.T) {
 	ma := &mockAdapter{name: "telegram"}

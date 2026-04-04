@@ -84,6 +84,10 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 	return ctx.Err()
 }
 
+func (a *Adapter) SendTyping(_ context.Context, externalID string) error {
+	return a.session.ChannelTyping(externalID)
+}
+
 // Send sends a text message (and optional buttons) to a Discord channel.
 // msg.ExternalID must be the Discord channel ID.
 func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {

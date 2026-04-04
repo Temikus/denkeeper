@@ -32,10 +32,11 @@ Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router 
 
 **Engine** (`internal/agent/engine.go`) is the per-agent orchestrator. Each named agent gets its own Engine with its own persona, skills, permissions, and LLM router. Three public entry points:
 - `Chat(ctx, msg) (string, error)` — runs the full pipeline and returns the response text. Used by the REST API and any caller that wants the reply directly.
-- `ChatWithEvents(ctx, msg, onEvent ChatEventFunc) (string, error)` — like `Chat` but calls `onEvent` for intermediate pipeline events (`tool_start`/`tool_end`) so SSE callers can stream tool call status in real time.
-- `HandleMessage(ctx, msg) error` — calls `Chat` then dispatches the response via the `SendFunc` callback. Used by the Dispatcher and Scheduler.
+- `ChatWithEvents(ctx, msg, onEvent ChatEventFunc) (string, error)` — like `Chat` but calls `onEvent` for intermediate pipeline events (`thinking`, `tool_start`, `tool_end`, `usage`) so SSE callers can stream tool call status and cost in real time.
+- `HandleMessage(ctx, msg) error` — delegates to `HandleMessageWithEvents` with a nil callback. Used by the Dispatcher and Scheduler.
+- `HandleMessageWithEvents(ctx, msg, onEvent ChatEventFunc) error` — like `HandleMessage` but forwards events to the callback; the Dispatcher uses this to refresh adapter typing indicators via `SendTyping`.
 
-The pipeline steps are: check permissions → get/create conversation → store user message → load history → build system prompt (persona + trigger-matched skills) → call `Router.Complete()` (budget check + provider call + cost record) → optional tool-call loop (emitting `ChatEvent` callbacks per tool) → extract memory update → store assistant message → return text.
+The pipeline steps are: check permissions → get/create conversation → store user message → load history → build system prompt (persona + trigger-matched skills) → call `Router.Complete()` (budget check + provider call + cost record) → optional tool-call loop (emitting `ChatEvent` callbacks per tool) → emit `usage` event with total tokens and cost → extract memory update → store assistant message → return text.
 
 **Three key interfaces** define the extension points:
 
@@ -83,7 +84,7 @@ Cron matching uses bitsets for O(1) field checks. The scheduler dispatches messa
 - **TLS**: Optional (`api.tls = true` with `cert_file`/`key_file`).
 - **Health**: `GET /api/v1/health` (no auth required).
 - Authenticated endpoints use `server.RequireScope(scope, handler)` middleware.
-- **Chat**: `POST /api/v1/chat` (scope `chat`) — JSON body `{agent, session_id, message, user_id, user_name}`; returns `{session_id, response}`. Set `Accept: text/event-stream` for SSE streaming: emits `{"type":"tool_start","tool":"...","round":N}` and `{"type":"tool_end","tool":"...","round":N,"duration_ms":N}` events during agentic tool loops, then `{"type":"content","text":"..."}` and `{"type":"done","session_id":"..."}`. `session_id` is auto-generated if omitted; pass the same value in subsequent requests to continue the conversation.
+- **Chat**: `POST /api/v1/chat` (scope `chat`) — JSON body `{agent, session_id, message, user_id, user_name}`; returns `{session_id, response}`. Set `Accept: text/event-stream` for SSE streaming: emits `{"type":"thinking","text":"..."}` before each LLM call, `{"type":"tool_start","tool":"...","round":N}` and `{"type":"tool_end","tool":"...","round":N,"duration_ms":N}` during agentic tool loops, `{"type":"usage","tokens":N,"cost_usd":F}` after the response completes, then `{"type":"content","text":"..."}` and `{"type":"done","session_id":"..."}`. `session_id` is auto-generated if omitted; pass the same value in subsequent requests to continue the conversation.
 - **Session deletion**: `DELETE /api/v1/sessions/{id}` (scope `sessions:read`) — removes the conversation and all its messages (204, idempotent).
 - **Approvals**: `GET /api/v1/approvals` / `GET /api/v1/approvals/{id}` (scope `approvals:read`) — list or fetch approval requests. `POST /api/v1/approvals/{id}/approve` / `.../deny` (scope `approvals:write`) — resolve programmatically.
 - **Schedule CRUD**: `POST /api/v1/schedules` (scope `schedules:write`) — create schedule with name, expression, channel, skill, session_mode, session_tier, agent, tags, enabled. `PATCH /api/v1/schedules/{name}` (scope `schedules:write`) — partial update. `DELETE /api/v1/schedules/{name}` (scope `schedules:write`) — unregister and remove from config. All persist to TOML config atomically.

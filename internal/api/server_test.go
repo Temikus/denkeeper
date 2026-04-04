@@ -897,28 +897,35 @@ func TestChat_SSEResponse(t *testing.T) {
 	}
 
 	// Parse SSE events.
-	var events []map[string]string
+	var events []map[string]any
 	scanner := bufio.NewScanner(rec.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		var ev map[string]string
+		var ev map[string]any
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
 			t.Fatalf("parse SSE event: %v", err)
 		}
 		events = append(events, ev)
 	}
 
-	if len(events) != 2 {
-		t.Fatalf("events count = %d, want 2", len(events))
+	// Events: thinking, usage, content, done
+	if len(events) != 4 {
+		t.Fatalf("events count = %d, want 4; events: %v", len(events), events)
 	}
-	if events[0]["type"] != "content" || events[0]["text"] != "Hello from mock!" {
-		t.Errorf("events[0] = %v, want content/Hello from mock!", events[0])
+	if events[0]["type"] != "thinking" {
+		t.Errorf("events[0] = %v, want thinking", events[0])
 	}
-	if events[1]["type"] != "done" || events[1]["session_id"] == "" {
-		t.Errorf("events[1] = %v, want done with session_id", events[1])
+	if events[1]["type"] != "usage" {
+		t.Errorf("events[1] = %v, want usage", events[1])
+	}
+	if events[2]["type"] != "content" || events[2]["text"] != "Hello from mock!" {
+		t.Errorf("events[2] = %v, want content/Hello from mock!", events[2])
+	}
+	if events[3]["type"] != "done" {
+		t.Errorf("events[3] = %v, want done with session_id", events[3])
 	}
 }
 
@@ -1938,20 +1945,29 @@ func TestChat_SSEToolEvents(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	// Expect: tool_start, tool_end, content, done = 4 events.
-	if len(events) != 4 {
-		t.Fatalf("events count = %d, want 4; events: %+v", len(events), events)
+	// Expect: thinking, tool_start, tool_end, thinking, usage, content, done = 7 events.
+	if len(events) != 7 {
+		t.Fatalf("events count = %d, want 7; events: %+v", len(events), events)
 	}
-	if events[0]["type"] != "tool_start" || events[0]["tool"] != "get_weather" {
-		t.Errorf("events[0] = %v, want tool_start/get_weather", events[0])
+	if events[0]["type"] != "thinking" {
+		t.Errorf("events[0] = %v, want thinking", events[0])
 	}
-	if events[1]["type"] != "tool_end" || events[1]["tool"] != "get_weather" {
-		t.Errorf("events[1] = %v, want tool_end/get_weather", events[1])
+	if events[1]["type"] != "tool_start" || events[1]["tool"] != "get_weather" {
+		t.Errorf("events[1] = %v, want tool_start/get_weather", events[1])
 	}
-	if events[2]["type"] != "content" || events[2]["text"] != "It's sunny!" {
-		t.Errorf("events[2] = %v, want content/It's sunny!", events[2])
+	if events[2]["type"] != "tool_end" || events[2]["tool"] != "get_weather" {
+		t.Errorf("events[2] = %v, want tool_end/get_weather", events[2])
 	}
-	if events[3]["type"] != "done" {
-		t.Errorf("events[3] = %v, want done", events[3])
+	if events[3]["type"] != "thinking" {
+		t.Errorf("events[3] = %v, want thinking", events[3])
+	}
+	if events[4]["type"] != "usage" {
+		t.Errorf("events[4] = %v, want usage", events[4])
+	}
+	if events[5]["type"] != "content" || events[5]["text"] != "It's sunny!" {
+		t.Errorf("events[5] = %v, want content/It's sunny!", events[5])
+	}
+	if events[6]["type"] != "done" {
+		t.Errorf("events[6] = %v, want done", events[6])
 	}
 }

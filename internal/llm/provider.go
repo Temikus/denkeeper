@@ -80,6 +80,7 @@ type ChatResponse struct {
 	TokensUsed   TokenUsage
 	Model        string
 	FinishReason string
+	CostUSD      float64 // provider-reported or estimated cost in USD
 }
 
 // ToolCall represents a tool invocation requested by the LLM (OpenAI format).

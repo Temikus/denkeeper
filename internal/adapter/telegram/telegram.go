@@ -190,6 +190,15 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 	}
 }
 
+func (a *Adapter) SendTyping(_ context.Context, externalID string) error {
+	chatID, err := strconv.ParseInt(externalID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parsing chat ID: %w", err)
+	}
+	_, err = a.bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+	return err
+}
+
 func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 	chatID, err := strconv.ParseInt(msg.ExternalID, 10, 64)
 	if err != nil {
