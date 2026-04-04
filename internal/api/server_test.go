@@ -1717,6 +1717,60 @@ func TestRemovePlugin_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"command": "/usr/bin/new-cmd"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/nonexistent", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUpdateTool_MissingCommand(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"transport": "stdio"}` // no command
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/nonexistent", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestUpdateTool_NilLifecycleMgr_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = nil
+	srv := New(cfg, deps, testLogger())
+
+	body := `{"command": "/usr/bin/test"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/any", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Browser profile & session endpoints
 // ---------------------------------------------------------------------------

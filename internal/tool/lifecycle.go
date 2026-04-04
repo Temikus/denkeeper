@@ -127,6 +127,56 @@ func (lm *LifecycleManager) RemoveTool(ctx context.Context, name string) error {
 	return nil
 }
 
+// UpdateTool replaces the configuration of an existing MCP tool server.
+// It removes the old server and re-adds it with the new config atomically.
+func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg config.ToolConfig) error {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	switch transport {
+	case "stdio":
+		if cfg.Command == "" {
+			return fmt.Errorf("command is required for stdio transport")
+		}
+	case "sse":
+		if cfg.URL == "" {
+			return fmt.Errorf("url is required for sse transport")
+		}
+	default:
+		return fmt.Errorf("unsupported transport %q", transport)
+	}
+
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	// Verify the tool exists.
+	if _, ok := lm.toolMgr.ServerInfo(name); !ok {
+		return fmt.Errorf("tool %q not found", name)
+	}
+
+	// Remove old server.
+	if err := lm.toolMgr.UnregisterServer(name); err != nil {
+		return fmt.Errorf("unregistering tool %q: %w", name, err)
+	}
+
+	// Register with new config.
+	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
+		return fmt.Errorf("re-registering tool %q: %w", name, err)
+	}
+
+	// Persist updated config.
+	if err := removeToolFromConfig(lm.configPath, name); err != nil {
+		return fmt.Errorf("removing old config for tool %q: %w", name, err)
+	}
+	if err := addToolToConfig(lm.configPath, name, cfg); err != nil {
+		return fmt.Errorf("persisting updated config for tool %q: %w", name, err)
+	}
+
+	lm.logger.Info("tool updated", "name", name, "transport", transport)
+	return nil
+}
+
 // RestartTool stops and re-registers an MCP tool server, resetting its health state.
 func (lm *LifecycleManager) RestartTool(ctx context.Context, name string) error {
 	lm.mu.Lock()

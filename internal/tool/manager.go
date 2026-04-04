@@ -501,6 +501,19 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	}, true
 }
 
+// ServerToolConfig returns the stored config.ToolConfig for a registered server.
+// This is used to pre-populate edit forms. Returns false if not found.
+func (m *Manager) ServerToolConfig(name string) (config.ToolConfig, bool) {
+	m.mu.RLock()
+	sc, ok := m.servers[name]
+	m.mu.RUnlock()
+
+	if !ok {
+		return config.ToolConfig{}, false
+	}
+	return sc.cfg, true
+}
+
 // Close shuts down all MCP server connections.
 func (m *Manager) Close() error {
 	m.mu.Lock()

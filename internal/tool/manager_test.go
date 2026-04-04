@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
@@ -142,5 +143,30 @@ func TestToolNames_WithTools(t *testing.T) {
 		if names[i] != w {
 			t.Errorf("ToolNames()[%d] = %q, want %q", i, names[i], w)
 		}
+	}
+}
+
+func TestManager_ServerToolConfig_NotFound(t *testing.T) {
+	m := NewManager(testLogger())
+	_, ok := m.ServerToolConfig("nonexistent")
+	if ok {
+		t.Error("expected ServerToolConfig to return false for unknown server")
+	}
+}
+
+func TestManager_ServerToolConfig_ReturnsStoredConfig(t *testing.T) {
+	m := NewManager(testLogger())
+	cfg := config.ToolConfig{Command: "/usr/bin/test", Args: []string{"--verbose"}, Transport: "stdio"}
+	m.servers["my-tool"] = &serverConn{name: "my-tool", command: cfg.Command, transport: cfg.Transport, cfg: cfg}
+
+	got, ok := m.ServerToolConfig("my-tool")
+	if !ok {
+		t.Fatal("expected ServerToolConfig to return true for registered server")
+	}
+	if got.Command != cfg.Command {
+		t.Errorf("Command = %q, want %q", got.Command, cfg.Command)
+	}
+	if len(got.Args) != 1 || got.Args[0] != "--verbose" {
+		t.Errorf("Args = %v, want [--verbose]", got.Args)
 	}
 }

@@ -119,6 +119,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(cfg),
   }),
+  updateTool: (name, cfg) => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(cfg),
+  }),
   removeTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
   toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),

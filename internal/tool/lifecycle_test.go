@@ -91,6 +91,38 @@ func TestLifecycleManager_ConflictDetection(t *testing.T) {
 	}
 }
 
+func TestLifecycleManager_UpdateTool_NotFound(t *testing.T) {
+	lm, _ := newTestLifecycleMgr(t)
+	cfg := config.ToolConfig{Command: "/usr/bin/new-cmd"}
+	err := lm.UpdateTool(t.Context(), "nonexistent", cfg)
+	if err == nil {
+		t.Error("expected error updating nonexistent tool")
+	}
+}
+
+func TestLifecycleManager_UpdateTool_MissingCommand(t *testing.T) {
+	lm, _ := newTestLifecycleMgr(t)
+	// Inject a fake server so existence check passes.
+	lm.toolMgr.servers["fake"] = &serverConn{name: "fake", command: "/bin/old", transport: "stdio"}
+
+	cfg := config.ToolConfig{Transport: "stdio"} // no command
+	err := lm.UpdateTool(t.Context(), "fake", cfg)
+	if err == nil {
+		t.Error("expected error when command is missing for stdio transport")
+	}
+}
+
+func TestLifecycleManager_UpdateTool_MissingURL(t *testing.T) {
+	lm, _ := newTestLifecycleMgr(t)
+	lm.toolMgr.servers["fake"] = &serverConn{name: "fake", url: "http://old", transport: "sse"}
+
+	cfg := config.ToolConfig{Transport: "sse"} // no url
+	err := lm.UpdateTool(t.Context(), "fake", cfg)
+	if err == nil {
+		t.Error("expected error when url is missing for sse transport")
+	}
+}
+
 func TestBuildPluginDockerArgs(t *testing.T) {
 	cfg := config.PluginConfig{
 		Type:        "docker",

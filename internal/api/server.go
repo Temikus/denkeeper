@@ -139,6 +139,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/tools", s.RequireScope("tools:read", s.handleListTools))
 	mux.HandleFunc("GET /api/v1/tools/{name}", s.RequireScope("tools:read", s.handleGetTool))
 	mux.HandleFunc("POST /api/v1/tools", s.RequireScope("tools:write", s.handleAddTool))
+	mux.HandleFunc("PUT /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleUpdateTool))
 	mux.HandleFunc("DELETE /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleRemoveTool))
 	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
 	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
@@ -887,7 +888,27 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tool not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, info)
+
+	// Include config fields for edit pre-population.
+	resp := map[string]any{
+		"name":          info.Name,
+		"command":       info.Command,
+		"args_count":    info.ArgsCount,
+		"tool_names":    info.ToolNames,
+		"status":        info.Status,
+		"transport":     info.Transport,
+		"url":           info.URL,
+		"restart_count": info.RestartCount,
+		"last_error":    info.LastError,
+		"uptime_secs":   info.UptimeSecs,
+	}
+	if cfg, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
+		resp["args"] = cfg.Args
+		resp["env"] = cfg.Env
+		resp["headers"] = cfg.Headers
+		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
@@ -931,6 +952,45 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 
 	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(body.Name)
 	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	var body struct {
+		Command            string            `json:"command"`
+		Args               []string          `json:"args"`
+		Env                map[string]string `json:"env"`
+		Transport          string            `json:"transport"`
+		URL                string            `json:"url"`
+		Headers            map[string]string `json:"headers"`
+		RequestTimeoutSecs int               `json:"request_timeout_secs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	cfg := config.ToolConfig{
+		Command:            body.Command,
+		Args:               body.Args,
+		Env:                body.Env,
+		Transport:          body.Transport,
+		URL:                body.URL,
+		Headers:            body.Headers,
+		RequestTimeoutSecs: body.RequestTimeoutSecs,
+	}
+
+	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {
+		s.logger.Error("updating tool", "name", name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
