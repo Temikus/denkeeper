@@ -731,7 +731,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		return nil, nil, err
 	}
 
-	agentRouter.SetTools(agentToolMgr.ToolDefs())
+	agentRouter.SetTools(agentToolMgr.ToolDefs)
 
 	var bindings []agent.Binding
 	for _, binding := range ac.Adapters {

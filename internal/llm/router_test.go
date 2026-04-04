@@ -634,6 +634,73 @@ func TestRouter_Fallback_BalanceCached(t *testing.T) {
 	}
 }
 
+// toolCapturingProvider records the tools from each ChatCompletion call.
+type toolCapturingProvider struct {
+	mockProvider
+	lastTools []ToolDef
+}
+
+func (tc *toolCapturingProvider) ChatCompletion(_ context.Context, req ChatRequest) (*ChatResponse, error) {
+	tc.lastTools = req.Tools
+	return tc.mockProvider.ChatCompletion(context.Background(), req)
+}
+
+func TestRouter_SetTools_DynamicResolution(t *testing.T) {
+	ct := NewCostTracker(10.0)
+	r := NewRouter("mock", "model", ct)
+	cap := &toolCapturingProvider{}
+	cap.name = "mock"
+	cap.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
+	r.RegisterProvider(cap)
+
+	// Initially no tools.
+	tools := []ToolDef{}
+	r.SetTools(func() []ToolDef { return tools })
+
+	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cap.lastTools) != 0 {
+		t.Errorf("first call tools count = %d, want 0", len(cap.lastTools))
+	}
+
+	// Add a tool at "runtime".
+	tools = append(tools, ToolDef{
+		Type:     "function",
+		Function: FunctionDef{Name: "new_tool", Description: "a runtime tool"},
+	})
+
+	_, err = r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi again"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cap.lastTools) != 1 {
+		t.Fatalf("second call tools count = %d, want 1", len(cap.lastTools))
+	}
+	if cap.lastTools[0].Function.Name != "new_tool" {
+		t.Errorf("tool name = %q, want new_tool", cap.lastTools[0].Function.Name)
+	}
+}
+
+func TestRouter_SetTools_NilSource(t *testing.T) {
+	ct := NewCostTracker(10.0)
+	r := NewRouter("mock", "model", ct)
+	cap := &toolCapturingProvider{}
+	cap.name = "mock"
+	cap.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
+	r.RegisterProvider(cap)
+
+	// No SetTools call — toolSource is nil.
+	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastTools != nil {
+		t.Errorf("tools = %v, want nil when no source set", cap.lastTools)
+	}
+}
+
 func TestRouter_SetDefaultModel(t *testing.T) {
 	ct := NewCostTracker(10.0)
 	r := NewRouter("mock", "original-model", ct)

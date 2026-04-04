@@ -34,6 +34,7 @@ type ServerStatus struct {
 // Manager manages MCP tool server connections and tool execution.
 type Manager struct {
 	mu       sync.RWMutex
+	parent   *Manager              // optional parent for delegated lookups (set by AdoptFrom)
 	servers  map[string]*serverConn // keyed by config name (e.g. "web-search")
 	toolMap  map[string]*serverConn // keyed by MCP tool name → owning server
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
@@ -127,50 +128,58 @@ func (m *Manager) RegisterSession(ctx context.Context, name string, session *mcp
 	return m.discoverTools(ctx, sc)
 }
 
-// AdoptFrom copies all registered tool connections from source into m.
-// Both managers then share the same underlying *mcp.ClientSession pointers,
-// which is safe for concurrent use. Use this to give per-agent managers
-// access to shared external MCP servers without re-spawning subprocesses.
+// AdoptFrom stores a reference to source as a parent manager. The child
+// manager delegates tool lookups to the parent, so tools added to the parent
+// at runtime (e.g. via the REST API) are immediately visible to all agents.
+// Both managers share the same underlying *mcp.ClientSession pointers,
+// which is safe for concurrent use.
 func (m *Manager) AdoptFrom(source *Manager) {
-	source.mu.RLock()
-	defer source.mu.RUnlock()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	for name, sc := range source.servers {
-		m.servers[name] = sc
-	}
-	for toolName, sc := range source.toolMap {
-		m.toolMap[toolName] = sc
-	}
-	m.toolDefs = append(m.toolDefs, source.toolDefs...)
+	m.parent = source
 }
 
-// ToolDefs returns OpenAI-format tool definitions for all registered tools.
+// ToolDefs returns OpenAI-format tool definitions for all registered tools,
+// including those from the parent manager (if any).
 func (m *Manager) ToolDefs() []llm.ToolDef {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.toolDefs
+
+	if m.parent == nil {
+		return m.toolDefs
+	}
+	parentDefs := m.parent.ToolDefs()
+	if len(m.toolDefs) == 0 {
+		return parentDefs
+	}
+	merged := make([]llm.ToolDef, 0, len(parentDefs)+len(m.toolDefs))
+	merged = append(merged, parentDefs...)
+	merged = append(merged, m.toolDefs...)
+	return merged
 }
 
-// ToolNames returns the names of all registered MCP tools.
+// ToolNames returns the names of all registered MCP tools,
+// including those from the parent manager (if any).
 func (m *Manager) ToolNames() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	names := make([]string, len(m.toolDefs))
-	for i, td := range m.toolDefs {
+	defs := m.ToolDefs()
+	names := make([]string, len(defs))
+	for i, td := range defs {
 		names[i] = td.Function.Name
 	}
 	return names
 }
 
 // Execute runs a single tool call and returns the text result.
+// If the tool is not found locally, it delegates to the parent manager.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
 	m.mu.RLock()
 	sc, ok := m.toolMap[call.Function.Name]
+	parent := m.parent
 	m.mu.RUnlock()
 	if !ok {
+		if parent != nil {
+			return parent.Execute(ctx, call)
+		}
 		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
 	}
 
@@ -240,25 +249,44 @@ func (m *Manager) UnregisterServer(name string) error {
 	return nil
 }
 
-// ServerNames returns the names of all registered MCP servers.
+// ServerNames returns the names of all registered MCP servers,
+// including those from the parent manager (if any).
 func (m *Manager) ServerNames() []string {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	parent := m.parent
 	names := make([]string, 0, len(m.servers))
 	for name := range m.servers {
 		names = append(names, name)
+	}
+	m.mu.RUnlock()
+
+	if parent != nil {
+		seen := make(map[string]bool, len(names))
+		for _, n := range names {
+			seen[n] = true
+		}
+		for _, n := range parent.ServerNames() {
+			if !seen[n] {
+				names = append(names, n)
+			}
+		}
 	}
 	return names
 }
 
 // ServerInfo returns metadata about a registered server.
 // The second return value is false if the server is not registered.
+// Checks the parent manager if the server is not found locally.
 func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	sc, ok := m.servers[name]
+	parent := m.parent
+	m.mu.RUnlock()
+
 	if !ok {
+		if parent != nil {
+			return parent.ServerInfo(name)
+		}
 		return ServerStatus{}, false
 	}
 

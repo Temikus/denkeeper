@@ -38,7 +38,7 @@ type Router struct {
 	defaultModel    string
 	costTracker     *CostTracker
 	fallbacks       []FallbackRule
-	tools           []ToolDef
+	toolSource      func() []ToolDef // dynamic tool resolution; nil = no tools
 	balanceCache    map[string]balanceCacheEntry
 	mu              sync.Mutex // protects balanceCache
 
@@ -94,9 +94,19 @@ func (r *Router) SetFallbacks(rules []FallbackRule) {
 	r.fallbacks = rules
 }
 
-// SetTools configures the tool definitions passed to every LLM request.
-func (r *Router) SetTools(tools []ToolDef) {
-	r.tools = tools
+// SetTools configures a dynamic tool definition source. The function is
+// called on every LLM request so that tools added at runtime are visible
+// immediately.
+func (r *Router) SetTools(source func() []ToolDef) {
+	r.toolSource = source
+}
+
+// currentTools returns the current tool definitions, or nil if no source is set.
+func (r *Router) currentTools() []ToolDef {
+	if r.toolSource == nil {
+		return nil
+	}
+	return r.toolSource()
 }
 
 func (r *Router) Complete(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
@@ -127,7 +137,8 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	activeProvider, activeModel := r.applyLowFundsFallback(ctx, sessionID, provider)
 
 	// 2. Make the primary call.
-	req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
+	currentTools := r.currentTools()
+	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
 		r.recordOTelSuccess(start, resp, attrs)
@@ -143,7 +154,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	// 4. Apply error/rate_limit fallbacks in declaration order.
-	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, err)
+	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, err)
 	if err != nil {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
@@ -209,7 +220,7 @@ func (r *Router) applyLowFundsFallback(ctx context.Context, sessionID string, pr
 
 // applyErrorFallbacks iterates error/rate_limit fallback rules after a failed
 // primary call. Returns the successful response or the last error encountered.
-func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, lastErr error) (*ChatResponse, error) {
+func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, lastErr error) (*ChatResponse, error) {
 	var resp *ChatResponse
 	err := lastErr
 
@@ -223,7 +234,7 @@ func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, acti
 		slog.Info("fallback triggered",
 			"session", sessionID, "trigger", rule.Trigger, "action", rule.Action, "error", err)
 
-		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages)
+		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages, tools)
 		if err == nil {
 			return resp, nil
 		}
@@ -244,12 +255,12 @@ func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
 }
 
 // executeFallbackAction performs a single fallback action and returns the result.
-func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message) (*ChatResponse, error) {
+func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
 	switch rule.Action {
 	case "wait_and_retry":
 		var resp *ChatResponse
 		var callErr error
-		req := ChatRequest{Model: activeModel, Messages: messages, Tools: r.tools}
+		req := ChatRequest{Model: activeModel, Messages: messages, Tools: tools}
 		retryErr := doWaitAndRetry(ctx, rule.MaxRetries, rule.Backoff, func() error {
 			resp, callErr = activeProvider.ChatCompletion(ctx, req)
 			return callErr
@@ -266,10 +277,10 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		if rule.Model != "" {
 			model = rule.Model
 		}
-		return fp.ChatCompletion(ctx, ChatRequest{Model: model, Messages: messages, Tools: r.tools})
+		return fp.ChatCompletion(ctx, ChatRequest{Model: model, Messages: messages, Tools: tools})
 
 	case "switch_model":
-		return activeProvider.ChatCompletion(ctx, ChatRequest{Model: rule.Model, Messages: messages, Tools: r.tools})
+		return activeProvider.ChatCompletion(ctx, ChatRequest{Model: rule.Model, Messages: messages, Tools: tools})
 	}
 
 	return nil, fmt.Errorf("unknown fallback action %q", rule.Action)
