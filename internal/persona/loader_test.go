@@ -110,18 +110,32 @@ func TestPersona_IsEditable_Defaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if p.IsEditable("soul") {
-		t.Error("soul should not be editable")
+	if !p.IsEditable("soul") {
+		t.Error("soul should be editable by user")
 	}
-	if p.IsEditable("user") {
-		t.Error("user should not be editable")
+	if !p.IsEditable("user") {
+		t.Error("user should be editable by user")
 	}
 	if !p.IsEditable("memory") {
-		t.Error("memory should be editable")
+		t.Error("memory should be editable by user")
 	}
 	// Case-insensitive
-	if p.IsEditable("SOUL") {
+	if !p.IsEditable("SOUL") {
 		t.Error("IsEditable should be case-insensitive")
+	}
+
+	// Agent-mutability
+	if p.IsAgentMutable("soul") {
+		t.Error("soul should not be agent-mutable")
+	}
+	if !p.IsAgentMutable("user") {
+		t.Error("user should be agent-mutable")
+	}
+	if !p.IsAgentMutable("memory") {
+		t.Error("memory should be agent-mutable")
+	}
+	if p.IsAgentMutable("unknown") {
+		t.Error("unknown section should not be agent-mutable")
 	}
 }
 

@@ -2010,18 +2010,21 @@ func TestEngine_PersonaSection_Success(t *testing.T) {
 
 	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
 
-	content, editable, ok := eng.PersonaSection("soul")
+	content, editable, agentMutable, ok := eng.PersonaSection("soul")
 	if !ok {
 		t.Fatal("PersonaSection('soul') returned ok=false")
 	}
 	if content != "You are helpful." {
 		t.Errorf("soul content = %q, want %q", content, "You are helpful.")
 	}
-	if editable {
-		t.Error("soul should not be editable")
+	if !editable {
+		t.Error("soul should be editable by user")
+	}
+	if agentMutable {
+		t.Error("soul should not be agent-mutable")
 	}
 
-	content, editable, ok = eng.PersonaSection("memory")
+	content, editable, agentMutable, ok = eng.PersonaSection("memory")
 	if !ok {
 		t.Fatal("PersonaSection('memory') returned ok=false")
 	}
@@ -2029,7 +2032,10 @@ func TestEngine_PersonaSection_Success(t *testing.T) {
 		t.Errorf("memory content = %q, want %q", content, "Memory data.")
 	}
 	if !editable {
-		t.Error("memory should be editable")
+		t.Error("memory should be editable by user")
+	}
+	if !agentMutable {
+		t.Error("memory should be agent-mutable")
 	}
 }
 
@@ -2044,7 +2050,7 @@ func TestEngine_PersonaSection_NoPersona(t *testing.T) {
 
 	eng := NewEngine("default", router, store, nil, perms, nil, "fallback", nil, nil, nil, testLogger())
 
-	_, _, ok := eng.PersonaSection("soul")
+	_, _, _, ok := eng.PersonaSection("soul")
 	if ok {
 		t.Error("PersonaSection should return ok=false when persona is nil")
 	}
@@ -2065,7 +2071,7 @@ func TestEngine_PersonaSection_UnknownSection(t *testing.T) {
 
 	eng := NewEngine("default", router, store, nil, perms, p, "", nil, nil, nil, testLogger())
 
-	_, _, ok := eng.PersonaSection("evil")
+	_, _, _, ok := eng.PersonaSection("evil")
 	if ok {
 		t.Error("PersonaSection should return ok=false for unknown section")
 	}
@@ -2091,7 +2097,7 @@ func TestEngine_SavePersonaSection_Success(t *testing.T) {
 		t.Fatalf("SavePersonaSection: %v", err)
 	}
 
-	content, _, ok := eng.PersonaSection("memory")
+	content, _, _, ok := eng.PersonaSection("memory")
 	if !ok {
 		t.Fatal("PersonaSection after save returned ok=false")
 	}

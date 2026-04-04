@@ -13,6 +13,7 @@
   let expandedSection = $state(null)
   let sectionContent = $state('')
   let sectionEditable = $state(false)
+  let sectionAgentMutable = $state(false)
   let sectionLoading = $state(false)
   let sectionSaving = $state(false)
   let sectionSaveOk = $state(false)
@@ -50,6 +51,7 @@
       const data = await api.getPersona(detail.name, sec)
       sectionContent = data.content
       sectionEditable = data.editable
+      sectionAgentMutable = data.agent_mutable
       expandedSection = sec
     } catch(e) {
       error = e.message
@@ -355,16 +357,19 @@
                     rows="12"
                   ></textarea>
                   <div class="editor-footer">
-                    {#if !sectionEditable}
-                      <span class="editor-hint">Read-only — this section cannot be edited via the dashboard.</span>
-                    {:else}
-                      <button class="btn-save" onclick={(e) => { e.stopPropagation(); saveSection() }} disabled={sectionSaving}>
-                        {sectionSaving ? 'Saving…' : 'Save'}
-                      </button>
-                      {#if sectionSaveOk}
-                        <span class="save-ok">Saved</span>
-                      {/if}
+                    <button class="btn-save" onclick={(e) => { e.stopPropagation(); saveSection() }} disabled={sectionSaving}>
+                      {sectionSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    {#if sectionSaveOk}
+                      <span class="save-ok">Saved</span>
                     {/if}
+                    <span class="agent-mutable-hint">
+                      {#if sectionAgentMutable}
+                        <span class="dot-agent-rw"></span> Agent can write
+                      {:else}
+                        <span class="dot-agent-ro"></span> Agent read-only
+                      {/if}
+                    </span>
                   </div>
                 {/if}
               </div>
@@ -568,6 +573,9 @@
   .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
   .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
   .editor-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
+  .agent-mutable-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
+  .dot-agent-rw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .dot-agent-ro { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
   /* Inline stat editing */
   .stat-input {
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);

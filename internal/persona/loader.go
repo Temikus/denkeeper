@@ -49,9 +49,9 @@ func Load(dir string) (*Persona, error) {
 		dir:  dir,
 		Soul: strings.TrimSpace(string(soul)),
 		Editable: map[string]bool{
-			"soul":   false, // requires explicit user approval
-			"user":   false, // requires supervised/autonomous tier
-			"memory": true,  // freely writable
+			"soul":   true, // editable by user via dashboard/API; agent access governed by permission tier
+			"user":   true, // editable by user via dashboard/API; agent access governed by permission tier
+			"memory": true, // editable by user via dashboard/API; agent writes freely
 		},
 	}
 
@@ -165,11 +165,27 @@ If the user shares important personal information they want remembered persisten
 		`persisted across sessions. Omit entirely when not needed.`
 }
 
-// IsEditable reports whether the agent can modify the given section without elevated permissions.
+// IsEditable reports whether the section can be edited via the dashboard/API by the user.
 // Unknown sections are treated as not editable (returns false).
 func (p *Persona) IsEditable(section string) bool {
 	ed, ok := p.Editable[strings.ToLower(section)]
 	return ok && ed
+}
+
+// IsAgentMutable reports whether the agent itself can modify the given section.
+// "memory" is always agent-mutable; "user" requires supervised/autonomous tier
+// (via approval or directive); "soul" is never agent-mutable.
+func (p *Persona) IsAgentMutable(section string) bool {
+	switch strings.ToLower(section) {
+	case "memory":
+		return true
+	case "user":
+		return true // via USER_UPDATE directive (supervised tier requires approval)
+	case "soul":
+		return false
+	default:
+		return false
+	}
 }
 
 // SystemPrompt assembles the persona into a single system prompt string.

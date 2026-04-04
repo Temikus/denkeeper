@@ -256,21 +256,22 @@ func (e *Engine) PersonaSections() map[string]bool {
 	}
 }
 
-// PersonaSection returns the content and editability of a specific persona section.
-// Returns ("", false, false) if no persona is configured or section is unknown.
-func (e *Engine) PersonaSection(section string) (content string, editable bool, ok bool) {
+// PersonaSection returns the content, editability, and agent-mutability of a persona section.
+// Returns ("", false, false, false) if no persona is configured or section is unknown.
+func (e *Engine) PersonaSection(section string) (content string, editable bool, agentMutable bool, ok bool) {
 	if e.persona == nil {
-		return "", false, false
+		return "", false, false, false
 	}
-	switch strings.ToLower(section) {
+	s := strings.ToLower(section)
+	switch s {
 	case "soul":
-		return e.persona.Soul, e.persona.IsEditable("soul"), true
+		return e.persona.Soul, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
 	case "user":
-		return e.persona.User, e.persona.IsEditable("user"), true
+		return e.persona.User, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
 	case "memory":
-		return e.persona.Memory, e.persona.IsEditable("memory"), true
+		return e.persona.Memory, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
 	default:
-		return "", false, false
+		return "", false, false, false
 	}
 }
 
