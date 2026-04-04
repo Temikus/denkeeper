@@ -96,6 +96,34 @@ func TestCostTracker_RecordWithTokens(t *testing.T) {
 	}
 }
 
+func TestCostTracker_RecordWithTokens_PricingSource(t *testing.T) {
+	ct := NewCostTracker(10.0)
+
+	ct.RecordWithTokens("agent1:telegram:1", 0.5, 100, 50, "registry")
+	ct.RecordWithTokens("agent1:telegram:1", 0.3, 80, 40, "registry")
+	ct.RecordWithTokens("agent1:telegram:1", 0.1, 10, 5, "provider")
+
+	stats := ct.AllSessionStats()
+	s := stats["agent1:telegram:1"]
+	if s.PricingSources["registry"] != 2 {
+		t.Errorf("registry count = %d, want 2", s.PricingSources["registry"])
+	}
+	if s.PricingSources["provider"] != 1 {
+		t.Errorf("provider count = %d, want 1", s.PricingSources["provider"])
+	}
+}
+
+func TestCostTracker_RecordWithTokens_NoPricingSource(t *testing.T) {
+	ct := NewCostTracker(10.0)
+	ct.RecordWithTokens("sess", 0.5, 100, 50)
+
+	stats := ct.AllSessionStats()
+	s := stats["sess"]
+	if s.PricingSources != nil {
+		t.Errorf("expected nil PricingSources when not provided, got %v", s.PricingSources)
+	}
+}
+
 func TestCostTracker_AgentCosts(t *testing.T) {
 	ct := NewCostTracker(10.0)
 

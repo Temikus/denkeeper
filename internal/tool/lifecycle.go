@@ -127,6 +127,19 @@ func (lm *LifecycleManager) RemoveTool(ctx context.Context, name string) error {
 	return nil
 }
 
+// RestartTool stops and re-registers an MCP tool server, resetting its health state.
+func (lm *LifecycleManager) RestartTool(ctx context.Context, name string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if err := lm.toolMgr.RestartServer(ctx, name); err != nil {
+		return fmt.Errorf("restarting tool %q: %w", name, err)
+	}
+
+	lm.logger.Info("tool restarted", "name", name)
+	return nil
+}
+
 // AddPlugin validates, optionally spawns, registers, and persists the
 // [plugins.<name>] section.
 // validatePluginConfig checks that a plugin config has valid type and required fields.

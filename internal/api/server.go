@@ -34,18 +34,18 @@ type Deps struct {
 	CostTracker     *llm.CostTracker
 	Memory          agent.MemoryStore
 	Config          *config.Config
-	Approvals       *approval.Manager       // nil = approval endpoints return 503
-	LifecycleMgr    *tool.LifecycleManager  // nil = tool CRUD endpoints return 503
-	BrowserProfiles *browser.ProfileService // nil = browser endpoints return 503
-	WebHandler      http.Handler            // nil = no web dashboard served
-	MetricsHandler  http.Handler            // nil = no /metrics endpoint
-	KeyStore        *KeyStore               // nil = API key CRUD endpoints return 503
-	KVStore         kv.Store                // nil = KV endpoints return 503
-	ConfigPath      string                  // TOML config path for schedule persistence
-	Sessions        *SessionManager         // nil = no session-based auth
-	OIDCProvider    *OIDCProvider           // nil = no OIDC endpoints
-	PasswordHash    string                  // bcrypt hash for password login
-	SetupPIN        string                  // one-time PIN for account setup (empty = disabled)
+	Approvals       *approval.Manager                  // nil = approval endpoints return 503
+	LifecycleMgr    *tool.LifecycleManager             // nil = tool CRUD endpoints return 503
+	BrowserProfiles *browser.ProfileService            // nil = browser endpoints return 503
+	WebHandler      http.Handler                       // nil = no web dashboard served
+	MetricsHandler  http.Handler                       // nil = no /metrics endpoint
+	KeyStore        *KeyStore                          // nil = API key CRUD endpoints return 503
+	KVStore         kv.Store                           // nil = KV endpoints return 503
+	ConfigPath      string                             // TOML config path for schedule persistence
+	Sessions        *SessionManager                    // nil = no session-based auth
+	OIDCProvider    *OIDCProvider                      // nil = no OIDC endpoints
+	PasswordHash    string                             // bcrypt hash for password login
+	SetupPIN        string                             // one-time PIN for account setup (empty = disabled)
 	ModelLister     func(ctx context.Context) []string // returns available LLM models; nil = endpoint returns 503
 }
 
@@ -140,6 +140,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/tools/{name}", s.RequireScope("tools:read", s.handleGetTool))
 	mux.HandleFunc("POST /api/v1/tools", s.RequireScope("tools:write", s.handleAddTool))
 	mux.HandleFunc("DELETE /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleRemoveTool))
+	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
+	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
 	mux.HandleFunc("GET /api/v1/plugins", s.RequireScope("tools:read", s.handleListPlugins))
 	mux.HandleFunc("GET /api/v1/plugins/{name}", s.RequireScope("tools:read", s.handleGetPlugin))
 	mux.HandleFunc("POST /api/v1/plugins", s.RequireScope("tools:write", s.handleAddPlugin))
@@ -351,6 +353,16 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		byAgent = one
 	}
 
+	// Build pricing config summary.
+	pricingConfig := map[string]any{
+		"fallback_rate_per_1k_tokens": 0.0,
+		"custom_model_count":          0,
+	}
+	if s.deps.Config != nil {
+		pricingConfig["fallback_rate_per_1k_tokens"] = s.deps.Config.Costs.DefaultRatePerKTokens
+		pricingConfig["custom_model_count"] = len(s.deps.Config.Costs.ModelPrices)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_cost":     s.deps.CostTracker.GlobalCost(),
 		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(),
@@ -358,6 +370,7 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		"session_costs":   s.deps.CostTracker.AllSessionCosts(),
 		"session_stats":   filtered,
 		"by_agent":        byAgent,
+		"pricing_config":  pricingConfig,
 	})
 }
 
@@ -930,6 +943,40 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	info, ok := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tool not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":          info.Name,
+		"status":        info.Status,
+		"transport":     info.Transport,
+		"restart_count": info.RestartCount,
+		"last_error":    info.LastError,
+		"uptime_secs":   info.UptimeSecs,
+	})
+}
+
+func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.LifecycleMgr.RestartTool(r.Context(), name); err != nil {
+		s.logger.Error("restarting tool", "name", name, "error", err)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) handleListPlugins(w http.ResponseWriter, _ *http.Request) {

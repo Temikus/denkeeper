@@ -41,8 +41,8 @@ type Router struct {
 	defaultModel    string
 	costTracker     *CostTracker
 	fallbacks       []FallbackRule
-	toolSource      func() []ToolDef      // dynamic tool resolution; nil = no tools
-	pricing         *pricing.Registry      // model pricing lookup; nil = legacy fallback
+	toolSource      func() []ToolDef  // dynamic tool resolution; nil = no tools
+	pricing         *pricing.Registry // model pricing lookup; nil = legacy fallback
 	balanceCache    map[string]balanceCacheEntry
 	mu              sync.Mutex // protects balanceCache
 
@@ -187,7 +187,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 		)
 		cost, source := TokenCost(resp, r.pricing)
 		r.recordOTelSuccess(start, resp, cost, source, attrs)
-		r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+		r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 		if source == "unknown" {
 			slog.Warn("no pricing data for model", "model", resp.Model)
 		}
@@ -211,7 +211,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 
 	cost, source := TokenCost(resp, r.pricing)
 	r.recordOTelSuccess(start, resp, cost, source, attrs)
-	r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+	r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 	if source == "unknown" {
 		slog.Warn("no pricing data for model", "model", resp.Model)
 	}

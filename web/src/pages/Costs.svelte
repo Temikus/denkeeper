@@ -78,6 +78,21 @@
     return String(n)
   }
 
+  function dominantSource(sources) {
+    if (!sources || Object.keys(sources).length === 0) return null
+    let best = null, max = 0
+    for (const [src, count] of Object.entries(sources)) {
+      if (count > max) { max = count; best = src }
+    }
+    return best
+  }
+
+  function sourceColor(src) {
+    if (src === 'provider' || src === 'registry') return 'green'
+    if (src === 'fallback') return 'yellow'
+    return 'red'
+  }
+
   onMount(fetchData)
 </script>
 
@@ -112,6 +127,18 @@
       <div class="label">Output Tokens</div>
       <div class="value">{formatTokens(totalOutputTokens)}</div>
     </div>
+    {#if data.pricing_config}
+      <div class="card">
+        <div class="label">Fallback Rate</div>
+        <div class="value value-sm">{data.pricing_config.fallback_rate_per_1k_tokens > 0 ? `$${data.pricing_config.fallback_rate_per_1k_tokens}/1k` : 'None'}</div>
+      </div>
+      {#if data.pricing_config.custom_model_count > 0}
+        <div class="card">
+          <div class="label">Custom Prices</div>
+          <div class="value">{data.pricing_config.custom_model_count}</div>
+        </div>
+      {/if}
+    {/if}
   </div>
 
   <h2 class="section-title">Per-Agent Breakdown</h2>
@@ -163,12 +190,13 @@
             {#if expandedAgent === a.agent && agentSessions.length > 0}
               <tr class="sub-header">
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <th colspan="2" class="sortable" onclick={() => toggleSessionSort('id')} role="columnheader" tabindex="0">
+                <th class="sortable" onclick={() => toggleSessionSort('id')} role="columnheader" tabindex="0">
                   Session ID {#if sessionSortBy === 'id'}<span class="arrow">{sessionSortAsc ? '\u25B2' : '\u25BC'}</span>{/if}
                 </th>
                 <th class="num">Messages</th>
                 <th class="num">Input</th>
                 <th class="num">Output</th>
+                <th>Source</th>
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <th class="sortable num" onclick={() => toggleSessionSort('cost')} role="columnheader" tabindex="0">
                   Cost {#if sessionSortBy === 'cost'}<span class="arrow">{sessionSortAsc ? '\u25B2' : '\u25BC'}</span>{/if}
@@ -176,10 +204,17 @@
               </tr>
               {#each agentSessions as s}
                 <tr class="sub-row">
-                  <td colspan="2" class="mono session-id">{s.id}</td>
+                  <td class="mono session-id">{s.id}</td>
                   <td class="num mono">{s.messages}</td>
                   <td class="num mono">{formatTokens(s.input_tokens)}</td>
                   <td class="num mono">{formatTokens(s.output_tokens)}</td>
+                  <td>
+                    {#if dominantSource(s.pricing_sources)}
+                      <span class="source-badge {sourceColor(dominantSource(s.pricing_sources))}">{dominantSource(s.pricing_sources)}</span>
+                    {:else}
+                      <span class="muted">--</span>
+                    {/if}
+                  </td>
                   <td class="num mono">${s.cost.toFixed(6)}</td>
                 </tr>
               {/each}
@@ -246,4 +281,18 @@
   .arrow { margin-left: 4px; font-size: 10px; }
   .empty { color: var(--text-muted); padding: 20px 0; }
   .loading { color: var(--text-muted); }
+  .muted { color: var(--text-muted); }
+  .value-sm { font-size: 16px; }
+  .source-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .source-badge.green { background: rgba(34, 197, 94, 0.15); color: rgb(34, 197, 94); }
+  .source-badge.yellow { background: rgba(234, 179, 8, 0.15); color: rgb(202, 156, 8); }
+  .source-badge.red { background: rgba(239, 68, 68, 0.15); color: rgb(239, 68, 68); }
 </style>

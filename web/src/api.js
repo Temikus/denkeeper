@@ -115,11 +115,13 @@ export const api = {
   // Tools & Plugins
   listTools: () => apiFetch('/api/v1/tools'),
   getTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`),
-  addTool: (name, command, args, env) => apiFetch('/api/v1/tools', {
+  addTool: (cfg) => apiFetch('/api/v1/tools', {
     method: 'POST',
-    body: JSON.stringify({ name, command, args: args || [], env: env || {} }),
+    body: JSON.stringify(cfg),
   }),
   removeTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
+  toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),
   listPlugins: () => apiFetch('/api/v1/plugins'),
   getPlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`),
   addPlugin: cfg => apiFetch('/api/v1/plugins', {

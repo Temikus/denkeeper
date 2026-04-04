@@ -10,8 +10,12 @@
   // Add tool inline form
   let showToolForm = false
   let toolName = ''
+  let toolTransport = 'stdio'
   let toolCommand = ''
   let toolArgs = ''
+  let toolURL = ''
+  let toolHeaderPairs = []
+  let toolTimeoutSecs = ''
   let toolEnvPairs = []
   let addingTool = false
 
@@ -28,6 +32,9 @@
   let pluginCPULimit = ''
   let pluginNetwork = ''
   let addingPlugin = false
+
+  // Restart tool
+  let restartingTool = null
 
   // Confirm remove
   let confirmRemove = null // { kind: 'tool'|'plugin', name }
@@ -62,14 +69,37 @@
     return obj
   }
 
+  function toolFormValid() {
+    if (!toolName.trim()) return false
+    if (toolTransport === 'stdio' && !toolCommand.trim()) return false
+    if (toolTransport === 'sse' && !toolURL.trim()) return false
+    return true
+  }
+
   async function addTool() {
-    if (!toolName.trim() || !toolCommand.trim()) return
+    if (!toolFormValid()) return
     addingTool = true
     error = ''
     try {
-      await api.addTool(toolName.trim(), toolCommand.trim(), parseArgs(toolArgs), envPairsToObj(toolEnvPairs))
+      const cfg = { name: toolName.trim() }
+      if (toolTransport === 'sse') {
+        cfg.transport = 'sse'
+        cfg.url = toolURL.trim()
+        const headers = envPairsToObj(toolHeaderPairs)
+        if (Object.keys(headers).length > 0) cfg.headers = headers
+      } else {
+        cfg.command = toolCommand.trim()
+        const args = parseArgs(toolArgs)
+        if (args.length > 0) cfg.args = args
+      }
+      const env = envPairsToObj(toolEnvPairs)
+      if (Object.keys(env).length > 0) cfg.env = env
+      const timeout = parseInt(toolTimeoutSecs, 10)
+      if (timeout > 0) cfg.request_timeout_secs = timeout
+      await api.addTool(cfg)
       showToolForm = false
-      toolName = ''; toolCommand = ''; toolArgs = ''; toolEnvPairs = []
+      toolName = ''; toolTransport = 'stdio'; toolCommand = ''; toolArgs = ''
+      toolURL = ''; toolHeaderPairs = []; toolTimeoutSecs = ''; toolEnvPairs = []
       await loadData()
     } catch (e) {
       error = e.message
@@ -127,19 +157,36 @@
     }
   }
 
-  function addEnvPair(target) {
-    if (target === 'tool') {
+  function addKVPair(target) {
+    if (target === 'tool-env') {
       toolEnvPairs = [...toolEnvPairs, { key: '', value: '' }]
-    } else {
+    } else if (target === 'tool-headers') {
+      toolHeaderPairs = [...toolHeaderPairs, { key: '', value: '' }]
+    } else if (target === 'plugin') {
       pluginEnvPairs = [...pluginEnvPairs, { key: '', value: '' }]
     }
   }
 
-  function removeEnvPair(target, idx) {
-    if (target === 'tool') {
+  function removeKVPair(target, idx) {
+    if (target === 'tool-env') {
       toolEnvPairs = toolEnvPairs.filter((_, i) => i !== idx)
-    } else {
+    } else if (target === 'tool-headers') {
+      toolHeaderPairs = toolHeaderPairs.filter((_, i) => i !== idx)
+    } else if (target === 'plugin') {
       pluginEnvPairs = pluginEnvPairs.filter((_, i) => i !== idx)
+    }
+  }
+
+  async function restartTool(name) {
+    restartingTool = name
+    error = ''
+    try {
+      await api.restartTool(name)
+      await loadData()
+    } catch (e) {
+      error = e.message
+    } finally {
+      restartingTool = null
     }
   }
 
@@ -182,28 +229,59 @@
             <input type="text" bind:value={toolName} placeholder="e.g. web-search" />
           </label>
           <label>
-            Command
-            <input type="text" bind:value={toolCommand} placeholder="Path to MCP server binary" />
+            Transport
+            <select bind:value={toolTransport}>
+              <option value="stdio">Stdio (local subprocess)</option>
+              <option value="sse">SSE (remote HTTP)</option>
+            </select>
           </label>
-          <label>
-            Arguments <span class="hint">(space-separated)</span>
-            <input type="text" bind:value={toolArgs} placeholder="--provider tavily" />
-          </label>
+          {#if toolTransport === 'stdio'}
+            <label>
+              Command
+              <input type="text" bind:value={toolCommand} placeholder="Path to MCP server binary" />
+            </label>
+            <label>
+              Arguments <span class="hint">(space-separated)</span>
+              <input type="text" bind:value={toolArgs} placeholder="--provider tavily" />
+            </label>
+          {:else}
+            <label>
+              URL
+              <input type="text" bind:value={toolURL} placeholder="https://mcp-server.example.com/sse" />
+            </label>
+            <div class="env-section">
+              <div class="env-header">
+                <span class="env-label">Headers</span>
+                <button class="btn-sm" onclick={() => addKVPair('tool-headers')}>+ Add</button>
+              </div>
+              {#each toolHeaderPairs as pair, i}
+                <div class="env-row">
+                  <input type="text" bind:value={pair.key} placeholder="Header name" />
+                  <input type="text" bind:value={pair.value} placeholder="Value (supports ${VAR})" />
+                  <button class="btn-sm danger" onclick={() => removeKVPair('tool-headers', i)}>x</button>
+                </div>
+              {/each}
+            </div>
+            <label>
+              Request timeout <span class="hint">(seconds, optional)</span>
+              <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
+            </label>
+          {/if}
           <div class="env-section">
             <div class="env-header">
               <span class="env-label">Environment Variables</span>
-              <button class="btn-sm" onclick={() => addEnvPair('tool')}>+ Add</button>
+              <button class="btn-sm" onclick={() => addKVPair('tool-env')}>+ Add</button>
             </div>
             {#each toolEnvPairs as pair, i}
               <div class="env-row">
                 <input type="text" bind:value={pair.key} placeholder="Key" />
                 <input type="text" bind:value={pair.value} placeholder="Value" />
-                <button class="btn-sm danger" onclick={() => removeEnvPair('tool', i)}>x</button>
+                <button class="btn-sm danger" onclick={() => removeKVPair('tool-env', i)}>x</button>
               </div>
             {/each}
           </div>
           <div class="form-actions">
-            <button class="btn-primary" onclick={addTool} disabled={addingTool || !toolName.trim() || !toolCommand.trim()}>
+            <button class="btn-primary" onclick={addTool} disabled={addingTool || !toolFormValid()}>
               {addingTool ? 'Adding...' : 'Add Tool'}
             </button>
             <button class="btn-ghost" onclick={() => showToolForm = false}>Cancel</button>
@@ -221,7 +299,7 @@
         <thead>
           <tr>
             <th>Name</th>
-            <th>Command</th>
+            <th>Command / URL</th>
             <th>Status</th>
             <th>Exposed Tools</th>
             <th>Actions</th>
@@ -231,7 +309,7 @@
           {#each tools as t}
             <tr>
               <td class="mono">{t.name}</td>
-              <td class="mono truncate" title={t.command}>{t.command}</td>
+              <td class="mono truncate" title={t.url || t.command}>{t.url || t.command}</td>
               <td title={t.last_error || ''}>
                 <span class="status-dot {statusDot(t.status)}"></span>
                 {statusLabel(t)}
@@ -245,7 +323,12 @@
                   <span class="muted">--</span>
                 {/if}
               </td>
-              <td>
+              <td class="actions">
+                {#if t.status === 'error' || t.status === 'disabled'}
+                  <button class="btn-sm" onclick={() => restartTool(t.name)} disabled={restartingTool === t.name}>
+                    {restartingTool === t.name ? 'Restarting...' : 'Restart'}
+                  </button>
+                {/if}
                 <button class="btn-sm danger" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>
                   Remove
                 </button>
@@ -302,13 +385,13 @@
           <div class="env-section">
             <div class="env-header">
               <span class="env-label">Environment Variables</span>
-              <button class="btn-sm" onclick={() => addEnvPair('plugin')}>+ Add</button>
+              <button class="btn-sm" onclick={() => addKVPair('plugin')}>+ Add</button>
             </div>
             {#each pluginEnvPairs as pair, i}
               <div class="env-row">
                 <input type="text" bind:value={pair.key} placeholder="Key" />
                 <input type="text" bind:value={pair.value} placeholder="Value" />
-                <button class="btn-sm danger" onclick={() => removeEnvPair('plugin', i)}>x</button>
+                <button class="btn-sm danger" onclick={() => removeKVPair('plugin', i)}>x</button>
               </div>
             {/each}
           </div>
@@ -430,4 +513,5 @@
   .resource-limits { margin-bottom: 16px; }
   .resource-limits summary { cursor: pointer; color: var(--text-muted); font-size: 13px; margin-bottom: 12px; }
   .resource-limits summary:hover { color: var(--text); }
+  .actions { display: flex; gap: 6px; }
 </style>

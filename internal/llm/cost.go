@@ -7,10 +7,11 @@ import (
 
 // SessionStats holds per-session cost and token tracking.
 type SessionStats struct {
-	Cost         float64 `json:"cost"`
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	Messages     int     `json:"messages"`
+	Cost           float64        `json:"cost"`
+	InputTokens    int            `json:"input_tokens"`
+	OutputTokens   int            `json:"output_tokens"`
+	Messages       int            `json:"messages"`
+	PricingSources map[string]int `json:"pricing_sources,omitempty"`
 }
 
 // AgentStats holds aggregated per-agent cost and token data.
@@ -56,7 +57,8 @@ func (ct *CostTracker) Record(sessionID string, cost float64) bool {
 }
 
 // RecordWithTokens adds cost and token usage for a session. Returns true if within budget.
-func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTokens, outputTokens int) bool {
+// The optional pricingSource parameter records which pricing method was used.
+func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTokens, outputTokens int, pricingSource ...string) bool {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
@@ -68,6 +70,13 @@ func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTok
 	s.InputTokens += inputTokens
 	s.OutputTokens += outputTokens
 	s.Messages++
+
+	if len(pricingSource) > 0 && pricingSource[0] != "" {
+		if s.PricingSources == nil {
+			s.PricingSources = make(map[string]int)
+		}
+		s.PricingSources[pricingSource[0]]++
+	}
 
 	return ct.sessionCosts[sessionID] <= ct.maxPerSession
 }

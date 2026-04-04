@@ -83,6 +83,14 @@ func TestStartHealthChecker_DisabledByConfig(t *testing.T) {
 	m.StartHealthChecker(ctx, time.Hour)
 }
 
+func TestRestartServer_NotRegistered(t *testing.T) {
+	m := NewManager(testLogger())
+	err := m.RestartServer(t.Context(), "no-such-server")
+	if err == nil {
+		t.Fatal("expected error for unregistered server, got nil")
+	}
+}
+
 func TestHandleServerFailure_MaxAttempts(t *testing.T) {
 	m := NewManager(testLogger())
 	sc := &serverConn{

@@ -517,6 +517,30 @@ func TestToolRemove_MissingName(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// Tests: tool_restart
+// --------------------------------------------------------------------------
+
+func TestToolRestart_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+	text, isErr := callTool(t, session, "tool_restart", map[string]any{
+		"name": "some-tool",
+	})
+	if !isErr {
+		t.Fatalf("expected error in restricted mode, got: %s", text)
+	}
+}
+
+func TestToolRestart_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "tool_restart", map[string]any{})
+	if !isErr {
+		t.Fatalf("expected error for missing name, got: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
 // Tests: plugin_list
 // --------------------------------------------------------------------------
 
@@ -1407,6 +1431,7 @@ func TestServer_ListTools_IncludesNewTools(t *testing.T) {
 		"schedule_update":  false,
 		"set_fallback":     false,
 		"get_cost_summary": false,
+		"tool_restart":     false,
 	}
 	for _, tool := range result.Tools {
 		if _, ok := expected[tool.Name]; ok {

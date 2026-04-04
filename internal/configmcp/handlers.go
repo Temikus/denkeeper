@@ -139,6 +139,18 @@ func (s *Server) registerTools() {
 	}, s.handleToolRemove)
 
 	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "tool_restart",
+		Description: "Restart a crashed or disabled MCP tool server. Resets health state and re-connects.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Name of the tool server to restart"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handleToolRestart)
+
+	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "plugin_list",
 		Description: "List all plugins and their status.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
@@ -810,6 +822,37 @@ func (s *Server) handleToolRemove(ctx context.Context, req *mcp.CallToolRequest)
 
 	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
 		return lm.RemoveTool(ctx, input.Name)
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
+		summary, input.Name, applyFn)
+}
+
+func (s *Server) handleToolRestart(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.LifecycleMgr == nil {
+		return toolError("tool_restart is not available: no lifecycle manager configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("tool_restart is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	lm := s.deps.LifecycleMgr
+	summary := "Restart tool: " + input.Name
+
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		return lm.RestartTool(ctx, input.Name)
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,

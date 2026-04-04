@@ -391,6 +391,36 @@ func (m *Manager) UnregisterServer(name string) error {
 	return nil
 }
 
+// RestartServer stops and re-registers an MCP server using its stored config.
+// It resets the server's health state (disabled flag, error, restart count).
+func (m *Manager) RestartServer(ctx context.Context, name string) error {
+	m.mu.RLock()
+	sc, ok := m.servers[name]
+	if !ok {
+		m.mu.RUnlock()
+		return fmt.Errorf("server %q is not registered", name)
+	}
+	cfg := sc.cfg
+	m.mu.RUnlock()
+
+	if err := m.UnregisterServer(name); err != nil {
+		return fmt.Errorf("stopping server %q: %w", name, err)
+	}
+
+	if err := m.RegisterServer(ctx, name, cfg); err != nil {
+		return fmt.Errorf("restarting server %q: %w", name, err)
+	}
+
+	m.mu.Lock()
+	if newSc, ok := m.servers[name]; ok {
+		newSc.connectedAt = time.Now()
+	}
+	m.mu.Unlock()
+
+	m.logger.Info("MCP server manually restarted", "server", name)
+	return nil
+}
+
 // ServerNames returns the names of all registered MCP servers,
 // including those from the parent manager (if any).
 func (m *Manager) ServerNames() []string {

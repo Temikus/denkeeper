@@ -1602,6 +1602,62 @@ func TestGetTool_NotFound(t *testing.T) {
 	}
 }
 
+func TestToolHealth_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools/nonexistent/health"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestToolHealth_NilLifecycleMgr_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = nil
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools/test/health"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestRestartTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/tools/nonexistent/restart"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestRestartTool_NilLifecycleMgr_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = nil
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/tools/test/restart"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
 func TestGetPlugin_NotFound(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()

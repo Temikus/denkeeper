@@ -96,7 +96,7 @@ cached_input = 0.5 # per million cached input tokens (0 = same as input)
 
 `internal/tool/manager.go` manages MCP server connections (stdio subprocess or SSE remote).
 
-**Health monitoring**: `StartHealthChecker(ctx, interval)` probes servers via ListTools every 30s. Crashed servers are auto-restarted with exponential backoff. Config: `[mcp]` section with `auto_restart` (default true), `max_restart_attempts` (default 3), `restart_cooldown` (default "5m"). `ServerStatus` reports `connected`/`error`/`disabled` with `restart_count`, `last_error`, `uptime_secs`.
+**Health monitoring**: `StartHealthChecker(ctx, interval)` probes servers via ListTools every 30s. Crashed servers are auto-restarted with exponential backoff. Config: `[mcp]` section with `auto_restart` (default true), `max_restart_attempts` (default 3), `restart_cooldown` (default "5m"). `ServerStatus` reports `connected`/`error`/`disabled` with `restart_count`, `last_error`, `uptime_secs`. Manual restart via `Manager.RestartServer()`, `LifecycleManager.RestartTool()`, REST `POST /api/v1/tools/{name}/restart`, or Config MCP `tool_restart`.
 
 **Security**: SSRF protection, header injection prevention, env var denylist, URL/arg redaction in API responses.
 
@@ -114,6 +114,8 @@ Key endpoints (all require auth unless noted):
 - `GET/PUT /api/v1/agents/{name}/persona/{section}` — persona sections
 - `GET/DELETE /api/v1/kv/...` — KV store
 - `GET/POST/DELETE /api/v1/tools/...` — tool/plugin CRUD
+- `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
+- `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
 - `PATCH /api/v1/agents/{name}` — agent config mutation
 
 SSE chat events: `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
