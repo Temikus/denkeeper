@@ -665,12 +665,11 @@ func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, ab
 
 func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc agentBuildCtx) (*agent.Engine, []agent.Binding, error) {
 	// Per-agent persona
-	var p *persona.Persona
-	loadedPersona, pErr := persona.Load(ac.PersonaDir)
+	p, pErr := persona.Load(ac.PersonaDir)
 	if pErr != nil {
-		abc.logger.Warn("persona files not loaded, using default prompt", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
+		abc.logger.Warn("persona files not loaded, using empty persona", "agent", ac.Name, "dir", ac.PersonaDir, "error", pErr)
+		p = persona.NewEmpty(ac.PersonaDir)
 	} else {
-		p = loadedPersona
 		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
 	}
 

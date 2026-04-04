@@ -26,6 +26,20 @@ type Persona struct {
 // Empty string means no write path is available.
 func (p *Persona) Dir() string { return p.dir }
 
+// NewEmpty creates a writable Persona with no content. The directory is created
+// on first Save if it does not exist. Use this when the persona directory is
+// known but no files exist yet, so the user can create sections from the dashboard.
+func NewEmpty(dir string) *Persona {
+	return &Persona{
+		dir: dir,
+		Editable: map[string]bool{
+			"soul":   true,
+			"user":   true,
+			"memory": true,
+		},
+	}
+}
+
 // Load reads persona files from the given directory.
 // SOUL.md is required and must be non-empty. USER.md and MEMORY.md are optional.
 func Load(dir string) (*Persona, error) {
@@ -76,6 +90,9 @@ func (p *Persona) Save(section, content string) error {
 	filename, err := sectionFilename(section)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(p.dir, 0700); err != nil {
+		return fmt.Errorf("persona: creating directory %s: %w", p.dir, err)
 	}
 	target := filepath.Join(p.dir, filename)
 	tmp := target + ".tmp"
