@@ -83,6 +83,39 @@ func TestChatCompletion_Success(t *testing.T) {
 	}
 }
 
+// TestChatCompletion_ArrayContent verifies that models returning content as an
+// array of content blocks are handled correctly.
+func TestChatCompletion_ArrayContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "gpt-4o",
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": [{"type": "text", "text": "Hello from blocks!"}]
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, "", server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "Hello from blocks!" {
+		t.Errorf("content = %q, want Hello from blocks!", resp.Content)
+	}
+}
+
 func TestChatCompletion_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

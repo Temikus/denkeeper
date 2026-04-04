@@ -76,6 +76,40 @@ func TestChatCompletion_Success(t *testing.T) {
 	}
 }
 
+// TestChatCompletion_ArrayContent verifies that models returning content as an
+// array of content blocks (e.g. moonshotai/kimi-k2.5) are handled correctly.
+func TestChatCompletion_ArrayContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Return content as an array of blocks, as kimi-k2.5 does.
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "moonshotai/kimi-k2.5",
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": [{"type": "text", "text": "Hello from kimi!"}]
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "moonshotai/kimi-k2.5",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "Hello from kimi!" {
+		t.Errorf("content = %q, want Hello from kimi!", resp.Content)
+	}
+}
+
 func TestChatCompletion_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

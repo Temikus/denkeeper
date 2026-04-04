@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -177,11 +178,64 @@ type apiRequest struct {
 	Tools       []llm.ToolDef `json:"tools,omitempty"`
 }
 
+// apiMessage handles both outgoing requests (content as string) and incoming
+// responses where some models (e.g. moonshotai/kimi-k2.5) return content as
+// an array of content blocks instead of a plain string.
 type apiMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content"`
+	Content    string         `json:"-"` // handled by MarshalJSON/UnmarshalJSON
 	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+func (m apiMessage) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Role       string         `json:"role"`
+		Content    string         `json:"content"`
+		ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string         `json:"tool_call_id,omitempty"`
+	}
+	return json.Marshal(wire(m))
+}
+
+func (m *apiMessage) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		Role       string          `json:"role"`
+		RawContent json.RawMessage `json:"content"`
+		ToolCalls  []llm.ToolCall  `json:"tool_calls,omitempty"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+	}
+	var w wire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	m.Role = w.Role
+	m.ToolCalls = w.ToolCalls
+	m.ToolCallID = w.ToolCallID
+	if len(w.RawContent) == 0 {
+		return nil
+	}
+	// Try plain string first (standard case).
+	var s string
+	if err := json.Unmarshal(w.RawContent, &s); err == nil {
+		m.Content = s
+		return nil
+	}
+	// Fall back to array of content blocks (e.g. moonshotai/kimi-k2.5).
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(w.RawContent, &blocks); err == nil {
+		var sb strings.Builder
+		for _, b := range blocks {
+			if b.Type == "text" {
+				sb.WriteString(b.Text)
+			}
+		}
+		m.Content = sb.String()
+	}
+	return nil
 }
 
 type apiResponse struct {
