@@ -67,14 +67,14 @@ func NewDispatcher(
 		metric.WithDescription("Messages dispatched to agents"))
 
 	return &Dispatcher{
-		agents:   agents,
-		specific: specific,
-		wildcard: wildcard,
-		adapters: adapterMap,
-		incoming: make(chan adapter.IncomingMessage, 64),
-		tracer:   tracer,
+		agents:    agents,
+		specific:  specific,
+		wildcard:  wildcard,
+		adapters:  adapterMap,
+		incoming:  make(chan adapter.IncomingMessage, 64),
+		tracer:    tracer,
 		mDispatch: dispatch,
-		logger:   logger,
+		logger:    logger,
 	}
 }
 

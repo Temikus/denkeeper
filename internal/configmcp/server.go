@@ -83,6 +83,14 @@ type Deps struct {
 	// browser_profile_* tools are disabled.
 	BrowserProfiles *browser.ProfileService
 
+	// GetPersonaSection returns (content, editable, agentMutable, ok) for a
+	// persona section. If nil, persona_get is disabled.
+	GetPersonaSection func(section string) (string, bool, bool, bool)
+
+	// SavePersonaSection writes content to a persona section. If nil,
+	// persona_update is disabled.
+	SavePersonaSection func(section, content string) error
+
 	Logger *slog.Logger
 }
 

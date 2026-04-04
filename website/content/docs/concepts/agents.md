@@ -16,7 +16,7 @@ Each agent's identity is defined by persona files in its `persona_dir`:
 
 | File | Purpose | Who updates it |
 |---|---|---|
-| `SOUL.md` | Core identity — personality, values, communication style | User (agent can propose changes with approval) |
+| `SOUL.md` | Core identity — personality, values, communication style | Agent (supervised requires approval; autonomous writes directly) |
 | `USER.md` | What the agent knows about its user | Agent (user can edit directly) |
 | `MEMORY.md` | Working memory — updated automatically each session | Agent |
 
@@ -57,4 +57,4 @@ Agents can modify their own persona files within their permission tier:
 
 - **MEMORY.md** — freely writable (working memory)
 - **USER.md** — writable in `supervised` and `autonomous` tiers
-- **SOUL.md** — always requires explicit user approval
+- **SOUL.md** — writable in `supervised` (requires approval) and `autonomous` tiers

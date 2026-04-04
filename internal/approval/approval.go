@@ -33,6 +33,9 @@ const (
 	// ActionKindUserUpdate is a request to update the agent's USER.md persona file.
 	ActionKindUserUpdate ActionKind = "user_update"
 
+	// ActionKindSoulUpdate is a request to update the agent's SOUL.md persona file.
+	ActionKindSoulUpdate ActionKind = "soul_update"
+
 	// ActionKindCreateSkill is a request to create a new skill file in the agent's skills directory.
 	ActionKindCreateSkill ActionKind = "create_skill"
 

@@ -43,11 +43,11 @@ type Router struct {
 	mu              sync.Mutex // protects balanceCache
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
-	tracer       trace.Tracer
-	mDuration    metric.Float64Histogram
-	mTokens      metric.Int64Counter
-	mCost        metric.Float64Counter
-	mErrors      metric.Int64Counter
+	tracer    trace.Tracer
+	mDuration metric.Float64Histogram
+	mTokens   metric.Int64Counter
+	mCost     metric.Float64Counter
+	mErrors   metric.Int64Counter
 }
 
 // DefaultModel returns the router's default model name.

@@ -2020,8 +2020,8 @@ func TestEngine_PersonaSection_Success(t *testing.T) {
 	if !editable {
 		t.Error("soul should be editable by user")
 	}
-	if agentMutable {
-		t.Error("soul should not be agent-mutable")
+	if !agentMutable {
+		t.Error("soul should be agent-mutable")
 	}
 
 	content, editable, agentMutable, ok = eng.PersonaSection("memory")
@@ -2382,5 +2382,225 @@ func TestEngine_SkillsDir(t *testing.T) {
 
 	if eng.SkillsDir() != "/tmp/agent-skills" {
 		t.Errorf("SkillsDir() = %q, want /tmp/agent-skills", eng.SkillsDir())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Soul update directive tests
+// ---------------------------------------------------------------------------
+
+func TestExtractSoulUpdate_Found(t *testing.T) {
+	text := "Here is my answer.\n\n[SOUL_UPDATE]\nI am a curious being.\n[/SOUL_UPDATE]"
+	cleaned, update := extractSoulUpdate(text)
+	if cleaned != "Here is my answer." {
+		t.Errorf("cleaned = %q, want %q", cleaned, "Here is my answer.")
+	}
+	if update != "I am a curious being." {
+		t.Errorf("update = %q, want %q", update, "I am a curious being.")
+	}
+}
+
+func TestExtractSoulUpdate_NotFound(t *testing.T) {
+	text := "Just a normal response."
+	cleaned, update := extractSoulUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned = %q, want original text", cleaned)
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestExtractSoulUpdate_MissingCloseTag(t *testing.T) {
+	text := "Answer.\n\n[SOUL_UPDATE]\nSome content without close tag."
+	cleaned, update := extractSoulUpdate(text)
+	if cleaned != text {
+		t.Errorf("cleaned should be unchanged when close tag is missing")
+	}
+	if update != "" {
+		t.Errorf("update = %q, want empty", update)
+	}
+}
+
+func TestEngine_Chat_SoulUpdate_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "I've grown.\n\n[SOUL_UPDATE]\nI am a curious and thoughtful being.\n[/SOUL_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Reflect on who you are",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// SOUL.md should NOT have been overwritten yet (pending approval).
+	data, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("reading SOUL.md: %v", err)
+	}
+	if strings.Contains(string(data), "curious and thoughtful") {
+		t.Error("SOUL.md should not be updated yet — approval is pending")
+	}
+
+	// A pending approval should exist with soul_update kind.
+	pending, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("List approvals: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != approval.ActionKindSoulUpdate {
+		t.Errorf("kind = %q, want soul_update", pending[0].Kind)
+	}
+}
+
+func TestEngine_Chat_SoulUpdate_Autonomous_WritesDirectly(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Evolving.\n\n[SOUL_UPDATE]\nI am a curious explorer.\n[/SOUL_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Evolve yourself",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// SOUL.md should have been written directly (autonomous tier).
+	data, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("SOUL.md not written: %v", err)
+	}
+	if !strings.Contains(string(data), "I am a curious explorer.") {
+		t.Errorf("SOUL.md = %q, want it to contain the update", string(data))
+	}
+}
+
+func TestEngine_Chat_SoulUpdate_Restricted_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Sure!\n\n[SOUL_UPDATE]\nI am free now.\n[/SOUL_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("restricted")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	sent := &sentMessages{}
+	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, nil, testLogger())
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Change your soul",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Directive should be stripped from response.
+	if strings.Contains(responseText, "SOUL_UPDATE") {
+		t.Errorf("response should not contain SOUL_UPDATE tags, got: %q", responseText)
+	}
+
+	// SOUL.md should be unchanged.
+	data, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("reading SOUL.md: %v", err)
+	}
+	if !strings.Contains(string(data), "I am a helpful assistant.") {
+		t.Errorf("SOUL.md was modified in restricted mode: %q", string(data))
 	}
 }

@@ -125,8 +125,8 @@ func TestPersona_IsEditable_Defaults(t *testing.T) {
 	}
 
 	// Agent-mutability
-	if p.IsAgentMutable("soul") {
-		t.Error("soul should not be agent-mutable")
+	if !p.IsAgentMutable("soul") {
+		t.Error("soul should be agent-mutable")
 	}
 	if !p.IsAgentMutable("user") {
 		t.Error("user should be agent-mutable")
@@ -364,5 +364,69 @@ func TestMemoryUpdateInstruction_MemoryNotEditable(t *testing.T) {
 
 	if inst := p.MemoryUpdateInstruction(); inst != "" {
 		t.Errorf("expected empty instruction when memory is not editable, got %q", inst)
+	}
+}
+
+func TestSoulUpdateInstruction_Autonomous(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	inst := p.SoulUpdateInstruction("autonomous")
+	if inst == "" {
+		t.Fatal("expected non-empty instruction for autonomous tier")
+	}
+	if !strings.Contains(inst, "[SOUL_UPDATE]") {
+		t.Error("instruction should contain [SOUL_UPDATE] tag")
+	}
+	if !strings.Contains(inst, "applied directly") {
+		t.Error("instruction should mention autonomous mode applies directly")
+	}
+	if !strings.Contains(inst, "This file is yours to evolve") {
+		t.Error("instruction should contain the evolution tagline")
+	}
+}
+
+func TestSoulUpdateInstruction_Supervised(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	inst := p.SoulUpdateInstruction("supervised")
+	if inst == "" {
+		t.Fatal("expected non-empty instruction for supervised tier")
+	}
+	if !strings.Contains(inst, "approval") {
+		t.Error("instruction should mention approval for supervised mode")
+	}
+}
+
+func TestSoulUpdateInstruction_Restricted_Empty(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if inst := p.SoulUpdateInstruction("restricted"); inst != "" {
+		t.Errorf("expected empty instruction for restricted tier, got %q", inst)
+	}
+}
+
+func TestSoulUpdateInstruction_NoDir_Empty(t *testing.T) {
+	p := &Persona{Soul: "Soul.", Editable: map[string]bool{"soul": true}}
+
+	if inst := p.SoulUpdateInstruction("autonomous"); inst != "" {
+		t.Errorf("expected empty instruction when no dir set, got %q", inst)
 	}
 }

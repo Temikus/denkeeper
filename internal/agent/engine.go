@@ -36,6 +36,9 @@ const memUpdateClose = "[/MEMORY_UPDATE]"
 const userUpdateOpen = "[USER_UPDATE]"
 const userUpdateClose = "[/USER_UPDATE]"
 
+const soulUpdateOpen = "[SOUL_UPDATE]"
+const soulUpdateClose = "[/SOUL_UPDATE]"
+
 const skillCreateOpen = "[SKILL_CREATE]"
 const skillCreateClose = "[/SKILL_CREATE]"
 
@@ -73,11 +76,11 @@ type Engine struct {
 	logger *slog.Logger
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
-	tracer       trace.Tracer
-	mMessages    metric.Int64Counter
-	mSessions    metric.Int64UpDownCounter
-	mChatDur     metric.Float64Histogram
-	mToolCalls   metric.Int64Counter
+	tracer     trace.Tracer
+	mMessages  metric.Int64Counter
+	mSessions  metric.Int64UpDownCounter
+	mChatDur   metric.Float64Histogram
+	mToolCalls metric.Int64Counter
 }
 
 func NewEngine(
@@ -297,6 +300,9 @@ func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine, msg adapter
 		if inst := e.persona.UserUpdateInstruction(perms.Tier()); inst != "" {
 			base += "\n\n" + inst
 		}
+		if inst := e.persona.SoulUpdateInstruction(perms.Tier()); inst != "" {
+			base += "\n\n" + inst
+		}
 		if e.agentSkillsDir != "" && perms.Tier() != "restricted" {
 			base += "\n\n" + skillCreateInstruction(perms.Tier())
 		}
@@ -407,6 +413,13 @@ func extractMemoryUpdate(text string) (cleaned, memUpdate string) {
 // (empty if no block was found or the block was malformed).
 func extractUserUpdate(text string) (cleaned, userUpdate string) {
 	return extractDirective(text, userUpdateOpen, userUpdateClose)
+}
+
+// extractSoulUpdate parses and removes a [SOUL_UPDATE]...[/SOUL_UPDATE] block
+// from text. Returns the cleaned text and the proposed SOUL.md content
+// (empty if no block was found or the block was malformed).
+func extractSoulUpdate(text string) (cleaned, soulUpdate string) {
+	return extractDirective(text, soulUpdateOpen, soulUpdateClose)
 }
 
 // extractSkillCreate parses and removes a [SKILL_CREATE]...[/SKILL_CREATE] block.
@@ -755,21 +768,28 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	return resp, llmMessages, nil
 }
 
-// processResponseDirectives extracts memory updates, user updates, skill
-// creation, and schedule addition directives from the LLM response. Returns
+// applyMemoryUpdate persists a memory update extracted from the LLM response.
+func (e *Engine) applyMemoryUpdate(memUpdate string, perms *security.PermissionEngine) {
+	if memUpdate == "" || e.persona == nil || !perms.CanExecute("write_memory") {
+		return
+	}
+	if err := e.persona.UpdateMemory(memUpdate); err != nil {
+		e.logger.Warn("failed to persist memory update", "error", err)
+	} else {
+		e.logger.Info("memory updated", "bytes", len(memUpdate))
+	}
+}
+
+// processResponseDirectives extracts memory updates, user updates, soul updates,
+// skill creation, and schedule addition directives from the LLM response. Returns
 // the cleaned response text. Sets e.lastPendingApproval if an approval was
 // created.
 func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatResponse, perms *security.PermissionEngine, msg adapter.IncomingMessage, convID string) string {
 	responseText, memUpdate := extractMemoryUpdate(resp.Content)
-	if memUpdate != "" && e.persona != nil && perms.CanExecute("write_memory") {
-		if err := e.persona.UpdateMemory(memUpdate); err != nil {
-			e.logger.Warn("failed to persist memory update", "error", err)
-		} else {
-			e.logger.Info("memory updated", "bytes", len(memUpdate))
-		}
-	}
+	e.applyMemoryUpdate(memUpdate, perms)
 
 	responseText, userUpdate := extractUserUpdate(responseText)
+	responseText, soulUpdate := extractSoulUpdate(responseText)
 	responseText, skillPayload := extractSkillCreate(responseText)
 	responseText, schedPayload := extractScheduleAdd(responseText)
 
@@ -784,6 +804,18 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 			logLabel:    "user update", externalID: msg.ExternalID,
 			adapter: msg.Adapter, convID: convID,
 			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("user", payload) },
+		}, responseText)
+	}
+
+	if soulUpdate != "" && e.lastPendingApproval == nil && e.persona != nil && e.persona.Dir() != "" {
+		personaRef := e.persona
+		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+			payload: soulUpdate, kind: approval.ActionKindSoulUpdate,
+			description: "Update soul identity (SOUL.md)",
+			pendingMsg:  "\n\n_Proposed soul update is pending your approval._",
+			logLabel:    "soul update", externalID: msg.ExternalID,
+			adapter: msg.Adapter, convID: convID,
+			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("soul", payload) },
 		}, responseText)
 	}
 

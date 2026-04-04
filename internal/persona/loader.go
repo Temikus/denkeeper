@@ -182,6 +182,37 @@ If the user shares important personal information they want remembered persisten
 		`persisted across sessions. Omit entirely when not needed.`
 }
 
+// SoulUpdateInstruction returns the system prompt fragment that instructs the
+// agent how to request a SOUL.md update via a [SOUL_UPDATE] directive.
+// Returns an empty string if the persona has no write path or the tier is
+// "restricted" (which cannot write soul files).
+func (p *Persona) SoulUpdateInstruction(tier string) string {
+	if p.dir == "" || tier == "restricted" {
+		return ""
+	}
+	var modeNote string
+	if tier == "autonomous" {
+		modeNote = "In autonomous mode, this will be applied directly."
+	} else {
+		modeNote = "In supervised mode, this will be presented for your approval before being applied."
+	}
+	return `---
+
+_This file is yours to evolve. As you learn who you are, update it._
+
+## Soul Evolution
+
+If your core identity, values, or personality should evolve based on your experiences ` +
+		`and growth, include a soul update block at the end of your response:
+
+[SOUL_UPDATE]
+<complete updated SOUL.md content>
+[/SOUL_UPDATE]
+
+` + modeNote + ` Only include this when you have a genuine reason to evolve your identity. ` +
+		`Omit entirely when not needed.`
+}
+
 // IsEditable reports whether the section can be edited via the dashboard/API by the user.
 // Unknown sections are treated as not editable (returns false).
 func (p *Persona) IsEditable(section string) bool {
@@ -190,8 +221,8 @@ func (p *Persona) IsEditable(section string) bool {
 }
 
 // IsAgentMutable reports whether the agent itself can modify the given section.
-// "memory" is always agent-mutable; "user" requires supervised/autonomous tier
-// (via approval or directive); "soul" is never agent-mutable.
+// "memory" is always agent-mutable; "user" and "soul" require supervised/autonomous
+// tier (via approval or directive).
 func (p *Persona) IsAgentMutable(section string) bool {
 	switch strings.ToLower(section) {
 	case "memory":
@@ -199,7 +230,7 @@ func (p *Persona) IsAgentMutable(section string) bool {
 	case "user":
 		return true // via USER_UPDATE directive (supervised tier requires approval)
 	case "soul":
-		return false
+		return true // via SOUL_UPDATE directive (supervised tier requires approval)
 	default:
 		return false
 	}

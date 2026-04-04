@@ -99,6 +99,9 @@ func TestGetPersona_Success(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "You are a test agent.") {
 		t.Errorf("response missing soul content: %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"agent_mutable":true`) {
+		t.Errorf("response missing agent_mutable:true for soul: %s", rec.Body.String())
+	}
 }
 
 func TestGetPersona_AgentNotFound(t *testing.T) {

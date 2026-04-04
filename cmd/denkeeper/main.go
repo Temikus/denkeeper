@@ -28,11 +28,11 @@ import (
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
-	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
+	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
 	"github.com/Temikus/denkeeper/internal/sandbox"
@@ -520,8 +520,10 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 			}
 			router.SetFallbacks(converted)
 		},
-		BrowserProfiles: abc.browserProfiles,
-		Logger:          abc.logger,
+		BrowserProfiles:    abc.browserProfiles,
+		GetPersonaSection:  e.PersonaSection,
+		SavePersonaSection: e.SavePersonaSection,
+		Logger:             abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
 	if err != nil {
@@ -1058,7 +1060,7 @@ func initAPIAuth(ctx context.Context, cfg *config.Config, deps *api.Deps, logger
 	}
 
 	maxAge, _ := time.ParseDuration(auth.SessionMaxAge) // validated in config
-	secure := cfg.API.TLS                                // Secure cookies only when TLS is enabled
+	secure := cfg.API.TLS                               // Secure cookies only when TLS is enabled
 	sm, err := api.NewSessionManager(auth.SessionSecret, maxAge, secure)
 	if err != nil {
 		return fmt.Errorf("creating session manager: %w", err)

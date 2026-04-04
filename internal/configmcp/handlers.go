@@ -242,6 +242,11 @@ func (s *Server) registerTools() {
 	if s.deps.BrowserProfiles != nil {
 		s.registerBrowserTools()
 	}
+
+	// Persona tools (registered only when persona callbacks are provided).
+	if s.deps.GetPersonaSection != nil && s.deps.SavePersonaSection != nil {
+		s.registerPersonaTools()
+	}
 }
 
 // --------------------------------------------------------------------------
