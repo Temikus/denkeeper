@@ -34,7 +34,7 @@
     detail = null
     expandedGroup = null
     expandedSection = null
-    editingConfig = false
+    expandedCard = null
     sectionData = {}
     try {
       detail = await api.agent(a.name)
@@ -103,8 +103,8 @@
     return groups
   }
 
-  // Agent config editing state
-  let editingConfig = $state(false)
+  // Per-card expandable config state (accordion — one at a time)
+  let expandedCard = $state(null)  // 'model' | 'permission' | 'tools' | 'adapters' | null
   let configTier = $state('')
   let configModel = $state('')
   let configDescription = $state('')
@@ -126,38 +126,70 @@
     }
   }
 
-  function startEditConfig() {
+  function toggleCard(card) {
+    if (expandedCard === card) { expandedCard = null; return }
     initConfigForm(detail)
-    editingConfig = true
+    configSaveOk = false
+    expandedCard = card
+  }
+
+  function cancelCard() {
+    expandedCard = null
     configSaveOk = false
   }
 
-  function cancelEditConfig() {
-    editingConfig = false
-    configSaveOk = false
-  }
-
-  async function saveConfig() {
+  async function saveCardConfig() {
     if (!detail) return
     configSaving = true
     configSaveOk = false
     try {
       const data = {}
-      if (configTier !== detail.permission_tier) data.session_tier = configTier
-      if (configModel !== detail.model) data.llm_model = configModel
-      if (configDescription !== undefined) data.description = configDescription
-      const allowlistArr = configAllowlist.split(',').map(s => s.trim()).filter(Boolean)
-      data.browser_url_allowlist = allowlistArr
-      await api.updateAgentConfig(detail.name, data)
-      detail = await api.agent(detail.name)
-      agents = (await api.agents()) || []
-      editingConfig = false
+      if (expandedCard === 'model') {
+        if (configModel !== detail.model) data.llm_model = configModel
+        if (configDescription !== undefined) data.description = configDescription
+      } else if (expandedCard === 'permission') {
+        if (configTier !== detail.permission_tier) data.session_tier = configTier
+      }
+      if (Object.keys(data).length) {
+        await api.updateAgentConfig(detail.name, data)
+        detail = await api.agent(detail.name)
+        agents = (await api.agents()) || []
+        initConfigForm(detail)
+      }
       configSaveOk = true
+      expandedCard = null
       setTimeout(() => configSaveOk = false, 3000)
     } catch(e) {
       error = e.message
     } finally {
       configSaving = false
+    }
+  }
+
+  // Allowlist editing (in Available Tools section)
+  let allowlistSaving = $state(false)
+  let allowlistSaveOk = $state(false)
+
+  function isBrowserGroup(group) {
+    return group.startsWith('browser_') || group.startsWith('web_')
+  }
+
+  async function saveAllowlist() {
+    if (!detail) return
+    allowlistSaving = true
+    allowlistSaveOk = false
+    try {
+      const arr = configAllowlist.split(',').map(s => s.trim()).filter(Boolean)
+      await api.updateAgentConfig(detail.name, { browser_url_allowlist: arr })
+      detail = await api.agent(detail.name)
+      agents = (await api.agents()) || []
+      initConfigForm(detail)
+      allowlistSaveOk = true
+      setTimeout(() => allowlistSaveOk = false, 3000)
+    } catch(e) {
+      error = e.message
+    } finally {
+      allowlistSaving = false
     }
   }
 
@@ -216,59 +248,38 @@
             {#if detail.model}· {detail.model}{/if}
           </p>
         </div>
-        <div class="header-actions">
-          {#if configSaveOk}
-            <span class="save-ok">Saved</span>
-          {/if}
-          {#if editingConfig}
-            <button class="btn-save" onclick={saveConfig} disabled={configSaving}>
-              {configSaving ? 'Saving…' : 'Save'}
-            </button>
-            <button class="btn-ghost btn-ghost-sm" onclick={cancelEditConfig}>Cancel</button>
-          {:else}
-            <button class="btn-ghost btn-ghost-sm" onclick={startEditConfig}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              Edit
-            </button>
-          {/if}
-        </div>
+        {#if configSaveOk}
+          <span class="save-ok">Saved</span>
+        {/if}
       </div>
 
-      <!-- Stats cards — inline editable -->
+      <!-- Stats cards — summary row -->
       <div class="stat-cards">
-        <div class="stat-card">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="stat-card" class:expanded={expandedCard === 'model'} onclick={() => toggleCard('model')} role="button" tabindex="0" aria-expanded={expandedCard === 'model'}>
           <div class="stat-icon" style="background: rgba(79,142,247,0.12); color: var(--accent);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
           </div>
           <div class="stat-text">
             <div class="stat-label">MODEL</div>
-            {#if editingConfig}
-              <input class="stat-input mono" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
-            {:else}
-              <div class="stat-value mono">{detail.model || '—'}</div>
-            {/if}
+            <div class="stat-value mono">{detail.model || '—'}</div>
           </div>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
-        <div class="stat-card">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="stat-card" class:expanded={expandedCard === 'permission'} onclick={() => toggleCard('permission')} role="button" tabindex="0" aria-expanded={expandedCard === 'permission'}>
           <div class="stat-icon" style="background: rgba(240,169,88,0.12); color: var(--warn);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           </div>
           <div class="stat-text">
             <div class="stat-label">PERMISSION</div>
-            {#if editingConfig}
-              <select class="stat-input" bind:value={configTier}>
-                <option value="autonomous">Autonomous</option>
-                <option value="supervised">Supervised</option>
-                <option value="restricted">Restricted</option>
-              </select>
-            {:else}
-              <div class="stat-value">
-                <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
-              </div>
-            {/if}
+            <div class="stat-value">
+              <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
+            </div>
           </div>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card-static">
           <div class="stat-icon" style="background: rgba(76,175,125,0.12); color: var(--success);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3h-8l-2 4h12z"/></svg>
           </div>
@@ -285,7 +296,7 @@
             </div>
           </div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card-static">
           <div class="stat-icon" style="background: rgba(168,85,247,0.12); color: #a855f7;">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
           </div>
@@ -296,26 +307,36 @@
         </div>
       </div>
 
-      <!-- Extra config fields — shown inline below stats when editing -->
-      <div class="inline-panel" class:open={editingConfig}>
-        <div class="inline-panel-inner">
-          <div class="extra-config">
-            <div class="extra-config-row">
-              <label class="extra-config-label" for="cfg-desc">Description</label>
-              <input id="cfg-desc" class="stat-input" type="text" bind:value={configDescription} placeholder="Agent description" />
+      <!-- Full-width config panel below cards -->
+      {#if expandedCard}
+        <div class="config-panel" aria-hidden={!expandedCard}>
+          {#if expandedCard === 'model'}
+            <div class="config-panel-title">Model Configuration</div>
+            <div class="config-panel-body">
+              <label class="config-label" for="cfg-model">LLM Model</label>
+              <input id="cfg-model" class="config-input mono" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
+              <label class="config-label" for="cfg-desc">Description</label>
+              <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
             </div>
-            <div class="extra-config-row">
-              <label class="extra-config-label" for="cfg-allowlist">Browser URL Allowlist</label>
-              <input id="cfg-allowlist" class="stat-input" type="text" bind:value={configAllowlist} placeholder="e.g. *.example.com, api.service.io" />
-              <span class="hint">Comma-separated domains. Empty = unrestricted.</span>
+          {:else if expandedCard === 'permission'}
+            <div class="config-panel-title">Permission Configuration</div>
+            <div class="config-panel-body">
+              <label class="config-label" for="cfg-tier">Permission Tier</label>
+              <select id="cfg-tier" class="config-input" bind:value={configTier}>
+                <option value="autonomous">Autonomous</option>
+                <option value="supervised">Supervised</option>
+                <option value="restricted">Restricted</option>
+              </select>
             </div>
-            <div class="extra-config-row">
-              <span class="extra-config-label">Adapters</span>
-              <span class="stat-value mono">{(detail.adapters || []).join(', ') || '—'} <span class="hint">(requires restart)</span></span>
-            </div>
+          {/if}
+          <div class="config-panel-actions">
+            <button class="btn-save" onclick={saveCardConfig} disabled={configSaving}>
+              {configSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button class="btn-ghost btn-ghost-sm" onclick={cancelCard}>Cancel</button>
           </div>
         </div>
-      </div>
+      {/if}
 
       <!-- Persona -->
       <div class="card">
@@ -333,7 +354,7 @@
           {#each personaSections(detail) as { name: sec, loaded }}
             <div class="sp-section" class:active={expandedSection === sec}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <div class="sp-header" onclick={() => toggleSection(sec)} role="button" tabindex="0">
+              <div class="sp-header" onclick={() => toggleSection(sec)} role="button" tabindex="0" aria-expanded={expandedSection === sec}>
                 <div class="sp-label">
                   <span class="section-icon">
                     {#if sec === 'soul'}
@@ -448,6 +469,18 @@
                 <span class="tool-expand-item mono">{t}</span>
               {/each}
             </div>
+            {#if isBrowserGroup(expandedGroup)}
+              <div class="tool-allowlist">
+                <label class="config-label" for="cfg-allowlist">Browser URL Allowlist</label>
+                <div class="tool-allowlist-row">
+                  <input id="cfg-allowlist" class="config-input" type="text" bind:value={configAllowlist} placeholder="e.g. *.example.com, api.service.io" />
+                  <button class="btn-save btn-save-sm" onclick={saveAllowlist} disabled={allowlistSaving}>
+                    {allowlistSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+                <span class="hint">Comma-separated domains. Empty = unrestricted.{#if allowlistSaveOk} <span class="save-ok-inline">Saved</span>{/if}</span>
+              </div>
+            {/if}
           {/if}
         </div>
       {:else if detail.has_tools}
@@ -493,25 +526,56 @@
   .agent-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
   .agent-name { font-size: 28px; font-weight: 700; margin: 0; line-height: 1.2; }
   .agent-subtitle { font-size: 14px; color: var(--text-muted); margin: 4px 0 0; }
-  .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  .btn-ghost-sm { padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
 
   /* Stat cards */
-  .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
   .stat-card {
     display: flex; align-items: center; gap: 12px;
     padding: 16px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    cursor: pointer;
+    transition: border-color 0.15s;
   }
+  .stat-card:hover { border-color: var(--accent); }
+  .stat-card.expanded { border-color: var(--accent); }
+  .stat-card-static { cursor: default; }
+  .stat-card-static:hover { border-color: var(--border); }
   .stat-icon {
     width: 40px; height: 40px; border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
   }
+  .stat-text { flex: 1; min-width: 0; }
   .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
   .stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .chevron {
+    flex-shrink: 0; color: var(--text-muted);
+    transition: transform 0.2s;
+  }
+  .stat-card.expanded .chevron { transform: rotate(180deg); }
+
+  /* Full-width config panel below stat cards */
+  .config-panel {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+  }
+  .config-panel-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  .config-panel-body { display: flex; flex-direction: column; gap: 8px; }
+  .config-label { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .config-input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); padding: 6px 10px; font-size: 12px; width: 100%;
+  }
+  .config-input:focus { outline: none; border-color: var(--accent); }
+  select.config-input { cursor: pointer; }
+  .config-readonly { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+  .config-panel-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .btn-ghost-sm { padding: 5px 12px; font-size: 12px; }
 
   /* Tier badge */
   .tier-badge {
@@ -598,21 +662,6 @@
   .agent-mutable-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
   .dot-agent-rw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
   .dot-agent-ro { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
-  /* Inline stat editing */
-  .stat-input {
-    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-    color: var(--text); padding: 5px 8px; font-size: 12px; width: 100%; margin-top: 2px;
-  }
-  .stat-input:focus { outline: none; border-color: var(--accent); }
-  select.stat-input { cursor: pointer; }
-
-  /* Extra config fields (shown below stats when editing) */
-  .extra-config {
-    display: flex; flex-direction: column; gap: 12px;
-    padding: 16px 0 4px;
-  }
-  .extra-config-row { display: flex; flex-direction: column; gap: 4px; }
-  .extra-config-label { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
 
   /* Capabilities */
   .capabilities-list { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }
@@ -671,6 +720,18 @@
     color: var(--text);
   }
 
+  /* Tool allowlist config */
+  .tool-allowlist {
+    padding: 0 18px 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .tool-allowlist-row { display: flex; gap: 8px; align-items: center; }
+  .tool-allowlist-row .config-input { flex: 1; }
+  .btn-save-sm { padding: 6px 14px; font-size: 12px; flex-shrink: 0; }
+  .save-ok-inline { color: var(--success); font-weight: 500; }
+
   /* Misc */
   .empty { color: var(--text-muted); font-size: 13px; padding: 14px 18px; }
   .select-prompt { margin-top: 40px; text-align: center; }
@@ -683,5 +744,8 @@
     .layout { flex-direction: column; }
     .list { width: 100%; flex-direction: row; overflow-x: auto; }
     .stat-cards { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chevron, .stat-card, .sp-preview, .section-name, .config-panel { transition: none; }
   }
 </style>
