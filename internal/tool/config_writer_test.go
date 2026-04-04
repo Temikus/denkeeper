@@ -342,3 +342,50 @@ token = "keep-me"
 		t.Error("existing config should be preserved")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SetAuthConfig
+// ---------------------------------------------------------------------------
+
+func TestSetAuthConfig_CreatesAuthSection(t *testing.T) {
+	path := writeTestConfig(t, `[api]
+enabled = true
+`)
+
+	if err := SetAuthConfig(path, "$2a$13$testhashvalue", "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "$2a$13$testhashvalue") {
+		t.Error("config should contain password_hash")
+	}
+	if !strings.Contains(content, "aabbccdd00112233") {
+		t.Error("config should contain session_secret")
+	}
+}
+
+func TestSetAuthConfig_PreservesExistingConfig(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "my-bot-token"
+
+[api]
+enabled = true
+listen = ":8080"
+`)
+
+	if err := SetAuthConfig(path, "$2b$13$newhash", "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff"); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "my-bot-token") {
+		t.Error("telegram config should be preserved")
+	}
+	if !strings.Contains(content, ":8080") {
+		t.Error("api listen should be preserved")
+	}
+	if !strings.Contains(content, "$2b$13$newhash") {
+		t.Error("config should contain new password_hash")
+	}
+}

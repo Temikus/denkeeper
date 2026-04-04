@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -815,10 +817,8 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 			break
 		}
 	}
-	if !hasActiveKey {
-		logger.Warn("no API keys found — web dashboard login will fail",
-			"hint", "run: denkeeper keys create <name>",
-		)
+	if !hasActiveKey && cfg.API.Auth.PasswordHash == "" {
+		logger.Warn("no API keys or password found — open the web dashboard to complete setup")
 	}
 
 	deps.KeyStore = keyStore
@@ -828,6 +828,20 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 		return fmt.Errorf("initializing auth: %w", err)
 	}
 
+	// Generate a one-time setup PIN when no auth is configured yet.
+	// The PIN secures the web-based account creation flow.
+	if !hasActiveKey && cfg.API.Auth.PasswordHash == "" {
+		pin, err := generateSetupPIN()
+		if err != nil {
+			return fmt.Errorf("generating setup PIN: %w", err)
+		}
+		deps.SetupPIN = pin
+		logger.Info("══════════════════════════════════════════════════")
+		logger.Info("FIRST-RUN SETUP PIN", "pin", pin)
+		logger.Info("Enter this PIN in the web dashboard to create your admin account.")
+		logger.Info("══════════════════════════════════════════════════")
+	}
+
 	apiServer := api.New(cfg.API, deps, logger)
 	go func() {
 		if err := apiServer.Run(ctx); err != nil && ctx.Err() == nil {
@@ -835,6 +849,15 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 		}
 	}()
 	return nil
+}
+
+// generateSetupPIN returns a cryptographically random 6-digit PIN string.
+func generateSetupPIN() (string, error) {
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", fmt.Errorf("generating random PIN: %w", err)
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 // resolveConfigPath returns the config file path from the CLI flag, env var, or default.

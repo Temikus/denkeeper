@@ -88,6 +88,17 @@ export const api = {
 
   // Setup (no auth required — only usable when no keys exist)
   setupStatus: () => fetch('/api/v1/setup').then(r => r.json()),
+  setupAccount: (pin, password) => fetch('/api/v1/setup/account', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin, password }),
+  }).then(async r => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}))
+      throw new Error(body.error || `HTTP ${r.status}`)
+    }
+    return r.json()
+  }),
   setupInit: (name, scopes) => fetch('/api/v1/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

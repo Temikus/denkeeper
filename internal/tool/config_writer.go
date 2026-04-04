@@ -300,6 +300,35 @@ func rawSchedules(raw map[string]any) []any {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Auth config persistence
+// ---------------------------------------------------------------------------
+
+// SetAuthConfig persists password_hash and session_secret to [api.auth] in the
+// TOML config file. Used by the PIN-protected account setup flow.
+func SetAuthConfig(path, passwordHash, sessionSecret string) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	apiSection, ok := raw["api"].(map[string]any)
+	if !ok {
+		apiSection = map[string]any{}
+	}
+	authSection, ok := apiSection["auth"].(map[string]any)
+	if !ok {
+		authSection = map[string]any{}
+	}
+
+	authSection["password_hash"] = passwordHash
+	authSection["session_secret"] = sessionSecret
+	apiSection["auth"] = authSection
+	raw["api"] = apiSection
+
+	return writeRawConfig(path, raw)
+}
+
 // readRawConfig reads a TOML file into a generic map.
 func readRawConfig(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- TOML config path from startup

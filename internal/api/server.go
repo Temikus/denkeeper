@@ -24,6 +24,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Deps holds the application dependencies the API server needs to serve data.
@@ -44,6 +45,7 @@ type Deps struct {
 	Sessions        *SessionManager         // nil = no session-based auth
 	OIDCProvider    *OIDCProvider           // nil = no OIDC endpoints
 	PasswordHash    string                  // bcrypt hash for password login
+	SetupPIN        string                  // one-time PIN for account setup (empty = disabled)
 }
 
 // Server is the external REST API server.
@@ -67,6 +69,9 @@ type Server struct {
 	passwordHash string
 	oidcProvider *OIDCProvider
 	loginLimiter *loginRateLimiter
+
+	// setupPIN is a one-time PIN for account creation, cleared after use.
+	setupPIN string
 }
 
 // New creates a new API server. The server is not started until Run is called.
@@ -80,6 +85,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		passwordHash: deps.PasswordHash,
 		oidcProvider: deps.OIDCProvider,
 		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
+		setupPIN:     deps.SetupPIN,
 	}
 
 	mux := http.NewServeMux()
@@ -92,9 +98,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		mux.Handle("GET /metrics", deps.MetricsHandler)
 	}
 
-	// Setup endpoints — no auth required; only functional when no keys exist.
+	// Setup endpoints — no auth required; only functional when no keys/password exist.
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupStatus)
 	mux.HandleFunc("POST /api/v1/setup", s.handleSetupInit)
+	mux.HandleFunc("POST /api/v1/setup/account", s.handleSetupAccount)
 
 	// Chat endpoint.
 	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.handleChat))
@@ -1233,10 +1240,14 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 // Setup (first-run bootstrap)
 // ---------------------------------------------------------------------------
 
-// setupRequired returns true when there are no active keys anywhere — neither
-// in the SQLite store nor in the TOML config. TOML keys always satisfy the
-// check so that users who prefer static config never see the setup prompt.
+// setupRequired returns true when there are no active keys anywhere and no
+// password auth configured. TOML keys always satisfy the check so that users
+// who prefer static config never see the setup prompt. Password auth also
+// satisfies setup (the user already has a way to log in).
 func (s *Server) setupRequired(ctx context.Context) (bool, error) {
+	if s.passwordHash != "" {
+		return false, nil
+	}
 	if len(s.cfg.Keys) > 0 {
 		return false, nil
 	}
@@ -1248,7 +1259,8 @@ func (s *Server) setupRequired(ctx context.Context) (bool, error) {
 }
 
 // handleSetupStatus handles GET /api/v1/setup.
-// Returns {"setup_required": true} when no active API keys exist.
+// Returns {"setup_required": true} when no active API keys or password exist.
+// Also reports whether the PIN-protected account setup flow is available.
 // No authentication required.
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
@@ -1260,7 +1272,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"setup_required": required})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"setup_required":          required,
+		"account_setup_available": s.setupPIN != "",
+	})
 }
 
 // handleSetupInit handles POST /api/v1/setup.
@@ -1322,6 +1337,107 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		"scopes":     rec.Scopes,
 		"created_at": rec.CreatedAt,
 	})
+}
+
+// handleSetupAccount handles POST /api/v1/setup/account.
+// Creates an admin account (password login) verified by a one-time setup PIN.
+// The PIN is displayed in server logs at startup. No authentication required —
+// the endpoint self-disables after successful use.
+func (s *Server) handleSetupAccount(w http.ResponseWriter, r *http.Request) {
+	// Rate-limit PIN attempts (reuse login rate limiter).
+	ip := clientIP(r)
+	if !s.loginLimiter.allow(ip) {
+		retryAfter := s.loginLimiter.retryAfter(ip)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		s.logger.Warn("setup account rate limited", "ip", ip)
+		http.Error(w, `{"error":"too many attempts"}`, http.StatusTooManyRequests)
+		return
+	}
+
+	var body struct {
+		PIN      string `json:"pin"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if strings.TrimSpace(body.PIN) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pin is required"})
+		return
+	}
+	if len(body.Password) < 8 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 8 characters"})
+		return
+	}
+
+	// Serialise PIN check + account creation to prevent TOCTOU races.
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+
+	if s.setupPIN == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "account setup is no longer available"})
+		return
+	}
+
+	// Constant-time comparison to prevent timing attacks on the PIN.
+	if subtle.ConstantTimeCompare([]byte(s.setupPIN), []byte(strings.TrimSpace(body.PIN))) != 1 {
+		s.logger.Warn("setup account: invalid PIN", "ip", ip)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid PIN"})
+		return
+	}
+
+	// Hash password with bcrypt (cost 13, consistent with `denkeeper passwd`).
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 13)
+	if err != nil {
+		s.logger.Error("hashing password", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	// Generate a cryptographic session secret (32 bytes, hex-encoded).
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		s.logger.Error("generating session secret", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	sessionSecret := hex.EncodeToString(secretBytes)
+
+	// Persist to TOML config for restart survival.
+	if err := tool.SetAuthConfig(s.deps.ConfigPath, string(hash), sessionSecret); err != nil {
+		s.logger.Error("persisting auth config", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save configuration"})
+		return
+	}
+
+	// Hot-reload: create SessionManager and update server state in-place.
+	sm, err := NewSessionManager(sessionSecret, 24*time.Hour, s.cfg.TLS)
+	if err != nil {
+		s.logger.Error("creating session manager", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	s.sessions = sm
+	s.passwordHash = string(hash)
+
+	// Clear the PIN — single use.
+	s.setupPIN = ""
+
+	// Create session cookie to log the user in immediately.
+	sess := Session{
+		Email:  "admin",
+		Scopes: adminScopes(),
+	}
+	if err := sm.Create(w, sess); err != nil {
+		s.logger.Error("creating session after account setup", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	s.logger.Info("account setup complete", "remote_addr", r.RemoteAddr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "email": "admin"}) //nolint:errcheck
 }
 
 // ---------------------------------------------------------------------------

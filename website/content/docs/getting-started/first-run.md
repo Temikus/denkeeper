@@ -67,6 +67,28 @@ denkeeper serve
 
 Send a message to your bot in Telegram. You should see a response within a few seconds.
 
+## Web dashboard setup
+
+If you have the API enabled (`[api] enabled = true` in your config), the web dashboard offers a streamlined first-run setup.
+
+When Denkeeper starts with no API keys and no password configured, it generates a **one-time setup PIN** and logs it to the console:
+
+```
+INFO FIRST-RUN SETUP PIN pin=482937
+INFO Enter this PIN in the web dashboard to create your admin account.
+```
+
+Open the dashboard in your browser (default: `http://localhost:8080`) and you'll see two options:
+
+1. **Create Account** (recommended) — enter the PIN from the logs and choose a password. This creates a password-based login for the dashboard and logs you in immediately.
+2. **Create API Key** — creates a scoped API key for programmatic access. Useful for automation or headless setups.
+
+The PIN is single-use and cleared after successful account creation. It is never exposed via any API endpoint — only in the server logs.
+
+{{< callout type="info" >}}
+The setup PIN protects against setup hijacking: an attacker with network access to the API port cannot create an account without also having access to the server logs.
+{{< /callout >}}
+
 ## Logs
 
 By default, Denkeeper logs to stderr at `info` level:

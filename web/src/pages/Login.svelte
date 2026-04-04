@@ -18,6 +18,17 @@
   let showApiKey = $state(false)
 
   // Setup state
+  let setupTab = $state('account') // 'account' | 'apikey'
+  let accountSetupAvailable = $state(false)
+
+  // Account setup state
+  let pinInput = $state('')
+  let accountPassword = $state('')
+  let accountPasswordConfirm = $state('')
+  let accountError = $state('')
+  let accountLoading = $state(false)
+
+  // API key setup state
   let setupName = $state('admin')
   let setupScopes = $state({
     admin: true,
@@ -34,7 +45,7 @@
   let setupError = $state('')
   let setupLoading = $state(false)
 
-  // Reveal state (after successful setup)
+  // Reveal state (after successful API key setup)
   let revealedKey = $state('')
   let copied = $state(false)
 
@@ -66,13 +77,16 @@
     // Fetch auth config and setup status in parallel.
     const [authCfg, setupStatus] = await Promise.all([
       api.authConfig().catch(() => ({ password_enabled: false, oidc_enabled: false })),
-      api.setupStatus().catch(() => ({ setup_required: false })),
+      api.setupStatus().catch(() => ({ setup_required: false, account_setup_available: false })),
     ])
 
     passwordEnabled = authCfg.password_enabled
     oidcEnabled = authCfg.oidc_enabled
+    accountSetupAvailable = setupStatus.account_setup_available || false
 
     if (setupStatus.setup_required) {
+      // Default to account tab when PIN-based setup is available.
+      setupTab = accountSetupAvailable ? 'account' : 'apikey'
       mode = 'setup'
     } else {
       // If neither password nor OIDC is configured, show API key login directly.
@@ -143,7 +157,38 @@
     window.location.href = '/auth/oidc/login'
   }
 
-  // --- Setup ---
+  // --- Account Setup (PIN + password) ---
+
+  async function handleAccountSetup() {
+    accountError = ''
+    if (!pinInput.trim()) {
+      accountError = 'PIN is required. Check your server logs.'
+      return
+    }
+    if (accountPassword.length < 8) {
+      accountError = 'Password must be at least 8 characters.'
+      return
+    }
+    if (accountPassword !== accountPasswordConfirm) {
+      accountError = 'Passwords do not match.'
+      return
+    }
+    accountLoading = true
+    try {
+      await api.setupAccount(pinInput.trim(), accountPassword)
+      authMode.set('session')
+    } catch (e) {
+      accountError = e.message || 'Account creation failed.'
+    } finally {
+      accountLoading = false
+    }
+  }
+
+  function handleAccountKeydown(e) {
+    if (e.key === 'Enter') handleAccountSetup()
+  }
+
+  // --- API Key Setup ---
 
   function selectedScopes() {
     return Object.entries(setupScopes)
@@ -256,29 +301,82 @@
 
     {:else if mode === 'setup'}
       <h1>Welcome to Denkeeper</h1>
-      <p class="subtitle">Create your first API key to access the dashboard.</p>
-      {#if setupError}
-        <p class="error">{setupError}</p>
+
+      {#if accountSetupAvailable}
+        <div class="tab-bar">
+          <button
+            class="tab" class:active={setupTab === 'account'}
+            onclick={() => setupTab = 'account'}
+          >Create Account</button>
+          <button
+            class="tab" class:active={setupTab === 'apikey'}
+            onclick={() => setupTab = 'apikey'}
+          >Create API Key</button>
+        </div>
       {/if}
-      <span class="field-label">Key name</span>
-      <input
-        type="text"
-        placeholder="admin"
-        bind:value={setupName}
-        disabled={setupLoading}
-      />
-      <span class="field-label">Scopes</span>
-      <div class="scopes-grid">
-        {#each ALL_SCOPES as { value, label }}
-          <label class="scope-item">
-            <input type="checkbox" bind:checked={setupScopes[value]} disabled={setupLoading} />
-            <code>{label}</code>
-          </label>
-        {/each}
-      </div>
-      <button onclick={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
-        {setupLoading ? 'Creating...' : 'Create key'}
-      </button>
+
+      {#if setupTab === 'account' && accountSetupAvailable}
+        <p class="subtitle">Enter the PIN from your server logs and choose a password.</p>
+        {#if accountError}
+          <p class="error">{accountError}</p>
+        {/if}
+        <span class="field-label">Setup PIN</span>
+        <input
+          type="text"
+          placeholder="6-digit PIN from server logs"
+          bind:value={pinInput}
+          onkeydown={handleAccountKeydown}
+          inputmode="numeric"
+          maxlength="6"
+          autocomplete="off"
+          disabled={accountLoading}
+        />
+        <span class="field-label">Password</span>
+        <input
+          type="password"
+          placeholder="Choose a password (min. 8 characters)"
+          bind:value={accountPassword}
+          onkeydown={handleAccountKeydown}
+          autocomplete="new-password"
+          disabled={accountLoading}
+        />
+        <span class="field-label">Confirm password</span>
+        <input
+          type="password"
+          placeholder="Confirm your password"
+          bind:value={accountPasswordConfirm}
+          onkeydown={handleAccountKeydown}
+          autocomplete="new-password"
+          disabled={accountLoading}
+        />
+        <button onclick={handleAccountSetup} disabled={accountLoading}>
+          {accountLoading ? 'Creating account...' : 'Create account'}
+        </button>
+      {:else}
+        <p class="subtitle">Create your first API key to access the dashboard.</p>
+        {#if setupError}
+          <p class="error">{setupError}</p>
+        {/if}
+        <span class="field-label">Key name</span>
+        <input
+          type="text"
+          placeholder="admin"
+          bind:value={setupName}
+          disabled={setupLoading}
+        />
+        <span class="field-label">Scopes</span>
+        <div class="scopes-grid">
+          {#each ALL_SCOPES as { value, label }}
+            <label class="scope-item">
+              <input type="checkbox" bind:checked={setupScopes[value]} disabled={setupLoading} />
+              <code>{label}</code>
+            </label>
+          {/each}
+        </div>
+        <button onclick={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
+          {setupLoading ? 'Creating...' : 'Create key'}
+        </button>
+      {/if}
 
     {:else if mode === 'reveal'}
       <h1>Your API key</h1>
@@ -328,6 +426,29 @@
   input[type="text"]:focus,
   input[type="password"]:focus { border-color: var(--accent); }
   input:disabled { opacity: 0.6; }
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+  }
+  .tab {
+    flex: 1;
+    padding: 8px 12px;
+    background: none;
+    color: var(--text-muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .tab:hover { color: var(--text); background: none; }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
   .scopes-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
