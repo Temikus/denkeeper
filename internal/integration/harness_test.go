@@ -254,7 +254,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	}
 
 	cfg := config.APIConfig{
-		Enabled: true,
+		Enabled: boolPtr(true),
 		Listen:  ":0",
 		Keys: []config.APIKeyConfig{
 			{Name: "integration-test", Key: apiKey, Scopes: scopes},
@@ -318,3 +318,5 @@ func DecodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 		t.Fatalf("decode JSON response: %v", err)
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
