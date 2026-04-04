@@ -19,6 +19,12 @@ type BalanceProvider interface {
 	FundsRemaining(ctx context.Context) (float64, error)
 }
 
+// ModelLister is an optional interface implemented by providers that can
+// enumerate their available models.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]string, error)
+}
+
 // LLMError is returned by providers for API-level failures.
 // Use errors.As to unwrap from wrapped errors.
 type LLMError struct {
@@ -110,9 +116,10 @@ type FunctionDef struct {
 }
 
 type TokenUsage struct {
-	Prompt     int
-	Completion int
-	Total      int
+	Prompt       int
+	Completion   int
+	CachedPrompt int // tokens served from cache (Anthropic cache_read, OpenAI cached_tokens)
+	Total        int
 }
 
 type ProviderMetadata struct {

@@ -1869,7 +1869,8 @@ func TestChat_SSEToolEvents(t *testing.T) {
 	mem, _ := agent.NewInMemoryStore()
 	costTracker := llm.NewCostTracker(1.0)
 
-	perms, _ := security.NewPermissionEngine("supervised")
+	// Use autonomous tier so tool calls execute without approval blocking.
+	perms, _ := security.NewPermissionEngine("autonomous")
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&sequentialProvider{
 		responses: []*llm.ChatResponse{
@@ -1969,5 +1970,64 @@ func TestChat_SSEToolEvents(t *testing.T) {
 	}
 	if events[6]["type"] != "done" {
 		t.Errorf("events[6] = %v, want done", events[6])
+	}
+}
+
+func TestHandleModels_ReturnsList(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.ModelLister = func(_ context.Context) []string {
+		return []string{"anthropic/claude-opus-4", "openai/gpt-4o"}
+	}
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/models")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	models, ok := resp["models"].([]any)
+	if !ok {
+		t.Fatalf("models field missing or wrong type: %v", resp)
+	}
+	if len(models) != 2 {
+		t.Errorf("len(models) = %d, want 2", len(models))
+	}
+}
+
+func TestHandleModels_NilListerReturns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	// ModelLister is nil (not configured)
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/models")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleModels_RequiresAuth(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.ModelLister = func(_ context.Context) []string { return nil }
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }

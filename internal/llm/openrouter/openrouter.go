@@ -114,6 +114,40 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}, nil
 }
 
+// ListModels returns available model IDs from the OpenRouter API.
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing models response: %w", err)
+	}
+
+	models := make([]string, len(result.Data))
+	for i, m := range result.Data {
+		models[i] = m.ID
+	}
+	return models, nil
+}
+
 func (c *Client) HealthCheck(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
 	if err != nil {

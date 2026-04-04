@@ -115,6 +115,39 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}, nil
 }
 
+// ListModels returns available model names from the Ollama API.
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating tags request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing tags response: %w", err)
+	}
+
+	models := make([]string, len(result.Models))
+	for i, m := range result.Models {
+		models[i] = m.Name
+	}
+	return models, nil
+}
+
 // HealthCheck hits GET /api/tags which Ollama exposes on its native API.
 func (c *Client) HealthCheck(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)

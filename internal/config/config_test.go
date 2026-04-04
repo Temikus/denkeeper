@@ -2937,3 +2937,69 @@ args = ["--flag"]
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestParse_CostsConfig(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm.openrouter]
+api_key = "sk-or-key"
+
+[costs]
+default_rate_per_1k_tokens = 0.02
+
+[costs.model_prices.claude-opus-4]
+input = 15.0
+output = 75.0
+cached_input = 1.5
+
+[costs.model_prices.gpt-4o]
+input = 2.50
+output = 10.0
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Costs.DefaultRatePerKTokens != 0.02 {
+		t.Errorf("default_rate = %f, want 0.02", cfg.Costs.DefaultRatePerKTokens)
+	}
+	if len(cfg.Costs.ModelPrices) != 2 {
+		t.Errorf("model_prices count = %d, want 2", len(cfg.Costs.ModelPrices))
+	}
+	opus := cfg.Costs.ModelPrices["claude-opus-4"]
+	if opus.InputPerMTok != 15.0 {
+		t.Errorf("claude-opus-4 input = %f, want 15.0", opus.InputPerMTok)
+	}
+	if opus.CachedInputPerMTok != 1.5 {
+		t.Errorf("claude-opus-4 cached_input = %f, want 1.5", opus.CachedInputPerMTok)
+	}
+}
+
+func TestParse_CostsDefaults(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm.openrouter]
+api_key = "sk-or-key"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No [costs] section — should default to zero (use registry only).
+	if cfg.Costs.DefaultRatePerKTokens != 0 {
+		t.Errorf("default_rate = %f, want 0", cfg.Costs.DefaultRatePerKTokens)
+	}
+	if cfg.Costs.ModelPrices != nil {
+		t.Errorf("model_prices = %v, want nil", cfg.Costs.ModelPrices)
+	}
+}

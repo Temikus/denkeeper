@@ -146,7 +146,15 @@
   function statusDot(status) {
     if (status === 'connected') return 'green'
     if (status === 'error') return 'red'
+    if (status === 'disabled') return 'red'
     return 'grey'
+  }
+
+  function statusLabel(t) {
+    if (t.status === 'error' && t.last_error) return `error: ${t.last_error}`
+    if (t.status === 'disabled') return `disabled after ${t.restart_count} restart${t.restart_count !== 1 ? 's' : ''}`
+    if (t.status === 'connected' && t.restart_count > 0) return `connected (restarted ${t.restart_count}x)`
+    return t.status
   }
 
   onMount(loadData)
@@ -224,9 +232,9 @@
             <tr>
               <td class="mono">{t.name}</td>
               <td class="mono truncate" title={t.command}>{t.command}</td>
-              <td>
+              <td title={t.last_error || ''}>
                 <span class="status-dot {statusDot(t.status)}"></span>
-                {t.status}
+                {statusLabel(t)}
               </td>
               <td>
                 {#if t.tool_names && t.tool_names.length > 0}

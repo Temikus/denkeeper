@@ -35,6 +35,26 @@ type Config struct {
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
 	MCP       MCPConfig               `toml:"mcp"`
+	Costs     CostsConfig             `toml:"costs"`
+}
+
+// CostsConfig controls the pricing registry and cost calculation.
+type CostsConfig struct {
+	// DefaultRatePerKTokens is the fallback rate (USD per 1K tokens) used when
+	// the model is not found in the bundled registry or operator overrides.
+	// Set to 0 to record $0.00 and emit a warning. Default: 0.
+	DefaultRatePerKTokens float64 `toml:"default_rate_per_1k_tokens"`
+	// ModelPrices allows operators to override or add model pricing.
+	// Keys are model name prefixes; values are [input, output, cached_input]
+	// rates per million tokens.
+	ModelPrices map[string]ModelPriceConfig `toml:"model_prices"`
+}
+
+// ModelPriceConfig holds per-million-token pricing for a model override.
+type ModelPriceConfig struct {
+	InputPerMTok       float64 `toml:"input"`
+	OutputPerMTok      float64 `toml:"output"`
+	CachedInputPerMTok float64 `toml:"cached_input"`
 }
 
 // OTelConfig controls OpenTelemetry observability instrumentation.

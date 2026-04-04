@@ -50,6 +50,9 @@ const (
 
 	// ActionKindBrowserProfile is a request to clear or delete a browser profile.
 	ActionKindBrowserProfile ActionKind = "browser_profile"
+
+	// ActionKindToolCall is a request to execute an MCP tool call (supervised tier).
+	ActionKindToolCall ActionKind = "tool_call"
 )
 
 // Request is the persisted record of a pending or resolved approval.

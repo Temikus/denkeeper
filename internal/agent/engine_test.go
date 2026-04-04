@@ -743,6 +743,190 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 	}
 }
 
+func TestEngine_SupervisedToolCallApproval_Approved(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Here are the search results.",
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	// Create a mock tool manager that returns a result.
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Start the message handling in a goroutine since it will block on approval.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-supervised",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	// Wait a bit for the approval to be submitted, then approve it.
+	time.Sleep(100 * time.Millisecond)
+	approvals, listErr := mgr.List(ctx, approval.StatusPending)
+	if listErr != nil {
+		t.Fatalf("listing approvals: %v", listErr)
+	}
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	if approvals[0].Kind != approval.ActionKindToolCall {
+		t.Errorf("approval kind = %q, want %q", approvals[0].Kind, approval.ActionKindToolCall)
+	}
+
+	// Approve it.
+	_, resolveErr := mgr.Resolve(ctx, approvals[0].ID, true, "test-operator")
+	if resolveErr != nil {
+		t.Fatalf("resolving approval: %v", resolveErr)
+	}
+
+	// Wait for the pipeline to complete.
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessage")
+	}
+
+	// The response should contain the search results text.
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
+	}
+	if !strings.Contains(sent.msgs[len(sent.msgs)-1].Text, "search results") {
+		t.Errorf("response = %q, want to contain 'search results'", sent.msgs[len(sent.msgs)-1].Text)
+	}
+}
+
+func TestEngine_SupervisedToolCallApproval_Denied(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "I was unable to perform the search.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-denied",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	// Wait for approval, then deny it.
+	time.Sleep(100 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+
+	_, _ = mgr.Resolve(ctx, approvals[0].ID, false, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessage")
+	}
+
+	// The LLM should have received the denial message and responded.
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
+	}
+}
+
 func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {

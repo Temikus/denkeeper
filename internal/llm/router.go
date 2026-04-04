@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/Temikus/denkeeper/internal/llm/pricing"
 )
 
 // FallbackRule describes a single fallback step the router will attempt.
@@ -38,7 +41,8 @@ type Router struct {
 	defaultModel    string
 	costTracker     *CostTracker
 	fallbacks       []FallbackRule
-	toolSource      func() []ToolDef // dynamic tool resolution; nil = no tools
+	toolSource      func() []ToolDef      // dynamic tool resolution; nil = no tools
+	pricing         *pricing.Registry      // model pricing lookup; nil = legacy fallback
 	balanceCache    map[string]balanceCacheEntry
 	mu              sync.Mutex // protects balanceCache
 
@@ -52,6 +56,33 @@ type Router struct {
 
 // DefaultModel returns the router's default model name.
 func (r *Router) DefaultModel() string { return r.defaultModel }
+
+// ListModels queries all registered providers that implement ModelLister and
+// returns a de-duplicated sorted list of available model names.
+func (r *Router) ListModels(ctx context.Context) []string {
+	seen := make(map[string]bool)
+	for _, p := range r.providers {
+		lister, ok := p.(ModelLister)
+		if !ok {
+			continue
+		}
+		models, err := lister.ListModels(ctx)
+		if err != nil {
+			slog.Warn("listing models from provider failed", "provider", p.Name(), "error", err)
+			continue
+		}
+		for _, m := range models {
+			seen[m] = true
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for m := range seen {
+		result = append(result, m)
+	}
+	// Sort for deterministic output.
+	sort.Strings(result)
+	return result
+}
 
 // SetDefaultModel changes the router's default model for subsequent requests.
 func (r *Router) SetDefaultModel(model string) { r.defaultModel = model }
@@ -92,6 +123,11 @@ func (r *Router) RegisterProvider(p Provider) {
 // SetFallbacks configures the ordered list of fallback rules.
 func (r *Router) SetFallbacks(rules []FallbackRule) {
 	r.fallbacks = rules
+}
+
+// SetPricing configures the model pricing registry used by TokenCost.
+func (r *Router) SetPricing(reg *pricing.Registry) {
+	r.pricing = reg
 }
 
 // SetTools configures a dynamic tool definition source. The function is
@@ -149,8 +185,12 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 			"tool_calls", len(resp.ToolCalls),
 			"tokens_total", resp.TokensUsed.Total,
 		)
-		r.recordOTelSuccess(start, resp, attrs)
-		r.costTracker.RecordWithTokens(sessionID, TokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+		cost, source := TokenCost(resp, r.pricing)
+		r.recordOTelSuccess(start, resp, cost, source, attrs)
+		r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+		if source == "unknown" {
+			slog.Warn("no pricing data for model", "model", resp.Model)
+		}
 		return resp, nil
 	}
 
@@ -169,22 +209,30 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
-	r.recordOTelSuccess(start, resp, attrs)
-	r.costTracker.RecordWithTokens(sessionID, TokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+	cost, source := TokenCost(resp, r.pricing)
+	r.recordOTelSuccess(start, resp, cost, source, attrs)
+	r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
+	if source == "unknown" {
+		slog.Warn("no pricing data for model", "model", resp.Model)
+	}
 	return resp, nil
 }
 
 // recordOTelSuccess records duration, token, and cost metrics for a successful LLM call.
-func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, attrs metric.MeasurementOption) {
+func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, cost float64, pricingSource string, attrs metric.MeasurementOption) {
 	ctx := context.Background()
 	r.mDuration.Record(ctx, time.Since(start).Seconds(), attrs)
 	r.mTokens.Add(ctx, int64(resp.TokensUsed.Prompt), attrs,
 		metric.WithAttributes(attribute.String("direction", "prompt")))
 	r.mTokens.Add(ctx, int64(resp.TokensUsed.Completion), attrs,
 		metric.WithAttributes(attribute.String("direction", "completion")))
-	cost := TokenCost(resp)
+	if resp.TokensUsed.CachedPrompt > 0 {
+		r.mTokens.Add(ctx, int64(resp.TokensUsed.CachedPrompt), attrs,
+			metric.WithAttributes(attribute.String("direction", "cached_prompt")))
+	}
 	if cost > 0 {
-		r.mCost.Add(ctx, cost, attrs)
+		r.mCost.Add(ctx, cost, attrs,
+			metric.WithAttributes(attribute.String("pricing_source", pricingSource)))
 	}
 }
 
@@ -362,12 +410,22 @@ func doWaitAndRetry(ctx context.Context, maxRetries int, backoff string, fn func
 	return err
 }
 
-// TokenCost returns the USD cost for a chat response. If the provider reported
-// a real cost (CostUSD > 0), that value is used. Otherwise falls back to a
-// rough estimate of $0.01 per 1K tokens.
-func TokenCost(resp *ChatResponse) float64 {
-	if resp.CostUSD > 0 {
-		return resp.CostUSD
+// TokenCost returns the USD cost for a chat response using the pricing registry.
+// Priority: provider-reported cost > registry lookup > fallback rate > $0.
+// Also returns a pricing source string ("provider"/"registry"/"fallback"/"unknown").
+func TokenCost(resp *ChatResponse, reg *pricing.Registry) (float64, string) {
+	if reg != nil {
+		return reg.Cost(
+			resp.Model,
+			resp.TokensUsed.Prompt,
+			resp.TokensUsed.Completion,
+			resp.TokensUsed.CachedPrompt,
+			resp.CostUSD,
+		)
 	}
-	return float64(resp.TokensUsed.Total) / 1000.0 * 0.01
+	// Legacy fallback when no registry is configured.
+	if resp.CostUSD > 0 {
+		return resp.CostUSD, "provider"
+	}
+	return float64(resp.TokensUsed.Total) / 1000.0 * 0.01, "fallback"
 }

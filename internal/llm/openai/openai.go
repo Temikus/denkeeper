@@ -15,41 +15,6 @@ import (
 const defaultBaseURL = "https://api.openai.com/v1"
 
 // modelPricing holds per-million-token pricing (input, output) in USD.
-type modelPricing struct {
-	inputPerMTok  float64
-	outputPerMTok float64
-}
-
-// pricingTable maps model name prefixes to their per-million-token pricing.
-// Prices from https://platform.openai.com/docs/pricing
-var pricingTable = []struct {
-	prefix  string
-	pricing modelPricing
-}{
-	{"gpt-4.1-nano", modelPricing{0.10, 0.40}},
-	{"gpt-4.1-mini", modelPricing{0.40, 1.60}},
-	{"gpt-4.1", modelPricing{2.0, 8.0}},
-	{"gpt-4o-mini", modelPricing{0.15, 0.60}},
-	{"gpt-4o", modelPricing{2.50, 10.0}},
-	{"o4-mini", modelPricing{1.10, 4.40}},
-	{"o3-mini", modelPricing{1.10, 4.40}},
-	{"o3", modelPricing{2.0, 8.0}},
-	{"o1-mini", modelPricing{1.10, 4.40}},
-	{"o1", modelPricing{15.0, 60.0}},
-}
-
-// estimateCost returns the estimated USD cost based on model pricing.
-// Returns 0 if the model is unrecognized (e.g. vLLM or LiteLLM endpoints).
-func estimateCost(model string, inputTokens, outputTokens int) float64 {
-	for _, entry := range pricingTable {
-		if strings.HasPrefix(model, entry.prefix) {
-			return float64(inputTokens)/1_000_000*entry.pricing.inputPerMTok +
-				float64(outputTokens)/1_000_000*entry.pricing.outputPerMTok
-		}
-	}
-	return 0
-}
-
 // Client implements llm.Provider for the OpenAI Chat Completions API.
 // Compatible with any OpenAI-format endpoint (OpenAI, Azure OpenAI, vLLM, LiteLLM).
 type Client struct {
@@ -151,18 +116,62 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 		return nil, fmt.Errorf("no choices in response")
 	}
 
+	var cachedPrompt int
+	if apiResp.Usage.PromptTokensDetails != nil {
+		cachedPrompt = apiResp.Usage.PromptTokensDetails.CachedTokens
+	}
+	// OpenAI includes cached tokens in PromptTokens; split them out.
+	promptNonCached := apiResp.Usage.PromptTokens - cachedPrompt
+
 	return &llm.ChatResponse{
 		Content:      apiResp.Choices[0].Message.Content,
 		ToolCalls:    apiResp.Choices[0].Message.ToolCalls,
 		Model:        apiResp.Model,
 		FinishReason: apiResp.Choices[0].FinishReason,
 		TokensUsed: llm.TokenUsage{
-			Prompt:     apiResp.Usage.PromptTokens,
-			Completion: apiResp.Usage.CompletionTokens,
-			Total:      apiResp.Usage.TotalTokens,
+			Prompt:       promptNonCached,
+			Completion:   apiResp.Usage.CompletionTokens,
+			CachedPrompt: cachedPrompt,
+			Total:        apiResp.Usage.TotalTokens,
 		},
-		CostUSD: estimateCost(apiResp.Model, apiResp.Usage.PromptTokens, apiResp.Usage.CompletionTokens),
 	}, nil
+}
+
+// ListModels returns available model IDs from the OpenAI-compatible API.
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.organization != "" {
+		req.Header.Set("OpenAI-Organization", c.organization)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing models response: %w", err)
+	}
+
+	models := make([]string, len(result.Data))
+	for i, m := range result.Data {
+		models[i] = m.ID
+	}
+	return models, nil
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {
@@ -267,7 +276,12 @@ type apiChoice struct {
 }
 
 type apiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                `json:"prompt_tokens"`
+	CompletionTokens    int                `json:"completion_tokens"`
+	TotalTokens         int                `json:"total_tokens"`
+	PromptTokensDetails *promptTokenDetail `json:"prompt_tokens_details,omitempty"`
+}
+
+type promptTokenDetail struct {
+	CachedTokens int `json:"cached_tokens"`
 }

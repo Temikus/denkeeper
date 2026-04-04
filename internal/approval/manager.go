@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,9 @@ type Manager struct {
 	store    Store
 	registry *Registry
 	logger   *slog.Logger
+
+	waiterMu sync.Mutex
+	waiters  map[string]chan Status // notified when an approval is resolved
 }
 
 // NewManager creates a Manager backed by the given store.
@@ -24,6 +28,7 @@ func NewManager(store Store, logger *slog.Logger) *Manager {
 		store:    store,
 		registry: NewRegistry(),
 		logger:   logger,
+		waiters:  make(map[string]chan Status),
 	}
 }
 
@@ -97,9 +102,11 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 				m.logger.Error("approval action failed", "id", id, "error", err)
 				// The status is already set to approved in the DB; we log the error
 				// but still return the resolved record so the caller can notify.
+				m.notifyWaiter(id, StatusApproved)
 				return req, fmt.Errorf("approval action: %w", err)
 			}
 			m.logger.Info("approval action executed", "id", id, "resolvedBy", resolvedBy)
+			m.notifyWaiter(id, StatusApproved)
 			return req, nil
 		}
 	} else {
@@ -108,6 +115,7 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 		m.logger.Info("approval denied", "id", id, "resolvedBy", resolvedBy)
 	}
 
+	m.notifyWaiter(id, status)
 	return m.store.Get(ctx, id)
 }
 
@@ -143,11 +151,14 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 	}
 
 	// If approved, invoke the action closure.
+	resolvedStatus := StatusDenied
 	if approved {
+		resolvedStatus = StatusApproved
 		fn, ok := m.registry.Pop(req.ID)
 		if ok {
 			if err := fn(ctx, req.Payload); err != nil {
 				m.logger.Error("approval action failed", "id", req.ID, "error", err)
+				m.notifyWaiter(req.ID, resolvedStatus)
 				return req, fmt.Errorf("approval action: %w", err)
 			}
 			m.logger.Info("approval action executed via callback", "id", req.ID)
@@ -159,7 +170,84 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		m.logger.Info("approval denied via callback", "id", req.ID)
 	}
 
+	m.notifyWaiter(req.ID, resolvedStatus)
 	return req, nil
+}
+
+// notifyWaiter signals any goroutine blocked in SubmitAndWait for the given ID.
+func (m *Manager) notifyWaiter(id string, status Status) {
+	m.waiterMu.Lock()
+	defer m.waiterMu.Unlock()
+	if ch, ok := m.waiters[id]; ok {
+		select {
+		case ch <- status:
+		default:
+		}
+	}
+}
+
+// SubmitAndWait submits an approval request and blocks until it is resolved.
+// The returned status is StatusApproved or StatusDenied. If the context is
+// cancelled before resolution, StatusExpired is returned.
+// Unlike Submit, the action closure is a no-op — the caller is expected to
+// take action based on the returned status.
+func (m *Manager) SubmitAndWait(
+	ctx context.Context,
+	agentName string,
+	kind ActionKind,
+	summary string,
+	payload string,
+	externalID string,
+	adapterName string,
+	conversationID string,
+) (Status, *Request, error) {
+	// No-op action — the caller acts on the returned status.
+	noOp := func(_ context.Context, _ string) error { return nil }
+
+	req, err := m.Submit(ctx, agentName, kind, summary, payload, externalID, adapterName, conversationID, noOp)
+	if err != nil {
+		return StatusDenied, nil, err
+	}
+
+	ch := make(chan Status, 1)
+	m.waiterMu.Lock()
+	m.waiters[req.ID] = ch
+	m.waiterMu.Unlock()
+
+	defer func() {
+		m.waiterMu.Lock()
+		delete(m.waiters, req.ID)
+		m.waiterMu.Unlock()
+	}()
+
+	select {
+	case status := <-ch:
+		return status, req, nil
+	case <-ctx.Done():
+		return StatusExpired, req, ctx.Err()
+	}
+}
+
+// WaitForResolution blocks until the approval with the given ID is resolved.
+// Returns StatusApproved, StatusDenied, or StatusExpired (if the context is cancelled).
+func (m *Manager) WaitForResolution(ctx context.Context, id string) Status {
+	ch := make(chan Status, 1)
+	m.waiterMu.Lock()
+	m.waiters[id] = ch
+	m.waiterMu.Unlock()
+
+	defer func() {
+		m.waiterMu.Lock()
+		delete(m.waiters, id)
+		m.waiterMu.Unlock()
+	}()
+
+	select {
+	case status := <-ch:
+		return status
+	case <-ctx.Done():
+		return StatusExpired
+	}
 }
 
 // Get returns a single approval by ID.

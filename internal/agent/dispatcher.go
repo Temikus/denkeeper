@@ -136,6 +136,18 @@ func (d *Dispatcher) Agent(name string) *Engine {
 	return d.agents[name]
 }
 
+// ListModels returns available LLM models by querying the default agent's router.
+func (d *Dispatcher) ListModels(ctx context.Context) []string {
+	if e := d.agents["default"]; e != nil {
+		return e.ListModels(ctx)
+	}
+	// Fall back to first available agent.
+	for _, e := range d.agents {
+		return e.ListModels(ctx)
+	}
+	return nil
+}
+
 // Run starts all adapters and processes incoming messages until ctx is cancelled.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	for _, a := range d.adapters {
@@ -170,11 +182,25 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 
 			// Refresh adapter typing indicator on thinking/tool_start events
 			// so the user sees continuous activity during long processing.
+			// For tool_approval events, send the approval prompt with inline buttons.
 			onEvent := func(evt ChatEvent) {
-				if evt.Type == "thinking" || evt.Type == "tool_start" {
-					if a, ok := d.adapters[msg.Adapter]; ok {
-						_ = a.SendTyping(msgCtx, msg.ExternalID)
-					}
+				a, ok := d.adapters[msg.Adapter]
+				if !ok {
+					return
+				}
+				switch evt.Type {
+				case "thinking", "tool_start":
+					_ = a.SendTyping(msgCtx, msg.ExternalID)
+				case "tool_approval":
+					_ = a.Send(msgCtx, adapter.OutgoingMessage{
+						Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+						ExternalID: msg.ExternalID,
+						Adapter:    msg.Adapter,
+						Buttons: []adapter.KeyboardButton{
+							{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+							{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+						},
+					})
 				}
 			}
 			if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {

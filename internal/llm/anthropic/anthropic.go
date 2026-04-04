@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -20,40 +19,6 @@ const (
 	anthropicVersion = "2023-06-01"
 	messagesEndpoint = "/v1/messages"
 )
-
-// modelPricing holds per-million-token pricing (input, output) in USD.
-type modelPricing struct {
-	inputPerMTok  float64
-	outputPerMTok float64
-}
-
-// pricingTable maps model name prefixes to their per-million-token pricing.
-// Prices from https://docs.anthropic.com/en/docs/about-claude/models
-var pricingTable = []struct {
-	prefix  string
-	pricing modelPricing
-}{
-	{"claude-opus-4", modelPricing{15.0, 75.0}},
-	{"claude-sonnet-4", modelPricing{3.0, 15.0}},
-	{"claude-3-7-sonnet", modelPricing{3.0, 15.0}},
-	{"claude-3-5-sonnet", modelPricing{3.0, 15.0}},
-	{"claude-3-5-haiku", modelPricing{0.80, 4.0}},
-	{"claude-3-opus", modelPricing{15.0, 75.0}},
-	{"claude-3-sonnet", modelPricing{3.0, 15.0}},
-	{"claude-3-haiku", modelPricing{0.25, 1.25}},
-}
-
-// estimateCost returns the estimated USD cost based on model pricing.
-// Returns 0 if the model is unrecognized.
-func estimateCost(model string, inputTokens, outputTokens int) float64 {
-	for _, entry := range pricingTable {
-		if strings.HasPrefix(model, entry.prefix) {
-			return float64(inputTokens)/1_000_000*entry.pricing.inputPerMTok +
-				float64(outputTokens)/1_000_000*entry.pricing.outputPerMTok
-		}
-	}
-	return 0
-}
 
 // Client implements llm.Provider against the Anthropic Messages API.
 type Client struct {
@@ -101,6 +66,40 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("health check returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ListModels returns available model IDs from the Anthropic API.
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating models request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing models response: %w", err)
+	}
+
+	models := make([]string, len(result.Data))
+	for i, m := range result.Data {
+		models[i] = m.ID
+	}
+	return models, nil
 }
 
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
@@ -250,11 +249,11 @@ func (c *Client) parseResponse(r *apiResponse) (*llm.ChatResponse, error) {
 		Model:        r.Model,
 		FinishReason: r.StopReason,
 		TokensUsed: llm.TokenUsage{
-			Prompt:     r.Usage.InputTokens,
-			Completion: r.Usage.OutputTokens,
-			Total:      r.Usage.InputTokens + r.Usage.OutputTokens,
+			Prompt:       r.Usage.InputTokens,
+			Completion:   r.Usage.OutputTokens,
+			CachedPrompt: r.Usage.CacheReadInputTokens,
+			Total:        r.Usage.InputTokens + r.Usage.OutputTokens + r.Usage.CacheReadInputTokens,
 		},
-		CostUSD: estimateCost(r.Model, r.Usage.InputTokens, r.Usage.OutputTokens),
 	}
 
 	for _, block := range r.Content {
@@ -328,8 +327,10 @@ type apiResponse struct {
 }
 
 type apiUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens            int `json:"input_tokens"`
+	OutputTokens           int `json:"output_tokens"`
+	CacheReadInputTokens   int `json:"cache_read_input_tokens"`
+	CacheCreationInputToks int `json:"cache_creation_input_tokens"`
 }
 
 type apiErrorResponse struct {

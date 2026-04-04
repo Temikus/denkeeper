@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Temikus/denkeeper/internal/llm/pricing"
 )
 
 // ---------------------------------------------------------------------------
@@ -724,18 +726,46 @@ func TestTokenCost_PrefersProviderCost(t *testing.T) {
 		CostUSD:    0.00123,
 		TokensUsed: TokenUsage{Total: 1000},
 	}
-	if got := TokenCost(resp); got != 0.00123 {
+	got, source := TokenCost(resp, nil)
+	if got != 0.00123 {
 		t.Errorf("TokenCost with CostUSD = %f, want 0.00123", got)
+	}
+	if source != "provider" {
+		t.Errorf("source = %q, want %q", source, "provider")
 	}
 }
 
-func TestTokenCost_FallbackEstimate(t *testing.T) {
+func TestTokenCost_LegacyFallbackEstimate(t *testing.T) {
 	resp := &ChatResponse{
 		CostUSD:    0,
 		TokensUsed: TokenUsage{Total: 1000},
 	}
 	want := float64(1000) / 1000.0 * 0.01
-	if got := TokenCost(resp); got != want {
+	got, source := TokenCost(resp, nil)
+	if got != want {
 		t.Errorf("TokenCost fallback = %f, want %f", got, want)
+	}
+	if source != "fallback" {
+		t.Errorf("source = %q, want %q", source, "fallback")
+	}
+}
+
+func TestTokenCost_UsesRegistry(t *testing.T) {
+	reg := pricing.NewEmpty()
+	reg.RegisterPrefix("claude-sonnet-4", pricing.ModelPrice{
+		InputPerMTok: 3.0, OutputPerMTok: 15.0, CachedInputPerMTok: 0.30,
+	})
+
+	resp := &ChatResponse{
+		Model:      "claude-sonnet-4-20250514",
+		TokensUsed: TokenUsage{Prompt: 1000, Completion: 500, CachedPrompt: 200, Total: 1700},
+	}
+	got, source := TokenCost(resp, reg)
+	want := 1000.0/1_000_000*3.0 + 500.0/1_000_000*15.0 + 200.0/1_000_000*0.30
+	if diff := got - want; diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("TokenCost = %e, want %e", got, want)
+	}
+	if source != "registry" {
+		t.Errorf("source = %q, want %q", source, "registry")
 	}
 }

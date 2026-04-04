@@ -111,6 +111,7 @@
   let configAllowlist = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
+  let availableModels = $state([])
 
   function initConfigForm(d) {
     configTier = d.permission_tier || 'supervised'
@@ -131,6 +132,9 @@
     initConfigForm(detail)
     configSaveOk = false
     expandedCard = card
+    if (card === 'model' && !availableModels.length) {
+      api.models().then(m => { availableModels = m })
+    }
   }
 
   function cancelCard() {
@@ -314,7 +318,16 @@
             <div class="config-panel-title">Model Configuration</div>
             <div class="config-panel-body">
               <label class="config-label" for="cfg-model">LLM Model</label>
-              <input id="cfg-model" class="config-input mono" type="text" bind:value={configModel} placeholder="e.g. anthropic/claude-sonnet-4-20250514" />
+              <input id="cfg-model" class="config-input mono" type="text" bind:value={configModel}
+                placeholder="e.g. anthropic/claude-sonnet-4-20250514"
+                list="available-models" autocomplete="off" />
+              {#if availableModels.length}
+                <datalist id="available-models">
+                  {#each availableModels as m}
+                    <option value={m}></option>
+                  {/each}
+                </datalist>
+              {/if}
               <label class="config-label" for="cfg-desc">Description</label>
               <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
             </div>

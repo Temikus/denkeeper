@@ -32,6 +32,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/ollama"
 	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
+	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -106,6 +107,7 @@ type llmClients struct {
 	openAI     *openaillm.Client
 	cost       *llm.CostTracker
 	fallbacks  []llm.FallbackRule
+	pricing    *pricing.Registry
 }
 
 // stores holds the initialized persistence stores and the approval manager.
@@ -219,6 +221,19 @@ func initLLMClients(cfg *config.Config) llmClients {
 		}
 	}
 
+	// Build pricing registry with bundled defaults + operator overrides.
+	reg := pricing.New()
+	if cfg.Costs.DefaultRatePerKTokens > 0 {
+		reg.SetFallbackRate(cfg.Costs.DefaultRatePerKTokens)
+	}
+	for prefix, mp := range cfg.Costs.ModelPrices {
+		reg.RegisterPrefix(prefix, pricing.ModelPrice{
+			InputPerMTok:       mp.InputPerMTok,
+			OutputPerMTok:      mp.OutputPerMTok,
+			CachedInputPerMTok: mp.CachedInputPerMTok,
+		})
+	}
+
 	return llmClients{
 		openRouter: orClient,
 		ollama:     ollamaClient,
@@ -226,6 +241,7 @@ func initLLMClients(cfg *config.Config) llmClients {
 		openAI:     openAIClient,
 		cost:       llm.NewCostTracker(cfg.LLM.MaxCostPerSession),
 		fallbacks:  fallbackRules,
+		pricing:    reg,
 	}
 }
 
@@ -649,6 +665,9 @@ func buildAgentRouter(model string, abc agentBuildCtx) *llm.Router {
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)
 	}
+	if abc.llm.pricing != nil {
+		router.SetPricing(abc.llm.pricing)
+	}
 	return router
 }
 
@@ -1003,10 +1022,14 @@ func runServe(_ *cobra.Command, _ []string) error {
 			MetricsHandler:  metricsHandler,
 			KVStore:         st.kvStore,
 			ConfigPath:      path,
+			ModelLister:     dispatcher.ListModels,
 		}, logger); err != nil {
 			return err
 		}
 	}
+
+	// Start MCP server health checker (respects [mcp] auto_restart config).
+	sharedToolMgr.StartHealthChecker(ctx, 30*time.Second)
 
 	logger.Info("denkeeper starting",
 		"agents", len(engines),

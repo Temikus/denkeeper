@@ -46,6 +46,7 @@ type Deps struct {
 	OIDCProvider    *OIDCProvider           // nil = no OIDC endpoints
 	PasswordHash    string                  // bcrypt hash for password login
 	SetupPIN        string                  // one-time PIN for account setup (empty = disabled)
+	ModelLister     func(ctx context.Context) []string // returns available LLM models; nil = endpoint returns 503
 }
 
 // Server is the external REST API server.
@@ -113,6 +114,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:read", s.handleGetPersona))
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
+	mux.HandleFunc("GET /api/v1/models", s.RequireScope("agents:read", s.handleModels))
 	mux.HandleFunc("GET /api/v1/skills", s.RequireScope("skills:read", s.handleSkills))
 	mux.HandleFunc("GET /api/v1/skills/{agent}", s.RequireScope("skills:read", s.handleSkillsByAgent))
 	mux.HandleFunc("GET /api/v1/skills/{agent}/{name}", s.RequireScope("skills:read", s.handleGetSkill))
@@ -357,6 +359,16 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		"session_stats":   filtered,
 		"by_agent":        byAgent,
 	})
+}
+
+// handleModels returns available LLM models from all configured providers.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ModelLister == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "model listing not available"})
+		return
+	}
+	models := s.deps.ModelLister(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // agentFromSession extracts the agent name from a session ID ("agent:adapter:ext").

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -345,29 +344,13 @@ func TestChatCompletion_TextAndToolUse(t *testing.T) {
 	}
 }
 
-func TestEstimateCost_KnownModel(t *testing.T) {
-	// claude-sonnet-4: $3/MTok input, $15/MTok output
-	cost := estimateCost("claude-sonnet-4-5", 1_000_000, 1_000_000)
-	want := 3.0 + 15.0
-	if cost != want {
-		t.Errorf("estimateCost(claude-sonnet-4-5, 1M, 1M) = %f, want %f", cost, want)
-	}
-}
-
-func TestEstimateCost_UnknownModel(t *testing.T) {
-	cost := estimateCost("some-unknown-model", 1_000_000, 1_000_000)
-	if cost != 0 {
-		t.Errorf("estimateCost(unknown, ...) = %f, want 0", cost)
-	}
-}
-
-func TestChatCompletion_CostUSD_Populated(t *testing.T) {
+func TestChatCompletion_CachedTokensPopulated(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := apiResponse{
 			Model:      "claude-sonnet-4-5",
 			StopReason: "end_turn",
 			Content:    []contentBlock{{Type: "text", Text: "hi"}},
-			Usage:      apiUsage{InputTokens: 1000, OutputTokens: 500},
+			Usage:      apiUsage{InputTokens: 800, OutputTokens: 500, CacheReadInputTokens: 200},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -382,12 +365,13 @@ func TestChatCompletion_CostUSD_Populated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.CostUSD <= 0 {
-		t.Errorf("CostUSD = %f, want > 0", resp.CostUSD)
+	if resp.TokensUsed.CachedPrompt != 200 {
+		t.Errorf("CachedPrompt = %d, want 200", resp.TokensUsed.CachedPrompt)
 	}
-	// 1000 input @ $3/MTok + 500 output @ $15/MTok = $0.003 + $0.0075 = $0.0105
-	want := 1000.0/1_000_000*3.0 + 500.0/1_000_000*15.0
-	if math.Abs(resp.CostUSD-want) > 1e-9 {
-		t.Errorf("CostUSD = %.10f, want %.10f", resp.CostUSD, want)
+	if resp.TokensUsed.Prompt != 800 {
+		t.Errorf("Prompt = %d, want 800", resp.TokensUsed.Prompt)
+	}
+	if resp.CostUSD != 0 {
+		t.Errorf("CostUSD = %f, want 0 (pricing moved to central registry)", resp.CostUSD)
 	}
 }

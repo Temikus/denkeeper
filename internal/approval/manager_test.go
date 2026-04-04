@@ -264,3 +264,91 @@ func TestManager_List(t *testing.T) {
 		t.Errorf("expected 3 pending, got %d", len(pending))
 	}
 }
+
+func TestManager_WaitForResolution_Approved(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"Execute tool", "args", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Approve in a goroutine.
+	go func() {
+		_, _ = m.Resolve(ctx, req.ID, true, "operator")
+	}()
+
+	status := m.WaitForResolution(ctx, req.ID)
+	if status != StatusApproved {
+		t.Errorf("WaitForResolution = %q, want %q", status, StatusApproved)
+	}
+}
+
+func TestManager_WaitForResolution_Denied(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"Execute tool", "args", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	go func() {
+		_, _ = m.Resolve(ctx, req.ID, false, "operator")
+	}()
+
+	status := m.WaitForResolution(ctx, req.ID)
+	if status != StatusDenied {
+		t.Errorf("WaitForResolution = %q, want %q", status, StatusDenied)
+	}
+}
+
+func TestManager_WaitForResolution_ContextCancelled(t *testing.T) {
+	m := newTestManager(t)
+
+	req, err := m.Submit(context.Background(), "default", ActionKindToolCall,
+		"Execute tool", "args", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	status := m.WaitForResolution(ctx, req.ID)
+	if status != StatusExpired {
+		t.Errorf("WaitForResolution with cancelled ctx = %q, want %q", status, StatusExpired)
+	}
+}
+
+func TestManager_WaitForResolution_ViaCallback(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"Execute tool", "args", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Resolve via callback (simulates Telegram button press).
+	go func() {
+		_, _ = m.ResolveByCallback(ctx, req.CallbackData+":approve", "user-123")
+	}()
+
+	status := m.WaitForResolution(ctx, req.ID)
+	if status != StatusApproved {
+		t.Errorf("WaitForResolution via callback = %q, want %q", status, StatusApproved)
+	}
+}

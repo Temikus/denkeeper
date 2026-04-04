@@ -163,6 +163,11 @@ func (e *Engine) SetPermissionTier(tier string) error {
 	return nil
 }
 
+// ListModels returns available LLM models from all registered providers.
+func (e *Engine) ListModels(ctx context.Context) []string {
+	return e.router.ListModels(ctx)
+}
+
 // SetModel changes the engine's default LLM model.
 func (e *Engine) SetModel(model string) {
 	e.router.SetDefaultModel(model)
@@ -561,7 +566,7 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
 type ChatEvent struct {
-	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage"
+	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage", "tool_approval"
 	Tool     string  `json:"tool,omitempty"`        // tool name
 	Round    int     `json:"round,omitempty"`       // 1-based tool round
 	Duration int64   `json:"duration_ms,omitempty"` // tool execution time
@@ -569,6 +574,11 @@ type ChatEvent struct {
 	Text     string  `json:"text,omitempty"`        // human-readable status message
 	Tokens   int     `json:"tokens,omitempty"`      // total tokens used (usage event)
 	CostUSD  float64 `json:"cost_usd,omitempty"`    // estimated cost in USD (usage event)
+
+	// ApprovalID and ApprovalCallback are set on "tool_approval" events so
+	// the adapter can render inline approve/deny buttons.
+	ApprovalID       string `json:"approval_id,omitempty"`
+	ApprovalCallback string `json:"approval_callback,omitempty"` // "appr:{id}" prefix
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -688,16 +698,21 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
 
-	resp, _, err := e.runLLMWithTools(ctx, convID, perms, llmMessages, onEvent)
+	// Store adapter routing info in context for tool approval submissions.
+	ctx = context.WithValue(ctx, ctxKeyAdapter, msg.Adapter)
+	ctx = context.WithValue(ctx, ctxKeyExternalID, msg.ExternalID)
+
+	resp, _, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, onEvent)
 	if err != nil {
 		return "", nil, err
 	}
 
 	if onEvent != nil {
+		cost, _ := llm.TokenCost(resp, nil)
 		onEvent(ChatEvent{
 			Type:    "usage",
 			Tokens:  resp.TokensUsed.Total,
-			CostUSD: llm.TokenCost(resp),
+			CostUSD: cost,
 		})
 	}
 
@@ -789,7 +804,7 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
 // LLM produces a text response. If onEvent is non-nil, it is called for each
 // tool execution start/end so the caller can stream status to the client.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
 	}
@@ -819,38 +834,14 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 			return nil, llmMessages, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 
+		supervised := perms.Tier() == "supervised" && e.approvals != nil
+
 		llmMessages = append(llmMessages, llm.Message{Role: "assistant", ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
 				attribute.String("tool_name", tc.Function.Name)))
-
-			if onEvent != nil {
-				onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, Round: round + 1})
-			}
-
-			toolStart := time.Now()
-			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
-			result, execErr := e.tools.Execute(ctx, tc)
-			toolDur := time.Since(toolStart)
-
-			if execErr != nil {
-				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "round", round+1,
-					"duration_ms", toolDur.Milliseconds(), "error", execErr)
-				result = fmt.Sprintf("Tool error: %v", execErr)
-			} else {
-				e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round+1,
-					"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
-			}
-
-			if onEvent != nil {
-				evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, Round: round + 1, Duration: toolDur.Milliseconds()}
-				if execErr != nil {
-					evt.Error = execErr.Error()
-				}
-				onEvent(evt)
-			}
-
+			result := e.executeToolCall(ctx, tc, round+1, convID, supervised, onEvent)
 			llmMessages = append(llmMessages, llm.Message{
 				Role: "tool", Content: result, ToolCallID: tc.ID,
 			})
@@ -884,6 +875,103 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	resp.CostUSD = totalCost
 	return resp, llmMessages, nil
 }
+
+// executeToolCall handles one tool call: optionally awaiting approval (supervised),
+// then executing it and emitting tool_start/tool_end ChatEvents.
+// Returns the tool result string to be fed back to the LLM.
+func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc) string {
+	// Supervised tier: request human approval before executing.
+	if supervised {
+		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
+		if !approved {
+			return result
+		}
+	}
+
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, Round: round})
+	}
+
+	toolStart := time.Now()
+	e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round)
+	result, execErr := e.tools.Execute(ctx, tc)
+	toolDur := time.Since(toolStart)
+
+	if execErr != nil {
+		e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "round", round,
+			"duration_ms", toolDur.Milliseconds(), "error", execErr)
+		result = fmt.Sprintf("Tool error: %v", execErr)
+	} else {
+		e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round,
+			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
+	}
+
+	if onEvent != nil {
+		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, Round: round, Duration: toolDur.Milliseconds()}
+		if execErr != nil {
+			evt.Error = execErr.Error()
+		}
+		onEvent(evt)
+	}
+	return result
+}
+
+// awaitToolApproval submits a tool call for approval and blocks until the
+// operator approves or denies it. Emits a "tool_approval" ChatEvent so the
+// adapter can render inline buttons. Returns the result string and whether
+// the tool was approved.
+func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, bool) {
+	summary := fmt.Sprintf("Execute tool %q with args: %s", tc.Function.Name, tc.Function.Arguments)
+
+	// Extract adapter routing from context — stored by chatWithApproval.
+	adapterName, _ := ctx.Value(ctxKeyAdapter).(string)
+	externalID, _ := ctx.Value(ctxKeyExternalID).(string)
+
+	e.logger.Info("submitting tool call for approval",
+		"tool", tc.Function.Name, "round", round, "conversation", convID)
+
+	// Use Submit (non-blocking) so we can emit the event before blocking.
+	noOp := func(_ context.Context, _ string) error { return nil }
+	req, err := e.approvals.Submit(
+		ctx, e.name, approval.ActionKindToolCall, summary,
+		tc.Function.Arguments, externalID, adapterName, convID, noOp,
+	)
+	if err != nil {
+		e.logger.Warn("tool approval submit failed", "tool", tc.Function.Name, "error", err)
+		return fmt.Sprintf("Tool call approval failed: %v", err), false
+	}
+
+	// Emit event so the adapter can send the approval prompt to the user.
+	if onEvent != nil {
+		onEvent(ChatEvent{
+			Type:             "tool_approval",
+			Tool:             tc.Function.Name,
+			Round:            round,
+			Text:             summary,
+			ApprovalID:       req.ID,
+			ApprovalCallback: req.CallbackData,
+		})
+	}
+
+	// Block until the approval is resolved by the operator.
+	status := e.approvals.WaitForResolution(ctx, req.ID)
+
+	if status == approval.StatusApproved {
+		e.logger.Info("tool call approved", "tool", tc.Function.Name, "id", req.ID)
+		return "", true
+	}
+
+	e.logger.Info("tool call denied", "tool", tc.Function.Name, "id", req.ID)
+	return "Tool call was denied by the operator.", false
+}
+
+// Context keys for adapter routing info passed through the pipeline.
+type ctxKey string
+
+const (
+	ctxKeyAdapter    ctxKey = "adapter"
+	ctxKeyExternalID ctxKey = "external_id"
+)
 
 // applyMemoryUpdate persists a memory update extracted from the LLM response.
 func (e *Engine) applyMemoryUpdate(memUpdate string, perms *security.PermissionEngine) {

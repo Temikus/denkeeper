@@ -28,18 +28,27 @@ type serverConn struct {
 	url       string            // remote server URL (SSE only)
 	cfg       config.ToolConfig // stored for restart
 	session   *mcp.ClientSession
+
+	// Health monitoring state.
+	connectedAt  time.Time // when the server was last successfully connected
+	restartCount int       // consecutive restart attempts
+	lastError    string    // most recent failure message
+	disabled     bool      // true when restarts exhausted
 }
 
 // ServerStatus exposes metadata about a registered MCP server.
 type ServerStatus struct {
-	Name      string   `json:"name"`
-	Command   string   `json:"command,omitempty"`
-	Args      []string `json:"-"`          // excluded from JSON (may contain secrets)
-	ArgsCount int      `json:"args_count"` // safe count for display
-	ToolNames []string `json:"tool_names"`
-	Status    string   `json:"status"` // "connected", "error", "stopped", "disabled"
-	Transport string   `json:"transport,omitempty"`
-	URL       string   `json:"url,omitempty"` // redacted
+	Name         string   `json:"name"`
+	Command      string   `json:"command,omitempty"`
+	Args         []string `json:"-"`          // excluded from JSON (may contain secrets)
+	ArgsCount    int      `json:"args_count"` // safe count for display
+	ToolNames    []string `json:"tool_names"`
+	Status       string   `json:"status"` // "connected", "restarting", "error", "disabled"
+	Transport    string   `json:"transport,omitempty"`
+	URL          string   `json:"url,omitempty"` // redacted
+	RestartCount int      `json:"restart_count,omitempty"`
+	LastError    string   `json:"last_error,omitempty"`
+	UptimeSecs   float64  `json:"uptime_secs,omitempty"`
 }
 
 // Manager manages MCP tool server connections and tool execution.
@@ -120,12 +129,13 @@ func (m *Manager) registerStdio(ctx context.Context, name string, cfg config.Too
 	}
 
 	sc := &serverConn{
-		name:      name,
-		command:   cfg.Command,
-		args:      cfg.Args,
-		transport: "stdio",
-		cfg:       cfg,
-		session:   session,
+		name:        name,
+		command:     cfg.Command,
+		args:        cfg.Args,
+		transport:   "stdio",
+		cfg:         cfg,
+		session:     session,
+		connectedAt: time.Now(),
 	}
 
 	m.mu.Lock()
@@ -197,11 +207,12 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	}
 
 	sc := &serverConn{
-		name:      name,
-		transport: "sse",
-		url:       resolvedURL,
-		cfg:       cfg,
-		session:   session,
+		name:        name,
+		transport:   "sse",
+		url:         resolvedURL,
+		cfg:         cfg,
+		session:     session,
+		connectedAt: time.Now(),
 	}
 
 	m.mu.Lock()
@@ -433,15 +444,30 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 		displayURL = redactURL(sc.url)
 	}
 
+	status := "connected"
+	if sc.disabled {
+		status = "disabled"
+	} else if sc.lastError != "" {
+		status = "error"
+	}
+
+	var uptimeSecs float64
+	if !sc.connectedAt.IsZero() {
+		uptimeSecs = time.Since(sc.connectedAt).Seconds()
+	}
+
 	return ServerStatus{
-		Name:      sc.name,
-		Command:   sc.command,
-		Args:      sc.args,
-		ArgsCount: len(sc.args),
-		ToolNames: toolNames,
-		Status:    "connected",
-		Transport: sc.transport,
-		URL:       displayURL,
+		Name:         sc.name,
+		Command:      sc.command,
+		Args:         sc.args,
+		ArgsCount:    len(sc.args),
+		ToolNames:    toolNames,
+		Status:       status,
+		Transport:    sc.transport,
+		URL:          displayURL,
+		RestartCount: sc.restartCount,
+		LastError:    sc.lastError,
+		UptimeSecs:   uptimeSecs,
 	}, true
 }
 
@@ -456,6 +482,133 @@ func (m *Manager) Close() error {
 		}
 	}
 	return firstErr
+}
+
+// StartHealthChecker runs a background goroutine that periodically probes MCP
+// servers and restarts crashed ones. It respects the [mcp] config settings:
+// auto_restart, max_restart_attempts, and restart_cooldown.
+func (m *Manager) StartHealthChecker(ctx context.Context, interval time.Duration) {
+	if m.mcpCfg.AutoRestart != nil && !*m.mcpCfg.AutoRestart {
+		m.logger.Info("MCP auto-restart disabled")
+		return
+	}
+
+	cooldown := 5 * time.Minute
+	if d, err := time.ParseDuration(m.mcpCfg.RestartCooldown); err == nil && d > 0 {
+		cooldown = d
+	}
+	maxAttempts := m.mcpCfg.MaxRestartAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 3
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.checkServers(ctx, maxAttempts, cooldown)
+			}
+		}
+	}()
+}
+
+// checkServers probes each registered server and restarts any that are unresponsive.
+func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown time.Duration) {
+	m.mu.RLock()
+	names := make([]string, 0, len(m.servers))
+	for name := range m.servers {
+		names = append(names, name)
+	}
+	m.mu.RUnlock()
+
+	for _, name := range names {
+		m.mu.RLock()
+		sc, ok := m.servers[name]
+		m.mu.RUnlock()
+		if !ok || sc.disabled || sc.transport == "" {
+			// Skip in-process servers and disabled servers.
+			continue
+		}
+
+		if err := m.probeServer(ctx, sc); err != nil {
+			m.logger.Warn("MCP server health check failed", "server", name, "error", err)
+			m.handleServerFailure(ctx, sc, maxAttempts, cooldown, err.Error())
+		} else if sc.lastError != "" {
+			// Server recovered — reset health state.
+			m.mu.Lock()
+			if !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
+				sc.restartCount = 0
+			}
+			sc.lastError = ""
+			m.mu.Unlock()
+		}
+	}
+}
+
+// probeServer sends a ListTools request to verify the server is responsive.
+func (m *Manager) probeServer(ctx context.Context, sc *serverConn) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := sc.session.ListTools(probeCtx, nil)
+	return err
+}
+
+// handleServerFailure records the error and attempts a restart if allowed.
+func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAttempts int, cooldown time.Duration, errMsg string) {
+	m.mu.Lock()
+	sc.lastError = errMsg
+	sc.restartCount++
+
+	if sc.restartCount > maxAttempts {
+		sc.disabled = true
+		m.mu.Unlock()
+		m.logger.Error("MCP server disabled after max restart attempts",
+			"server", sc.name, "attempts", sc.restartCount-1)
+		return
+	}
+
+	attempt := sc.restartCount
+	cfg := sc.cfg
+	name := sc.name
+	m.mu.Unlock()
+
+	// Exponential backoff: 2^(attempt-1) seconds, capped at 60s.
+	backoffSecs := 1 << (attempt - 1)
+	if backoffSecs > 60 {
+		backoffSecs = 60
+	}
+	m.logger.Info("restarting MCP server",
+		"server", name, "attempt", attempt, "backoff_secs", backoffSecs)
+
+	select {
+	case <-time.After(time.Duration(backoffSecs) * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	// Close old session, re-register.
+	_ = m.UnregisterServer(name)
+	if err := m.RegisterServer(ctx, name, cfg); err != nil {
+		m.logger.Error("MCP server restart failed", "server", name, "attempt", attempt, "error", err)
+		m.mu.Lock()
+		// Re-add a placeholder so the next health check can retry.
+		sc.lastError = err.Error()
+		m.servers[name] = sc
+		m.mu.Unlock()
+	} else {
+		m.logger.Info("MCP server restarted successfully", "server", name, "attempt", attempt)
+		// RegisterServer creates a new serverConn — update health state.
+		m.mu.Lock()
+		if newSc, ok := m.servers[name]; ok {
+			newSc.restartCount = attempt
+			newSc.connectedAt = time.Now()
+		}
+		m.mu.Unlock()
+	}
 }
 
 // schemaToMap converts a jsonschema.Schema to a generic map for the OpenAI tools API.
