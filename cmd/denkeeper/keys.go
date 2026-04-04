@@ -13,6 +13,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/scope"
 )
 
 func newKeysCmd() *cobra.Command {
@@ -33,7 +34,7 @@ func newKeysCmd() *cobra.Command {
 		},
 	}
 	createCmd.Flags().StringSliceVarP(&createScopes, "scopes", "s", []string{"admin"},
-		"Comma-separated scopes (admin, chat, sessions:read, approvals:read, approvals:write, health)")
+		"Comma-separated scopes ("+strings.Join(scope.Names(), ", ")+")")
 
 	listCmd := &cobra.Command{
 		Use:   "list",

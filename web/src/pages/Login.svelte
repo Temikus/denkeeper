@@ -38,17 +38,28 @@
   let revealedKey = $state('')
   let copied = $state(false)
 
+  // All valid API scopes — must match the canonical list in internal/scope/scope.go.
+  // The scope sync test (internal/scope/scope_test.go) will fail if any are missing.
   const ALL_SCOPES = [
-    { value: 'admin',           label: 'admin' },
-    { value: 'chat',            label: 'chat' },
-    { value: 'sessions:read',   label: 'sessions:read' },
-    { value: 'costs:read',      label: 'costs:read' },
-    { value: 'skills:read',     label: 'skills:read' },
-    { value: 'schedules:read',  label: 'schedules:read' },
-    { value: 'approvals:read',  label: 'approvals:read' },
-    { value: 'approvals:write', label: 'approvals:write' },
-    { value: 'tools:read',     label: 'tools:read' },
-    { value: 'tools:write',    label: 'tools:write' },
+    { value: 'admin',            label: 'admin' },
+    { value: 'chat',             label: 'chat' },
+    { value: 'health',           label: 'health' },
+    { value: 'agents:read',      label: 'agents:read' },
+    { value: 'agents:write',     label: 'agents:write' },
+    { value: 'approvals:read',   label: 'approvals:read' },
+    { value: 'approvals:write',  label: 'approvals:write' },
+    { value: 'browser:read',     label: 'browser:read' },
+    { value: 'browser:write',    label: 'browser:write' },
+    { value: 'costs:read',       label: 'costs:read' },
+    { value: 'kv:read',          label: 'kv:read' },
+    { value: 'kv:write',         label: 'kv:write' },
+    { value: 'schedules:read',   label: 'schedules:read' },
+    { value: 'schedules:write',  label: 'schedules:write' },
+    { value: 'sessions:read',    label: 'sessions:read' },
+    { value: 'skills:read',      label: 'skills:read' },
+    { value: 'skills:write',     label: 'skills:write' },
+    { value: 'tools:read',       label: 'tools:read' },
+    { value: 'tools:write',      label: 'tools:write' },
   ]
 
   onMount(async () => {
@@ -238,10 +249,8 @@
           {loginLoading ? 'Signing in...' : 'Sign in with API key'}
         </button>
         <p class="hint">
-          The key must have scopes: <code>admin</code>, <code>sessions:read</code>,
-          <code>costs:read</code>, <code>skills:read</code>, <code>schedules:read</code>,
-          <code>approvals:read</code>, <code>approvals:write</code>,
-          <code>tools:read</code>, <code>tools:write</code>.
+          The key must have the <code>admin</code> scope for full dashboard access,
+          or specific read/write scopes for limited access.
         </p>
       {/if}
 

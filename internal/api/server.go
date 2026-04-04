@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -1005,28 +1006,8 @@ func (s *Server) handleRemovePlugin(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // ValidScopes is the set of scope values accepted by the key management system.
-// Exported so the CLI can share the same allowlist.
-var ValidScopes = map[string]struct{}{
-	"admin":           {},
-	"chat":            {},
-	"sessions:read":   {},
-	"costs:read":      {},
-	"agents:read":     {},
-	"agents:write":    {},
-	"skills:read":     {},
-	"skills:write":    {},
-	"schedules:read":  {},
-	"schedules:write": {},
-	"approvals:read":  {},
-	"approvals:write": {},
-	"tools:read":      {},
-	"tools:write":     {},
-	"browser:read":    {},
-	"browser:write":   {},
-	"kv:read":         {},
-	"kv:write":        {},
-	"health":          {},
-}
+// It delegates to the canonical list in the scope package.
+var ValidScopes = scope.Valid
 
 const maxKeyNameLen = 255
 

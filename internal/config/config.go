@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Temikus/denkeeper/internal/scope"
 )
 
 type Config struct {
@@ -1074,16 +1076,9 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool) e
 	return nil
 }
 
-// validAPIScopes is the set of recognised API key scopes.
-var validAPIScopes = map[string]bool{
-	"chat": true, "sessions:read": true, "costs:read": true,
-	"skills:read": true, "skills:write": true,
-	"schedules:read": true, "schedules:write": true,
-	"approvals:read": true, "approvals:write": true,
-	"tools:read": true, "tools:write": true,
-	"browser:read": true, "browser:write": true,
-	"health": true, "admin": true,
-}
+// validAPIScopes delegates to the canonical scope list so that config
+// validation and the API server can never drift apart.
+var validAPIScopes = scope.Valid
 
 func validateAPI(api *APIConfig) error {
 	if !api.Enabled {
@@ -1112,9 +1107,9 @@ func validateAPI(api *APIConfig) error {
 		if len(k.Scopes) == 0 {
 			return fmt.Errorf("config: api.keys[%d] (%s): at least one scope is required", i, k.Name)
 		}
-		for _, scope := range k.Scopes {
-			if !validAPIScopes[scope] {
-				return fmt.Errorf("config: api.keys[%d] (%s): invalid scope %q", i, k.Name, scope)
+		for _, s := range k.Scopes {
+			if _, ok := validAPIScopes[s]; !ok {
+				return fmt.Errorf("config: api.keys[%d] (%s): invalid scope %q", i, k.Name, s)
 			}
 		}
 	}

@@ -19,9 +19,18 @@
   let actionLoading = false
   let rotatedKey = ''
 
+  // All valid API scopes — must match the canonical list in internal/scope/scope.go.
+  // The scope sync test (internal/scope/scope_test.go) will fail if any are missing.
   const ALL_SCOPES = [
-    'chat', 'admin', 'sessions:read', 'costs:read',
-    'skills:read', 'schedules:read', 'approvals:read', 'approvals:write',
+    'admin', 'chat', 'health',
+    'agents:read', 'agents:write',
+    'approvals:read', 'approvals:write',
+    'browser:read', 'browser:write',
+    'costs:read',
+    'kv:read', 'kv:write',
+    'schedules:read', 'schedules:write',
+    'sessions:read',
+    'skills:read', 'skills:write',
     'tools:read', 'tools:write',
   ]
 
@@ -29,13 +38,16 @@
   const RESOURCE_GROUPS = [
     { name: 'Chat', desc: 'Send messages to agents', levels: ['none', 'full'], scopes: { full: ['chat'] } },
     { name: 'Admin', desc: 'Administrative operations', levels: ['none', 'full'], scopes: { full: ['admin'] } },
+    { name: 'Health', desc: 'Health check endpoint', levels: ['none', 'full'], scopes: { full: ['health'] } },
     { name: 'Sessions', desc: 'View conversation history', levels: ['none', 'read'], scopes: { read: ['sessions:read'] } },
     { name: 'Costs', desc: 'View usage and cost data', levels: ['none', 'read'], scopes: { read: ['costs:read'] } },
-    { name: 'Skills', desc: 'View agent skills', levels: ['none', 'read'], scopes: { read: ['skills:read'] } },
-    { name: 'Schedules', desc: 'View scheduled tasks', levels: ['none', 'read'], scopes: { read: ['schedules:read'] } },
+    { name: 'Agents', desc: 'View and manage agents', levels: ['none', 'read', 'readwrite'], scopes: { read: ['agents:read'], readwrite: ['agents:read', 'agents:write'] } },
+    { name: 'Skills', desc: 'View and manage agent skills', levels: ['none', 'read', 'readwrite'], scopes: { read: ['skills:read'], readwrite: ['skills:read', 'skills:write'] } },
+    { name: 'Schedules', desc: 'View and manage scheduled tasks', levels: ['none', 'read', 'readwrite'], scopes: { read: ['schedules:read'], readwrite: ['schedules:read', 'schedules:write'] } },
     { name: 'Approvals', desc: 'Manage approval workflows', levels: ['none', 'read', 'readwrite'], scopes: { read: ['approvals:read'], readwrite: ['approvals:read', 'approvals:write'] } },
     { name: 'Tools', desc: 'Manage MCP tools and plugins', levels: ['none', 'read', 'readwrite'], scopes: { read: ['tools:read'], readwrite: ['tools:read', 'tools:write'] } },
     { name: 'Browser', desc: 'Manage browser profiles and sessions', levels: ['none', 'read', 'readwrite'], scopes: { read: ['browser:read'], readwrite: ['browser:read', 'browser:write'] } },
+    { name: 'KV Store', desc: 'Agent key-value storage', levels: ['none', 'read', 'readwrite'], scopes: { read: ['kv:read'], readwrite: ['kv:read', 'kv:write'] } },
   ]
 
   // Track permission level per resource group
