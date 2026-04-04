@@ -1030,13 +1030,27 @@ schedule = "@daily"
 // API config tests
 // ---------------------------------------------------------------------------
 
-func TestParse_APIDisabledByDefault(t *testing.T) {
+func TestParse_APIEnabledByDefault(t *testing.T) {
 	cfg, err := Parse([]byte(baseConfig))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.API.Enabled {
-		t.Error("API should be disabled by default")
+	if cfg.API.Enabled == nil || !*cfg.API.Enabled {
+		t.Error("API should be enabled by default")
+	}
+}
+
+func TestParse_APIExplicitlyDisabled(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[api]
+enabled = false
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.API.Enabled == nil || *cfg.API.Enabled {
+		t.Error("API should be disabled when explicitly set to false")
 	}
 }
 
@@ -1056,7 +1070,7 @@ scopes = ["health", "chat"]
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !cfg.API.Enabled {
+	if cfg.API.Enabled == nil || !*cfg.API.Enabled {
 		t.Error("API should be enabled")
 	}
 	if cfg.API.Listen != ":9090" {
@@ -2009,7 +2023,7 @@ func TestApplyEnvOverrides_APIEnabledBoolParsing(t *testing.T) {
 	t.Setenv("DENKEEPER_API_ENABLED", "true")
 	cfg := &Config{}
 	applyEnvOverrides(cfg)
-	if !cfg.API.Enabled {
+	if cfg.API.Enabled == nil || !*cfg.API.Enabled {
 		t.Error("API.Enabled should be true when env is \"true\"")
 	}
 
@@ -2017,16 +2031,32 @@ func TestApplyEnvOverrides_APIEnabledBoolParsing(t *testing.T) {
 	t.Setenv("DENKEEPER_API_ENABLED", "1")
 	cfg = &Config{}
 	applyEnvOverrides(cfg)
-	if !cfg.API.Enabled {
+	if cfg.API.Enabled == nil || !*cfg.API.Enabled {
 		t.Error("API.Enabled should be true when env is \"1\"")
 	}
 
-	// "yes" should NOT enable (strict parsing)
+	// "false" should disable
+	t.Setenv("DENKEEPER_API_ENABLED", "false")
+	cfg = &Config{}
+	applyEnvOverrides(cfg)
+	if cfg.API.Enabled == nil || *cfg.API.Enabled {
+		t.Error("API.Enabled should be false when env is \"false\"")
+	}
+
+	// "0" should disable
+	t.Setenv("DENKEEPER_API_ENABLED", "0")
+	cfg = &Config{}
+	applyEnvOverrides(cfg)
+	if cfg.API.Enabled == nil || *cfg.API.Enabled {
+		t.Error("API.Enabled should be false when env is \"0\"")
+	}
+
+	// "yes" should NOT change the value (strict parsing)
 	t.Setenv("DENKEEPER_API_ENABLED", "yes")
 	cfg = &Config{}
 	applyEnvOverrides(cfg)
-	if cfg.API.Enabled {
-		t.Error("API.Enabled should be false when env is \"yes\" (strict parsing)")
+	if cfg.API.Enabled != nil {
+		t.Error("API.Enabled should be nil when env is \"yes\" (strict parsing)")
 	}
 }
 
@@ -2079,7 +2109,7 @@ func TestApplyEnvOverrides_AllSecrets(t *testing.T) {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
 		}
 	}
-	if !cfg.API.Enabled {
+	if cfg.API.Enabled == nil || !*cfg.API.Enabled {
 		t.Error("API.Enabled should be true")
 	}
 }
@@ -2688,5 +2718,222 @@ enabled = true
 	}
 	if cfg.OTel.ServiceName != "denkeeper" {
 		t.Errorf("OTel.ServiceName = %q, want %q", cfg.OTel.ServiceName, "denkeeper")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP Config & Transport Tests
+// ---------------------------------------------------------------------------
+
+func TestParse_MCPDefaults(t *testing.T) {
+	tomlData := []byte(baseConfig)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MCP.RequestTimeoutSecs != 30 {
+		t.Errorf("MCP.RequestTimeoutSecs = %d, want 30", cfg.MCP.RequestTimeoutSecs)
+	}
+	if cfg.MCP.AutoRestart == nil || !*cfg.MCP.AutoRestart {
+		t.Error("MCP.AutoRestart should default to true")
+	}
+	if cfg.MCP.MaxRestartAttempts != 3 {
+		t.Errorf("MCP.MaxRestartAttempts = %d, want 3", cfg.MCP.MaxRestartAttempts)
+	}
+	if cfg.MCP.RestartCooldown != "5m" {
+		t.Errorf("MCP.RestartCooldown = %q, want 5m", cfg.MCP.RestartCooldown)
+	}
+}
+
+func TestParse_MCPConfigExplicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+request_timeout_secs = 60
+auto_restart = false
+max_restart_attempts = 5
+restart_cooldown = "10m"
+url_allowlist = ["api.example.com", "*.internal.corp"]
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MCP.RequestTimeoutSecs != 60 {
+		t.Errorf("MCP.RequestTimeoutSecs = %d, want 60", cfg.MCP.RequestTimeoutSecs)
+	}
+	if cfg.MCP.AutoRestart == nil || *cfg.MCP.AutoRestart {
+		t.Error("MCP.AutoRestart should be false")
+	}
+	if cfg.MCP.MaxRestartAttempts != 5 {
+		t.Errorf("MCP.MaxRestartAttempts = %d, want 5", cfg.MCP.MaxRestartAttempts)
+	}
+	if len(cfg.MCP.URLAllowlist) != 2 {
+		t.Errorf("MCP.URLAllowlist len = %d, want 2", len(cfg.MCP.URLAllowlist))
+	}
+}
+
+func TestParse_MCPInvalidCooldown(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+restart_cooldown = "not-a-duration"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid restart_cooldown")
+	}
+	if !strings.Contains(err.Error(), "restart_cooldown") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolSSETransport(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.remote-mcp]
+transport = "sse"
+url = "https://mcp.example.com/events"
+env = { MCP_TOKEN = "test" }
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := cfg.Tools["remote-mcp"]
+	if tc.Transport != "sse" {
+		t.Errorf("Transport = %q, want sse", tc.Transport)
+	}
+	if tc.URL != "https://mcp.example.com/events" {
+		t.Errorf("URL = %q, want https://mcp.example.com/events", tc.URL)
+	}
+}
+
+func TestParse_ToolSSEHeaders(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.remote]
+transport = "sse"
+url = "https://mcp.example.com"
+request_timeout_secs = 45
+
+[tools.remote.headers]
+Authorization = "Bearer test-token"
+X-Custom = "value"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := cfg.Tools["remote"]
+	if tc.Headers["Authorization"] != "Bearer test-token" {
+		t.Errorf("Authorization header = %q", tc.Headers["Authorization"])
+	}
+	if tc.RequestTimeoutSecs != 45 {
+		t.Errorf("RequestTimeoutSecs = %d, want 45", tc.RequestTimeoutSecs)
+	}
+}
+
+func TestParse_ToolSSEMissingURL(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-sse]
+transport = "sse"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for SSE tool missing URL")
+	}
+	if !strings.Contains(err.Error(), "url is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolSSEWithCommand(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-sse]
+transport = "sse"
+url = "https://mcp.example.com"
+command = "/usr/bin/should-not-be-here"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for SSE tool with command")
+	}
+	if !strings.Contains(err.Error(), "command must be empty") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolStdioWithURL(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-stdio]
+command = "/usr/bin/tool"
+url = "https://should-not-be-here.com"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for stdio tool with URL")
+	}
+	if !strings.Contains(err.Error(), "url must be empty") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolStdioWithHeaders(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-stdio]
+command = "/usr/bin/tool"
+
+[tools.bad-stdio.headers]
+Authorization = "Bearer should-not-be-here"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for stdio tool with headers")
+	}
+	if !strings.Contains(err.Error(), "headers are not supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolUnknownTransport(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-transport]
+transport = "grpc"
+command = "/usr/bin/tool"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for unknown transport")
+	}
+	if !strings.Contains(err.Error(), "unsupported transport") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolMissingCommand_StdioExplicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-tool]
+transport = "stdio"
+args = ["--flag"]
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for stdio tool missing command")
+	}
+	if !strings.Contains(err.Error(), "command is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_ToolSSEWithArgs(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.bad-sse]
+transport = "sse"
+url = "https://mcp.example.com"
+args = ["--flag"]
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for SSE tool with args")
+	}
+	if !strings.Contains(err.Error(), "args must be empty") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

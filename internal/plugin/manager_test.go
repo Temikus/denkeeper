@@ -27,11 +27,11 @@ type registeredServer struct {
 	args    []string
 }
 
-func (m *mockToolRegistrar) RegisterServer(_ context.Context, name, command string, args []string, _ map[string]string) error {
+func (m *mockToolRegistrar) RegisterServer(_ context.Context, name string, cfg config.ToolConfig) error {
 	if m.failNames[name] {
 		return errors.New("mock: simulated failure")
 	}
-	m.registered = append(m.registered, registeredServer{name: name, command: command, args: args})
+	m.registered = append(m.registered, registeredServer{name: name, command: cfg.Command, args: cfg.Args})
 	return nil
 }
 

@@ -34,6 +34,7 @@ type Config struct {
 	Web       WebConfig               `toml:"web"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
+	MCP       MCPConfig               `toml:"mcp"`
 }
 
 // OTelConfig controls OpenTelemetry observability instrumentation.
@@ -158,8 +159,11 @@ type DiscordConfig struct {
 
 // APIConfig controls the external REST API server.
 type APIConfig struct {
-	// Enabled controls whether the API server starts. Default: false.
-	Enabled bool `toml:"enabled"`
+	// Enabled controls whether the API server starts. Default: true.
+	// Use a pointer so that an omitted field can be distinguished from an
+	// explicit false, allowing applyDefaults to set the value to true when
+	// unspecified.
+	Enabled *bool `toml:"enabled"`
 
 	// Listen is the address to listen on (e.g. "0.0.0.0:8443", ":8080").
 	Listen string `toml:"listen"`
@@ -181,6 +185,12 @@ type APIConfig struct {
 
 	// Auth configures optional password and OIDC authentication for the dashboard.
 	Auth APIAuthConfig `toml:"auth"`
+}
+
+// IsEnabled returns whether the API server should start. After applyDefaults
+// the pointer is always non-nil, but this method is safe to call at any stage.
+func (a *APIConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
 }
 
 // APIAuthConfig configures password and OIDC authentication.
@@ -278,11 +288,32 @@ type VoiceOpenAIConfig struct {
 	APIKey string `toml:"api_key"`
 }
 
+// MCPConfig holds global MCP settings that apply to all tool servers.
+type MCPConfig struct {
+	// RequestTimeoutSecs is the default per-request timeout for MCP calls. Default: 30.
+	RequestTimeoutSecs int `toml:"request_timeout_secs"`
+	// AutoRestart enables automatic restart of crashed MCP servers. Default: true.
+	AutoRestart *bool `toml:"auto_restart"`
+	// MaxRestartAttempts is the maximum number of consecutive restart attempts before
+	// a server is disabled. Default: 3.
+	MaxRestartAttempts int `toml:"max_restart_attempts"`
+	// RestartCooldown is the duration a server must stay connected before its
+	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
+	RestartCooldown string `toml:"restart_cooldown"`
+	// URLAllowlist restricts which hosts SSE tool servers may connect to.
+	// Supports wildcards (e.g. "*.internal.corp"). Empty = all non-blocked hosts allowed.
+	URLAllowlist []string `toml:"url_allowlist"`
+}
+
 // ToolConfig defines an MCP tool server to spawn.
 type ToolConfig struct {
-	Command string            `toml:"command"`
-	Args    []string          `toml:"args"`
-	Env     map[string]string `toml:"env"`
+	Command            string            `toml:"command"`
+	Args               []string          `toml:"args"`
+	Env                map[string]string `toml:"env"`
+	Transport          string            `toml:"transport"`             // "stdio" (default) or "sse"
+	URL                string            `toml:"url"`                   // required for sse transport
+	Headers            map[string]string `toml:"headers"`               // optional HTTP headers for sse
+	RequestTimeoutSecs int               `toml:"request_timeout_secs"` // per-server override (0 = use global)
 }
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.
@@ -576,6 +607,19 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.OTel.ServiceName == "" {
 		cfg.OTel.ServiceName = "denkeeper"
 	}
+	if cfg.MCP.RequestTimeoutSecs == 0 {
+		cfg.MCP.RequestTimeoutSecs = 30
+	}
+	if cfg.MCP.AutoRestart == nil {
+		t := true
+		cfg.MCP.AutoRestart = &t
+	}
+	if cfg.MCP.MaxRestartAttempts == 0 {
+		cfg.MCP.MaxRestartAttempts = 3
+	}
+	if cfg.MCP.RestartCooldown == "" {
+		cfg.MCP.RestartCooldown = "5m"
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -630,7 +674,11 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_OIDC_CLIENT_SECRET", &cfg.API.Auth.OIDC.ClientSecret)
 
 	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
-		cfg.API.Enabled = true
+		t := true
+		cfg.API.Enabled = &t
+	} else if v == "false" || v == "0" {
+		f := false
+		cfg.API.Enabled = &f
 	}
 }
 
@@ -666,7 +714,11 @@ func applyMiscDefaults(cfg *Config) {
 	if cfg.KV.CleanupInterval == "" {
 		cfg.KV.CleanupInterval = "1h"
 	}
-	if cfg.API.Enabled && cfg.API.Listen == "" {
+	if cfg.API.Enabled == nil {
+		t := true
+		cfg.API.Enabled = &t
+	}
+	if cfg.API.IsEnabled() && cfg.API.Listen == "" {
 		cfg.API.Listen = ":8080"
 	}
 	applyAuthDefaults(cfg)
@@ -867,6 +919,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateSchedules(cfg.Schedules, agentNames); err != nil {
+		return err
+	}
+	if err := validateMCP(&cfg.MCP); err != nil {
 		return err
 	}
 	if err := validateTools(cfg.Tools); err != nil {
@@ -1081,7 +1136,7 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool) e
 var validAPIScopes = scope.Valid
 
 func validateAPI(api *APIConfig) error {
-	if !api.Enabled {
+	if !api.IsEnabled() {
 		return nil
 	}
 	if api.TLS {
@@ -1164,10 +1219,50 @@ func validateAuth(auth *APIAuthConfig) error {
 	return nil
 }
 
+func validateMCP(mcp *MCPConfig) error {
+	if mcp.RequestTimeoutSecs < 0 {
+		return fmt.Errorf("config: mcp.request_timeout_secs must be non-negative")
+	}
+	if mcp.MaxRestartAttempts < 0 {
+		return fmt.Errorf("config: mcp.max_restart_attempts must be non-negative")
+	}
+	if mcp.RestartCooldown != "" {
+		if _, err := time.ParseDuration(mcp.RestartCooldown); err != nil {
+			return fmt.Errorf("config: mcp.restart_cooldown: invalid duration %q: %w", mcp.RestartCooldown, err)
+		}
+	}
+	return nil
+}
+
 func validateTools(tools map[string]ToolConfig) error {
 	for name, tc := range tools {
-		if tc.Command == "" {
-			return fmt.Errorf("config: tools.%s: command is required", name)
+		transport := tc.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		switch transport {
+		case "stdio":
+			if tc.Command == "" {
+				return fmt.Errorf("config: tools.%s: command is required for stdio transport", name)
+			}
+			if tc.URL != "" {
+				return fmt.Errorf("config: tools.%s: url must be empty for stdio transport", name)
+			}
+			if len(tc.Headers) > 0 {
+				return fmt.Errorf("config: tools.%s: headers are not supported for stdio transport", name)
+			}
+		case "sse":
+			if tc.URL == "" {
+				return fmt.Errorf("config: tools.%s: url is required for sse transport", name)
+			}
+			if tc.Command != "" {
+				return fmt.Errorf("config: tools.%s: command must be empty for sse transport", name)
+			}
+			if len(tc.Args) > 0 {
+				return fmt.Errorf("config: tools.%s: args must be empty for sse transport", name)
+			}
+		default:
+			return fmt.Errorf("config: tools.%s: unsupported transport %q (must be \"stdio\" or \"sse\")", name, transport)
 		}
 	}
 	return nil

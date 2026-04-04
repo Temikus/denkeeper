@@ -1,34 +1,45 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
 // serverConn tracks a connected MCP server subprocess and its session.
 type serverConn struct {
-	name    string
-	command string   // binary path (empty for in-process sessions)
-	args    []string // command-line arguments
-	session *mcp.ClientSession
+	name      string
+	command   string             // binary path (empty for in-process or SSE sessions)
+	args      []string           // command-line arguments
+	transport string             // "stdio", "sse", or "" (in-process)
+	url       string             // remote server URL (SSE only)
+	cfg       config.ToolConfig  // stored for restart
+	session   *mcp.ClientSession
 }
 
 // ServerStatus exposes metadata about a registered MCP server.
 type ServerStatus struct {
-	Name      string
-	Command   string
-	Args      []string
-	ToolNames []string
-	Status    string // "connected", "error", "stopped"
+	Name      string   `json:"name"`
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"-"`          // excluded from JSON (may contain secrets)
+	ArgsCount int      `json:"args_count"` // safe count for display
+	ToolNames []string `json:"tool_names"`
+	Status    string   `json:"status"` // "connected", "error", "stopped", "disabled"
+	Transport string   `json:"transport,omitempty"`
+	URL       string   `json:"url,omitempty"` // redacted
 }
 
 // Manager manages MCP tool server connections and tool execution.
@@ -38,26 +49,136 @@ type Manager struct {
 	servers  map[string]*serverConn // keyed by config name (e.g. "web-search")
 	toolMap  map[string]*serverConn // keyed by MCP tool name → owning server
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
+	mcpCfg   config.MCPConfig       // global MCP settings
 	logger   *slog.Logger
 }
 
 // NewManager creates a manager with no servers registered.
-func NewManager(logger *slog.Logger) *Manager {
-	return &Manager{
+func NewManager(logger *slog.Logger, mcpCfg ...config.MCPConfig) *Manager {
+	m := &Manager{
 		servers: make(map[string]*serverConn),
 		toolMap: make(map[string]*serverConn),
 		logger:  logger,
 	}
+	if len(mcpCfg) > 0 {
+		m.mcpCfg = mcpCfg[0]
+	}
+	return m
 }
 
-// RegisterServer spawns an MCP server subprocess, connects to it over stdio,
-// and discovers its available tools.
-func (m *Manager) RegisterServer(ctx context.Context, name, command string, args []string, env map[string]string) error {
-	cmd := exec.Command(command, args...) // #nosec G204 -- MCP tool servers are spawned from config-declared commands
+// RegisterServer connects to an MCP server (stdio subprocess or remote SSE)
+// based on the transport field in cfg, and discovers its available tools.
+func (m *Manager) RegisterServer(ctx context.Context, name string, cfg config.ToolConfig) error {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+
+	switch transport {
+	case "stdio":
+		return m.registerStdio(ctx, name, cfg)
+	case "sse":
+		return m.registerSSE(ctx, name, cfg)
+	default:
+		return fmt.Errorf("unsupported transport %q for MCP server %q", transport, name)
+	}
+}
+
+// registerStdio spawns an MCP server subprocess and connects over stdio.
+func (m *Manager) registerStdio(ctx context.Context, name string, cfg config.ToolConfig) error {
+	cmd := exec.Command(cfg.Command, cfg.Args...) // #nosec G204 -- MCP tool servers are spawned from config-declared commands
 	// Inherit the current process environment and overlay tool-specific vars.
 	cmd.Env = os.Environ()
-	for k, v := range env {
+	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	// Capture stderr so we can surface diagnostic output when the server
+	// fails to start (e.g. missing deps, bad config, crash on init).
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "denkeeper",
+		Version: "v1.0.0",
+	}, nil)
+
+	cmdTransport := &mcp.CommandTransport{Command: cmd}
+	session, err := client.Connect(ctx, cmdTransport, nil)
+	if err != nil {
+		stderrOutput := strings.TrimSpace(stderrBuf.String())
+		if stderrOutput != "" {
+			// Truncate very long stderr to keep error messages readable.
+			const maxStderr = 1024
+			if len(stderrOutput) > maxStderr {
+				stderrOutput = stderrOutput[:maxStderr] + "... (truncated)"
+			}
+			m.logger.Error("MCP server stderr", "server", name, "stderr", stderrOutput)
+			return fmt.Errorf("connecting to MCP server %q: %w\nserver stderr:\n%s", name, err, stderrOutput)
+		}
+		return fmt.Errorf("connecting to MCP server %q: %w", name, err)
+	}
+
+	sc := &serverConn{
+		name:      name,
+		command:   cfg.Command,
+		args:      cfg.Args,
+		transport: "stdio",
+		cfg:       cfg,
+		session:   session,
+	}
+
+	m.mu.Lock()
+	m.servers[name] = sc
+	m.mu.Unlock()
+
+	return m.discoverTools(ctx, sc)
+}
+
+// registerSSE connects to a remote MCP server over Streamable HTTP (SSE).
+func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolConfig) error {
+	// Resolve ${VAR} placeholders in URL and header values (with denylist).
+	resolvedURL, err := resolveEnvPlaceholders(cfg.URL, cfg.Env)
+	if err != nil {
+		return fmt.Errorf("resolving URL for MCP server %q: %w", name, err)
+	}
+
+	// SSRF validation.
+	if err := validateToolURL(resolvedURL, m.mcpCfg.URLAllowlist); err != nil {
+		return fmt.Errorf("MCP server %q URL rejected: %w", name, err)
+	}
+
+	// Resolve and validate headers.
+	resolvedHeaders := make(map[string]string, len(cfg.Headers))
+	for k, v := range cfg.Headers {
+		resolved, err := resolveEnvPlaceholders(v, cfg.Env)
+		if err != nil {
+			return fmt.Errorf("resolving header %q for MCP server %q: %w", k, name, err)
+		}
+		resolvedHeaders[k] = resolved
+	}
+	if err := validateHeaders(resolvedHeaders); err != nil {
+		return fmt.Errorf("MCP server %q header rejected: %w", name, err)
+	}
+
+	// Build HTTP client with SSRF-safe redirect checking and header injection.
+	baseRT := http.DefaultTransport
+	rt := http.RoundTripper(&redirectCheckingRoundTripper{
+		base:      baseRT,
+		allowlist: m.mcpCfg.URLAllowlist,
+	})
+	if len(resolvedHeaders) > 0 {
+		rt = &headerRoundTripper{base: rt, headers: resolvedHeaders}
+	}
+
+	timeout := time.Duration(m.mcpCfg.RequestTimeoutSecs) * time.Second
+	if cfg.RequestTimeoutSecs > 0 {
+		timeout = time.Duration(cfg.RequestTimeoutSecs) * time.Second
+	}
+
+	httpClient := &http.Client{
+		Transport: rt,
+		Timeout:   timeout,
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{
@@ -65,13 +186,23 @@ func (m *Manager) RegisterServer(ctx context.Context, name, command string, args
 		Version: "v1.0.0",
 	}, nil)
 
-	transport := &mcp.CommandTransport{Command: cmd}
-	session, err := client.Connect(ctx, transport, nil)
-	if err != nil {
-		return fmt.Errorf("connecting to MCP server %q: %w", name, err)
+	sseTransport := &mcp.StreamableClientTransport{
+		Endpoint:   resolvedURL,
+		HTTPClient: httpClient,
 	}
 
-	sc := &serverConn{name: name, command: command, args: args, session: session}
+	session, err := client.Connect(ctx, sseTransport, nil)
+	if err != nil {
+		return fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), err)
+	}
+
+	sc := &serverConn{
+		name:      name,
+		transport: "sse",
+		url:       resolvedURL,
+		cfg:       cfg,
+		session:   session,
+	}
 
 	m.mu.Lock()
 	m.servers[name] = sc
@@ -297,12 +428,20 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 		}
 	}
 
+	var displayURL string
+	if sc.url != "" {
+		displayURL = redactURL(sc.url)
+	}
+
 	return ServerStatus{
 		Name:      sc.name,
 		Command:   sc.command,
 		Args:      sc.args,
+		ArgsCount: len(sc.args),
 		ToolNames: toolNames,
 		Status:    "connected",
+		Transport: sc.transport,
+		URL:       displayURL,
 	}, true
 }
 

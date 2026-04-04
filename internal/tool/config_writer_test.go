@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 func writeTestConfig(t *testing.T, content string) string {
@@ -31,7 +33,7 @@ func TestAddToolToConfig_NewSection(t *testing.T) {
 token = "test-token"
 `)
 
-	if err := addToolToConfig(path, "web-search", "/usr/bin/ws", []string{"--flag"}, map[string]string{"API_KEY": "secret"}); err != nil {
+	if err := addToolToConfig(path, "web-search", config.ToolConfig{Command: "/usr/bin/ws", Args: []string{"--flag"}, Env: map[string]string{"API_KEY": "secret"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,7 +52,7 @@ func TestAddToolToConfig_ExistingSection(t *testing.T) {
 command = "/usr/bin/existing"
 `)
 
-	if err := addToolToConfig(path, "new-tool", "/usr/bin/new", nil, nil); err != nil {
+	if err := addToolToConfig(path, "new-tool", config.ToolConfig{Command: "/usr/bin/new"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,7 +325,7 @@ func TestRoundTrip_AddThenRemove(t *testing.T) {
 token = "keep-me"
 `)
 
-	if err := addToolToConfig(path, "my-tool", "/bin/tool", nil, nil); err != nil {
+	if err := addToolToConfig(path, "my-tool", config.ToolConfig{Command: "/bin/tool"}); err != nil {
 		t.Fatal(err)
 	}
 	content := readConfig(t, path)
@@ -346,6 +348,57 @@ token = "keep-me"
 // ---------------------------------------------------------------------------
 // SetAuthConfig
 // ---------------------------------------------------------------------------
+
+func TestAddToolToConfig_SSETransport(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test-token"
+`)
+
+	if err := addToolToConfig(path, "remote-mcp", config.ToolConfig{
+		Transport:          "sse",
+		URL:                "https://mcp.example.com/events",
+		Headers:            map[string]string{"Authorization": "Bearer tok"},
+		RequestTimeoutSecs: 45,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "remote-mcp") {
+		t.Error("config should contain tool name")
+	}
+	if !strings.Contains(content, "sse") {
+		t.Error("config should contain transport")
+	}
+	if !strings.Contains(content, "https://mcp.example.com/events") {
+		t.Error("config should contain URL")
+	}
+	if !strings.Contains(content, "Authorization") {
+		t.Error("config should contain headers")
+	}
+	if !strings.Contains(content, "45") {
+		t.Error("config should contain request_timeout_secs")
+	}
+}
+
+func TestAddToolToConfig_StdioOmitsTransport(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test"
+`)
+
+	if err := addToolToConfig(path, "local-tool", config.ToolConfig{Command: "/usr/bin/tool"}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	// stdio is the default, so transport field should not appear
+	if strings.Contains(content, "transport") {
+		t.Error("stdio tool should not have transport field in config")
+	}
+	if !strings.Contains(content, "/usr/bin/tool") {
+		t.Error("config should contain command")
+	}
+}
 
 func TestSetAuthConfig_CreatesAuthSection(t *testing.T) {
 	path := writeTestConfig(t, `[api]

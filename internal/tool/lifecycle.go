@@ -69,8 +69,21 @@ func (lm *LifecycleManager) AddTool(ctx context.Context, name string, cfg config
 	if err := validateToolName(name); err != nil {
 		return err
 	}
-	if cfg.Command == "" {
-		return fmt.Errorf("command is required")
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	switch transport {
+	case "stdio":
+		if cfg.Command == "" {
+			return fmt.Errorf("command is required for stdio transport")
+		}
+	case "sse":
+		if cfg.URL == "" {
+			return fmt.Errorf("url is required for sse transport")
+		}
+	default:
+		return fmt.Errorf("unsupported transport %q", transport)
 	}
 
 	lm.mu.Lock()
@@ -83,17 +96,17 @@ func (lm *LifecycleManager) AddTool(ctx context.Context, name string, cfg config
 		return err
 	}
 
-	if err := lm.toolMgr.RegisterServer(ctx, name, cfg.Command, cfg.Args, cfg.Env); err != nil {
+	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
 		return fmt.Errorf("starting tool %q: %w", name, err)
 	}
 
-	if err := addToolToConfig(lm.configPath, name, cfg.Command, cfg.Args, cfg.Env); err != nil {
+	if err := addToolToConfig(lm.configPath, name, cfg); err != nil {
 		// Best-effort rollback: unregister the server we just started.
 		_ = lm.toolMgr.UnregisterServer(name)
 		return fmt.Errorf("persisting tool %q to config: %w", name, err)
 	}
 
-	lm.logger.Info("tool added", "name", name, "command", cfg.Command)
+	lm.logger.Info("tool added", "name", name, "transport", transport)
 	return nil
 }
 
@@ -144,10 +157,10 @@ func hasToolsCapability(cfg config.PluginConfig) bool {
 func (lm *LifecycleManager) registerPluginServer(ctx context.Context, name string, cfg config.PluginConfig) error {
 	switch cfg.Type {
 	case "subprocess":
-		return lm.toolMgr.RegisterServer(ctx, name, cfg.Command, cfg.Args, cfg.Env)
+		return lm.toolMgr.RegisterServer(ctx, name, config.ToolConfig{Command: cfg.Command, Args: cfg.Args, Env: cfg.Env})
 	case "docker":
 		dockerArgs := buildPluginDockerArgs(cfg)
-		return lm.toolMgr.RegisterServer(ctx, name, "docker", dockerArgs, nil)
+		return lm.toolMgr.RegisterServer(ctx, name, config.ToolConfig{Command: "docker", Args: dockerArgs})
 	}
 	return nil
 }
@@ -227,9 +240,10 @@ func (lm *LifecycleManager) ListTools() []ServerStatus {
 		if !ok {
 			continue
 		}
-		// Exclude configmcp sessions and plugin entries.
-		if info.Command == "" {
-			continue // in-process session
+		// Exclude in-process sessions (configmcp, webmcp) and plugin entries.
+		// In-process sessions have no transport set; external servers have "stdio" or "sse".
+		if info.Transport == "" {
+			continue
 		}
 		lm.mu.Lock()
 		_, isPlugin := lm.plugins[name]

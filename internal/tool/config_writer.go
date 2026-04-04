@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 type pluginEntry struct {
@@ -23,7 +25,7 @@ type pluginEntry struct {
 
 // addToolToConfig reads the TOML config at path, adds a [tools.<name>] section,
 // and writes it back atomically.
-func addToolToConfig(path, name, command string, args []string, env map[string]string) error {
+func addToolToConfig(path, name string, cfg config.ToolConfig) error {
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -37,12 +39,27 @@ func addToolToConfig(path, name, command string, args []string, env map[string]s
 		return fmt.Errorf("config: tools section has unexpected type")
 	}
 
-	entry := map[string]any{"command": command}
-	if len(args) > 0 {
-		entry["args"] = args
+	entry := map[string]any{}
+	if cfg.Transport != "" && cfg.Transport != "stdio" {
+		entry["transport"] = cfg.Transport
 	}
-	if len(env) > 0 {
-		entry["env"] = env
+	if cfg.Command != "" {
+		entry["command"] = cfg.Command
+	}
+	if cfg.URL != "" {
+		entry["url"] = cfg.URL
+	}
+	if len(cfg.Args) > 0 {
+		entry["args"] = cfg.Args
+	}
+	if len(cfg.Env) > 0 {
+		entry["env"] = cfg.Env
+	}
+	if len(cfg.Headers) > 0 {
+		entry["headers"] = cfg.Headers
+	}
+	if cfg.RequestTimeoutSecs > 0 {
+		entry["request_timeout_secs"] = cfg.RequestTimeoutSecs
 	}
 	tools[name] = entry
 	raw["tools"] = tools

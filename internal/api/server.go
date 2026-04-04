@@ -866,10 +866,14 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name    string            `json:"name"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
+		Name               string            `json:"name"`
+		Command            string            `json:"command"`
+		Args               []string          `json:"args"`
+		Env                map[string]string `json:"env"`
+		Transport          string            `json:"transport"`
+		URL                string            `json:"url"`
+		Headers            map[string]string `json:"headers"`
+		RequestTimeoutSecs int               `json:"request_timeout_secs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -879,15 +883,15 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
-	if strings.TrimSpace(body.Command) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "command is required"})
-		return
-	}
 
 	cfg := config.ToolConfig{
-		Command: body.Command,
-		Args:    body.Args,
-		Env:     body.Env,
+		Command:            body.Command,
+		Args:               body.Args,
+		Env:                body.Env,
+		Transport:          body.Transport,
+		URL:                body.URL,
+		Headers:            body.Headers,
+		RequestTimeoutSecs: body.RequestTimeoutSecs,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {

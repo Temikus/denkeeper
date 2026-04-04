@@ -109,16 +109,20 @@ func (s *Server) registerTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "tool_add",
-		Description: "Add a new MCP tool server. The server process will be started immediately.",
+		Description: "Add a new MCP tool server. Supports stdio (local subprocess) and sse (remote HTTP) transports.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"name":    {"type": "string",  "description": "Unique name for the tool (used as [tools.<name>] in config)"},
-				"command": {"type": "string",  "description": "Path to the MCP server binary"},
-				"args":    {"type": "array", "items": {"type": "string"}, "description": "Command-line arguments"},
-				"env":     {"type": "object", "additionalProperties": {"type": "string"}, "description": "Environment variables"}
+				"name":                 {"type": "string",  "description": "Unique name for the tool (used as [tools.<name>] in config)"},
+				"transport":            {"type": "string",  "enum": ["stdio", "sse"], "description": "Transport type: stdio (default) for local subprocess, sse for remote HTTP"},
+				"command":              {"type": "string",  "description": "Path to the MCP server binary (required for stdio)"},
+				"url":                  {"type": "string",  "description": "Remote MCP server URL (required for sse)"},
+				"args":                 {"type": "array", "items": {"type": "string"}, "description": "Command-line arguments (stdio only)"},
+				"env":                  {"type": "object", "additionalProperties": {"type": "string"}, "description": "Environment variables"},
+				"headers":              {"type": "object", "additionalProperties": {"type": "string"}, "description": "HTTP headers for sse transport (supports ${VAR} placeholders)"},
+				"request_timeout_secs": {"type": "integer", "description": "Per-server request timeout override in seconds"}
 			},
-			"required": ["name", "command"]
+			"required": ["name"]
 		}`),
 	}, s.handleToolAdd)
 
@@ -731,10 +735,14 @@ func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*
 	}
 
 	var input struct {
-		Name    string            `json:"name"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
+		Name               string            `json:"name"`
+		Command            string            `json:"command"`
+		Args               []string          `json:"args"`
+		Env                map[string]string `json:"env"`
+		Transport          string            `json:"transport"`
+		URL                string            `json:"url"`
+		Headers            map[string]string `json:"headers"`
+		RequestTimeoutSecs int               `json:"request_timeout_secs"`
 	}
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
 		return toolError("invalid arguments: " + err.Error()), nil
@@ -742,24 +750,31 @@ func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*
 	if strings.TrimSpace(input.Name) == "" {
 		return toolError("name is required"), nil
 	}
-	if strings.TrimSpace(input.Command) == "" {
-		return toolError("command is required"), nil
-	}
 
 	cfg := config.ToolConfig{
-		Command: input.Command,
-		Args:    input.Args,
-		Env:     input.Env,
+		Command:            input.Command,
+		Args:               input.Args,
+		Env:                input.Env,
+		Transport:          input.Transport,
+		URL:                input.URL,
+		Headers:            input.Headers,
+		RequestTimeoutSecs: input.RequestTimeoutSecs,
 	}
 
 	lm := s.deps.LifecycleMgr
-	summary := fmt.Sprintf("Install tool: %s (%s)", input.Name, input.Command)
+	identifier := input.Command
+	if input.URL != "" {
+		identifier = input.URL
+	}
+	summary := fmt.Sprintf("Install tool: %s (%s)", input.Name, identifier)
 
 	payload, _ := toml.Marshal(map[string]any{
-		"name":    input.Name,
-		"command": input.Command,
-		"args":    input.Args,
-		"env":     input.Env,
+		"name":      input.Name,
+		"transport": input.Transport,
+		"command":   input.Command,
+		"url":       input.URL,
+		"args":      input.Args,
+		"env":       input.Env,
 	})
 
 	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {

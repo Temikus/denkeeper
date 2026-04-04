@@ -17,7 +17,7 @@ import (
 // ToolRegistrar is the interface Manager uses to register MCP tool servers.
 // *tool.Manager satisfies this interface; inject a mock in tests.
 type ToolRegistrar interface {
-	RegisterServer(ctx context.Context, name, command string, args []string, env map[string]string) error
+	RegisterServer(ctx context.Context, name string, cfg config.ToolConfig) error
 }
 
 // VerifyOpts configures plugin signature verification.
@@ -174,7 +174,7 @@ func (m *Manager) Start(ctx context.Context, tools ToolRegistrar) error {
 		var err error
 		switch p.Type {
 		case TypeSubprocess:
-			err = tools.RegisterServer(ctx, p.Name, p.Command, p.Args, p.Env)
+			err = tools.RegisterServer(ctx, p.Name, config.ToolConfig{Command: p.Command, Args: p.Args, Env: p.Env})
 		default:
 			// Sandboxed plugins (Docker, Kubernetes) go through the runtime.
 			err = m.startSandboxed(ctx, p, tools)
@@ -211,7 +211,7 @@ func (m *Manager) startSandboxed(ctx context.Context, p Plugin, tools ToolRegist
 	if err != nil {
 		return fmt.Errorf("spawning sandbox: %w", err)
 	}
-	return tools.RegisterServer(ctx, p.Name, proc.Command, proc.Args, proc.Env)
+	return tools.RegisterServer(ctx, p.Name, config.ToolConfig{Command: proc.Command, Args: proc.Args, Env: proc.Env})
 }
 
 // Count returns the number of successfully loaded plugins.

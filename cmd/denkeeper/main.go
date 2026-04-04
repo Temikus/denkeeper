@@ -285,7 +285,7 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	// Helper to ensure sharedToolMgr is initialised exactly once.
 	ensureToolMgr := func() {
 		if sharedToolMgr == nil {
-			sharedToolMgr = tool.NewManager(logger)
+			sharedToolMgr = tool.NewManager(logger, cfg.MCP)
 			cleanups = append(cleanups, func() { _ = sharedToolMgr.Close() })
 		}
 	}
@@ -293,10 +293,10 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	if len(cfg.Tools) > 0 {
 		ensureToolMgr()
 		for name, tc := range cfg.Tools {
-			if err := sharedToolMgr.RegisterServer(ctx, name, tc.Command, tc.Args, tc.Env); err != nil {
+			if err := sharedToolMgr.RegisterServer(ctx, name, tc); err != nil {
 				return nil, "", cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
 			}
-			logger.Info("tool server registered", "name", name, "command", tc.Command)
+			logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
 		}
 	}
 
@@ -429,7 +429,7 @@ func registerBrowser(ctx context.Context, cfg *config.Config, profileDir string,
 	if err != nil {
 		return fmt.Errorf("starting browser plugin: %w", err)
 	}
-	if err := toolMgr.RegisterServer(ctx, "browser", proc.Command, proc.Args, proc.Env); err != nil {
+	if err := toolMgr.RegisterServer(ctx, "browser", config.ToolConfig{Command: proc.Command, Args: proc.Args, Env: proc.Env}); err != nil {
 		return fmt.Errorf("registering browser tools: %w", err)
 	}
 	logger.Info("browser automation registered",
@@ -924,7 +924,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Ensure shared tool manager exists for the lifecycle manager.
 	if sharedToolMgr == nil {
-		sharedToolMgr = tool.NewManager(logger)
+		sharedToolMgr = tool.NewManager(logger, cfg.MCP)
 		defer func() { _ = sharedToolMgr.Close() }()
 	}
 
@@ -985,7 +985,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		cancel()
 	}()
 
-	if cfg.API.Enabled {
+	if cfg.API.IsEnabled() {
 		var metricsHandler http.Handler
 		if cfg.OTel.Enabled {
 			metricsHandler = dkotel.PrometheusHandler()
