@@ -1,9 +1,10 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, initChat } from '../chatStore.js'
+  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat } from '../chatStore.js'
 
   let agents = $state([])
+  let sessions = $state([])
   let input = $state('')
   let messagesEl
 
@@ -19,6 +20,21 @@
     } catch (e) {
       // non-fatal — default will still work
     }
+  }
+
+  async function loadSessions() {
+    try {
+      const res = await api.sessions()
+      sessions = (res || []).sort((a, b) =>
+        new Date(b.created_at) - new Date(a.created_at)
+      )
+    } catch (_) {}
+  }
+
+  async function selectSession(e) {
+    const id = e.target.value
+    if (!id) return
+    await loadSession(id, $chatState.agent)
   }
 
   async function loadPendingApprovals() {
@@ -93,6 +109,7 @@
 
   onMount(() => {
     loadAgents()
+    loadSessions()
     loadPendingApprovals()
     pollTimer = setInterval(loadPendingApprovals, 5000)
   })
@@ -113,14 +130,17 @@
         {/if}
       </select>
     </label>
-    <span class="session-label">
-      {#if $chatState.sessionId}
-        Session: <code>{$chatState.sessionId}</code>
-      {:else}
-        <span class="muted">New session</span>
-      {/if}
-    </span>
-    <button class="btn-ghost" onclick={newSession}>New Session</button>
+    <label>
+      Session
+      <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring}>
+        <option value="">New session</option>
+        {#each sessions as s}
+          <option value={s.id}>{s.id.slice(0, 8)} — {s.message_count} msgs — {new Date(s.created_at).toLocaleDateString()}</option>
+        {/each}
+      </select>
+    </label>
+    <button class="btn-ghost" onclick={() => { newSession(); }} disabled={!$chatState.sessionId}>New Session</button>
+    <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh</button>
   </div>
 
   <!-- Pending approvals banner (polled, cross-adapter) -->
@@ -251,8 +271,9 @@
     padding: 4px 8px;
     font-size: 13px;
   }
-  .session-label { font-size: 12px; color: var(--text-muted); flex: 1; }
-  .session-label code { font-family: monospace; font-size: 11px; }
+  .toolbar select { min-width: 0; max-width: 260px; text-overflow: ellipsis; }
+  .toolbar label { flex-shrink: 0; }
+  .toolbar label:nth-child(2) { flex: 1; min-width: 0; }
 
   .pending-banner {
     flex-shrink: 0;

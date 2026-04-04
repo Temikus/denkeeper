@@ -203,10 +203,10 @@ func TestExtractToolName(t *testing.T) {
 
 func TestParseCallback(t *testing.T) {
 	tests := []struct {
-		data     string
-		prefix   string
-		action   CallbackAction
-		ok       bool
+		data   string
+		prefix string
+		action CallbackAction
+		ok     bool
 	}{
 		{"appr:abc123:approve", "appr:abc123", CallbackApprove, true},
 		{"appr:abc123:deny", "appr:abc123", CallbackDeny, true},

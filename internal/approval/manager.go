@@ -14,10 +14,10 @@ import (
 // Manager coordinates the persistent Store with the in-memory action Registry.
 // It is the primary API used by the Engine and REST API server.
 type Manager struct {
-	store      Store
-	autoStore  AutoApproveStore
-	registry   *Registry
-	logger     *slog.Logger
+	store     Store
+	autoStore AutoApproveStore
+	registry  *Registry
+	logger    *slog.Logger
 
 	waiterMu sync.Mutex
 	waiters  map[string]chan Status // notified when an approval is resolved

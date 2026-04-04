@@ -40,6 +40,27 @@ export function setAgent(name) {
   chatState.update(s => ({ ...s, agent: name }))
 }
 
+export async function loadSession(sessionId, agent) {
+  if (!sessionId) return
+  chatState.update(s => ({ ...s, restoring: true, error: '' }))
+  try {
+    const history = await api.sessionMessages(sessionId)
+    chatState.update(s => ({
+      ...s,
+      sessionId,
+      agent: agent || s.agent,
+      messages: (history || []).map(m => ({
+        role: m.role === 'assistant' ? 'agent' : 'user',
+        text: m.content,
+      })),
+      restoring: false,
+    }))
+    saveSession()
+  } catch (e) {
+    chatState.update(s => ({ ...s, restoring: false, error: 'Failed to load session' }))
+  }
+}
+
 export async function initChat(agents) {
   const state = get(chatState)
   if (state.initialized) return
