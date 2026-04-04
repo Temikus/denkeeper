@@ -42,7 +42,8 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 | `[[schedules]]` | Recurring task schedules |
 | `[plugins.*]` | Plugin definitions |
 | `[security]` | Plugin signing (trusted keys, allow unsigned) |
-| `[tools.*]` | MCP tool server definitions |
+| `[mcp]` | Global MCP settings (timeout, auto-restart, SSE URL allowlist) |
+| `[tools.*]` | MCP tool server definitions (stdio or SSE transport) |
 | `[kv]` | Agent KV store limits |
 
 ## Environment variable overrides

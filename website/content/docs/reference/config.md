@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-03T00:00:00+00:00
+lastmod: 2026-04-04T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -197,13 +197,31 @@ Selects the runtime backend for sandboxed (Docker-type) plugins.
 
 The Kubernetes backend creates ephemeral Pods with init-container network isolation, dropped capabilities, read-only root filesystem, and Pod Security Admission labels. Supports both in-cluster (ServiceAccount) and out-of-cluster (kubeconfig) authentication.
 
+## `[mcp]`
+
+Global settings that apply to all MCP tool servers.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `request_timeout_secs` | int | `30` | Per-request timeout for MCP calls (0 = no timeout) |
+| `auto_restart` | bool | `true` | Automatically restart crashed stdio servers |
+| `max_restart_attempts` | int | `3` | Consecutive failures before disabling a server |
+| `restart_cooldown` | string | `"5m"` | Duration a server must stay connected to reset the failure counter |
+| `url_allowlist` | string[] | — | Allowed hostnames/wildcards for SSE tool server URLs (empty = all non-blocked hosts) |
+
 ## `[tools.*]`
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `command` | string | *required* | MCP server command |
-| `args` | string[] | — | Command arguments |
-| `env` | map | — | Environment variables |
+| `transport` | string | `"stdio"` | Transport type: `"stdio"` (subprocess) or `"sse"` (remote HTTP/SSE) |
+| `command` | string | *required for stdio* | MCP server command (stdio only) |
+| `args` | string[] | — | Command arguments (stdio only) |
+| `env` | map | — | Environment variables; supports `${NAME}` placeholder expansion (stdio only) |
+| `url` | string | *required for sse* | Remote server URL (SSE only, must be http/https) |
+| `headers` | map | — | HTTP headers sent with SSE requests (SSE only) |
+| `request_timeout_secs` | int | `0` | Per-server timeout override (0 = use global `[mcp]` value) |
+
+**SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
 

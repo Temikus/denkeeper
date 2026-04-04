@@ -117,11 +117,12 @@ cosign verify \
 - **Conversation memory** — SQLite-backed, persistent across restarts
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
-- **MCP tools** — spawn MCP stdio servers, discover tools, and execute tool calls in an agentic loop
+- **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff
+- **MCP security** — SSRF protection (blocks localhost, link-local, and cloud metadata endpoints), HTTP header injection prevention, redirect target validation, env var denylist for secrets, and URL/arg redaction in API responses
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
-- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, and API key management
+- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, and API key management; includes dark mode toggle and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
@@ -199,7 +200,8 @@ Key sections:
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
-| `[tools.*]` | MCP tool server definitions |
+| `[mcp]` | Global MCP settings — request timeout, auto-restart, max restart attempts, restart cooldown, SSE URL allowlist |
+| `[tools.*]` | MCP tool server definitions — stdio (subprocess) or SSE (remote) transport, URL, headers, per-server timeout override |
 | `[plugins.*]` | Plugin definitions — subprocess or Docker-sandboxed (capability declarations) |
 | `[security]` | Ed25519 plugin signing config (`trusted_keys`, `allow_unsigned`) |
 | `[voice]` | STT/TTS configuration (OpenAI) |
@@ -226,6 +228,8 @@ Secrets and select config fields can be set via environment variables, which tak
 | `DENKEEPER_LLM_ANTHROPIC_API_KEY` | `llm.anthropic.api_key` |
 | `DENKEEPER_LLM_ANTHROPIC_BASE_URL` | `llm.anthropic.base_url` |
 | `DENKEEPER_LLM_OLLAMA_BASE_URL` | `llm.ollama.base_url` |
+| `DENKEEPER_LLM_OPENAI_API_KEY` | `llm.openai.api_key` |
+| `DENKEEPER_LLM_OPENAI_BASE_URL` | `llm.openai.base_url` |
 | `DENKEEPER_VOICE_OPENAI_API_KEY` | `voice.openai.api_key` |
 | `DENKEEPER_LOG_LEVEL` | `log.level` |
 | `DENKEEPER_LOG_FORMAT` | `log.format` |
@@ -490,12 +494,18 @@ Denkeeper is built in phases:
 - [x] Getting-started guides, concept docs, and reference pages
 - [x] One-liner install script hosted at `get.denkeeper.io`
 
-**Phase 6 — Browser Automation** (in progress)
+**Phase 6 — Browser Automation** ✅
 - [x] Browser automation — first-party Docker plugin with headless Chromium + Playwright MCP server, tmpfs/shm support for read-only containers
 - [x] Persistent browser profiles — per-agent profile storage with volume mounts
 - [x] URL allowlist enforcement — per-agent domain filtering with wildcard support, link-local/metadata blocking
 - [x] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns (vision + non-vision LLMs)
 - [x] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
+
+**Phase 7 — Remote MCP & Observability** (in progress)
+- [x] Remote MCP servers — SSE/Streamable HTTP transport alongside existing stdio; auto-restart with configurable backoff (`[mcp]` section)
+- [x] MCP security hardening — SSRF blocklist, HTTP header injection prevention, redirect target validation, env var denylist for secrets, URL/arg redaction in API responses
+- [x] Pipeline logging — structured log events throughout the chat pipeline with finish reason, token breakdown, tool durations, and round summaries
+- [x] Real-time tool call streaming — `tool_start`/`tool_end` SSE events with `duration_ms` for inline tool progress in the web dashboard
 
 ## License
 
