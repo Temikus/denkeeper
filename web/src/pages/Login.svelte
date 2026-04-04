@@ -10,12 +10,14 @@
   let passwordEnabled = $state(false)
   let oidcEnabled = $state(false)
 
+  // Which login method is active: 'password' | 'apikey'
+  let activeMethod = $state('password')
+
   // Login state
   let keyInput = $state('')
   let passwordInput = $state('')
   let loginError = $state('')
   let loginLoading = $state(false)
-  let showApiKey = $state(false)
 
   // Setup state
   let setupTab = $state('account') // 'account' | 'apikey'
@@ -48,6 +50,9 @@
   // Reveal state (after successful API key setup)
   let revealedKey = $state('')
   let copied = $state(false)
+
+  // Derived: true when there are multiple login method choices.
+  let hasMultipleMethods = $derived(passwordEnabled && true) // password + apikey always available
 
   // All valid API scopes — must match the canonical list in internal/scope/scope.go.
   // The scope sync test (internal/scope/scope_test.go) will fail if any are missing.
@@ -89,11 +94,16 @@
       setupTab = accountSetupAvailable ? 'account' : 'apikey'
       mode = 'setup'
     } else {
-      // If neither password nor OIDC is configured, show API key login directly.
-      showApiKey = !passwordEnabled && !oidcEnabled
+      // Choose the best default login method.
+      activeMethod = passwordEnabled ? 'password' : 'apikey'
       mode = 'login'
     }
   })
+
+  function switchMethod(method) {
+    loginError = ''
+    activeMethod = method
+  }
 
   // --- Password Login ---
 
@@ -233,7 +243,7 @@
 
   function proceedToLogin() {
     keyInput = revealedKey
-    showApiKey = true
+    activeMethod = 'apikey'
     mode = 'login'
   }
 </script>
@@ -247,6 +257,7 @@
 
     {:else if mode === 'login'}
       <h1>Denkeeper</h1>
+      <p class="subtitle">Sign in to access the dashboard.</p>
 
       {#if loginError}
         <p class="error">{loginError}</p>
@@ -254,10 +265,26 @@
 
       {#if oidcEnabled}
         <button class="sso-btn" onclick={handleSSO}>Sign in with SSO</button>
+        {#if passwordEnabled || activeMethod === 'apikey'}
+          <div class="or-divider"><span>or</span></div>
+        {/if}
       {/if}
 
-      {#if passwordEnabled}
-        <p class="subtitle">Enter your password to access the dashboard.</p>
+      <!-- Method switcher: shown when password login is available (always has apikey as alternative) -->
+      {#if hasMultipleMethods}
+        <div class="method-tabs">
+          <button
+            class="method-tab" class:active={activeMethod === 'password'}
+            onclick={() => switchMethod('password')}
+          >Password</button>
+          <button
+            class="method-tab" class:active={activeMethod === 'apikey'}
+            onclick={() => switchMethod('apikey')}
+          >API Key</button>
+        </div>
+      {/if}
+
+      {#if activeMethod === 'password' && passwordEnabled}
         <input
           type="password"
           placeholder="Password"
@@ -269,19 +296,7 @@
         <button onclick={handlePasswordLogin} disabled={loginLoading}>
           {loginLoading ? 'Signing in...' : 'Sign in'}
         </button>
-      {/if}
-
-      {#if (passwordEnabled || oidcEnabled) && !showApiKey}
-        <button class="link-btn" onclick={() => showApiKey = true}>
-          Advanced: API Key
-        </button>
-      {/if}
-
-      {#if showApiKey}
-        {#if passwordEnabled || oidcEnabled}
-          <hr class="divider" />
-        {/if}
-        <p class="subtitle">Enter your API key to access the dashboard.</p>
+      {:else}
         <input
           type="password"
           placeholder="API key (dk_...)"
@@ -291,10 +306,10 @@
           disabled={loginLoading}
         />
         <button onclick={handleKeyLogin} disabled={loginLoading}>
-          {loginLoading ? 'Signing in...' : 'Sign in with API key'}
+          {loginLoading ? 'Signing in...' : 'Sign in'}
         </button>
         <p class="hint">
-          The key must have the <code>admin</code> scope for full dashboard access,
+          Requires the <code>admin</code> scope for full access,
           or specific read/write scopes for limited access.
         </p>
       {/if}
@@ -449,6 +464,43 @@
     color: var(--accent);
     border-bottom-color: var(--accent);
   }
+  .method-tabs {
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .method-tab {
+    flex: 1;
+    padding: 8px 12px;
+    background: none;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background 0.15s, color 0.15s;
+  }
+  .method-tab:hover { color: var(--text); background: none; }
+  .method-tab.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .or-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .or-divider::before,
+  .or-divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--border);
+  }
   .scopes-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -478,19 +530,6 @@
     background: var(--success);
   }
   .sso-btn:hover { background: #5bc68d; }
-  .link-btn {
-    background: none;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 400;
-    padding: 6px;
-  }
-  .link-btn:hover { color: var(--text); background: none; }
-  .divider {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 4px 0;
-  }
   .key-box {
     display: flex;
     align-items: center;
