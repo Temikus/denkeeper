@@ -317,14 +317,16 @@
         </div>
       </div>
 
-      <!-- System Prompt Assembly -->
+      <!-- Persona -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4a2 2 0 012-2h8.5L20 7.5V20a2 2 0 01-2 2H6a2 2 0 01-2-2v-3"/><polyline points="14 2 14 8 20 8"/><line x1="2" y1="15" x2="12" y2="15"/><line x1="2" y1="11" x2="8" y2="11"/><line x1="2" y1="19" x2="10" y2="19"/></svg>
-            System Prompt Assembly
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            Persona
           </div>
-          <span class="card-meta mono">persona.SystemPrompt()</span>
+          {#if detail.persona_dir}
+            <span class="card-meta mono">{detail.persona_dir}</span>
+          {/if}
         </div>
 
         <div class="persona-sections">
