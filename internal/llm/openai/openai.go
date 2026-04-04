@@ -237,7 +237,7 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	m.Role = w.Role
 	m.ToolCalls = w.ToolCalls
 	m.ToolCallID = w.ToolCallID
-	if len(w.RawContent) == 0 {
+	if len(w.RawContent) == 0 || string(w.RawContent) == "null" {
 		return nil
 	}
 	// Try plain string first (standard case).
@@ -248,14 +248,22 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	}
 	// Fall back to array of content blocks (some model-specific response formats).
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(w.RawContent, &blocks); err == nil {
 		var sb strings.Builder
 		for _, b := range blocks {
-			if b.Type == "text" {
+			switch b.Type {
+			case "text":
 				sb.WriteString(b.Text)
+			default:
+				if b.Text != "" {
+					sb.WriteString(b.Text)
+				} else if b.Content != "" {
+					sb.WriteString(b.Content)
+				}
 			}
 		}
 		m.Content = sb.String()

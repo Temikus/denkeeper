@@ -2933,3 +2933,131 @@ func TestEngine_ChatWithEvents_NilCallback(t *testing.T) {
 		t.Errorf("response = %q, want %q", text, "Hello!")
 	}
 }
+
+// TestEngine_EmptyResponseAfterTools_NudgeRetry verifies that when the LLM
+// returns finish_reason=stop with empty content after tool rounds, the engine
+// sends a nudge message and uses the follow-up response.
+func TestEngine_EmptyResponseAfterTools_NudgeRetry(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			// Round 1: request a tool call.
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_data", Arguments: "{}"}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "tool_calls",
+			},
+			// Round 2: model finishes but returns empty content (reasoning model quirk).
+			{
+				Content:      "",
+				TokensUsed:   llm.TokenUsage{Total: 500},
+				FinishReason: "stop",
+			},
+			// Nudge retry: model now provides the actual answer.
+			{
+				Content:      "Here is the data you requested.",
+				TokensUsed:   llm.TokenUsage{Total: 30},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "nudge-retry-1",
+		UserID:     "user-1",
+		Text:       "Get me the data",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "Here is the data you requested." {
+		t.Errorf("response = %q, want nudge retry response", text)
+	}
+	// All 3 provider calls should have been consumed.
+	if provider.callIndex != 3 {
+		t.Errorf("provider calls = %d, want 3 (tool round + empty + nudge)", provider.callIndex)
+	}
+}
+
+// TestEngine_IntermediateContentAccumulation verifies that text the model
+// produces alongside tool calls is preserved and used when the final response
+// is empty.
+func TestEngine_IntermediateContentAccumulation(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			// Round 1: model produces content AND a tool call in the same response.
+			{
+				Content: "Let me look that up for you.",
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "search", Arguments: "{}"}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 25},
+				FinishReason: "tool_calls",
+			},
+			// Round 2: empty final response (the model already said what it needed).
+			{
+				Content:      "",
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "accum-content-1",
+		UserID:     "user-1",
+		Text:       "Search for something",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should use the accumulated intermediate content, not trigger a nudge.
+	if text != "Let me look that up for you." {
+		t.Errorf("response = %q, want accumulated intermediate content", text)
+	}
+	// Only 2 provider calls — no nudge needed since we had intermediate content.
+	if provider.callIndex != 2 {
+		t.Errorf("provider calls = %d, want 2 (no nudge for accumulated content)", provider.callIndex)
+	}
+}

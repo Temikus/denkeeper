@@ -57,8 +57,8 @@ func TestChatCompletion_TextResponse(t *testing.T) {
 	if resp.Content != "Hello, how can I help?" {
 		t.Errorf("content = %q, want Hello, how can I help?", resp.Content)
 	}
-	if resp.FinishReason != "end_turn" {
-		t.Errorf("finish_reason = %q, want end_turn", resp.FinishReason)
+	if resp.FinishReason != "stop" {
+		t.Errorf("finish_reason = %q, want stop", resp.FinishReason)
 	}
 	if resp.TokensUsed.Total != 18 {
 		t.Errorf("total tokens = %d, want 18", resp.TokensUsed.Total)

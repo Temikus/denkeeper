@@ -437,3 +437,62 @@ func TestChatCompletion_NoOrganizationHeader(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestChatCompletion_ArrayContent_UnknownType verifies that content blocks with
+// unknown types still extract any text they carry.
+func TestChatCompletion_ArrayContent_UnknownType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "gpt-4o",
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": [{"type": "unknown_future_type", "text": "hello from unknown block"}]
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, "", server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "hello from unknown block" {
+		t.Errorf("content = %q, want %q", resp.Content, "hello from unknown block")
+	}
+}
+
+// TestChatCompletion_NullContent verifies null content is handled gracefully.
+func TestChatCompletion_NullContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "gpt-4o",
+			"choices": [{"message": {"role": "assistant", "content": null}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, "", server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "" {
+		t.Errorf("content = %q, want empty for null content", resp.Content)
+	}
+}

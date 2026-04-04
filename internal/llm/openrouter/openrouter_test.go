@@ -461,3 +461,106 @@ func TestChatCompletion_CostUSD_FromUsage(t *testing.T) {
 		t.Errorf("CostUSD = %f, want 0.00045", resp.CostUSD)
 	}
 }
+
+// TestChatCompletion_NullContent verifies that a null content field is handled
+// gracefully, returning an empty content string rather than an error.
+func TestChatCompletion_NullContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "test-model",
+			"choices": [{
+				"message": {"role": "assistant", "content": null},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "test-model",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "" {
+		t.Errorf("content = %q, want empty for null content", resp.Content)
+	}
+}
+
+// TestChatCompletion_ReasoningContent verifies that reasoning_content is captured
+// when the model returns it alongside empty content (reasoning model behavior).
+func TestChatCompletion_ReasoningContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "moonshotai/kimi-k2.5",
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": "",
+					"reasoning_content": "Let me think about this..."
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 100, "total_tokens": 110}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	// Should not error even when content is empty with reasoning_content present.
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "moonshotai/kimi-k2.5",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Content itself is empty — the warning is logged but no error.
+	if resp.Content != "" {
+		t.Errorf("content = %q, want empty", resp.Content)
+	}
+}
+
+// TestChatCompletion_ThinkingBlockContent verifies that content blocks with
+// type "thinking" are NOT included in the visible response (they are reasoning),
+// while type "text" blocks are still extracted correctly.
+func TestChatCompletion_ThinkingBlockContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-1",
+			"model": "moonshotai/kimi-k2.5",
+			"choices": [{
+				"message": {
+					"role": "assistant",
+					"content": [
+						{"type": "thinking", "text": "internal reasoning here"},
+						{"type": "text", "text": "visible answer"}
+					]
+				},
+				"finish_reason": "stop"
+			}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "moonshotai/kimi-k2.5",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "visible answer" {
+		t.Errorf("content = %q, want %q", resp.Content, "visible answer")
+	}
+}

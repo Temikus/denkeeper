@@ -243,11 +243,24 @@ func convertMessage(m llm.Message) (apiMessage, error) {
 	}
 }
 
+// normalizeStopReason maps Anthropic stop reasons to the canonical values
+// expected by the engine's tool-call loop ("tool_calls", "stop").
+func normalizeStopReason(reason string) string {
+	switch reason {
+	case "tool_use":
+		return "tool_calls"
+	case "end_turn":
+		return "stop"
+	default:
+		return reason
+	}
+}
+
 // parseResponse converts an Anthropic API response into an llm.ChatResponse.
 func (c *Client) parseResponse(r *apiResponse) (*llm.ChatResponse, error) {
 	out := &llm.ChatResponse{
 		Model:        r.Model,
-		FinishReason: r.StopReason,
+		FinishReason: normalizeStopReason(r.StopReason),
 		TokensUsed: llm.TokenUsage{
 			Prompt:       r.Usage.InputTokens,
 			Completion:   r.Usage.OutputTokens,

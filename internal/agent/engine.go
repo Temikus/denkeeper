@@ -814,8 +814,28 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
 	}
 
-	// Accumulate tokens and cost across all rounds so the caller sees the
-	// full picture, not just the final round's usage.
+	// Validate tool execution preconditions before entering the loop.
+	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
+		if e.tools == nil {
+			return nil, llmMessages, fmt.Errorf("LLM requested tool calls but no tool manager configured")
+		}
+		if !perms.CanExecute("use_tools") {
+			return nil, llmMessages, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+		}
+	}
+
+	resp, llmMessages, err = e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
+	if err != nil {
+		return nil, llmMessages, err
+	}
+
+	return resp, llmMessages, nil
+}
+
+// executeToolRounds runs the tool-call loop, accumulating tokens/cost across
+// all rounds. If the model returns empty content after completing tool rounds,
+// it attempts to recover by using intermediate content or nudging the model.
+func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Prompt += resp.TokensUsed.Prompt
@@ -823,20 +843,21 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	totalUsage.Total += resp.TokensUsed.Total
 	totalCost += resp.CostUSD
 
+	supervised := perms.Tier() == "supervised" && e.approvals != nil
+	var toolRounds int
+	var accumulatedContent strings.Builder
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
+		toolRounds++
 		if round >= maxToolRounds {
 			return nil, llmMessages, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
 		}
-		if e.tools == nil {
-			return nil, llmMessages, fmt.Errorf("LLM requested tool calls but no tool manager configured")
-		}
-		if !perms.CanExecute("use_tools") {
-			return nil, llmMessages, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+
+		// Preserve any text content the model produced alongside tool calls.
+		if resp.Content != "" {
+			accumulatedContent.WriteString(resp.Content)
 		}
 
-		supervised := perms.Tier() == "supervised" && e.approvals != nil
-
-		llmMessages = append(llmMessages, llm.Message{Role: "assistant", ToolCalls: resp.ToolCalls})
+		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
@@ -851,6 +872,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 			onEvent(ChatEvent{Type: "thinking", Round: round + 1, Text: "Processing tool results..."})
 		}
 
+		var err error
 		resp, err = e.router.Complete(ctx, convID, llmMessages)
 		if err != nil {
 			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
@@ -870,10 +892,46 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		)
 	}
 
+	// If the model returned empty content after tool rounds, try to recover.
+	if resp.Content == "" && toolRounds > 0 {
+		var err error
+		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, accumulatedContent.String())
+		if err != nil {
+			return nil, llmMessages, err
+		}
+		totalUsage.Prompt += resp.TokensUsed.Prompt
+		totalUsage.Completion += resp.TokensUsed.Completion
+		totalUsage.Total += resp.TokensUsed.Total
+		totalCost += resp.CostUSD
+	}
+
 	// Replace per-round usage with accumulated totals.
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
 	return resp, llmMessages, nil
+}
+
+// recoverEmptyToolResponse attempts to recover when the LLM returns empty
+// content after tool rounds. It first checks for accumulated intermediate
+// content, then falls back to nudging the model for a response.
+func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string) (*llm.ChatResponse, []llm.Message, error) {
+	if accumulated != "" {
+		e.logger.Info("using accumulated content from intermediate tool rounds",
+			"accumulated_len", len(accumulated))
+		resp.Content = accumulated
+		return resp, llmMessages, nil
+	}
+	e.logger.Warn("empty response after tool rounds, retrying with nudge",
+		"finish_reason", resp.FinishReason)
+	llmMessages = append(llmMessages, llm.Message{
+		Role:    "user",
+		Content: "Please provide your response based on the tool results above.",
+	})
+	nudgeResp, err := e.router.Complete(ctx, convID, llmMessages)
+	if err != nil {
+		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
+	}
+	return nudgeResp, llmMessages, nil
 }
 
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),

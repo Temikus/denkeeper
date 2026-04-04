@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -100,18 +101,42 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 		return nil, fmt.Errorf("no choices in response")
 	}
 
+	return buildChatResponse(&apiResp), nil
+}
+
+// buildChatResponse converts the API response into a ChatResponse and logs
+// warnings when the model returns empty content despite generating tokens.
+func buildChatResponse(apiResp *apiResponse) *llm.ChatResponse {
+	choice := apiResp.Choices[0]
+	content := choice.Message.Content
+
+	if content == "" && choice.Message.ReasoningContent != "" {
+		slog.Warn("openrouter: model returned empty content with reasoning_content",
+			"model", apiResp.Model,
+			"reasoning_len", len(choice.Message.ReasoningContent),
+			"finish_reason", choice.FinishReason,
+			"completion_tokens", apiResp.Usage.CompletionTokens,
+		)
+	} else if content == "" && apiResp.Usage.CompletionTokens > 0 && choice.FinishReason == "stop" {
+		slog.Warn("openrouter: model returned empty content despite generating tokens",
+			"model", apiResp.Model,
+			"finish_reason", choice.FinishReason,
+			"completion_tokens", apiResp.Usage.CompletionTokens,
+		)
+	}
+
 	return &llm.ChatResponse{
-		Content:      apiResp.Choices[0].Message.Content,
-		ToolCalls:    apiResp.Choices[0].Message.ToolCalls,
+		Content:      content,
+		ToolCalls:    choice.Message.ToolCalls,
 		Model:        apiResp.Model,
-		FinishReason: apiResp.Choices[0].FinishReason,
+		FinishReason: choice.FinishReason,
 		TokensUsed: llm.TokenUsage{
 			Prompt:     apiResp.Usage.PromptTokens,
 			Completion: apiResp.Usage.CompletionTokens,
 			Total:      apiResp.Usage.TotalTokens,
 		},
 		CostUSD: apiResp.Usage.Cost,
-	}, nil
+	}
 }
 
 // ListModels returns available model IDs from the OpenRouter API.
@@ -217,28 +242,31 @@ type apiRequest struct {
 // responses where some models (e.g. moonshotai/kimi-k2.5) return content as
 // an array of content blocks instead of a plain string.
 type apiMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"-"` // handled by MarshalJSON/UnmarshalJSON
-	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role             string         `json:"role"`
+	Content          string         `json:"-"` // handled by MarshalJSON/UnmarshalJSON
+	ReasoningContent string         `json:"-"` // reasoning/thinking from the model (populated by UnmarshalJSON)
+	ToolCalls        []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
 }
 
 func (m apiMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role       string         `json:"role"`
-		Content    string         `json:"content"`
-		ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
-		ToolCallID string         `json:"tool_call_id,omitempty"`
+		Role             string         `json:"role"`
+		Content          string         `json:"content"`
+		ReasoningContent string         `json:"reasoning_content,omitempty"`
+		ToolCalls        []llm.ToolCall `json:"tool_calls,omitempty"`
+		ToolCallID       string         `json:"tool_call_id,omitempty"`
 	}
 	return json.Marshal(wire(m))
 }
 
 func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		Role       string          `json:"role"`
-		RawContent json.RawMessage `json:"content"`
-		ToolCalls  []llm.ToolCall  `json:"tool_calls,omitempty"`
-		ToolCallID string          `json:"tool_call_id,omitempty"`
+		Role             string          `json:"role"`
+		RawContent       json.RawMessage `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        []llm.ToolCall  `json:"tool_calls,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
 	}
 	var w wire
 	if err := json.Unmarshal(data, &w); err != nil {
@@ -247,7 +275,8 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	m.Role = w.Role
 	m.ToolCalls = w.ToolCalls
 	m.ToolCallID = w.ToolCallID
-	if len(w.RawContent) == 0 {
+	m.ReasoningContent = w.ReasoningContent
+	if len(w.RawContent) == 0 || string(w.RawContent) == "null" {
 		return nil
 	}
 	// Try plain string first (standard case).
@@ -258,14 +287,28 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	}
 	// Fall back to array of content blocks (e.g. moonshotai/kimi-k2.5).
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(w.RawContent, &blocks); err == nil {
 		var sb strings.Builder
 		for _, b := range blocks {
-			if b.Type == "text" {
+			switch b.Type {
+			case "text":
 				sb.WriteString(b.Text)
+			case "thinking", "reasoning":
+				// Capture thinking/reasoning blocks as fallback content.
+				if m.ReasoningContent == "" && b.Text != "" {
+					m.ReasoningContent = b.Text
+				}
+			default:
+				// Unknown block type — extract any text it carries.
+				if b.Text != "" {
+					sb.WriteString(b.Text)
+				} else if b.Content != "" {
+					sb.WriteString(b.Content)
+				}
 			}
 		}
 		m.Content = sb.String()
