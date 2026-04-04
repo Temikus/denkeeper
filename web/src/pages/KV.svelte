@@ -200,15 +200,15 @@
   td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
   tr:last-child td { border-bottom: none; }
   .row { cursor: pointer; }
-  .row:hover { background: rgba(255,255,255,0.02); }
-  .row.expanded { background: rgba(79,142,247,0.05); }
+  .row:hover { background: var(--hover-overlay); }
+  .row.expanded { background: rgba(200, 78, 53, 0.08); }
   .key-cell { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .ttl-cell { white-space: nowrap; width: 60px; }
   .date-cell { white-space: nowrap; font-size: 12px; color: var(--text-muted); }
   .action-cell { width: 70px; text-align: right; }
   .expanded-row td { padding: 0; border-bottom: 1px solid var(--border); }
-  .expanded-content { padding: 12px 14px; background: rgba(255,255,255,0.01); }
+  .expanded-content { padding: 12px 14px; background: var(--hover-overlay); }
   .expanded-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
   .expanded-value {
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);

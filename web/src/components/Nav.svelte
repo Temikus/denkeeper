@@ -1,7 +1,7 @@
 <script>
   let { active = 'overview' } = $props()
   import { navigate } from '../router.js'
-  import { token, authMode } from '../store.js'
+  import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
 
   const links = [
@@ -37,6 +37,9 @@
       </li>
     {/each}
   </ul>
+  <button class="theme-toggle" onclick={() => theme.toggle()}>
+    {$theme === 'dark' ? 'Light mode' : 'Dark mode'}
+  </button>
   <button class="logout" onclick={logout}>Logout</button>
 </nav>
 
@@ -69,8 +72,19 @@
   }
   li a:hover { color: var(--text); background: var(--border); }
   li.active a { color: var(--text); background: var(--border); }
-  .logout {
+  .theme-toggle {
     margin: 8px 16px 0;
+    padding: 8px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--text-muted); }
+  .logout {
+    margin: 6px 16px 0;
     padding: 8px;
     background: none;
     border: 1px solid var(--border);

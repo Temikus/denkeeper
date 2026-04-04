@@ -19,6 +19,25 @@ function createTokenStore() {
 
 export const token = createTokenStore()
 
+// Theme: 'light' (default) or 'dark'. Persisted to localStorage, synced to <html> class.
+function createThemeStore() {
+  const stored = localStorage.getItem('dk_theme') || 'light'
+  const { subscribe, set } = writable(stored)
+  return {
+    subscribe,
+    toggle() {
+      let next
+      const unsub = subscribe(v => { next = v === 'dark' ? 'light' : 'dark' })
+      unsub()
+      localStorage.setItem('dk_theme', next)
+      document.documentElement.classList.toggle('dark', next === 'dark')
+      set(next)
+    },
+  }
+}
+
+export const theme = createThemeStore()
+
 // Auth mode: 'token' (API key), 'session' (cookie-based), or null.
 export const authMode = writable(null)
 

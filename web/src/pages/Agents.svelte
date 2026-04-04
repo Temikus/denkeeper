@@ -257,7 +257,7 @@
       <div class="stat-cards">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="stat-card" class:expanded={expandedCard === 'model'} onclick={() => toggleCard('model')} role="button" tabindex="0" aria-expanded={expandedCard === 'model'}>
-          <div class="stat-icon" style="background: rgba(79,142,247,0.12); color: var(--accent);">
+          <div class="stat-icon" style="background: rgba(200, 78, 53, 0.12); color: var(--accent);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
           </div>
           <div class="stat-text">
@@ -629,13 +629,13 @@
   .agent-badge {
     font-size: 10px; padding: 2px 7px; border-radius: 4px;
     font-family: monospace; letter-spacing: 0.3px;
-    background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-muted);
+    background: var(--hover-overlay); border: 1px solid var(--border); color: var(--text-muted);
   }
   .agent-badge.writable { border-color: rgba(76,175,125,0.3); color: var(--success); }
 
   /* Content preview block */
   .sp-preview {
-    background: rgba(255,255,255,0.03);
+    background: var(--hover-overlay);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 12px 14px;
@@ -668,7 +668,7 @@
   .capability-item {
     padding: 10px 12px;
     border-radius: var(--radius);
-    background: rgba(255,255,255,0.02);
+    background: var(--hover-overlay);
     border: 1px solid var(--border);
   }
   .capability-name { font-size: 13px; font-weight: 600; }
@@ -677,7 +677,7 @@
   /* Tools inventory */
   .tool-count {
     font-size: 11px; color: var(--text-muted);
-    background: rgba(255,255,255,0.05);
+    background: var(--hover-overlay);
     padding: 2px 8px;
     border-radius: 4px;
     border: 1px solid var(--border);
@@ -686,7 +686,7 @@
   .tool-pill {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 12px;
-    background: rgba(255,255,255,0.03);
+    background: var(--hover-overlay);
     border: 1px solid var(--border);
     border-radius: 20px;
     font-size: 12px; font-family: monospace;
@@ -694,9 +694,9 @@
     cursor: default;
   }
   .tool-pill:hover, .tool-pill.expanded { border-color: var(--accent); }
-  .tool-pill.expanded { background: rgba(79,142,247,0.08); }
+  .tool-pill.expanded { background: rgba(200, 78, 53, 0.08); }
   .pill-count {
-    background: rgba(79,142,247,0.15);
+    background: rgba(200, 78, 53, 0.15);
     color: var(--accent);
     font-size: 11px; font-weight: 600;
     padding: 1px 6px;
@@ -713,7 +713,7 @@
   }
   .tool-expand-item {
     padding: 4px 10px;
-    background: rgba(255,255,255,0.03);
+    background: var(--hover-overlay);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-size: 12px;
