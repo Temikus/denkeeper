@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,23 @@ func (m *mockProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*ll
 	return m.response, m.err
 }
 func (m *mockProvider) HealthCheck(_ context.Context) error { return nil }
+
+// sequentialProvider returns responses in order, one per call.
+type sequentialProvider struct {
+	responses []*llm.ChatResponse
+	callIndex int
+}
+
+func (s *sequentialProvider) Name() string { return "mock" }
+func (s *sequentialProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	if s.callIndex >= len(s.responses) {
+		return nil, fmt.Errorf("no more mock responses (call %d)", s.callIndex)
+	}
+	resp := s.responses[s.callIndex]
+	s.callIndex++
+	return resp, nil
+}
+func (s *sequentialProvider) HealthCheck(_ context.Context) error { return nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -1836,5 +1854,104 @@ func TestBrowserConfig_NoBrowser(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestChat_SSEToolEvents(t *testing.T) {
+	logger := testLogger()
+	mem, _ := agent.NewInMemoryStore()
+	costTracker := llm.NewCostTracker(1.0)
+
+	perms, _ := security.NewPermissionEngine("supervised")
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_weather", Arguments: `{}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "It's sunny!",
+				TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+				Model:        "test-model",
+				FinishReason: "stop",
+			},
+		},
+	})
+
+	approvalStore, _ := approval.NewInMemoryStore()
+	approvalMgr := approval.NewManager(approvalStore, logger)
+	toolMgr := tool.NewManager(logger)
+
+	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{}, toolMgr, approvalMgr, logger)
+
+	dispatcher := agent.NewDispatcher(
+		map[string]*agent.Engine{"default": e},
+		[]agent.Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil, logger,
+	)
+
+	sched := scheduler.New(logger)
+	cfg := testConfig(allScopesKey())
+	deps := Deps{
+		Dispatcher:  dispatcher,
+		Scheduler:   sched,
+		CostTracker: costTracker,
+		Memory:      mem,
+		Approvals:   approvalMgr,
+		Config: &config.Config{
+			Agents: []config.AgentInstanceConfig{
+				{Name: "default", Adapters: []string{"telegram"}},
+			},
+		},
+	}
+	srv := New(cfg, deps, logger)
+
+	b, _ := json.Marshal(map[string]string{"message": "weather?"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/chat", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Parse SSE events.
+	var events []map[string]any
+	scanner := bufio.NewScanner(rec.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
+			t.Fatalf("parse SSE event: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	// Expect: tool_start, tool_end, content, done = 4 events.
+	if len(events) != 4 {
+		t.Fatalf("events count = %d, want 4; events: %+v", len(events), events)
+	}
+	if events[0]["type"] != "tool_start" || events[0]["tool"] != "get_weather" {
+		t.Errorf("events[0] = %v, want tool_start/get_weather", events[0])
+	}
+	if events[1]["type"] != "tool_end" || events[1]["tool"] != "get_weather" {
+		t.Errorf("events[1] = %v, want tool_end/get_weather", events[1])
+	}
+	if events[2]["type"] != "content" || events[2]["text"] != "It's sunny!" {
+		t.Errorf("events[2] = %v, want content/It's sunny!", events[2])
+	}
+	if events[3]["type"] != "done" {
+		t.Errorf("events[3] = %v, want done", events[3])
 	}
 }

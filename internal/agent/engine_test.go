@@ -2604,3 +2604,130 @@ func TestEngine_Chat_SoulUpdate_Restricted_DropsDirective(t *testing.T) {
 		t.Errorf("SOUL.md was modified in restricted mode: %q", string(data))
 	}
 }
+
+func TestEngine_ChatWithEvents_ToolCallEvents(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_weather", Arguments: `{"city":"London"}`}},
+					{ID: "call_2", Type: "function", Function: llm.FunctionCall{Name: "get_time", Arguments: `{}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "It's sunny and 3pm.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
+
+	var events []ChatEvent
+	onEvent := func(evt ChatEvent) {
+		events = append(events, evt)
+	}
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-events-1",
+		UserID:     "user-1",
+		Text:       "What's the weather and time?",
+		Timestamp:  time.Now(),
+	}, onEvent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "It's sunny and 3pm." {
+		t.Errorf("response = %q, want %q", text, "It's sunny and 3pm.")
+	}
+
+	// Expect 4 events: tool_start, tool_end, tool_start, tool_end (2 tools in 1 round).
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4: %+v", len(events), events)
+	}
+
+	// First tool: get_weather
+	if events[0].Type != "tool_start" || events[0].Tool != "get_weather" || events[0].Round != 1 {
+		t.Errorf("event[0] = %+v, want tool_start/get_weather/round=1", events[0])
+	}
+	if events[1].Type != "tool_end" || events[1].Tool != "get_weather" || events[1].Round != 1 {
+		t.Errorf("event[1] = %+v, want tool_end/get_weather/round=1", events[1])
+	}
+	// tool_end should have error since tool is unknown
+	if events[1].Error == "" {
+		t.Error("event[1].Error should be non-empty for unknown tool")
+	}
+	if events[1].Duration < 0 {
+		t.Errorf("event[1].Duration = %d, want >= 0", events[1].Duration)
+	}
+
+	// Second tool: get_time
+	if events[2].Type != "tool_start" || events[2].Tool != "get_time" || events[2].Round != 1 {
+		t.Errorf("event[2] = %+v, want tool_start/get_time/round=1", events[2])
+	}
+	if events[3].Type != "tool_end" || events[3].Tool != "get_time" || events[3].Round != 1 {
+		t.Errorf("event[3] = %+v, want tool_end/get_time/round=1", events[3])
+	}
+}
+
+func TestEngine_ChatWithEvents_NilCallback(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Hello!",
+			TokensUsed:   llm.TokenUsage{Total: 10},
+			FinishReason: "stop",
+		},
+	}
+
+	costTracker := llm.NewCostTracker(10.0)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
+
+	// nil onEvent should work fine (same as Chat).
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-nil-cb",
+		UserID:     "user-1",
+		Text:       "Hi",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "Hello!" {
+		t.Errorf("response = %q, want %q", text, "Hello!")
+	}
+}

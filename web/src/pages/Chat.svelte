@@ -79,7 +79,7 @@
     sending = true
 
     messages = [...messages, { role: 'user', text }]
-    const agentMsg = { role: 'agent', text: '', streaming: true }
+    const agentMsg = { role: 'agent', text: '', streaming: true, toolCalls: [] }
     messages = [...messages, agentMsg]
     await tick()
     scrollBottom()
@@ -96,6 +96,22 @@
           agentMsg.streaming = false
           messages = messages
           saveSession()
+        },
+        (evt) => {
+          if (evt.type === 'tool_start') {
+            agentMsg.toolCalls = [...agentMsg.toolCalls, { name: evt.tool, round: evt.round, status: 'running' }]
+          }
+          if (evt.type === 'tool_end') {
+            const tc = agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
+            if (tc) {
+              tc.status = evt.error ? 'error' : 'done'
+              tc.duration = evt.duration_ms
+              tc.error = evt.error
+            }
+            agentMsg.toolCalls = [...agentMsg.toolCalls] // trigger reactivity
+          }
+          messages = messages
+          scrollBottom()
         }
       )
     } catch (e) {
@@ -166,6 +182,17 @@
     {#each messages as msg}
       <div class="bubble {msg.role}" class:streaming={msg.streaming}>
         <span class="role-label">{msg.role === 'user' ? 'You' : selectedAgent}</span>
+        {#if msg.toolCalls?.length > 0}
+          <div class="tool-calls">
+            {#each msg.toolCalls as tc}
+              <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'}>
+                <span class="tool-icon">{tc.status === 'running' ? '...' : tc.status === 'error' ? '!' : '>'}</span>
+                <span class="tool-name">{tc.name}</span>
+                {#if tc.duration}<span class="tool-dur">{tc.duration}ms</span>{/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
         <p class="text">{msg.text}{#if msg.streaming}<span class="cursor">▋</span>{/if}</p>
       </div>
     {/each}
@@ -268,6 +295,24 @@
     opacity: 0.7;
     margin-bottom: 4px;
   }
+  .tool-calls { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .tool-call {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .tool-call.running { border-color: var(--accent); }
+  .tool-call.error { border-color: var(--danger); color: var(--danger); }
+  .tool-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
+  .tool-name { font-family: monospace; }
+  .tool-dur { margin-left: auto; opacity: 0.6; }
+
   .text { white-space: pre-wrap; word-break: break-word; margin: 0; }
   .cursor { animation: blink 1s step-end infinite; }
   @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }

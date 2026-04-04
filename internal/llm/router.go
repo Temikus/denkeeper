@@ -141,6 +141,14 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
+		slog.Debug("llm completion",
+			"provider", r.defaultProvider,
+			"model", activeModel,
+			"finish_reason", resp.FinishReason,
+			"content_len", len(resp.Content),
+			"tool_calls", len(resp.ToolCalls),
+			"tokens_total", resp.TokensUsed.Total,
+		)
 		r.recordOTelSuccess(start, resp, attrs)
 		r.costTracker.RecordWithTokens(sessionID, tokenCost(resp), resp.TokensUsed.Prompt, resp.TokensUsed.Completion)
 		return resp, nil

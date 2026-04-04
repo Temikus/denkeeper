@@ -582,7 +582,11 @@ func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agen
 		flush()
 	}
 
-	responseText, err := eng.Chat(r.Context(), msg)
+	onEvent := func(evt agent.ChatEvent) {
+		writeEvent(evt)
+	}
+
+	responseText, err := eng.ChatWithEvents(r.Context(), msg, onEvent)
 	if err != nil {
 		s.logger.Error("chat SSE error", "error", err, "session", sessionID)
 		writeEvent(map[string]string{"type": "error", "message": "failed to process message"})

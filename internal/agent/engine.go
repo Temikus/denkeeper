@@ -559,12 +559,31 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 	}, jobFunc)
 }
 
+// ChatEvent describes an intermediate pipeline event streamed to SSE clients.
+type ChatEvent struct {
+	Type     string `json:"type"`                    // "tool_start", "tool_end"
+	Tool     string `json:"tool,omitempty"`           // tool name
+	Round    int    `json:"round,omitempty"`          // 1-based tool round
+	Duration int64  `json:"duration_ms,omitempty"`    // tool execution time
+	Error    string `json:"error,omitempty"`          // tool error (if any)
+}
+
+// ChatEventFunc is called for each intermediate pipeline event.
+type ChatEventFunc func(ChatEvent)
+
 // Chat processes a single incoming message through the full pipeline and
 // returns the response text. It does not call the sendFunc — use this when
 // the caller wants to receive the reply directly (e.g. the REST API).
 // Any pending approval request is accessible via GET /api/v1/approvals.
 func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
-	text, _, err := e.chatWithApproval(ctx, msg)
+	text, _, err := e.chatWithApproval(ctx, msg, nil)
+	return text, err
+}
+
+// ChatWithEvents is like Chat but calls onEvent for intermediate status events
+// (tool calls, etc.) that can be streamed to the client in real time.
+func (e *Engine) ChatWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, error) {
+	text, _, err := e.chatWithApproval(ctx, msg, onEvent)
 	return text, err
 }
 
@@ -621,7 +640,7 @@ func (e *Engine) processDirective(ctx context.Context, perms *security.Permissio
 // chatWithApproval is the internal full-pipeline implementation. It returns
 // both the response text and any approval request that was created during this
 // call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
-func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage) (string, *approval.Request, error) {
+func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, *approval.Request, error) {
 	perms := e.resolvePermissions(msg)
 	if !perms.CanExecute("chat") {
 		return "", nil, fmt.Errorf("chat action not permitted")
@@ -666,12 +685,36 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
 
-	resp, _, err := e.runLLMWithTools(ctx, convID, perms, llmMessages)
+	resp, _, err := e.runLLMWithTools(ctx, convID, perms, llmMessages, onEvent)
 	if err != nil {
 		return "", nil, err
 	}
 
+	e.logger.Info("llm response received",
+		"adapter", msg.Adapter,
+		"finish_reason", resp.FinishReason,
+		"model", resp.Model,
+		"content_len", len(resp.Content),
+		"tool_calls", len(resp.ToolCalls),
+		"tokens_prompt", resp.TokensUsed.Prompt,
+		"tokens_completion", resp.TokensUsed.Completion,
+		"tokens_total", resp.TokensUsed.Total,
+	)
+
 	responseText := e.processResponseDirectives(ctx, resp, perms, msg, convID)
+
+	if responseText == "" && resp.Content != "" {
+		e.logger.Warn("response emptied by directive extraction",
+			"raw_content_len", len(resp.Content),
+			"finish_reason", resp.FinishReason,
+			"conversation", convID,
+		)
+	} else if responseText == "" {
+		e.logger.Warn("llm returned empty response",
+			"finish_reason", resp.FinishReason,
+			"conversation", convID,
+		)
+	}
 
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:       "assistant",
@@ -681,7 +724,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, fmt.Errorf("storing assistant message: %w", err)
 	}
 
-	e.logger.Info("chat complete", "adapter", msg.Adapter, "tokens", resp.TokensUsed.Total)
+	e.logger.Info("chat complete",
+		"adapter", msg.Adapter,
+		"response_len", len(responseText),
+		"tokens", resp.TokensUsed.Total,
+		"finish_reason", resp.FinishReason,
+		"model", resp.Model,
+		"conversation", convID,
+	)
 	return responseText, e.lastPendingApproval, nil
 }
 
@@ -726,8 +776,9 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 }
 
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
-// LLM produces a text response.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, llmMessages []llm.Message) (*llm.ChatResponse, []llm.Message, error) {
+// LLM produces a text response. If onEvent is non-nil, it is called for each
+// tool execution start/end so the caller can stream status to the client.
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	resp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
 		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
@@ -749,12 +800,33 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
 				attribute.String("tool_name", tc.Function.Name)))
+
+			if onEvent != nil {
+				onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, Round: round + 1})
+			}
+
+			toolStart := time.Now()
 			e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round+1)
 			result, execErr := e.tools.Execute(ctx, tc)
+			toolDur := time.Since(toolStart)
+
 			if execErr != nil {
-				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "error", execErr)
+				e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "round", round+1,
+					"duration_ms", toolDur.Milliseconds(), "error", execErr)
 				result = fmt.Sprintf("Tool error: %v", execErr)
+			} else {
+				e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round+1,
+					"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
 			}
+
+			if onEvent != nil {
+				evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, Round: round + 1, Duration: toolDur.Milliseconds()}
+				if execErr != nil {
+					evt.Error = execErr.Error()
+				}
+				onEvent(evt)
+			}
+
 			llmMessages = append(llmMessages, llm.Message{
 				Role: "tool", Content: result, ToolCallID: tc.ID,
 			})
@@ -764,6 +836,14 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		if err != nil {
 			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
+
+		e.logger.Info("tool round complete",
+			"round", round+1,
+			"finish_reason", resp.FinishReason,
+			"content_len", len(resp.Content),
+			"tool_calls_next", len(resp.ToolCalls),
+			"tokens_total", resp.TokensUsed.Total,
+		)
 	}
 	return resp, llmMessages, nil
 }
@@ -849,7 +929,7 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 // chatWithApproval so it can attach inline keyboard buttons when an approval
 // was created during this call.
 func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage) error {
-	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg)
+	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg, nil)
 	if err != nil {
 		return err
 	}

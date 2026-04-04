@@ -162,7 +162,8 @@ export const api = {
   // Chat with SSE streaming.
   // onChunk(text) is called for each content chunk.
   // onDone(sessionId) is called when the stream ends.
-  streamChat: async (agent, sessionId, message, onChunk, onDone) => {
+  // onToolEvent(evt) is called for tool_start/tool_end events.
+  streamChat: async (agent, sessionId, message, onChunk, onDone, onToolEvent) => {
     const res = await fetch('/api/v1/chat', {
       method: 'POST',
       headers: {
@@ -196,6 +197,7 @@ export const api = {
           const evt = JSON.parse(line.slice(6))
           if (evt.type === 'content') onChunk(evt.text || '')
           if (evt.type === 'done') onDone(evt.session_id || '')
+          if (evt.type === 'tool_start' || evt.type === 'tool_end') onToolEvent?.(evt)
           if (evt.type === 'error') throw new Error(evt.message || 'stream error')
         } catch (e) {
           if (e.message !== 'stream error') continue // skip malformed JSON
