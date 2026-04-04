@@ -45,7 +45,7 @@ type ServerStatus struct {
 // Manager manages MCP tool server connections and tool execution.
 type Manager struct {
 	mu       sync.RWMutex
-	parent   *Manager              // optional parent for delegated lookups (set by AdoptFrom)
+	parent   *Manager               // optional parent for delegated lookups (set by AdoptFrom)
 	servers  map[string]*serverConn // keyed by config name (e.g. "web-search")
 	toolMap  map[string]*serverConn // keyed by MCP tool name → owning server
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions

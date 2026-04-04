@@ -561,11 +561,11 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
 type ChatEvent struct {
-	Type     string `json:"type"`                    // "tool_start", "tool_end"
-	Tool     string `json:"tool,omitempty"`           // tool name
-	Round    int    `json:"round,omitempty"`          // 1-based tool round
-	Duration int64  `json:"duration_ms,omitempty"`    // tool execution time
-	Error    string `json:"error,omitempty"`          // tool error (if any)
+	Type     string `json:"type"`                  // "tool_start", "tool_end"
+	Tool     string `json:"tool,omitempty"`        // tool name
+	Round    int    `json:"round,omitempty"`       // 1-based tool round
+	Duration int64  `json:"duration_ms,omitempty"` // tool execution time
+	Error    string `json:"error,omitempty"`       // tool error (if any)
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.

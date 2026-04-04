@@ -222,15 +222,15 @@
         <tbody>
           {#each tools as t}
             <tr>
-              <td class="mono">{t.Name}</td>
-              <td class="mono truncate" title={t.Command}>{t.Command}</td>
+              <td class="mono">{t.name}</td>
+              <td class="mono truncate" title={t.command}>{t.command}</td>
               <td>
-                <span class="status-dot {statusDot(t.Status)}"></span>
-                {t.Status}
+                <span class="status-dot {statusDot(t.status)}"></span>
+                {t.status}
               </td>
               <td>
-                {#if t.ToolNames && t.ToolNames.length > 0}
-                  {#each t.ToolNames as tn}
+                {#if t.tool_names && t.tool_names.length > 0}
+                  {#each t.tool_names as tn}
                     <span class="pill">{tn}</span>
                   {/each}
                 {:else}
@@ -238,7 +238,7 @@
                 {/if}
               </td>
               <td>
-                <button class="btn-sm danger" onclick={() => { confirmRemove = { kind: 'tool', name: t.Name } }}>
+                <button class="btn-sm danger" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>
                   Remove
                 </button>
               </td>
