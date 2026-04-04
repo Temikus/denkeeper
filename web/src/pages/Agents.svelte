@@ -9,14 +9,15 @@
   let error = $state('')
   let expandedGroup = $state(null)
 
-  // Persona editing state
+  // Persona section state: keyed by section name
+  let sectionData = $state({})   // { soul: { content, editable, agent_mutable }, ... }
   let expandedSection = $state(null)
   let sectionContent = $state('')
   let sectionEditable = $state(false)
   let sectionAgentMutable = $state(false)
-  let sectionLoading = $state(false)
   let sectionSaving = $state(false)
   let sectionSaveOk = $state(false)
+  let sectionsLoading = $state(false)
 
   onMount(async () => {
     try {
@@ -34,29 +35,37 @@
     expandedGroup = null
     expandedSection = null
     editingConfig = false
+    sectionData = {}
     try {
       detail = await api.agent(a.name)
       initConfigForm(detail)
+      loadAllSections(a.name)
     } catch(e) {
       error = e.message
     }
   }
 
-  async function toggleSection(sec) {
+  async function loadAllSections(agentName) {
+    sectionsLoading = true
+    const results = {}
+    await Promise.all(defaultSections.map(async (sec) => {
+      try {
+        const data = await api.getPersona(agentName, sec)
+        results[sec] = data
+      } catch { /* section may not exist */ }
+    }))
+    sectionData = results
+    sectionsLoading = false
+  }
+
+  function toggleSection(sec) {
     if (expandedSection === sec) { expandedSection = null; return }
-    sectionLoading = true
     sectionSaveOk = false
-    try {
-      const data = await api.getPersona(detail.name, sec)
-      sectionContent = data.content
-      sectionEditable = data.editable
-      sectionAgentMutable = data.agent_mutable
-      expandedSection = sec
-    } catch(e) {
-      error = e.message
-    } finally {
-      sectionLoading = false
-    }
+    const data = sectionData[sec]
+    sectionContent = data?.content || ''
+    sectionEditable = data?.editable ?? true
+    sectionAgentMutable = data?.agent_mutable ?? false
+    expandedSection = sec
   }
 
   async function saveSection() {
@@ -64,6 +73,8 @@
     sectionSaveOk = false
     try {
       await api.updatePersona(detail.name, expandedSection, sectionContent)
+      // Update preview data
+      sectionData[expandedSection] = { ...sectionData[expandedSection], content: sectionContent }
       sectionSaveOk = true
       setTimeout(() => sectionSaveOk = false, 3000)
     } catch(e) {
@@ -71,6 +82,13 @@
     } finally {
       sectionSaving = false
     }
+  }
+
+  function previewLines(sec) {
+    const data = sectionData[sec]
+    if (!data?.content) return ''
+    const lines = data.content.split('\n').slice(0, 3).join('\n')
+    return lines.length < data.content.length ? lines + '...' : lines
   }
 
   function toolGroups(toolNames) {
@@ -299,55 +317,55 @@
         </div>
       </div>
 
-      <!-- Persona section (always shown) -->
+      <!-- System Prompt Assembly -->
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
-            Persona
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4a2 2 0 012-2h8.5L20 7.5V20a2 2 0 01-2 2H6a2 2 0 01-2-2v-3"/><polyline points="14 2 14 8 20 8"/><line x1="2" y1="15" x2="12" y2="15"/><line x1="2" y1="11" x2="8" y2="11"/><line x1="2" y1="19" x2="10" y2="19"/></svg>
+            System Prompt Assembly
           </div>
-          {#if detail.persona_dir}
-            <span class="card-meta mono">{detail.persona_dir}</span>
-          {/if}
+          <span class="card-meta mono">persona.SystemPrompt()</span>
         </div>
 
         <div class="persona-sections">
           {#each personaSections(detail) as { name: sec, loaded }}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_tabindex -->
-            <div
-              class="persona-section"
-              class:loaded
-              class:missing={!loaded}
-              class:active={expandedSection === sec}
-              onclick={() => toggleSection(sec)}
-              role="button"
-              tabindex="0"
-            >
-              <div class="section-header">
-                <span class="section-icon">
-                  {#if sec === 'soul'}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
-                  {:else if sec === 'user'}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  {:else}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v6l4 2"/></svg>
+            <div class="sp-section" class:active={expandedSection === sec}>
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div class="sp-header" onclick={() => toggleSection(sec)} role="button" tabindex="0">
+                <div class="sp-label">
+                  <span class="section-icon">
+                    {#if sec === 'soul'}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+                    {:else if sec === 'user'}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    {:else}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v6l4 2"/></svg>
+                    {/if}
+                  </span>
+                  <span class="section-name"># {sec.charAt(0).toUpperCase() + sec.slice(1)}</span>
+                  <span class="section-source">← {sec.toUpperCase()}.md</span>
+                </div>
+                <div class="sp-badges">
+                  {#if sectionData[sec]}
+                    <span class="agent-badge" class:writable={sectionData[sec].agent_mutable}>
+                      {sectionData[sec].agent_mutable ? 'agent: rw' : 'agent: ro'}
+                    </span>
                   {/if}
-                </span>
-                <span class="section-name"># {sec.charAt(0).toUpperCase() + sec.slice(1)}</span>
-                <span class="section-source">← {sec.toUpperCase()}.md</span>
+                </div>
               </div>
-              {#if loaded}
-                <div class="section-status loaded-status">{expandedSection === sec ? '\u25BC' : '\u25B6'} Loaded</div>
-              {:else}
-                <div class="section-status missing-status">{expandedSection === sec ? '\u25BC' : '\u25B6'} Not created</div>
-              {/if}
-            </div>
 
-            {#if expandedSection === sec}
-              <div class="section-editor">
-                {#if sectionLoading}
-                  <p class="editor-loading">Loading…</p>
+              {#if expandedSection !== sec}
+                {#if sectionsLoading}
+                  <div class="sp-preview muted">Loading…</div>
+                {:else if previewLines(sec)}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <div class="sp-preview" onclick={() => toggleSection(sec)} role="button" tabindex="0">{previewLines(sec)}</div>
                 {:else}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <div class="sp-preview sp-empty" onclick={() => toggleSection(sec)} role="button" tabindex="0">Empty — click to add content</div>
+                {/if}
+              {:else}
+                <div class="section-editor">
                   <textarea
                     class="editor-textarea"
                     bind:value={sectionContent}
@@ -369,9 +387,9 @@
                       {/if}
                     </span>
                   </div>
-                {/if}
-              </div>
-            {/if}
+                </div>
+              {/if}
+            </div>
           {/each}
         </div>
       </div>
@@ -528,40 +546,45 @@
   }
   .card-meta { font-size: 11px; color: var(--text-muted); }
 
-  /* Persona sections */
-  .persona-sections { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
-  .persona-section {
+  /* System Prompt Assembly sections */
+  .persona-sections { padding: 16px 18px; display: flex; flex-direction: column; gap: 20px; }
+  .sp-section { }
+  .sp-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    background: rgba(255,255,255,0.02);
-    border: 1px solid var(--border);
+    cursor: pointer; padding: 2px 0; margin-bottom: 8px;
   }
-  .persona-section.loaded { border-color: rgba(79,142,247,0.3); }
-  .section-header { display: flex; align-items: center; gap: 8px; }
+  .sp-header:hover .section-name { color: var(--accent); }
+  .sp-label { display: flex; align-items: center; gap: 8px; }
   .section-icon { display: flex; align-items: center; color: var(--text-muted); }
-  .persona-section.loaded .section-icon { color: var(--accent); }
-  .section-name { font-size: 13px; font-weight: 600; }
+  .sp-section.active .section-icon { color: var(--accent); }
+  .section-name { font-size: 13px; font-weight: 600; transition: color 0.1s; }
   .section-source { font-size: 11px; color: var(--text-muted); }
-  .section-status { font-size: 12px; font-weight: 500; }
-  .loaded-status { color: var(--success); }
-  .missing-status { color: var(--danger); font-style: italic; }
-  .persona-section { cursor: pointer; }
-  .persona-section:hover { border-color: var(--accent); }
-  .persona-section.missing { border-style: dashed; opacity: 0.7; }
-  .persona-section.missing:hover { opacity: 1; }
-  .persona-section.active { border-color: var(--accent); background: rgba(79,142,247,0.05); }
-
-  /* Persona editor */
-  .section-editor {
-    padding: 12px 14px;
-    background: rgba(255,255,255,0.01);
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 var(--radius) var(--radius);
-    margin-top: -1px;
+  .sp-badges { display: flex; gap: 6px; }
+  .agent-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 4px;
+    font-family: monospace; letter-spacing: 0.3px;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-muted);
   }
-  .editor-loading { color: var(--text-muted); font-size: 13px; }
+  .agent-badge.writable { border-color: rgba(76,175,125,0.3); color: var(--success); }
+
+  /* Content preview block */
+  .sp-preview {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-family: monospace; font-size: 12px; line-height: 1.6;
+    color: var(--text-muted);
+    white-space: pre-wrap; word-break: break-word;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .sp-preview:hover { border-color: var(--accent); }
+  .sp-empty { font-style: italic; border-style: dashed; opacity: 0.6; }
+  .sp-empty:hover { opacity: 1; }
+
+  /* Persona editor (expanded) */
+  .section-editor { margin-top: 8px; }
   .editor-textarea {
     width: 100%; background: var(--bg); border: 1px solid var(--border);
     border-radius: var(--radius); color: var(--text); padding: 10px 12px;
@@ -570,7 +593,6 @@
   .editor-textarea:focus { outline: none; border-color: var(--accent); }
   .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
   .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-  .editor-hint { font-size: 11px; color: var(--text-muted); font-style: italic; }
   .agent-mutable-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
   .dot-agent-rw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
   .dot-agent-ro { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
