@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -386,7 +387,7 @@ func TestChatCompletion_CostUSD_Populated(t *testing.T) {
 	}
 	// 1000 input @ $3/MTok + 500 output @ $15/MTok = $0.003 + $0.0075 = $0.0105
 	want := 1000.0/1_000_000*3.0 + 500.0/1_000_000*15.0
-	if resp.CostUSD != want {
-		t.Errorf("CostUSD = %f, want %f", resp.CostUSD, want)
+	if math.Abs(resp.CostUSD-want) > 1e-9 {
+		t.Errorf("CostUSD = %.10f, want %.10f", resp.CostUSD, want)
 	}
 }
