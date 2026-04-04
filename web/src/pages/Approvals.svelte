@@ -107,7 +107,7 @@
     text-transform: capitalize;
   }
   .filter-btn:hover  { color: var(--text); border-color: var(--text-muted); }
-  .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(79,142,247,0.1); }
+  .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(200, 78, 53, 0.1); }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
   .summary { max-width: 280px; }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }

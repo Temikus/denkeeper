@@ -529,7 +529,7 @@
   .sso-btn {
     background: var(--success);
   }
-  .sso-btn:hover { background: #5bc68d; }
+  .sso-btn:hover { opacity: 0.85; }
   .key-box {
     display: flex;
     align-items: center;

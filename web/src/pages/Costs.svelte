@@ -223,21 +223,21 @@
   .data-table th.sortable:hover { color: var(--text); }
   .data-table td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
   .data-table tr:last-child td { border-bottom: none; }
-  .data-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .data-table tbody tr:hover { background: var(--hover-overlay); }
   .num { text-align: right; }
   .mono { font-family: monospace; }
   .clickable { cursor: pointer; }
-  .clickable:hover { background: rgba(255,255,255,0.04); }
-  .expanded { background: rgba(79, 142, 247, 0.06); }
+  .clickable:hover { background: var(--hover-overlay); }
+  .expanded { background: rgba(200, 78, 53, 0.08); }
   .agent-name { font-weight: 600; }
   .sub-header th {
-    background: rgba(255,255,255,0.02);
+    background: var(--hover-overlay);
     padding: 6px 14px;
     font-size: 10px;
     border-bottom: 1px solid var(--border);
   }
   .sub-row td {
-    background: rgba(255,255,255,0.01);
+    background: var(--hover-overlay);
     padding: 6px 14px;
     font-size: 12px;
     color: var(--text-muted);

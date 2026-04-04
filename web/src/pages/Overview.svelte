@@ -169,7 +169,7 @@
   .cost-table th.sortable:hover { color: var(--text); }
   .cost-table td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
   .cost-table tr:last-child td { border-bottom: none; }
-  .cost-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .cost-table tbody tr:hover { background: var(--hover-overlay); }
   .mono { font-family: monospace; }
   .session-id { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sort-arrow { margin-left: 4px; font-size: 10px; }
