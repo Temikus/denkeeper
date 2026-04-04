@@ -197,7 +197,7 @@ export const api = {
           const evt = JSON.parse(line.slice(6))
           if (evt.type === 'content') onChunk(evt.text || '')
           if (evt.type === 'done') onDone(evt.session_id || '')
-          if (evt.type === 'tool_start' || evt.type === 'tool_end') onToolEvent?.(evt)
+          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end') onToolEvent?.(evt)
           if (evt.type === 'error') throw new Error(evt.message || 'stream error')
         } catch (e) {
           if (e.message !== 'stream error') continue // skip malformed JSON

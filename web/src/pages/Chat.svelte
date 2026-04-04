@@ -1,142 +1,27 @@
 <script>
   import { onMount, tick } from 'svelte'
   import { api } from '../api.js'
-  import { get } from 'svelte/store'
-  import { token } from '../store.js'
+  import { chatState, sendMessage, newSession, setAgent, initChat } from '../chatStore.js'
 
-  let agents = []
-  let selectedAgent = 'default'
-  let sessionId = ''
-  let messages = [] // { role: 'user'|'agent', text: string, streaming?: bool }
-  let input = ''
-  let sending = false
-  let error = ''
+  let agents = $state([])
+  let input = $state('')
   let messagesEl
-  let restoring = false
-
-  const STORAGE_KEY = 'dk_chat_session'
-
-  function saveSession() {
-    if (!sessionId) return
-    try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-        sessionId,
-        agent: selectedAgent,
-      }))
-    } catch (_) { /* quota exceeded — ignore */ }
-  }
-
-  async function restoreSession() {
-    try {
-      const raw = sessionStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const saved = JSON.parse(raw)
-      if (!saved.sessionId) return
-
-      restoring = true
-      const history = await api.sessionMessages(saved.sessionId)
-      if (!history || history.length === 0) return
-
-      sessionId = saved.sessionId
-      if (saved.agent) selectedAgent = saved.agent
-      messages = history.map(m => ({
-        role: m.role === 'assistant' ? 'agent' : 'user',
-        text: m.content,
-      }))
-      await tick()
-      scrollBottom()
-    } catch (_) {
-      // session gone or API error — start fresh
-    } finally {
-      restoring = false
-    }
-  }
 
   async function loadAgents() {
     try {
       const res = await api.agents()
       agents = res || []
-      if (agents.length > 0 && !sessionId) {
-        selectedAgent = agents[0].name
-      }
+      await initChat(agents)
     } catch (e) {
       // non-fatal — default will still work
     }
   }
 
-  function newSession() {
-    sessionId = ''
-    messages = []
-    error = ''
-    sessionStorage.removeItem(STORAGE_KEY)
-  }
-
   async function send() {
     const text = input.trim()
-    if (!text || sending) return
+    if (!text || $chatState.sending) return
     input = ''
-    error = ''
-    sending = true
-
-    messages = [...messages, { role: 'user', text }]
-    const agentMsg = { role: 'agent', text: '', streaming: true, toolCalls: [], status: '', tokens: 0, costUSD: 0 }
-    messages = [...messages, agentMsg]
-    await tick()
-    scrollBottom()
-
-    try {
-      await api.streamChat(selectedAgent, sessionId, text,
-        (chunk) => {
-          agentMsg.text += chunk
-          messages = messages // trigger reactivity
-          scrollBottom()
-        },
-        (doneSessionId) => {
-          sessionId = doneSessionId
-          agentMsg.streaming = false
-          agentMsg.status = ''
-          messages = messages
-          saveSession()
-        },
-        (evt) => {
-          if (evt.type === 'thinking') {
-            agentMsg.status = evt.text || 'Thinking...'
-            messages = messages
-            scrollBottom()
-            return
-          }
-          if (evt.type === 'usage') {
-            agentMsg.tokens = evt.tokens
-            agentMsg.costUSD = evt.cost_usd
-            messages = messages
-            return
-          }
-          if (evt.type === 'tool_start') {
-            agentMsg.status = ''
-            agentMsg.toolCalls = [...agentMsg.toolCalls, { name: evt.tool, round: evt.round, status: 'running' }]
-          }
-          if (evt.type === 'tool_end') {
-            const tc = agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
-            if (tc) {
-              tc.status = evt.error ? 'error' : 'done'
-              tc.duration = evt.duration_ms
-              tc.error = evt.error
-            }
-            agentMsg.toolCalls = [...agentMsg.toolCalls] // trigger reactivity
-          }
-          messages = messages
-          scrollBottom()
-        }
-      )
-    } catch (e) {
-      agentMsg.text = '⚠ ' + e.message
-      agentMsg.streaming = false
-      messages = messages
-      error = e.message
-    } finally {
-      sending = false
-      scrollBottom()
-    }
+    await sendMessage(text)
   }
 
   function handleKeydown(e) {
@@ -152,10 +37,13 @@
     }
   }
 
-  onMount(async () => {
-    await restoreSession()
-    await loadAgents()
+  // Scroll when messages change.
+  $effect(() => {
+    $chatState.messages;
+    tick().then(scrollBottom)
   })
+
+  onMount(loadAgents)
 </script>
 
 <div class="chat-shell">
@@ -163,7 +51,7 @@
   <div class="toolbar">
     <label>
       Agent
-      <select bind:value={selectedAgent}>
+      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)}>
         {#each agents as a}
           <option value={a.name}>{a.name}</option>
         {/each}
@@ -173,8 +61,8 @@
       </select>
     </label>
     <span class="session-label">
-      {#if sessionId}
-        Session: <code>{sessionId}</code>
+      {#if $chatState.sessionId}
+        Session: <code>{$chatState.sessionId}</code>
       {:else}
         <span class="muted">New session</span>
       {/if}
@@ -184,18 +72,18 @@
 
   <!-- Message list -->
   <div class="messages" bind:this={messagesEl}>
-    {#if restoring}
+    {#if $chatState.restoring}
       <div class="empty">
         <p class="muted">Restoring session…</p>
       </div>
-    {:else if messages.length === 0}
+    {:else if $chatState.messages.length === 0}
       <div class="empty">
         <p>Send a message to start a conversation.</p>
       </div>
     {/if}
-    {#each messages as msg}
+    {#each $chatState.messages as msg}
       <div class="bubble {msg.role}" class:streaming={msg.streaming}>
-        <span class="role-label">{msg.role === 'user' ? 'You' : selectedAgent}</span>
+        <span class="role-label">{msg.role === 'user' ? 'You' : $chatState.agent}</span>
         {#if msg.toolCalls?.length > 0}
           <div class="tool-calls">
             {#each msg.toolCalls as tc}
@@ -220,8 +108,8 @@
 
   <!-- Input area -->
   <div class="input-area">
-    {#if error}
-      <div class="error-bar">{error}</div>
+    {#if $chatState.error}
+      <div class="error-bar">{$chatState.error}</div>
     {/if}
     <div class="input-row">
       <textarea
@@ -229,10 +117,10 @@
         onkeydown={handleKeydown}
         placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
         rows="3"
-        disabled={sending}
+        disabled={$chatState.sending}
       ></textarea>
-      <button class="btn-send" onclick={send} disabled={sending || !input.trim()}>
-        {sending ? '…' : 'Send'}
+      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()}>
+        {$chatState.sending ? '…' : 'Send'}
       </button>
     </div>
   </div>
