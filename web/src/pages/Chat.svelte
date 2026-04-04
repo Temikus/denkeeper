@@ -31,6 +31,27 @@
     }
   }
 
+  async function resolveApproval(appr, approve, autoApproveScope) {
+    appr.resolving = true
+    $chatState.messages = [...$chatState.messages]
+    try {
+      if (approve) {
+        await api.approveApproval(appr.id, autoApproveScope || undefined)
+      } else {
+        await api.denyApproval(appr.id)
+      }
+      // Status will be updated by tool_start event for approved tools;
+      // for denied, update immediately.
+      if (!approve) {
+        appr.status = 'denied'
+        $chatState.messages = [...$chatState.messages]
+      }
+    } catch (e) {
+      appr.resolving = false
+      $chatState.messages = [...$chatState.messages]
+    }
+  }
+
   function scrollBottom() {
     if (messagesEl) {
       messagesEl.scrollTop = messagesEl.scrollHeight
@@ -84,6 +105,25 @@
     {#each $chatState.messages as msg}
       <div class="bubble {msg.role}" class:streaming={msg.streaming}>
         <span class="role-label">{msg.role === 'user' ? 'You' : $chatState.agent}</span>
+        {#if msg.approvals?.length > 0}
+          <div class="approval-cards">
+            {#each msg.approvals as appr}
+              <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
+                <span class="approval-icon">{appr.status === 'auto_approved' ? '>' : appr.status === 'approved' ? '>' : appr.status === 'denied' ? '!' : '?'}</span>
+                <span class="tool-name">{appr.tool}</span>
+                {#if appr.status === 'pending'}
+                  <div class="approval-actions">
+                    <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving}>Approve</button>
+                    <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving}>Deny</button>
+                    <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Always approve this tool for this agent">Always</button>
+                  </div>
+                {:else}
+                  <span class="approval-badge">{appr.status === 'auto_approved' ? 'auto-approved' : appr.status}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if msg.toolCalls?.length > 0}
           <div class="tool-calls">
             {#each msg.toolCalls as tc}
@@ -203,6 +243,45 @@
     opacity: 0.7;
     margin-bottom: 4px;
   }
+  .approval-cards { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .approval-card {
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .approval-card.pending { border-color: var(--accent); background: rgba(99,102,241,0.06); }
+  .approval-card.auto { opacity: 0.7; }
+  .approval-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
+  .approval-actions { display: flex; gap: 4px; margin-left: auto; }
+  .btn-appr {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text);
+  }
+  .btn-appr:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ok { border-color: var(--accent); color: var(--accent); }
+  .btn-ok:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .btn-bad { border-color: var(--danger); color: var(--danger); }
+  .btn-bad:hover:not(:disabled) { background: var(--danger); color: #fff; }
+  .btn-auto { border-color: var(--text-muted); color: var(--text-muted); }
+  .btn-auto:hover:not(:disabled) { background: var(--text-muted); color: #fff; }
+  .approval-badge {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   .tool-calls { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
   .tool-call {
     font-size: 12px;

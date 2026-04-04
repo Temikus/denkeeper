@@ -1288,6 +1288,210 @@ func TestHandleApprovals_RequiresScope(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-approve rule endpoints
+// ---------------------------------------------------------------------------
+
+func TestHandleListAutoApprove_Empty(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/auto-approve"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("expected empty list, got %d items", len(list))
+	}
+}
+
+func TestHandleCreateAutoApprove_Permanent(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body := `{"agent":"default","tool":"web_search","scope":"permanent"}`
+	req := authedRequest(http.MethodPost, "/api/v1/auto-approve")
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var rule map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&rule); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rule["tool_name"] != "web_search" {
+		t.Errorf("tool_name = %v, want web_search", rule["tool_name"])
+	}
+	if rule["scope"] != "permanent" {
+		t.Errorf("scope = %v, want permanent", rule["scope"])
+	}
+}
+
+func TestHandleCreateAutoApprove_MissingFields(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body := `{"agent":"","tool":""}`
+	req := authedRequest(http.MethodPost, "/api/v1/auto-approve")
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleCreateAutoApprove_InvalidScope(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body := `{"agent":"default","tool":"web_search","scope":"invalid"}`
+	req := authedRequest(http.MethodPost, "/api/v1/auto-approve")
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleDeleteAutoApprove_Success(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	// Create a rule first via the manager.
+	rule, err := deps.Approvals.AddPermanentRule(context.Background(), "default", "web_search", "test")
+	if err != nil {
+		t.Fatalf("AddPermanentRule: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/auto-approve/"+rule.ID))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestHandleDeleteAutoApprove_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/v1/auto-approve/nonexistent"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleListAutoApprove_FilterByAgent(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	if _, err := deps.Approvals.AddPermanentRule(context.Background(), "agent1", "tool_a", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deps.Approvals.AddPermanentRule(context.Background(), "agent2", "tool_b", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/auto-approve?agent=agent1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected 1 rule for agent1, got %d", len(list))
+	}
+}
+
+func TestHandleApproveApproval_WithAutoApprove_CreatesRule(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+
+	// Submit a tool-call approval.
+	noOp := func(_ context.Context, _ string) error { return nil }
+	req, err := deps.Approvals.Submit(
+		context.Background(),
+		"default",
+		approval.ActionKindToolCall,
+		`Execute tool "web_search" with args: {}`,
+		`{}`,
+		"chat-123", "api", "conv-abc", noOp,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(cfg, deps, testLogger())
+
+	// Approve with auto_approve=permanent param.
+	httpReq := authedRequest(http.MethodPost, "/api/v1/approvals/"+req.ID+"/approve?auto_approve=permanent")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Permanent auto-approve rule should now exist.
+	ok, scope := deps.Approvals.ShouldAutoApprove(context.Background(), "default", "web_search", "any-conv")
+	if !ok {
+		t.Error("expected permanent auto-approve rule to be created")
+	}
+	if scope != approval.ScopePermanent {
+		t.Errorf("scope = %v, want permanent", scope)
+	}
+}
+
+func TestHandleAutoApprove_NilManager_Returns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Approvals = nil
+	srv := New(cfg, deps, testLogger())
+
+	paths := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/auto-approve"},
+		{http.MethodPost, "/api/v1/auto-approve"},
+		{http.MethodDelete, "/api/v1/auto-approve/someid"},
+	}
+	for _, p := range paths {
+		rec := httptest.NewRecorder()
+		req := authedRequest(p.method, p.path)
+		if p.method == http.MethodPost {
+			req.Body = io.NopCloser(strings.NewReader(`{"agent":"a","tool":"b"}`))
+		}
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s %s: status = %d, want %d", p.method, p.path, rec.Code, http.StatusServiceUnavailable)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Nil-array regression tests (JSON must be [] not null when empty)
 // ---------------------------------------------------------------------------
 

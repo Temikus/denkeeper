@@ -56,8 +56,15 @@ func (h *Handler) Resolve(ctx context.Context, data string) (string, error) {
 		}
 	}
 
-	if strings.HasSuffix(data, ":approve") {
+	_, action, _ := parseCallback(data)
+	switch action {
+	case CallbackApproveSession:
+		return "✅ Approved (auto-approve for this session): " + resolved.Summary, nil
+	case CallbackApproveAlways:
+		return "✅ Approved (auto-approve always): " + resolved.Summary, nil
+	case CallbackApprove:
 		return "✅ Approved: " + resolved.Summary, nil
+	default:
+		return "❌ Denied: " + resolved.Summary, nil
 	}
-	return "❌ Denied: " + resolved.Summary, nil
 }

@@ -14,22 +14,31 @@ import (
 // Manager coordinates the persistent Store with the in-memory action Registry.
 // It is the primary API used by the Engine and REST API server.
 type Manager struct {
-	store    Store
-	registry *Registry
-	logger   *slog.Logger
+	store      Store
+	autoStore  AutoApproveStore
+	registry   *Registry
+	logger     *slog.Logger
 
 	waiterMu sync.Mutex
 	waiters  map[string]chan Status // notified when an approval is resolved
+
+	// sessionRules holds ephemeral auto-approve rules keyed by "agent\x00convID\x00tool".
+	sessionRules sync.Map
 }
 
 // NewManager creates a Manager backed by the given store.
+// The store must also implement AutoApproveStore for auto-approve support.
 func NewManager(store Store, logger *slog.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		store:    store,
 		registry: NewRegistry(),
 		logger:   logger,
 		waiters:  make(map[string]chan Status),
 	}
+	if as, ok := store.(AutoApproveStore); ok {
+		m.autoStore = as
+	}
+	return m
 }
 
 // DefaultTTL is the time an approval request stays pending before it is
@@ -124,26 +133,49 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 // or approved). The caller should surface its Status to the user.
 var ErrStaleCallback = fmt.Errorf("approval: callback refers to a non-pending request")
 
-// ResolveByCallback parses the full Telegram callback data string
-// ("appr:{id}:approve" or "appr:{id}:deny"), resolves the approval, and
-// returns the updated Request. Returns ErrNotFound for unknown callbacks,
-// ErrStaleCallback when the approval is no longer pending.
-func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, resolvedBy string) (*Request, error) {
+// CallbackAction identifies what a callback button requested.
+type CallbackAction string
+
+const (
+	CallbackApprove        CallbackAction = "approve"
+	CallbackDeny           CallbackAction = "deny"
+	CallbackApproveSession CallbackAction = "approve_session"
+	CallbackApproveAlways  CallbackAction = "approve_always"
+)
+
+// parseCallback splits a callback data string into the DB prefix and action.
+// Formats: "appr:{id}:approve", ":deny", ":approve_session", ":approve_always".
+func parseCallback(callbackData string) (prefix string, action CallbackAction, ok bool) {
 	if !strings.HasPrefix(callbackData, "appr:") {
+		return "", "", false
+	}
+	for _, suffix := range []CallbackAction{CallbackApproveSession, CallbackApproveAlways, CallbackApprove, CallbackDeny} {
+		s := ":" + string(suffix)
+		if strings.HasSuffix(callbackData, s) {
+			return strings.TrimSuffix(callbackData, s), suffix, true
+		}
+	}
+	return "", "", false
+}
+
+// ResolveByCallback parses the full Telegram callback data string
+// ("appr:{id}:approve", ":deny", ":approve_session", ":approve_always"),
+// resolves the approval, and optionally creates an auto-approve rule.
+// Returns ErrNotFound for unknown callbacks, ErrStaleCallback when the
+// approval is no longer pending.
+func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, resolvedBy string) (*Request, error) {
+	prefix, action, ok := parseCallback(callbackData)
+	if !ok {
 		return nil, ErrNotFound
 	}
-	// Strip the trailing :approve or :deny to get the prefix stored in DB.
-	approved := strings.HasSuffix(callbackData, ":approve")
-	prefix := strings.TrimSuffix(strings.TrimSuffix(callbackData, ":approve"), ":deny")
+
+	approved := action != CallbackDeny
 
 	// Look up the pending row by prefix.
 	req, err := m.store.ResolveByCallbackPrefix(ctx, prefix, statusFor(approved), resolvedBy)
 	if err != nil {
 		if err == ErrNotFound {
-			// No pending row. Check whether the row exists in any other status so
-			// we can give the user an informative message instead of silence.
 			if existing, lookupErr := m.store.GetByCallbackData(ctx, prefix); lookupErr == nil {
-				_ = existing // Status is available to the caller via ErrStaleCallback
 				return existing, ErrStaleCallback
 			}
 		}
@@ -165,6 +197,9 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		} else {
 			m.logger.Warn("approval action not found in registry (restarted?)", "id", req.ID)
 		}
+
+		// Create auto-approve rule if requested.
+		m.createAutoApproveFromCallback(ctx, action, req, resolvedBy)
 	} else {
 		m.registry.Delete(req.ID)
 		m.logger.Info("approval denied via callback", "id", req.ID)
@@ -172,6 +207,44 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 
 	m.notifyWaiter(req.ID, resolvedStatus)
 	return req, nil
+}
+
+// createAutoApproveFromCallback creates an auto-approve rule when the callback
+// action is approve_session or approve_always. Extracts the tool name from the
+// approval summary. Errors are logged but do not fail the resolution.
+func (m *Manager) createAutoApproveFromCallback(ctx context.Context, action CallbackAction, req *Request, resolvedBy string) {
+	if req.Kind != ActionKindToolCall {
+		return
+	}
+	toolName := ExtractToolName(req.Summary)
+	if toolName == "" {
+		return
+	}
+
+	switch action {
+	case CallbackApproveSession:
+		m.AddSessionRule(req.AgentName, toolName, req.ConversationID, resolvedBy)
+	case CallbackApproveAlways:
+		if _, err := m.AddPermanentRule(ctx, req.AgentName, toolName, resolvedBy); err != nil {
+			m.logger.Error("failed to create permanent auto-approve rule", "error", err)
+		}
+	}
+}
+
+// ExtractToolName parses the tool name from an approval summary.
+// Expected format: `Execute tool "toolname" with args: ...`
+func ExtractToolName(summary string) string {
+	const prefix = `Execute tool "`
+	idx := strings.Index(summary, prefix)
+	if idx < 0 {
+		return ""
+	}
+	rest := summary[idx+len(prefix):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
 }
 
 // notifyWaiter signals any goroutine blocked in SubmitAndWait for the given ID.
@@ -296,6 +369,130 @@ func (m *Manager) StartExpiryWorker(ctx context.Context, interval time.Duration)
 // already-resolved or expired Telegram button.
 func (m *Manager) GetByCallbackData(ctx context.Context, callbackData string) (*Request, error) {
 	return m.store.GetByCallbackData(ctx, callbackData)
+}
+
+// --- Auto-approve rule management ---
+
+// sessionRuleKey builds the lookup key for session-scoped auto-approve rules.
+func sessionRuleKey(agentName, conversationID, toolName string) string {
+	return agentName + "\x00" + conversationID + "\x00" + toolName
+}
+
+// ShouldAutoApprove checks whether the given tool call should be auto-approved.
+// It checks session rules (in-memory) first, then permanent rules (DB).
+// Returns (true, scope) on match, (false, "") on no match.
+func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, conversationID string) (bool, AutoApproveScope) {
+	// 1. Session rules (in-memory, conversation-scoped).
+	key := sessionRuleKey(agentName, conversationID, toolName)
+	if _, ok := m.sessionRules.Load(key); ok {
+		return true, ScopeSession
+	}
+
+	// 2. Permanent rules (DB, agent-scoped).
+	if m.autoStore != nil {
+		if _, err := m.autoStore.MatchAutoApproveRule(ctx, agentName, toolName); err == nil {
+			return true, ScopePermanent
+		}
+	}
+
+	// 3. Future: config-based rules would be checked here.
+
+	return false, ""
+}
+
+// AddSessionRule creates an ephemeral auto-approve rule for the current conversation.
+func (m *Manager) AddSessionRule(agentName, toolName, conversationID, createdBy string) {
+	key := sessionRuleKey(agentName, conversationID, toolName)
+	m.sessionRules.Store(key, true)
+	m.logger.Info("session auto-approve rule added",
+		"agent", agentName, "tool", toolName, "conversation", conversationID, "by", createdBy)
+}
+
+// AddPermanentRule creates a persistent auto-approve rule for the given agent+tool.
+func (m *Manager) AddPermanentRule(ctx context.Context, agentName, toolName, createdBy string) (*AutoApproveRule, error) {
+	if m.autoStore == nil {
+		return nil, fmt.Errorf("adding permanent auto-approve rule: store does not support auto-approve")
+	}
+	rule := AutoApproveRule{
+		ID:        generateID(),
+		AgentName: agentName,
+		ToolName:  toolName,
+		Scope:     ScopePermanent,
+		CreatedBy: createdBy,
+	}
+	if _, err := m.autoStore.CreateAutoApproveRule(ctx, rule); err != nil {
+		return nil, fmt.Errorf("adding permanent auto-approve rule: %w", err)
+	}
+	m.logger.Info("permanent auto-approve rule added",
+		"id", rule.ID, "agent", agentName, "tool", toolName, "by", createdBy)
+	return &rule, nil
+}
+
+// RemoveAutoApproveRule deletes a permanent auto-approve rule by ID.
+func (m *Manager) RemoveAutoApproveRule(ctx context.Context, id string) error {
+	if m.autoStore == nil {
+		return fmt.Errorf("removing auto-approve rule: store does not support auto-approve")
+	}
+	if err := m.autoStore.DeleteAutoApproveRule(ctx, id); err != nil {
+		return fmt.Errorf("removing auto-approve rule: %w", err)
+	}
+	m.logger.Info("auto-approve rule removed", "id", id)
+	return nil
+}
+
+// ListAutoApproveRules returns all auto-approve rules for the given agent.
+// Pass "" for all agents. Combines permanent (DB) and session (in-memory) rules.
+func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([]AutoApproveRule, error) {
+	var rules []AutoApproveRule
+
+	// Permanent rules from DB.
+	if m.autoStore != nil {
+		dbRules, err := m.autoStore.ListAutoApproveRules(ctx, agentName)
+		if err != nil {
+			return nil, fmt.Errorf("listing auto-approve rules: %w", err)
+		}
+		rules = append(rules, dbRules...)
+	}
+
+	// Session rules from memory.
+	m.sessionRules.Range(func(key, _ any) bool {
+		k, ok := key.(string)
+		if !ok {
+			return true
+		}
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) != 3 {
+			return true
+		}
+		agent, convID, tool := parts[0], parts[1], parts[2]
+		if agentName != "" && agent != agentName {
+			return true
+		}
+		rules = append(rules, AutoApproveRule{
+			AgentName:      agent,
+			ToolName:       tool,
+			Scope:          ScopeSession,
+			ConversationID: convID,
+		})
+		return true
+	})
+
+	return rules, nil
+}
+
+// ClearSessionRules removes all session-scoped auto-approve rules for a conversation.
+func (m *Manager) ClearSessionRules(conversationID string) {
+	m.sessionRules.Range(func(key, _ any) bool {
+		k, ok := key.(string)
+		if !ok {
+			return true
+		}
+		parts := strings.SplitN(k, "\x00", 3)
+		if len(parts) == 3 && parts[1] == conversationID {
+			m.sessionRules.Delete(key)
+		}
+		return true
+	})
 }
 
 func statusFor(approved bool) Status {

@@ -71,7 +71,9 @@ Three tiers: `autonomous` (all actions), `supervised` (chat + tools with approva
 
 Seven action kinds: `user_update`, `soul_update`, `create_skill`, `modify_schedule`, `install_tool`, `browser_profile`, `tool_call`.
 
-**Supervised tool call approval**: When `permission_tier = "supervised"`, each MCP tool call is submitted for approval before execution. Engine blocks on `Manager.WaitForResolution(ctx, id)`. Dispatcher intercepts `"tool_approval"` ChatEvents and sends inline keyboard messages. Denied tool calls feed "Tool call was denied by the operator." to the LLM.
+**Supervised tool call approval**: When `permission_tier = "supervised"`, each MCP tool call is submitted for approval before execution. Engine first checks `Manager.ShouldAutoApprove()` — if a matching rule exists, the tool executes immediately and a `tool_approval` ChatEvent with `approval_status: "auto_approved"` is emitted. Otherwise Engine blocks on `Manager.WaitForResolution(ctx, id)`. Dispatcher intercepts pending `"tool_approval"` ChatEvents and sends inline keyboard messages with four buttons: Approve, Deny, Auto (session), Auto (always). Denied tool calls feed "Tool call was denied by the operator." to the LLM.
+
+**Auto-approve rules**: Two scopes — `session` (in-memory, conversation-scoped, cleared on restart) and `permanent` (persisted in SQLite, agent-scoped). `Manager.ShouldAutoApprove()` checks session rules first, then permanent rules. Future config-based rules (`ScopeConfig`) can be added as a third check. Rules are created from Telegram inline buttons (`:approve_session`, `:approve_always` callback suffixes), from the web UI chat (Always Approve button), or via the REST API. `approval.ExtractToolName()` parses the tool name from the approval summary to key rules.
 
 ## Cost Tracking & Pricing
 
@@ -108,7 +110,8 @@ Key endpoints (all require auth unless noted):
 - `GET /api/v1/health` (no auth)
 - `POST /api/v1/chat` (scope `chat`) — JSON or SSE streaming
 - `GET /api/v1/models` (scope `agents:read`) — available LLM models from all providers
-- `GET/POST/DELETE /api/v1/approvals/...` — approval CRUD
+- `GET/POST/DELETE /api/v1/approvals/...` — approval CRUD; `POST /approve` accepts `?auto_approve=session|permanent` to simultaneously create an auto-approve rule
+- `GET/POST/DELETE /api/v1/auto-approve` (scope `approvals:read/write`) — auto-approve rule CRUD; `GET` accepts `?agent=` filter
 - `GET/POST/PATCH/DELETE /api/v1/schedules/...` — schedule CRUD
 - `GET/POST/PUT/DELETE /api/v1/skills/...` — skill CRUD
 - `GET/PUT /api/v1/agents/{name}/persona/{section}` — persona sections

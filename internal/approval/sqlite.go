@@ -34,6 +34,19 @@ CREATE INDEX IF NOT EXISTS idx_approvals_callback ON approvals(callback_data);
 CREATE INDEX IF NOT EXISTS idx_approvals_expires ON approvals(expires_at) WHERE status = 'pending';
 `
 
+const autoApproveSchema = `
+CREATE TABLE IF NOT EXISTS auto_approve_rules (
+    id TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'permanent',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_auto_approve_agent_tool ON auto_approve_rules(agent_name, tool_name);
+`
+
 // migrationAddExpiresAt is applied after schema creation to add the expires_at
 // column to pre-existing databases that were created before this column existed.
 const migrationAddExpiresAt = `ALTER TABLE approvals ADD COLUMN expires_at DATETIME`
@@ -68,6 +81,11 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("migrating schema (expires_at): %w", err)
 	}
 
+	if _, err := db.Exec(autoApproveSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initializing auto-approve schema: %w", err)
+	}
+
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -83,6 +101,10 @@ func NewInMemoryStore() (*SQLiteStore, error) {
 	}
 	// In-memory DBs are always fresh; migration is a no-op but run for consistency.
 	if _, err := db.Exec(migrationAddExpiresAt); err != nil && !isDuplicateColumn(err) {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec(autoApproveSchema); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -234,6 +256,70 @@ func (s *SQLiteStore) ExpireBefore(ctx context.Context, deadline time.Time) (int
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
+}
+
+// --- AutoApproveStore implementation ---
+
+const autoApproveSelectCols = `id, agent_name, tool_name, scope, conversation_id, created_at, created_by`
+
+func (s *SQLiteStore) CreateAutoApproveRule(ctx context.Context, rule AutoApproveRule) (string, error) {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO auto_approve_rules (id, agent_name, tool_name, scope, conversation_id, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		rule.ID, rule.AgentName, rule.ToolName, string(rule.Scope), rule.ConversationID, rule.CreatedBy,
+	)
+	if err != nil {
+		return "", fmt.Errorf("creating auto-approve rule: %w", err)
+	}
+	return rule.ID, nil
+}
+
+func (s *SQLiteStore) DeleteAutoApproveRule(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM auto_approve_rules WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting auto-approve rule: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("deleting auto-approve rule (rows): %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListAutoApproveRules(ctx context.Context, agentName string) ([]AutoApproveRule, error) {
+	var rows []AutoApproveRule
+	var err error
+	if agentName == "" {
+		err = s.db.SelectContext(ctx, &rows,
+			`SELECT `+autoApproveSelectCols+` FROM auto_approve_rules ORDER BY created_at DESC`)
+	} else {
+		err = s.db.SelectContext(ctx, &rows,
+			`SELECT `+autoApproveSelectCols+` FROM auto_approve_rules WHERE agent_name = ? ORDER BY created_at DESC`,
+			agentName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("listing auto-approve rules: %w", err)
+	}
+	return rows, nil
+}
+
+func (s *SQLiteStore) MatchAutoApproveRule(ctx context.Context, agentName, toolName string) (*AutoApproveRule, error) {
+	var rule AutoApproveRule
+	err := s.db.GetContext(ctx, &rule,
+		`SELECT `+autoApproveSelectCols+` FROM auto_approve_rules
+		 WHERE agent_name = ? AND tool_name = ? AND scope = 'permanent' LIMIT 1`,
+		agentName, toolName,
+	)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("matching auto-approve rule: %w", err)
+	}
+	return &rule, nil
 }
 
 // isNotFound returns true for the error SQLite returns on no-row queries.

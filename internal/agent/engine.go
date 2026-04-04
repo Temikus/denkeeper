@@ -579,6 +579,10 @@ type ChatEvent struct {
 	// the adapter can render inline approve/deny buttons.
 	ApprovalID       string `json:"approval_id,omitempty"`
 	ApprovalCallback string `json:"approval_callback,omitempty"` // "appr:{id}" prefix
+
+	// ApprovalStatus distinguishes pending approvals from auto-approved ones.
+	// Values: "" (pending, needs user action), "auto_approved" (rule matched).
+	ApprovalStatus string `json:"approval_status,omitempty"`
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -938,11 +942,24 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 // then executing it and emitting tool_start/tool_end ChatEvents.
 // Returns the tool result string to be fed back to the LLM.
 func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc) string {
-	// Supervised tier: request human approval before executing.
+	// Supervised tier: check auto-approve rules first, then request human approval.
 	if supervised {
-		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
-		if !approved {
-			return result
+		if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
+			e.logger.Info("tool auto-approved", "tool", tc.Function.Name, "scope", scope)
+			if onEvent != nil {
+				onEvent(ChatEvent{
+					Type:           "tool_approval",
+					Tool:           tc.Function.Name,
+					Round:          round,
+					Text:           fmt.Sprintf("Auto-approved (%s)", scope),
+					ApprovalStatus: "auto_approved",
+				})
+			}
+		} else {
+			result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
+			if !approved {
+				return result
+			}
 		}
 	}
 

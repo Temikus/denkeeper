@@ -10,6 +10,14 @@
   let timer
   let resolvingId = ''
 
+  // Auto-approve rules management
+  let autoRules = []
+  let autoError = ''
+  let showAddRule = false
+  let newRule = { agent: '', tool: '', scope: 'permanent' }
+  let addingRule = false
+  let agents = []
+
   async function load() {
     try {
       error = ''
@@ -19,8 +27,47 @@
     }
   }
 
+  async function loadAutoRules() {
+    try {
+      autoError = ''
+      autoRules = await api.listAutoApprove() || []
+    } catch(e) {
+      autoError = e.message
+    }
+  }
+
+  async function loadAgents() {
+    try { agents = await api.agents() || [] } catch(_) {}
+  }
+
+  async function addAutoRule() {
+    if (!newRule.agent || !newRule.tool) return
+    addingRule = true
+    try {
+      await api.createAutoApprove(newRule)
+      newRule = { agent: '', tool: '', scope: 'permanent' }
+      showAddRule = false
+      await loadAutoRules()
+    } catch(e) {
+      autoError = e.message
+    } finally {
+      addingRule = false
+    }
+  }
+
+  async function revokeRule(id) {
+    try {
+      await api.deleteAutoApprove(id)
+      await loadAutoRules()
+    } catch(e) {
+      autoError = e.message
+    }
+  }
+
   onMount(() => {
     load()
+    loadAutoRules()
+    loadAgents()
     timer = setInterval(load, 10000)
   })
   onDestroy(() => clearInterval(timer))
@@ -97,6 +144,65 @@
   </table>
 {/if}
 
+<!-- Auto-Approve Rules Section -->
+<h2 class="section-title">Auto-Approve Rules</h2>
+<p class="section-desc">Rules that automatically approve tool calls without prompting. Session rules are ephemeral; permanent rules survive restarts.</p>
+
+<ErrorBanner message={autoError} />
+
+{#if autoRules.length === 0 && !autoError}
+  <p class="empty">No auto-approve rules. Rules are created from chat approval prompts or added here.</p>
+{:else}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Tool</th><th>Agent</th><th>Scope</th><th>Created</th><th>Source</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each autoRules as rule}
+        <tr>
+          <td class="tool-name-cell"><code>{rule.tool_name}</code></td>
+          <td>{rule.agent_name}</td>
+          <td><span class="scope-badge" class:session={rule.scope === 'session'}>{rule.scope}</span></td>
+          <td class="date">{fmtDate(rule.created_at)}</td>
+          <td class="muted">{rule.created_by || '—'}</td>
+          <td class="actions">
+            {#if rule.scope === 'permanent'}
+              <button class="btn-bad" onclick={() => revokeRule(rule.id)}>Revoke</button>
+            {:else}
+              <span class="muted">session only</span>
+            {/if}
+          </td>
+        </tr>
+      {/each}
+    </tbody>
+  </table>
+{/if}
+
+<div class="add-rule-area">
+  {#if showAddRule}
+    <div class="add-rule-form">
+      <select bind:value={newRule.agent}>
+        <option value="">Select agent…</option>
+        {#each agents as a}
+          <option value={a.name}>{a.name}</option>
+        {/each}
+      </select>
+      <input type="text" bind:value={newRule.tool} placeholder="Tool name" />
+      <select bind:value={newRule.scope}>
+        <option value="permanent">Permanent</option>
+      </select>
+      <button class="btn-ok" onclick={addAutoRule} disabled={addingRule || !newRule.agent || !newRule.tool}>
+        {addingRule ? '...' : 'Add'}
+      </button>
+      <button class="btn-ghost" onclick={() => { showAddRule = false }}>Cancel</button>
+    </div>
+  {:else}
+    <button class="btn-ghost" onclick={() => { showAddRule = true }}>+ Add Rule</button>
+  {/if}
+</div>
+
 <style>
   .page-title { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
   .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -117,4 +223,48 @@
   .btn-ok:hover  { opacity: 0.85; }
   .btn-bad:hover { opacity: 0.85; }
   .empty { color: var(--text-muted); font-size: 13px; }
+
+  .section-title { font-size: 17px; font-weight: 600; margin-top: 40px; margin-bottom: 6px; }
+  .section-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+  .tool-name-cell code { font-size: 12px; }
+  .scope-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: rgba(99,102,241,0.1);
+    color: var(--accent);
+  }
+  .scope-badge.session { background: rgba(100,100,100,0.1); color: var(--text-muted); }
+  .muted { color: var(--text-muted); font-size: 12px; }
+
+  .add-rule-area { margin-top: 12px; }
+  .add-rule-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .add-rule-form select,
+  .add-rule-form input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .add-rule-form input { min-width: 180px; }
+  .btn-ghost {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
 </style>

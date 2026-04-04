@@ -192,15 +192,25 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 				case "thinking", "tool_start":
 					_ = a.SendTyping(msgCtx, msg.ExternalID)
 				case "tool_approval":
-					_ = a.Send(msgCtx, adapter.OutgoingMessage{
-						Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
-						ExternalID: msg.ExternalID,
-						Adapter:    msg.Adapter,
-						Buttons: []adapter.KeyboardButton{
-							{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-							{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-						},
-					})
+					if evt.ApprovalStatus == "auto_approved" {
+						_ = a.Send(msgCtx, adapter.OutgoingMessage{
+							Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
+							ExternalID: msg.ExternalID,
+							Adapter:    msg.Adapter,
+						})
+					} else {
+						_ = a.Send(msgCtx, adapter.OutgoingMessage{
+							Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+							ExternalID: msg.ExternalID,
+							Adapter:    msg.Adapter,
+							Buttons: []adapter.KeyboardButton{
+								{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+								{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+								{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
+								{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
+							},
+						})
+					}
 				}
 			}
 			if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {

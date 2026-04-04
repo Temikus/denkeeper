@@ -84,8 +84,19 @@ export const api = {
   // Approvals
   approvals: (status = '') => apiFetch(`/api/v1/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
   approval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}`),
-  approveApproval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
+  approveApproval: (id, autoApprove) => {
+    const qs = autoApprove ? `?auto_approve=${encodeURIComponent(autoApprove)}` : ''
+    return apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}/approve${qs}`, { method: 'POST' })
+  },
   denyApproval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}/deny`, { method: 'POST' }),
+
+  // Auto-approve rules
+  listAutoApprove: (agent) => apiFetch(`/api/v1/auto-approve${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
+  createAutoApprove: (rule) => apiFetch('/api/v1/auto-approve', {
+    method: 'POST',
+    body: JSON.stringify(rule),
+  }),
+  deleteAutoApprove: id => apiFetch(`/api/v1/auto-approve/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // Setup (no auth required — only usable when no keys exist)
   setupStatus: () => fetch('/api/v1/setup').then(r => r.json()),
@@ -204,7 +215,7 @@ export const api = {
           const evt = JSON.parse(line.slice(6))
           if (evt.type === 'content') onChunk(evt.text || '')
           if (evt.type === 'done') onDone(evt.session_id || '')
-          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end') onToolEvent?.(evt)
+          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval') onToolEvent?.(evt)
           if (evt.type === 'error') throw new Error(evt.message || 'stream error')
         } catch (e) {
           if (e.message !== 'stream error') continue // skip malformed JSON

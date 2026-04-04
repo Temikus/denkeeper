@@ -86,7 +86,7 @@ export async function sendMessage(text) {
 
   const agentMsg = {
     role: 'agent', text: '', streaming: true,
-    toolCalls: [], status: '', tokens: 0, costUSD: 0,
+    toolCalls: [], approvals: [], status: '', tokens: 0, costUSD: 0,
   }
   activeAgentMsg = agentMsg
 
@@ -122,8 +122,28 @@ export async function sendMessage(text) {
           touchMessages()
           return
         }
+        if (evt.type === 'tool_approval') {
+          if (evt.approval_status === 'auto_approved') {
+            agentMsg.approvals = [...agentMsg.approvals, {
+              id: evt.approval_id, tool: evt.tool, text: evt.text,
+              status: 'auto_approved', resolving: false,
+            }]
+          } else {
+            agentMsg.status = `Waiting for approval: ${evt.tool}`
+            agentMsg.approvals = [...agentMsg.approvals, {
+              id: evt.approval_id, tool: evt.tool, text: evt.text,
+              status: 'pending', resolving: false,
+            }]
+          }
+        }
         if (evt.type === 'tool_start') {
           agentMsg.status = ''
+          // If there's a pending approval for this tool, mark it approved.
+          const pendingAppr = agentMsg.approvals.find(a => a.tool === evt.tool && a.status === 'pending')
+          if (pendingAppr) {
+            pendingAppr.status = 'approved'
+            agentMsg.approvals = [...agentMsg.approvals]
+          }
           agentMsg.toolCalls = [...agentMsg.toolCalls, { name: evt.tool, round: evt.round, status: 'running' }]
         }
         if (evt.type === 'tool_end') {

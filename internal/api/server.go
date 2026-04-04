@@ -135,6 +135,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.RequireScope("approvals:write", s.handleResolveApproval(true)))
 	mux.HandleFunc("POST /api/v1/approvals/{id}/deny", s.RequireScope("approvals:write", s.handleResolveApproval(false)))
 
+	// Auto-approve rule endpoints.
+	mux.HandleFunc("GET /api/v1/auto-approve", s.RequireScope("approvals:read", s.handleListAutoApprove))
+	mux.HandleFunc("POST /api/v1/auto-approve", s.RequireScope("approvals:write", s.handleCreateAutoApprove))
+	mux.HandleFunc("DELETE /api/v1/auto-approve/{id}", s.RequireScope("approvals:write", s.handleDeleteAutoApprove))
+
 	// Tool & plugin management endpoints.
 	mux.HandleFunc("GET /api/v1/tools", s.RequireScope("tools:read", s.handleListTools))
 	mux.HandleFunc("GET /api/v1/tools/{name}", s.RequireScope("tools:read", s.handleGetTool))
@@ -739,6 +744,23 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 			return
 		}
 
+		// If approved with auto_approve param, create an auto-approve rule.
+		if approved {
+			if autoScope := r.URL.Query().Get("auto_approve"); autoScope != "" {
+				toolName := approval.ExtractToolName(resolved.Summary)
+				if toolName != "" && resolved.Kind == approval.ActionKindToolCall {
+					switch autoScope {
+					case "session":
+						s.deps.Approvals.AddSessionRule(resolved.AgentName, toolName, resolved.ConversationID, "api")
+					case "permanent":
+						if _, aaErr := s.deps.Approvals.AddPermanentRule(r.Context(), resolved.AgentName, toolName, "api"); aaErr != nil {
+							s.logger.Error("creating auto-approve rule via approval", "error", aaErr)
+						}
+					}
+				}
+			}
+		}
+
 		// Notify the originating adapter channel of the resolution.
 		action := "Denied"
 		if approved {
@@ -755,6 +777,83 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, resolved)
 	}
+}
+
+// handleListAutoApprove handles GET /api/v1/auto-approve?agent={name}.
+func (s *Server) handleListAutoApprove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Approvals == nil {
+		s.approvalNotConfigured(w)
+		return
+	}
+	agentName := r.URL.Query().Get("agent")
+	rules, err := s.deps.Approvals.ListAutoApproveRules(r.Context(), agentName)
+	if err != nil {
+		s.logger.Error("listing auto-approve rules", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+// handleCreateAutoApprove handles POST /api/v1/auto-approve.
+func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Approvals == nil {
+		s.approvalNotConfigured(w)
+		return
+	}
+	var body struct {
+		Agent          string `json:"agent"`
+		Tool           string `json:"tool"`
+		Scope          string `json:"scope"`
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if body.Agent == "" || body.Tool == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent and tool are required"})
+		return
+	}
+
+	switch body.Scope {
+	case "session":
+		if body.ConversationID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id required for session scope"})
+			return
+		}
+		s.deps.Approvals.AddSessionRule(body.Agent, body.Tool, body.ConversationID, "api")
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "scope": "session"})
+	case "permanent", "":
+		rule, err := s.deps.Approvals.AddPermanentRule(r.Context(), body.Agent, body.Tool, "api")
+		if err != nil {
+			s.logger.Error("creating auto-approve rule", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, rule)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope must be 'session' or 'permanent'"})
+	}
+}
+
+// handleDeleteAutoApprove handles DELETE /api/v1/auto-approve/{id}.
+func (s *Server) handleDeleteAutoApprove(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Approvals == nil {
+		s.approvalNotConfigured(w)
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.deps.Approvals.RemoveAutoApproveRule(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		s.logger.Error("deleting auto-approve rule", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // ---------------------------------------------------------------------------
