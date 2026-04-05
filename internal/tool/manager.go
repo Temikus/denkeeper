@@ -311,6 +311,29 @@ func (m *Manager) ToolNames() []string {
 	return names
 }
 
+// ServerToolDefs returns tool definitions for a specific server.
+// Returns false if the server is not registered.
+func (m *Manager) ServerToolDefs(serverName string) ([]llm.ToolDef, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sc, ok := m.servers[serverName]
+	if !ok {
+		if m.parent != nil {
+			return m.parent.ServerToolDefs(serverName)
+		}
+		return nil, false
+	}
+
+	var defs []llm.ToolDef
+	for _, td := range m.toolDefs {
+		if owner, exists := m.toolMap[td.Function.Name]; exists && owner == sc {
+			defs = append(defs, td)
+		}
+	}
+	return defs, true
+}
+
 // Execute runs a single tool call and returns the text result.
 // If the tool is not found locally, it delegates to the parent manager.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {

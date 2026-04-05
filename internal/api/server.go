@@ -157,6 +157,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/tools", s.RequireScope("tools:write", s.handleAddTool))
 	mux.HandleFunc("PUT /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleUpdateTool))
 	mux.HandleFunc("DELETE /api/v1/tools/{name}", s.RequireScope("tools:write", s.handleRemoveTool))
+	mux.HandleFunc("GET /api/v1/tools/{name}/defs", s.RequireScope("tools:read", s.handleToolDefs))
 	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
 	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
 	mux.HandleFunc("GET /api/v1/plugins", s.RequireScope("tools:read", s.handleListPlugins))
@@ -1001,6 +1002,33 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	defs, ok := s.deps.LifecycleMgr.ToolManager().ServerToolDefs(name)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tool server not found"})
+		return
+	}
+
+	type toolDefResp struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+	}
+	result := make([]toolDefResp, 0, len(defs))
+	for _, td := range defs {
+		result = append(result, toolDefResp{
+			Name:        td.Function.Name,
+			Description: td.Function.Description,
+			Parameters:  td.Function.Parameters,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": result})
 }
 
 func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {

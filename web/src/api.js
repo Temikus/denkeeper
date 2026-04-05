@@ -137,6 +137,7 @@ export const api = {
   removeTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
   toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),
+  toolDefs: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/defs`),
   listPlugins: () => apiFetch('/api/v1/plugins'),
   getPlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`),
   addPlugin: cfg => apiFetch('/api/v1/plugins', {

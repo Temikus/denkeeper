@@ -113,3 +113,50 @@ func TestServerInfo_Found(t *testing.T) {
 		t.Errorf("Status = %q, want connected", info.Status)
 	}
 }
+
+func TestServerToolDefs_NotFound(t *testing.T) {
+	m := NewManager(testLogger())
+	_, ok := m.ServerToolDefs("nope")
+	if ok {
+		t.Error("expected ok=false for missing server")
+	}
+}
+
+func TestServerToolDefs_ReturnsOnlyServerDefs(t *testing.T) {
+	m := NewManager(testLogger())
+	sc1 := &serverConn{name: "server-a"}
+	sc2 := &serverConn{name: "server-b"}
+	m.servers["server-a"] = sc1
+	m.servers["server-b"] = sc2
+	m.toolMap["tool_a1"] = sc1
+	m.toolMap["tool_a2"] = sc1
+	m.toolMap["tool_b1"] = sc2
+	m.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "tool_a1", Description: "A1"}},
+		{Type: "function", Function: llm.FunctionDef{Name: "tool_a2", Description: "A2"}},
+		{Type: "function", Function: llm.FunctionDef{Name: "tool_b1", Description: "B1"}},
+	}
+
+	defs, ok := m.ServerToolDefs("server-a")
+	if !ok {
+		t.Fatal("expected ok=true for server-a")
+	}
+	if len(defs) != 2 {
+		t.Fatalf("ServerToolDefs(server-a) returned %d defs, want 2", len(defs))
+	}
+	names := map[string]bool{}
+	for _, d := range defs {
+		names[d.Function.Name] = true
+	}
+	if !names["tool_a1"] || !names["tool_a2"] {
+		t.Errorf("unexpected defs: %v", defs)
+	}
+
+	defs2, ok2 := m.ServerToolDefs("server-b")
+	if !ok2 {
+		t.Fatal("expected ok=true for server-b")
+	}
+	if len(defs2) != 1 || defs2[0].Function.Name != "tool_b1" {
+		t.Errorf("ServerToolDefs(server-b) = %v, want [tool_b1]", defs2)
+	}
+}
