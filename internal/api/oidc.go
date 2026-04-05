@@ -109,7 +109,7 @@ func (op *OIDCProvider) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Decrypt the state cookie using session manager.
 	fakeReq := &http.Request{Header: http.Header{}}
-	fakeReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: stateCookie.Value})
+	fakeReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: stateCookie.Value}) // #nosec G124 -- internal cookie for reading, not sent to client
 	sess, err := op.sessions.Read(fakeReq)
 	if err != nil {
 		op.logger.Warn("oidc: invalid state cookie", "error", err)
@@ -191,7 +191,7 @@ func (op *OIDCProvider) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear the state cookie.
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is set dynamically via op.sessions.secure
 		Name:     oidcStateCookieName,
 		Value:    "",
 		Path:     "/",

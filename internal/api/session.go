@@ -68,7 +68,7 @@ func (sm *SessionManager) Create(w http.ResponseWriter, s Session) error {
 	ciphertext := sm.gcm.Seal(nonce, nonce, plaintext, nil)
 	encoded := base64.URLEncoding.EncodeToString(ciphertext)
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is set dynamically via sm.secure
 		Name:     sessionCookieName,
 		Value:    encoded,
 		Path:     "/",
@@ -117,7 +117,7 @@ func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 
 // Clear removes the session cookie.
 func (sm *SessionManager) Clear(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is set dynamically via sm.secure
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",

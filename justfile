@@ -176,6 +176,27 @@ release bump:
     git push origin "$tag"
     echo "Released ${tag}"
 
+# Run security scans (usage: just scan [gosec|govulncheck], default: all)
+scan tool="all":
+    #!/usr/bin/env sh
+    set -e
+    case "{{tool}}" in
+        all)
+            just scan gosec
+            just scan govulncheck
+            ;;
+        gosec)
+            go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101,G104,G120 ./...
+            ;;
+        govulncheck)
+            go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+            ;;
+        *)
+            echo "Unknown scan: {{tool}}. Available: gosec, govulncheck"
+            exit 1
+            ;;
+    esac
+
 # Count lines of Go code (source and test separately)
 loc:
     @echo "Source:"

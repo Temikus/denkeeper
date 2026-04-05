@@ -23,7 +23,7 @@ func newPasswdCmd() *cobra.Command {
 func runPasswd(_ *cobra.Command, _ []string) error {
 	var password string
 
-	fd := int(os.Stdin.Fd()) //nolint:gosec // fd is always small enough for int
+	fd := int(os.Stdin.Fd()) // #nosec G115 -- fd is always small enough for int //nolint:gosec
 	if term.IsTerminal(fd) {
 		fmt.Fprint(os.Stderr, "Enter password: ")
 		pw1, err := term.ReadPassword(fd)
