@@ -93,6 +93,15 @@
     --radius:      6px;
     --hover-overlay: rgba(0, 0, 0, 0.04);
     --overlay-bg:    rgba(0, 0, 0, 0.4);
+
+    /* Sidebar tokens */
+    --sidebar-bg:           #FDF8F0;
+    --sidebar-text:         #3d3d3a;
+    --sidebar-section-label: rgba(0, 0, 0, 0.4);
+    --sidebar-border-accent: rgba(192, 68, 44, 0.15);
+    --sidebar-active-bg:    rgba(192, 68, 44, 0.08);
+    --sidebar-hover-bg:     rgba(0, 0, 0, 0.04);
+    --sidebar-divider:      rgba(0, 0, 0, 0.08);
   }
 
   :global(:root.dark) {
@@ -108,6 +117,15 @@
     --warn:        #f0a958;
     --hover-overlay: rgba(255, 255, 255, 0.03);
     --overlay-bg:    rgba(0, 0, 0, 0.6);
+
+    /* Sidebar tokens */
+    --sidebar-bg:           #1E1C19;
+    --sidebar-text:         #d4d0c8;
+    --sidebar-section-label: rgba(255, 255, 255, 0.35);
+    --sidebar-border-accent: rgba(207, 100, 75, 0.25);
+    --sidebar-active-bg:    rgba(207, 100, 75, 0.15);
+    --sidebar-hover-bg:     rgba(255, 255, 255, 0.06);
+    --sidebar-divider:      rgba(255, 255, 255, 0.08);
   }
 
   :global(body) {
