@@ -63,7 +63,7 @@ vet:
     go vet ./...
 
 # Run all checks (fmt, vet, lint, test)
-check: fmt-check vet lint test
+check: fmt-check vet lint test test-ui
 
 # Tidy modules
 tidy:
@@ -109,6 +109,24 @@ dev-ui:
         npm ci
     fi
     npm run dev
+
+# Run web UI unit tests
+test-ui:
+    #!/usr/bin/env sh
+    cd web
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm test
+
+# Run web UI tests in watch mode
+test-ui-watch:
+    #!/usr/bin/env sh
+    cd web
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npm run test:watch
 
 # Remove frontend build artifacts and node_modules
 clean-ui:
