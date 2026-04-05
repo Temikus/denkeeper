@@ -25,6 +25,10 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.{js,svelte}'],
       exclude: ['src/test/**', 'src/main.js'],
+      thresholds: {
+        lines: 60,
+        branches: 50,
+      },
     },
   },
 })

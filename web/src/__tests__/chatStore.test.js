@@ -33,7 +33,7 @@ vi.mock('../api.js', () => ({
   },
 }))
 
-const { chatState, sendMessage, loadSession, newSession, setAgent } = await import('../chatStore.js')
+const { chatState, sendMessage, loadSession, newSession, setAgent, initChat, resolveApprovalAction } = await import('../chatStore.js')
 
 beforeEach(() => {
   newSession()
@@ -286,5 +286,243 @@ describe('setAgent', () => {
   test('updates agent in chatState', () => {
     setAgent('helper')
     expect(get(chatState).agent).toBe('helper')
+  })
+})
+
+describe('initChat', () => {
+  test('sets agent from first agent and marks initialized', async () => {
+    // Reset initialized flag by forcing state
+    chatState.update(s => ({ ...s, initialized: false }))
+    mockSessionMessages.mockResolvedValue([])
+
+    await initChat([{ name: 'myagent' }, { name: 'other' }])
+    const state = get(chatState)
+    expect(state.agent).toBe('myagent')
+    expect(state.initialized).toBe(true)
+  })
+
+  test('no-op when already initialized', async () => {
+    chatState.update(s => ({ ...s, initialized: false }))
+    mockSessionMessages.mockResolvedValue([])
+    await initChat([{ name: 'first' }])
+
+    // Second call should be a no-op
+    await initChat([{ name: 'second' }])
+    expect(get(chatState).agent).toBe('first')
+  })
+
+  test('does not override agent when sessionId already set', async () => {
+    chatState.update(s => ({ ...s, initialized: false, sessionId: 'existing', agent: 'preset' }))
+    mockSessionMessages.mockResolvedValue([])
+
+    await initChat([{ name: 'other' }])
+    // Agent should remain 'preset' because sessionId was already set
+    expect(get(chatState).agent).toBe('preset')
+  })
+
+  test('restores session from sessionStorage', async () => {
+    chatState.update(s => ({ ...s, initialized: false }))
+    sessionStorage.setItem('dk_chat_session', JSON.stringify({ sessionId: 'sess-saved', agent: 'saved-agent' }))
+    mockSessionMessages.mockResolvedValue([
+      { role: 'user', content: 'saved msg' },
+      { role: 'assistant', content: 'saved reply' },
+    ])
+
+    await initChat([{ name: 'default' }])
+    const state = get(chatState)
+    expect(state.sessionId).toBe('sess-saved')
+    expect(state.agent).toBe('saved-agent')
+    expect(state.messages).toHaveLength(2)
+  })
+
+  test('handles malformed sessionStorage gracefully', async () => {
+    chatState.update(s => ({ ...s, initialized: false }))
+    sessionStorage.setItem('dk_chat_session', 'not-json')
+
+    await initChat([{ name: 'default' }])
+    const state = get(chatState)
+    expect(state.initialized).toBe(true)
+    expect(state.restoring).toBe(false)
+  })
+
+  test('handles empty history from restored session', async () => {
+    chatState.update(s => ({ ...s, initialized: false }))
+    sessionStorage.setItem('dk_chat_session', JSON.stringify({ sessionId: 'sess-empty', agent: 'default' }))
+    mockSessionMessages.mockResolvedValue([])
+
+    await initChat([{ name: 'default' }])
+    const state = get(chatState)
+    // Should not set sessionId when history is empty
+    expect(state.messages).toHaveLength(0)
+    expect(state.initialized).toBe(true)
+  })
+
+  test('handles API error during restore', async () => {
+    chatState.update(s => ({ ...s, initialized: false }))
+    sessionStorage.setItem('dk_chat_session', JSON.stringify({ sessionId: 'sess-fail', agent: 'default' }))
+    mockSessionMessages.mockRejectedValue(new Error('server down'))
+
+    await initChat([{ name: 'default' }])
+    const state = get(chatState)
+    expect(state.initialized).toBe(true)
+    expect(state.restoring).toBe(false)
+  })
+})
+
+describe('resolveApprovalAction', () => {
+  const approval = { id: 'appr-1', tool: 'web_search', text: 'search', status: 'pending' }
+
+  test('WS path: sends approve action', async () => {
+    mockWsStatus.set('connected')
+    await resolveApprovalAction(approval, true)
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'approval_response',
+      approval_id: 'appr-1',
+      action: 'approve',
+    })
+  })
+
+  test('WS path: sends deny action', async () => {
+    mockWsStatus.set('connected')
+    await resolveApprovalAction(approval, false)
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'approval_response',
+      approval_id: 'appr-1',
+      action: 'deny',
+    })
+  })
+
+  test('WS path: sends auto_session action', async () => {
+    mockWsStatus.set('connected')
+    await resolveApprovalAction(approval, true, 'session')
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'approval_response',
+      approval_id: 'appr-1',
+      action: 'auto_session',
+    })
+  })
+
+  test('WS path: sends auto_always action', async () => {
+    mockWsStatus.set('connected')
+    await resolveApprovalAction(approval, true, 'permanent')
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'approval_response',
+      approval_id: 'appr-1',
+      action: 'auto_always',
+    })
+  })
+
+  test('REST fallback: calls api.approveApproval', async () => {
+    mockWsStatus.set('disconnected')
+    mockApproveApproval.mockResolvedValue({ ok: true })
+    await resolveApprovalAction(approval, true, 'session')
+    expect(mockApproveApproval).toHaveBeenCalledWith('appr-1', 'session')
+  })
+
+  test('REST fallback: calls api.denyApproval', async () => {
+    mockWsStatus.set('disconnected')
+    mockDenyApproval.mockResolvedValue({ ok: true })
+    await resolveApprovalAction(approval, false)
+    expect(mockDenyApproval).toHaveBeenCalledWith('appr-1')
+  })
+
+  test('REST fallback: approve without autoApproveScope passes undefined', async () => {
+    mockWsStatus.set('disconnected')
+    mockApproveApproval.mockResolvedValue({ ok: true })
+    await resolveApprovalAction(approval, true)
+    expect(mockApproveApproval).toHaveBeenCalledWith('appr-1', undefined)
+  })
+})
+
+describe('sendViaWS edge cases', () => {
+  test('rejects when client.send returns false (not connected)', async () => {
+    mockWsStatus.set('connected')
+    mockSend.mockReturnValue(false)
+
+    await sendMessage('hello')
+    const state = get(chatState)
+    expect(state.error).toBe('WebSocket not connected')
+    expect(state.sending).toBe(false)
+  })
+
+  test('re-registers handler when server assigns new session_id', async () => {
+    mockWsStatus.set('connected')
+
+    mockOnSessionEvent.mockImplementation((id, handler) => {
+      // Simulate server responding with a NEW session_id
+      setTimeout(() => {
+        handler({ type: 'content', text: 'reply', session_id: 'server-assigned-id' })
+        handler({ type: 'done', session_id: 'server-assigned-id' })
+      }, 0)
+    })
+
+    await sendMessage('hello')
+    // offSessionEvent should have been called for the original registration
+    // and onSessionEvent called again for the new session_id
+    const offCalls = mockOffSessionEvent.mock.calls.map(c => c[0])
+    expect(offCalls).toContain('__pending__')
+    expect(get(chatState).sessionId).toBe('server-assigned-id')
+  })
+
+  test('handles error frame from WS', async () => {
+    mockWsStatus.set('connected')
+
+    mockOnSessionEvent.mockImplementation((id, handler) => {
+      setTimeout(() => {
+        handler({ type: 'error', message: 'server exploded', session_id: id })
+      }, 0)
+    })
+
+    await sendMessage('hello')
+    const state = get(chatState)
+    expect(state.error).toBe('server exploded')
+    expect(state.sending).toBe(false)
+  })
+
+  test('WS tool events are routed through handleToolEvent', async () => {
+    mockWsStatus.set('connected')
+
+    mockOnSessionEvent.mockImplementation((id, handler) => {
+      setTimeout(() => {
+        handler({ type: 'tool_start', tool: 'fetch', round: 1, session_id: id })
+        handler({ type: 'tool_end', tool: 'fetch', round: 1, duration_ms: 200, session_id: id })
+        handler({ type: 'content', text: 'done', session_id: id })
+        handler({ type: 'done', session_id: id })
+      }, 0)
+    })
+
+    await sendMessage('fetch data')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.toolCalls[0].name).toBe('fetch')
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBe(200)
+  })
+})
+
+describe('handleToolEvent: tool_start marks pending approvals as approved', () => {
+  test('pending approval for same tool is marked approved on tool_start', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'pending' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals[0].status).toBe('approved')
+    expect(agentMsg.toolCalls).toHaveLength(1)
+  })
+
+  test('pending approval for different tool is not affected by tool_start', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'pending' })
+      onToolEvent({ type: 'tool_start', tool: 'different_tool', round: 1 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals[0].status).toBe('pending')
   })
 })

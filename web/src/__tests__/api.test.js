@@ -156,6 +156,234 @@ describe('streamChat', () => {
   })
 })
 
+describe('streamChat edge cases', () => {
+  test('throws on error event with custom message (bug fix verification)', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"error","message":"rate limit exceeded"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    token.set('key')
+    await expect(
+      api.streamChat('default', '', 'hello', () => {}, () => {}, () => {})
+    ).rejects.toThrow('rate limit exceeded')
+  })
+
+  test('handles partial frame delivery split across reads', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            // Split a frame across two chunks
+            controller.enqueue(encoder.encode('data: {"type":"con'))
+            controller.enqueue(encoder.encode('tent","text":"split"}\n\ndata: {"type":"done","session_id":"sess-3"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const chunks = []
+    let doneId
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      (chunk) => chunks.push(chunk),
+      (sid) => { doneId = sid },
+      () => {},
+    )
+
+    expect(chunks).toEqual(['split'])
+    expect(doneId).toBe('sess-3')
+  })
+
+  test('empty text in content event delivers empty string', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"content"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done","session_id":"sess-4"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const chunks = []
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      (chunk) => chunks.push(chunk),
+      () => {},
+      () => {},
+    )
+
+    expect(chunks).toEqual([''])
+  })
+
+  test('stream interrupted without done event resolves without error', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"content","text":"partial"}\n\n'))
+            // Close without sending done frame
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const chunks = []
+    let doneCalled = false
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      (chunk) => chunks.push(chunk),
+      () => { doneCalled = true },
+      () => {},
+    )
+
+    expect(chunks).toEqual(['partial'])
+    expect(doneCalled).toBe(false)
+  })
+
+  test('skips malformed JSON frames without throwing', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: not-json\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"content","text":"ok"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done","session_id":"sess-5"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const chunks = []
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      (chunk) => chunks.push(chunk),
+      () => {},
+      () => {},
+    )
+
+    expect(chunks).toEqual(['ok'])
+  })
+
+  test('skips non-data lines (comments)', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(': this is a comment\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"content","text":"hello"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done","session_id":"sess-6"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const chunks = []
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      (chunk) => chunks.push(chunk),
+      () => {},
+      () => {},
+    )
+
+    expect(chunks).toEqual(['hello'])
+  })
+
+  test('401 during stream clears token and throws', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => new HttpResponse(null, { status: 401 }))
+    )
+
+    token.set('old-key')
+    await expect(
+      api.streamChat('default', '', 'hello', () => {}, () => {}, () => {})
+    ).rejects.toThrow('Unauthorized')
+
+    const { get } = await import('svelte/store')
+    expect(get(token)).toBe('')
+  })
+
+  test('thinking and tool_approval events are forwarded to onToolEvent', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"thinking","text":"hmm"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"tool_approval","approval_id":"a1","tool":"t","approval_status":"pending"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done","session_id":"sess-7"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const toolEvents = []
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      () => {},
+      () => {},
+      (evt) => toolEvents.push(evt),
+    )
+
+    expect(toolEvents).toHaveLength(2)
+    expect(toolEvents[0].type).toBe('thinking')
+    expect(toolEvents[1].type).toBe('tool_approval')
+  })
+})
+
 describe('API method smoke tests', () => {
   test('agents() fetches /api/v1/agents', async () => {
     token.set('key')

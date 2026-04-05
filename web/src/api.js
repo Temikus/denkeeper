@@ -212,16 +212,16 @@ export const api = {
       for (const frame of frames) {
         const line = frame.trim()
         if (!line.startsWith('data: ')) continue
+        let evt
         try {
-          const evt = JSON.parse(line.slice(6))
-          if (evt.type === 'content') onChunk(evt.text || '')
-          if (evt.type === 'done') onDone(evt.session_id || '')
-          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval') onToolEvent?.(evt)
-          if (evt.type === 'error') throw new Error(evt.message || 'stream error')
-        } catch (e) {
-          if (e.message !== 'stream error') continue // skip malformed JSON
-          throw e
+          evt = JSON.parse(line.slice(6))
+        } catch (_) {
+          continue // skip malformed JSON
         }
+        if (evt.type === 'content') onChunk(evt.text || '')
+        if (evt.type === 'done') onDone(evt.session_id || '')
+        if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval') onToolEvent?.(evt)
+        if (evt.type === 'error') throw new Error(evt.message || 'stream error')
       }
     }
   },
