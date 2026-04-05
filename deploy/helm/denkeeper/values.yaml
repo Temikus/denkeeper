@@ -155,3 +155,51 @@ securityContext:
 namespace:
   create: false
   name: denkeeper
+
+# -- Extra containers injected into the pod alongside the main denkeeper container.
+# Useful for MCP server sidecars that communicate over localhost or a shared volume.
+# Each entry is a full Kubernetes container spec.
+extraContainers: []
+# - name: jmap-mcp
+#   image: ghcr.io/temikus/jmap-mcp:latest
+#   env:
+#     - name: JMAP_SESSION_URL
+#       value: "https://api.fastmail.com/jmap/session"
+#     - name: JMAP_BEARER_TOKEN
+#       valueFrom:
+#         secretKeyRef:
+#           name: jmap-secrets
+#           key: bearer-token
+#     - name: MCP_TRANSPORT
+#       value: "sse"
+
+# -- ServiceMonitor for Prometheus Operator (kube-prometheus-stack).
+# Requires the prometheus-operator CRDs (monitoring.coreos.com/v1) to be installed.
+# kube-prometheus-stack installs these automatically.
+#
+# Denkeeper exposes Prometheus metrics at /metrics when OTel is enabled
+# (config.otel.enabled: true). Distributed traces are pushed to Tempo/Jaeger
+# via config.otel.traces_endpoint — no scrape config needed for those.
+#
+# To have Prometheus discover this ServiceMonitor, the additionalLabels must
+# match the Prometheus CR's serviceMonitorSelector. kube-prometheus-stack
+# defaults to: { release: <prometheus-helm-release-name> }
+serviceMonitor:
+  enabled: false
+  # -- Extra labels added to the ServiceMonitor metadata.
+  # Must match the Prometheus CR's serviceMonitorSelector to be picked up.
+  # Example: { release: kube-prometheus-stack }
+  additionalLabels: {}
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  scheme: http
+  # -- TLS configuration for HTTPS scraping.
+  tlsConfig: {}
+  # insecureSkipVerify: true
+  # -- Secret containing a bearer token for authenticated scraping.
+  bearerTokenSecret: {}
+  # name: denkeeper-api-keys
+  # key: prometheus-scrape-token
+  # -- Prometheus relabeling rules applied during scraping.
+  relabelings: []

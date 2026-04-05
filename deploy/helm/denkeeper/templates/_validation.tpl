@@ -38,6 +38,13 @@ These mirror the runtime checks in internal/config/config.go:validate().
   {{- end }}
 {{- end }}
 
+{{/* ServiceMonitor requires OTel to be enabled (it exposes /metrics via the OTel Prometheus exporter) */}}
+{{- if .Values.serviceMonitor.enabled }}
+  {{- if not (dig "otel" "enabled" false .Values.config) }}
+    {{- fail "serviceMonitor.enabled requires config.otel.enabled: true — denkeeper only exposes /metrics when OTel is enabled" }}
+  {{- end }}
+{{- end }}
+
 {{/* At least one adapter must be configured (skip when using existingSecret — we can't inspect its contents) */}}
 {{- if not .Values.existingSecret }}
   {{- if and (not .Values.secrets.telegramToken) (not .Values.secrets.discordToken) }}
