@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -73,6 +74,9 @@ type Server struct {
 
 	// setupPIN is a one-time PIN for account creation, cleared after use.
 	setupPIN string
+
+	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
+	wsHub *WSHub
 }
 
 // New creates a new API server. The server is not started until Run is called.
@@ -106,6 +110,13 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 
 	// Chat endpoint.
 	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.handleChat))
+
+	// WebSocket streaming endpoint — auth handled inside the handler because
+	// the upgrade must happen before RequireScope writes an HTTP response.
+	if cfg.IsWebSocketEnabled() {
+		s.wsHub = NewWSHub(cfg.WebSocketMaxConnections, cfg.WebSocketReplayTTL(), logger)
+		mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
+	}
 
 	// Data endpoints — require auth with appropriate scopes.
 	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
@@ -227,6 +238,10 @@ func (s *Server) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		// Close all WebSocket connections before HTTP shutdown.
+		if s.wsHub != nil {
+			s.wsHub.Shutdown()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
@@ -248,7 +263,10 @@ func (s *Server) Run(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "ok",
+		"ws_enabled": s.wsHub != nil,
+	})
 }
 
 // handleAgents lists all registered agents with metadata.
@@ -593,39 +611,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChatSSE streams the response as Server-Sent Events.
-// The engine pipeline is currently synchronous, so we send a single content
-// event followed by a done event once the response is ready.
 func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	flush := func() {
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-	}
-
-	writeEvent := func(data any) {
-		b, _ := json.Marshal(data)
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
-		flush()
-	}
-
-	onEvent := func(evt agent.ChatEvent) {
-		writeEvent(evt)
-	}
-
-	responseText, err := eng.ChatWithEvents(r.Context(), msg, onEvent)
-	if err != nil {
-		s.logger.Error("chat SSE error", "error", err, "session", sessionID)
-		writeEvent(map[string]string{"type": "error", "message": "failed to process message"})
-		return
-	}
-
-	writeEvent(map[string]string{"type": "content", "text": responseText})
-	writeEvent(map[string]string{"type": "done", "session_id": sessionID})
+	stream := NewSSEStreamSession(w)
+	s.runChatStream(r.Context(), stream, eng, msg, sessionID)
 }
 
 // handleDeleteSession handles DELETE /api/v1/sessions/{id}.
@@ -1781,6 +1774,22 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack implements http.Hijacker so WebSocket upgrades work through the
+// logging middleware.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support Hijack")
+}
+
+// Flush implements http.Flusher so SSE streaming works through the logging middleware.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

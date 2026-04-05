@@ -1,7 +1,8 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat } from '../chatStore.js'
+  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction } from '../chatStore.js'
+  import { wsStatus, initWS, destroyWS } from '../wsStore.js'
 
   let agents = $state([])
   let sessions = $state([])
@@ -78,11 +79,7 @@
     appr.resolving = true
     $chatState.messages = [...$chatState.messages]
     try {
-      if (approve) {
-        await api.approveApproval(appr.id, autoApproveScope || undefined)
-      } else {
-        await api.denyApproval(appr.id)
-      }
+      await resolveApprovalAction(appr, approve, autoApproveScope)
       // Status will be updated by tool_start event for approved tools;
       // for denied, update immediately.
       if (!approve) {
@@ -107,13 +104,30 @@
     tick().then(scrollBottom)
   })
 
+  // Poll interval: 30s when WS connected, 5s otherwise.
+  function startPoll() {
+    clearInterval(pollTimer)
+    const interval = $wsStatus === 'connected' ? 30000 : 5000
+    pollTimer = setInterval(loadPendingApprovals, interval)
+  }
+
+  // Restart poll when WS status changes.
+  $effect(() => {
+    $wsStatus; // track dependency
+    startPoll()
+  })
+
   onMount(() => {
+    initWS()
     loadAgents()
     loadSessions()
     loadPendingApprovals()
-    pollTimer = setInterval(loadPendingApprovals, 5000)
+    startPoll()
   })
-  onDestroy(() => clearInterval(pollTimer))
+  onDestroy(() => {
+    clearInterval(pollTimer)
+    destroyWS()
+  })
 </script>
 
 <div class="chat-shell">
@@ -141,6 +155,14 @@
     </label>
     <button class="btn-ghost" onclick={() => { newSession(); }} disabled={!$chatState.sessionId}>New Session</button>
     <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh</button>
+    <span class="ws-status" class:ws-connected={$wsStatus === 'connected'} class:ws-reconnecting={$wsStatus === 'reconnecting'} class:ws-fallback={$wsStatus === 'sse_fallback'}>
+      <span class="ws-dot"></span>
+      {#if $wsStatus === 'connected'}WS
+      {:else if $wsStatus === 'reconnecting'}Reconnecting
+      {:else if $wsStatus === 'sse_fallback'}SSE
+      {:else if $wsStatus === 'connecting'}Connecting
+      {/if}
+    </span>
   </div>
 
   <!-- Pending approvals banner (polled, cross-adapter) -->
@@ -274,6 +296,26 @@
   .toolbar select { min-width: 0; max-width: 260px; text-overflow: ellipsis; }
   .toolbar label { flex-shrink: 0; }
   .toolbar label:nth-child(2) { flex: 1; min-width: 0; }
+
+  .ws-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .ws-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .ws-connected .ws-dot { background: #22c55e; }
+  .ws-reconnecting .ws-dot { background: #eab308; animation: pulse 1.5s ease-in-out infinite; }
+  .ws-fallback .ws-dot { background: var(--accent); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
   .pending-banner {
     flex-shrink: 0;

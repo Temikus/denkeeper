@@ -205,12 +205,43 @@ type APIConfig struct {
 
 	// Auth configures optional password and OIDC authentication for the dashboard.
 	Auth APIAuthConfig `toml:"auth"`
+
+	// WebSocketEnabled controls whether the WebSocket endpoint (GET /api/v1/ws)
+	// is available. Default: true. Use a pointer so omitted = true.
+	WebSocketEnabled *bool `toml:"websocket_enabled"`
+
+	// WebSocketMaxConnections is the maximum number of concurrent WebSocket
+	// connections. 0 = unlimited.
+	WebSocketMaxConnections int `toml:"websocket_max_connections"`
+
+	// WebSocketReplayBufferTTL is how long to buffer events for replay after
+	// a client disconnects. Parsed as time.Duration. Default: "5m".
+	WebSocketReplayBufferTTL string `toml:"websocket_replay_buffer_ttl"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults
 // the pointer is always non-nil, but this method is safe to call at any stage.
 func (a *APIConfig) IsEnabled() bool {
 	return a.Enabled == nil || *a.Enabled
+}
+
+// IsWebSocketEnabled returns whether the WebSocket endpoint should be
+// registered. After applyDefaults the pointer is always non-nil.
+func (a *APIConfig) IsWebSocketEnabled() bool {
+	return a.WebSocketEnabled == nil || *a.WebSocketEnabled
+}
+
+// WebSocketReplayTTL parses and returns the replay buffer TTL duration.
+// Returns 5m if the value is empty or unparseable.
+func (a *APIConfig) WebSocketReplayTTL() time.Duration {
+	if a.WebSocketReplayBufferTTL == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(a.WebSocketReplayBufferTTL)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
 }
 
 // APIAuthConfig configures password and OIDC authentication.
@@ -700,6 +731,14 @@ func applyEnvOverrides(cfg *Config) {
 		f := false
 		cfg.API.Enabled = &f
 	}
+
+	if v := os.Getenv("DENKEEPER_API_WEBSOCKET_ENABLED"); v == "true" || v == "1" {
+		t := true
+		cfg.API.WebSocketEnabled = &t
+	} else if v == "false" || v == "0" {
+		f := false
+		cfg.API.WebSocketEnabled = &f
+	}
 }
 
 func expandEnvVars(cfg *Config) {
@@ -740,6 +779,13 @@ func applyMiscDefaults(cfg *Config) {
 	}
 	if cfg.API.IsEnabled() && cfg.API.Listen == "" {
 		cfg.API.Listen = ":8080"
+	}
+	if cfg.API.WebSocketEnabled == nil {
+		t := true
+		cfg.API.WebSocketEnabled = &t
+	}
+	if cfg.API.WebSocketReplayBufferTTL == "" {
+		cfg.API.WebSocketReplayBufferTTL = "5m"
 	}
 	applyAuthDefaults(cfg)
 	applyWebDefaults(cfg)
@@ -1186,6 +1232,11 @@ func validateAPI(api *APIConfig) error {
 			if _, ok := validAPIScopes[s]; !ok {
 				return fmt.Errorf("config: api.keys[%d] (%s): invalid scope %q", i, k.Name, s)
 			}
+		}
+	}
+	if api.WebSocketReplayBufferTTL != "" {
+		if _, err := time.ParseDuration(api.WebSocketReplayBufferTTL); err != nil {
+			return fmt.Errorf("config: api.websocket_replay_buffer_ttl: invalid duration %q: %w", api.WebSocketReplayBufferTTL, err)
 		}
 	}
 	if err := validateAuth(&api.Auth); err != nil {
