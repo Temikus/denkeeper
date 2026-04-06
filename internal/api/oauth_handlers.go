@@ -243,7 +243,7 @@ func (s *Server) serveCallbackHTML(w http.ResponseWriter, success bool, errMsg s
 
 	if success {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `<!DOCTYPE html>
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
 <html><head><title>Authorization Successful</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
@@ -263,7 +263,7 @@ p { color: #6b7280; }
 
 	w.WriteHeader(http.StatusBadRequest)
 	safeMsg := html.EscapeString(errMsg)
-	fmt.Fprintf(w, `<!DOCTYPE html>
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><title>Authorization Failed</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }

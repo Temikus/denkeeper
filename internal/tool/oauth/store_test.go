@@ -25,7 +25,7 @@ func testStore(t *testing.T) *TokenStore {
 	if err != nil {
 		t.Fatalf("opening in-memory db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	store, err := NewTokenStore(db, testKey())
 	if err != nil {
@@ -246,7 +246,7 @@ func TestTokenStore_ToOAuth2Token(t *testing.T) {
 
 func TestNewTokenStore_ShortKey(t *testing.T) {
 	db, _ := sqlx.Open("sqlite", ":memory:")
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err := NewTokenStore(db, "abcd")
 	if err == nil {
@@ -256,7 +256,7 @@ func TestNewTokenStore_ShortKey(t *testing.T) {
 
 func TestNewTokenStore_InvalidHex(t *testing.T) {
 	db, _ := sqlx.Open("sqlite", ":memory:")
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err := NewTokenStore(db, "not-hex")
 	if err == nil {
@@ -296,7 +296,7 @@ func TestTokenStore_MigratesOldSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create an old-schema table missing the new columns.
 	oldSchema := `CREATE TABLE oauth_tokens (

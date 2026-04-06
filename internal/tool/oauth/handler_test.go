@@ -23,7 +23,7 @@ func testHandlerDeps(t *testing.T) (*TokenStore, *PendingManager, *slog.Logger) 
 	if err != nil {
 		t.Fatalf("opening db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	store, err := NewTokenStore(db, testKey())
 	if err != nil {
@@ -541,7 +541,7 @@ func TestTodoistBehavior_NonExpiringToken(t *testing.T) {
 	// Simulate a Todoist-like token: no expiry, no refresh token.
 	st := &StoredToken{
 		ToolName:    "todoist-mcp",
-		AccessToken: "0123456789abcdef0123456789abcdef01234567",
+		AccessToken: "test-fake-todoist-access-token-not-real",
 		TokenType:   "Bearer",
 		// Expiry: nil (Todoist returns expires_in=0 → zero-time → not stored)
 		// RefreshToken: "" (Todoist doesn't return one)
