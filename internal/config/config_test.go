@@ -2603,7 +2603,7 @@ enabled = true
 
 [api.auth]
 password_hash = "plaintext-not-bcrypt"
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_secret = "test-fake-session-secret-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 `)
 
 	_, err := Parse(tomlData)
@@ -2621,7 +2621,7 @@ func TestValidateAuth_OIDCMissingIssuer(t *testing.T) {
 enabled = true
 
 [api.auth]
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_secret = "test-fake-session-secret-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 [api.auth.oidc]
 enabled = true
@@ -2646,7 +2646,7 @@ func TestValidateAuth_OIDCEmptyAllowedEmails(t *testing.T) {
 enabled = true
 
 [api.auth]
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_secret = "test-fake-session-secret-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 [api.auth.oidc]
 enabled = true
@@ -2673,7 +2673,7 @@ enabled = true
 
 [api.auth]
 password_hash = "$2a$13$somehashvalueherethatis.validlookingbcrypthashstring"
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_secret = "test-fake-session-secret-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 `)
 
 	_, err := Parse(tomlData)
@@ -2689,7 +2689,7 @@ enabled = true
 
 [api.auth]
 password_hash = "$2b$13$somehashvalueherethatis.validlookingbcrypthashstring"
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+session_secret = "test-fake-session-secret-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 session_max_age = "not-a-duration"
 `)
 

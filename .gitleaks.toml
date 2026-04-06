@@ -1,0 +1,21 @@
+title = "denkeeper gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documentation curl examples with placeholder tokens"
+regexes = [
+    '''Authorization: Bearer dk[_-][a-z\-]+''',
+]
+paths = [
+    '''README\.md''',
+    '''website/.*\.md''',
+]
+
+[[allowlists]]
+description = "Historical commits: test fixtures used hex strings later replaced with obviously-fake values"
+commits = [
+    "6a8ff99597aae41e67f55682be3bed792c53c52a",
+    "dc8beea4be50bcdcc48dc1b0c39b086bc85c588a",
+]
