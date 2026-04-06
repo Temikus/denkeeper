@@ -407,7 +407,7 @@ func doWaitAndRetry(ctx context.Context, maxRetries int, backoff string, fn func
 			return err // success, or a different error type — stop retrying
 		}
 	}
-	return err
+	return fmt.Errorf("rate limit retries exhausted (%d attempts): %w", maxRetries, err)
 }
 
 // TokenCost returns the USD cost for a chat response using the pricing registry.

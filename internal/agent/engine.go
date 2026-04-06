@@ -69,10 +69,6 @@ type Engine struct {
 	globalSkillsDir string               // base global skills dir (for merge on reload)
 	sched           *scheduler.Scheduler // nil = SCHEDULE_ADD directives silently stripped
 
-	// lastPendingApproval holds the approval request from the most recent
-	// chatWithApproval call, used by HandleMessage to attach inline buttons.
-	lastPendingApproval *approval.Request
-
 	logger *slog.Logger
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
@@ -731,7 +727,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		"tokens_total", resp.TokensUsed.Total,
 	)
 
-	responseText := e.processResponseDirectives(ctx, resp, perms, msg, convID)
+	responseText, pendingApproval := e.processResponseDirectives(ctx, resp, perms, msg, convID)
 
 	if responseText == "" && resp.Content != "" {
 		e.logger.Warn("response emptied by directive extraction",
@@ -762,7 +758,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		"model", resp.Model,
 		"conversation", convID,
 	)
-	return responseText, e.lastPendingApproval, nil
+	return responseText, pendingApproval, nil
 }
 
 // resolvePermissions returns the effective permission engine for the message,
@@ -1062,9 +1058,8 @@ func (e *Engine) applyMemoryUpdate(memUpdate string, perms *security.PermissionE
 
 // processResponseDirectives extracts memory updates, user updates, soul updates,
 // skill creation, and schedule addition directives from the LLM response. Returns
-// the cleaned response text. Sets e.lastPendingApproval if an approval was
-// created.
-func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatResponse, perms *security.PermissionEngine, msg adapter.IncomingMessage, convID string) string {
+// the cleaned response text and a pending approval request (if any).
+func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatResponse, perms *security.PermissionEngine, msg adapter.IncomingMessage, convID string) (string, *approval.Request) {
 	responseText, memUpdate := extractMemoryUpdate(resp.Content)
 	e.applyMemoryUpdate(memUpdate, perms)
 
@@ -1073,11 +1068,11 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 	responseText, skillPayload := extractSkillCreate(responseText)
 	responseText, schedPayload := extractScheduleAdd(responseText)
 
-	e.lastPendingApproval = nil
+	var pendingApproval *approval.Request
 
 	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
 		personaRef := e.persona
-		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: userUpdate, kind: approval.ActionKindUserUpdate,
 			description: "Update user profile (USER.md)",
 			pendingMsg:  "\n\n_Proposed user profile update is pending your approval._",
@@ -1087,9 +1082,9 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		}, responseText)
 	}
 
-	if soulUpdate != "" && e.lastPendingApproval == nil && e.persona != nil && e.persona.Dir() != "" {
+	if soulUpdate != "" && pendingApproval == nil && e.persona != nil && e.persona.Dir() != "" {
 		personaRef := e.persona
-		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: soulUpdate, kind: approval.ActionKindSoulUpdate,
 			description: "Update soul identity (SOUL.md)",
 			pendingMsg:  "\n\n_Proposed soul update is pending your approval._",
@@ -1099,8 +1094,8 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		}, responseText)
 	}
 
-	if skillPayload != "" && e.lastPendingApproval == nil {
-		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+	if skillPayload != "" && pendingApproval == nil {
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: skillPayload, kind: approval.ActionKindCreateSkill,
 			description: "Create new skill",
 			pendingMsg:  "\n\n_Proposed skill creation is pending your approval._",
@@ -1110,8 +1105,8 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		}, responseText)
 	}
 
-	if schedPayload != "" && e.lastPendingApproval == nil {
-		e.lastPendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
+	if schedPayload != "" && pendingApproval == nil {
+		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
 			payload: schedPayload, kind: approval.ActionKindModifySchedule,
 			description: "Add new schedule",
 			pendingMsg:  "\n\n_Proposed schedule addition is pending your approval._",
@@ -1121,7 +1116,7 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 		}, responseText)
 	}
 
-	return responseText
+	return responseText, pendingApproval
 }
 
 // HandleMessage processes a single incoming message and sends the response

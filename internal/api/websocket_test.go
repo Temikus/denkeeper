@@ -1,14 +1,26 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
 )
 
 // wsTestServer creates an httptest.Server with a WebSocket-enabled Server.
@@ -271,5 +283,279 @@ func TestWSHealth_WSDisabled(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if body["ws_enabled"] != false {
 		t.Errorf("ws_enabled = %v, want false", body["ws_enabled"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// blockingProvider — an LLM provider whose ChatCompletion blocks until
+// its gate channel is closed, allowing tests to hold semaphore slots open.
+// ---------------------------------------------------------------------------
+
+type blockingProvider struct {
+	gate     chan struct{}   // close to unblock all pending calls
+	entered  chan struct{}   // receives a value each time a call enters
+	inflight atomic.Int64   // number of currently blocked calls
+}
+
+func newBlockingProvider() *blockingProvider {
+	return &blockingProvider{
+		gate:    make(chan struct{}),
+		entered: make(chan struct{}, 100),
+	}
+}
+
+func (b *blockingProvider) Name() string { return "mock" }
+
+func (b *blockingProvider) ChatCompletion(ctx context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	b.inflight.Add(1)
+	defer b.inflight.Add(-1)
+	// Signal that we have entered the provider.
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &llm.ChatResponse{
+		Content:      "Hello from blocking mock!",
+		TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+		Model:        "test-model",
+		FinishReason: "stop",
+	}, nil
+}
+
+func (b *blockingProvider) HealthCheck(_ context.Context) error { return nil }
+
+// wsTestServerWithProvider creates a test server using the given LLM provider,
+// so tests can control when ChatCompletion returns. It uses a file-based
+// SQLite store (with WAL mode) instead of :memory: to support concurrent
+// goroutine access without connection-pool isolation issues.
+func wsTestServerWithProvider(t *testing.T, prov llm.Provider) (*httptest.Server, *Server) {
+	t.Helper()
+	logger := testLogger()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	mem, err := agent.NewSQLiteMemoryStore(dbPath)
+	if err != nil {
+		t.Fatalf("creating file-based memory store: %v", err)
+	}
+	t.Cleanup(func() { _ = mem.Close() })
+
+	costTracker := llm.NewCostTracker(1.0)
+
+	perms, _ := security.NewPermissionEngine("supervised")
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(prov)
+
+	approvalStore, _ := approval.NewInMemoryStore()
+	approvalMgr := approval.NewManager(approvalStore, logger)
+
+	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{}, nil, approvalMgr, logger)
+
+	dispatcher := agent.NewDispatcher(
+		map[string]*agent.Engine{"default": e},
+		[]agent.Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil,
+		logger,
+	)
+
+	sched := scheduler.New(logger)
+
+	deps := Deps{
+		Dispatcher:  dispatcher,
+		Scheduler:   sched,
+		CostTracker: costTracker,
+		Memory:      mem,
+		Approvals:   approvalMgr,
+		Config: &config.Config{
+			Agents: []config.AgentInstanceConfig{
+				{Name: "default", Adapters: []string{"telegram"}},
+			},
+		},
+	}
+
+	cfg := testConfig(allScopesKey())
+	cfg.WebSocketEnabled = boolPtr(true)
+	cfg.WebSocketMaxConnections = 100
+	cfg.WebSocketReplayBufferTTL = "5m"
+	srv := New(cfg, deps, logger)
+	ts := httptest.NewServer(srv.httpServer.Handler)
+	t.Cleanup(ts.Close)
+	return ts, srv
+}
+
+func TestWSConn_ConcurrentChatSemaphore(t *testing.T) {
+	bp := newBlockingProvider()
+	ts, _ := wsTestServerWithProvider(t, bp)
+	conn := dialWS(t, ts)
+
+	// Send wsMaxConcurrentChats (10) requests that will all block.
+	for i := 0; i < wsMaxConcurrentChats; i++ {
+		msg := ChatRequestFrame{
+			Type:    FrameTypeChatRequest,
+			Agent:   "default",
+			Message: "hello",
+		}
+		if err := conn.WriteJSON(msg); err != nil {
+			t.Fatalf("write chat %d: %v", i, err)
+		}
+	}
+
+	// Wait until all 10 goroutines have entered the provider.
+	deadline := time.After(10 * time.Second)
+	for i := 0; i < wsMaxConcurrentChats; i++ {
+		select {
+		case <-bp.entered:
+		case <-deadline:
+			t.Fatalf("timed out waiting for goroutine %d to enter provider (inflight=%d)",
+				i, bp.inflight.Load())
+		}
+	}
+
+	// The 11th request should be rejected immediately with rate_limited.
+	msg := ChatRequestFrame{
+		Type:    FrameTypeChatRequest,
+		Agent:   "default",
+		Message: "one too many",
+	}
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("write overflow chat: %v", err)
+	}
+
+	// Read frames until we find the rate_limited error. The 10 in-flight
+	// chats emit "thinking" events before the 11th gets rejected, so we
+	// must skip those.
+	var gotRateLimited bool
+	readDeadline := time.Now().Add(5 * time.Second)
+	for !gotRateLimited {
+		_ = conn.SetReadDeadline(readDeadline)
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		var frame map[string]any
+		_ = json.Unmarshal(data, &frame)
+		if frame["type"] == "error" && frame["code"] == "rate_limited" {
+			gotRateLimited = true
+		}
+	}
+
+	if !gotRateLimited {
+		t.Error("expected a rate_limited error frame for the 11th concurrent request")
+	}
+
+	// Unblock all goroutines so test can clean up.
+	close(bp.gate)
+}
+
+func TestWSConn_SemaphoreReleasedAfterCompletion(t *testing.T) {
+	bp := newBlockingProvider()
+	ts, _ := wsTestServerWithProvider(t, bp)
+	conn := dialWS(t, ts)
+
+	// Fill all semaphore slots.
+	for i := 0; i < wsMaxConcurrentChats; i++ {
+		msg := ChatRequestFrame{
+			Type:    FrameTypeChatRequest,
+			Agent:   "default",
+			Message: "hello",
+		}
+		if err := conn.WriteJSON(msg); err != nil {
+			t.Fatalf("write chat %d: %v", i, err)
+		}
+	}
+
+	// Wait until all slots are occupied.
+	deadline := time.After(10 * time.Second)
+	for i := 0; i < wsMaxConcurrentChats; i++ {
+		select {
+		case <-bp.entered:
+		case <-deadline:
+			t.Fatalf("timed out waiting for goroutine %d to enter provider", i)
+		}
+	}
+
+	// Unblock all pending calls so they complete and release semaphore slots.
+	close(bp.gate)
+
+	// Drain all frames from the completed chats (content + done per chat).
+	doneCount := 0
+	drainDeadline := time.Now().Add(5 * time.Second)
+	for doneCount < wsMaxConcurrentChats {
+		_ = conn.SetReadDeadline(drainDeadline)
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("drain read: %v (doneCount=%d)", err, doneCount)
+		}
+		var f map[string]any
+		_ = json.Unmarshal(data, &f)
+		if f["type"] == "done" {
+			doneCount++
+		}
+	}
+
+	// Since we already unblocked bp, the next request will complete immediately.
+	msg := ChatRequestFrame{
+		Type:    FrameTypeChatRequest,
+		Agent:   "default",
+		Message: "after release",
+	}
+	if err := conn.WriteJSON(msg); err != nil {
+		t.Fatalf("write follow-up: %v", err)
+	}
+
+	// Read frames — we should get content + done, not a rate_limited error.
+	var gotDone bool
+	readDeadline := time.Now().Add(5 * time.Second)
+	for !gotDone {
+		_ = conn.SetReadDeadline(readDeadline)
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("follow-up read: %v", err)
+		}
+		var f map[string]any
+		_ = json.Unmarshal(data, &f)
+		if f["type"] == "error" && f["code"] == "rate_limited" {
+			t.Fatal("follow-up request was rate-limited; semaphore was not released")
+		}
+		if f["type"] == "done" {
+			gotDone = true
+		}
+	}
+}
+
+func TestWSHub_ConcurrentRegisterUnregister(t *testing.T) {
+	hub := NewWSHub(0, 5*time.Minute, testLogger()) // unlimited capacity
+
+	const goroutines = 50
+	const opsPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < opsPerGoroutine; i++ {
+				c := &WSConn{done: make(chan struct{})}
+				if !hub.Register(c) {
+					t.Errorf("register failed unexpectedly")
+					return
+				}
+				// Immediately unregister to keep the map from growing unbounded.
+				hub.Unregister(c)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// After all goroutines complete, every connection was unregistered.
+	if count := hub.ConnCount(); count != 0 {
+		t.Errorf("final conn count = %d, want 0", count)
 	}
 }

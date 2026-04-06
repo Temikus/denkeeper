@@ -208,14 +208,23 @@ func (s *SQLiteMemoryStore) CountConversationsBefore(ctx context.Context, before
 // PruneConversations deletes all conversations (and their messages) created before the given time.
 // Returns the number of conversations deleted.
 func (s *SQLiteMemoryStore) PruneConversations(ctx context.Context, before time.Time) (int, error) {
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("starting prune transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE created_at < ?)`, before); err != nil {
 		return 0, fmt.Errorf("deleting old messages: %w", err)
 	}
-	result, err := s.db.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`DELETE FROM conversations WHERE created_at < ?`, before)
 	if err != nil {
 		return 0, fmt.Errorf("deleting old conversations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing prune transaction: %w", err)
 	}
 	n, _ := result.RowsAffected()
 	return int(n), nil

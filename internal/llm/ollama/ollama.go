@@ -84,7 +84,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -152,7 +152,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 func (c *Client) HealthCheck(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/tags", nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("creating health check request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)

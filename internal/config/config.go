@@ -997,40 +997,43 @@ func validateAdaptersAndProviders(cfg *Config) error {
 
 func validate(cfg *Config) error {
 	if err := validateAdaptersAndProviders(cfg); err != nil {
-		return err
+		return fmt.Errorf("validate adapters/providers: %w", err)
 	}
 	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
-		return err
+		return fmt.Errorf("validate session tier: %w", err)
 	}
 	if err := validateFallbacks(cfg.LLM.Fallbacks); err != nil {
-		return err
+		return fmt.Errorf("validate fallbacks: %w", err)
 	}
 	agentNames, err := validateAgents(cfg.Agents)
 	if err != nil {
-		return err
+		return fmt.Errorf("validate agents: %w", err)
 	}
 	if err := validateSchedules(cfg.Schedules, agentNames); err != nil {
-		return err
+		return fmt.Errorf("validate schedules: %w", err)
 	}
 	if err := validateMCP(&cfg.MCP); err != nil {
-		return err
+		return fmt.Errorf("validate mcp: %w", err)
 	}
 	if err := validateTools(cfg.Tools); err != nil {
-		return err
+		return fmt.Errorf("validate tools: %w", err)
 	}
 	if err := validatePlugins(cfg.Plugins, cfg.Tools); err != nil {
-		return err
+		return fmt.Errorf("validate plugins: %w", err)
 	}
 	if err := validateVoice(&cfg.Voice); err != nil {
-		return err
+		return fmt.Errorf("validate voice: %w", err)
 	}
 	if err := validateAPI(&cfg.API); err != nil {
-		return err
+		return fmt.Errorf("validate api: %w", err)
 	}
 	if err := validateWeb(&cfg.Web); err != nil {
-		return err
+		return fmt.Errorf("validate web: %w", err)
 	}
-	return validateSandbox(&cfg.Sandbox)
+	if err := validateSandbox(&cfg.Sandbox); err != nil {
+		return fmt.Errorf("validate sandbox: %w", err)
+	}
+	return nil
 }
 
 // validWebSearchProviders is the set of supported web search provider names.

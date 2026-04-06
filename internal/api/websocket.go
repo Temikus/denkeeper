@@ -32,6 +32,10 @@ const (
 
 	// wsSendBufferSize is the capacity of the outbound message channel.
 	wsSendBufferSize = 256
+
+	// wsMaxConcurrentChats is the maximum number of concurrent chat
+	// goroutines per WebSocket connection. Prevents DoS via chat spam.
+	wsMaxConcurrentChats = 10
 )
 
 // upgrader is the gorilla/websocket upgrader shared across connections.
@@ -97,6 +101,27 @@ func (h *WSHub) Shutdown() {
 	}
 }
 
+// StartCleanup launches a background goroutine that periodically removes
+// stale replay buffers. It stops when ctx is cancelled.
+func (h *WSHub) StartCleanup(ctx context.Context) {
+	ttl := h.replayStore.ttl
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(ttl)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.replayStore.Cleanup()
+			}
+		}
+	}()
+}
+
 // ConnCount returns the current number of active connections.
 func (h *WSHub) ConnCount() int {
 	h.mu.Lock()
@@ -124,6 +149,9 @@ type WSConn struct {
 	// Key: sessionID, Value: context.CancelFunc.
 	sessions sync.Map
 
+	// chatSem limits the number of concurrent chat goroutines per connection.
+	chatSem chan struct{}
+
 	// seqCounter provides monotonically increasing sequence numbers.
 	seqCounter atomic.Int64
 }
@@ -136,6 +164,7 @@ func newWSConn(conn *websocket.Conn, hub *WSHub, server *Server, keyName string)
 		keyName: keyName,
 		send:    make(chan []byte, wsSendBufferSize),
 		done:    make(chan struct{}),
+		chatSem: make(chan struct{}, wsMaxConcurrentChats),
 	}
 }
 
@@ -174,8 +203,19 @@ func (c *WSConn) sendJSON(v any) {
 	select {
 	case c.send <- data:
 	default:
-		// Send buffer full — drop the message and log.
-		c.hub.logger.Warn("ws: send buffer full, dropping message", "key", c.keyName)
+		// Send buffer full — drop the message to avoid blocking the writer.
+		frameType := "unknown"
+		switch f := v.(type) {
+		case WSEventFrame:
+			frameType = f.Type
+		case WSErrorFrame:
+			frameType = "error"
+		}
+		c.hub.logger.Warn("ws: send buffer full, dropping message",
+			"key", c.keyName,
+			"frame_type", frameType,
+			"queue_depth", len(c.send),
+		)
 	}
 }
 
@@ -321,6 +361,14 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 		ConversationID: sessionID,
 	}
 
+	// Limit concurrent chat goroutines per connection.
+	select {
+	case c.chatSem <- struct{}{}:
+	default:
+		c.sendError(sessionID, "rate_limited", "too many concurrent chat requests")
+		return
+	}
+
 	// Create a cancellable context for this session.
 	ctx, cancel := context.WithCancel(context.Background())
 	c.sessions.Store(sessionID, cancel)
@@ -328,6 +376,7 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 	// Run the chat pipeline in a goroutine so the read pump stays free.
 	go func() {
 		defer func() {
+			<-c.chatSem
 			c.sessions.Delete(sessionID)
 			cancel()
 		}()

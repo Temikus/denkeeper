@@ -83,7 +83,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -176,7 +176,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 func (c *Client) HealthCheck(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("creating health check request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
@@ -208,7 +208,7 @@ func (c *Client) FundsRemaining(ctx context.Context) (float64, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	if err != nil {
 		return 0, fmt.Errorf("reading key info response: %w", err)
 	}
@@ -270,7 +270,7 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	}
 	var w wire
 	if err := json.Unmarshal(data, &w); err != nil {
-		return err
+		return fmt.Errorf("unmarshaling openrouter message: %w", err)
 	}
 	m.Role = w.Role
 	m.ToolCalls = w.ToolCalls

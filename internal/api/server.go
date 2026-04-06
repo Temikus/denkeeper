@@ -212,6 +212,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 
 	var handler http.Handler = mux
 	handler = s.middlewareLogging(handler)
+	handler = s.middlewareSecurityHeaders(handler)
 	handler = s.middlewareCORS(handler)
 	handler = s.middlewareRecover(handler)
 
@@ -236,6 +237,11 @@ func (s *Server) Run(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("api: listen %s: %w", s.cfg.Listen, err)
+	}
+
+	// Start periodic replay-buffer cleanup (stops when ctx is cancelled).
+	if s.wsHub != nil {
+		s.wsHub.StartCleanup(ctx)
 	}
 
 	errCh := make(chan error, 1)
@@ -1822,6 +1828,18 @@ func (s *Server) middlewareCORS(next http.Handler) http.Handler {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) middlewareSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		// Set Cache-Control on API routes only (not static assets served by the web handler).
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
 	})
