@@ -36,7 +36,14 @@ jobs:
           node-version: lts/*
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: cd web && npm ci && npm test
+      - run: cd web && npm ci && npm run test:coverage
+      - name: Upload UI coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-coverage
+          path: web/coverage/
+          retention-days: 7
 
   lint:
     name: Lint

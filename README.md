@@ -9,6 +9,7 @@
   <a href="https://github.com/Temikus/denkeeper/pkgs/container/denkeeper"><img src="https://img.shields.io/github/v/release/Temikus/denkeeper?label=ghcr.io&logo=docker" alt="Docker Image"></a>
   <a href="https://goreportcard.com/report/github.com/Temikus/denkeeper"><img src="https://goreportcard.com/badge/github.com/Temikus/denkeeper" alt="Go Report Card"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Temikus/denkeeper" alt="License"></a>
+  <a href="https://github.com/Temikus/denkeeper/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/UI_coverage-enforced-blue" alt="UI Coverage"></a>
 </p>
 
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
