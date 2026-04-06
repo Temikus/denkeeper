@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-03T00:00:00+00:00
+lastmod: 2026-04-06T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -57,6 +57,22 @@ data: {"type":"content","text":"How can I help you?"}
 
 data: {"type":"done","session_id":"abc123"}
 ```
+
+**SSE event types:** `content`, `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `done`, `error`.
+
+### `GET /api/v1/ws`
+
+**Scope:** `chat`
+
+Upgrades to a bidirectional WebSocket connection. Authentication is via `?token=` query parameter (API key auth) or session cookie. The WebSocket carries the same event types as SSE, plus supports sending chat requests and approval responses as JSON frames.
+
+The web dashboard connects via WebSocket by default and falls back to SSE after 3 failed reconnect attempts. Configure with `api.websocket_enabled`, `api.websocket_max_connections`, and `api.websocket_replay_buffer_ttl` in your config.
+
+### `GET /api/v1/models`
+
+**Scope:** `agents:read`
+
+List available LLM models from all configured providers.
 
 ## Sessions
 
@@ -225,13 +241,45 @@ Get a single approval request.
 
 **Scope:** `approvals:write`
 
-Approve a pending request.
+Approve a pending request. Add `?auto_approve=session` or `?auto_approve=permanent` to simultaneously create an auto-approve rule for future tool calls of the same type.
 
 ### `POST /api/v1/approvals/{id}/deny`
 
 **Scope:** `approvals:write`
 
 Deny a pending request.
+
+## Auto-Approve Rules
+
+### `GET /api/v1/auto-approve`
+
+**Scope:** `approvals:read`
+
+List all auto-approve rules. Filter by agent with `?agent=name`.
+
+### `POST /api/v1/auto-approve`
+
+**Scope:** `approvals:write`
+
+Create an auto-approve rule.
+
+**Request body:**
+
+```json
+{
+  "agent": "default",
+  "tool_name": "web_search",
+  "scope": "permanent"
+}
+```
+
+- `scope`: `"session"` (in-memory, cleared on restart) or `"permanent"` (persisted in SQLite).
+
+### `DELETE /api/v1/auto-approve/{id}`
+
+**Scope:** `approvals:write`
+
+Delete an auto-approve rule. Returns `204 No Content`.
 
 ## Setup
 
@@ -391,11 +439,29 @@ Add a new MCP tool server. The tool is started immediately and its configuration
 }
 ```
 
+### `PUT /api/v1/tools/{name}`
+
+**Scope:** `tools:write`
+
+Edit a tool server's configuration. The server is restarted with the new settings and the configuration is persisted to TOML.
+
 ### `DELETE /api/v1/tools/{name}`
 
 **Scope:** `tools:write`
 
 Remove a tool server. The process is stopped and the configuration is removed from TOML.
+
+### `GET /api/v1/tools/{name}/health`
+
+**Scope:** `tools:read`
+
+Get health status for a specific tool server. Returns `connected`, `error`, or `disabled` status with restart count, last error, and uptime.
+
+### `POST /api/v1/tools/{name}/restart`
+
+**Scope:** `tools:write`
+
+Manually restart a tool server.
 
 ### `GET /api/v1/plugins`
 

@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-04T00:00:00+00:00
+lastmod: 2026-04-06T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -129,6 +129,10 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | `key_file` | string | — | TLS private key path |
 | `cors_origins` | string[] | — | Allowed CORS origins |
 | `rate_limit` | float | `0` | Max requests/sec per API key |
+| `websocket_enabled` | bool | `true` | Enable the WebSocket endpoint (`GET /api/v1/ws`) |
+| `websocket_max_connections` | int | `0` | Maximum concurrent WebSocket connections (0 = unlimited) |
+| `websocket_replay_buffer_ttl` | string | `"5m"` | How long to buffer events for replay after a client disconnects |
+| `external_url` | string | — | Publicly-reachable base URL (used for OAuth callback URLs; defaults to `http(s)://<listen>`) |
 
 ## `[[schedules]]`
 
@@ -220,6 +224,10 @@ Global settings that apply to all MCP tool servers.
 | `url` | string | *required for sse* | Remote server URL (SSE only, must be http/https) |
 | `headers` | map | — | HTTP headers sent with SSE requests (SSE only) |
 | `request_timeout_secs` | int | `0` | Per-server timeout override (0 = use global `[mcp]` value) |
+| `auth` | string | `""` | Authentication method: `""` (none) or `"oauth"` (OAuth 2.1, SSE only) |
+| `client_id` | string | — | OAuth2 client ID (optional; some servers use dynamic registration) |
+| `client_secret` | string | — | OAuth2 client secret (optional; must be set together with `client_id`) |
+| `scopes` | string[] | — | OAuth2 scopes to request (optional) |
 
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 

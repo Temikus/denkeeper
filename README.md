@@ -13,7 +13,7 @@
 
 A security-first personal AI agent that lives in your chat. Built in Go as a single binary, designed to run anywhere from a Raspberry Pi to a cloud VM.
 
-Denkeeper connects to your Telegram or Discord, routes messages through LLM providers via [Anthropic](https://anthropic.com), [OpenRouter](https://openrouter.ai), or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
+Denkeeper connects to your Telegram or Discord, routes messages through LLM providers via [Anthropic](https://anthropic.com), [OpenAI](https://openai.com), [OpenRouter](https://openrouter.ai), or a local [Ollama](https://ollama.com) instance, and remembers conversations across sessions using a local SQLite database. It enforces per-session cost budgets, user allowlists, and a tiered permission system — so you stay in control of what it can do and how much it can spend.
 
 ## Installation
 
@@ -111,13 +111,13 @@ cosign verify \
 - **Multi-agent routing** — run multiple named agents, each with their own persona, skills, LLM model, and permission tier
 - **Telegram + Discord** — chat with your agent from your phone or Discord server, including inline Approve/Deny buttons for supervised actions; both adapters can run simultaneously
 - **User allowlist** — only approved user IDs can interact (per-adapter)
-- **LLM routing** — pluggable provider interface; Anthropic (direct), OpenRouter (cloud, hundreds of models), and Ollama (local inference) built-in
+- **LLM routing** — pluggable provider interface; Anthropic (direct), OpenAI (direct + Azure/vLLM-compatible), OpenRouter (cloud, hundreds of models), and Ollama (local inference) built-in
 - **Fallback strategies** — automatic model/provider switching on errors, rate limits, or low funds
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
 - **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
-- **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff
+- **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff; OAuth 2.1 authorization for remote MCP servers
 - **MCP security** — SSRF protection (blocks localhost, link-local, and cloud metadata endpoints), HTTP header injection prevention, redirect target validation, env var denylist for secrets, and URL/arg redaction in API responses
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
@@ -127,7 +127,7 @@ cosign verify \
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
 - **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
-- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming, session management, approval CRUD, tool/plugin CRUD, and API key management
+- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming and WebSocket transport, session management, approval CRUD, tool/plugin CRUD, and API key management
 - **Dashboard authentication** — password login (bcrypt), OAuth2/OIDC SSO (PKCE), session cookies (AES-256-GCM)
 - **OpenTelemetry observability** — Prometheus `/metrics` endpoint and optional OTLP trace export
 - **CLI plugin signing** — `denkeeper plugin keygen/sign/verify` commands for Ed25519 plugin binary signing and verification
@@ -137,13 +137,13 @@ cosign verify \
 ## Architecture
 
 ```
-Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenRouter/Ollama)
-                                               ↕                    ↕
-                                           MemoryStore          CostTracker
-                                           (SQLite)
+Adapter (Telegram/Discord) ─┐
+Web Dashboard (WS/SSE) ─────┼→ Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenAI/OpenRouter/Ollama)
+REST API (/api/v1/chat) ────┘                    ↕                    ↕
+                                             MemoryStore          CostTracker
+                                             (SQLite)
 
-API Server (/api/v1/...) ──────────────────────┘
-Scheduler ─────────────────────────────────────┘
+Scheduler ──────────────────────────────────────┘
 ```
 
 The Dispatcher routes incoming messages to named agent Engines based on adapter bindings. Each Engine checks permissions, loads conversation history, builds the system prompt (persona + skills), calls the LLM (with tool-call loop if MCP tools are configured), stores the response, and sends it back through the adapter.
@@ -240,6 +240,7 @@ Secrets and select config fields can be set via environment variables, which tak
 | `DENKEEPER_API_AUTH_SESSION_SECRET` | `api.auth.session_secret` (AES-256 hex key) |
 | `DENKEEPER_OIDC_CLIENT_ID` | `api.auth.oidc.client_id` |
 | `DENKEEPER_OIDC_CLIENT_SECRET` | `api.auth.oidc.client_secret` |
+| `DENKEEPER_API_WEBSOCKET_ENABLED` | `api.websocket_enabled` (accepts `"true"` or `"false"`) |
 | `DENKEEPER_OTEL_TRACES_ENDPOINT` | `otel.traces_endpoint` (OTLP HTTP endpoint) |
 
 A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) for Kubernetes deployments.
@@ -329,7 +330,7 @@ key  = "dk-your-secret-key"
 scopes = ["chat", "sessions:read", "costs:read"]
 ```
 
-**Available scopes**: `chat`, `admin`, `sessions:read`, `costs:read`, `skills:read`, `schedules:read`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`
+**Available scopes**: `chat`, `admin`, `agents:read`, `agents:write`, `sessions:read`, `costs:read`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `kv:read`, `kv:write`
 
 **Endpoints:**
 
@@ -339,19 +340,31 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/setup` | — | First-run setup status |
 | `POST` | `/api/v1/setup` | — | Initialize first-run configuration |
 | `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
+| `GET` | `/api/v1/ws` | `chat` | WebSocket upgrade for bidirectional streaming (auth via `?token=` or session cookie) |
+| `GET` | `/api/v1/models` | `agents:read` | List available LLM models from all providers |
 | `GET` | `/api/v1/sessions` | `sessions:read` | List all conversations |
 | `GET` | `/api/v1/sessions/{id}/messages` | `sessions:read` | Get messages for a session |
 | `DELETE` | `/api/v1/sessions/{id}` | `sessions:read` | Delete a session and its history |
-| `GET` | `/api/v1/agents` | `admin` | List agents with metadata |
-| `GET` | `/api/v1/agents/{name}` | `admin` | Agent details and skills |
+| `GET` | `/api/v1/agents` | `agents:read` | List agents with metadata |
+| `GET` | `/api/v1/agents/{name}` | `agents:read` | Agent details and skills |
+| `PATCH` | `/api/v1/agents/{name}` | `agents:write` | Mutate agent config |
 | `GET` | `/api/v1/skills` | `skills:read` | List all skills across agents |
 | `GET` | `/api/v1/skills/{agent}` | `skills:read` | List skills for a specific agent |
+| `POST` | `/api/v1/skills/{agent}` | `skills:write` | Create a skill |
+| `PUT` | `/api/v1/skills/{agent}/{name}` | `skills:write` | Update a skill |
+| `DELETE` | `/api/v1/skills/{agent}/{name}` | `skills:write` | Delete a skill |
 | `GET` | `/api/v1/schedules` | `schedules:read` | List schedules with run times |
+| `POST` | `/api/v1/schedules` | `schedules:write` | Create a schedule |
+| `PATCH` | `/api/v1/schedules/{name}` | `schedules:write` | Update a schedule |
+| `DELETE` | `/api/v1/schedules/{name}` | `schedules:write` | Delete a schedule |
 | `GET` | `/api/v1/costs` | `costs:read` | Cost summary |
 | `GET` | `/api/v1/approvals` | `approvals:read` | List approval requests (filter by `?status=pending`) |
 | `GET` | `/api/v1/approvals/{id}` | `approvals:read` | Get a single approval request |
-| `POST` | `/api/v1/approvals/{id}/approve` | `approvals:write` | Approve a pending request |
+| `POST` | `/api/v1/approvals/{id}/approve` | `approvals:write` | Approve; `?auto_approve=session\|permanent` to create auto-approve rule |
 | `POST` | `/api/v1/approvals/{id}/deny` | `approvals:write` | Deny a pending request |
+| `GET` | `/api/v1/auto-approve` | `approvals:read` | List auto-approve rules (filter by `?agent=`) |
+| `POST` | `/api/v1/auto-approve` | `approvals:write` | Create an auto-approve rule |
+| `DELETE` | `/api/v1/auto-approve/{id}` | `approvals:write` | Delete an auto-approve rule |
 | `GET` | `/api/v1/keys` | `admin` | List API keys (secrets not returned) |
 | `POST` | `/api/v1/keys` | `admin` | Create a new API key |
 | `DELETE` | `/api/v1/keys/{id}` | `admin` | Revoke an API key |
@@ -360,11 +373,16 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/tools` | `tools:read` | List MCP tool servers |
 | `GET` | `/api/v1/tools/{name}` | `tools:read` | Get tool server details |
 | `POST` | `/api/v1/tools` | `tools:write` | Add a tool server |
+| `PUT` | `/api/v1/tools/{name}` | `tools:write` | Edit a tool server |
 | `DELETE` | `/api/v1/tools/{name}` | `tools:write` | Remove a tool server |
+| `GET` | `/api/v1/tools/{name}/health` | `tools:read` | Tool server health status |
+| `POST` | `/api/v1/tools/{name}/restart` | `tools:write` | Manually restart a tool server |
 | `GET` | `/api/v1/plugins` | `tools:read` | List plugins |
 | `GET` | `/api/v1/plugins/{name}` | `tools:read` | Get plugin details |
 | `POST` | `/api/v1/plugins` | `tools:write` | Add a plugin |
 | `DELETE` | `/api/v1/plugins/{name}` | `tools:write` | Remove a plugin |
+| `GET` | `/api/v1/kv/{agent}` | `kv:read` | List KV keys for an agent |
+| `DELETE` | `/api/v1/kv/{agent}/{key}` | `kv:write` | Delete a KV key |
 
 **Chat example:**
 
@@ -427,6 +445,7 @@ internal/
   kv/                Per-agent key-value store with TTL
   llm/               Provider interface, router, cost tracking
     anthropic/       Anthropic direct client
+    openai/          OpenAI direct client (Azure/vLLM-compatible)
     openrouter/      OpenRouter client
     ollama/          Ollama local inference client
   persona/           Persona file loader (SOUL.md, USER.md, MEMORY.md)
@@ -436,6 +455,7 @@ internal/
   security/          Permission engine (tiers) and Ed25519 plugin signing
   skill/             Skill file loader, trigger matching, merging
   tool/              MCP tool server manager
+    oauth/           MCP OAuth 2.1 authorization for remote tool servers
   voice/             STT/TTS provider interface
     openai/          OpenAI Whisper + TTS client
   web/               Embedded web dashboard handler (serves web/dist/)
@@ -501,11 +521,27 @@ Denkeeper is built in phases:
 - [x] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns (vision + non-vision LLMs)
 - [x] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
 
-**Phase 7 — Remote MCP & Observability** (in progress)
+**Phase 7 — Remote MCP & Observability** ✅
 - [x] Remote MCP servers — SSE/Streamable HTTP transport alongside existing stdio; auto-restart with configurable backoff (`[mcp]` section)
 - [x] MCP security hardening — SSRF blocklist, HTTP header injection prevention, redirect target validation, env var denylist for secrets, URL/arg redaction in API responses
 - [x] Pipeline logging — structured log events throughout the chat pipeline with finish reason, token breakdown, tool durations, and round summaries
 - [x] Real-time tool call streaming — `tool_start`/`tool_end` SSE events with `duration_ms` for inline tool progress in the web dashboard
+
+**Phase 8 — Cost Accuracy** ✅
+- [x] Pricing registry — bundled defaults for ~70 models with exact-match > prefix-match > fallback lookup
+- [x] Pricing source tracking — `pricing_source` OTel attribute for cost auditability
+
+**Phase 9 — WebSocket Streaming** ✅
+- [x] WebSocket transport — bidirectional `GET /api/v1/ws` with auto-reconnect, replay buffer, and SSE fallback
+- [x] Inline approvals — approve/deny/auto-approve tool calls directly in the web chat UI
+- [x] Auto-approve rules — session-scoped (in-memory) and permanent (SQLite) rules with REST API CRUD
+- [x] MCP OAuth 2.1 — authorization flow for remote SSE tool servers (e.g. Todoist); per-tool `auth = "oauth"` config
+
+**Phase 10 — Web UI Testing & Polish** ✅
+- [x] Web UI test infrastructure — Vitest + jsdom + MSW with 130+ tests
+- [x] Web UI redesigns — card-layout Tools page with inspector modal, grouped sidebar navigation, animated theme toggle
+- [x] Session selector in chat toolbar
+- [x] Helm chart enhancements — `extraContainers` and ServiceMonitor support
 
 ## License
 

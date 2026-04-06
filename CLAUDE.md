@@ -9,12 +9,14 @@ This project uses [just](https://github.com/casey/just) as the command runner an
 ```bash
 just build                    # Build binary → pkg/bin/denkeeper
 just serve                    # Run via go run (accepts optional config path)
-just test                     # All tests with -race
+just test                     # All Go tests with -race
 just test-v                   # Verbose test output
 just test-pkg internal/agent  # Single package
+just test-ui                  # Web UI tests (vitest)
 just lint                     # golangci-lint
 just fmt                      # gofmt -w .
-just check                    # fmt-check + vet + lint + test (CI equivalent)
+just check                    # fmt-check + vet + lint + test + test-ui (CI equivalent)
+just scan                     # Security scans (gosec + govulncheck)
 just build-ui                 # Build web UI (required before go build/test)
 just build-full               # Build web then binary
 just web-dev                  # Vite dev server with hot-reload
@@ -26,10 +28,11 @@ just test-integration         # E2E integration tests
 Denkeeper is a single-binary personal AI agent with multi-agent routing. Messages flow through:
 
 ```
-Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenRouter/OpenAI/Ollama)
-                                               ↕                    ↕
-                                           MemoryStore          CostTracker
-                                           (SQLite)              + Pricing Registry
+Adapter (Telegram/Discord) ─┐
+Web Dashboard (WS/SSE) ─────┼→ Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenRouter/OpenAI/Ollama)
+REST API (/api/v1/chat) ────┘                    ↕                    ↕
+                                             MemoryStore          CostTracker
+                                             (SQLite)              + Pricing Registry
 ```
 
 **Dispatcher** (`internal/agent/dispatcher.go`) routes messages to the correct Engine based on adapter bindings (`"telegram"` wildcard or `"telegram:12345"` specific). Falls back to the `"default"` agent. Handles `tool_approval` ChatEvents by sending inline keyboard approval messages.
@@ -47,6 +50,7 @@ Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router 
 
 ## Conventions
 
+- **Build tags**: Use `-tags mcp_go_client_oauth` for all Go build/test commands (justfile handles this via `go_tags`).
 - **Error wrapping**: Always `fmt.Errorf("context: %w", err)` — no naked error returns.
 - **Structured logging**: `log/slog` everywhere, with contextual fields.
 - **Context propagation**: All I/O functions accept `context.Context`.
@@ -62,6 +66,7 @@ Adapter (Telegram/Discord) → Dispatcher → Engine (per agent) → LLM Router 
 - Individual `TestName_Scenario` functions (not table-driven).
 - Always run with `-race` flag.
 - Web UI must be built before any Go step that embeds it (CI handles via `build-ui` job).
+- **Web UI tests**: Vitest + jsdom + MSW (mock service worker). Test files in `web/src/__tests__/` and `web/src/components/__tests__/`. Run via `just test-ui`.
 
 ## Permission Tiers & Approval Workflows
 
@@ -100,6 +105,8 @@ cached_input = 0.5 # per million cached input tokens (0 = same as input)
 
 **Health monitoring**: `StartHealthChecker(ctx, interval)` probes servers via ListTools every 30s. Crashed servers are auto-restarted with exponential backoff. Config: `[mcp]` section with `auto_restart` (default true), `max_restart_attempts` (default 3), `restart_cooldown` (default "5m"). `ServerStatus` reports `connected`/`error`/`disabled` with `restart_count`, `last_error`, `uptime_secs`. Manual restart via `Manager.RestartServer()`, `LifecycleManager.RestartTool()`, REST `POST /api/v1/tools/{name}/restart`, or Config MCP `tool_restart`.
 
+**OAuth 2.1 for MCP tools**: `internal/tool/oauth/` implements the MCP OAuth 2.1 spec for remote SSE tool servers that require authorization. Config per tool: `auth = "oauth"` with optional `client_id`, `client_secret`, `scopes`. OAuth routes are mounted at `/api/v1/tools/{name}/oauth/...`. Token storage in SQLite. `api.external_url` used for callback URL construction.
+
 **Security**: SSRF protection, header injection prevention, env var denylist, URL/arg redaction in API responses.
 
 ## External REST API
@@ -109,6 +116,7 @@ cached_input = 0.5 # per million cached input tokens (0 = same as input)
 Key endpoints (all require auth unless noted):
 - `GET /api/v1/health` (no auth)
 - `POST /api/v1/chat` (scope `chat`) — JSON or SSE streaming
+- `GET /api/v1/ws` — WebSocket upgrade (auth via `?token=` or session cookie)
 - `GET /api/v1/models` (scope `agents:read`) — available LLM models from all providers
 - `GET/POST/DELETE /api/v1/approvals/...` — approval CRUD; `POST /approve` accepts `?auto_approve=session|permanent` to simultaneously create an auto-approve rule
 - `GET/POST/DELETE /api/v1/auto-approve` (scope `approvals:read/write`) — auto-approve rule CRUD; `GET` accepts `?agent=` filter
@@ -116,18 +124,20 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PUT/DELETE /api/v1/skills/...` — skill CRUD
 - `GET/PUT /api/v1/agents/{name}/persona/{section}` — persona sections
 - `GET/DELETE /api/v1/kv/...` — KV store
-- `GET/POST/DELETE /api/v1/tools/...` — tool/plugin CRUD
+- `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
 - `PATCH /api/v1/agents/{name}` — agent config mutation
 
-SSE chat events: `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
+Chat streaming events (SSE and WebSocket): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
 
-## Web Dashboard
+## Web Dashboard & WebSocket Transport
 
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` via `//go:embed dist`.
 
 13 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, KV Store, Costs, Agents, API Keys.
+
+**WebSocket transport** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to a bidirectional WebSocket. The web dashboard auto-connects via WS and falls back to SSE after 3 failed reconnect attempts. `WSHub` manages connections with per-connection replay buffer (`websocket_replay_buffer_ttl`, default 5m). Config: `api.websocket_enabled` (default true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl`. Frame types defined in `wsframes.go`.
 
 ## UI/UX Standards
 
@@ -153,10 +163,11 @@ Every user-facing feature must include thoughtful UX treatment.
 | OTel | `internal/otel/` | `[otel]` |
 | Pricing | `internal/llm/pricing/` | `[costs]` |
 | Auth | `internal/api/session.go`, `oidc.go` | `[api.auth]` |
+| MCP OAuth | `internal/tool/oauth/` | `[tools.*.auth]` |
 
 ## Current State
 
-Phase 8 (cost accuracy) complete. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (13 pages).
+Phase 10 (web UI testing) complete. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (13 pages) with WebSocket streaming.
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
 

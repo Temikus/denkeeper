@@ -2,7 +2,7 @@
 title: "Tools (MCP)"
 description: "External tool servers connected via the Model Context Protocol."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-29T00:00:00+00:00
+lastmod: 2026-04-06T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -37,7 +37,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 Tool execution respects the agent's permission tier:
 
 - **Autonomous** — tools execute without approval
-- **Supervised** — tools execute without approval (future: configurable per-tool approval)
+- **Supervised** — each tool call requires human approval via Approve/Deny buttons (Telegram/Discord inline keyboards, web dashboard, or REST API). Auto-approve rules can be created per-tool with session or permanent scope to skip future approvals for trusted tools.
 - **Restricted** — only read-only tools are available
 
 ## Runtime tool management
@@ -87,3 +87,19 @@ Plugins extend the agent with external processes. Two execution strategies are a
 Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/config/) for all sandbox options.
 
 Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli/), and [config reference](/docs/reference/config/) pages for details.
+
+## OAuth 2.1 for remote tools
+
+Remote MCP tool servers that require authorization can use the OAuth 2.1 flow. Configure per tool:
+
+```toml
+[tools.todoist]
+transport = "sse"
+url = "https://mcp.todoist.com/sse"
+auth = "oauth"
+client_id = "your-client-id"       # optional — some servers use dynamic registration
+client_secret = "your-secret"      # optional
+scopes = ["task:read", "task:write"]
+```
+
+When `auth = "oauth"` is set, Denkeeper handles the authorization code flow with PKCE. OAuth callback routes are mounted at `/api/v1/tools/{name}/oauth/...`. Tokens are stored in SQLite and refreshed automatically. Set `api.external_url` in your config to ensure correct callback URL construction when behind a reverse proxy.
