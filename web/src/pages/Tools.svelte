@@ -18,8 +18,18 @@
   let toolHeaderPairs = []
   let toolTimeoutSecs = ''
   let toolEnvPairs = []
+  let toolAuth = ''         // '' or 'oauth'
+  let toolClientID = ''
+  let toolClientSecret = ''
+  let toolScopes = ''
+  let showOAuthAdvanced = false
+  let showConnSettings = false
   let addingTool = false
   let loadingToolConfig = false
+
+  // OAuth connect flow
+  let connectingOAuth = null // tool name currently connecting
+  let oauthPollInterval = null
 
   // Add plugin inline form
   let showPluginForm = false
@@ -188,6 +198,9 @@
     editingToolName = null
     toolName = ''; toolTransport = 'stdio'; toolCommand = ''; toolArgs = ''
     toolURL = ''; toolHeaderPairs = []; toolTimeoutSecs = ''; toolEnvPairs = []
+    toolAuth = ''; toolClientID = ''; toolClientSecret = ''; toolScopes = ''
+    showOAuthAdvanced = false
+    showConnSettings = false
   }
 
   function openAddToolForm() {
@@ -215,6 +228,10 @@
       toolHeaderPairs = objToEnvPairs(info.headers)
       toolTimeoutSecs = info.request_timeout_secs ? String(info.request_timeout_secs) : ''
       toolEnvPairs = objToEnvPairs(info.env)
+      toolAuth = info.auth || ''
+      toolClientID = info.client_id || ''
+      toolClientSecret = '' // never returned by API
+      toolScopes = (info.scopes || []).join(', ')
     } catch (e) {
       error = e.message
       showToolForm = false
@@ -224,12 +241,12 @@
     }
   }
 
-  function toolFormValid() {
+  $: toolFormIsValid = (() => {
     if (!toolName.trim()) return false
     if (toolTransport === 'stdio' && !toolCommand.trim()) return false
     if (toolTransport === 'sse' && !toolURL.trim()) return false
     return true
-  }
+  })()
 
   function buildToolConfig() {
     const cfg = {}
@@ -247,11 +264,18 @@
     if (Object.keys(env).length > 0) cfg.env = env
     const timeout = parseInt(toolTimeoutSecs, 10)
     if (timeout > 0) cfg.request_timeout_secs = timeout
+    if (toolAuth === 'oauth') {
+      cfg.auth = 'oauth'
+      if (toolClientID.trim()) cfg.client_id = toolClientID.trim()
+      if (toolClientSecret.trim()) cfg.client_secret = toolClientSecret.trim()
+      const scopes = toolScopes.split(',').map(s => s.trim()).filter(Boolean)
+      if (scopes.length > 0) cfg.scopes = scopes
+    }
     return cfg
   }
 
   async function submitToolForm() {
-    if (!toolFormValid()) return
+    if (!toolFormIsValid) return
     addingTool = true
     error = ''
     try {
@@ -354,8 +378,69 @@
     }
   }
 
+  async function startOAuthConnect(name) {
+    connectingOAuth = name
+    error = ''
+    try {
+      const result = await api.toolOAuthConnect(name)
+      if (result.auth_url) {
+        const popup = window.open(result.auth_url, 'oauth-' + name, 'width=600,height=700')
+        if (!popup || popup.closed) {
+          error = 'Popup was blocked by your browser. Please allow popups for this site and try again.'
+          connectingOAuth = null
+          return
+        }
+        // Poll for completion.
+        let attempts = 0
+        let consecutiveErrors = 0
+        oauthPollInterval = setInterval(async () => {
+          attempts++
+          if (attempts > 150) { // 5 min at 2s intervals
+            clearInterval(oauthPollInterval)
+            oauthPollInterval = null
+            connectingOAuth = null
+            error = 'OAuth authorization timed out. Please try again.'
+            return
+          }
+          try {
+            const status = await api.toolOAuthStatus(name)
+            consecutiveErrors = 0
+            if (status.has_token) {
+              clearInterval(oauthPollInterval)
+              oauthPollInterval = null
+              connectingOAuth = null
+              await loadData()
+            }
+          } catch {
+            consecutiveErrors++
+            if (consecutiveErrors >= 5) {
+              clearInterval(oauthPollInterval)
+              oauthPollInterval = null
+              connectingOAuth = null
+              error = 'Lost connection while waiting for authorization. Please try again.'
+            }
+          }
+        }, 2000)
+      }
+    } catch (e) {
+      error = e.message
+      connectingOAuth = null
+    }
+  }
+
+  async function revokeOAuthToken(name) {
+    error = ''
+    try {
+      await api.toolOAuthRevoke(name)
+      await loadData()
+    } catch (e) {
+      error = e.message
+    }
+  }
+
   function statusDot(status) {
     if (status === 'connected') return 'green'
+    if (status === 'pending_auth') return 'orange'
     if (status === 'error') return 'red'
     if (status === 'disabled') return 'red'
     return 'grey'
@@ -364,6 +449,7 @@
   function statusLabel(t) {
     if (t.status === 'error') return 'Error'
     if (t.status === 'disabled') return `Disabled`
+    if (t.status === 'pending_auth') return 'Needs Auth'
     if (t.status === 'connected') return 'Connected'
     return t.status
   }
@@ -428,23 +514,6 @@
             URL
             <input type="text" bind:value={toolURL} placeholder="https://mcp-server.example.com/sse" />
           </label>
-          <div class="env-section">
-            <div class="env-header">
-              <span class="env-label">Headers</span>
-              <button class="btn-sm" onclick={() => addKVPair('tool-headers')}>+ Add</button>
-            </div>
-            {#each toolHeaderPairs as pair, i}
-              <div class="env-row">
-                <input type="text" bind:value={pair.key} placeholder="Header name" />
-                <input type="text" bind:value={pair.value} placeholder="Value (supports ${VAR})" />
-                <button class="btn-sm danger" onclick={() => removeKVPair('tool-headers', i)}>x</button>
-              </div>
-            {/each}
-          </div>
-          <label>
-            Request timeout <span class="hint">(seconds, optional)</span>
-            <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
-          </label>
         {/if}
         <div class="env-section">
           <div class="env-header">
@@ -459,8 +528,85 @@
             </div>
           {/each}
         </div>
+        {#if toolTransport === 'sse'}
+          <!-- OAuth card -->
+          <div class="settings-card">
+            <div class="oauth-toggle-row">
+              <div class="oauth-toggle-text">
+                <span class="oauth-toggle-title">OAuth 2.1</span>
+                <span class="oauth-toggle-desc">Authenticate via OAuth</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" checked={toolAuth === 'oauth'} onchange={(e) => { toolAuth = e.target.checked ? 'oauth' : '' }} />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            {#if toolAuth === 'oauth'}
+              <button class="settings-card-toggle" onclick={() => { showOAuthAdvanced = !showOAuthAdvanced }}>
+                <span class="settings-card-toggle-label">
+                  Advanced settings
+                  {#if !showOAuthAdvanced && (toolClientID.trim() || toolClientSecret.trim() || toolScopes.trim())}
+                    <span class="settings-card-badge">{[toolClientID.trim(), toolClientSecret.trim(), toolScopes.trim()].filter(Boolean).length} configured</span>
+                  {/if}
+                </span>
+                <svg class="settings-card-chevron" class:open={showOAuthAdvanced} width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              {#if showOAuthAdvanced}
+                <div class="settings-card-body">
+                  <label>
+                    Client ID <span class="hint">(optional — leave empty for automatic registration)</span>
+                    <input type="text" bind:value={toolClientID} placeholder="Pre-registered client ID" />
+                  </label>
+                  <label>
+                    Client Secret <span class="hint">(optional)</span>
+                    <input type="password" bind:value={toolClientSecret} placeholder="Pre-registered client secret" />
+                  </label>
+                  <label>
+                    Scopes <span class="hint">(comma-separated, optional)</span>
+                    <input type="text" bind:value={toolScopes} placeholder="repo, read:org" />
+                  </label>
+                </div>
+              {/if}
+            {/if}
+          </div>
+          <!-- Connection settings card -->
+          <div class="settings-card">
+            <button class="settings-card-toggle top" onclick={() => { showConnSettings = !showConnSettings }}>
+              <span class="settings-card-toggle-title">Connection settings</span>
+              <svg class="settings-card-chevron" class:open={showConnSettings} width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            {#if showConnSettings}
+              <div class="settings-card-body">
+                <div class="env-section">
+                  <div class="env-header">
+                    <span class="env-label">Headers</span>
+                    <button class="btn-sm" onclick={() => addKVPair('tool-headers')}>+ Add</button>
+                  </div>
+                  {#each toolHeaderPairs as pair, i}
+                    <div class="env-row">
+                      <input type="text" bind:value={pair.key} placeholder="Header name" />
+                      <input type="text" bind:value={pair.value} placeholder="Value (supports ${VAR})" />
+                      <button class="btn-sm danger" onclick={() => removeKVPair('tool-headers', i)}>x</button>
+                    </div>
+                  {/each}
+                </div>
+                <div class="timeout-row">
+                  <span class="timeout-label">Request timeout</span>
+                  <div class="timeout-input">
+                    <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
+                    <span class="timeout-unit">sec</span>
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
         <div class="form-actions">
-          <button class="btn-primary" onclick={submitToolForm} disabled={addingTool || !toolFormValid()}>
+          <button class="btn-primary" onclick={submitToolForm} disabled={addingTool || !toolFormIsValid}>
             {#if addingTool}
               {editingToolName ? 'Saving...' : 'Adding...'}
             {:else}
@@ -499,12 +645,28 @@
                 <span class="tool-name">{t.name}</span>
                 <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
                 <span class="status-badge connected">{statusLabel(t)}</span>
+                {#if t.auth_type === 'oauth'}
+                  {#if t.oauth_status?.has_token}
+                    <span class="oauth-badge connected" title="OAuth connected">OAuth</span>
+                  {:else}
+                    <span class="oauth-badge needs-auth" title="Authorization required">OAuth</span>
+                  {/if}
+                {/if}
                 {#if toolCount(t)}
                   <button class="tool-count-link" onclick={() => openDefsModal(t.name, t.tool_names?.length || 0)}>{toolCount(t)}</button>
                 {:else}
                   <span class="tool-count">{'\u2014'}</span>
                 {/if}
                 <div class="tool-actions">
+                  {#if t.auth_type === 'oauth'}
+                    {#if t.oauth_status?.has_token}
+                      <button class="btn-ghost btn-card" onclick={() => revokeOAuthToken(t.name)}>Disconnect</button>
+                    {:else}
+                      <button class="btn-primary btn-card" onclick={() => startOAuthConnect(t.name)} disabled={connectingOAuth === t.name}>
+                        {connectingOAuth === t.name ? 'Connecting...' : 'Connect'}
+                      </button>
+                    {/if}
+                  {/if}
                   <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
                   <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
                 </div>
@@ -531,8 +693,16 @@
                 <span class="tool-name">{t.name}</span>
                 <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
                 <span class="status-badge error">{statusLabel(t)}</span>
+                {#if t.auth_type === 'oauth' && t.oauth_status?.needs_reauth}
+                  <span class="oauth-badge needs-auth" title="Authorization required">OAuth</span>
+                {/if}
                 <span class="tool-count">{'\u2014'}</span>
                 <div class="tool-actions">
+                  {#if t.auth_type === 'oauth' && t.oauth_status?.needs_reauth}
+                    <button class="btn-primary btn-card" onclick={() => startOAuthConnect(t.name)} disabled={connectingOAuth === t.name}>
+                      {connectingOAuth === t.name ? 'Connecting...' : 'Connect'}
+                    </button>
+                  {/if}
                   <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
                   <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
                 </div>
@@ -905,6 +1075,180 @@
   .status-badge.error {
     background: rgba(196, 58, 58, 0.1);
     color: var(--danger);
+  }
+
+  /* Shared settings card (OAuth, Connection settings) */
+  .settings-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .settings-card + .settings-card {
+    margin-top: 10px;
+  }
+
+  .oauth-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+  }
+  .oauth-toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .oauth-toggle-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .oauth-toggle-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* Pill toggle switch */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .switch-slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: var(--border);
+    border-radius: 24px;
+    transition: background 0.2s;
+  }
+  .switch-slider::before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .switch input:checked + .switch-slider {
+    background: var(--accent);
+  }
+  .switch input:checked + .switch-slider::before {
+    transform: translateX(20px);
+  }
+
+  /* Collapsible toggle row inside settings cards */
+  .settings-card-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .settings-card-toggle.top {
+    border-top: none;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 14px 16px;
+  }
+  .settings-card-toggle:hover {
+    background: var(--bg);
+  }
+  .settings-card-toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .settings-card-toggle-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .settings-card-badge {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 1px 8px;
+    border-radius: 10px;
+  }
+  .settings-card-chevron {
+    color: var(--text-muted);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .settings-card-chevron.open {
+    transform: rotate(180deg);
+  }
+
+  .settings-card-body {
+    border-top: 1px solid var(--border);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .timeout-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .timeout-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .timeout-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .timeout-input input {
+    width: 80px;
+    text-align: center;
+  }
+  .timeout-unit {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .oauth-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+  }
+  .oauth-badge.connected {
+    background: rgba(61, 143, 98, 0.1);
+    color: var(--success);
+  }
+  .oauth-badge.needs-auth {
+    background: rgba(234, 179, 8, 0.15);
+    color: #b45309;
   }
 
   .tool-count {

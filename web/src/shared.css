@@ -149,6 +149,7 @@
 }
 .inline-form input[type="text"],
 .inline-form input[type="number"],
+.inline-form input[type="password"],
 .inline-form select,
 .inline-form textarea {
   background: var(--bg);
@@ -160,6 +161,7 @@
 }
 .inline-form input[type="text"]:focus,
 .inline-form input[type="number"]:focus,
+.inline-form input[type="password"]:focus,
 .inline-form select:focus,
 .inline-form textarea:focus {
   outline: none;

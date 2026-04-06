@@ -34,7 +34,33 @@ type serverConn struct {
 	restartCount int       // consecutive restart attempts
 	lastError    string    // most recent failure message
 	disabled     bool      // true when restarts exhausted
+
+	// OAuth state (nil for non-OAuth tools).
+	oauthHandler oauthHandler
 }
+
+// oauthHandler is an internal interface satisfied by oauth.Handler.
+// It abstracts the concrete type so the manager can reference it without
+// importing the build-tag-gated oauth package.
+type oauthHandler interface {
+	ToolName() string
+	HasToken() bool
+	ClearToken() error
+	Close()
+}
+
+// OAuthSupport holds OAuth infrastructure injected into the Manager.
+type OAuthSupport struct {
+	// HandlerFactory creates an oauth.Handler for a tool. This is set from
+	// a build-tag-gated init in manager_oauth.go.
+	HandlerFactory OAuthHandlerFactory
+	CallbackURL    string
+}
+
+// OAuthHandlerFactory creates an OAuthHandler and its corresponding
+// auth.OAuthHandler for use with StreamableClientTransport.
+// The second return value is the transport-compatible handler.
+type OAuthHandlerFactory func(name string, cfg config.ToolConfig, httpClient *http.Client) (oauthHandler, any, error)
 
 // ServerStatus exposes metadata about a registered MCP server.
 type ServerStatus struct {
@@ -49,6 +75,14 @@ type ServerStatus struct {
 	RestartCount int      `json:"restart_count,omitempty"`
 	LastError    string   `json:"last_error,omitempty"`
 	UptimeSecs   float64  `json:"uptime_secs,omitempty"`
+	AuthType     string   `json:"auth_type,omitempty"`     // "oauth" or ""
+	OAuthStatus  *OAuthStatusInfo `json:"oauth_status,omitempty"`
+}
+
+// OAuthStatusInfo is a non-sensitive view of OAuth state for API responses.
+type OAuthStatusInfo struct {
+	HasToken    bool   `json:"has_token"`
+	NeedsReauth bool   `json:"needs_reauth"`
 }
 
 // Manager manages MCP tool server connections and tool execution.
@@ -60,6 +94,12 @@ type Manager struct {
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
 	mcpCfg   config.MCPConfig       // global MCP settings
 	logger   *slog.Logger
+	oauth    *OAuthSupport          // nil if OAuth not configured
+}
+
+// SetOAuthSupport injects OAuth infrastructure into the Manager.
+func (m *Manager) SetOAuthSupport(o *OAuthSupport) {
+	m.oauth = o
 }
 
 // NewManager creates a manager with no servers registered.
@@ -201,25 +241,98 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		HTTPClient: httpClient,
 	}
 
+	// Wire OAuth handler. On first registration of an OAuth tool without a
+	// cached token, short-circuit to pending_auth state so the API call
+	// returns immediately. On re-registration (connect flow), proceed to
+	// Connect() which triggers the actual authorization flow.
+	m.mu.RLock()
+	_, isReregistration := m.servers[name]
+	m.mu.RUnlock()
+
+	m.logger.Debug("registerSSE: setting up OAuth",
+		slog.String("tool", name),
+		slog.String("auth", cfg.Auth),
+		slog.Bool("is_reregistration", isReregistration))
+
+	oh, done, err := m.setupOAuth(name, cfg, httpClient, sseTransport, resolvedURL)
+	if err != nil {
+		return err
+	}
+	if done && !isReregistration {
+		return nil
+	}
+
+	m.logger.Debug("registerSSE: proceeding to Connect",
+		slog.String("tool", name),
+		slog.Bool("setup_done", done),
+		slog.Bool("is_reregistration", isReregistration),
+		slog.Bool("has_oauth_handler", oh != nil))
+
 	session, err := client.Connect(ctx, sseTransport, nil)
 	if err != nil {
 		return fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), err)
 	}
 
 	sc := &serverConn{
-		name:        name,
-		transport:   "sse",
-		url:         resolvedURL,
-		cfg:         cfg,
-		session:     session,
-		connectedAt: time.Now(),
+		name:         name,
+		transport:    "sse",
+		url:          resolvedURL,
+		cfg:          cfg,
+		session:      session,
+		connectedAt:  time.Now(),
+		oauthHandler: oh,
 	}
 
 	m.mu.Lock()
+	// Close the old session if we're overwriting (e.g. OAuth reconnect).
+	if old, exists := m.servers[name]; exists && old.session != nil {
+		_ = old.session.Close()
+	}
 	m.servers[name] = sc
 	m.mu.Unlock()
 
 	return m.discoverTools(ctx, sc)
+}
+
+// setupOAuth wires the OAuth handler for an SSE tool. If the tool needs OAuth
+// but has no cached token, it registers a pending-auth server and returns
+// done=true so the caller can short-circuit without blocking on Connect().
+func (m *Manager) setupOAuth(name string, cfg config.ToolConfig, httpClient *http.Client, transport *mcp.StreamableClientTransport, resolvedURL string) (oauthHandler, bool, error) {
+	if cfg.Auth != "oauth" {
+		return nil, false, nil
+	}
+	if m.oauth == nil || m.oauth.HandlerFactory == nil {
+		return nil, false, fmt.Errorf("tool %q requires auth = \"oauth\" but OAuth support is not configured (missing session_secret?)", name)
+	}
+
+	handler, transportHandler, err := m.oauth.HandlerFactory(name, cfg, httpClient)
+	if err != nil {
+		return nil, false, fmt.Errorf("creating OAuth handler for %q: %w", name, err)
+	}
+	setTransportOAuthHandler(transport, transportHandler)
+	m.logger.Info("oauth: handler created for remote MCP server",
+		slog.String("tool", name),
+		slog.Bool("has_cached_token", handler.HasToken()))
+
+	// Without a cached token, register in "pending auth" state.
+	// The user completes OAuth via the dashboard's "Connect" button.
+	if !handler.HasToken() {
+		sc := &serverConn{
+			name:         name,
+			transport:    "sse",
+			url:          resolvedURL,
+			cfg:          cfg,
+			oauthHandler: handler,
+		}
+		m.mu.Lock()
+		m.servers[name] = sc
+		m.mu.Unlock()
+		m.logger.Info("oauth: tool registered pending authorization",
+			slog.String("tool", name))
+		return handler, true, nil
+	}
+
+	return handler, false, nil
 }
 
 // discoverTools calls ListTools on the server's session and populates the
@@ -348,6 +461,10 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
 	}
 
+	if sc.session == nil {
+		return "", fmt.Errorf("tool %q is not connected (OAuth authorization required)", call.Function.Name)
+	}
+
 	var arguments map[string]any
 	if call.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
@@ -384,6 +501,34 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 // UnregisterServer stops the MCP server for the given config name,
 // removes its tools from the tool map, and closes the connection.
 // Returns an error if the server is not registered.
+// CleanupOAuthToken removes the OAuth token for a tool, if any.
+// Called during tool removal to avoid leaving orphaned tokens.
+func (m *Manager) CleanupOAuthToken(name string) {
+	m.mu.RLock()
+	sc, ok := m.servers[name]
+	m.mu.RUnlock()
+
+	if ok && sc.oauthHandler != nil {
+		if err := sc.oauthHandler.ClearToken(); err != nil {
+			m.logger.Warn("oauth: failed to clean up token on removal",
+				slog.String("tool", name),
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
+// GetOAuthHandler returns the OAuth handler for a tool, or nil.
+func (m *Manager) GetOAuthHandler(name string) oauthHandler {
+	m.mu.RLock()
+	sc, ok := m.servers[name]
+	m.mu.RUnlock()
+
+	if ok {
+		return sc.oauthHandler
+	}
+	return nil
+}
+
 func (m *Manager) UnregisterServer(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -500,6 +645,9 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	status := "connected"
 	if sc.disabled {
 		status = "disabled"
+	} else if sc.session == nil && sc.cfg.Auth == "oauth" {
+		// Registered but not yet connected — waiting for OAuth authorization.
+		status = "pending_auth"
 	} else if sc.lastError != "" {
 		status = "error"
 	}
@@ -509,7 +657,7 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 		uptimeSecs = time.Since(sc.connectedAt).Seconds()
 	}
 
-	return ServerStatus{
+	ss := ServerStatus{
 		Name:         sc.name,
 		Command:      sc.command,
 		Args:         sc.args,
@@ -521,7 +669,21 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 		RestartCount: sc.restartCount,
 		LastError:    sc.lastError,
 		UptimeSecs:   uptimeSecs,
-	}, true
+	}
+
+	if sc.cfg.Auth == "oauth" {
+		ss.AuthType = "oauth"
+		if sc.oauthHandler != nil {
+			ss.OAuthStatus = &OAuthStatusInfo{
+				HasToken:    sc.oauthHandler.HasToken(),
+				NeedsReauth: !sc.oauthHandler.HasToken(),
+			}
+		} else {
+			ss.OAuthStatus = &OAuthStatusInfo{NeedsReauth: true}
+		}
+	}
+
+	return ss, true
 }
 
 // ServerToolConfig returns the stored config.ToolConfig for a registered server.
@@ -537,14 +699,19 @@ func (m *Manager) ServerToolConfig(name string) (config.ToolConfig, bool) {
 	return sc.cfg, true
 }
 
-// Close shuts down all MCP server connections.
+// Close shuts down all MCP server connections and OAuth handlers.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var firstErr error
 	for name, sc := range m.servers {
-		if err := sc.session.Close(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("closing MCP server %q: %w", name, err)
+		if sc.oauthHandler != nil {
+			sc.oauthHandler.Close()
+		}
+		if sc.session != nil {
+			if err := sc.session.Close(); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("closing MCP server %q: %w", name, err)
+			}
 		}
 	}
 	return firstErr
@@ -595,8 +762,8 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		m.mu.RLock()
 		sc, ok := m.servers[name]
 		m.mu.RUnlock()
-		if !ok || sc.disabled || sc.transport == "" {
-			// Skip in-process servers and disabled servers.
+		if !ok || sc.disabled || sc.transport == "" || sc.session == nil {
+			// Skip in-process servers, disabled servers, and OAuth-pending tools.
 			continue
 		}
 

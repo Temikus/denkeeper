@@ -115,6 +115,9 @@ func (lm *LifecycleManager) RemoveTool(ctx context.Context, name string) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
+	// Clean up OAuth token if present.
+	lm.toolMgr.CleanupOAuthToken(name)
+
 	if err := lm.toolMgr.UnregisterServer(name); err != nil {
 		return fmt.Errorf("unregistering tool %q: %w", name, err)
 	}

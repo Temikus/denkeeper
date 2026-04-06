@@ -138,6 +138,12 @@ export const api = {
   restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
   toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),
   toolDefs: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/defs`),
+
+  // OAuth tool endpoints
+  toolOAuthStatus: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/oauth`),
+  toolOAuthConnect: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/oauth/connect`, { method: 'POST' }),
+  toolOAuthRevoke: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/oauth/token`, { method: 'DELETE' }),
+  listPendingOAuth: () => apiFetch('/api/v1/tools/oauth/pending'),
   listPlugins: () => apiFetch('/api/v1/plugins'),
   getPlugin: name => apiFetch(`/api/v1/plugins/${encodeURIComponent(name)}`),
   addPlugin: cfg => apiFetch('/api/v1/plugins', {

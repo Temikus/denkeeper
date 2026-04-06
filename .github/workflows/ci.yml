@@ -53,6 +53,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.3
+          args: --build-tags mcp_go_client_oauth
 
   test:
     name: Test
@@ -75,9 +76,9 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-
-      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go test -tags mcp_go_client_oauth -race -coverprofile=coverage.out ./...
       - name: Integration tests
-        run: go test -race -v -tags=integration ./internal/integration/...
+        run: go test -tags "mcp_go_client_oauth,integration" -race -v ./internal/integration/...
       - name: Upload coverage
         uses: actions/upload-artifact@v7
         with:
@@ -106,7 +107,7 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest -tags mcp_go_client_oauth ./...
 
   build:
     name: Build
@@ -143,7 +144,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o denkeeper-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/denkeeper
+        run: go build -tags mcp_go_client_oauth -o denkeeper-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/denkeeper
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:

@@ -217,6 +217,11 @@ type APIConfig struct {
 	// WebSocketReplayBufferTTL is how long to buffer events for replay after
 	// a client disconnects. Parsed as time.Duration. Default: "5m".
 	WebSocketReplayBufferTTL string `toml:"websocket_replay_buffer_ttl"`
+
+	// ExternalURL is the publicly-reachable base URL for this instance.
+	// Used for constructing OAuth callback URLs for remote MCP tool authorization.
+	// If empty, defaults to http(s)://<listen>.
+	ExternalURL string `toml:"external_url"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults
@@ -365,6 +370,12 @@ type ToolConfig struct {
 	URL                string            `toml:"url"`                  // required for sse transport
 	Headers            map[string]string `toml:"headers"`              // optional HTTP headers for sse
 	RequestTimeoutSecs int               `toml:"request_timeout_secs"` // per-server override (0 = use global)
+
+	// OAuth fields — only valid when Transport is "sse".
+	Auth         string   `toml:"auth"`          // "" (none) or "oauth"
+	ClientID     string   `toml:"client_id"`     // pre-registered OAuth client ID (optional)
+	ClientSecret string   `toml:"client_secret"` // pre-registered OAuth client secret (optional)
+	Scopes       []string `toml:"scopes"`        // OAuth scopes to request (optional)
 }
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.
@@ -723,6 +734,7 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_API_AUTH_SESSION_SECRET", &cfg.API.Auth.SessionSecret)
 	envOverride("DENKEEPER_OIDC_CLIENT_ID", &cfg.API.Auth.OIDC.ClientID)
 	envOverride("DENKEEPER_OIDC_CLIENT_SECRET", &cfg.API.Auth.OIDC.ClientSecret)
+	envOverride("DENKEEPER_API_EXTERNAL_URL", &cfg.API.ExternalURL)
 
 	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
 		t := true
@@ -1322,6 +1334,9 @@ func validateTools(tools map[string]ToolConfig) error {
 			if len(tc.Headers) > 0 {
 				return fmt.Errorf("config: tools.%s: headers are not supported for stdio transport", name)
 			}
+			if tc.Auth != "" {
+				return fmt.Errorf("config: tools.%s: auth is only supported for sse transport", name)
+			}
 		case "sse":
 			if tc.URL == "" {
 				return fmt.Errorf("config: tools.%s: url is required for sse transport", name)
@@ -1334,6 +1349,29 @@ func validateTools(tools map[string]ToolConfig) error {
 			}
 		default:
 			return fmt.Errorf("config: tools.%s: unsupported transport %q (must be \"stdio\" or \"sse\")", name, transport)
+		}
+
+		// Validate OAuth config.
+		switch tc.Auth {
+		case "", "oauth":
+		default:
+			return fmt.Errorf("config: tools.%s: unsupported auth %q (must be \"\" or \"oauth\")", name, tc.Auth)
+		}
+		if tc.Auth == "oauth" {
+			// client_id and client_secret must both be present or both absent.
+			hasID := tc.ClientID != ""
+			hasSecret := tc.ClientSecret != ""
+			if hasID != hasSecret {
+				return fmt.Errorf("config: tools.%s: client_id and client_secret must both be set or both empty", name)
+			}
+		}
+		if tc.Auth != "oauth" {
+			if tc.ClientID != "" || tc.ClientSecret != "" {
+				return fmt.Errorf("config: tools.%s: client_id and client_secret require auth = \"oauth\"", name)
+			}
+			if len(tc.Scopes) > 0 {
+				return fmt.Errorf("config: tools.%s: scopes require auth = \"oauth\"", name)
+			}
 		}
 	}
 	return nil

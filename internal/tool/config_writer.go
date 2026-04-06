@@ -61,6 +61,22 @@ func addToolToConfig(path, name string, cfg config.ToolConfig) error {
 	if cfg.RequestTimeoutSecs > 0 {
 		entry["request_timeout_secs"] = cfg.RequestTimeoutSecs
 	}
+	if cfg.Auth != "" {
+		entry["auth"] = cfg.Auth
+	}
+	if cfg.ClientID != "" {
+		entry["client_id"] = cfg.ClientID
+	}
+	if cfg.ClientSecret != "" {
+		entry["client_secret"] = cfg.ClientSecret
+	}
+	if len(cfg.Scopes) > 0 {
+		scopes := make([]any, len(cfg.Scopes))
+		for i, s := range cfg.Scopes {
+			scopes[i] = s
+		}
+		entry["scopes"] = scopes
+	}
 	tools[name] = entry
 	raw["tools"] = tools
 

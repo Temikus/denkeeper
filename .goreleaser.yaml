@@ -12,6 +12,8 @@ builds:
     binary: denkeeper
     env:
       - CGO_ENABLED=0
+    tags:
+      - mcp_go_client_oauth
     goos:
       - linux
       - darwin

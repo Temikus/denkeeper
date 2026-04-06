@@ -4,21 +4,24 @@
 default:
     @just --list
 
+# Build tags for OAuth MCP client support
+go_tags := "-tags mcp_go_client_oauth"
+
 # Build the denkeeper binary
 build:
-    go build -o pkg/bin/denkeeper ./cmd/denkeeper
+    go build {{go_tags}} -o pkg/bin/denkeeper ./cmd/denkeeper
 
 # Run all tests
 test:
-    go test -race ./...
+    go test {{go_tags}} -race ./...
 
 # Run all tests (verbose)
 test-v:
-    go test -race -v ./...
+    go test {{go_tags}} -race -v ./...
 
 # Run tests with coverage report
 test-cover:
-    go test -race -coverprofile=coverage.out ./...
+    go test {{go_tags}} -race -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
 
 # Open coverage in browser
@@ -31,15 +34,25 @@ test-integration:
 
 # Run tests for a specific package (e.g. just test-pkg internal/agent)
 test-pkg pkg:
-    go test -race -v ./{{pkg}}/...
+    go test {{go_tags}} -race -v ./{{pkg}}/...
 
 # Start the agent (optionally pass config path: just serve ./denkeeper.toml)
 serve config="":
     #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
-        go run ./cmd/denkeeper serve --config "{{config}}"
+        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve --config "{{config}}"
     else
-        go run ./cmd/denkeeper serve
+        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve
+    fi
+
+# Run with debug logging
+serve-debug config="":
+    #!/usr/bin/env sh
+    export DENKEEPER_LOG_LEVEL=debug
+    if [ -n "{{config}}" ]; then
+        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve --config "{{config}}"
+    else
+        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve
     fi
 
 # Run linter
@@ -60,7 +73,7 @@ fmt-check:
 
 # Vet the codebase
 vet:
-    go vet ./...
+    go vet {{go_tags}} ./...
 
 # Run all checks (fmt, vet, lint, test)
 check: fmt-check vet lint test test-ui
@@ -186,10 +199,10 @@ scan tool="all":
             just scan govulncheck
             ;;
         gosec)
-            go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101,G104,G120 ./...
+            go run github.com/securego/gosec/v2/cmd/gosec@latest -tags mcp_go_client_oauth -exclude=G101,G104,G120 ./...
             ;;
         govulncheck)
-            go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+            go run golang.org/x/vuln/cmd/govulncheck@latest -tags mcp_go_client_oauth ./...
             ;;
         *)
             echo "Unknown scan: {{tool}}. Available: gosec, govulncheck"

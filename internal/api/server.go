@@ -48,6 +48,7 @@ type Deps struct {
 	PasswordHash    string                             // bcrypt hash for password login
 	SetupPIN        string                             // one-time PIN for account setup (empty = disabled)
 	ModelLister     func(ctx context.Context) []string // returns available LLM models; nil = endpoint returns 503
+	OAuthDeps       *OAuthDeps                         // nil = OAuth tool endpoints return 503
 }
 
 // Server is the external REST API server.
@@ -160,6 +161,13 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/tools/{name}/defs", s.RequireScope("tools:read", s.handleToolDefs))
 	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
 	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
+
+	// OAuth tool endpoints.
+	mux.HandleFunc("GET /api/v1/tools/oauth/callback", s.handleOAuthCallback) // no auth (browser redirect)
+	mux.HandleFunc("GET /api/v1/tools/oauth/pending", s.RequireScope("tools:read", s.handleListPendingOAuth))
+	mux.HandleFunc("GET /api/v1/tools/{name}/oauth", s.RequireScope("tools:read", s.handleToolOAuthStatus))
+	mux.HandleFunc("POST /api/v1/tools/{name}/oauth/connect", s.RequireScope("tools:write", s.handleToolOAuthConnect))
+	mux.HandleFunc("DELETE /api/v1/tools/{name}/oauth/token", s.RequireScope("tools:write", s.handleToolOAuthRevoke))
 	mux.HandleFunc("GET /api/v1/plugins", s.RequireScope("tools:read", s.handleListPlugins))
 	mux.HandleFunc("GET /api/v1/plugins/{name}", s.RequireScope("tools:read", s.handleGetPlugin))
 	mux.HandleFunc("POST /api/v1/plugins", s.RequireScope("tools:write", s.handleAddPlugin))
@@ -995,11 +1003,26 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		"last_error":    info.LastError,
 		"uptime_secs":   info.UptimeSecs,
 	}
+	if info.AuthType != "" {
+		resp["auth_type"] = info.AuthType
+	}
+	if info.OAuthStatus != nil {
+		resp["oauth_status"] = info.OAuthStatus
+	}
 	if cfg, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
 		resp["args"] = cfg.Args
 		resp["env"] = cfg.Env
 		resp["headers"] = cfg.Headers
 		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
+		if cfg.Auth != "" {
+			resp["auth"] = cfg.Auth
+		}
+		if cfg.ClientID != "" {
+			resp["client_id"] = cfg.ClientID
+		}
+		if len(cfg.Scopes) > 0 {
+			resp["scopes"] = cfg.Scopes
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1044,6 +1067,10 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		URL                string            `json:"url"`
 		Headers            map[string]string `json:"headers"`
 		RequestTimeoutSecs int               `json:"request_timeout_secs"`
+		Auth               string            `json:"auth"`
+		ClientID           string            `json:"client_id"`
+		ClientSecret       string            `json:"client_secret"`
+		Scopes             []string          `json:"scopes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -1062,6 +1089,10 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		URL:                body.URL,
 		Headers:            body.Headers,
 		RequestTimeoutSecs: body.RequestTimeoutSecs,
+		Auth:               body.Auth,
+		ClientID:           body.ClientID,
+		ClientSecret:       body.ClientSecret,
+		Scopes:             body.Scopes,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -1087,6 +1118,10 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		URL                string            `json:"url"`
 		Headers            map[string]string `json:"headers"`
 		RequestTimeoutSecs int               `json:"request_timeout_secs"`
+		Auth               string            `json:"auth"`
+		ClientID           string            `json:"client_id"`
+		ClientSecret       string            `json:"client_secret"`
+		Scopes             []string          `json:"scopes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -1101,6 +1136,10 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		URL:                body.URL,
 		Headers:            body.Headers,
 		RequestTimeoutSecs: body.RequestTimeoutSecs,
+		Auth:               body.Auth,
+		ClientID:           body.ClientID,
+		ClientSecret:       body.ClientSecret,
+		Scopes:             body.Scopes,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {

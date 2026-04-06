@@ -27,6 +27,7 @@ COPY --from=frontend /src/internal/web/dist ./internal/web/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -tags mcp_go_client_oauth \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /denkeeper ./cmd/denkeeper
 

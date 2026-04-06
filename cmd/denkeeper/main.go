@@ -294,6 +294,38 @@ func initAdapters(cfg *config.Config, logger *slog.Logger, voiceOpts *telegram.V
 // cleanupFunc is a function to be called on shutdown.
 type cleanupFunc func()
 
+// registerNonOAuthTools registers tools that don't require OAuth at startup.
+// OAuth tools are deferred until after initOAuthSupport wires the handler factory.
+func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConfig, mgr *tool.Manager, logger *slog.Logger) error {
+	for name, tc := range tools {
+		if tc.Auth == "oauth" {
+			logger.Info("tool server deferred (needs OAuth)", "name", name)
+			continue
+		}
+		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
+			return fmt.Errorf("initializing tool %q: %w", name, err)
+		}
+		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
+	}
+	return nil
+}
+
+// registerDeferredOAuthTools registers tools with auth="oauth" that were
+// skipped by initSharedTools. These must run after initOAuthSupport wires
+// the OAuth handler factory into the tool manager.
+func registerDeferredOAuthTools(ctx context.Context, cfg *config.Config, mgr *tool.Manager, logger *slog.Logger) error {
+	for name, tc := range cfg.Tools {
+		if tc.Auth != "oauth" {
+			continue
+		}
+		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
+			return fmt.Errorf("initializing OAuth tool %q: %w", name, err)
+		}
+		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "auth", tc.Auth)
+	}
+	return nil
+}
+
 func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*tool.Manager, string, []cleanupFunc, error) {
 	var sharedToolMgr *tool.Manager
 	var cleanups []cleanupFunc
@@ -308,11 +340,8 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 
 	if len(cfg.Tools) > 0 {
 		ensureToolMgr()
-		for name, tc := range cfg.Tools {
-			if err := sharedToolMgr.RegisterServer(ctx, name, tc); err != nil {
-				return nil, "", cleanups, fmt.Errorf("initializing tool %q: %w", name, err)
-			}
-			logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
+		if err := registerNonOAuthTools(ctx, cfg.Tools, sharedToolMgr, logger); err != nil {
+			return nil, "", cleanups, err
 		}
 	}
 
@@ -947,6 +976,18 @@ func runServe(_ *cobra.Command, _ []string) error {
 		defer func() { _ = sharedToolMgr.Close() }()
 	}
 
+	// Initialize OAuth support for remote MCP tools (if any configured).
+	oauthSt, oauthDeps, oauthErr := initOAuthSupport(ctx, cfg, sharedToolMgr, logger)
+	if oauthErr != nil {
+		return fmt.Errorf("initializing OAuth support: %w", oauthErr)
+	}
+	defer oauthSt.Close()
+
+	// Register OAuth tools that were deferred during initSharedTools.
+	if err := registerDeferredOAuthTools(ctx, cfg, sharedToolMgr, logger); err != nil {
+		return err
+	}
+
 	lifecycleMgr := tool.NewLifecycleManager(sharedToolMgr, path, cfg.MaxTools, logger)
 
 	// Track plugins loaded at startup so ListPlugins can report them.
@@ -1023,6 +1064,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			KVStore:         st.kvStore,
 			ConfigPath:      path,
 			ModelLister:     dispatcher.ListModels,
+			OAuthDeps:       oauthDeps,
 		}, logger); err != nil {
 			return err
 		}
