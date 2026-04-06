@@ -76,6 +76,7 @@
       // Update preview data
       sectionData[expandedSection] = { ...sectionData[expandedSection], content: sectionContent }
       sectionSaveOk = true
+      expandedSection = null
       setTimeout(() => sectionSaveOk = false, 3000)
     } catch(e) {
       error = e.message
