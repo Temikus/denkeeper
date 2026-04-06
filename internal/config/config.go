@@ -377,6 +377,9 @@ type ToolConfig struct {
 	ClientID     string   `toml:"client_id"`     // pre-registered OAuth client ID (optional)
 	ClientSecret string   `toml:"client_secret"` // pre-registered OAuth client secret (optional)
 	Scopes       []string `toml:"scopes"`        // OAuth scopes to request (optional)
+
+	// Unsafe options.
+	AllowLoopback bool `toml:"allow_loopback"` // bypass SSRF loopback block (localhost/127.x/::1)
 }
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.

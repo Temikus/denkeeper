@@ -5,84 +5,84 @@ import (
 )
 
 func TestValidateToolURL_ValidHTTPS(t *testing.T) {
-	err := validateToolURL("https://mcp.example.com/events", nil)
+	err := validateToolURL("https://mcp.example.com/events", nil, false)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
 func TestValidateToolURL_ValidHTTP(t *testing.T) {
-	err := validateToolURL("http://mcp.example.com/events", nil)
+	err := validateToolURL("http://mcp.example.com/events", nil, false)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
 func TestValidateToolURL_BlocksNonHTTPScheme(t *testing.T) {
-	err := validateToolURL("ftp://mcp.example.com/events", nil)
+	err := validateToolURL("ftp://mcp.example.com/events", nil, false)
 	if err == nil {
 		t.Fatal("expected error for ftp scheme")
 	}
 }
 
 func TestValidateToolURL_BlocksLocalhost(t *testing.T) {
-	err := validateToolURL("http://localhost:8080/events", nil)
+	err := validateToolURL("http://localhost:8080/events", nil, false)
 	if err == nil {
 		t.Fatal("expected error for localhost")
 	}
 }
 
 func TestValidateToolURL_BlocksLoopbackIP(t *testing.T) {
-	err := validateToolURL("http://127.0.0.1:8080/events", nil)
+	err := validateToolURL("http://127.0.0.1:8080/events", nil, false)
 	if err == nil {
 		t.Fatal("expected error for 127.0.0.1")
 	}
 }
 
 func TestValidateToolURL_BlocksLoopbackIPAlt(t *testing.T) {
-	err := validateToolURL("http://127.0.0.2:8080/events", nil)
+	err := validateToolURL("http://127.0.0.2:8080/events", nil, false)
 	if err == nil {
 		t.Fatal("expected error for 127.0.0.2")
 	}
 }
 
 func TestValidateToolURL_BlocksLinkLocal(t *testing.T) {
-	err := validateToolURL("http://169.254.169.254/latest/meta-data/", nil)
+	err := validateToolURL("http://169.254.169.254/latest/meta-data/", nil, false)
 	if err == nil {
 		t.Fatal("expected error for link-local metadata endpoint")
 	}
 }
 
 func TestValidateToolURL_BlocksMetadataHostname(t *testing.T) {
-	err := validateToolURL("http://metadata.google.internal/computeMetadata/v1/", nil)
+	err := validateToolURL("http://metadata.google.internal/computeMetadata/v1/", nil, false)
 	if err == nil {
 		t.Fatal("expected error for metadata.google.internal")
 	}
 }
 
 func TestValidateToolURL_BlocksIPv6Loopback(t *testing.T) {
-	err := validateToolURL("http://[::1]:8080/events", nil)
+	err := validateToolURL("http://[::1]:8080/events", nil, false)
 	if err == nil {
 		t.Fatal("expected error for IPv6 loopback")
 	}
 }
 
 func TestValidateToolURL_AllowlistPermits(t *testing.T) {
-	err := validateToolURL("https://api.example.com/mcp", []string{"api.example.com"})
+	err := validateToolURL("https://api.example.com/mcp", []string{"api.example.com"}, false)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
 func TestValidateToolURL_AllowlistWildcard(t *testing.T) {
-	err := validateToolURL("https://mcp.internal.corp/events", []string{"*.internal.corp"})
+	err := validateToolURL("https://mcp.internal.corp/events", []string{"*.internal.corp"}, false)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
 func TestValidateToolURL_AllowlistRejects(t *testing.T) {
-	err := validateToolURL("https://evil.com/mcp", []string{"api.example.com"})
+	err := validateToolURL("https://evil.com/mcp", []string{"api.example.com"}, false)
 	if err == nil {
 		t.Fatal("expected error for host not in allowlist")
 	}
@@ -90,7 +90,7 @@ func TestValidateToolURL_AllowlistRejects(t *testing.T) {
 
 func TestValidateToolURL_AllowlistStillBlocksLocalhost(t *testing.T) {
 	// Even if localhost is in the allowlist, it should be blocked.
-	err := validateToolURL("http://localhost:8080/events", []string{"localhost"})
+	err := validateToolURL("http://localhost:8080/events", []string{"localhost"}, false)
 	if err == nil {
 		t.Fatal("expected error for localhost even when in allowlist")
 	}
@@ -157,6 +157,43 @@ func TestValidateHeaders_ForbiddenTransferEncoding(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for forbidden Transfer-Encoding header")
+	}
+}
+
+// --- allow_loopback tests ---
+
+func TestValidateToolURL_AllowLoopbackPermitsLocalhost(t *testing.T) {
+	err := validateToolURL("http://localhost:8080/events", nil, true)
+	if err != nil {
+		t.Fatalf("expected localhost to be allowed with allowLoopback, got: %v", err)
+	}
+}
+
+func TestValidateToolURL_AllowLoopbackPermits127(t *testing.T) {
+	err := validateToolURL("http://127.0.0.1:8080/events", nil, true)
+	if err != nil {
+		t.Fatalf("expected 127.0.0.1 to be allowed with allowLoopback, got: %v", err)
+	}
+}
+
+func TestValidateToolURL_AllowLoopbackPermitsIPv6Loopback(t *testing.T) {
+	err := validateToolURL("http://[::1]:8080/events", nil, true)
+	if err != nil {
+		t.Fatalf("expected ::1 to be allowed with allowLoopback, got: %v", err)
+	}
+}
+
+func TestValidateToolURL_AllowLoopbackStillBlocksLinkLocal(t *testing.T) {
+	err := validateToolURL("http://169.254.169.254/latest/meta-data/", nil, true)
+	if err == nil {
+		t.Fatal("expected link-local to remain blocked even with allowLoopback")
+	}
+}
+
+func TestValidateToolURL_AllowLoopbackStillBlocksMetadata(t *testing.T) {
+	err := validateToolURL("http://metadata.google.internal/computeMetadata/v1/", nil, true)
+	if err == nil {
+		t.Fatal("expected metadata hostname to remain blocked even with allowLoopback")
 	}
 }
 

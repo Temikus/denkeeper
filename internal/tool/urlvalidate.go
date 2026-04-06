@@ -11,8 +11,10 @@ import (
 
 // validateToolURL checks that rawURL is a valid HTTP(S) URL that does not
 // target blocked hosts (SSRF protection). If allowlist is non-empty, the
-// host must also match at least one allowed pattern.
-func validateToolURL(rawURL string, allowlist []string) error {
+// host must also match at least one allowed pattern. When allowLoopback is
+// true, localhost and loopback IPs (127.x, ::1) are permitted but link-local
+// and cloud metadata endpoints remain blocked.
+func validateToolURL(rawURL string, allowlist []string, allowLoopback bool) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
@@ -30,7 +32,11 @@ func validateToolURL(rawURL string, allowlist []string) error {
 		return fmt.Errorf("URL has no host")
 	}
 
-	if isBlockedHost(host) {
+	if allowLoopback {
+		if isNonLoopbackBlockedHost(host) {
+			return fmt.Errorf("URL host %q is blocked (link-local or metadata endpoint)", host)
+		}
+	} else if isBlockedHost(host) {
 		return fmt.Errorf("URL host %q is blocked (localhost, link-local, or metadata endpoint)", host)
 	}
 
@@ -116,6 +122,29 @@ func isBlockedHost(host string) bool {
 	return false
 }
 
+// isNonLoopbackBlockedHost returns true for blocked hosts excluding loopback
+// addresses. Used when allow_loopback is set — link-local and cloud metadata
+// endpoints are still blocked.
+func isNonLoopbackBlockedHost(host string) bool {
+	// Cloud metadata hostnames.
+	if host == "metadata.google.internal" || host == "metadata.google.com" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // non-IP hostnames other than metadata are fine
+	}
+
+	// IPv4 link-local: 169.254.0.0/16 (includes AWS/GCP/Azure metadata at 169.254.169.254).
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4[0] == 169 && ip4[1] == 254
+	}
+
+	// IPv6 link-local (fe80::/10).
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
 // matchDomain checks if host matches a domain pattern.
 // "github.com" matches "github.com" exactly.
 // "*.example.com" matches "sub.example.com" and "deep.sub.example.com".
@@ -130,14 +159,15 @@ func matchDomain(host, pattern string) bool {
 // redirectCheckingRoundTripper wraps a base RoundTripper and validates each
 // redirect target against the SSRF blocklist.
 type redirectCheckingRoundTripper struct {
-	base      http.RoundTripper
-	allowlist []string
+	base          http.RoundTripper
+	allowlist     []string
+	allowLoopback bool
 }
 
 func (rt *redirectCheckingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Validate the request URL (covers both initial and redirect targets
 	// when used with http.Client's CheckRedirect).
-	if err := validateToolURL(req.URL.String(), rt.allowlist); err != nil {
+	if err := validateToolURL(req.URL.String(), rt.allowlist, rt.allowLoopback); err != nil {
 		return nil, fmt.Errorf("redirect blocked: %w", err)
 	}
 	return rt.base.RoundTrip(req)

@@ -24,6 +24,8 @@
   let toolScopes = ''
   let showOAuthAdvanced = false
   let showConnSettings = false
+  let showUnsafeOptions = false
+  let toolAllowLoopback = false
   let addingTool = false
   let loadingToolConfig = false
 
@@ -201,6 +203,8 @@
     toolAuth = ''; toolClientID = ''; toolClientSecret = ''; toolScopes = ''
     showOAuthAdvanced = false
     showConnSettings = false
+    showUnsafeOptions = false
+    toolAllowLoopback = false
   }
 
   function openAddToolForm() {
@@ -232,6 +236,7 @@
       toolClientID = info.client_id || ''
       toolClientSecret = '' // never returned by API
       toolScopes = (info.scopes || []).join(', ')
+      toolAllowLoopback = !!info.allow_loopback
     } catch (e) {
       error = e.message
       showToolForm = false
@@ -271,6 +276,7 @@
       const scopes = toolScopes.split(',').map(s => s.trim()).filter(Boolean)
       if (scopes.length > 0) cfg.scopes = scopes
     }
+    if (toolAllowLoopback) cfg.allow_loopback = true
     return cfg
   }
 
@@ -599,6 +605,50 @@
                   <div class="timeout-input">
                     <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
                     <span class="timeout-unit">sec</span>
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+          <!-- Unsafe options card -->
+          <div class="settings-card unsafe-card">
+            <button class="settings-card-toggle top" onclick={() => { showUnsafeOptions = !showUnsafeOptions }}>
+              <span class="settings-card-toggle-label">
+                <svg class="unsafe-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 1L1 14h14L8 1z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                  <path d="M8 6v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  <circle cx="8" cy="12" r="0.8" fill="currentColor"/>
+                </svg>
+                <span class="settings-card-toggle-title">Unsafe options</span>
+              </span>
+              <svg class="settings-card-chevron" class:open={showUnsafeOptions} width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            {#if showUnsafeOptions}
+              <div class="settings-card-body">
+                <div class="unsafe-toggle-row">
+                  <div class="unsafe-toggle-text">
+                    <span class="unsafe-toggle-title">Allow loopback connections</span>
+                    <span class="unsafe-toggle-desc">
+                      Permits localhost, 127.x, and ::1 URLs. Use for sidecar MCP servers in the same pod.
+                    </span>
+                  </div>
+                  <div class="unsafe-toggle-control">
+                    <label class="switch">
+                      <input type="checkbox" bind:checked={toolAllowLoopback} />
+                      <span class="switch-slider"></span>
+                    </label>
+                    <span class="unsafe-popover-anchor">
+                      <svg class="unsafe-info-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M8 7v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <circle cx="8" cy="5" r="0.8" fill="currentColor"/>
+                      </svg>
+                      <span class="unsafe-popover">
+                        Disabling SSRF loopback protection allows the MCP server to access services on localhost. This is safe for trusted sidecar containers but dangerous if the tool URL can be influenced by untrusted input &mdash; an attacker could reach internal services, cloud metadata endpoints are still blocked.
+                      </span>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1539,5 +1589,68 @@
     padding: 12px 24px;
     border-top: 1px solid var(--border);
     font-size: 13px;
+  }
+
+  /* Unsafe options card */
+  .unsafe-card {
+    border-color: rgba(234, 179, 8, 0.3);
+  }
+  .unsafe-icon {
+    color: #b45309;
+    flex-shrink: 0;
+  }
+  .unsafe-toggle-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .unsafe-toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .unsafe-toggle-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .unsafe-toggle-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+  .unsafe-toggle-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .unsafe-info-icon {
+    color: var(--text-muted);
+    cursor: help;
+  }
+  .unsafe-popover-anchor {
+    position: relative;
+    display: inline-flex;
+  }
+  .unsafe-popover {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 22px;
+    width: 280px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 10;
+  }
+  .unsafe-popover-anchor:hover .unsafe-popover {
+    display: block;
   }
 </style>

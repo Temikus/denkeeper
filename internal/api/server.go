@@ -1026,6 +1026,9 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		if len(cfg.Scopes) > 0 {
 			resp["scopes"] = cfg.Scopes
 		}
+		if cfg.AllowLoopback {
+			resp["allow_loopback"] = true
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1074,6 +1077,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		ClientID           string            `json:"client_id"`
 		ClientSecret       string            `json:"client_secret"`
 		Scopes             []string          `json:"scopes"`
+		AllowLoopback      bool              `json:"allow_loopback"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -1096,6 +1100,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		ClientID:           body.ClientID,
 		ClientSecret:       body.ClientSecret,
 		Scopes:             body.Scopes,
+		AllowLoopback:      body.AllowLoopback,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -1125,6 +1130,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		ClientID           string            `json:"client_id"`
 		ClientSecret       string            `json:"client_secret"`
 		Scopes             []string          `json:"scopes"`
+		AllowLoopback      bool              `json:"allow_loopback"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -1143,6 +1149,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		ClientID:           body.ClientID,
 		ClientSecret:       body.ClientSecret,
 		Scopes:             body.Scopes,
+		AllowLoopback:      body.AllowLoopback,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {

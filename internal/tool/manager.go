@@ -194,7 +194,7 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	}
 
 	// SSRF validation.
-	if err := validateToolURL(resolvedURL, m.mcpCfg.URLAllowlist); err != nil {
+	if err := validateToolURL(resolvedURL, m.mcpCfg.URLAllowlist, cfg.AllowLoopback); err != nil {
 		return fmt.Errorf("MCP server %q URL rejected: %w", name, err)
 	}
 
@@ -214,8 +214,9 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	// Build HTTP client with SSRF-safe redirect checking and header injection.
 	baseRT := http.DefaultTransport
 	rt := http.RoundTripper(&redirectCheckingRoundTripper{
-		base:      baseRT,
-		allowlist: m.mcpCfg.URLAllowlist,
+		base:          baseRT,
+		allowlist:     m.mcpCfg.URLAllowlist,
+		allowLoopback: cfg.AllowLoopback,
 	})
 	if len(resolvedHeaders) > 0 {
 		rt = &headerRoundTripper{base: rt, headers: resolvedHeaders}
