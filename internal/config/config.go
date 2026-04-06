@@ -1319,59 +1319,74 @@ func validateMCP(mcp *MCPConfig) error {
 
 func validateTools(tools map[string]ToolConfig) error {
 	for name, tc := range tools {
-		transport := tc.Transport
-		if transport == "" {
-			transport = "stdio"
+		if err := validateToolConfig(name, tc); err != nil {
+			return err
 		}
-		switch transport {
-		case "stdio":
-			if tc.Command == "" {
-				return fmt.Errorf("config: tools.%s: command is required for stdio transport", name)
-			}
-			if tc.URL != "" {
-				return fmt.Errorf("config: tools.%s: url must be empty for stdio transport", name)
-			}
-			if len(tc.Headers) > 0 {
-				return fmt.Errorf("config: tools.%s: headers are not supported for stdio transport", name)
-			}
-			if tc.Auth != "" {
-				return fmt.Errorf("config: tools.%s: auth is only supported for sse transport", name)
-			}
-		case "sse":
-			if tc.URL == "" {
-				return fmt.Errorf("config: tools.%s: url is required for sse transport", name)
-			}
-			if tc.Command != "" {
-				return fmt.Errorf("config: tools.%s: command must be empty for sse transport", name)
-			}
-			if len(tc.Args) > 0 {
-				return fmt.Errorf("config: tools.%s: args must be empty for sse transport", name)
-			}
-		default:
-			return fmt.Errorf("config: tools.%s: unsupported transport %q (must be \"stdio\" or \"sse\")", name, transport)
-		}
+	}
+	return nil
+}
 
-		// Validate OAuth config.
-		switch tc.Auth {
-		case "", "oauth":
-		default:
-			return fmt.Errorf("config: tools.%s: unsupported auth %q (must be \"\" or \"oauth\")", name, tc.Auth)
+func validateToolConfig(name string, tc ToolConfig) error {
+	if err := validateToolTransport(name, tc); err != nil {
+		return err
+	}
+	return validateToolAuth(name, tc)
+}
+
+func validateToolTransport(name string, tc ToolConfig) error {
+	transport := tc.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	switch transport {
+	case "stdio":
+		if tc.Command == "" {
+			return fmt.Errorf("config: tools.%s: command is required for stdio transport", name)
 		}
-		if tc.Auth == "oauth" {
-			// client_id and client_secret must both be present or both absent.
-			hasID := tc.ClientID != ""
-			hasSecret := tc.ClientSecret != ""
-			if hasID != hasSecret {
-				return fmt.Errorf("config: tools.%s: client_id and client_secret must both be set or both empty", name)
-			}
+		if tc.URL != "" {
+			return fmt.Errorf("config: tools.%s: url must be empty for stdio transport", name)
 		}
-		if tc.Auth != "oauth" {
-			if tc.ClientID != "" || tc.ClientSecret != "" {
-				return fmt.Errorf("config: tools.%s: client_id and client_secret require auth = \"oauth\"", name)
-			}
-			if len(tc.Scopes) > 0 {
-				return fmt.Errorf("config: tools.%s: scopes require auth = \"oauth\"", name)
-			}
+		if len(tc.Headers) > 0 {
+			return fmt.Errorf("config: tools.%s: headers are not supported for stdio transport", name)
+		}
+		if tc.Auth != "" {
+			return fmt.Errorf("config: tools.%s: auth is only supported for sse transport", name)
+		}
+	case "sse":
+		if tc.URL == "" {
+			return fmt.Errorf("config: tools.%s: url is required for sse transport", name)
+		}
+		if tc.Command != "" {
+			return fmt.Errorf("config: tools.%s: command must be empty for sse transport", name)
+		}
+		if len(tc.Args) > 0 {
+			return fmt.Errorf("config: tools.%s: args must be empty for sse transport", name)
+		}
+	default:
+		return fmt.Errorf("config: tools.%s: unsupported transport %q (must be \"stdio\" or \"sse\")", name, transport)
+	}
+	return nil
+}
+
+func validateToolAuth(name string, tc ToolConfig) error {
+	switch tc.Auth {
+	case "", "oauth":
+	default:
+		return fmt.Errorf("config: tools.%s: unsupported auth %q (must be \"\" or \"oauth\")", name, tc.Auth)
+	}
+	if tc.Auth == "oauth" {
+		hasID := tc.ClientID != ""
+		hasSecret := tc.ClientSecret != ""
+		if hasID != hasSecret {
+			return fmt.Errorf("config: tools.%s: client_id and client_secret must both be set or both empty", name)
+		}
+	}
+	if tc.Auth != "oauth" {
+		if tc.ClientID != "" || tc.ClientSecret != "" {
+			return fmt.Errorf("config: tools.%s: client_id and client_secret require auth = \"oauth\"", name)
+		}
+		if len(tc.Scopes) > 0 {
+			return fmt.Errorf("config: tools.%s: scopes require auth = \"oauth\"", name)
 		}
 	}
 	return nil

@@ -294,6 +294,20 @@ func initAdapters(cfg *config.Config, logger *slog.Logger, voiceOpts *telegram.V
 // cleanupFunc is a function to be called on shutdown.
 type cleanupFunc func()
 
+// initOAuthAndRegisterTools initialises OAuth support and registers the
+// tools that were deferred during initSharedTools (those with auth=oauth).
+func initOAuthAndRegisterTools(ctx context.Context, cfg *config.Config, mgr *tool.Manager, logger *slog.Logger) (*oauthState, *api.OAuthDeps, error) {
+	oauthSt, oauthDeps, err := initOAuthSupport(ctx, cfg, mgr, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initializing OAuth support: %w", err)
+	}
+	if err := registerDeferredOAuthTools(ctx, cfg, mgr, logger); err != nil {
+		oauthSt.Close()
+		return nil, nil, err
+	}
+	return oauthSt, oauthDeps, nil
+}
+
 // registerNonOAuthTools registers tools that don't require OAuth at startup.
 // OAuth tools are deferred until after initOAuthSupport wires the handler factory.
 func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConfig, mgr *tool.Manager, logger *slog.Logger) error {
@@ -853,6 +867,13 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 	return nil
 }
 
+func otelMetricsHandler(cfg *config.Config) http.Handler {
+	if cfg.OTel.Enabled {
+		return dkotel.PrometheusHandler()
+	}
+	return nil
+}
+
 func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logger *slog.Logger) error {
 	keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
 	if ksErr != nil {
@@ -976,17 +997,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 		defer func() { _ = sharedToolMgr.Close() }()
 	}
 
-	// Initialize OAuth support for remote MCP tools (if any configured).
-	oauthSt, oauthDeps, oauthErr := initOAuthSupport(ctx, cfg, sharedToolMgr, logger)
-	if oauthErr != nil {
-		return fmt.Errorf("initializing OAuth support: %w", oauthErr)
-	}
-	defer oauthSt.Close()
-
-	// Register OAuth tools that were deferred during initSharedTools.
-	if err := registerDeferredOAuthTools(ctx, cfg, sharedToolMgr, logger); err != nil {
+	// Initialize OAuth support and register deferred OAuth tools.
+	oauthSt, oauthDeps, err := initOAuthAndRegisterTools(ctx, cfg, sharedToolMgr, logger)
+	if err != nil {
 		return err
 	}
+	defer oauthSt.Close()
 
 	lifecycleMgr := tool.NewLifecycleManager(sharedToolMgr, path, cfg.MaxTools, logger)
 
@@ -1046,10 +1062,6 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}()
 
 	if cfg.API.IsEnabled() {
-		var metricsHandler http.Handler
-		if cfg.OTel.Enabled {
-			metricsHandler = dkotel.PrometheusHandler()
-		}
 		if err := startAPIServer(ctx, cfg, api.Deps{
 			Dispatcher:      dispatcher,
 			Scheduler:       sched,
@@ -1060,7 +1072,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			LifecycleMgr:    lifecycleMgr,
 			BrowserProfiles: browserProfiles,
 			WebHandler:      web.Handler(),
-			MetricsHandler:  metricsHandler,
+			MetricsHandler:  otelMetricsHandler(cfg),
 			KVStore:         st.kvStore,
 			ConfigPath:      path,
 			ModelLister:     dispatcher.ListModels,

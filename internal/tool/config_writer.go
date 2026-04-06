@@ -39,6 +39,15 @@ func addToolToConfig(path, name string, cfg config.ToolConfig) error {
 		return fmt.Errorf("config: tools section has unexpected type")
 	}
 
+	tools[name] = toolConfigToMap(cfg)
+	raw["tools"] = tools
+
+	return writeRawConfig(path, raw)
+}
+
+// toolConfigToMap converts a ToolConfig to a map suitable for TOML serialization,
+// omitting zero-value fields.
+func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	entry := map[string]any{}
 	if cfg.Transport != "" && cfg.Transport != "stdio" {
 		entry["transport"] = cfg.Transport
@@ -77,10 +86,7 @@ func addToolToConfig(path, name string, cfg config.ToolConfig) error {
 		}
 		entry["scopes"] = scopes
 	}
-	tools[name] = entry
-	raw["tools"] = tools
-
-	return writeRawConfig(path, raw)
+	return entry
 }
 
 // removeToolFromConfig reads the TOML config at path, removes [tools.<name>],
