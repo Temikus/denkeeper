@@ -63,6 +63,20 @@ lint:
 lint-fix:
     mise x -- golangci-lint run --fix
 
+# Lint web UI (Svelte)
+lint-ui:
+    #!/usr/bin/env sh
+    # Catch unescaped ${VAR} in Svelte templates — Svelte interprets {VAR} as an
+    # expression, causing runtime ReferenceErrors. Use placeholder={"${VAR}"} instead.
+    errors=$(grep -rn -E '="[^"]*\$\{[A-Za-z_][A-Za-z_0-9]*\}[^"]*"' web/src --include='*.svelte' | grep -v '={"') || true
+    if [ -n "$errors" ]; then
+        echo "ERROR: Unescaped \${} in Svelte attribute strings (Svelte interprets {…} as expressions):"
+        echo "$errors"
+        echo ""
+        echo 'Fix: wrap the attribute value as a JS string, e.g. placeholder={"text ${VAR} text"}'
+        exit 1
+    fi
+
 # Format all Go files
 fmt:
     gofmt -w .
@@ -76,7 +90,7 @@ vet:
     go vet {{go_tags}} ./...
 
 # Run all checks (fmt, vet, lint, test)
-check: fmt-check vet lint test test-ui
+check: fmt-check vet lint lint-ui test test-ui
 
 # Tidy modules
 tidy:

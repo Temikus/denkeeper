@@ -36,6 +36,14 @@ jobs:
           node-version: lts/*
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Lint Svelte templates
+        run: |
+          if grep -rn -E '="[^"]*\$\{[A-Za-z_][A-Za-z_0-9]*\}[^"]*"' web/src --include='*.svelte' | grep -qv '={"'; then
+            echo "ERROR: Unescaped \${} in Svelte attribute strings (Svelte interprets {…} as expressions):"
+            grep -rn -E '="[^"]*\$\{[A-Za-z_][A-Za-z_0-9]*\}[^"]*"' web/src --include='*.svelte' | grep -v '={"'
+            echo 'Fix: wrap the attribute value as a JS string, e.g. placeholder={"text ${VAR} text"}'
+            exit 1
+          fi
       - run: cd web && npm ci && npm run test:coverage
       - name: Upload UI coverage
         if: always()
