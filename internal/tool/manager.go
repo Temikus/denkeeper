@@ -185,7 +185,10 @@ func (m *Manager) registerStdio(ctx context.Context, name string, cfg config.Too
 	return m.discoverTools(ctx, sc)
 }
 
-// registerSSE connects to a remote MCP server over Streamable HTTP (SSE).
+// registerSSE connects to a remote MCP server over Streamable HTTP or legacy SSE.
+// It first attempts the Streamable HTTP transport (2025-03-26 spec), then falls
+// back to the legacy SSE transport (2024-11-05 spec) if the server doesn't
+// support the newer protocol. OAuth tools always use Streamable HTTP (no fallback).
 func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolConfig) error {
 	// Resolve ${VAR} placeholders in URL and header values (with denylist).
 	resolvedURL, err := resolveEnvPlaceholders(cfg.URL, cfg.Env)
@@ -232,12 +235,7 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		Timeout:   timeout,
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "denkeeper",
-		Version: "v1.0.0",
-	}, nil)
-
-	sseTransport := &mcp.StreamableClientTransport{
+	streamableTransport := &mcp.StreamableClientTransport{
 		Endpoint:   resolvedURL,
 		HTTPClient: httpClient,
 	}
@@ -255,7 +253,7 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		slog.String("auth", cfg.Auth),
 		slog.Bool("is_reregistration", isReregistration))
 
-	oh, done, err := m.setupOAuth(name, cfg, httpClient, sseTransport, resolvedURL)
+	oh, done, err := m.setupOAuth(name, cfg, httpClient, streamableTransport, resolvedURL)
 	if err != nil {
 		return err
 	}
@@ -269,14 +267,15 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		slog.Bool("is_reregistration", isReregistration),
 		slog.Bool("has_oauth_handler", oh != nil))
 
-	session, err := client.Connect(ctx, sseTransport, nil)
+	// Try Streamable HTTP first, fall back to legacy SSE for non-OAuth tools.
+	session, transport, err := m.connectSSE(ctx, name, cfg, httpClient, streamableTransport, resolvedURL)
 	if err != nil {
-		return fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), err)
+		return err
 	}
 
 	sc := &serverConn{
 		name:         name,
-		transport:    "sse",
+		transport:    transport,
 		url:          resolvedURL,
 		cfg:          cfg,
 		session:      session,
@@ -293,6 +292,61 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	m.mu.Unlock()
 
 	return m.discoverTools(ctx, sc)
+}
+
+// connectSSE attempts to connect using Streamable HTTP, falling back to legacy
+// SSE if the server doesn't support the newer protocol. OAuth tools skip the
+// fallback since they require the Streamable HTTP transport for auth handling.
+// Returns the session, the transport name used ("sse" or "sse-legacy"), and error.
+func (m *Manager) connectSSE(
+	ctx context.Context,
+	name string,
+	cfg config.ToolConfig,
+	httpClient *http.Client,
+	streamableTransport *mcp.StreamableClientTransport,
+	resolvedURL string,
+) (*mcp.ClientSession, string, error) {
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "denkeeper",
+		Version: "v1.0.0",
+	}, nil)
+
+	session, streamableErr := client.Connect(ctx, streamableTransport, nil)
+	if streamableErr == nil {
+		m.logger.Info("connected to remote MCP server via Streamable HTTP",
+			slog.String("tool", name))
+		return session, "sse", nil
+	}
+
+	// OAuth tools require Streamable HTTP for the auth handler — no fallback.
+	if cfg.Auth == "oauth" {
+		return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), streamableErr)
+	}
+
+	m.logger.Info("streamable HTTP failed, falling back to legacy SSE",
+		slog.String("tool", name),
+		slog.String("error", streamableErr.Error()))
+
+	legacyTransport := &mcp.SSEClientTransport{
+		Endpoint:   resolvedURL,
+		HTTPClient: httpClient,
+	}
+
+	// Need a fresh client for the new transport.
+	legacyClient := mcp.NewClient(&mcp.Implementation{
+		Name:    "denkeeper",
+		Version: "v1.0.0",
+	}, nil)
+
+	session, err := legacyClient.Connect(ctx, legacyTransport, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s (tried Streamable HTTP and legacy SSE): streamable: %v; legacy SSE: %w",
+			name, redactURL(resolvedURL), streamableErr, err)
+	}
+
+	m.logger.Info("connected to remote MCP server via legacy SSE",
+		slog.String("tool", name))
+	return session, "sse-legacy", nil
 }
 
 // setupOAuth wires the OAuth handler for an SSE tool. If the tool needs OAuth
