@@ -13,8 +13,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/modelcontextprotocol/go-sdk/auth"
-	_ "modernc.org/sqlite"
 	"golang.org/x/oauth2"
+	_ "modernc.org/sqlite"
 )
 
 func testHandlerDeps(t *testing.T) (*TokenStore, *PendingManager, *slog.Logger) {

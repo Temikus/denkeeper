@@ -261,6 +261,12 @@ export async function sendMessage(text) {
     chatState.update(s => ({ ...s, error: e.message }))
     touchMessages()
   } finally {
+    // Ensure streaming flag is always cleared so the UI never gets stuck.
+    if (agentMsg.streaming) {
+      agentMsg.streaming = false
+      agentMsg.status = ''
+      touchMessages()
+    }
     activeAgentMsg = null
     chatState.update(s => ({ ...s, sending: false }))
   }

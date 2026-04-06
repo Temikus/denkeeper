@@ -64,25 +64,25 @@ type OAuthHandlerFactory func(name string, cfg config.ToolConfig, httpClient *ht
 
 // ServerStatus exposes metadata about a registered MCP server.
 type ServerStatus struct {
-	Name         string   `json:"name"`
-	Command      string   `json:"command,omitempty"`
-	Args         []string `json:"-"`          // excluded from JSON (may contain secrets)
-	ArgsCount    int      `json:"args_count"` // safe count for display
-	ToolNames    []string `json:"tool_names"`
-	Status       string   `json:"status"` // "connected", "restarting", "error", "disabled"
-	Transport    string   `json:"transport,omitempty"`
-	URL          string   `json:"url,omitempty"` // redacted
-	RestartCount int      `json:"restart_count,omitempty"`
-	LastError    string   `json:"last_error,omitempty"`
-	UptimeSecs   float64  `json:"uptime_secs,omitempty"`
-	AuthType     string   `json:"auth_type,omitempty"`     // "oauth" or ""
+	Name         string           `json:"name"`
+	Command      string           `json:"command,omitempty"`
+	Args         []string         `json:"-"`          // excluded from JSON (may contain secrets)
+	ArgsCount    int              `json:"args_count"` // safe count for display
+	ToolNames    []string         `json:"tool_names"`
+	Status       string           `json:"status"` // "connected", "restarting", "error", "disabled"
+	Transport    string           `json:"transport,omitempty"`
+	URL          string           `json:"url,omitempty"` // redacted
+	RestartCount int              `json:"restart_count,omitempty"`
+	LastError    string           `json:"last_error,omitempty"`
+	UptimeSecs   float64          `json:"uptime_secs,omitempty"`
+	AuthType     string           `json:"auth_type,omitempty"` // "oauth" or ""
 	OAuthStatus  *OAuthStatusInfo `json:"oauth_status,omitempty"`
 }
 
 // OAuthStatusInfo is a non-sensitive view of OAuth state for API responses.
 type OAuthStatusInfo struct {
-	HasToken    bool   `json:"has_token"`
-	NeedsReauth bool   `json:"needs_reauth"`
+	HasToken    bool `json:"has_token"`
+	NeedsReauth bool `json:"needs_reauth"`
 }
 
 // Manager manages MCP tool server connections and tool execution.
@@ -94,7 +94,7 @@ type Manager struct {
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
 	mcpCfg   config.MCPConfig       // global MCP settings
 	logger   *slog.Logger
-	oauth    *OAuthSupport          // nil if OAuth not configured
+	oauth    *OAuthSupport // nil if OAuth not configured
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.

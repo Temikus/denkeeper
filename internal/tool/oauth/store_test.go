@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	_ "modernc.org/sqlite"
 	"golang.org/x/oauth2"
+	_ "modernc.org/sqlite"
 )
 
 func testKey() string {

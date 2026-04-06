@@ -242,7 +242,7 @@ describe('streamChat edge cases', () => {
     expect(chunks).toEqual([''])
   })
 
-  test('stream interrupted without done event resolves without error', async () => {
+  test('stream interrupted without done event calls onDone fallback', async () => {
     server.use(
       http.post('/api/v1/chat', () => {
         const encoder = new TextEncoder()
@@ -260,18 +260,50 @@ describe('streamChat edge cases', () => {
     )
 
     const chunks = []
-    let doneCalled = false
+    let doneSessionId = null
     token.set('key')
 
     await api.streamChat(
       'default', '', 'hello',
       (chunk) => chunks.push(chunk),
-      () => { doneCalled = true },
+      (sid) => { doneSessionId = sid },
       () => {},
     )
 
     expect(chunks).toEqual(['partial'])
-    expect(doneCalled).toBe(false)
+    // Fallback onDone is called with empty string when stream closes without done event
+    expect(doneSessionId).toBe('')
+  })
+
+  test('stream with done event does not call fallback onDone', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"content","text":"ok"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done","session_id":"sess-normal"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    const doneCalls = []
+    token.set('key')
+
+    await api.streamChat(
+      'default', '', 'hello',
+      () => {},
+      (sid) => doneCalls.push(sid),
+      () => {},
+    )
+
+    // onDone should be called exactly once with the real session_id, not twice
+    expect(doneCalls).toEqual(['sess-normal'])
   })
 
   test('skips malformed JSON frames without throwing', async () => {

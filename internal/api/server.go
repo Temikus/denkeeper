@@ -117,6 +117,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	if cfg.IsWebSocketEnabled() {
 		s.wsHub = NewWSHub(cfg.WebSocketMaxConnections, cfg.WebSocketReplayTTL(), logger)
 		mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
+		logger.Debug("ws: endpoint registered at /api/v1/ws")
+	} else {
+		logger.Warn("ws: endpoint disabled by config")
 	}
 
 	// Data endpoints — require auth with appropriate scopes.

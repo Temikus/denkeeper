@@ -14,7 +14,7 @@ vi.mock('../ws.js', () => ({
   }),
 }))
 
-const { wsStatus, onSessionEvent, offSessionEvent, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
+const { wsStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
 
 beforeEach(() => {
   mockConnect.mockReset()
@@ -147,5 +147,97 @@ describe('session event routing', () => {
     expect(handler2).toHaveBeenCalledTimes(1)
 
     offSessionEvent('sess-replace')
+  })
+})
+
+describe('failAllSessionHandlers', () => {
+  beforeEach(() => {
+    getWSClient()
+  })
+
+  test('sends error event to all registered session handlers', () => {
+    const handler1 = vi.fn()
+    const handler2 = vi.fn()
+    onSessionEvent('sess-a', handler1)
+    onSessionEvent('sess-b', handler2)
+
+    failAllSessionHandlers()
+
+    expect(handler1).toHaveBeenCalledWith({
+      type: 'error',
+      session_id: 'sess-a',
+      message: 'WebSocket disconnected',
+    })
+    expect(handler2).toHaveBeenCalledWith({
+      type: 'error',
+      session_id: 'sess-b',
+      message: 'WebSocket disconnected',
+    })
+  })
+
+  test('clears all handlers after failing them', () => {
+    const handler = vi.fn()
+    onSessionEvent('sess-1', handler)
+
+    failAllSessionHandlers()
+    handler.mockReset()
+
+    // Event after clear should not be routed
+    capturedOptions.onEvent({ type: 'content', text: 'late', session_id: 'sess-1' })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  test('no-ops when no handlers registered', () => {
+    // Should not throw
+    expect(() => failAllSessionHandlers()).not.toThrow()
+  })
+})
+
+describe('onStatus triggers failAllSessionHandlers', () => {
+  beforeEach(() => {
+    getWSClient()
+  })
+
+  test('disconnected status fails all session handlers', () => {
+    const handler = vi.fn()
+    onSessionEvent('sess-dc', handler)
+
+    capturedOptions.onStatus('disconnected')
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', session_id: 'sess-dc' })
+    )
+  })
+
+  test('reconnecting status fails all session handlers', () => {
+    const handler = vi.fn()
+    onSessionEvent('sess-rc', handler)
+
+    capturedOptions.onStatus('reconnecting')
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', session_id: 'sess-rc' })
+    )
+  })
+
+  test('sse_fallback status fails all session handlers', () => {
+    const handler = vi.fn()
+    onSessionEvent('sess-fb', handler)
+
+    capturedOptions.onStatus('sse_fallback')
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', session_id: 'sess-fb' })
+    )
+  })
+
+  test('connected status does not fail session handlers', () => {
+    const handler = vi.fn()
+    onSessionEvent('sess-ok', handler)
+
+    capturedOptions.onStatus('connected')
+
+    expect(handler).not.toHaveBeenCalled()
+    offSessionEvent('sess-ok')
   })
 })

@@ -21,6 +21,17 @@ export function offSessionEvent(sessionID) {
   sessionHandlers.delete(sessionID)
 }
 
+/**
+ * Notify all pending session handlers that the connection was lost.
+ * This prevents sendViaWS promises from hanging forever.
+ */
+export function failAllSessionHandlers() {
+  for (const [id, handler] of sessionHandlers) {
+    handler({ type: 'error', session_id: id, message: 'WebSocket disconnected' })
+  }
+  sessionHandlers.clear()
+}
+
 /** Singleton WebSocket client instance. */
 let wsClient = null
 
@@ -41,6 +52,11 @@ export function getWSClient() {
     },
     onStatus: (status) => {
       wsStatus.set(status)
+      // When the WS disconnects or falls back, reject any pending chat promises
+      // so the UI doesn't get stuck waiting for a done frame that will never arrive.
+      if (status === 'disconnected' || status === 'reconnecting' || status === 'sse_fallback') {
+        failAllSessionHandlers()
+      }
     },
   })
 

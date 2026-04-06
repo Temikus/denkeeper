@@ -443,6 +443,8 @@ func (c *WSConn) handleCancel(f CancelFrame) {
 // handleWebSocket handles GET /api/v1/ws — upgrades the HTTP connection to
 // a WebSocket and spawns read/write pump goroutines.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	s.logger.Debug("ws: upgrade request received", "remote", r.RemoteAddr, "upgrade", r.Header.Get("Upgrade"))
+
 	// Authenticate: Authorization header, ?token= query param, or session cookie.
 	scope := "chat"
 	keyName := ""
@@ -455,6 +457,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	name, ok := s.authenticate(r.Context(), r, scope)
 	if !ok {
+		s.logger.Debug("ws: auth failed", "remote", r.RemoteAddr, "has_cookie", r.Header.Get("Cookie") != "", "has_token", r.URL.Query().Get("token") != "")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}

@@ -186,6 +186,9 @@ func TestHealth_LoggedAtDebugLevel(t *testing.T) {
 	logger := slog.New(&capturingHandler{records: &records})
 	srv := New(testConfig(), testDeps(), logger)
 
+	// Reset records so we only capture logs from the HTTP handler, not from New().
+	records = records[:0]
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -207,6 +210,9 @@ func TestNonHealthEndpoint_LoggedAtInfoLevel(t *testing.T) {
 	var records []logRecord
 	logger := slog.New(&capturingHandler{records: &records})
 	srv := New(testConfig(), testDeps(), logger)
+
+	// Reset records so we only capture logs from the HTTP handler, not from New().
+	records = records[:0]
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/agents", func(w http.ResponseWriter, _ *http.Request) {

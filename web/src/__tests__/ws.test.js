@@ -3,6 +3,7 @@ import { DenkeeperWS } from '../ws.js'
 
 // Mock WebSocket
 class MockWebSocket {
+  static CONNECTING = 0
   static OPEN = 1
   static CLOSED = 3
 
@@ -19,6 +20,10 @@ class MockWebSocket {
 
   close() {
     this.readyState = MockWebSocket.CLOSED
+    // Simulate onclose firing after close() is called
+    if (this.onclose) {
+      setTimeout(() => this.onclose({ code: 1000, reason: '', wasClean: true }), 0)
+    }
   }
 }
 MockWebSocket.instances = []
@@ -82,6 +87,52 @@ describe('connect', () => {
     ws.connect()
     ws.connect()
     expect(MockWebSocket.instances).toHaveLength(1)
+  })
+})
+
+describe('connect timeout', () => {
+  test('forces close if connection stays in CONNECTING state past timeout', () => {
+    const { ws, onStatus } = createWS()
+    ws.connect()
+
+    const mockWs = MockWebSocket.instances[0]
+    // Simulate staying in CONNECTING state (never fires onopen)
+    mockWs.readyState = MockWebSocket.CONNECTING
+
+    // Advance past the 5s connect timeout
+    vi.advanceTimersByTime(5000)
+
+    // Should have called close() on the stuck socket
+    expect(mockWs.readyState).toBe(MockWebSocket.CLOSED)
+  })
+
+  test('does not force close if connection opens before timeout', () => {
+    const { ws } = createWS()
+    ws.connect()
+
+    const mockWs = MockWebSocket.instances[0]
+    // Connection opens immediately
+    mockWs.onopen()
+
+    // Advance past timeout — should be a no-op
+    vi.advanceTimersByTime(5000)
+    // Socket was OPEN after onopen, timeout should not have closed it
+    expect(ws.status).toBe('connected')
+  })
+
+  test('close() clears connect timer', () => {
+    const { ws } = createWS()
+    ws.connect()
+
+    const mockWs = MockWebSocket.instances[0]
+    mockWs.readyState = MockWebSocket.CONNECTING
+
+    // Close before timeout fires
+    ws.close()
+
+    // Advance past timeout — should not throw or change state
+    vi.advanceTimersByTime(5000)
+    expect(ws.status).toBe('disconnected')
   })
 })
 

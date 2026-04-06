@@ -1,3 +1,4 @@
 [tools]
 deno = "latest"
+gitleaks = "latest"
 go = "latest"

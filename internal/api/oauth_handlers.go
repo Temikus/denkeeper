@@ -278,5 +278,3 @@ code { background: #f3f4f6; padding: 0.2rem 0.5rem; border-radius: 4px; font-siz
 <p>Close this window and try again from the Denkeeper dashboard.</p>
 </div></body></html>`, safeMsg)
 }
-
-

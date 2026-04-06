@@ -7,6 +7,7 @@
 const BACKOFF_INITIAL = 1000
 const BACKOFF_MAX = 30000
 const MAX_RECONNECT_ATTEMPTS = 3
+const CONNECT_TIMEOUT_MS = 5000
 
 export class DenkeeperWS {
   /**
@@ -25,6 +26,7 @@ export class DenkeeperWS {
     this._status = 'disconnected'
     this._reconnectAttempts = 0
     this._reconnectTimer = null
+    this._connectTimer = null
     this._intentionalClose = false
   }
 
@@ -59,15 +61,32 @@ export class DenkeeperWS {
     this._intentionalClose = false
     this._setStatus('connecting')
 
+    const url = this._buildURL()
+    console.debug('[ws] connecting to', url, 'attempt', this._reconnectAttempts)
+
     try {
-      this._ws = new WebSocket(this._buildURL())
+      this._ws = new WebSocket(url)
     } catch (e) {
+      console.debug('[ws] constructor threw:', e.message)
       this._handleFailure()
       return
     }
 
+    // If the connection doesn't open within CONNECT_TIMEOUT_MS, treat it as
+    // a failure so we don't stay in "Connecting" forever.
+    this._connectTimer = setTimeout(() => {
+      this._connectTimer = null
+      if (this._ws && this._ws.readyState === WebSocket.CONNECTING) {
+        console.debug('[ws] connect timeout, forcing close')
+        this._ws.close()
+      }
+    }, CONNECT_TIMEOUT_MS)
+
     this._ws.onopen = () => {
+      clearTimeout(this._connectTimer)
+      this._connectTimer = null
       this._reconnectAttempts = 0
+      console.debug('[ws] connected')
       this._setStatus('connected')
     }
 
@@ -81,7 +100,10 @@ export class DenkeeperWS {
     }
 
     this._ws.onclose = (evt) => {
+      clearTimeout(this._connectTimer)
+      this._connectTimer = null
       this._ws = null
+      console.debug('[ws] closed, code:', evt.code, 'reason:', evt.reason, 'wasClean:', evt.wasClean)
       if (this._intentionalClose) {
         this._setStatus('disconnected')
         return
@@ -94,7 +116,8 @@ export class DenkeeperWS {
       this._handleFailure()
     }
 
-    this._ws.onerror = () => {
+    this._ws.onerror = (evt) => {
+      console.debug('[ws] error event', evt)
       // onclose will fire after this — let it handle reconnection.
     }
   }
@@ -102,6 +125,7 @@ export class DenkeeperWS {
   _handleFailure() {
     this._reconnectAttempts++
     if (this._reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      console.debug('[ws] max reconnect attempts reached, falling back to SSE')
       this._setStatus('sse_fallback')
       return
     }
@@ -130,6 +154,10 @@ export class DenkeeperWS {
   /** Gracefully close the connection. */
   close() {
     this._intentionalClose = true
+    if (this._connectTimer) {
+      clearTimeout(this._connectTimer)
+      this._connectTimer = null
+    }
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer)
       this._reconnectTimer = null

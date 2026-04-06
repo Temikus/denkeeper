@@ -157,7 +157,7 @@ type Handler struct {
 	clientSecret string
 	scopes       []string
 
-	ctx    context.Context    // cancelled on Close(); used for token refresh
+	ctx    context.Context // cancelled on Close(); used for token refresh
 	cancel context.CancelFunc
 	rt     *oauthRoundTripper // captures token URL during exchange
 

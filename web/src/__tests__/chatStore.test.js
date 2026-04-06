@@ -127,6 +127,34 @@ describe('sendMessage', () => {
     expect(state.error).toBe('network fail')
     expect(state.sending).toBe(false)
   })
+
+  test('clears streaming flag on agent message after error', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onChunk('partial ')
+      throw new Error('mid-stream crash')
+    })
+
+    await sendMessage('hello')
+    const state = get(chatState)
+    const agentMsg = state.messages[1]
+    // streaming should be cleared by the finally block
+    expect(agentMsg.streaming).toBe(false)
+    expect(agentMsg.status).toBe('')
+    expect(state.sending).toBe(false)
+  })
+
+  test('clears streaming flag even when stream ends without done event', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone) => {
+      onChunk('response')
+      // Stream ends without calling onDone — the finally block should clean up
+    })
+
+    await sendMessage('hello')
+    const state = get(chatState)
+    const agentMsg = state.messages[1]
+    expect(agentMsg.streaming).toBe(false)
+    expect(state.sending).toBe(false)
+  })
 })
 
 describe('handleToolEvent via SSE path', () => {
