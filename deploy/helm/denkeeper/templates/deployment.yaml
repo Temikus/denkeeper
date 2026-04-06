@@ -47,6 +47,9 @@ spec:
         - name: denkeeper
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DENKEEPER_DATA_DIR
+              value: "/data"
           envFrom:
             - secretRef:
                 name: {{ include "denkeeper.secretName" . }}

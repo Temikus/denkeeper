@@ -74,11 +74,13 @@ config:
   #   allowed_users: ["123456789012345678"]
 
   # -- Agent defaults and multi-agent routing.
+  # All paths default to $DENKEEPER_DATA_DIR/... (set to /data in this chart).
   # agent:
-  #   persona_dir: "/data/persona"
+  #   persona_dir: "/data/agents/default"
+  #   skills_dir: "/data/skills"
   # agents:
   #   - name: "default"
-  #     persona_dir: "/data/persona/default"
+  #     persona_dir: "/data/agents/default"
   #     adapters: ["telegram"]
   #     llm_model: "anthropic/claude-sonnet-4-20250514"
 
@@ -98,7 +100,8 @@ config:
   #   fetch:
   #     timeout: "30s"
 
-  # -- Memory store (SQLite). db_path must be on a writable, persistent volume.
+  # -- Memory store (SQLite). Kept explicit to avoid the nested /data/data/memory.db path
+  # that would result from DENKEEPER_DATA_DIR=/data + default data/memory.db subpath.
   memory:
     db_path: "/data/memory.db"
   # kv:

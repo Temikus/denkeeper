@@ -46,6 +46,8 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 
 **Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters`, `llm_model`, `session_tier`. If no `[[agents]]` section exists, a single `"default"` agent is synthesized.
 
+**Data directory**: All default paths (db, persona, skills) are derived from a single base directory. Set via `DENKEEPER_DATA_DIR` env var, `data_dir` in TOML, or defaults to `~/.denkeeper`. The Helm chart sets `DENKEEPER_DATA_DIR=/data` so everything lands on the writable PVC.
+
 **Wiring** happens in `cmd/denkeeper/main.go` — config drives everything. All behavior should be configurable via TOML, not hardcoded.
 
 ## Conventions

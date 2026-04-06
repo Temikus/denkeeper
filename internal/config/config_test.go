@@ -3003,3 +3003,104 @@ api_key = "sk-or-key"
 		t.Errorf("model_prices = %v, want nil", cfg.Costs.ModelPrices)
 	}
 }
+
+func TestParse_DataDirEnvVar(t *testing.T) {
+	t.Setenv("DENKEEPER_DATA_DIR", "/data")
+
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.DataDir != "/data" {
+		t.Errorf("DataDir = %q, want /data", cfg.DataDir)
+	}
+	if cfg.Memory.DBPath != "/data/data/memory.db" {
+		t.Errorf("DBPath = %q, want /data/data/memory.db", cfg.Memory.DBPath)
+	}
+	if cfg.Agent.PersonaDir != "/data/agents/default" {
+		t.Errorf("PersonaDir = %q, want /data/agents/default", cfg.Agent.PersonaDir)
+	}
+	if cfg.Agent.SkillsDir != "/data/skills" {
+		t.Errorf("SkillsDir = %q, want /data/skills", cfg.Agent.SkillsDir)
+	}
+}
+
+func TestParse_DataDirToml(t *testing.T) {
+	tomlData := []byte(`
+data_dir = "/custom/path"
+
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.DataDir != "/custom/path" {
+		t.Errorf("DataDir = %q, want /custom/path", cfg.DataDir)
+	}
+	if cfg.Memory.DBPath != "/custom/path/data/memory.db" {
+		t.Errorf("DBPath = %q, want /custom/path/data/memory.db", cfg.Memory.DBPath)
+	}
+}
+
+func TestParse_DataDirEnvOverridesToml(t *testing.T) {
+	t.Setenv("DENKEEPER_DATA_DIR", "/env/path")
+
+	tomlData := []byte(`
+data_dir = "/toml/path"
+
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.DataDir != "/env/path" {
+		t.Errorf("DataDir = %q, want /env/path (env should override TOML)", cfg.DataDir)
+	}
+}
+
+func TestParse_DataDirMultiAgent(t *testing.T) {
+	t.Setenv("DENKEEPER_DATA_DIR", "/data")
+
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[[agents]]
+name = "default"
+adapters = ["telegram"]
+
+[[agents]]
+name = "helper"
+adapters = ["telegram:99999"]
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Agents[1].PersonaDir != "/data/agents/helper" {
+		t.Errorf("agent persona_dir = %q, want /data/agents/helper", cfg.Agents[1].PersonaDir)
+	}
+}

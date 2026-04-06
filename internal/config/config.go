@@ -14,6 +14,7 @@ import (
 )
 
 type Config struct {
+	DataDir   string                  `toml:"data_dir"` // base directory for all data; defaults to ~/.denkeeper
 	Telegram  TelegramConfig          `toml:"telegram"`
 	Discord   DiscordConfig           `toml:"discord"`
 	LLM       LLMConfig               `toml:"llm"`
@@ -628,6 +629,7 @@ func fixSlice(s []any) []any {
 }
 
 func applyDefaults(cfg *Config) {
+	resolveDataDir(cfg)
 	applyScalarDefaults(cfg)
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
@@ -638,18 +640,27 @@ func applyDefaults(cfg *Config) {
 	applyScheduleDefaults(cfg)
 }
 
+// resolveDataDir sets cfg.DataDir from DENKEEPER_DATA_DIR env var, the TOML
+// data_dir field, or the default ~/.denkeeper. All other default paths are
+// derived from this base directory.
+func resolveDataDir(cfg *Config) {
+	envOverride("DENKEEPER_DATA_DIR", &cfg.DataDir)
+	if cfg.DataDir != "" {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	cfg.DataDir = filepath.Join(home, ".denkeeper")
+}
+
 func applyScalarDefaults(cfg *Config) {
 	if cfg.Memory.DBPath == "" {
-		home, _ := os.UserHomeDir()
-		cfg.Memory.DBPath = filepath.Join(home, ".denkeeper", "data", "memory.db")
+		cfg.Memory.DBPath = filepath.Join(cfg.DataDir, "data", "memory.db")
 	}
 	if cfg.Agent.PersonaDir == "" {
-		home, _ := os.UserHomeDir()
-		cfg.Agent.PersonaDir = filepath.Join(home, ".denkeeper", "agents", "default")
+		cfg.Agent.PersonaDir = filepath.Join(cfg.DataDir, "agents", "default")
 	}
 	if cfg.Agent.SkillsDir == "" {
-		home, _ := os.UserHomeDir()
-		cfg.Agent.SkillsDir = filepath.Join(home, ".denkeeper", "skills")
+		cfg.Agent.SkillsDir = filepath.Join(cfg.DataDir, "skills")
 	}
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
@@ -887,8 +898,7 @@ func applyAgentDefaults(cfg *Config) {
 	for i := range cfg.Agents {
 		a := &cfg.Agents[i]
 		if a.PersonaDir == "" {
-			home, _ := os.UserHomeDir()
-			a.PersonaDir = filepath.Join(home, ".denkeeper", "agents", a.Name)
+			a.PersonaDir = filepath.Join(cfg.DataDir, "agents", a.Name)
 		}
 	}
 }
@@ -1420,12 +1430,19 @@ func validatePlugins(plugins map[string]PluginConfig, tools map[string]ToolConfi
 }
 
 func DefaultConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".denkeeper", "denkeeper.toml")
+	return filepath.Join(defaultDataDir(), "denkeeper.toml")
 }
 
 // DefaultDBPath returns the default path for the SQLite database.
 func DefaultDBPath() string {
+	return filepath.Join(defaultDataDir(), "data", "memory.db")
+}
+
+// defaultDataDir returns the data directory from DENKEEPER_DATA_DIR or ~/.denkeeper.
+func defaultDataDir() string {
+	if v := os.Getenv("DENKEEPER_DATA_DIR"); v != "" {
+		return v
+	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".denkeeper", "data", "memory.db")
+	return filepath.Join(home, ".denkeeper")
 }
