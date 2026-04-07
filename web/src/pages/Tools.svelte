@@ -1639,7 +1639,7 @@
     display: none;
     position: absolute;
     right: 0;
-    top: 22px;
+    bottom: 22px;
     width: 280px;
     padding: 10px 12px;
     font-size: 12px;
