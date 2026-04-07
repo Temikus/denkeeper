@@ -20,7 +20,7 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	content, editable, agentMutable, ok := e.PersonaSection(section)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown section %q, must be one of: soul, user, memory", section),
+			"error": fmt.Sprintf("unknown section %q, must be one of: identity, soul, user, memory", section),
 		})
 		return
 	}
@@ -47,7 +47,7 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 	// Validate section name before parsing body.
 	if _, _, _, ok := e.PersonaSection(section); !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown section %q, must be one of: soul, user, memory", section),
+			"error": fmt.Sprintf("unknown section %q, must be one of: identity, soul, user, memory", section),
 		})
 		return
 	}

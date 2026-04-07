@@ -76,7 +76,7 @@ Three tiers: `autonomous` (all actions), `supervised` (chat + tools with approva
 
 `internal/approval/` manages requests requiring human sign-off. Flow: Engine submits to Manager → Manager persists + registers closure → Engine attaches Approve/Deny inline keyboard → user clicks → callback handler resolves → closure invoked.
 
-Seven action kinds: `user_update`, `soul_update`, `create_skill`, `modify_schedule`, `install_tool`, `browser_profile`, `tool_call`.
+Eight action kinds: `user_update`, `soul_update`, `identity_update`, `create_skill`, `modify_schedule`, `install_tool`, `browser_profile`, `tool_call`.
 
 **Supervised tool call approval**: When `permission_tier = "supervised"`, each MCP tool call is submitted for approval before execution. Engine first checks `Manager.ShouldAutoApprove()` — if a matching rule exists, the tool executes immediately and a `tool_approval` ChatEvent with `approval_status: "auto_approved"` is emitted. Otherwise Engine blocks on `Manager.WaitForResolution(ctx, id)`. Dispatcher intercepts pending `"tool_approval"` ChatEvents and sends inline keyboard messages with four buttons: Approve, Deny, Auto (session), Auto (always). Denied tool calls feed "Tool call was denied by the operator." to the LLM.
 

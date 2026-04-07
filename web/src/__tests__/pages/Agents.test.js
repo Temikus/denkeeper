@@ -38,6 +38,20 @@ describe('Agents page', () => {
     })
   })
 
+  test('shows identity section header', async () => {
+    render(Agents)
+    await waitFor(() => {
+      expect(screen.getByText('# Identity')).toBeInTheDocument()
+    })
+  })
+
+  test('shows identity section with IDENTITY.md label', async () => {
+    render(Agents)
+    await waitFor(() => {
+      expect(screen.getByText('← IDENTITY.md')).toBeInTheDocument()
+    })
+  })
+
   test('shows no agents message when empty', async () => {
     server.use(
       http.get('/api/v1/agents', () => HttpResponse.json([]))

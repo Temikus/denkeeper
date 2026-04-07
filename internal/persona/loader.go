@@ -5,7 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
+
+// Identity holds the parsed YAML frontmatter and body from IDENTITY.md.
+type Identity struct {
+	Name  string `yaml:"name"`
+	Emoji string `yaml:"emoji"`
+	Theme string `yaml:"theme"`
+	Body  string `yaml:"-"` // markdown body after frontmatter
+}
 
 // DefaultPrompt is the fallback system prompt when no persona files are available.
 const DefaultPrompt = "You are Denkeeper, a helpful personal AI assistant."
@@ -16,6 +26,11 @@ type Persona struct {
 	Soul   string // SOUL.md content (required)
 	User   string // USER.md content (optional)
 	Memory string // MEMORY.md content (optional)
+
+	// IdentityRaw stores the full IDENTITY.md content for API round-tripping.
+	IdentityRaw string
+	// Identity holds the parsed YAML frontmatter from IDENTITY.md (nil if absent).
+	Identity *Identity
 
 	// Editable tracks which sections the agent can modify without elevated permissions.
 	// true = freely writable; false = requires approval or elevated permissions.
@@ -33,9 +48,10 @@ func NewEmpty(dir string) *Persona {
 	return &Persona{
 		dir: dir,
 		Editable: map[string]bool{
-			"soul":   true,
-			"user":   true,
-			"memory": true,
+			"identity": true,
+			"soul":     true,
+			"user":     true,
+			"memory":   true,
 		},
 	}
 }
@@ -63,10 +79,19 @@ func Load(dir string) (*Persona, error) {
 		dir:  dir,
 		Soul: strings.TrimSpace(string(soul)),
 		Editable: map[string]bool{
-			"soul":   true, // editable by user via dashboard/API; agent access governed by permission tier
-			"user":   true, // editable by user via dashboard/API; agent access governed by permission tier
-			"memory": true, // editable by user via dashboard/API; agent writes freely
+			"identity": true, // editable by user via dashboard/API; agent access governed by permission tier
+			"soul":     true, // editable by user via dashboard/API; agent access governed by permission tier
+			"user":     true, // editable by user via dashboard/API; agent access governed by permission tier
+			"memory":   true, // editable by user via dashboard/API; agent writes freely
 		},
+	}
+
+	if data, err := os.ReadFile(filepath.Join(dir, "IDENTITY.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
+		raw := strings.TrimSpace(string(data))
+		p.IdentityRaw = raw
+		if id, parseErr := parseIdentity(raw); parseErr == nil {
+			p.Identity = id
+		}
 	}
 
 	if data, err := os.ReadFile(filepath.Join(dir, "USER.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
@@ -106,6 +131,11 @@ func (p *Persona) Save(section, content string) error {
 		return fmt.Errorf("persona: committing %s: %w", filename, err)
 	}
 	switch strings.ToLower(section) {
+	case "identity":
+		p.IdentityRaw = trimmed
+		if id, parseErr := parseIdentity(trimmed); parseErr == nil {
+			p.Identity = id
+		}
 	case "memory":
 		p.Memory = trimmed
 	case "user":
@@ -125,6 +155,8 @@ func (p *Persona) UpdateMemory(content string) error {
 // sectionFilename maps a section name to its filename.
 func sectionFilename(section string) (string, error) {
 	switch strings.ToLower(section) {
+	case "identity":
+		return "IDENTITY.md", nil
 	case "memory":
 		return "MEMORY.md", nil
 	case "user":
@@ -132,7 +164,7 @@ func sectionFilename(section string) (string, error) {
 	case "soul":
 		return "SOUL.md", nil
 	default:
-		return "", fmt.Errorf("persona: unknown section %q, must be one of: memory, user, soul", section)
+		return "", fmt.Errorf("persona: unknown section %q, must be one of: identity, memory, user, soul", section)
 	}
 }
 
@@ -213,6 +245,81 @@ If your core identity, values, or personality should evolve based on your experi
 		`Omit entirely when not needed.`
 }
 
+// IdentityUpdateInstruction returns the system prompt fragment that instructs the
+// agent how to request an IDENTITY.md update via an [IDENTITY_UPDATE] directive.
+// Returns an empty string if the persona has no write path or the tier is
+// "restricted" (which cannot write identity files).
+func (p *Persona) IdentityUpdateInstruction(tier string) string {
+	if p.dir == "" || tier == "restricted" {
+		return ""
+	}
+	var modeNote string
+	if tier == "autonomous" {
+		modeNote = "In autonomous mode, this will be applied directly."
+	} else {
+		modeNote = "In supervised mode, this will be presented for your approval before being applied."
+	}
+	return `## Identity Updates
+
+If your name, emoji, theme, or identity metadata should change, include an identity update block ` +
+		`at the end of your response. Preserve the YAML frontmatter format:
+
+[IDENTITY_UPDATE]
+---
+name: YourName
+emoji: "🤖"
+theme: your vibe description
+---
+
+Any additional identity notes here.
+[/IDENTITY_UPDATE]
+
+` + modeNote + ` Only include this when your identity metadata genuinely needs updating. ` +
+		`Omit entirely when not needed.`
+}
+
+// parseIdentity parses IDENTITY.md content: optional YAML frontmatter delimited
+// by "---" lines, followed by a markdown body.
+func parseIdentity(content string) (*Identity, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return &Identity{}, nil
+	}
+
+	id := &Identity{}
+
+	if !strings.HasPrefix(content, "---") {
+		id.Body = content
+		return id, nil
+	}
+
+	// Find the closing "---" after the opening one.
+	rest := content[3:] // skip opening "---"
+	rest = strings.TrimLeft(rest, " \t")
+	if len(rest) > 0 && rest[0] == '\n' {
+		rest = rest[1:]
+	} else if len(rest) > 1 && rest[0] == '\r' && rest[1] == '\n' {
+		rest = rest[2:]
+	}
+
+	closeIdx := strings.Index(rest, "\n---")
+	if closeIdx == -1 {
+		// No closing delimiter — treat entire content as body.
+		id.Body = content
+		return id, nil
+	}
+
+	yamlBlock := rest[:closeIdx]
+	afterClose := rest[closeIdx+4:] // skip "\n---"
+
+	if err := yaml.Unmarshal([]byte(yamlBlock), id); err != nil {
+		return nil, fmt.Errorf("persona: parsing IDENTITY.md frontmatter: %w", err)
+	}
+
+	id.Body = strings.TrimSpace(afterClose)
+	return id, nil
+}
+
 // IsEditable reports whether the section can be edited via the dashboard/API by the user.
 // Unknown sections are treated as not editable (returns false).
 func (p *Persona) IsEditable(section string) bool {
@@ -221,12 +328,14 @@ func (p *Persona) IsEditable(section string) bool {
 }
 
 // IsAgentMutable reports whether the agent itself can modify the given section.
-// "memory" is always agent-mutable; "user" and "soul" require supervised/autonomous
-// tier (via approval or directive).
+// "memory" is always agent-mutable; "identity", "user" and "soul" require
+// supervised/autonomous tier (via approval or directive).
 func (p *Persona) IsAgentMutable(section string) bool {
 	switch strings.ToLower(section) {
 	case "memory":
 		return true
+	case "identity":
+		return true // via IDENTITY_UPDATE directive (supervised tier requires approval)
 	case "user":
 		return true // via USER_UPDATE directive (supervised tier requires approval)
 	case "soul":
@@ -239,6 +348,24 @@ func (p *Persona) IsAgentMutable(section string) bool {
 // SystemPrompt assembles the persona into a single system prompt string.
 func (p *Persona) SystemPrompt() string {
 	var b strings.Builder
+
+	if p.Identity != nil {
+		b.WriteString("# Identity\n\n")
+		if p.Identity.Name != "" {
+			line := "Your name is " + p.Identity.Name
+			if p.Identity.Emoji != "" {
+				line += " " + p.Identity.Emoji
+			}
+			b.WriteString(line + ".\n")
+		}
+		if p.Identity.Theme != "" {
+			b.WriteString("Your vibe: " + p.Identity.Theme + ".\n")
+		}
+		if p.Identity.Body != "" {
+			b.WriteString("\n" + p.Identity.Body)
+		}
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("# Soul\n\n")
 	b.WriteString(p.Soul)

@@ -16,11 +16,11 @@ import (
 func (s *Server) registerPersonaTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "persona_get",
-		Description: "Read a persona section (soul, user, or memory). Returns the content and editability flags.",
+		Description: "Read a persona section (identity, soul, user, or memory). Returns the content and editability flags.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"section": {"type": "string", "description": "The persona section to read: soul, user, or memory"}
+				"section": {"type": "string", "description": "The persona section to read: identity, soul, user, or memory"}
 			},
 			"required": ["section"]
 		}`),
@@ -28,11 +28,11 @@ func (s *Server) registerPersonaTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "persona_update",
-		Description: "Update a persona section (soul, user, or memory). Replaces the entire section content. Soul and user updates require approval in supervised mode.",
+		Description: "Update a persona section (identity, soul, user, or memory). Replaces the entire section content. Identity, soul, and user updates require approval in supervised mode.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"section": {"type": "string", "description": "The persona section to update: soul, user, or memory"},
+				"section": {"type": "string", "description": "The persona section to update: identity, soul, user, or memory"},
 				"content": {"type": "string", "description": "The new content for the section (replaces existing content entirely)"}
 			},
 			"required": ["section", "content"]
@@ -48,8 +48,8 @@ func (s *Server) handlePersonaGet(_ context.Context, req *mcp.CallToolRequest) (
 		return toolError("invalid arguments: " + err.Error()), nil
 	}
 	section := strings.TrimSpace(strings.ToLower(input.Section))
-	if section != "soul" && section != "user" && section != "memory" {
-		return toolError(fmt.Sprintf("unknown section %q, must be one of: soul, user, memory", input.Section)), nil
+	if section != "identity" && section != "soul" && section != "user" && section != "memory" {
+		return toolError(fmt.Sprintf("unknown section %q, must be one of: identity, soul, user, memory", input.Section)), nil
 	}
 
 	content, editable, agentMutable, ok := s.deps.GetPersonaSection(section)
@@ -75,8 +75,8 @@ func (s *Server) handlePersonaUpdate(ctx context.Context, req *mcp.CallToolReque
 		return toolError("invalid arguments: " + err.Error()), nil
 	}
 	section := strings.TrimSpace(strings.ToLower(input.Section))
-	if section != "soul" && section != "user" && section != "memory" {
-		return toolError(fmt.Sprintf("unknown section %q, must be one of: soul, user, memory", input.Section)), nil
+	if section != "identity" && section != "soul" && section != "user" && section != "memory" {
+		return toolError(fmt.Sprintf("unknown section %q, must be one of: identity, soul, user, memory", input.Section)), nil
 	}
 	if strings.TrimSpace(input.Content) == "" {
 		return toolError("content is required"), nil
@@ -95,9 +95,11 @@ func (s *Server) handlePersonaUpdate(ctx context.Context, req *mcp.CallToolReque
 		return toolText(`{"ok": true}`), nil
 	}
 
-	// Soul and user require tier checks.
+	// Identity, soul, and user require tier checks.
 	var kind approval.ActionKind
 	switch section {
+	case "identity":
+		kind = approval.ActionKindIdentityUpdate
 	case "soul":
 		kind = approval.ActionKindSoulUpdate
 	case "user":

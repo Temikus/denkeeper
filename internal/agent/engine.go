@@ -39,6 +39,9 @@ const userUpdateClose = "[/USER_UPDATE]"
 const soulUpdateOpen = "[SOUL_UPDATE]"
 const soulUpdateClose = "[/SOUL_UPDATE]"
 
+const identityUpdateOpen = "[IDENTITY_UPDATE]"
+const identityUpdateClose = "[/IDENTITY_UPDATE]"
+
 const skillCreateOpen = "[SKILL_CREATE]"
 const skillCreateClose = "[/SKILL_CREATE]"
 
@@ -254,9 +257,10 @@ func (e *Engine) PersonaSections() map[string]bool {
 		return nil
 	}
 	return map[string]bool{
-		"soul":   e.persona.Soul != "",
-		"user":   e.persona.User != "",
-		"memory": e.persona.Memory != "",
+		"identity": e.persona.IdentityRaw != "",
+		"soul":     e.persona.Soul != "",
+		"user":     e.persona.User != "",
+		"memory":   e.persona.Memory != "",
 	}
 }
 
@@ -268,6 +272,8 @@ func (e *Engine) PersonaSection(section string) (content string, editable bool, 
 	}
 	s := strings.ToLower(section)
 	switch s {
+	case "identity":
+		return e.persona.IdentityRaw, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
 	case "soul":
 		return e.persona.Soul, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
 	case "user":
@@ -302,6 +308,9 @@ func (e *Engine) buildSystemPrompt(perms *security.PermissionEngine, msg adapter
 			base += "\n\n" + inst
 		}
 		if inst := e.persona.SoulUpdateInstruction(perms.Tier()); inst != "" {
+			base += "\n\n" + inst
+		}
+		if inst := e.persona.IdentityUpdateInstruction(perms.Tier()); inst != "" {
 			base += "\n\n" + inst
 		}
 		if e.agentSkillsDir != "" && perms.Tier() != "restricted" {
@@ -421,6 +430,13 @@ func extractUserUpdate(text string) (cleaned, userUpdate string) {
 // (empty if no block was found or the block was malformed).
 func extractSoulUpdate(text string) (cleaned, soulUpdate string) {
 	return extractDirective(text, soulUpdateOpen, soulUpdateClose)
+}
+
+// extractIdentityUpdate parses and removes an [IDENTITY_UPDATE]...[/IDENTITY_UPDATE]
+// block from text. Returns the cleaned text and the proposed IDENTITY.md content
+// (empty if no block was found or the block was malformed).
+func extractIdentityUpdate(text string) (cleaned, identityUpdate string) {
+	return extractDirective(text, identityUpdateOpen, identityUpdateClose)
 }
 
 // extractSkillCreate parses and removes a [SKILL_CREATE]...[/SKILL_CREATE] block.
@@ -1066,6 +1082,25 @@ func (e *Engine) applyMemoryUpdate(memUpdate string, perms *security.PermissionE
 	}
 }
 
+// processPersonaSection handles a single persona-file directive (user/soul/identity).
+// It is a no-op when payload is empty, a prior approval is already pending, or the
+// persona has no write path. This helper keeps processResponseDirectives within the
+// cyclomatic complexity limit.
+func (e *Engine) processPersonaSection(ctx context.Context, perms *security.PermissionEngine, msg adapter.IncomingMessage, convID, payload, section string, kind approval.ActionKind, description, pendingMsg, logLabel string, responseText string, pendingApproval *approval.Request) (string, *approval.Request) {
+	if payload == "" || pendingApproval != nil || e.persona == nil || e.persona.Dir() == "" {
+		return responseText, pendingApproval
+	}
+	personaRef := e.persona
+	pending, text := e.processDirective(ctx, perms, directiveSpec{
+		payload: payload, kind: kind,
+		description: description, pendingMsg: pendingMsg,
+		logLabel: logLabel, externalID: msg.ExternalID,
+		adapter: msg.Adapter, convID: convID,
+		applyFn: func(_ context.Context, p string) error { return personaRef.Save(section, p) },
+	}, responseText)
+	return text, pending
+}
+
 // processResponseDirectives extracts memory updates, user updates, soul updates,
 // skill creation, and schedule addition directives from the LLM response. Returns
 // the cleaned response text and a pending approval request (if any).
@@ -1075,34 +1110,26 @@ func (e *Engine) processResponseDirectives(ctx context.Context, resp *llm.ChatRe
 
 	responseText, userUpdate := extractUserUpdate(responseText)
 	responseText, soulUpdate := extractSoulUpdate(responseText)
+	responseText, identityUpdate := extractIdentityUpdate(responseText)
 	responseText, skillPayload := extractSkillCreate(responseText)
 	responseText, schedPayload := extractScheduleAdd(responseText)
 
 	var pendingApproval *approval.Request
 
-	if userUpdate != "" && e.persona != nil && e.persona.Dir() != "" {
-		personaRef := e.persona
-		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
-			payload: userUpdate, kind: approval.ActionKindUserUpdate,
-			description: "Update user profile (USER.md)",
-			pendingMsg:  "\n\n_Proposed user profile update is pending your approval._",
-			logLabel:    "user update", externalID: msg.ExternalID,
-			adapter: msg.Adapter, convID: convID,
-			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("user", payload) },
-		}, responseText)
-	}
+	responseText, pendingApproval = e.processPersonaSection(ctx, perms, msg, convID, userUpdate, "user",
+		approval.ActionKindUserUpdate, "Update user profile (USER.md)",
+		"\n\n_Proposed user profile update is pending your approval._", "user update",
+		responseText, pendingApproval)
 
-	if soulUpdate != "" && pendingApproval == nil && e.persona != nil && e.persona.Dir() != "" {
-		personaRef := e.persona
-		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{
-			payload: soulUpdate, kind: approval.ActionKindSoulUpdate,
-			description: "Update soul identity (SOUL.md)",
-			pendingMsg:  "\n\n_Proposed soul update is pending your approval._",
-			logLabel:    "soul update", externalID: msg.ExternalID,
-			adapter: msg.Adapter, convID: convID,
-			applyFn: func(_ context.Context, payload string) error { return personaRef.Save("soul", payload) },
-		}, responseText)
-	}
+	responseText, pendingApproval = e.processPersonaSection(ctx, perms, msg, convID, soulUpdate, "soul",
+		approval.ActionKindSoulUpdate, "Update soul identity (SOUL.md)",
+		"\n\n_Proposed soul update is pending your approval._", "soul update",
+		responseText, pendingApproval)
+
+	responseText, pendingApproval = e.processPersonaSection(ctx, perms, msg, convID, identityUpdate, "identity",
+		approval.ActionKindIdentityUpdate, "Update identity metadata (IDENTITY.md)",
+		"\n\n_Proposed identity update is pending your approval._", "identity update",
+		responseText, pendingApproval)
 
 	if skillPayload != "" && pendingApproval == nil {
 		pendingApproval, responseText = e.processDirective(ctx, perms, directiveSpec{

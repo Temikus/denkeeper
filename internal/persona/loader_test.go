@@ -430,3 +430,286 @@ func TestSoulUpdateInstruction_NoDir_Empty(t *testing.T) {
 		t.Errorf("expected empty instruction when no dir set, got %q", inst)
 	}
 }
+
+// --- IDENTITY.md tests ---
+
+func TestParseIdentity_Full(t *testing.T) {
+	content := "---\nname: Moltis\nemoji: \"🧊\"\ntheme: thorough and methodical\n---\n\nAdditional identity notes."
+	id, err := parseIdentity(content)
+	if err != nil {
+		t.Fatalf("parseIdentity: %v", err)
+	}
+	if id.Name != "Moltis" {
+		t.Errorf("Name = %q, want %q", id.Name, "Moltis")
+	}
+	if id.Emoji != "🧊" {
+		t.Errorf("Emoji = %q, want %q", id.Emoji, "🧊")
+	}
+	if id.Theme != "thorough and methodical" {
+		t.Errorf("Theme = %q, want %q", id.Theme, "thorough and methodical")
+	}
+	if id.Body != "Additional identity notes." {
+		t.Errorf("Body = %q, want %q", id.Body, "Additional identity notes.")
+	}
+}
+
+func TestParseIdentity_Partial(t *testing.T) {
+	content := "---\nname: Helper\n---"
+	id, err := parseIdentity(content)
+	if err != nil {
+		t.Fatalf("parseIdentity: %v", err)
+	}
+	if id.Name != "Helper" {
+		t.Errorf("Name = %q, want %q", id.Name, "Helper")
+	}
+	if id.Emoji != "" {
+		t.Errorf("Emoji = %q, want empty", id.Emoji)
+	}
+	if id.Theme != "" {
+		t.Errorf("Theme = %q, want empty", id.Theme)
+	}
+	if id.Body != "" {
+		t.Errorf("Body = %q, want empty", id.Body)
+	}
+}
+
+func TestParseIdentity_NoFrontmatter(t *testing.T) {
+	content := "Just plain markdown identity notes."
+	id, err := parseIdentity(content)
+	if err != nil {
+		t.Fatalf("parseIdentity: %v", err)
+	}
+	if id.Name != "" {
+		t.Errorf("Name = %q, want empty", id.Name)
+	}
+	if id.Body != "Just plain markdown identity notes." {
+		t.Errorf("Body = %q, want %q", id.Body, "Just plain markdown identity notes.")
+	}
+}
+
+func TestParseIdentity_Empty(t *testing.T) {
+	id, err := parseIdentity("")
+	if err != nil {
+		t.Fatalf("parseIdentity: %v", err)
+	}
+	if id.Name != "" || id.Emoji != "" || id.Theme != "" || id.Body != "" {
+		t.Error("expected all fields empty for empty input")
+	}
+}
+
+func TestLoad_WithIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "I am the soul.")
+	writeTestFile(t, filepath.Join(dir, "IDENTITY.md"), "---\nname: TestBot\nemoji: \"🤖\"\ntheme: helpful\n---\n\nExtra notes.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Identity == nil {
+		t.Fatal("Identity should not be nil when IDENTITY.md is present")
+	}
+	if p.Identity.Name != "TestBot" {
+		t.Errorf("Identity.Name = %q, want %q", p.Identity.Name, "TestBot")
+	}
+	if p.Identity.Emoji != "🤖" {
+		t.Errorf("Identity.Emoji = %q, want %q", p.Identity.Emoji, "🤖")
+	}
+	if p.Identity.Theme != "helpful" {
+		t.Errorf("Identity.Theme = %q, want %q", p.Identity.Theme, "helpful")
+	}
+	if p.Identity.Body != "Extra notes." {
+		t.Errorf("Identity.Body = %q, want %q", p.Identity.Body, "Extra notes.")
+	}
+	if p.IdentityRaw == "" {
+		t.Error("IdentityRaw should be set")
+	}
+	if !p.IsEditable("identity") {
+		t.Error("identity should be editable")
+	}
+	if !p.IsAgentMutable("identity") {
+		t.Error("identity should be agent-mutable")
+	}
+}
+
+func TestLoad_WithoutIdentity(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Just soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Identity != nil {
+		t.Error("Identity should be nil when IDENTITY.md is absent")
+	}
+	if p.IdentityRaw != "" {
+		t.Errorf("IdentityRaw = %q, want empty", p.IdentityRaw)
+	}
+}
+
+func TestSystemPrompt_WithIdentity(t *testing.T) {
+	p := &Persona{
+		Soul: "Soul content",
+		Identity: &Identity{
+			Name:  "TestBot",
+			Emoji: "🤖",
+			Theme: "helpful and concise",
+			Body:  "Some extra identity notes.",
+		},
+	}
+	prompt := p.SystemPrompt()
+
+	if !strings.Contains(prompt, "# Identity") {
+		t.Error("SystemPrompt should contain Identity header")
+	}
+	if !strings.Contains(prompt, "Your name is TestBot 🤖.") {
+		t.Errorf("SystemPrompt should contain name line, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Your vibe: helpful and concise.") {
+		t.Error("SystemPrompt should contain theme line")
+	}
+	if !strings.Contains(prompt, "Some extra identity notes.") {
+		t.Error("SystemPrompt should contain body")
+	}
+	// Identity should come before Soul.
+	idIdx := strings.Index(prompt, "# Identity")
+	soulIdx := strings.Index(prompt, "# Soul")
+	if idIdx >= soulIdx {
+		t.Error("Identity section should appear before Soul section")
+	}
+}
+
+func TestSystemPrompt_IdentityPartialFields(t *testing.T) {
+	p := &Persona{
+		Soul:     "Soul content",
+		Identity: &Identity{Name: "Helper"},
+	}
+	prompt := p.SystemPrompt()
+
+	if !strings.Contains(prompt, "Your name is Helper.") {
+		t.Error("SystemPrompt should contain name without emoji")
+	}
+	if strings.Contains(prompt, "Your vibe:") {
+		t.Error("SystemPrompt should not contain theme line when theme is empty")
+	}
+}
+
+func TestSystemPrompt_WithoutIdentity_BackwardCompat(t *testing.T) {
+	p := &Persona{
+		Soul:   "Soul content",
+		User:   "User content",
+		Memory: "Context content",
+	}
+	prompt := p.SystemPrompt()
+
+	expected := "# Soul\n\nSoul content\n\n# User\n\nUser content\n\n# Memory\n\nContext content"
+	if prompt != expected {
+		t.Errorf("SystemPrompt =\n%s\nwant:\n%s", prompt, expected)
+	}
+}
+
+func TestSave_Identity(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	newContent := "---\nname: Updated\nemoji: \"✨\"\ntheme: sparkly\n---\n\nNew body."
+	if err := p.Save("identity", newContent); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if p.IdentityRaw != strings.TrimSpace(newContent) {
+		t.Errorf("IdentityRaw = %q, want %q", p.IdentityRaw, strings.TrimSpace(newContent))
+	}
+	if p.Identity == nil {
+		t.Fatal("Identity should not be nil after save")
+	}
+	if p.Identity.Name != "Updated" {
+		t.Errorf("Identity.Name = %q, want %q", p.Identity.Name, "Updated")
+	}
+	if p.Identity.Emoji != "✨" {
+		t.Errorf("Identity.Emoji = %q, want %q", p.Identity.Emoji, "✨")
+	}
+
+	// Verify file on disk.
+	data, err := os.ReadFile(filepath.Join(dir, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "name: Updated") {
+		t.Error("IDENTITY.md should contain updated name on disk")
+	}
+}
+
+func TestIdentityUpdateInstruction_Autonomous(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	inst := p.IdentityUpdateInstruction("autonomous")
+	if inst == "" {
+		t.Fatal("expected non-empty instruction for autonomous tier")
+	}
+	if !strings.Contains(inst, "[IDENTITY_UPDATE]") {
+		t.Error("instruction should contain [IDENTITY_UPDATE] tag")
+	}
+	if !strings.Contains(inst, "applied directly") {
+		t.Error("instruction should mention autonomous mode applies directly")
+	}
+}
+
+func TestIdentityUpdateInstruction_Supervised(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	inst := p.IdentityUpdateInstruction("supervised")
+	if inst == "" {
+		t.Fatal("expected non-empty instruction for supervised tier")
+	}
+	if !strings.Contains(inst, "approval") {
+		t.Error("instruction should mention approval for supervised mode")
+	}
+}
+
+func TestIdentityUpdateInstruction_Restricted_Empty(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if inst := p.IdentityUpdateInstruction("restricted"); inst != "" {
+		t.Errorf("expected empty instruction for restricted tier, got %q", inst)
+	}
+}
+
+func TestIdentityUpdateInstruction_NoDir_Empty(t *testing.T) {
+	p := &Persona{Soul: "Soul.", Editable: map[string]bool{"identity": true}}
+
+	if inst := p.IdentityUpdateInstruction("autonomous"); inst != "" {
+		t.Errorf("expected empty instruction when no dir set, got %q", inst)
+	}
+}
+
+func TestNewEmpty_IncludesIdentity(t *testing.T) {
+	p := NewEmpty("/tmp/test")
+	if !p.IsEditable("identity") {
+		t.Error("NewEmpty persona should have identity as editable")
+	}
+}

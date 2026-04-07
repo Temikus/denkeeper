@@ -3061,3 +3061,178 @@ func TestEngine_IntermediateContentAccumulation(t *testing.T) {
 		t.Errorf("provider calls = %d, want 2 (no nudge for accumulated content)", provider.callIndex)
 	}
 }
+
+func TestEngine_Chat_IdentityUpdate_Supervised_SubmitsApproval(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Updating my identity.\n\n[IDENTITY_UPDATE]\n---\nname: NewName\n---\n[/IDENTITY_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	approvalMgr := approval.NewManager(approvalStore, testLogger())
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Update your identity",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// IDENTITY.md should NOT exist yet (pending approval).
+	if _, statErr := os.Stat(filepath.Join(dir, "IDENTITY.md")); statErr == nil {
+		t.Error("IDENTITY.md should not be written yet — approval is pending")
+	}
+
+	// A pending approval should exist with identity_update kind.
+	pending, err := approvalMgr.List(context.Background(), approval.StatusPending)
+	if err != nil {
+		t.Fatalf("List approvals: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals = %d, want 1", len(pending))
+	}
+	if pending[0].Kind != approval.ActionKindIdentityUpdate {
+		t.Errorf("kind = %q, want identity_update", pending[0].Kind)
+	}
+}
+
+func TestEngine_Chat_IdentityUpdate_Autonomous_WritesDirectly(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Renaming myself.\n\n[IDENTITY_UPDATE]\n---\nname: AutoBot\nemoji: \"🤖\"\n---\n[/IDENTITY_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
+
+	_, err = engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Rename yourself",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// IDENTITY.md should have been written directly (autonomous tier).
+	data, err := os.ReadFile(filepath.Join(dir, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("IDENTITY.md not written: %v", err)
+	}
+	if !strings.Contains(string(data), "AutoBot") {
+		t.Errorf("IDENTITY.md = %q, want it to contain the update", string(data))
+	}
+}
+
+func TestEngine_Chat_IdentityUpdate_Restricted_DropsDirective(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a helpful assistant."), 0644); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "Sure!\n\n[IDENTITY_UPDATE]\n---\nname: Hacked\n---\n[/IDENTITY_UPDATE]",
+			TokensUsed: llm.TokenUsage{Total: 20},
+		},
+	})
+
+	permissions, err := security.NewPermissionEngine("restricted")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	sent := &sentMessages{}
+	engine := NewEngine("default", router, store, sent.send, permissions, p, "", nil, nil, nil, testLogger())
+
+	responseText, err := engine.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		Text:       "Change your name",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// Directive should be stripped from response.
+	if strings.Contains(responseText, "[IDENTITY_UPDATE]") {
+		t.Error("IDENTITY_UPDATE directive should be stripped from response text")
+	}
+
+	// IDENTITY.md should not exist.
+	if _, statErr := os.Stat(filepath.Join(dir, "IDENTITY.md")); statErr == nil {
+		t.Error("IDENTITY.md should not be written in restricted tier")
+	}
+}

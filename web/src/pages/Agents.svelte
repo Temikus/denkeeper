@@ -19,6 +19,13 @@
   let sectionSaveOk = $state(false)
   let sectionsLoading = $state(false)
 
+  // Identity form fields (structured editing mode)
+  let idName = $state('')
+  let idEmoji = $state('')
+  let idTheme = $state('')
+  let idBody = $state('')
+  let idRawMode = $state(false)
+
   onMount(async () => {
     try {
       agents = (await api.agents()) || []
@@ -58,6 +65,34 @@
     sectionsLoading = false
   }
 
+  // Parse identity content into structured fields for the form.
+  function parseIdentityContent(content) {
+    if (!content || !content.startsWith('---')) return { name: '', emoji: '', theme: '', body: content || '' }
+    const end = content.indexOf('\n---', 3)
+    if (end === -1) return { name: '', emoji: '', theme: '', body: content }
+    const yaml = content.substring(3, end)
+    const after = content.substring(end + 4).trim()
+    const name = yaml.match(/^name:\s*(.+)$/m)?.[1]?.trim() || ''
+    const emoji = yaml.match(/^emoji:\s*"?([^"\n]+)"?$/m)?.[1]?.trim() || ''
+    const theme = yaml.match(/^theme:\s*(.+)$/m)?.[1]?.trim() || ''
+    return { name, emoji, theme, body: after }
+  }
+
+  // Serialize identity form fields back to IDENTITY.md content.
+  function serializeIdentity() {
+    let fm = ''
+    if (idName || idEmoji || idTheme) {
+      const lines = ['---']
+      if (idName) lines.push(`name: ${idName}`)
+      if (idEmoji) lines.push(`emoji: "${idEmoji}"`)
+      if (idTheme) lines.push(`theme: ${idTheme}`)
+      lines.push('---')
+      fm = lines.join('\n')
+    }
+    if (idBody) return fm ? fm + '\n\n' + idBody : idBody
+    return fm
+  }
+
   function toggleSection(sec) {
     if (expandedSection === sec) { expandedSection = null; return }
     sectionSaveOk = false
@@ -66,15 +101,28 @@
     sectionEditable = data?.editable ?? true
     sectionAgentMutable = data?.agent_mutable ?? false
     expandedSection = sec
+    // Populate identity form fields when opening identity section.
+    if (sec === 'identity') {
+      const fields = parseIdentityContent(sectionContent)
+      idName = fields.name
+      idEmoji = fields.emoji
+      idTheme = fields.theme
+      idBody = fields.body
+      idRawMode = false
+    }
   }
 
   async function saveSection() {
     sectionSaving = true
     sectionSaveOk = false
     try {
-      await api.updatePersona(detail.name, expandedSection, sectionContent)
+      // For identity in form mode, serialize fields to content before saving.
+      const contentToSave = (expandedSection === 'identity' && !idRawMode)
+        ? serializeIdentity()
+        : sectionContent
+      await api.updatePersona(detail.name, expandedSection, contentToSave)
       // Update preview data
-      sectionData[expandedSection] = { ...sectionData[expandedSection], content: sectionContent }
+      sectionData[expandedSection] = { ...sectionData[expandedSection], content: contentToSave }
       sectionSaveOk = true
       expandedSection = null
       setTimeout(() => sectionSaveOk = false, 3000)
@@ -88,6 +136,14 @@
   function previewLines(sec) {
     const data = sectionData[sec]
     if (!data?.content) return ''
+    // For identity, show parsed fields as a readable summary.
+    if (sec === 'identity') {
+      const fields = parseIdentityContent(data.content)
+      const parts = []
+      if (fields.name) parts.push(fields.emoji ? `${fields.emoji} ${fields.name}` : fields.name)
+      if (fields.theme) parts.push(fields.theme)
+      return parts.join(' — ') || data.content.split('\n').slice(0, 3).join('\n')
+    }
     const lines = data.content.split('\n').slice(0, 3).join('\n')
     return lines.length < data.content.length ? lines + '...' : lines
   }
@@ -198,7 +254,27 @@
     }
   }
 
-  const defaultSections = ['soul', 'user', 'memory']
+  const defaultSections = ['identity', 'soul', 'user', 'memory']
+
+  // Parse identity frontmatter fields from raw content for display in headers.
+  function parseIdentityFields(content) {
+    if (!content || !content.startsWith('---')) return null
+    const end = content.indexOf('\n---', 3)
+    if (end === -1) return null
+    const yaml = content.substring(3, end)
+    const name = yaml.match(/^name:\s*(.+)$/m)?.[1]?.trim()
+    const emoji = yaml.match(/^emoji:\s*"?([^"\n]+)"?$/m)?.[1]?.trim()
+    return (name || emoji) ? { name, emoji } : null
+  }
+
+  // Returns display name enriched with identity data when available.
+  function agentDisplayName(agentName) {
+    const fields = parseIdentityFields(sectionData.identity?.content)
+    if (!fields) return agentName
+    let display = fields.name || agentName
+    if (fields.emoji) display = fields.emoji + ' ' + display
+    return display
+  }
 
   function personaSections(d) {
     if (d.persona_sections) {
@@ -247,7 +323,7 @@
       <!-- Header -->
       <div class="agent-header">
         <div>
-          <h1 class="agent-name">{detail.name}</h1>
+          <h1 class="agent-name">{agentDisplayName(detail.name)}</h1>
           <p class="agent-subtitle">
             {detail.persona_dir ? 'Persona Active' : 'No Persona'}
             {#if detail.model}· {detail.model}{/if}
@@ -371,7 +447,9 @@
               <div class="sp-header" onclick={() => toggleSection(sec)} role="button" tabindex="0" aria-expanded={expandedSection === sec}>
                 <div class="sp-label">
                   <span class="section-icon">
-                    {#if sec === 'soul'}
+                    {#if sec === 'identity'}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="13" y2="13"/></svg>
+                    {:else if sec === 'soul'}
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
                     {:else if sec === 'user'}
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -403,13 +481,48 @@
                 {/if}
               {:else}
                 <div class="section-editor">
-                  <textarea
-                    class="editor-textarea"
-                    bind:value={sectionContent}
-                    readonly={!sectionEditable}
-                    rows="12"
-                  ></textarea>
+                  {#if sec === 'identity' && !idRawMode}
+                    <!-- Identity structured form -->
+                    <div class="identity-form">
+                      <div class="id-field-row">
+                        <div class="id-field">
+                          <label class="config-label" for="id-name">Name</label>
+                          <input id="id-name" class="config-input" type="text" bind:value={idName} placeholder="Agent name" readonly={!sectionEditable} />
+                        </div>
+                        <div class="id-field id-field-sm">
+                          <label class="config-label" for="id-emoji">Emoji</label>
+                          <input id="id-emoji" class="config-input" type="text" bind:value={idEmoji} placeholder="e.g. 🤖" readonly={!sectionEditable} />
+                        </div>
+                      </div>
+                      <label class="config-label" for="id-theme">Theme / Vibe</label>
+                      <input id="id-theme" class="config-input" type="text" bind:value={idTheme} placeholder="e.g. thorough and methodical" readonly={!sectionEditable} />
+                      <label class="config-label" for="id-body">Notes <span class="text-muted">(optional)</span></label>
+                      <textarea id="id-body" class="editor-textarea" bind:value={idBody} readonly={!sectionEditable} rows="4" placeholder="Additional identity notes..."></textarea>
+                    </div>
+                  {:else}
+                    <textarea
+                      class="editor-textarea"
+                      bind:value={sectionContent}
+                      readonly={!sectionEditable}
+                      rows="12"
+                    ></textarea>
+                  {/if}
                   <div class="editor-footer">
+                    {#if sec === 'identity'}
+                      <button class="btn-ghost-sm" onclick={(e) => {
+                        e.stopPropagation()
+                        if (!idRawMode) {
+                          // Switching to raw: serialize fields into sectionContent
+                          sectionContent = serializeIdentity()
+                        } else {
+                          // Switching to form: parse raw content back to fields
+                          const fields = parseIdentityContent(sectionContent)
+                          idName = fields.name; idEmoji = fields.emoji
+                          idTheme = fields.theme; idBody = fields.body
+                        }
+                        idRawMode = !idRawMode
+                      }}>{idRawMode ? 'Form' : 'Raw'}</button>
+                    {/if}
                     <button class="btn-save" onclick={(e) => { e.stopPropagation(); saveSection() }} disabled={sectionSaving}>
                       {sectionSaving ? 'Saving…' : 'Save'}
                     </button>
@@ -673,6 +786,14 @@
   .editor-textarea:focus { outline: none; border-color: var(--accent); }
   .editor-textarea[readonly] { opacity: 0.7; cursor: default; }
   .editor-footer { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+
+  /* Identity form */
+  .identity-form { display: flex; flex-direction: column; gap: 8px; }
+  .id-field-row { display: flex; gap: 12px; }
+  .id-field { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .id-field-sm { flex: 0 0 80px; }
+  .identity-form .editor-textarea { font-family: inherit; }
+  .text-muted { color: var(--text-muted); font-weight: 400; }
   .agent-mutable-hint { margin-left: auto; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
   .dot-agent-rw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
   .dot-agent-ro { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }

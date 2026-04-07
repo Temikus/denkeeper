@@ -64,6 +64,6 @@ export const autoApproveRules = [
 ]
 
 export const personaSections = {
-  identity: 'You are a helpful assistant.',
+  identity: '---\nname: TestBot\nemoji: "🤖"\ntheme: helpful and concise\n---\n\nAdditional notes.',
   style: 'Be concise and clear.',
 }
