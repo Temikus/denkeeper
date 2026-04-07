@@ -59,10 +59,10 @@ func (m *mockOIDCServer) close() {
 
 func (m *mockOIDCServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	doc := map[string]any{
-		"issuer":                 m.issuer,
-		"authorization_endpoint": m.issuer + "/authorize",
-		"token_endpoint":         m.issuer + "/token",
-		"jwks_uri":               m.issuer + "/jwks",
+		"issuer":                                m.issuer,
+		"authorization_endpoint":                m.issuer + "/authorize",
+		"token_endpoint":                        m.issuer + "/token",
+		"jwks_uri":                              m.issuer + "/jwks",
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1253,4 +1253,3 @@ func TestOIDC_HandleLogin_ProducesReadableStateData(t *testing.T) {
 			u.Query().Get("nonce"), stateData.Nonce)
 	}
 }
-

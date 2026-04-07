@@ -292,9 +292,9 @@ func TestWSHealth_WSDisabled(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type blockingProvider struct {
-	gate     chan struct{}   // close to unblock all pending calls
-	entered  chan struct{}   // receives a value each time a call enters
-	inflight atomic.Int64   // number of currently blocked calls
+	gate     chan struct{} // close to unblock all pending calls
+	entered  chan struct{} // receives a value each time a call enters
+	inflight atomic.Int64  // number of currently blocked calls
 }
 
 func newBlockingProvider() *blockingProvider {

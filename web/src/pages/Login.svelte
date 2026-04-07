@@ -293,7 +293,7 @@
           autocomplete="current-password"
           disabled={loginLoading}
         />
-        <button onclick={handlePasswordLogin} disabled={loginLoading}>
+        <button type="submit" onclick={handlePasswordLogin} disabled={loginLoading}>
           {loginLoading ? 'Signing in...' : 'Sign in'}
         </button>
       {:else}

@@ -61,9 +61,9 @@ func TestRegisterSSE_StreamableHTTPServer(t *testing.T) {
 
 	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
 	cfg := config.ToolConfig{
-		Transport:      "sse",
-		URL:            ts.URL,
-		AllowLoopback:  true,
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
 	}
 
 	err := m.RegisterServer(context.Background(), "streamable-tool", cfg)
@@ -92,9 +92,9 @@ func TestRegisterSSE_LegacySSEFallback(t *testing.T) {
 
 	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
 	cfg := config.ToolConfig{
-		Transport:      "sse",
-		URL:            ts.URL,
-		AllowLoopback:  true,
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
 	}
 
 	err := m.RegisterServer(context.Background(), "legacy-tool", cfg)
@@ -127,9 +127,9 @@ func TestRegisterSSE_BothProtocolsFail(t *testing.T) {
 
 	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 5})
 	cfg := config.ToolConfig{
-		Transport:      "sse",
-		URL:            ts.URL,
-		AllowLoopback:  true,
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
 	}
 
 	err := m.RegisterServer(context.Background(), "broken-tool", cfg)
@@ -153,10 +153,10 @@ func TestRegisterSSE_OAuthNoFallback(t *testing.T) {
 	// we set Auth to "oauth" but don't configure OAuthSupport — setupOAuth
 	// should fail before we even get to connectSSE.
 	cfg := config.ToolConfig{
-		Transport:      "sse",
-		URL:            ts.URL,
-		Auth:           "oauth",
-		AllowLoopback:  true,
+		Transport:     "sse",
+		URL:           ts.URL,
+		Auth:          "oauth",
+		AllowLoopback: true,
 	}
 
 	err := m.RegisterServer(context.Background(), "oauth-tool", cfg)
