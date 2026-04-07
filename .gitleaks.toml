@@ -19,3 +19,10 @@ commits = [
     "6a8ff99597aae41e67f55682be3bed792c53c52a",
     "dc8beea4be50bcdcc48dc1b0c39b086bc85c588a",
 ]
+
+[[allowlists]]
+description = "E2E test fixtures — all values are obviously fake test credentials"
+paths = [
+    '''test/e2e/fixtures/.*\.toml''',
+    '''test/e2e/fixtures/.*\.json''',
+]
