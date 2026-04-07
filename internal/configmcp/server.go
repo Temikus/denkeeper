@@ -91,6 +91,10 @@ type Deps struct {
 	// persona_update is disabled.
 	SavePersonaSection func(section, content string) error
 
+	// ConfigPath is the path to the TOML config file. When non-empty,
+	// schedule mutations are persisted to disk so they survive restarts.
+	ConfigPath string
+
 	Logger *slog.Logger
 }
 

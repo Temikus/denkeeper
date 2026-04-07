@@ -21,11 +21,23 @@ type Session struct {
 	ExpiresAt int64    `json:"exp"` // Unix timestamp
 }
 
+// sessionCookiePayload is the minimal payload stored in the encrypted cookie
+// when server-tracked sessions are enabled. Only the session ID and expiry are
+// stored; full session data lives in SQLite.
+type sessionCookiePayload struct {
+	ID        string `json:"id"`
+	ExpiresAt int64  `json:"exp"`
+}
+
 // SessionManager handles AES-256-GCM encrypted session cookies.
+// When Store is non-nil, sessions are server-tracked in SQLite and the cookie
+// contains only a session ID. When Store is nil, legacy mode is used where the
+// full session data is encrypted in the cookie.
 type SessionManager struct {
 	gcm    cipher.AEAD
 	maxAge time.Duration
 	secure bool // set Secure flag on cookies (should be true in production)
+	Store  *SessionStore
 }
 
 // NewSessionManager creates a SessionManager from a hex-encoded AES key (≥32 bytes).
@@ -49,13 +61,32 @@ func NewSessionManager(hexKey string, maxAge time.Duration, secure bool) (*Sessi
 	return &SessionManager{gcm: gcm, maxAge: maxAge, secure: secure}, nil
 }
 
-// Create encrypts the session and sets it as an HttpOnly cookie.
-func (sm *SessionManager) Create(w http.ResponseWriter, s Session) error {
+// CreateWithRequest encrypts the session and sets it as an HttpOnly cookie.
+// When server-tracked sessions are enabled, the session is also stored in SQLite
+// and the cookie contains only the session ID.
+func (sm *SessionManager) CreateWithRequest(w http.ResponseWriter, r *http.Request, s Session) error {
 	if s.ExpiresAt == 0 {
 		s.ExpiresAt = time.Now().Add(sm.maxAge).Unix()
 	}
 
-	plaintext, err := json.Marshal(s)
+	var plaintext []byte
+	var err error
+
+	if sm.Store != nil && r != nil {
+		// Server-tracked mode: store full session in SQLite, cookie has only ID+exp.
+		expiresAt := time.Unix(s.ExpiresAt, 0)
+		userAgent := r.UserAgent()
+		ip := clientIP(r)
+		id, createErr := sm.Store.Create(r.Context(), s.Email, s.Scopes, userAgent, ip, expiresAt)
+		if createErr != nil {
+			return fmt.Errorf("session: store create: %w", createErr)
+		}
+		payload := sessionCookiePayload{ID: id, ExpiresAt: s.ExpiresAt}
+		plaintext, err = json.Marshal(payload)
+	} else {
+		// Legacy mode: full session in cookie.
+		plaintext, err = json.Marshal(s)
+	}
 	if err != nil {
 		return fmt.Errorf("session: marshal: %w", err)
 	}
@@ -80,7 +111,14 @@ func (sm *SessionManager) Create(w http.ResponseWriter, s Session) error {
 	return nil
 }
 
+// Create encrypts the session and sets it as an HttpOnly cookie (legacy, no request context).
+func (sm *SessionManager) Create(w http.ResponseWriter, s Session) error {
+	return sm.CreateWithRequest(w, nil, s)
+}
+
 // Read decrypts and validates the session cookie from the request.
+// When server-tracked sessions are enabled, it looks up the session in SQLite.
+// Falls back to legacy full-session decryption for rolling upgrades.
 func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -103,6 +141,25 @@ func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 		return nil, fmt.Errorf("session: decryption failed: %w", err)
 	}
 
+	// Try server-tracked session first (cookie contains {id, exp}).
+	if sm.Store != nil {
+		var payload sessionCookiePayload
+		if json.Unmarshal(plaintext, &payload) == nil && payload.ID != "" {
+			rec, lookupErr := sm.Store.Get(r.Context(), payload.ID)
+			if lookupErr == nil {
+				// Touch asynchronously to avoid blocking reads.
+				go func() { _ = sm.Store.Touch(r.Context(), payload.ID) }()
+				return &Session{
+					Email:     rec.Email,
+					Scopes:    ScopesFromRecord(rec),
+					ExpiresAt: rec.ExpiresAt.Unix(),
+				}, nil
+			}
+			// Fall through to legacy decryption for rolling upgrade compatibility.
+		}
+	}
+
+	// Legacy mode: full session in cookie.
 	var s Session
 	if err := json.Unmarshal(plaintext, &s); err != nil {
 		return nil, fmt.Errorf("session: unmarshal: %w", err)

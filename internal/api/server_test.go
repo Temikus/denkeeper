@@ -72,7 +72,7 @@ func testConfig(keys ...config.APIKeyConfig) config.APIConfig {
 func testDeps() Deps {
 	logger := testLogger()
 	mem, _ := agent.NewInMemoryStore()
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 
 	// Build a minimal "default" engine with a mock LLM provider.
 	perms, _ := security.NewPermissionEngine("supervised")
@@ -1528,7 +1528,7 @@ func TestSkills_NoSkillsReturnsArray(t *testing.T) {
 	// Build deps with an agent that has no skills.
 	logger := testLogger()
 	mem, _ := agent.NewInMemoryStore()
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	perms, _ := security.NewPermissionEngine("supervised")
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
@@ -2187,7 +2187,7 @@ func TestBrowserConfig_NoBrowser(t *testing.T) {
 func TestChat_SSEToolEvents(t *testing.T) {
 	logger := testLogger()
 	mem, _ := agent.NewInMemoryStore()
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 
 	// Use autonomous tier so tool calls execute without approval blocking.
 	perms, _ := security.NewPermissionEngine("autonomous")

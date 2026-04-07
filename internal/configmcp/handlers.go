@@ -17,6 +17,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // registerTools adds all four Config MCP tools to the server.
@@ -433,6 +434,41 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		"Update skill: "+input.Name, payload, applyFn)
 }
 
+type scheduleAddInput struct {
+	Name        string   `json:"name"`
+	Schedule    string   `json:"schedule"`
+	Skill       string   `json:"skill"`
+	Channel     string   `json:"channel"`
+	SessionMode string   `json:"session_mode"`
+	SessionTier string   `json:"session_tier"`
+	Tags        []string `json:"tags"`
+	Enabled     *bool    `json:"enabled"`
+}
+
+func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
+	var input scheduleAddInput
+	if err := json.Unmarshal(args, &input); err != nil {
+		return input, "invalid arguments: " + err.Error()
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return input, "name is required"
+	}
+	if strings.TrimSpace(input.Schedule) == "" {
+		return input, "schedule is required"
+	}
+	if strings.TrimSpace(input.Channel) == "" {
+		return input, "channel is required"
+	}
+	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
+		return input, "invalid schedule expression: " + err.Error()
+	}
+	colonIdx := strings.IndexByte(input.Channel, ':')
+	if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
+		return input, fmt.Sprintf("channel %q is not in adapter:externalID format", input.Channel)
+	}
+	return input, ""
+}
+
 func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.deps.Sched == nil {
 		return toolError("schedule_add is not available: no scheduler configured"), nil
@@ -446,35 +482,9 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("schedule_add is not available in restricted mode"), nil
 	}
 
-	var input struct {
-		Name        string   `json:"name"`
-		Schedule    string   `json:"schedule"`
-		Skill       string   `json:"skill"`
-		Channel     string   `json:"channel"`
-		SessionMode string   `json:"session_mode"`
-		SessionTier string   `json:"session_tier"`
-		Tags        []string `json:"tags"`
-		Enabled     *bool    `json:"enabled"`
-	}
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return toolError("invalid arguments: " + err.Error()), nil
-	}
-	if strings.TrimSpace(input.Name) == "" {
-		return toolError("name is required"), nil
-	}
-	if strings.TrimSpace(input.Schedule) == "" {
-		return toolError("schedule is required"), nil
-	}
-	if strings.TrimSpace(input.Channel) == "" {
-		return toolError("channel is required"), nil
-	}
-	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
-		return toolError("invalid schedule expression: " + err.Error()), nil
-	}
-
-	colonIdx := strings.IndexByte(input.Channel, ':')
-	if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
-		return toolError(fmt.Sprintf("channel %q is not in adapter:externalID format", input.Channel)), nil
+	input, errMsg := parseScheduleAddInput(req.Params.Arguments)
+	if errMsg != "" {
+		return toolError(errMsg), nil
 	}
 
 	enabled := true
@@ -508,8 +518,19 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
 
+	configPath := s.deps.ConfigPath
+	agentName := s.deps.AgentName
+
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		return schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger))
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger)); err != nil {
+			return err
+		}
+		if configPath != "" {
+			return tool.AddScheduleToConfig(configPath, cfg.Name, cfg.Schedule,
+				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
+				agentName, cfg.Tags, cfg.Enabled)
+		}
+		return nil
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
@@ -657,12 +678,22 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	schedRef := s.deps.Sched
 	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
+	configPath := s.deps.ConfigPath
+	agentName := s.deps.AgentName
 
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
 		if err := schedRef.Unregister(input.Name); err != nil {
 			return fmt.Errorf("unregistering old schedule: %w", err)
 		}
-		return schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger))
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger)); err != nil {
+			return err
+		}
+		if configPath != "" {
+			return tool.UpdateScheduleInConfig(configPath, cfg.Name, cfg.Schedule,
+				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
+				agentName, cfg.Tags, cfg.Enabled)
+		}
+		return nil
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,

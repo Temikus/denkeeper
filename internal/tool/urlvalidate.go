@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // validateToolURL checks that rawURL is a valid HTTP(S) URL that does not
@@ -154,6 +155,67 @@ func matchDomain(host, pattern string) bool {
 		return host == pattern[2:] || strings.HasSuffix(host, suffix)
 	}
 	return host == pattern
+}
+
+// isBlockedIP checks whether a resolved IP address should be blocked for SSRF
+// protection. Link-local (169.254.0.0/16, fe80::/10) and cloud metadata IPs
+// are always blocked. Loopback (127.0.0.0/8, ::1) is blocked unless
+// allowLoopback is true.
+func isBlockedIP(ip net.IP, allowLoopback bool) bool {
+	if ip == nil {
+		return false
+	}
+
+	// IPv4 checks.
+	if ip4 := ip.To4(); ip4 != nil {
+		// Link-local: 169.254.0.0/16 (includes AWS/GCP/Azure metadata at 169.254.169.254).
+		if ip4[0] == 169 && ip4[1] == 254 {
+			return true
+		}
+		// Loopback: 127.0.0.0/8.
+		if ip4[0] == 127 {
+			return !allowLoopback
+		}
+		return false
+	}
+
+	// IPv6 link-local (fe80::/10) — always blocked.
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	// IPv6 loopback (::1).
+	if ip.IsLoopback() {
+		return !allowLoopback
+	}
+
+	return false
+}
+
+// SSRFSafeTransport returns an *http.Transport that blocks connections to
+// SSRF-sensitive IP addresses at TCP connect time via net.Dialer.Control.
+// This prevents DNS-rebinding attacks where a hostname resolves to a blocked IP
+// after passing the initial string-based URL validation.
+func SSRFSafeTransport(allowLoopback bool) *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
+	transport.DialContext = (&net.Dialer{
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("SSRF check: invalid address %q: %w", address, err)
+			}
+			ip := net.ParseIP(host)
+			if ip != nil && isBlockedIP(ip, allowLoopback) {
+				return fmt.Errorf("resolved IP %s is blocked (SSRF protection)", ip)
+			}
+			return nil
+		},
+	}).DialContext
+
+	return transport
 }
 
 // redirectCheckingRoundTripper wraps a base RoundTripper and validates each

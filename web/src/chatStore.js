@@ -115,6 +115,11 @@ function handleToolEvent(agentMsg, evt) {
     touchMessages()
     return
   }
+  if (evt.type === 'cost_limit') {
+    agentMsg.costWarning = evt.text || 'Session cost limit reached — tool use paused.'
+    touchMessages()
+    return
+  }
   if (evt.type === 'tool_approval') {
     if (evt.approval_status === 'auto_approved') {
       agentMsg.approvals = [...agentMsg.approvals, {

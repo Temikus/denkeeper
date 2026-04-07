@@ -215,7 +215,10 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	}
 
 	// Build HTTP client with SSRF-safe redirect checking and header injection.
-	baseRT := http.DefaultTransport
+	// SSRFSafeTransport validates resolved IPs at TCP connect time to prevent
+	// DNS-rebinding attacks; redirectCheckingRoundTripper provides fast-path
+	// string-based URL validation for each redirect hop.
+	baseRT := http.RoundTripper(SSRFSafeTransport(cfg.AllowLoopback))
 	rt := http.RoundTripper(&redirectCheckingRoundTripper{
 		base:          baseRT,
 		allowlist:     m.mcpCfg.URLAllowlist,

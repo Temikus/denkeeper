@@ -165,3 +165,48 @@ jobs:
         with:
           name: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}
           path: denkeeper-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  test-e2e:
+    name: E2E Tests
+    needs: [build-ui, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
+      - name: Download binary
+        uses: actions/download-artifact@v8
+        with:
+          name: denkeeper-linux-amd64
+      - name: Make binary executable
+        run: chmod +x denkeeper-linux-amd64
+      - name: Install dependencies
+        run: cd web && npm ci
+      - name: Install Playwright browsers
+        run: cd web && npx playwright install --with-deps chromium
+      - name: Start denkeeper
+        run: |
+          mkdir -p /tmp/denkeeper-e2e/agents/default /tmp/denkeeper-e2e/skills /tmp/denkeeper-e2e/data
+          ./denkeeper-linux-amd64 serve --config test/e2e/fixtures/test.toml &
+          sleep 3
+        env:
+          BASE_URL: http://localhost:8080
+      - name: Run E2E tests
+        run: cd web && npx playwright test --config ../playwright.config.js
+        env:
+          BASE_URL: http://localhost:8080
+          CI: "true"
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: test-results/

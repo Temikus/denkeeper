@@ -890,6 +890,16 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			"tool_calls_next", len(resp.ToolCalls),
 			"tokens_total", resp.TokensUsed.Total,
 		)
+
+		// Check soft cost limit between tool rounds — allows the model to
+		// produce a final response but prevents further tool calls.
+		if e.router.CostTracker().ExceedsSoftLimit(convID) {
+			if onEvent != nil {
+				onEvent(ChatEvent{Type: "cost_limit", Text: "Session approaching cost limit — pausing tool use."})
+			}
+			e.logger.Warn("soft cost limit reached, breaking tool loop", "conversation", convID)
+			break
+		}
 	}
 
 	// If the model returned empty content after tool rounds, try to recover.

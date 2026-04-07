@@ -56,7 +56,7 @@ func TestEngine_HandleMessage(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -124,7 +124,7 @@ func TestEngine_MultipleMessages_BuildsHistory(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -174,7 +174,7 @@ func TestEngine_HandleMessage_PermissionDenied(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{Content: "should not be called"},
@@ -210,7 +210,7 @@ func TestEngine_HandleMessage_LLMError(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		err: fmt.Errorf("LLM unavailable"),
@@ -247,7 +247,7 @@ func TestEngine_HandleMessage_NilSendFunc(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -284,7 +284,7 @@ func TestEngine_HandleMessage_EmptyText(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -325,7 +325,7 @@ func TestEngine_HandleMessage_IsolatedSession(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -409,7 +409,7 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(mp)
 
@@ -512,7 +512,7 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -583,7 +583,7 @@ func TestEngine_HandleMessage_NoMemoryUpdateWithoutPersona(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -666,7 +666,7 @@ func TestEngine_HandleMessage_ToolCallNoManager(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -713,7 +713,7 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -767,7 +767,7 @@ func TestEngine_SupervisedToolCallApproval_Approved(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -867,7 +867,7 @@ func TestEngine_SupervisedToolCallApproval_Denied(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -946,7 +946,7 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -1003,7 +1003,7 @@ func TestEngine_HandleMessage_SessionTierEmpty_UsesGlobal(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -1045,7 +1045,7 @@ func TestEngine_HandleMessage_SessionTierInvalid_FallsBack(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1087,7 +1087,7 @@ func TestEngine_HandleMessage_VoiceFlagPropagated(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1141,7 +1141,7 @@ func TestEngine_ConversationNamespacing(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1242,7 +1242,7 @@ func TestEngine_Chat_UserUpdate_Supervised_SubmitsApproval(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1309,7 +1309,7 @@ func TestEngine_Chat_UserUpdate_Autonomous_WritesDirectly(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1362,7 +1362,7 @@ func TestEngine_Chat_UserUpdate_NoApprovalManager_DropsDirective(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1418,7 +1418,7 @@ func TestEngine_HandleMessage_WithPendingApproval_AttachesButtons(t *testing.T) 
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1531,7 +1531,7 @@ func TestEngine_SkillCreate_Autonomous_WritesFile(t *testing.T) {
 
 	skillsDir := filepath.Join(dir, "skills")
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1605,7 +1605,7 @@ func TestEngine_SkillCreate_Supervised_SubmitsApproval(t *testing.T) {
 
 	skillsDir := filepath.Join(dir, "skills")
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1695,7 +1695,7 @@ func TestEngine_SkillCreate_Restricted_DropsDirective(t *testing.T) {
 
 	skillsDir := filepath.Join(dir, "skills")
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1740,7 +1740,7 @@ func TestEngine_SkillCreate_NoSkillsDir_DropsDirective(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1813,7 +1813,7 @@ func TestEngine_ScheduleAdd_Autonomous_RegistersSchedule(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1878,7 +1878,7 @@ func TestEngine_ScheduleAdd_Supervised_SubmitsApproval(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1954,7 +1954,7 @@ func TestEngine_ScheduleAdd_NoScheduler_DropsDirective(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -1999,7 +1999,7 @@ schedule = "not-valid-cron"
 channel = "telegram:123"
 `
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -2049,7 +2049,7 @@ func TestEngine_PersonaDir_NoPersona(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2077,7 +2077,7 @@ func TestEngine_PersonaDir_WithPersona(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2093,7 +2093,7 @@ func TestEngine_PersonaSections_NoPersona(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2118,7 +2118,7 @@ func TestEngine_PersonaSections_SoulOnly(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2159,7 +2159,7 @@ func TestEngine_PersonaSections_AllSections(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2187,7 +2187,7 @@ func TestEngine_PersonaSection_Success(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("Memory data."), 0600)
 	p, _ := persona.Load(dir)
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2227,7 +2227,7 @@ func TestEngine_PersonaSection_NoPersona(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2248,7 +2248,7 @@ func TestEngine_PersonaSection_UnknownSection(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Test."), 0600)
 	p, _ := persona.Load(dir)
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2270,7 +2270,7 @@ func TestEngine_SavePersonaSection_Success(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("Old."), 0600)
 	p, _ := persona.Load(dir)
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2294,7 +2294,7 @@ func TestEngine_SavePersonaSection_NoPersona(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2310,7 +2310,7 @@ func TestEngine_ToolNames_NoTools(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2326,7 +2326,7 @@ func TestEngine_ToolNames_WithToolManager(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2351,7 +2351,7 @@ func TestEngine_GetSkill(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2375,7 +2375,7 @@ func TestEngine_GetSkill_NotFound(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2393,7 +2393,7 @@ func TestEngine_UpdateSkill(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2419,7 +2419,7 @@ func TestEngine_UpdateSkill_NotFound(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2436,7 +2436,7 @@ func TestEngine_RemoveSkill(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2468,7 +2468,7 @@ func TestEngine_RemoveSkill_NotFound(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2485,7 +2485,7 @@ func TestEngine_SetPermissionTier(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("supervised")
@@ -2515,7 +2515,7 @@ func TestEngine_SetPermissionTier_Invalid(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("supervised")
@@ -2535,7 +2535,7 @@ func TestEngine_SetModel(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2556,7 +2556,7 @@ func TestEngine_SkillsDir(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
 	perms, _ := security.NewPermissionEngine("autonomous")
@@ -2622,7 +2622,7 @@ func TestEngine_Chat_SoulUpdate_Supervised_SubmitsApproval(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -2693,7 +2693,7 @@ func TestEngine_Chat_SoulUpdate_Autonomous_WritesDirectly(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -2746,7 +2746,7 @@ func TestEngine_Chat_SoulUpdate_Restricted_DropsDirective(t *testing.T) {
 		t.Fatalf("loading persona: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{
@@ -2814,7 +2814,7 @@ func TestEngine_ChatWithEvents_ToolCallEvents(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -2907,7 +2907,7 @@ func TestEngine_ChatWithEvents_NilCallback(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -2969,7 +2969,7 @@ func TestEngine_EmptyResponseAfterTools_NudgeRetry(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 
@@ -3030,7 +3030,7 @@ func TestEngine_IntermediateContentAccumulation(t *testing.T) {
 		},
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(provider)
 

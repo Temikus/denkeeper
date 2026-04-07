@@ -151,7 +151,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 		Email:  "admin",
 		Scopes: adminScopes(),
 	}
-	if err := s.sessions.Create(w, sess); err != nil {
+	if err := s.sessions.CreateWithRequest(w, r, sess); err != nil {
 		s.logger.Error("creating session", "error", err)
 		http.Error(w, `{"error":"failed to create session"}`, http.StatusInternalServerError)
 		return
@@ -216,6 +216,92 @@ func clientIP(r *http.Request) string {
 		ip = ip[:i]
 	}
 	return ip
+}
+
+// handleListSessions returns all active sessions for the authenticated user.
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.sessions.Store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
+		return
+	}
+
+	sess, err := s.sessions.Read(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
+		return
+	}
+
+	records, err := s.sessions.Store.ListByEmail(r.Context(), sess.Email)
+	if err != nil {
+		s.logger.Error("listing sessions", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list sessions"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, records)
+}
+
+// handleRevokeSession revokes a single session by ID.
+func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.sessions.Store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session ID required"})
+		return
+	}
+
+	if err := s.sessions.Store.Delete(r.Context(), id); err != nil {
+		s.logger.Error("revoking session", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke session"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRevokeAllSessions revokes all sessions for the authenticated user.
+func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil || s.sessions.Store == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
+		return
+	}
+
+	sess, err := s.sessions.Read(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
+		return
+	}
+
+	count, err := s.sessions.Store.DeleteAllByEmail(r.Context(), sess.Email)
+	if err != nil {
+		s.logger.Error("revoking all sessions", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke sessions"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": count})
+}
+
+// handleAuthStatus returns a summary of auth configuration.
+func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"password_enabled":   s.passwordHash != "",
+		"oidc_enabled":       s.oidcProvider != nil,
+		"sessions_trackable": s.sessions != nil && s.sessions.Store != nil,
+	}
+
+	if s.sessions != nil && s.sessions.Store != nil {
+		count, err := s.sessions.Store.Count(r.Context())
+		if err == nil {
+			resp["active_session_count"] = count
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // isValidOrigin checks if the origin is allowed by CORS config or matches the server host.

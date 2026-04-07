@@ -57,6 +57,9 @@ type Router struct {
 // DefaultModel returns the router's default model name.
 func (r *Router) DefaultModel() string { return r.defaultModel }
 
+// CostTracker returns the router's cost tracker for soft-limit checks.
+func (r *Router) CostTracker() *CostTracker { return r.costTracker }
+
 // ListModels queries all registered providers that implement ModelLister and
 // returns a de-duplicated sorted list of available model names.
 func (r *Router) ListModels(ctx context.Context) []string {
@@ -151,8 +154,8 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
 	}
 
-	if r.costTracker.ExceedsBudget(sessionID) {
-		return nil, fmt.Errorf("session %q exceeded cost budget", sessionID)
+	if r.costTracker.ExceedsHardLimit(sessionID) {
+		return nil, fmt.Errorf("session %q exceeded hard cost limit: %w", sessionID, ErrHardLimitExceeded)
 	}
 
 	ctx, span := r.tracer.Start(ctx, "llm.complete",

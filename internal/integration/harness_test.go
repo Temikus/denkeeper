@@ -175,7 +175,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		t.Fatalf("creating kv store: %v", err)
 	}
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 
 	// Mock LLM.
 	mock := &mockProvider{}

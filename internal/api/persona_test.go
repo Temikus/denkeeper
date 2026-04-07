@@ -42,7 +42,7 @@ func testDepsWithPersona(t *testing.T) Deps {
 
 	logger := testLogger()
 	mem, _ := agent.NewInMemoryStore()
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 
 	perms, _ := security.NewPermissionEngine("supervised")
 	router := llm.NewRouter("mock", "test-model", costTracker)

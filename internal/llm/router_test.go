@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -113,7 +114,7 @@ func (c *countingBalanceMockProvider) FundsRemaining(_ context.Context) (float64
 // ---------------------------------------------------------------------------
 
 func TestRouter_Complete(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)
 
 	r.RegisterProvider(&mockProvider{
@@ -141,7 +142,7 @@ func TestRouter_Complete(t *testing.T) {
 }
 
 func TestRouter_UnknownProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("nonexistent", "model", ct)
 
 	_, err := r.Complete(context.Background(), "s1", nil)
@@ -151,7 +152,7 @@ func TestRouter_UnknownProvider(t *testing.T) {
 }
 
 func TestRouter_BudgetExceeded(t *testing.T) {
-	ct := NewCostTracker(0.001) // very low budget
+	ct := NewCostTracker(SessionLimits{Hard: 0.001}, nil) // very low budget
 	r := NewRouter("mock", "test-model", ct)
 	r.RegisterProvider(&mockProvider{
 		name:     "mock",
@@ -164,13 +165,16 @@ func TestRouter_BudgetExceeded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected budget exceeded error")
 	}
-	if !strings.Contains(err.Error(), "exceeded cost budget") {
-		t.Errorf("error = %q, want it to mention exceeded cost budget", err.Error())
+	if !strings.Contains(err.Error(), "exceeded hard cost limit") {
+		t.Errorf("error = %q, want it to mention exceeded hard cost limit", err.Error())
+	}
+	if !errors.Is(err, ErrHardLimitExceeded) {
+		t.Errorf("expected ErrHardLimitExceeded sentinel, got %v", err)
 	}
 }
 
 func TestRouter_ProviderError(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)
 	r.RegisterProvider(&mockProvider{name: "mock", err: fmt.Errorf("connection refused")})
 
@@ -184,7 +188,7 @@ func TestRouter_ProviderError(t *testing.T) {
 }
 
 func TestRouter_CostTracking(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)
 	r.RegisterProvider(&mockProvider{
 		name:     "mock",
@@ -205,7 +209,7 @@ func TestRouter_CostTracking(t *testing.T) {
 }
 
 func TestRouter_HealthCheck_AllHealthy(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)
 	r.RegisterProvider(&mockProvider{name: "mock1"})
 	r.RegisterProvider(&mockProvider{name: "mock2"})
@@ -216,7 +220,7 @@ func TestRouter_HealthCheck_AllHealthy(t *testing.T) {
 }
 
 func TestRouter_HealthCheck_OneUnhealthy(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)
 	r.RegisterProvider(&mockProvider{name: "healthy"})
 	r.RegisterProvider(&mockProvider{name: "unhealthy", healthErr: fmt.Errorf("service down")})
@@ -235,7 +239,7 @@ func TestRouter_HealthCheck_OneUnhealthy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRouter_Fallback_ErrorTrigger_SwitchProvider_Success(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "unavailable"}})
 	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 10}}})
@@ -251,7 +255,7 @@ func TestRouter_Fallback_ErrorTrigger_SwitchProvider_Success(t *testing.T) {
 }
 
 func TestRouter_Fallback_ErrorTrigger_SwitchProvider_FallbackAlsoFails(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
 	r.RegisterProvider(&mockProvider{name: "fallback", err: &LLMError{StatusCode: 502, Message: "also down"}})
@@ -264,7 +268,7 @@ func TestRouter_Fallback_ErrorTrigger_SwitchProvider_FallbackAlsoFails(t *testin
 }
 
 func TestRouter_Fallback_ErrorTrigger_SwitchProvider_WithModelOverride(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
 	cap := &capturingMockProvider{}
 	cap.name = "secondary"
@@ -288,7 +292,7 @@ func TestRouter_Fallback_ErrorTrigger_SwitchProvider_WithModelOverride(t *testin
 }
 
 func TestRouter_Fallback_ErrorTrigger_UnregisteredProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
 	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "nonexistent"}})
@@ -300,7 +304,7 @@ func TestRouter_Fallback_ErrorTrigger_UnregisteredProvider(t *testing.T) {
 }
 
 func TestRouter_Fallback_ErrorTrigger_NonRetryableSkipped(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 401, Message: "unauthorized"}})
 	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "should not reach", TokensUsed: TokenUsage{Total: 5}}})
@@ -316,7 +320,7 @@ func TestRouter_Fallback_ErrorTrigger_NonRetryableSkipped(t *testing.T) {
 }
 
 func TestRouter_Fallback_MultipleErrorRules_FirstSucceeds(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	second := &countingMockProvider{
 		mockProvider: mockProvider{name: "second", response: &ChatResponse{Content: "second", TokensUsed: TokenUsage{Total: 5}}},
 	}
@@ -342,7 +346,7 @@ func TestRouter_Fallback_MultipleErrorRules_FirstSucceeds(t *testing.T) {
 }
 
 func TestRouter_Fallback_MultipleErrorRules_FirstFailsSecondSucceeds(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
 	r.RegisterProvider(&mockProvider{name: "first", err: &LLMError{StatusCode: 502, Message: "also down"}})
@@ -362,7 +366,7 @@ func TestRouter_Fallback_MultipleErrorRules_FirstFailsSecondSucceeds(t *testing.
 }
 
 func TestRouter_Fallback_CostRecordedAfterFallback(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
 	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 1000}}})
@@ -386,7 +390,7 @@ func TestRouter_Fallback_CostRecordedAfterFallback(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRouter_Fallback_RateLimit_WaitAndRetry_Success(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	// Fail first call with 429, succeed on second
 	stateful := &statefulMockProvider{
@@ -410,7 +414,7 @@ func TestRouter_Fallback_RateLimit_WaitAndRetry_Success(t *testing.T) {
 }
 
 func TestRouter_Fallback_RateLimit_WaitAndRetry_Exhausted(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 429, Message: "rate limited"}})
 	r.SetFallbacks([]FallbackRule{
@@ -424,7 +428,7 @@ func TestRouter_Fallback_RateLimit_WaitAndRetry_Exhausted(t *testing.T) {
 }
 
 func TestRouter_Fallback_RateLimit_SwitchProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 429, Message: "rate limited"}})
 	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "from fallback", TokensUsed: TokenUsage{Total: 5}}})
@@ -443,7 +447,7 @@ func TestRouter_Fallback_RateLimit_SwitchProvider(t *testing.T) {
 
 func TestRouter_Fallback_RateLimit_NotFiredOn5xx(t *testing.T) {
 	// A 503 should not trigger the rate_limit rule — it should trigger the error rule.
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "service unavailable"}})
 	r.RegisterProvider(&mockProvider{name: "error-fallback", response: &ChatResponse{Content: "error fallback", TokensUsed: TokenUsage{Total: 5}}})
@@ -466,7 +470,7 @@ func TestRouter_Fallback_RateLimit_NotFiredOn5xx(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRouter_Fallback_LowFunds_SwitchModel_BelowThreshold(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
 	bp := &balanceCapturingProvider{balance: 10.0} // above threshold — no switch
 	bp.name = "primary"
@@ -486,7 +490,7 @@ func TestRouter_Fallback_LowFunds_SwitchModel_BelowThreshold(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_SwitchModel_AboveThreshold(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
 	bp := &balanceCapturingProvider{balance: 2.0} // below threshold
 	bp.name = "primary"
@@ -506,7 +510,7 @@ func TestRouter_Fallback_LowFunds_SwitchModel_AboveThreshold(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_Unlimited(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
 	bp := &balanceCapturingProvider{balance: -1} // unlimited
 	bp.name = "primary"
@@ -526,7 +530,7 @@ func TestRouter_Fallback_LowFunds_Unlimited(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_SwitchProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	primary := &balanceMockProvider{balance: 1.0} // below threshold
 	primary.name = "primary"
@@ -548,7 +552,7 @@ func TestRouter_Fallback_LowFunds_SwitchProvider(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_UnregisteredProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	bp := &balanceMockProvider{balance: 1.0} // below threshold
 	bp.name = "primary"
@@ -568,7 +572,7 @@ func TestRouter_Fallback_LowFunds_UnregisteredProvider(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_BalanceFetchError(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	bp := &balanceMockProvider{
 		balance:    0,
@@ -592,7 +596,7 @@ func TestRouter_Fallback_LowFunds_BalanceFetchError(t *testing.T) {
 }
 
 func TestRouter_Fallback_LowFunds_NoBalanceProvider(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	// Regular mockProvider does NOT implement BalanceProvider
 	r.RegisterProvider(&mockProvider{
@@ -613,7 +617,7 @@ func TestRouter_Fallback_LowFunds_NoBalanceProvider(t *testing.T) {
 }
 
 func TestRouter_Fallback_BalanceCached(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
 	counting := &countingBalanceMockProvider{balance: 10.0} // above threshold — no switch
 	counting.name = "primary"
@@ -648,7 +652,7 @@ func (tc *toolCapturingProvider) ChatCompletion(_ context.Context, req ChatReque
 }
 
 func TestRouter_SetTools_DynamicResolution(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "model", ct)
 	cap := &toolCapturingProvider{}
 	cap.name = "mock"
@@ -686,7 +690,7 @@ func TestRouter_SetTools_DynamicResolution(t *testing.T) {
 }
 
 func TestRouter_SetTools_NilSource(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "model", ct)
 	cap := &toolCapturingProvider{}
 	cap.name = "mock"
@@ -704,7 +708,7 @@ func TestRouter_SetTools_NilSource(t *testing.T) {
 }
 
 func TestRouter_SetDefaultModel(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "original-model", ct)
 	r.RegisterProvider(&mockProvider{
 		name:     "mock",

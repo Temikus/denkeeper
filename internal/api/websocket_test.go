@@ -345,7 +345,7 @@ func wsTestServerWithProvider(t *testing.T, prov llm.Provider) (*httptest.Server
 	}
 	t.Cleanup(func() { _ = mem.Close() })
 
-	costTracker := llm.NewCostTracker(1.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
 
 	perms, _ := security.NewPermissionEngine("supervised")
 	router := llm.NewRouter("mock", "test-model", costTracker)

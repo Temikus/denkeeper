@@ -155,6 +155,15 @@ test-ui-watch:
     fi
     npm run test:watch
 
+# Run Playwright E2E tests
+test-e2e:
+    #!/usr/bin/env sh
+    cd web
+    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+        npm ci
+    fi
+    npx playwright test --config ../playwright.config.js
+
 # Remove frontend build artifacts and node_modules
 clean-ui:
     rm -rf web/node_modules

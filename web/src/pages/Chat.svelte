@@ -230,6 +230,9 @@
             {/each}
           </div>
         {/if}
+        {#if msg.costWarning}
+          <div class="cost-warning">{msg.costWarning}</div>
+        {/if}
         {#if msg.streaming && msg.status && !msg.text}
           <p class="status">{msg.status}</p>
         {/if}
@@ -451,6 +454,15 @@
   .tool-name { font-family: monospace; }
   .tool-dur { margin-left: auto; opacity: 0.6; }
 
+  .cost-warning {
+    background: rgba(202, 156, 8, 0.15);
+    border: 1px solid rgb(202, 156, 8);
+    color: rgb(202, 156, 8);
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
   .status { color: var(--text-muted); font-style: italic; margin: 0 0 4px; font-size: 13px; }
   .text { white-space: pre-wrap; word-break: break-word; margin: 0; }
   .usage { display: block; margin-top: 6px; font-size: 11px; color: var(--text-muted); }

@@ -6,7 +6,7 @@ import (
 )
 
 func TestCostTracker_Record(t *testing.T) {
-	ct := NewCostTracker(1.0)
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
 
 	if !ct.Record("s1", 0.5) {
 		t.Error("expected within budget")
@@ -28,7 +28,7 @@ func TestCostTracker_Record(t *testing.T) {
 }
 
 func TestCostTracker_GlobalCost(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	ct.Record("s1", 1.0)
 	ct.Record("s2", 2.0)
 
@@ -38,7 +38,7 @@ func TestCostTracker_GlobalCost(t *testing.T) {
 }
 
 func TestCostTracker_ConcurrentRecords(t *testing.T) {
-	ct := NewCostTracker(1000.0)
+	ct := NewCostTracker(SessionLimits{Hard: 1000.0}, nil)
 	var wg sync.WaitGroup
 
 	// 100 goroutines each recording 10 times
@@ -62,20 +62,20 @@ func TestCostTracker_ConcurrentRecords(t *testing.T) {
 	}
 }
 
-func TestCostTracker_ZeroBudget(t *testing.T) {
-	ct := NewCostTracker(0)
+func TestCostTracker_ZeroHardLimit_DisablesLimit(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 0}, nil)
 
-	// First record should return false (over budget since 0+any > 0)
-	if ct.Record("s1", 0.001) {
-		t.Error("expected over budget with zero max")
+	// Zero hard limit means disabled — any amount should be within budget.
+	if !ct.Record("s1", 100.0) {
+		t.Error("expected within budget when hard limit is 0 (disabled)")
 	}
-	if !ct.ExceedsBudget("s1") {
-		t.Error("expected ExceedsBudget to be true")
+	if ct.ExceedsBudget("s1") {
+		t.Error("expected ExceedsBudget to be false when hard limit is 0 (disabled)")
 	}
 }
 
 func TestCostTracker_RecordWithTokens(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 
 	ct.RecordWithTokens("agent1:telegram:123", 0.5, 100, 50)
 	ct.RecordWithTokens("agent1:telegram:123", 0.3, 80, 40)
@@ -97,7 +97,7 @@ func TestCostTracker_RecordWithTokens(t *testing.T) {
 }
 
 func TestCostTracker_RecordWithTokens_PricingSource(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 
 	ct.RecordWithTokens("agent1:telegram:1", 0.5, 100, 50, "registry")
 	ct.RecordWithTokens("agent1:telegram:1", 0.3, 80, 40, "registry")
@@ -114,7 +114,7 @@ func TestCostTracker_RecordWithTokens_PricingSource(t *testing.T) {
 }
 
 func TestCostTracker_RecordWithTokens_NoPricingSource(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	ct.RecordWithTokens("sess", 0.5, 100, 50)
 
 	stats := ct.AllSessionStats()
@@ -125,7 +125,7 @@ func TestCostTracker_RecordWithTokens_NoPricingSource(t *testing.T) {
 }
 
 func TestCostTracker_AgentCosts(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 
 	ct.RecordWithTokens("alice:telegram:1", 1.0, 100, 50)
 	ct.RecordWithTokens("alice:telegram:2", 0.5, 50, 25)
@@ -173,7 +173,7 @@ func TestCostTracker_AgentFromSessionID(t *testing.T) {
 }
 
 func TestCostTracker_RecordAlsoPopulatesStats(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 
 	// The old Record() method should also populate sessionStats for backward compat.
 	ct.Record("agent:test:1", 0.5)
@@ -191,12 +191,105 @@ func TestCostTracker_RecordAlsoPopulatesStats(t *testing.T) {
 }
 
 func TestCostTracker_NewSessionCostIsZero(t *testing.T) {
-	ct := NewCostTracker(10.0)
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 
 	if cost := ct.SessionCost("never-seen"); cost != 0 {
 		t.Errorf("unknown session cost = %f, want 0", cost)
 	}
 	if ct.ExceedsBudget("never-seen") {
 		t.Error("unknown session should not exceed budget")
+	}
+}
+
+// --- Soft and hard limit tests ---
+
+func TestCostTracker_SoftLimit(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 0.5, Hard: 1.0}, nil)
+
+	ct.Record("s1", 0.4)
+	if ct.ExceedsSoftLimit("s1") {
+		t.Error("expected NOT to exceed soft limit at 0.4")
+	}
+
+	ct.Record("s1", 0.2) // total 0.6 > soft 0.5
+	if !ct.ExceedsSoftLimit("s1") {
+		t.Error("expected to exceed soft limit at 0.6")
+	}
+	if ct.ExceedsHardLimit("s1") {
+		t.Error("expected NOT to exceed hard limit at 0.6")
+	}
+}
+
+func TestCostTracker_HardLimit(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 0.5, Hard: 1.0}, nil)
+
+	ct.Record("s1", 1.1) // over hard limit
+	if !ct.ExceedsHardLimit("s1") {
+		t.Error("expected to exceed hard limit at 1.1")
+	}
+	if !ct.ExceedsSoftLimit("s1") {
+		t.Error("expected to also exceed soft limit at 1.1")
+	}
+}
+
+func TestCostTracker_SoftDisabled(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 0, Hard: 1.0}, nil)
+
+	ct.Record("s1", 100.0)
+	if ct.ExceedsSoftLimit("s1") {
+		t.Error("soft limit should be disabled when set to 0")
+	}
+}
+
+func TestCostTracker_AgentOverrides(t *testing.T) {
+	ct := NewCostTracker(
+		SessionLimits{Soft: 0.5, Hard: 1.0},
+		map[string]SessionLimits{
+			"expensive": {Soft: 5.0, Hard: 10.0},
+		},
+	)
+
+	// Default agent session
+	ct.Record("default:tg:1", 0.6)
+	if !ct.ExceedsSoftLimit("default:tg:1") {
+		t.Error("default agent should exceed soft limit at 0.6 (limit=0.5)")
+	}
+
+	// Overridden agent session
+	ct.Record("expensive:tg:1", 0.6)
+	if ct.ExceedsSoftLimit("expensive:tg:1") {
+		t.Error("expensive agent should NOT exceed soft limit at 0.6 (limit=5.0)")
+	}
+
+	ct.Record("expensive:tg:1", 5.0) // total 5.6 > 5.0
+	if !ct.ExceedsSoftLimit("expensive:tg:1") {
+		t.Error("expensive agent should exceed soft limit at 5.6 (limit=5.0)")
+	}
+}
+
+func TestCostTracker_DefaultLimits(t *testing.T) {
+	limits := SessionLimits{Soft: 0.8, Hard: 2.0}
+	ct := NewCostTracker(limits, nil)
+
+	got := ct.DefaultLimits()
+	if got.Soft != 0.8 || got.Hard != 2.0 {
+		t.Errorf("DefaultLimits = %+v, want %+v", got, limits)
+	}
+}
+
+func TestCostTracker_SetAgentLimits(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
+
+	ct.SetAgentLimits("special", SessionLimits{Hard: 100.0})
+	ct.Record("special:tg:1", 50.0)
+	if ct.ExceedsHardLimit("special:tg:1") {
+		t.Error("expected NOT to exceed hard limit for overridden agent")
+	}
+}
+
+func TestCostTracker_MaxBudgetPerSession_Deprecated(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 3.14}, nil)
+	if ct.MaxBudgetPerSession() != 3.14 {
+		t.Errorf("MaxBudgetPerSession = %f, want 3.14", ct.MaxBudgetPerSession())
 	}
 }

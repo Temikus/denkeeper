@@ -239,10 +239,31 @@ func initLLMClients(cfg *config.Config) llmClients {
 		ollama:     ollamaClient,
 		anthropic:  anthropicClient,
 		openAI:     openAIClient,
-		cost:       llm.NewCostTracker(cfg.LLM.MaxCostPerSession),
+		cost:       buildCostTracker(cfg),
 		fallbacks:  fallbackRules,
 		pricing:    reg,
 	}
+}
+
+func buildCostTracker(cfg *config.Config) *llm.CostTracker {
+	defaults := llm.SessionLimits{
+		Soft: cfg.LLM.CostLimitSoft,
+		Hard: cfg.LLM.CostLimitHard,
+	}
+	overrides := make(map[string]llm.SessionLimits)
+	for _, a := range cfg.Agents {
+		if a.CostLimitSoft != nil || a.CostLimitHard != nil {
+			l := defaults // start from global defaults
+			if a.CostLimitSoft != nil {
+				l.Soft = *a.CostLimitSoft
+			}
+			if a.CostLimitHard != nil {
+				l.Hard = *a.CostLimitHard
+			}
+			overrides[a.Name] = l
+		}
+	}
+	return llm.NewCostTracker(defaults, overrides)
 }
 
 func initVoiceOpts(cfg *config.Config, logger *slog.Logger) *telegram.VoiceOpts {
@@ -526,6 +547,7 @@ func createSandboxRuntime(cfg *config.Config, logger *slog.Logger) (sandbox.Runt
 // agentBuildCtx holds all the shared state needed to build per-agent engines.
 type agentBuildCtx struct {
 	cfg             *config.Config
+	configPath      string
 	llm             llmClients
 	memory          agent.MemoryStore
 	sharedToolMgr   *tool.Manager
@@ -582,6 +604,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		BrowserProfiles:    abc.browserProfiles,
 		GetPersonaSection:  e.PersonaSection,
 		SavePersonaSection: e.SavePersonaSection,
+		ConfigPath:         abc.configPath,
 		Logger:             abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
@@ -1020,6 +1043,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
 	abc := agentBuildCtx{
 		cfg:             cfg,
+		configPath:      path,
 		llm:             clients,
 		memory:          st.memory,
 		sharedToolMgr:   sharedToolMgr,
@@ -1142,6 +1166,28 @@ func initAPIAuth(ctx context.Context, cfg *config.Config, deps *api.Deps, logger
 	if err != nil {
 		return fmt.Errorf("creating session manager: %w", err)
 	}
+
+	// Set up server-tracked session store.
+	sessDBPath := filepath.Join(cfg.DataDir, "data", "sessions.db")
+	sessStore, err := api.NewSessionStore(sessDBPath)
+	if err != nil {
+		return fmt.Errorf("creating session store: %w", err)
+	}
+	sm.Store = sessStore
+
+	// Purge expired sessions periodically.
+	go func() { //nolint:gosec // G118: long-running background goroutine is intentionally not request-scoped
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n, purgeErr := sessStore.PurgeExpired(context.Background()); purgeErr != nil {
+				logger.Warn("session purge failed", "error", purgeErr)
+			} else if n > 0 {
+				logger.Info("purged expired sessions", "count", n)
+			}
+		}
+	}()
+
 	deps.Sessions = sm
 
 	if hasPassword {

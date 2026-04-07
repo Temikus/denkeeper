@@ -18,7 +18,7 @@ func newTestEngine(t *testing.T, name string, sent *sentMessages) *Engine {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	costTracker := llm.NewCostTracker(10.0)
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
 	router.RegisterProvider(&mockProvider{
 		response: &llm.ChatResponse{

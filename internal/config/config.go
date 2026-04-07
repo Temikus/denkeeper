@@ -330,6 +330,14 @@ type AgentInstanceConfig struct {
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
 	BrowserURLAllowlist []string `toml:"browser_url_allowlist"`
+
+	// CostLimitSoft overrides the global cost_limit_soft for this agent.
+	// Nil means inherit global. 0 means disabled.
+	CostLimitSoft *float64 `toml:"cost_limit_soft"`
+
+	// CostLimitHard overrides the global cost_limit_hard for this agent.
+	// Nil means inherit global. 0 means disabled.
+	CostLimitHard *float64 `toml:"cost_limit_hard"`
 }
 
 // VoiceConfig controls speech-to-text and text-to-speech.
@@ -435,7 +443,9 @@ type LLMConfig struct {
 	Ollama            OllamaConfig     `toml:"ollama"`
 	Anthropic         AnthropicConfig  `toml:"anthropic"`
 	OpenAI            OpenAIConfig     `toml:"openai"`
-	MaxCostPerSession float64          `toml:"max_cost_per_session"`
+	MaxCostPerSession float64          `toml:"max_cost_per_session"` // Deprecated: use CostLimitHard.
+	CostLimitSoft     float64          `toml:"cost_limit_soft"`
+	CostLimitHard     float64          `toml:"cost_limit_hard"`
 	Fallbacks         []FallbackConfig `toml:"fallback"`
 }
 
@@ -705,9 +715,20 @@ func applyLLMDefaults(cfg *Config) {
 	if cfg.LLM.DefaultModel == "" {
 		cfg.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
 	}
-	if cfg.LLM.MaxCostPerSession == 0 {
-		cfg.LLM.MaxCostPerSession = 1.0
+
+	// Migrate deprecated max_cost_per_session → cost_limit_hard.
+	if cfg.LLM.MaxCostPerSession > 0 && cfg.LLM.CostLimitHard == 0 {
+		cfg.LLM.CostLimitHard = cfg.LLM.MaxCostPerSession
 	}
+	// Default hard limit when nothing is configured.
+	if cfg.LLM.CostLimitHard == 0 {
+		cfg.LLM.CostLimitHard = 1.0
+	}
+	// Keep deprecated field in sync for backward compat.
+	if cfg.LLM.MaxCostPerSession == 0 {
+		cfg.LLM.MaxCostPerSession = cfg.LLM.CostLimitHard
+	}
+
 	for i := range cfg.LLM.Fallbacks {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
 			cfg.LLM.Fallbacks[i].Backoff = "exponential"
@@ -1024,6 +1045,9 @@ func validate(cfg *Config) error {
 	if err := validateVoice(&cfg.Voice); err != nil {
 		return fmt.Errorf("validate voice: %w", err)
 	}
+	if err := validateCostLimits(cfg); err != nil {
+		return fmt.Errorf("validate cost limits: %w", err)
+	}
 	if err := validateAPI(&cfg.API); err != nil {
 		return fmt.Errorf("validate api: %w", err)
 	}
@@ -1040,6 +1064,51 @@ func validate(cfg *Config) error {
 var validWebSearchProviders = map[string]bool{
 	"duckduckgo": true,
 	"tavily":     true,
+}
+
+func validateCostLimits(cfg *Config) error {
+	if err := validateGlobalCostLimits(&cfg.LLM); err != nil {
+		return err
+	}
+	for _, a := range cfg.Agents {
+		if err := validateAgentCostLimits(a, cfg.LLM.CostLimitSoft, cfg.LLM.CostLimitHard); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGlobalCostLimits(llm *LLMConfig) error {
+	if llm.CostLimitSoft < 0 {
+		return fmt.Errorf("config: llm.cost_limit_soft must be non-negative, got %.2f", llm.CostLimitSoft)
+	}
+	if llm.CostLimitHard < 0 {
+		return fmt.Errorf("config: llm.cost_limit_hard must be non-negative, got %.2f", llm.CostLimitHard)
+	}
+	if llm.CostLimitSoft > 0 && llm.CostLimitHard > 0 && llm.CostLimitSoft > llm.CostLimitHard {
+		return fmt.Errorf("config: llm.cost_limit_soft ($%.2f) must not exceed cost_limit_hard ($%.2f)", llm.CostLimitSoft, llm.CostLimitHard)
+	}
+	return nil
+}
+
+func validateAgentCostLimits(a AgentInstanceConfig, globalSoft, globalHard float64) error {
+	if a.CostLimitSoft != nil && *a.CostLimitSoft < 0 {
+		return fmt.Errorf("config: agent %q: cost_limit_soft must be non-negative", a.Name)
+	}
+	if a.CostLimitHard != nil && *a.CostLimitHard < 0 {
+		return fmt.Errorf("config: agent %q: cost_limit_hard must be non-negative", a.Name)
+	}
+	soft, hard := globalSoft, globalHard
+	if a.CostLimitSoft != nil {
+		soft = *a.CostLimitSoft
+	}
+	if a.CostLimitHard != nil {
+		hard = *a.CostLimitHard
+	}
+	if soft > 0 && hard > 0 && soft > hard {
+		return fmt.Errorf("config: agent %q: cost_limit_soft ($%.2f) must not exceed cost_limit_hard ($%.2f)", a.Name, soft, hard)
+	}
+	return nil
 }
 
 func validateWeb(w *WebConfig) error {

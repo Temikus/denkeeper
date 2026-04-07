@@ -1,6 +1,9 @@
 package tool
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -219,6 +222,113 @@ func TestRedactURL_InvalidURL(t *testing.T) {
 	if result != "<invalid-url>" {
 		t.Fatalf("expected <invalid-url>, got: %s", result)
 	}
+}
+
+// --- isBlockedIP tests ---
+
+func TestIsBlockedIP_Loopback_Blocked(t *testing.T) {
+	ip := net.ParseIP("127.0.0.1")
+	if !isBlockedIP(ip, false) {
+		t.Error("127.0.0.1 should be blocked when allowLoopback=false")
+	}
+}
+
+func TestIsBlockedIP_Loopback_Allowed(t *testing.T) {
+	ip := net.ParseIP("127.0.0.1")
+	if isBlockedIP(ip, true) {
+		t.Error("127.0.0.1 should be allowed when allowLoopback=true")
+	}
+}
+
+func TestIsBlockedIP_LoopbackAlt_Blocked(t *testing.T) {
+	ip := net.ParseIP("127.0.0.2")
+	if !isBlockedIP(ip, false) {
+		t.Error("127.0.0.2 should be blocked when allowLoopback=false")
+	}
+}
+
+func TestIsBlockedIP_LinkLocal_AlwaysBlocked(t *testing.T) {
+	ip := net.ParseIP("169.254.169.254")
+	if !isBlockedIP(ip, false) {
+		t.Error("169.254.169.254 should be blocked")
+	}
+	if !isBlockedIP(ip, true) {
+		t.Error("169.254.169.254 should be blocked even with allowLoopback=true")
+	}
+}
+
+func TestIsBlockedIP_IPv6Loopback_Blocked(t *testing.T) {
+	ip := net.ParseIP("::1")
+	if !isBlockedIP(ip, false) {
+		t.Error("::1 should be blocked when allowLoopback=false")
+	}
+}
+
+func TestIsBlockedIP_IPv6Loopback_Allowed(t *testing.T) {
+	ip := net.ParseIP("::1")
+	if isBlockedIP(ip, true) {
+		t.Error("::1 should be allowed when allowLoopback=true")
+	}
+}
+
+func TestIsBlockedIP_IPv6LinkLocal_AlwaysBlocked(t *testing.T) {
+	ip := net.ParseIP("fe80::1")
+	if !isBlockedIP(ip, false) {
+		t.Error("fe80::1 should be blocked")
+	}
+	if !isBlockedIP(ip, true) {
+		t.Error("fe80::1 should be blocked even with allowLoopback=true")
+	}
+}
+
+func TestIsBlockedIP_PublicIP_Allowed(t *testing.T) {
+	ip := net.ParseIP("8.8.8.8")
+	if isBlockedIP(ip, false) {
+		t.Error("8.8.8.8 should not be blocked")
+	}
+}
+
+func TestIsBlockedIP_PrivateIP_Allowed(t *testing.T) {
+	ip := net.ParseIP("10.0.0.1")
+	if isBlockedIP(ip, false) {
+		t.Error("10.0.0.1 (private) should not be blocked by SSRF check")
+	}
+}
+
+func TestIsBlockedIP_Nil(t *testing.T) {
+	if isBlockedIP(nil, false) {
+		t.Error("nil IP should not be blocked")
+	}
+}
+
+// --- SSRFSafeTransport integration tests ---
+
+func TestSSRFSafeTransport_BlocksLoopback(t *testing.T) {
+	// Start a test server on 127.0.0.1.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	client := &http.Client{Transport: SSRFSafeTransport(false)}
+	_, err := client.Get(ts.URL)
+	if err == nil {
+		t.Fatal("expected connection to 127.0.0.1 to be blocked with allowLoopback=false")
+	}
+}
+
+func TestSSRFSafeTransport_AllowsLoopback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	client := &http.Client{Transport: SSRFSafeTransport(true)}
+	resp, err := client.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("expected connection to 127.0.0.1 to succeed with allowLoopback=true, got: %v", err)
+	}
+	_ = resp.Body.Close()
 }
 
 func contains(s, substr string) bool {

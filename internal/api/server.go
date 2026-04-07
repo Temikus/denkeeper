@@ -200,6 +200,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /auth/login", s.handlePasswordLogin)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/session", s.handleSessionCheck)
+
+	// Session management — requires admin scope.
+	mux.HandleFunc("GET /api/v1/auth/sessions", s.RequireScope("admin", s.handleListSessions))
+	mux.HandleFunc("DELETE /api/v1/auth/sessions/{id}", s.RequireScope("admin", s.handleRevokeSession))
+	mux.HandleFunc("DELETE /api/v1/auth/sessions", s.RequireScope("admin", s.handleRevokeAllSessions))
+	mux.HandleFunc("GET /api/v1/auth/status", s.RequireScope("admin", s.handleAuthStatus))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)
@@ -405,14 +411,19 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		pricingConfig["custom_model_count"] = len(s.deps.Config.Costs.ModelPrices)
 	}
 
+	limits := s.deps.CostTracker.DefaultLimits()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_cost":     s.deps.CostTracker.GlobalCost(),
-		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(),
-		"session_count":   len(filtered),
-		"session_costs":   s.deps.CostTracker.AllSessionCosts(),
-		"session_stats":   filtered,
-		"by_agent":        byAgent,
-		"pricing_config":  pricingConfig,
+		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(), // deprecated, kept for compat
+		"cost_limits": map[string]float64{
+			"soft": limits.Soft,
+			"hard": limits.Hard,
+		},
+		"session_count":  len(filtered),
+		"session_costs":  s.deps.CostTracker.AllSessionCosts(),
+		"session_stats":  filtered,
+		"by_agent":       byAgent,
+		"pricing_config": pricingConfig,
 	})
 }
 

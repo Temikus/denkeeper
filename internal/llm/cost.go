@@ -1,9 +1,23 @@
 package llm
 
 import (
+	"errors"
 	"strings"
 	"sync"
 )
+
+// SessionLimits holds cost limit thresholds for a session. A zero value means
+// the corresponding limit is disabled.
+type SessionLimits struct {
+	Soft float64 `json:"soft"`
+	Hard float64 `json:"hard"`
+}
+
+// ErrSoftLimitExceeded is returned when the session's soft cost limit is reached.
+var ErrSoftLimitExceeded = errors.New("session soft cost limit exceeded")
+
+// ErrHardLimitExceeded is returned when the session's hard cost limit is reached.
+var ErrHardLimitExceeded = errors.New("session hard cost limit exceeded")
 
 // SessionStats holds per-session cost and token tracking.
 type SessionStats struct {
@@ -26,22 +40,28 @@ type AgentStats struct {
 
 // CostTracker tracks token usage and estimated costs per session and globally.
 type CostTracker struct {
-	mu            sync.Mutex
-	sessionCosts  map[string]float64
-	sessionStats  map[string]*SessionStats
-	globalCost    float64
-	maxPerSession float64
+	mu             sync.Mutex
+	sessionCosts   map[string]float64
+	sessionStats   map[string]*SessionStats
+	globalCost     float64
+	defaultLimits  SessionLimits
+	agentOverrides map[string]SessionLimits
 }
 
-func NewCostTracker(maxPerSession float64) *CostTracker {
+// NewCostTracker creates a CostTracker with default limits and optional per-agent overrides.
+func NewCostTracker(defaults SessionLimits, agentOverrides map[string]SessionLimits) *CostTracker {
+	if agentOverrides == nil {
+		agentOverrides = make(map[string]SessionLimits)
+	}
 	return &CostTracker{
-		sessionCosts:  make(map[string]float64),
-		sessionStats:  make(map[string]*SessionStats),
-		maxPerSession: maxPerSession,
+		sessionCosts:   make(map[string]float64),
+		sessionStats:   make(map[string]*SessionStats),
+		defaultLimits:  defaults,
+		agentOverrides: agentOverrides,
 	}
 }
 
-// Record adds cost for a session. Returns true if within budget.
+// Record adds cost for a session. Returns true if within hard budget.
 func (ct *CostTracker) Record(sessionID string, cost float64) bool {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
@@ -53,7 +73,8 @@ func (ct *CostTracker) Record(sessionID string, cost float64) bool {
 	s.Cost += cost
 	s.Messages++
 
-	return ct.sessionCosts[sessionID] <= ct.maxPerSession
+	hard := ct.limitsForSession(sessionID).Hard
+	return hard == 0 || ct.sessionCosts[sessionID] <= hard
 }
 
 // RecordWithTokens adds cost and token usage for a session. Returns true if within budget.
@@ -78,7 +99,19 @@ func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTok
 		s.PricingSources[pricingSource[0]]++
 	}
 
-	return ct.sessionCosts[sessionID] <= ct.maxPerSession
+	hard := ct.limitsForSession(sessionID).Hard
+	return hard == 0 || ct.sessionCosts[sessionID] <= hard
+}
+
+// limitsForSession resolves the effective limits for a session by checking
+// per-agent overrides first, then falling back to defaults.
+// Must be called with ct.mu held.
+func (ct *CostTracker) limitsForSession(sessionID string) SessionLimits {
+	agent := agentFromSessionID(sessionID)
+	if override, ok := ct.agentOverrides[agent]; ok {
+		return override
+	}
+	return ct.defaultLimits
 }
 
 func (ct *CostTracker) getOrCreateStats(sessionID string) *SessionStats {
@@ -104,11 +137,28 @@ func (ct *CostTracker) GlobalCost() float64 {
 	return ct.globalCost
 }
 
-// ExceedsBudget checks if a session has exceeded its budget.
-func (ct *CostTracker) ExceedsBudget(sessionID string) bool {
+// ExceedsSoftLimit checks if a session has exceeded its soft cost limit.
+// Returns false if the soft limit is disabled (zero).
+func (ct *CostTracker) ExceedsSoftLimit(sessionID string) bool {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
-	return ct.sessionCosts[sessionID] > ct.maxPerSession
+	soft := ct.limitsForSession(sessionID).Soft
+	return soft > 0 && ct.sessionCosts[sessionID] > soft
+}
+
+// ExceedsHardLimit checks if a session has exceeded its hard cost limit.
+// Returns false if the hard limit is disabled (zero).
+func (ct *CostTracker) ExceedsHardLimit(sessionID string) bool {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	hard := ct.limitsForSession(sessionID).Hard
+	return hard > 0 && ct.sessionCosts[sessionID] > hard
+}
+
+// ExceedsBudget checks if a session has exceeded its hard budget.
+// Deprecated: use ExceedsHardLimit.
+func (ct *CostTracker) ExceedsBudget(sessionID string) bool {
+	return ct.ExceedsHardLimit(sessionID)
 }
 
 // AllSessionCosts returns a copy of all session costs.
@@ -161,9 +211,22 @@ func (ct *CostTracker) AgentCosts() []AgentStats {
 	return result
 }
 
-// MaxBudgetPerSession returns the per-session cost cap.
+// DefaultLimits returns the default cost limits.
+func (ct *CostTracker) DefaultLimits() SessionLimits {
+	return ct.defaultLimits
+}
+
+// SetAgentLimits sets per-agent cost limit overrides.
+func (ct *CostTracker) SetAgentLimits(agent string, limits SessionLimits) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.agentOverrides[agent] = limits
+}
+
+// MaxBudgetPerSession returns the default hard cost cap.
+// Deprecated: use DefaultLimits().Hard.
 func (ct *CostTracker) MaxBudgetPerSession() float64 {
-	return ct.maxPerSession
+	return ct.defaultLimits.Hard
 }
 
 // agentFromSessionID extracts the agent name from a session ID.

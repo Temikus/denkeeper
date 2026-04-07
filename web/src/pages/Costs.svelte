@@ -107,10 +107,21 @@
       <div class="label">Total Cost</div>
       <div class="value">${data.global_cost.toFixed(4)}</div>
     </div>
-    <div class="card">
-      <div class="label">Session Budget</div>
-      <div class="value">${data.max_per_session.toFixed(4)}</div>
-    </div>
+    {#if data.cost_limits}
+      <div class="card">
+        <div class="label">Soft Limit</div>
+        <div class="value limit-soft">{data.cost_limits.soft > 0 ? `$${data.cost_limits.soft.toFixed(4)}` : 'Off'}</div>
+      </div>
+      <div class="card">
+        <div class="label">Hard Limit</div>
+        <div class="value limit-hard">{data.cost_limits.hard > 0 ? `$${data.cost_limits.hard.toFixed(4)}` : 'Off'}</div>
+      </div>
+    {:else}
+      <div class="card">
+        <div class="label">Session Budget</div>
+        <div class="value">${data.max_per_session.toFixed(4)}</div>
+      </div>
+    {/if}
     <div class="card">
       <div class="label">Sessions</div>
       <div class="value">{data.session_count}</div>
@@ -242,6 +253,8 @@
   }
   .label { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
   .value { font-size: 24px; font-weight: 700; }
+  .limit-soft { color: rgb(202, 156, 8); }
+  .limit-hard { color: rgb(239, 68, 68); }
   .table-wrapper {
     background: var(--surface);
     border: 1px solid var(--border);

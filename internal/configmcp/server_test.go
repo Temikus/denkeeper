@@ -1570,3 +1570,103 @@ func TestSkillUpdate_Restricted(t *testing.T) {
 		t.Errorf("error should mention denied/restricted: %s", text)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Schedule TOML persistence
+// --------------------------------------------------------------------------
+
+func TestScheduleAdd_PersistsToConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte("# empty config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ConfigPath = cfgPath
+	})
+
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "persisted-add",
+		"schedule": "@daily",
+		"channel":  "telegram:99",
+		"skill":    "greet",
+	})
+	if isErr {
+		t.Fatalf("schedule_add error: %s", text)
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "persisted-add") {
+		t.Errorf("config file should contain schedule name, got:\n%s", content)
+	}
+	if !strings.Contains(content, "@daily") {
+		t.Errorf("config file should contain schedule expression, got:\n%s", content)
+	}
+}
+
+func TestScheduleUpdate_PersistsToConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte("# empty config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ConfigPath = cfgPath
+	})
+
+	// Add a schedule first (this also persists).
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "update-me",
+		"schedule": "@every 1h",
+		"channel":  "telegram:42",
+		"skill":    "old-skill",
+	})
+	if isErr {
+		t.Fatal("schedule_add failed")
+	}
+
+	// Update the schedule expression.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":     "update-me",
+		"schedule": "@daily",
+		"skill":    "new-skill",
+	})
+	if isErr {
+		t.Fatalf("schedule_update error: %s", text)
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "@daily") {
+		t.Errorf("config should contain updated expression, got:\n%s", content)
+	}
+	if strings.Contains(content, "@every 1h") {
+		t.Errorf("config should NOT contain old expression, got:\n%s", content)
+	}
+	if !strings.Contains(content, "new-skill") {
+		t.Errorf("config should contain updated skill, got:\n%s", content)
+	}
+}
+
+func TestScheduleAdd_NoConfigPath_NoPersistence(t *testing.T) {
+	session, _ := newTestServer(t, nil) // no ConfigPath set
+
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "ephemeral",
+		"schedule": "@daily",
+		"channel":  "telegram:1",
+	})
+	if isErr {
+		t.Fatalf("schedule_add error: %s", text)
+	}
+	// No assertion on disk — just verify it doesn't panic or error without ConfigPath.
+}
