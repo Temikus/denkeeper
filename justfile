@@ -162,7 +162,7 @@ test-e2e:
     if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
         npm ci
     fi
-    npx playwright test --config ../playwright.config.js
+    npx playwright test
 
 # Remove frontend build artifacts and node_modules
 clean-ui:

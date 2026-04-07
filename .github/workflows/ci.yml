@@ -200,7 +200,8 @@ jobs:
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests
-        run: cd web && npx playwright test --config ../playwright.config.js
+        run: cd web && npx playwright test
+
         env:
           BASE_URL: http://localhost:8080
           CI: "true"
@@ -209,4 +210,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-traces
-          path: test-results/
+          path: web/test-results/
