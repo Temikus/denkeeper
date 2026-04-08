@@ -192,16 +192,19 @@ jobs:
         run: cd web && npm ci
       - name: Install Playwright browsers
         run: cd web && npx playwright install --with-deps chromium
+      - name: Create E2E data directory
+        run: |
+          dir="$(mktemp -d)"
+          mkdir -p "$dir/agents/default" "$dir/skills" "$dir/data"
+          echo "DENKEEPER_DATA_DIR=$dir" >> "$GITHUB_ENV"
       - name: Start denkeeper
         run: |
-          mkdir -p /tmp/denkeeper-e2e/agents/default /tmp/denkeeper-e2e/skills /tmp/denkeeper-e2e/data
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
           sleep 3
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests
         run: cd web && npx playwright test
-
         env:
           BASE_URL: http://localhost:8080
           CI: "true"

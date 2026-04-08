@@ -1,10 +1,8 @@
 # Minimal config for E2E testing.
-# Uses a no-op LLM provider (Ollama with unreachable endpoint) and SQLite :memory:.
-
-data_dir = "/tmp/denkeeper-e2e"
-
-[memory]
-db_path = "/tmp/denkeeper-e2e/memory.db"
+# Uses a no-op LLM provider (Ollama with unreachable endpoint) and SQLite.
+#
+# data_dir is set via DENKEEPER_DATA_DIR env var (created by globalSetup.js).
+# All paths (db, persona, skills) derive from data_dir automatically.
 
 [llm]
 default_provider = "ollama"
@@ -29,10 +27,6 @@ scopes = ["admin", "chat", "sessions:read", "costs:read", "skills:read", "skills
 
 [session]
 tier = "autonomous"
-
-[agent]
-persona_dir = "/tmp/denkeeper-e2e/agents/default"
-skills_dir = "/tmp/denkeeper-e2e/skills"
 
 [web]
 enabled = false
