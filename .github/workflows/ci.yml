@@ -170,6 +170,10 @@ jobs:
     name: E2E Tests
     needs: [build-ui, build]
     runs-on: ubuntu-latest
+    container:
+      # Must match @playwright/test version in web/package.json
+      image: mcr.microsoft.com/playwright:v1.52.0-noble
+      options: --user 1001
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -190,8 +194,6 @@ jobs:
         run: chmod +x denkeeper-linux-amd64
       - name: Install dependencies
         run: cd web && npm ci
-      - name: Install Playwright browsers
-        run: cd web && npx playwright install --with-deps chromium
       - name: Create E2E data directory
         run: |
           dir="$(mktemp -d)"
