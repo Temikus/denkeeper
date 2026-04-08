@@ -22,7 +22,7 @@ session_max_age = "24h"
 
 [[api.keys]]
 name = "e2e-test"
-token = "e2e-test-token-12345678"
+key = "e2e-test-token-12345678"
 scopes = ["admin", "chat", "sessions:read", "costs:read", "skills:read", "skills:write", "schedules:read", "schedules:write", "approvals:read", "approvals:write", "tools:read", "tools:write", "kv:read", "kv:write", "agents:read", "agents:write"]
 
 [session]
