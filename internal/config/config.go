@@ -998,8 +998,8 @@ func validateAdaptersAndProviders(cfg *Config) error {
 	if cfg.Telegram.Token != "" && len(cfg.Telegram.AllowedUsers) == 0 {
 		return fmt.Errorf("config: telegram.allowed_users must not be empty when telegram.token is set (security requirement)")
 	}
-	if cfg.Telegram.Token == "" && cfg.Discord.Token == "" {
-		return fmt.Errorf("config: at least one adapter must be configured (telegram.token or discord.token)")
+	if cfg.Telegram.Token == "" && cfg.Discord.Token == "" && !cfg.API.IsEnabled() {
+		return fmt.Errorf("config: at least one adapter must be configured (telegram.token, discord.token, or api.enabled)")
 	}
 	if cfg.Discord.Token != "" && len(cfg.Discord.AllowedUsers) == 0 {
 		return fmt.Errorf("config: discord.allowed_users must not be empty when discord.token is set (security requirement)")

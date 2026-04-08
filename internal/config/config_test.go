@@ -82,6 +82,9 @@ api_key = "sk-or-test-key"
 
 func TestParse_MissingToken(t *testing.T) {
 	tomlData := []byte(`
+[api]
+enabled = false
+
 [telegram]
 allowed_users = [111222333]
 
@@ -1547,8 +1550,11 @@ api_key = "sk-or-test-key"
 }
 
 func TestParse_NoAdaptersConfigured(t *testing.T) {
-	// Neither telegram nor discord token set.
+	// Neither telegram nor discord token set and API disabled.
 	tomlData := []byte(`
+[api]
+enabled = false
+
 [llm.openrouter]
 api_key = "sk-or-test-key"
 `)
@@ -1558,6 +1564,24 @@ api_key = "sk-or-test-key"
 	}
 	if !strings.Contains(err.Error(), "at least one adapter") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_APIOnlyMode_Valid(t *testing.T) {
+	// No adapter tokens but API is enabled (default) — valid for web-only use.
+	tomlData := []byte(`
+[llm]
+default_provider = "ollama"
+
+[llm.ollama]
+base_url = "http://localhost:11434"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for API-only config: %v", err)
+	}
+	if !cfg.API.IsEnabled() {
+		t.Error("API should be enabled by default")
 	}
 }
 
