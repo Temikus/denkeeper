@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -945,6 +946,33 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 	return nil
 }
 
+// ensureSessionSecret auto-generates and persists a stable session secret when
+// none is configured. This ensures OAuth MCP tools work out of the box on
+// fresh installs without requiring the user to manually generate a key.
+func ensureSessionSecret(cfg *config.Config, configPath string) error {
+	if cfg.API.Auth.SessionSecret != "" {
+		return nil
+	}
+	secret, err := generateSessionSecret()
+	if err != nil {
+		return fmt.Errorf("generating session secret: %w", err)
+	}
+	if err := tool.SetSessionSecret(configPath, secret); err != nil {
+		return fmt.Errorf("persisting session secret: %w", err)
+	}
+	cfg.API.Auth.SessionSecret = secret
+	return nil
+}
+
+// generateSessionSecret returns a hex-encoded 32-byte (AES-256) random key.
+func generateSessionSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", fmt.Errorf("reading random bytes: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // generateSetupPIN returns a cryptographically random 6-digit PIN string.
 func generateSetupPIN() (string, error) {
 	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(1_000_000))
@@ -971,6 +999,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	if err := ensureSessionSecret(cfg, path); err != nil {
+		return err
 	}
 
 	logger := initLogger(cfg)
@@ -1066,9 +1098,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// Re-create dispatcher with the fully wired engines and bindings.
 	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
 
-	if tgAdapter != nil {
-		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(st.approvalManager, logger))
-	}
+	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, logger); err != nil {
 		return err
@@ -1076,14 +1106,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	sched.Start()
 	defer sched.Stop()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		logger.Info("received signal, shutting down", "signal", sig)
-		cancel()
-	}()
+	handleShutdownSignals(cancel, logger)
 
 	if cfg.API.IsEnabled() {
 		if err := startAPIServer(ctx, cfg, api.Deps{
@@ -1116,6 +1139,24 @@ func runServe(_ *cobra.Command, _ []string) error {
 	)
 
 	return dispatcher.Run(ctx)
+}
+
+// wireCallbackResolver sets the Telegram callback resolver when a Telegram adapter is active.
+func wireCallbackResolver(tgAdapter *telegram.Adapter, approvalMgr *approval.Manager, logger *slog.Logger) {
+	if tgAdapter != nil {
+		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalMgr, logger))
+	}
+}
+
+// handleShutdownSignals starts a goroutine that cancels the context on SIGINT/SIGTERM.
+func handleShutdownSignals(cancel context.CancelFunc, logger *slog.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		logger.Info("received signal, shutting down", "signal", sig)
+		cancel()
+	}()
 }
 
 // kvCleanupDuration parses a duration string and falls back to 1 hour.

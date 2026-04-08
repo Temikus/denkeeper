@@ -36,22 +36,10 @@ func (s *oauthState) Close() {
 
 // initOAuthSupport creates the OAuth token store and pending manager,
 // wires them into the tool manager, and returns deps for the API server.
-// Returns nil if no OAuth tools are configured or session_secret is missing.
+// The session secret is always available at this point (auto-generated at
+// startup if not configured), so OAuth support is always initialized.
 func initOAuthSupport(ctx context.Context, cfg *config.Config, toolMgr *tool.Manager, logger *slog.Logger) (*oauthState, *api.OAuthDeps, error) {
-	// Session secret is required for token encryption. Initialize OAuth support
-	// eagerly whenever a secret is available so that tools added at runtime via
-	// the API can use OAuth without a restart.
 	secret := cfg.API.Auth.SessionSecret
-	if secret == "" {
-		// No secret — OAuth tools cannot be used. This is only an error if
-		// tools with auth=oauth already exist in the config.
-		for _, tc := range cfg.Tools {
-			if tc.Auth == "oauth" {
-				return nil, nil, fmt.Errorf("tools with auth = \"oauth\" require [api.auth] session_secret to be configured for token encryption")
-			}
-		}
-		return nil, nil, nil
-	}
 
 	// Open a dedicated DB connection for OAuth tokens (same file, separate conn).
 	db, err := sqlx.Open("sqlite", cfg.Memory.DBPath+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")

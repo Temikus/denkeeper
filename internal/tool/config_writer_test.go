@@ -400,6 +400,41 @@ token = "test"
 	}
 }
 
+func TestSetSessionSecret_CreatesAuthSection(t *testing.T) {
+	path := writeTestConfig(t, `[api]
+enabled = true
+`)
+
+	secret := "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+	if err := SetSessionSecret(path, secret); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, secret) {
+		t.Error("config should contain session_secret")
+	}
+}
+
+func TestSetSessionSecret_PreservesExistingAuth(t *testing.T) {
+	path := writeTestConfig(t, `[api.auth]
+password_hash = "$2a$13$existinghash"
+`)
+
+	secret := "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff"
+	if err := SetSessionSecret(path, secret); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "$2a$13$existinghash") {
+		t.Error("existing password_hash should be preserved")
+	}
+	if !strings.Contains(content, secret) {
+		t.Error("config should contain session_secret")
+	}
+}
+
 func TestSetAuthConfig_CreatesAuthSection(t *testing.T) {
 	path := writeTestConfig(t, `[api]
 enabled = true

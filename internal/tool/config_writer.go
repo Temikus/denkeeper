@@ -343,6 +343,30 @@ func rawSchedules(raw map[string]any) []any {
 // Auth config persistence
 // ---------------------------------------------------------------------------
 
+// SetSessionSecret persists only the session_secret into [api.auth] without
+// touching other auth fields. Used at startup to auto-generate a stable secret.
+func SetSessionSecret(path, sessionSecret string) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	apiSection, ok := raw["api"].(map[string]any)
+	if !ok {
+		apiSection = map[string]any{}
+	}
+	authSection, ok := apiSection["auth"].(map[string]any)
+	if !ok {
+		authSection = map[string]any{}
+	}
+
+	authSection["session_secret"] = sessionSecret
+	apiSection["auth"] = authSection
+	raw["api"] = apiSection
+
+	return writeRawConfig(path, raw)
+}
+
 // SetAuthConfig persists password_hash and session_secret to [api.auth] in the
 // TOML config file. Used by the PIN-protected account setup flow.
 func SetAuthConfig(path, passwordHash, sessionSecret string) error {
