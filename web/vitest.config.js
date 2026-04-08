@@ -10,6 +10,7 @@ export default defineConfig({
     conditions: ['browser'],
   },
   test: {
+    exclude: ['test/e2e/**', '**/node_modules/**', '**/dist/**'],
     environment: 'jsdom',
     globals: true,
     // polyfill-storage must run first to fix Node 25+ bare localStorage

@@ -195,7 +195,7 @@ jobs:
       - name: Start denkeeper
         run: |
           mkdir -p /tmp/denkeeper-e2e/agents/default /tmp/denkeeper-e2e/skills /tmp/denkeeper-e2e/data
-          ./denkeeper-linux-amd64 serve --config test/e2e/fixtures/test.toml &
+          ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
           sleep 3
         env:
           BASE_URL: http://localhost:8080
