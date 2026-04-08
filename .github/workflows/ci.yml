@@ -208,8 +208,6 @@ jobs:
           dir="$(mktemp -d)"
           mkdir -p "$dir/agents/default" "$dir/skills" "$dir/data"
           echo "DENKEEPER_DATA_DIR=$dir" >> "$GITHUB_ENV"
-      - name: Verify Playwright setup
-        run: cd web && npx playwright --version && ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "No browser cache"
       - name: Start denkeeper
         run: |
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
@@ -218,7 +216,7 @@ jobs:
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests
-        run: cd web && DEBUG=pw:browser* npx playwright test --reporter=line
+        run: cd web && npx playwright test
         timeout-minutes: 5
         env:
           BASE_URL: http://localhost:8080
