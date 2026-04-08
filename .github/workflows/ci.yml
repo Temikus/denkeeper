@@ -213,6 +213,10 @@ jobs:
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
           sleep 3
           curl -sf http://localhost:8080/ > /dev/null && echo "Server ready" || echo "Server not responding"
+          echo '--- Login smoke test ---'
+          curl -s -w "\nHTTP %{http_code}\n" -H 'Content-Type: application/json' -d '{"password":"test"}' http://localhost:8080/auth/login
+          echo '--- Skills API test ---'
+          curl -s -w "\nHTTP %{http_code}\n" -H 'Authorization: Bearer e2e-test-token-12345678' http://localhost:8080/api/v1/skills
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests
