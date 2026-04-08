@@ -170,6 +170,7 @@ jobs:
     name: E2E Tests
     needs: [build-ui, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -207,14 +208,18 @@ jobs:
           dir="$(mktemp -d)"
           mkdir -p "$dir/agents/default" "$dir/skills" "$dir/data"
           echo "DENKEEPER_DATA_DIR=$dir" >> "$GITHUB_ENV"
+      - name: Verify Playwright setup
+        run: cd web && npx playwright --version && ls -la ~/.cache/ms-playwright/ 2>/dev/null || echo "No browser cache"
       - name: Start denkeeper
         run: |
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
           sleep 3
+          curl -sf http://localhost:8080/ > /dev/null && echo "Server ready" || echo "Server not responding"
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests
-        run: cd web && npx playwright test
+        run: cd web && DEBUG=pw:browser* npx playwright test --reporter=line
+        timeout-minutes: 5
         env:
           BASE_URL: http://localhost:8080
           CI: "true"
