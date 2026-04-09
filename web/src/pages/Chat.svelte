@@ -131,6 +131,7 @@
 </script>
 
 <div class="chat-shell">
+  <h1 class="page-title">Chat</h1>
   <!-- Toolbar -->
   <div class="toolbar">
     <label>
@@ -271,6 +272,8 @@
     height: calc(100vh - 56px);
     max-width: 820px;
   }
+
+  .page-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
 
   .toolbar {
     display: flex;

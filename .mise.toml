@@ -1,4 +1,4 @@
 [tools]
-go = "1.25.8"
+go = "1.25.9"
 hugo-extended = "latest"
 "golangci-lint" = "latest"
