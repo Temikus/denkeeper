@@ -174,6 +174,13 @@ export const api = {
   browserSessions: () => apiFetch('/api/v1/browser/sessions'),
   browserConfig: () => apiFetch('/api/v1/browser/config'),
 
+  // Server config
+  serverConfig: () => apiFetch('/api/v1/server/config'),
+  updateServerConfig: (data) => apiFetch('/api/v1/server/config', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+
   // API Keys
   listKeys: () => apiFetch('/api/v1/keys'),
   createKey: (name, scopes) => apiFetch('/api/v1/keys', {

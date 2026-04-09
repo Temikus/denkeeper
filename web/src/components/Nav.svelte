@@ -34,8 +34,9 @@
       label: 'Admin',
       id: 'section-admin',
       items: [
-        { id: 'costs', label: 'Costs' },
-        { id: 'keys',  label: 'API Keys' },
+        { id: 'server', label: 'Server' },
+        { id: 'costs',  label: 'Costs' },
+        { id: 'keys',   label: 'API Keys' },
       ],
     },
   ]

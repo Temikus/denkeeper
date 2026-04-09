@@ -17,6 +17,7 @@
   import KV from './pages/KV.svelte'
   import ApiKeys from './pages/ApiKeys.svelte'
   import Costs from './pages/Costs.svelte'
+  import ServerConfig from './pages/ServerConfig.svelte'
   import './shared.css'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -61,6 +62,8 @@
         <KV />
       {:else if route === 'chat'}
         <Chat />
+      {:else if route === 'server'}
+        <ServerConfig />
       {:else if route === 'costs'}
         <Costs />
       {:else if route === 'keys'}

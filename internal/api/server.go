@@ -188,6 +188,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:read", s.handleGetKV))
 	mux.HandleFunc("DELETE /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:write", s.handleDeleteKV))
 
+	// Server config endpoints (require admin scope).
+	mux.HandleFunc("GET /api/v1/server/config", s.RequireScope("admin", s.handleGetServerConfig))
+	mux.HandleFunc("PATCH /api/v1/server/config", s.RequireScope("admin", s.handlePatchServerConfig))
+
 	// API key management endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))
 	mux.HandleFunc("POST /api/v1/keys", s.RequireScope("admin", s.handleCreateKey))

@@ -343,6 +343,30 @@ func rawSchedules(raw map[string]any) []any {
 }
 
 // ---------------------------------------------------------------------------
+// API config persistence
+// ---------------------------------------------------------------------------
+
+// UpdateAPIConfig persists changes to the [api] section of the TOML config.
+// Only keys present in changes are applied (partial update).
+func UpdateAPIConfig(path string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	apiSection, ok := raw["api"].(map[string]any)
+	if !ok {
+		apiSection = map[string]any{}
+	}
+	for k, v := range changes {
+		apiSection[k] = v
+	}
+	raw["api"] = apiSection
+
+	return writeRawConfig(path, raw)
+}
+
+// ---------------------------------------------------------------------------
 // Auth config persistence
 // ---------------------------------------------------------------------------
 
