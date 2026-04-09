@@ -176,7 +176,7 @@ jobs:
             ghcr.io/temikus/denkeeper@${{ steps.build.outputs.digest }}
       # Attach SLSA build provenance attestation to the image
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/temikus/denkeeper
           subject-digest: ${{ steps.build.outputs.digest }}
