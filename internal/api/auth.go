@@ -39,7 +39,12 @@ func newLoginRateLimiter(limit int, window time.Duration) *loginRateLimiter {
 }
 
 // allow returns true if the IP has not exceeded the rate limit.
+// A limit of 0 disables rate limiting (always allows).
 func (rl *loginRateLimiter) allow(ip string) bool {
+	if rl.limit <= 0 {
+		return true
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 

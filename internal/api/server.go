@@ -90,7 +90,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		sessions:     deps.Sessions,
 		passwordHash: deps.PasswordHash,
 		oidcProvider: deps.OIDCProvider,
-		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
+		loginLimiter: newLoginRateLimiter(cfg.GetLoginRateLimit(), cfg.GetLoginRateWindow()),
 		setupPIN:     deps.SetupPIN,
 	}
 

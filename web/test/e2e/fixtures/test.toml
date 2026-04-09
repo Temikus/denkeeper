@@ -14,6 +14,7 @@ base_url = "http://127.0.0.1:1"   # unreachable — chat will fail gracefully
 
 [api]
 listen = ":8080"
+login_rate_limit = 0  # disable for E2E tests
 
 [api.auth]
 password_hash = "$2a$13$7GUyWo4wSXOVEW5GqDRqOeHggYFzyYvkwhFfl/kPcyCP28.l6vrm."  # "test"

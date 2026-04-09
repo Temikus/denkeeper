@@ -6,14 +6,14 @@ const API_KEY = 'e2e-test-token-12345678'
 test.describe('Skills CRUD via API', () => {
   test('create, list, and delete a skill', async ({ request }) => {
     // Create
-    const createRes = await request.post('/api/v1/skills', {
+    const createRes = await request.post('/api/v1/skills/default', {
       headers: { Authorization: `Bearer ${API_KEY}` },
       data: { name: 'e2e-test-skill', description: 'A test skill', body: '# Test skill body' },
     })
     expect(createRes.ok()).toBeTruthy()
 
     // List
-    const listRes = await request.get('/api/v1/skills', {
+    const listRes = await request.get('/api/v1/skills/default', {
       headers: { Authorization: `Bearer ${API_KEY}` },
     })
     expect(listRes.ok()).toBeTruthy()
@@ -21,7 +21,7 @@ test.describe('Skills CRUD via API', () => {
     expect(skills.some(s => s.name === 'e2e-test-skill')).toBeTruthy()
 
     // Delete
-    const delRes = await request.delete('/api/v1/skills/e2e-test-skill', {
+    const delRes = await request.delete('/api/v1/skills/default/e2e-test-skill', {
       headers: { Authorization: `Bearer ${API_KEY}` },
     })
     expect(delRes.ok()).toBeTruthy()

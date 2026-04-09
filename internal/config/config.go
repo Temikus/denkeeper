@@ -207,6 +207,15 @@ type APIConfig struct {
 	// Auth configures optional password and OIDC authentication for the dashboard.
 	Auth APIAuthConfig `toml:"auth"`
 
+	// LoginRateLimit is the maximum number of password login attempts per IP
+	// within LoginRateWindow before requests are rejected with 429.
+	// Default: 5. Set to 0 to disable login rate limiting.
+	LoginRateLimit *int `toml:"login_rate_limit"`
+
+	// LoginRateWindow is the duration (Go duration string) of the login rate
+	// limit window. Default: "15m".
+	LoginRateWindow string `toml:"login_rate_window"`
+
 	// WebSocketEnabled controls whether the WebSocket endpoint (GET /api/v1/ws)
 	// is available. Default: true. Use a pointer so omitted = true.
 	WebSocketEnabled *bool `toml:"websocket_enabled"`
@@ -235,6 +244,28 @@ func (a *APIConfig) IsEnabled() bool {
 // registered. After applyDefaults the pointer is always non-nil.
 func (a *APIConfig) IsWebSocketEnabled() bool {
 	return a.WebSocketEnabled == nil || *a.WebSocketEnabled
+}
+
+// GetLoginRateLimit returns the configured login rate limit, defaulting to 5.
+// A value of 0 means unlimited (rate limiting disabled).
+func (a *APIConfig) GetLoginRateLimit() int {
+	if a.LoginRateLimit == nil {
+		return 5
+	}
+	return *a.LoginRateLimit
+}
+
+// GetLoginRateWindow parses and returns the login rate limit window duration.
+// Returns 15m if the value is empty or unparseable.
+func (a *APIConfig) GetLoginRateWindow() time.Duration {
+	if a.LoginRateWindow == "" {
+		return 15 * time.Minute
+	}
+	d, err := time.ParseDuration(a.LoginRateWindow)
+	if err != nil {
+		return 15 * time.Minute
+	}
+	return d
 }
 
 // WebSocketReplayTTL parses and returns the replay buffer TTL duration.
