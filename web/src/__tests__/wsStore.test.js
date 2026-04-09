@@ -8,9 +8,11 @@ const mockWSSend = vi.fn(() => true)
 let capturedOptions = null
 
 vi.mock('../ws.js', () => ({
-  DenkeeperWS: vi.fn((opts) => {
+  DenkeeperWS: vi.fn(function (opts) {
     capturedOptions = opts
-    return { connect: mockConnect, close: mockClose, send: mockWSSend }
+    this.connect = mockConnect
+    this.close = mockClose
+    this.send = mockWSSend
   }),
 }))
 
