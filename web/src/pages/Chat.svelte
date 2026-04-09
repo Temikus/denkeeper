@@ -8,6 +8,8 @@
   let sessions = $state([])
   let input = $state('')
   let messagesEl
+  let textareaEl
+  let userAtBottom = $state(true)
 
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
@@ -65,6 +67,7 @@
     const text = input.trim()
     if (!text || $chatState.sending) return
     input = ''
+    autoResizeTextarea()
     await sendMessage(text)
   }
 
@@ -92,17 +95,79 @@
     }
   }
 
+  // Track whether user is scrolled to the bottom.
+  function handleScroll() {
+    if (!messagesEl) return
+    const threshold = 60
+    userAtBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < threshold
+  }
+
   function scrollBottom() {
-    if (messagesEl) {
+    if (messagesEl && userAtBottom) {
       messagesEl.scrollTop = messagesEl.scrollHeight
     }
   }
 
-  // Scroll when messages change.
+  // Scroll when messages change — only if user is at bottom.
   $effect(() => {
     $chatState.messages;
     tick().then(scrollBottom)
   })
+
+  // Auto-resize textarea to fit content.
+  function autoResizeTextarea() {
+    if (!textareaEl) return
+    textareaEl.style.height = 'auto'
+    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 160) + 'px'
+  }
+
+  function handleInput() {
+    autoResizeTextarea()
+  }
+
+  function copyText(text) {
+    navigator.clipboard.writeText(text).catch(() => {})
+  }
+
+  function dismissError() {
+    chatState.update(s => ({ ...s, error: '' }))
+  }
+
+  function formatCost(costUSD) {
+    if (costUSD == null) return '$0.00'
+    if (costUSD < 0.001) {
+      const cents = costUSD * 100
+      if (cents < 0.01) return '<$0.01'
+      return `$${cents.toFixed(2)}c`
+    }
+    return `$${costUSD.toFixed(4)}`
+  }
+
+  function approvalStatusIcon(status) {
+    switch (status) {
+      case 'auto_approved': return '\u2713'
+      case 'approved': return '\u2713'
+      case 'denied': return '\u2717'
+      default: return '\u25cb'
+    }
+  }
+
+  function approvalStatusLabel(status) {
+    switch (status) {
+      case 'auto_approved': return 'auto-approved'
+      case 'approved': return 'approved'
+      case 'denied': return 'denied'
+      default: return 'pending'
+    }
+  }
+
+  function toolStatusIcon(status) {
+    switch (status) {
+      case 'running': return '\u2026'
+      case 'error': return '\u2717'
+      default: return '\u2713'
+    }
+  }
 
   // Poll interval: 30s when WS connected, 5s otherwise.
   function startPoll() {
@@ -133,10 +198,10 @@
 <div class="chat-shell">
   <h1 class="page-title">Chat</h1>
   <!-- Toolbar -->
-  <div class="toolbar">
+  <div class="toolbar" role="toolbar" aria-label="Chat controls">
     <label>
       Agent
-      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)}>
+      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent">
         {#each agents as a}
           <option value={a.name}>{a.name}</option>
         {/each}
@@ -147,7 +212,7 @@
     </label>
     <label>
       Session
-      <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring}>
+      <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring} aria-label="Select session">
         <option value="">New session</option>
         {#each sessions as s}
           <option value={s.id}>{s.id.slice(0, 8)} — {s.message_count} msgs — {new Date(s.created_at).toLocaleDateString()}</option>
@@ -155,9 +220,16 @@
       </select>
     </label>
     <button class="btn-ghost" onclick={() => { newSession(); }} disabled={!$chatState.sessionId}>New Session</button>
-    <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh</button>
-    <span class="ws-status" class:ws-connected={$wsStatus === 'connected'} class:ws-reconnecting={$wsStatus === 'reconnecting'} class:ws-fallback={$wsStatus === 'sse_fallback'}>
-      <span class="ws-dot"></span>
+    <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh Sessions</button>
+    <span
+      class="ws-status"
+      class:ws-connected={$wsStatus === 'connected'}
+      class:ws-reconnecting={$wsStatus === 'reconnecting'}
+      class:ws-fallback={$wsStatus === 'sse_fallback'}
+      role="status"
+      aria-label={'Connection: ' + ($wsStatus === 'connected' ? 'WebSocket connected' : $wsStatus === 'reconnecting' ? 'Reconnecting' : $wsStatus === 'sse_fallback' ? 'SSE fallback' : 'Connecting')}
+    >
+      <span class="ws-dot" aria-hidden="true"></span>
       {#if $wsStatus === 'connected'}WS
       {:else if $wsStatus === 'reconnecting'}Reconnecting
       {:else if $wsStatus === 'sse_fallback'}SSE
@@ -168,19 +240,19 @@
 
   <!-- Pending approvals banner (polled, cross-adapter) -->
   {#if pendingApprovals.length > 0}
-    <div class="pending-banner">
+    <div class="pending-banner" role="alert">
       <span class="pending-label">Pending approvals ({pendingApprovals.length})</span>
       {#each pendingApprovals as appr}
         <div class="approval-card pending">
-          <span class="approval-icon">?</span>
+          <span class="approval-icon" aria-hidden="true">{approvalStatusIcon('pending')}</span>
           <div class="pending-info">
             <span class="tool-name">{appr.summary}</span>
             <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
           </div>
           <div class="approval-actions">
-            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving}>Approve</button>
-            <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving}>Deny</button>
-            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Always approve this tool for this agent">Always</button>
+            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {appr.summary}">Approve</button>
+            <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {appr.summary}">Deny</button>
+            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.summary}">Always Approve</button>
           </div>
         </div>
       {/each}
@@ -188,10 +260,13 @@
   {/if}
 
   <!-- Message list -->
-  <div class="messages" bind:this={messagesEl}>
+  <div class="messages" bind:this={messagesEl} onscroll={handleScroll} role="log" aria-label="Chat messages" aria-live="polite">
     {#if $chatState.restoring}
       <div class="empty">
-        <p class="muted">Restoring session…</p>
+        <div class="restoring-indicator">
+          <span class="spinner" aria-hidden="true"></span>
+          <p class="muted">Restoring session...</p>
+        </div>
       </div>
     {:else if $chatState.messages.length === 0}
       <div class="empty">
@@ -199,22 +274,27 @@
       </div>
     {/if}
     {#each $chatState.messages as msg}
-      <div class="bubble {msg.role}" class:streaming={msg.streaming}>
-        <span class="role-label">{msg.role === 'user' ? 'You' : $chatState.agent}</span>
+      <div class="bubble {msg.role}" class:streaming={msg.streaming} class:incomplete={msg.text?.startsWith('\u26a0')} aria-label="{msg.role === 'user' ? 'Your message' : 'Agent response'}">
+        <div class="bubble-header">
+          <span class="role-label">{msg.role === 'user' ? 'You' : $chatState.agent}</span>
+          <button class="btn-copy" onclick={() => copyText(msg.text)} title="Copy message" aria-label="Copy message to clipboard">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
         {#if msg.approvals?.length > 0}
           <div class="approval-cards">
             {#each msg.approvals as appr}
               <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
-                <span class="approval-icon">{appr.status === 'auto_approved' ? '>' : appr.status === 'approved' ? '>' : appr.status === 'denied' ? '!' : '?'}</span>
+                <span class="approval-icon" aria-hidden="true">{approvalStatusIcon(appr.status)}</span>
                 <span class="tool-name">{appr.tool}</span>
                 {#if appr.status === 'pending'}
                   <div class="approval-actions">
-                    <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving}>Approve</button>
-                    <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving}>Deny</button>
-                    <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Always approve this tool for this agent">Always</button>
+                    <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
+                    <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
+                    <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always Approve</button>
                   </div>
                 {:else}
-                  <span class="approval-badge">{appr.status === 'auto_approved' ? 'auto-approved' : appr.status}</span>
+                  <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
                 {/if}
               </div>
             {/each}
@@ -223,23 +303,30 @@
         {#if msg.toolCalls?.length > 0}
           <div class="tool-calls">
             {#each msg.toolCalls as tc}
-              <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'}>
-                <span class="tool-icon">{tc.status === 'running' ? '...' : tc.status === 'error' ? '!' : '>'}</span>
+              <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'} title={tc.error || ''}>
+                <span class="tool-icon" aria-hidden="true">{toolStatusIcon(tc.status)}</span>
                 <span class="tool-name">{tc.name}</span>
-                {#if tc.duration}<span class="tool-dur">{tc.duration}ms</span>{/if}
+                {#if tc.status === 'running'}
+                  <span class="tool-dur">running</span>
+                {:else if tc.duration != null}
+                  <span class="tool-dur">{tc.duration}ms</span>
+                {/if}
+                {#if tc.error}
+                  <span class="tool-error">{tc.error}</span>
+                {/if}
               </div>
             {/each}
           </div>
         {/if}
         {#if msg.costWarning}
-          <div class="cost-warning">{msg.costWarning}</div>
+          <div class="cost-warning" role="alert">{msg.costWarning}</div>
         {/if}
         {#if msg.streaming && msg.status && !msg.text}
           <p class="status">{msg.status}</p>
         {/if}
-        <p class="text">{msg.text}{#if msg.streaming}<span class="cursor">▋</span>{/if}</p>
+        <p class="text">{msg.text}{#if msg.streaming}<span class="cursor">&#9647;</span>{/if}</p>
         {#if msg.tokens}
-          <span class="usage">{msg.tokens.toLocaleString()} tokens · ~${msg.costUSD?.toFixed(4) ?? '0.0000'}</span>
+          <span class="usage">{msg.tokens.toLocaleString()} tokens · ~{formatCost(msg.costUSD)}</span>
         {/if}
       </div>
     {/each}
@@ -248,18 +335,23 @@
   <!-- Input area -->
   <div class="input-area">
     {#if $chatState.error}
-      <div class="error-bar">{$chatState.error}</div>
+      <div class="error-bar" role="alert">
+        <span>{$chatState.error}</span>
+        <button class="btn-dismiss" onclick={dismissError} aria-label="Dismiss error">&times;</button>
+      </div>
     {/if}
     <div class="input-row">
       <textarea
+        bind:this={textareaEl}
         bind:value={input}
         onkeydown={handleKeydown}
-        placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-        rows="3"
-        disabled={$chatState.sending}
+        oninput={handleInput}
+        placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+        rows="1"
+        aria-label="Chat message input"
       ></textarea>
-      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()}>
-        {$chatState.sending ? '…' : 'Send'}
+      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()} aria-label={$chatState.sending ? 'Sending message' : 'Send message'}>
+        {$chatState.sending ? '...' : 'Send'}
       </button>
     </div>
   </div>
@@ -283,6 +375,7 @@
     border-bottom: 1px solid var(--border);
     margin-bottom: 0;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
   .toolbar label {
     display: flex;
@@ -365,6 +458,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    scroll-behavior: smooth;
   }
 
   .empty {
@@ -375,11 +469,28 @@
     color: var(--text-muted);
   }
 
+  .restoring-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .bubble {
     max-width: 80%;
     padding: 10px 14px;
     border-radius: 10px;
     line-height: 1.5;
+    position: relative;
   }
   .bubble.user {
     align-self: flex-end;
@@ -391,15 +502,38 @@
     background: var(--surface);
     border: 1px solid var(--border);
   }
+  .bubble.incomplete {
+    border-color: var(--danger);
+    background: rgba(224, 92, 110, 0.06);
+  }
+  .bubble-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
   .role-label {
-    display: block;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     opacity: 0.7;
-    margin-bottom: 4px;
   }
+  .btn-copy {
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: 0;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 3px;
+    transition: opacity 0.15s;
+    line-height: 1;
+  }
+  .bubble:hover .btn-copy { opacity: 0.5; }
+  .btn-copy:hover { opacity: 1 !important; }
+  .bubble.user .btn-copy { color: #fff; }
+
   .approval-cards { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
   .approval-card {
     font-size: 12px;
@@ -450,17 +584,25 @@
     border-radius: 4px;
     background: var(--surface);
     border: 1px solid var(--border);
+    flex-wrap: wrap;
   }
   .tool-call.running { border-color: var(--accent); }
   .tool-call.error { border-color: var(--danger); color: var(--danger); }
   .tool-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
   .tool-name { font-family: monospace; }
   .tool-dur { margin-left: auto; opacity: 0.6; }
+  .tool-error {
+    width: 100%;
+    font-size: 11px;
+    color: var(--danger);
+    margin-top: 2px;
+    word-break: break-word;
+  }
 
   .cost-warning {
-    background: rgba(202, 156, 8, 0.15);
-    border: 1px solid rgb(202, 156, 8);
-    color: rgb(202, 156, 8);
+    background: rgba(234, 179, 8, 0.15);
+    border: 1px solid var(--text-muted);
+    color: var(--text);
     padding: 6px 10px;
     border-radius: var(--radius);
     font-size: 12px;
@@ -478,6 +620,10 @@
     flex-shrink: 0;
   }
   .error-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     background: rgba(224,92,110,0.15);
     border: 1px solid var(--danger);
     color: var(--danger);
@@ -486,6 +632,17 @@
     font-size: 13px;
     margin-bottom: 10px;
   }
+  .btn-dismiss {
+    background: none;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+    opacity: 0.7;
+  }
+  .btn-dismiss:hover { opacity: 1; }
   .input-row {
     display: flex;
     gap: 10px;
@@ -502,9 +659,11 @@
     resize: none;
     font-family: inherit;
     line-height: 1.5;
+    min-height: 42px;
+    max-height: 160px;
+    overflow-y: auto;
   }
   textarea:focus { outline: none; border-color: var(--accent); }
-  textarea:disabled { opacity: 0.6; }
 
   .btn-send {
     background: var(--accent);
@@ -532,4 +691,16 @@
   .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
 
   .muted { color: var(--text-muted); }
+
+  /* Responsive: small screens */
+  @media (max-width: 640px) {
+    .chat-shell { max-width: 100%; }
+    .toolbar { gap: 8px; }
+    .toolbar label { font-size: 12px; }
+    .toolbar select { max-width: 140px; font-size: 12px; }
+    .btn-ghost { padding: 4px 8px; font-size: 12px; }
+    .bubble { max-width: 90%; }
+    .approval-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
+    .pending-banner { padding: 8px; }
+  }
 </style>

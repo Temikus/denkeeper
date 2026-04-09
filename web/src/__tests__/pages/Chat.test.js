@@ -161,7 +161,7 @@ describe('Chat page', () => {
       const approveButtons = screen.getAllByText('Approve')
       expect(approveButtons.length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText('Deny').length).toBeGreaterThanOrEqual(1)
-      expect(screen.getAllByText('Always').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('Always Approve').length).toBeGreaterThanOrEqual(1)
     })
   })
 
@@ -185,7 +185,7 @@ describe('Chat page', () => {
     })
   })
 
-  test('textarea is disabled while sending', async () => {
+  test('textarea stays enabled while sending but send button is disabled', async () => {
     let resolveStream
     server.use(
       http.post('/api/v1/chat', () => {
@@ -214,14 +214,25 @@ describe('Chat page', () => {
     await fireEvent.input(textarea, { target: { value: 'hello' } })
     await fireEvent.click(document.querySelector('.btn-send'))
 
+    // Textarea stays enabled so user can compose next message.
     await waitFor(() => {
-      expect(textarea).toBeDisabled()
+      expect(textarea).not.toBeDisabled()
     })
+    // Send button is disabled while sending.
+    expect(document.querySelector('.btn-send')).toBeDisabled()
 
     resolveStream()
 
+    // After stream completes, sending state clears.
+    // Send button stays disabled because input is empty (cleared on send),
+    // but the textarea is enabled so user can type a new message.
     await waitFor(() => {
       expect(textarea).not.toBeDisabled()
+    })
+    // Typing new text re-enables the button.
+    await fireEvent.input(textarea, { target: { value: 'next' } })
+    await waitFor(() => {
+      expect(document.querySelector('.btn-send')).not.toBeDisabled()
     })
   })
 

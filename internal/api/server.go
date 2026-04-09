@@ -599,6 +599,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
 		return
 	}
+	if len(req.Message) > maxChatMessageLen {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("message exceeds maximum length of %d bytes", maxChatMessageLen),
+		})
+		return
+	}
 
 	agentName := req.Agent
 	if agentName == "" {
@@ -1334,6 +1340,7 @@ func (s *Server) handleRemovePlugin(w http.ResponseWriter, r *http.Request) {
 var ValidScopes = scope.Valid
 
 const maxKeyNameLen = 255
+const maxChatMessageLen = 32 * 1024 // 32 KB — matches WS frame size order of magnitude
 
 // ValidateKeyInput checks that name is within the length limit and every scope
 // is in the ValidScopes allowlist. Returns a user-facing error on failure.

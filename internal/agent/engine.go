@@ -29,6 +29,9 @@ import (
 
 const maxContextMessages = 50
 const maxToolRounds = 10
+const toolExecTimeout = 30 * time.Second
+const approvalTimeout = 5 * time.Minute
+const maxConversationIDLen = 256
 
 const memUpdateOpen = "[MEMORY_UPDATE]"
 const memUpdateClose = "[/MEMORY_UPDATE]"
@@ -805,6 +808,9 @@ func (e *Engine) resolvePermissions(msg adapter.IncomingMessage) *security.Permi
 // the conversation if necessary.
 func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
 	if msg.ConversationID != "" {
+		if err := validateConversationID(msg.ConversationID); err != nil {
+			return "", err
+		}
 		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
 			return "", fmt.Errorf("getting conversation: %w", err)
 		}
@@ -991,8 +997,15 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 
 	toolStart := time.Now()
 	e.logger.Info("executing tool", "tool", tc.Function.Name, "round", round)
-	result, execErr := e.tools.Execute(ctx, tc)
+	toolCtx, toolCancel := context.WithTimeout(ctx, toolExecTimeout)
+	defer toolCancel()
+	result, execErr := e.tools.Execute(toolCtx, tc)
 	toolDur := time.Since(toolStart)
+
+	if execErr != nil && toolCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		execErr = fmt.Errorf("tool execution timed out after %s", toolExecTimeout)
+		result = execErr.Error()
+	}
 
 	if execErr != nil {
 		e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "round", round,
@@ -1050,8 +1063,16 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		})
 	}
 
-	// Block until the approval is resolved by the operator.
-	status := e.approvals.WaitForResolution(ctx, req.ID)
+	// Block until the approval is resolved by the operator or the timeout expires.
+	approvalCtx, approvalCancel := context.WithTimeout(ctx, approvalTimeout)
+	defer approvalCancel()
+	status := e.approvals.WaitForResolution(approvalCtx, req.ID)
+
+	if approvalCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		e.logger.Warn("tool approval timed out", "tool", tc.Function.Name, "id", req.ID,
+			"timeout", approvalTimeout)
+		return "Tool approval timed out — no response from operator.", false
+	}
 
 	if status == approval.StatusApproved {
 		e.logger.Info("tool call approved", "tool", tc.Function.Name, "id", req.ID)
@@ -1069,6 +1090,20 @@ const (
 	ctxKeyAdapter    ctxKey = "adapter"
 	ctxKeyExternalID ctxKey = "external_id"
 )
+
+// validateConversationID checks that a client-supplied conversation ID is
+// reasonable: non-empty, within length limits, and contains only safe characters.
+func validateConversationID(id string) error {
+	if len(id) > maxConversationIDLen {
+		return fmt.Errorf("conversation ID exceeds maximum length of %d", maxConversationIDLen)
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("conversation ID contains invalid control character")
+		}
+	}
+	return nil
+}
 
 // applyMemoryUpdate persists a memory update extracted from the LLM response.
 func (e *Engine) applyMemoryUpdate(memUpdate string, perms *security.PermissionEngine) {

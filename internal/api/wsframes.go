@@ -77,6 +77,22 @@ const (
 	FrameTypeError            = "error"
 )
 
+// validateApprovalResponseFrame checks required fields and action validity.
+func validateApprovalResponseFrame(f ApprovalResponseFrame) error {
+	if f.ApprovalID == "" {
+		return fmt.Errorf("wsframes: approval_response requires approval_id")
+	}
+	if f.Action == "" {
+		return fmt.Errorf("wsframes: approval_response requires action")
+	}
+	switch f.Action {
+	case "approve", "deny", "auto_session", "auto_always":
+		return nil
+	default:
+		return fmt.Errorf("wsframes: invalid approval action %q", f.Action)
+	}
+}
+
 // ParseClientFrame reads a raw JSON message from a WebSocket client and
 // returns the appropriate typed frame. Returns an error for unknown or
 // malformed frames.
@@ -102,11 +118,8 @@ func ParseClientFrame(data []byte) (any, error) {
 		if err := json.Unmarshal(data, &f); err != nil {
 			return nil, fmt.Errorf("wsframes: invalid approval_response: %w", err)
 		}
-		if f.ApprovalID == "" {
-			return nil, fmt.Errorf("wsframes: approval_response requires approval_id")
-		}
-		if f.Action == "" {
-			return nil, fmt.Errorf("wsframes: approval_response requires action")
+		if err := validateApprovalResponseFrame(f); err != nil {
+			return nil, err
 		}
 		return f, nil
 

@@ -83,6 +83,11 @@ func (s *Server) runChatStream(ctx context.Context, stream StreamSession, eng *a
 
 	responseText, err := eng.ChatWithEvents(ctx, msg, onEvent)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Client disconnected — don't attempt to send error.
+			s.logger.Info("chat stream cancelled (client disconnected)", "session", sessionID)
+			return
+		}
 		s.logger.Error("chat stream error", "error", err, "session", sessionID)
 		stream.SendError("failed to process message")
 		return

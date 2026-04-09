@@ -340,6 +340,11 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 	if agentName == "" {
 		agentName = "default"
 	}
+	if len(f.Message) > maxChatMessageLen {
+		c.sendError(f.SessionID, "invalid_frame",
+			fmt.Sprintf("message exceeds maximum length of %d bytes", maxChatMessageLen))
+		return
+	}
 	eng := c.server.deps.Dispatcher.Agent(agentName)
 	if eng == nil {
 		c.sendError(f.SessionID, "agent_not_found", fmt.Sprintf("agent %q not found", agentName))
