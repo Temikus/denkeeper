@@ -339,7 +339,9 @@ func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConf
 			continue
 		}
 		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
-			return fmt.Errorf("initializing tool %q: %w", name, err)
+			logger.Error("tool server disabled due to initialization error — fix the configuration and restart",
+				"name", name, "error", err)
+			continue
 		}
 		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
 	}
@@ -355,7 +357,9 @@ func registerDeferredOAuthTools(ctx context.Context, cfg *config.Config, mgr *to
 			continue
 		}
 		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
-			return fmt.Errorf("initializing OAuth tool %q: %w", name, err)
+			logger.Error("OAuth tool server disabled due to initialization error — fix the configuration and restart",
+				"name", name, "error", err)
+			continue
 		}
 		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "auth", tc.Auth)
 	}

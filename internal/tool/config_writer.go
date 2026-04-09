@@ -86,6 +86,9 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 		}
 		entry["scopes"] = scopes
 	}
+	if cfg.AllowLoopback {
+		entry["allow_loopback"] = true
+	}
 	return entry
 }
 

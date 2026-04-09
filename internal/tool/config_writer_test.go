@@ -381,6 +381,43 @@ token = "test-token"
 	}
 }
 
+func TestAddToolToConfig_AllowLoopbackPersisted(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test-token"
+`)
+
+	if err := addToolToConfig(path, "local-mcp", config.ToolConfig{
+		Transport:     "sse",
+		URL:           "http://localhost:8080/events",
+		AllowLoopback: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "allow_loopback") {
+		t.Error("config should contain allow_loopback when set to true")
+	}
+}
+
+func TestAddToolToConfig_AllowLoopbackOmittedWhenFalse(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test-token"
+`)
+
+	if err := addToolToConfig(path, "remote-mcp", config.ToolConfig{
+		Transport: "sse",
+		URL:       "https://mcp.example.com/events",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "allow_loopback") {
+		t.Error("config should not contain allow_loopback when false")
+	}
+}
+
 func TestAddToolToConfig_StdioOmitsTransport(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "test"
