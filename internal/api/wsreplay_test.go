@@ -174,6 +174,36 @@ func TestReplayStore_Remove(t *testing.T) {
 	}
 }
 
+func TestReplayStore_SessionLimit_EvictsOldest(t *testing.T) {
+	store := NewReplayStore(10, 5*time.Minute)
+	store.maxSessions = 3
+
+	// Fill to capacity.
+	b1 := store.Buffer("s1")
+	b1.Append(makeEvent(1))
+	store.Buffer("s2")
+	store.Buffer("s3")
+
+	if store.Len() != 3 {
+		t.Fatalf("store len = %d, want 3", store.Len())
+	}
+
+	// s1 has the oldest newest-entry; s2 and s3 are empty (newer by insertion).
+	// Requesting s4 should evict one buffer to make room.
+	store.Buffer("s4")
+	if store.Len() != 3 {
+		t.Fatalf("store len = %d, want 3 after eviction", store.Len())
+	}
+	// s4 should now exist.
+	found := false
+	store.mu.Lock()
+	_, found = store.buffers["s4"]
+	store.mu.Unlock()
+	if !found {
+		t.Error("s4 buffer should exist after eviction made room")
+	}
+}
+
 func TestReplayStore_Cleanup(t *testing.T) {
 	store := NewReplayStore(10, 50*time.Millisecond)
 	buf := store.Buffer("s1")

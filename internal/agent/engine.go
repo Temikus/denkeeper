@@ -544,7 +544,10 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 		if entry.SessionMode == "isolated" {
 			msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
 		}
-		if err := engineRef.HandleMessage(context.Background(), msg); err != nil {
+		// Derive from the scheduler's lifecycle context so jobs stop on shutdown.
+		jobCtx, jobCancel := context.WithTimeout(engineRef.sched.Context(), 10*time.Minute)
+		defer jobCancel()
+		if err := engineRef.HandleMessage(jobCtx, msg); err != nil {
 			engineRef.logger.Error("scheduled job failed", "name", entry.Name, "error", err)
 		}
 	}
@@ -642,12 +645,12 @@ func (e *Engine) processDirective(ctx context.Context, perms *security.Permissio
 			)
 			if submitErr != nil {
 				e.logger.Warn(spec.logLabel+" approval submit failed", "error", submitErr)
-			} else {
-				e.logger.Info(spec.logLabel+" approval submitted", "id", req.ID)
-				return req, responseText + spec.pendingMsg
+				return nil, responseText + "\n\n(Failed to submit " + spec.logLabel + " for approval.)"
 			}
+			e.logger.Info(spec.logLabel+" approval submitted", "id", req.ID)
+			return req, responseText + spec.pendingMsg
 		}
-		// restricted: silently drop
+		// No approval manager — treat as restricted and silently drop.
 	}
 	return nil, responseText
 }

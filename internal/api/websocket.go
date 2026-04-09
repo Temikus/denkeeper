@@ -208,23 +208,48 @@ func (c *WSConn) Close(code int, text string) {
 }
 
 // sendJSON marshals v as JSON and queues it for the write pump.
+// Protocol-critical frames (done, error) block until queued to prevent
+// the client from missing operation completion signals.
 func (c *WSConn) sendJSON(v any) {
+	// Check if connection is already closing — send on a closed channel panics.
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+
 	data, err := json.Marshal(v)
 	if err != nil {
 		c.hub.logger.Error("ws: marshal error", "error", err)
 		return
 	}
+
+	// Determine if the frame is protocol-critical (must not be dropped).
+	critical := false
+	frameType := "unknown"
+	switch f := v.(type) {
+	case WSEventFrame:
+		frameType = f.Type
+		critical = f.Type == "done" || f.Type == "error"
+	case WSErrorFrame:
+		frameType = "error"
+		critical = true
+	}
+
+	if critical {
+		// Block until the frame is queued or the connection closes.
+		select {
+		case c.send <- data:
+		case <-c.done:
+		}
+		return
+	}
+
 	select {
 	case c.send <- data:
+	case <-c.done:
 	default:
-		// Send buffer full — drop the message to avoid blocking the writer.
-		frameType := "unknown"
-		switch f := v.(type) {
-		case WSEventFrame:
-			frameType = f.Type
-		case WSErrorFrame:
-			frameType = "error"
-		}
+		// Send buffer full — drop the non-critical message to avoid blocking.
 		c.hub.logger.Warn("ws: send buffer full, dropping message",
 			"key", c.keyName,
 			"frame_type", frameType,
@@ -314,6 +339,7 @@ func (c *WSConn) writePump() {
 			// Drain queued messages to coalesce writes.
 			n := len(c.send)
 			for i := 0; i < n; i++ {
+				_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 				if err := c.conn.WriteMessage(websocket.TextMessage, <-c.send); err != nil {
 					return
 				}
@@ -485,18 +511,23 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 		}
 	}
 
-	// Notify the originating adapter channel.
+	// Notify the originating adapter channel in a goroutine so a slow
+	// adapter doesn't block the readPump from processing other frames.
 	action := "Denied"
 	if approved {
 		action = "Approved"
 	}
 	notifyMsg := fmt.Sprintf("%s via WebSocket: %s", action, resolved.Summary)
-	if err := c.server.deps.Dispatcher.SendVia(resolveCtx, resolved.AdapterName, adapter.OutgoingMessage{
-		ExternalID: resolved.ExternalID,
-		Text:       notifyMsg,
-	}); err != nil {
-		c.hub.logger.Warn("ws: failed to send approval notification", "id", f.ApprovalID, "error", err)
-	}
+	go func() {
+		notifyCtx, notifyCancel := context.WithTimeout(c.connCtx, 10*time.Second)
+		defer notifyCancel()
+		if err := c.server.deps.Dispatcher.SendVia(notifyCtx, resolved.AdapterName, adapter.OutgoingMessage{
+			ExternalID: resolved.ExternalID,
+			Text:       notifyMsg,
+		}); err != nil {
+			c.hub.logger.Warn("ws: failed to send approval notification", "id", f.ApprovalID, "error", err)
+		}
+	}()
 }
 
 func (c *WSConn) handleCancel(f CancelFrame) {
@@ -521,14 +552,24 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	keyName := ""
 
 	// Try ?token= query param first (browsers can't set custom WS headers).
+	hasToken := false
 	if token := r.URL.Query().Get("token"); token != "" {
 		// Temporarily set the Authorization header so authenticate() works.
 		r.Header.Set("Authorization", "Bearer "+token)
+		hasToken = true
 	}
 
 	name, ok := s.authenticate(r.Context(), r, scope)
+
+	// Redact the token from the URL to prevent it from appearing in logs.
+	if hasToken {
+		q := r.URL.Query()
+		q.Del("token")
+		r.URL.RawQuery = q.Encode()
+	}
+
 	if !ok {
-		s.logger.Debug("ws: auth failed", "remote", r.RemoteAddr, "has_cookie", r.Header.Get("Cookie") != "", "has_token", r.URL.Query().Get("token") != "")
+		s.logger.Debug("ws: auth failed", "remote", r.RemoteAddr, "has_cookie", r.Header.Get("Cookie") != "", "has_token", hasToken)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}

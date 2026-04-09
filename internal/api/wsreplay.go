@@ -7,6 +7,10 @@ import (
 
 const defaultReplayCapacity = 200
 
+// defaultMaxSessions limits the number of concurrent replay buffers to
+// prevent unbounded memory growth from many short-lived sessions.
+const defaultMaxSessions = 10000
+
 // replayEntry pairs a frame with its insertion timestamp for TTL eviction.
 type replayEntry struct {
 	frame WSEventFrame
@@ -88,10 +92,11 @@ func (b *ReplayBuffer) Len() int {
 
 // ReplayStore manages per-session replay buffers.
 type ReplayStore struct {
-	mu       sync.Mutex
-	buffers  map[string]*ReplayBuffer
-	capacity int
-	ttl      time.Duration
+	mu          sync.Mutex
+	buffers     map[string]*ReplayBuffer
+	capacity    int
+	maxSessions int
+	ttl         time.Duration
 }
 
 // NewReplayStore creates a store that allocates replay buffers on demand.
@@ -100,24 +105,63 @@ func NewReplayStore(capacity int, ttl time.Duration) *ReplayStore {
 		capacity = defaultReplayCapacity
 	}
 	return &ReplayStore{
-		buffers:  make(map[string]*ReplayBuffer),
-		capacity: capacity,
-		ttl:      ttl,
+		buffers:     make(map[string]*ReplayBuffer),
+		capacity:    capacity,
+		maxSessions: defaultMaxSessions,
+		ttl:         ttl,
 	}
 }
 
 // Buffer returns the replay buffer for the given session, creating one if it
-// does not exist.
+// does not exist. If the store is at the session limit, the oldest inactive
+// buffer is evicted to make room.
 func (s *ReplayStore) Buffer(sessionID string) *ReplayBuffer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	buf, ok := s.buffers[sessionID]
-	if !ok {
-		buf = NewReplayBuffer(s.capacity, s.ttl)
-		s.buffers[sessionID] = buf
+	if ok {
+		return buf
 	}
+
+	// Evict oldest buffer if at capacity.
+	if s.maxSessions > 0 && len(s.buffers) >= s.maxSessions {
+		s.evictOldestLocked()
+	}
+
+	buf = NewReplayBuffer(s.capacity, s.ttl)
+	s.buffers[sessionID] = buf
 	return buf
+}
+
+// evictOldestLocked removes the buffer whose newest entry is the oldest.
+// Must be called with s.mu held.
+func (s *ReplayStore) evictOldestLocked() {
+	var oldestID string
+	var oldestTime time.Time
+	first := true
+
+	for id, buf := range s.buffers {
+		buf.mu.Lock()
+		if buf.count == 0 {
+			buf.mu.Unlock()
+			// Empty buffer — evict immediately.
+			delete(s.buffers, id)
+			return
+		}
+		newest := (buf.head - 1 + len(buf.entries)) % len(buf.entries)
+		t := buf.entries[newest].at
+		buf.mu.Unlock()
+
+		if first || t.Before(oldestTime) {
+			oldestID = id
+			oldestTime = t
+			first = false
+		}
+	}
+	if oldestID != "" {
+		delete(s.buffers, oldestID)
+	}
 }
 
 // Remove deletes the replay buffer for a session.

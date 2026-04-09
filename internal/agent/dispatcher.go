@@ -153,15 +153,21 @@ func (d *Dispatcher) ListModels(ctx context.Context) []string {
 // Each message is handled in its own goroutine so slow LLM calls do not block
 // the dispatch loop.
 func (d *Dispatcher) Run(ctx context.Context) error {
+	var adapterWg sync.WaitGroup
 	for _, a := range d.adapters {
 		a := a
+		adapterWg.Add(1)
 		go func() {
+			defer adapterWg.Done()
 			if err := a.Start(ctx, d.incoming); err != nil && ctx.Err() == nil {
 				d.logger.Error("adapter stopped with error", "adapter", a.Name(), "error", err)
 			}
 		}()
 	}
 
+	if len(d.adapters) == 0 {
+		d.logger.Warn("dispatcher started with no adapters — messages can only arrive via API/WebSocket")
+	}
 	d.logger.Info("dispatcher started", "agents", len(d.agents), "adapters", len(d.adapters))
 
 	var wg sync.WaitGroup
@@ -170,6 +176,14 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			d.logger.Info("dispatcher shutting down, waiting for in-flight messages")
 			wg.Wait()
+
+			// Wait for adapter goroutines to finish, then drain
+			// any straggling messages so they don't block on send.
+			adapterWg.Wait()
+			for len(d.incoming) > 0 {
+				<-d.incoming
+			}
+
 			return ctx.Err()
 		case msg := <-d.incoming:
 			e := d.resolveAgent(msg)
@@ -201,7 +215,15 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 	// Refresh adapter typing indicator on thinking/tool_start events
 	// so the user sees continuous activity during long processing.
 	// For tool_approval events, send the approval prompt with inline buttons.
+	// Wrapped in recover to prevent a panicking callback from blocking shutdown
+	// (wg.Done would be skipped otherwise).
 	onEvent := func(evt ChatEvent) {
+		defer func() {
+			if r := recover(); r != nil {
+				d.logger.Error("panic in onEvent callback", "recover", r, "adapter", msg.Adapter, "event", evt.Type)
+			}
+		}()
+
 		a, ok := d.adapters[msg.Adapter]
 		if !ok {
 			return

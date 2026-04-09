@@ -216,31 +216,35 @@ export const api = {
     const decoder = new TextDecoder()
     let buf = ''
     let gotDone = false
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      // SSE frames are separated by "\n\n".
-      const frames = buf.split('\n\n')
-      buf = frames.pop() // keep incomplete frame
-      for (const frame of frames) {
-        const line = frame.trim()
-        if (!line.startsWith('data: ')) continue
-        let evt
-        try {
-          evt = JSON.parse(line.slice(6))
-        } catch (_) {
-          continue // skip malformed JSON
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        // SSE frames are separated by "\n\n".
+        const frames = buf.split('\n\n')
+        buf = frames.pop() // keep incomplete frame
+        for (const frame of frames) {
+          const line = frame.trim()
+          if (!line.startsWith('data: ')) continue
+          let evt
+          try {
+            evt = JSON.parse(line.slice(6))
+          } catch (_) {
+            continue // skip malformed JSON
+          }
+          if (evt.type === 'content') onChunk(evt.text || '')
+          if (evt.type === 'done') { gotDone = true; onDone(evt.session_id || '') }
+          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval' || evt.type === 'cost_limit') onToolEvent?.(evt)
+          if (evt.type === 'error') throw new Error(evt.message || 'stream error')
         }
-        if (evt.type === 'content') onChunk(evt.text || '')
-        if (evt.type === 'done') { gotDone = true; onDone(evt.session_id || '') }
-        if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval' || evt.type === 'cost_limit') onToolEvent?.(evt)
-        if (evt.type === 'error') throw new Error(evt.message || 'stream error')
       }
+      // Stream closed without a done event — signal completion anyway so the UI
+      // doesn't stay stuck in a "streaming" state forever.
+      if (!gotDone) onDone('')
+    } finally {
+      reader.cancel().catch(() => {})
     }
-    // Stream closed without a done event — signal completion anyway so the UI
-    // doesn't stay stuck in a "streaming" state forever.
-    if (!gotDone) onDone('')
   },
 
   // Auth endpoints (no auth required).

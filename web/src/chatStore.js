@@ -288,11 +288,14 @@ export async function resolveApprovalAction(appr, approve, autoApproveScope) {
     let action = approve ? 'approve' : 'deny'
     if (autoApproveScope === 'session') action = 'auto_session'
     if (autoApproveScope === 'permanent') action = 'auto_always'
-    client.send({
+    const sent = client.send({
       type: 'approval_response',
       approval_id: appr.id,
       action,
     })
+    if (!sent) {
+      throw new Error('WebSocket not connected — approval not sent')
+    }
   } else {
     // REST fallback.
     if (approve) {

@@ -255,6 +255,13 @@ func (s *Scheduler) Stop() {
 	s.logger.Info("scheduler stopped")
 }
 
+// Context returns the scheduler's lifecycle context. It is cancelled when
+// Stop() is called. Callers can derive job contexts from this to ensure
+// work stops on shutdown.
+func (s *Scheduler) Context() context.Context {
+	return s.ctx
+}
+
 // Entries returns a snapshot of all registered entries (enabled and disabled).
 func (s *Scheduler) Entries() []Entry {
 	s.mu.RLock()

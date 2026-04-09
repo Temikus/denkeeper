@@ -57,9 +57,10 @@
         await api.denyApproval(appr.id)
       }
       await loadPendingApprovals()
-    } catch (_) {
+    } catch (e) {
       appr._resolving = false
       pendingApprovals = [...pendingApprovals]
+      chatState.update(s => ({ ...s, error: 'Approval failed: ' + e.message }))
     }
   }
 
@@ -92,6 +93,7 @@
     } catch (e) {
       appr.resolving = false
       $chatState.messages = [...$chatState.messages]
+      chatState.update(s => ({ ...s, error: 'Approval failed: ' + e.message }))
     }
   }
 
@@ -169,17 +171,11 @@
     }
   }
 
-  // Poll interval: 30s when WS connected, 5s otherwise.
-  function startPoll() {
-    clearInterval(pollTimer)
+  // Restart poll when WS status changes; cleanup previous interval via effect teardown.
+  $effect(() => {
     const interval = $wsStatus === 'connected' ? 30000 : 5000
     pollTimer = setInterval(loadPendingApprovals, interval)
-  }
-
-  // Restart poll when WS status changes.
-  $effect(() => {
-    $wsStatus; // track dependency
-    startPoll()
+    return () => clearInterval(pollTimer)
   })
 
   onMount(() => {
@@ -187,10 +183,8 @@
     loadAgents()
     loadSessions()
     loadPendingApprovals()
-    startPoll()
   })
   onDestroy(() => {
-    clearInterval(pollTimer)
     destroyWS()
   })
 </script>
@@ -245,6 +239,7 @@
       {#each pendingApprovals as appr}
         <div class="approval-card pending">
           <span class="approval-icon" aria-hidden="true">{approvalStatusIcon('pending')}</span>
+          <span class="sr-only">pending</span>
           <div class="pending-info">
             <span class="tool-name">{appr.summary}</span>
             <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
@@ -260,7 +255,7 @@
   {/if}
 
   <!-- Message list -->
-  <div class="messages" bind:this={messagesEl} onscroll={handleScroll} role="log" aria-label="Chat messages" aria-live="polite">
+  <div class="messages" bind:this={messagesEl} onscroll={handleScroll} role="log" aria-label="Chat messages" aria-live="off">
     {#if $chatState.restoring}
       <div class="empty">
         <div class="restoring-indicator">
@@ -286,6 +281,7 @@
             {#each msg.approvals as appr}
               <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
                 <span class="approval-icon" aria-hidden="true">{approvalStatusIcon(appr.status)}</span>
+                <span class="sr-only">{approvalStatusLabel(appr.status)}</span>
                 <span class="tool-name">{appr.tool}</span>
                 {#if appr.status === 'pending'}
                   <div class="approval-actions">
@@ -305,6 +301,7 @@
             {#each msg.toolCalls as tc}
               <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'} title={tc.error || ''}>
                 <span class="tool-icon" aria-hidden="true">{toolStatusIcon(tc.status)}</span>
+                <span class="sr-only">{tc.status}</span>
                 <span class="tool-name">{tc.name}</span>
                 {#if tc.status === 'running'}
                   <span class="tool-dur">running</span>
@@ -319,7 +316,7 @@
           </div>
         {/if}
         {#if msg.costWarning}
-          <div class="cost-warning" role="alert">{msg.costWarning}</div>
+          <div class="cost-warning" role="status">{msg.costWarning}</div>
         {/if}
         {#if msg.streaming && msg.status && !msg.text}
           <p class="status">{msg.status}</p>
@@ -690,6 +687,17 @@
   }
   .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
 
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .muted { color: var(--text-muted); }
 
   /* Responsive: small screens */
