@@ -66,6 +66,18 @@ type WSErrorFrame struct {
 	Message   string `json:"message"`              // human-readable detail
 }
 
+// ActivityFrame notifies WebSocket clients of new activity on a conversation
+// from another adapter (e.g. a Telegram message was processed). It is broadcast
+// to all connected clients so the web UI can refresh its session list or
+// reload the active conversation.
+type ActivityFrame struct {
+	Type           string `json:"type"`            // "activity"
+	ConversationID string `json:"conversation_id"` // e.g. "default:telegram:12345"
+	Agent          string `json:"agent"`           // agent name
+	Adapter        string `json:"adapter"`         // source adapter name
+	Summary        string `json:"summary"`         // brief description
+}
+
 // --- Frame type constants ---
 
 const (
@@ -75,6 +87,7 @@ const (
 	FrameTypePong             = "pong"
 	FrameTypePing             = "ping"
 	FrameTypeError            = "error"
+	FrameTypeActivity         = "activity"
 )
 
 // validateApprovalResponseFrame checks required fields and action validity.

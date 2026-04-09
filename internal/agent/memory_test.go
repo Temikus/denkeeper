@@ -171,7 +171,7 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 	convID := "sched:daily-briefing:1234567890"
 
 	// First call creates the row.
-	if err := store.GetOrCreateConversationByID(ctx, convID); err != nil {
+	if err := store.GetOrCreateConversationByID(ctx, convID, "sched", convID); err != nil {
 		t.Fatalf("GetOrCreateConversationByID: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 	}
 
 	// Second call is idempotent — no error, row not duplicated.
-	if err := store.GetOrCreateConversationByID(ctx, convID); err != nil {
+	if err := store.GetOrCreateConversationByID(ctx, convID, "sched", convID); err != nil {
 		t.Fatalf("second GetOrCreateConversationByID: %v", err)
 	}
 	got2, _ := store.GetMessages(ctx, convID, 100)

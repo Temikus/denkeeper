@@ -1807,6 +1807,9 @@ func (s *Server) allowRequest(keyName string) bool {
 }
 
 // ---------------------------------------------------------------------------
+// WSHub returns the WebSocket hub, or nil if WebSocket is disabled.
+func (s *Server) WSHub() *WSHub { return s.wsHub }
+
 // Middleware
 // ---------------------------------------------------------------------------
 

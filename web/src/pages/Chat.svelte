@@ -2,7 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
   import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction } from '../chatStore.js'
-  import { wsStatus, initWS, destroyWS } from '../wsStore.js'
+  import { wsStatus, initWS, destroyWS, onActivity } from '../wsStore.js'
 
   let agents = $state([])
   let sessions = $state([])
@@ -14,6 +14,7 @@
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
   let pollTimer
+  let unsubActivity
 
   async function loadAgents() {
     try {
@@ -183,8 +184,18 @@
     loadAgents()
     loadSessions()
     loadPendingApprovals()
+
+    // Refresh session list (and active conversation) when another adapter
+    // processes a message, so Telegram/Discord activity appears in real time.
+    unsubActivity = onActivity((frame) => {
+      loadSessions()
+      if ($chatState.sessionId === frame.conversation_id) {
+        loadSession(frame.conversation_id, $chatState.agent)
+      }
+    })
   })
   onDestroy(() => {
+    unsubActivity?.()
     destroyWS()
   })
 </script>
@@ -209,7 +220,7 @@
       <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring} aria-label="Select session">
         <option value="">New session</option>
         {#each sessions as s}
-          <option value={s.id}>{s.id.slice(0, 8)} — {s.message_count} msgs — {new Date(s.created_at).toLocaleDateString()}</option>
+          <option value={s.id}>{s.adapter && s.adapter !== 'ws' && s.adapter !== 'api' && s.adapter !== 'sched' ? s.adapter : s.id.slice(0, 8)} — {s.message_count} msgs — {new Date(s.created_at).toLocaleDateString()}</option>
         {/each}
       </select>
     </label>

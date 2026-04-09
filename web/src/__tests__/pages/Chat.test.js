@@ -15,6 +15,7 @@ vi.mock('../../wsStore.js', () => ({
   getWSClient: vi.fn(() => ({ send: vi.fn(() => true) })),
   onSessionEvent: vi.fn(),
   offSessionEvent: vi.fn(),
+  onActivity: vi.fn(() => vi.fn()),
 }))
 
 const { chatState, newSession } = await import('../../chatStore.js')

@@ -902,10 +902,10 @@ func otelMetricsHandler(cfg *config.Config) http.Handler {
 	return nil
 }
 
-func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logger *slog.Logger) error {
+func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logger *slog.Logger) (*api.Server, error) {
 	keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
 	if ksErr != nil {
-		return fmt.Errorf("initializing api key store: %w", ksErr)
+		return nil, fmt.Errorf("initializing api key store: %w", ksErr)
 	}
 
 	existingKeys, _ := keyStore.List(ctx)
@@ -924,7 +924,7 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 
 	// Initialize auth subsystem if configured.
 	if err := initAPIAuth(ctx, cfg, &deps, logger); err != nil {
-		return fmt.Errorf("initializing auth: %w", err)
+		return nil, fmt.Errorf("initializing auth: %w", err)
 	}
 
 	// Generate a one-time setup PIN when no auth is configured yet.
@@ -932,7 +932,7 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 	if !hasActiveKey && cfg.API.Auth.PasswordHash == "" {
 		pin, err := generateSetupPIN()
 		if err != nil {
-			return fmt.Errorf("generating setup PIN: %w", err)
+			return nil, fmt.Errorf("generating setup PIN: %w", err)
 		}
 		deps.SetupPIN = pin
 		logger.Info("══════════════════════════════════════════════════")
@@ -947,6 +947,28 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 			logger.Error("api server error", "error", err)
 		}
 	}()
+	return apiServer, nil
+}
+
+// startAPIAndWireBroadcast starts the API server and wires the adapter→WebSocket
+// broadcast so the web UI is notified when messages arrive via external adapters.
+func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, deps api.Deps, logger *slog.Logger) error {
+	apiServer, err := startAPIServer(ctx, cfg, deps, logger)
+	if err != nil {
+		return err
+	}
+
+	if hub := apiServer.WSHub(); hub != nil {
+		dispatcher.OnBroadcast = func(agentName, convID, adapterName, summary string) {
+			hub.Broadcast(api.ActivityFrame{
+				Type:           api.FrameTypeActivity,
+				ConversationID: convID,
+				Agent:          agentName,
+				Adapter:        adapterName,
+				Summary:        summary,
+			})
+		}
+	}
 	return nil
 }
 
@@ -1113,7 +1135,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	handleShutdownSignals(cancel, logger)
 
 	if cfg.API.IsEnabled() {
-		if err := startAPIServer(ctx, cfg, api.Deps{
+		if err := startAPIAndWireBroadcast(ctx, cfg, dispatcher, api.Deps{
 			Dispatcher:      dispatcher,
 			Scheduler:       sched,
 			CostTracker:     clients.cost,

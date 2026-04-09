@@ -797,7 +797,7 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 		if err := validateConversationID(msg.ConversationID); err != nil {
 			return "", err
 		}
-		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID); err != nil {
+		if err := e.memory.GetOrCreateConversationByID(ctx, msg.ConversationID, msg.Adapter, msg.ExternalID); err != nil {
 			return "", fmt.Errorf("getting conversation: %w", err)
 		}
 		return msg.ConversationID, nil

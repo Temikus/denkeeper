@@ -32,6 +32,11 @@ type Dispatcher struct {
 	incoming chan adapter.IncomingMessage
 	logger   *slog.Logger
 
+	// OnBroadcast, when set, is called after an adapter message (Telegram,
+	// Discord, etc.) is successfully processed. The server uses this to
+	// notify WebSocket clients of conversation activity from other adapters.
+	OnBroadcast func(agentName, convID, adapterName, summary string)
+
 	// OTel instrumentation.
 	tracer    trace.Tracer
 	mDispatch metric.Int64Counter
@@ -257,6 +262,14 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
 		span.RecordError(err)
 		d.sendErrorFeedback(msgCtx, msg)
+		return
+	}
+
+	// Notify WebSocket clients of adapter activity so the web UI can
+	// refresh its session list or reload the active conversation.
+	if d.OnBroadcast != nil && msg.Adapter != "ws" && msg.Adapter != "api" {
+		convID := e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
+		d.OnBroadcast(e.Name(), convID, msg.Adapter, "New message processed")
 	}
 }
 

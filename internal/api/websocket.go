@@ -129,6 +129,22 @@ func (h *WSHub) ConnCount() int {
 	return len(h.conns)
 }
 
+// Broadcast sends a JSON frame to all connected WebSocket clients.
+// Frames are sent on a best-effort basis; slow clients may miss frames
+// because sendJSON drops non-critical frames when the send buffer is full.
+func (h *WSHub) Broadcast(frame any) {
+	h.mu.Lock()
+	conns := make([]*WSConn, 0, len(h.conns))
+	for c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.Unlock()
+
+	for _, c := range conns {
+		c.sendJSON(frame)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WSConn — a single WebSocket connection
 // ---------------------------------------------------------------------------

@@ -11,6 +11,9 @@ export const wsStatus = writable('disconnected')
 /** Stores for per-session event routing. sessionID -> callback */
 const sessionHandlers = new Map()
 
+/** Subscribers for cross-adapter activity broadcasts. */
+const activityCallbacks = new Set()
+
 /** Register a handler for events on a specific session. */
 export function onSessionEvent(sessionID, handler) {
   sessionHandlers.set(sessionID, handler)
@@ -48,6 +51,11 @@ export function getWSClient() {
         sessionHandlers.get(frame.session_id)(frame)
         return
       }
+      // Handle cross-adapter activity broadcasts.
+      if (frame.type === 'activity') {
+        activityCallbacks.forEach(cb => cb(frame))
+        return
+      }
       // Frames without a registered session are silently dropped.
     },
     onStatus: (status) => {
@@ -68,6 +76,12 @@ export function initWS() {
   const client = getWSClient()
   client.connect()
   return client
+}
+
+/** Subscribe to cross-adapter activity notifications. Returns an unsubscribe function. */
+export function onActivity(cb) {
+  activityCallbacks.add(cb)
+  return () => activityCallbacks.delete(cb)
 }
 
 /** Tear down the WS connection. */

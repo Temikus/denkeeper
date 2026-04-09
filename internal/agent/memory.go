@@ -34,10 +34,12 @@ type ConversationInfo struct {
 // MemoryStore defines the interface for conversation persistence.
 type MemoryStore interface {
 	GetOrCreateConversation(ctx context.Context, adapter, externalID string) (string, error)
-	// GetOrCreateConversationByID ensures a conversation row exists for the given
-	// convID without requiring a real adapter/externalID pair. Used by the
-	// scheduler for isolated sessions that are not tied to a chat channel.
-	GetOrCreateConversationByID(ctx context.Context, convID string) error
+	// GetOrCreateConversationByID ensures a conversation row exists for the
+	// given convID. The adapter and externalID are stored as metadata so that
+	// ListConversations can report the correct source (e.g. "ws", "api",
+	// "sched"). If the row already exists (INSERT OR IGNORE) the stored
+	// adapter/externalID are left unchanged.
+	GetOrCreateConversationByID(ctx context.Context, convID, adapter, externalID string) error
 	AddMessage(ctx context.Context, convID string, msg StoredMessage) error
 	GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error)
 	ListConversations(ctx context.Context) ([]ConversationInfo, error)
@@ -121,10 +123,10 @@ func (s *SQLiteMemoryStore) GetOrCreateConversation(ctx context.Context, adapter
 	return convID, nil
 }
 
-func (s *SQLiteMemoryStore) GetOrCreateConversationByID(ctx context.Context, convID string) error {
+func (s *SQLiteMemoryStore) GetOrCreateConversationByID(ctx context.Context, convID, adapter, externalID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO conversations (id, adapter, external_id) VALUES (?, ?, ?)`,
-		convID, "sched", convID,
+		convID, adapter, externalID,
 	)
 	if err != nil {
 		return fmt.Errorf("creating conversation: %w", err)
