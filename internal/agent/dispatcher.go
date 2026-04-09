@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 
@@ -149,6 +150,8 @@ func (d *Dispatcher) ListModels(ctx context.Context) []string {
 }
 
 // Run starts all adapters and processes incoming messages until ctx is cancelled.
+// Each message is handled in its own goroutine so slow LLM calls do not block
+// the dispatch loop.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	for _, a := range d.adapters {
 		a := a
@@ -161,10 +164,12 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 
 	d.logger.Info("dispatcher started", "agents", len(d.agents), "adapters", len(d.adapters))
 
+	var wg sync.WaitGroup
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("dispatcher shutting down")
+			d.logger.Info("dispatcher shutting down, waiting for in-flight messages")
+			wg.Wait()
 			return ctx.Err()
 		case msg := <-d.incoming:
 			e := d.resolveAgent(msg)
@@ -175,49 +180,75 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			d.mDispatch.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("adapter", msg.Adapter),
 				attribute.String("agent", e.Name())))
-			msgCtx, span := d.tracer.Start(ctx, "dispatcher.route",
-				trace.WithAttributes(
-					attribute.String("adapter", msg.Adapter),
-					attribute.String("agent", e.Name())))
 
-			// Refresh adapter typing indicator on thinking/tool_start events
-			// so the user sees continuous activity during long processing.
-			// For tool_approval events, send the approval prompt with inline buttons.
-			onEvent := func(evt ChatEvent) {
-				a, ok := d.adapters[msg.Adapter]
-				if !ok {
-					return
-				}
-				switch evt.Type {
-				case "thinking", "tool_start":
-					_ = a.SendTyping(msgCtx, msg.ExternalID)
-				case "tool_approval":
-					if evt.ApprovalStatus == "auto_approved" {
-						_ = a.Send(msgCtx, adapter.OutgoingMessage{
-							Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
-							ExternalID: msg.ExternalID,
-							Adapter:    msg.Adapter,
-						})
-					} else {
-						_ = a.Send(msgCtx, adapter.OutgoingMessage{
-							Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
-							ExternalID: msg.ExternalID,
-							Adapter:    msg.Adapter,
-							Buttons: []adapter.KeyboardButton{
-								{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-								{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-								{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
-								{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
-							},
-						})
-					}
-				}
-			}
-			if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
-				d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
-				span.RecordError(err)
-			}
-			span.End()
+			wg.Add(1)
+			go d.handleMessage(ctx, &wg, e, msg)
 		}
 	}
+}
+
+// handleMessage processes a single incoming message. It runs the engine
+// pipeline and sends an error message back to the user if the pipeline fails.
+func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *Engine, msg adapter.IncomingMessage) {
+	defer wg.Done()
+
+	msgCtx, span := d.tracer.Start(ctx, "dispatcher.route",
+		trace.WithAttributes(
+			attribute.String("adapter", msg.Adapter),
+			attribute.String("agent", e.Name())))
+	defer span.End()
+
+	// Refresh adapter typing indicator on thinking/tool_start events
+	// so the user sees continuous activity during long processing.
+	// For tool_approval events, send the approval prompt with inline buttons.
+	onEvent := func(evt ChatEvent) {
+		a, ok := d.adapters[msg.Adapter]
+		if !ok {
+			return
+		}
+		switch evt.Type {
+		case "thinking", "tool_start":
+			_ = a.SendTyping(msgCtx, msg.ExternalID)
+		case "tool_approval":
+			if evt.ApprovalStatus == "auto_approved" {
+				_ = a.Send(msgCtx, adapter.OutgoingMessage{
+					Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
+					ExternalID: msg.ExternalID,
+					Adapter:    msg.Adapter,
+				})
+			} else {
+				_ = a.Send(msgCtx, adapter.OutgoingMessage{
+					Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+					ExternalID: msg.ExternalID,
+					Adapter:    msg.Adapter,
+					Buttons: []adapter.KeyboardButton{
+						{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+						{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+						{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
+						{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
+					},
+				})
+			}
+		}
+	}
+	if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
+		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
+		span.RecordError(err)
+		d.sendErrorFeedback(msgCtx, msg)
+	}
+}
+
+// sendErrorFeedback attempts to notify the user that their message could not be
+// processed. This prevents the silent-failure scenario where the user sends a
+// message and never receives any response.
+func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.IncomingMessage) {
+	a, ok := d.adapters[msg.Adapter]
+	if !ok {
+		return
+	}
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Adapter:    msg.Adapter,
+		ExternalID: msg.ExternalID,
+		Text:       "Sorry, I encountered an error processing your message. Please try again.",
+	})
 }

@@ -145,6 +145,12 @@ type WSConn struct {
 	done chan struct{} // closed when connection is shutting down
 	once sync.Once     // ensures done is closed exactly once
 
+	// connCtx is cancelled when the connection closes. All chat goroutines
+	// should derive their context from this so they stop when the client
+	// disconnects.
+	connCtx    context.Context
+	connCancel context.CancelFunc
+
 	// sessions tracks in-flight chat sessions on this connection.
 	// Key: sessionID, Value: context.CancelFunc.
 	sessions sync.Map
@@ -157,14 +163,17 @@ type WSConn struct {
 }
 
 func newWSConn(conn *websocket.Conn, hub *WSHub, server *Server, keyName string) *WSConn {
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel is called in WSConn.Close
 	return &WSConn{
-		conn:    conn,
-		hub:     hub,
-		server:  server,
-		keyName: keyName,
-		send:    make(chan []byte, wsSendBufferSize),
-		done:    make(chan struct{}),
-		chatSem: make(chan struct{}, wsMaxConcurrentChats),
+		conn:       conn,
+		hub:        hub,
+		server:     server,
+		keyName:    keyName,
+		send:       make(chan []byte, wsSendBufferSize),
+		done:       make(chan struct{}),
+		connCtx:    ctx,
+		connCancel: cancel,
+		chatSem:    make(chan struct{}, wsMaxConcurrentChats),
 	}
 }
 
@@ -178,13 +187,18 @@ func (c *WSConn) Start() {
 func (c *WSConn) Close(code int, text string) {
 	c.once.Do(func() {
 		close(c.done)
+		// Cancel the connection-level context so all in-flight chat
+		// goroutines stop when the client disconnects.
+		c.connCancel()
 	})
 	msg := websocket.FormatCloseMessage(code, text)
 	_ = c.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(wsWriteTimeout))
 	_ = c.conn.Close()
 	c.hub.Unregister(c)
 
-	// Cancel all in-flight sessions.
+	// Cancel all in-flight sessions (belt-and-suspenders — connCancel above
+	// already cancels parent, but per-session cancels are still useful for
+	// the sessions.Delete cleanup path).
 	c.sessions.Range(func(_, val any) bool {
 		if cancel, ok := val.(context.CancelFunc); ok {
 			cancel()
@@ -369,8 +383,9 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 		return
 	}
 
-	// Create a cancellable context for this session.
-	ctx, cancel := context.WithCancel(context.Background())
+	// Derive from the connection context so processing stops when the
+	// client disconnects.
+	ctx, cancel := context.WithCancel(c.connCtx)
 	c.sessions.Store(sessionID, cancel)
 
 	// Run the chat pipeline in a goroutine so the read pump stays free.
@@ -434,7 +449,9 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 
 	approved := f.Action == "approve" || f.Action == "auto_session" || f.Action == "auto_always"
 
-	resolved, err := c.server.deps.Approvals.Resolve(context.Background(), f.ApprovalID, approved, "ws")
+	resolveCtx, resolveCancel := context.WithTimeout(c.connCtx, 30*time.Second)
+	defer resolveCancel()
+	resolved, err := c.server.deps.Approvals.Resolve(resolveCtx, f.ApprovalID, approved, "ws")
 	if err != nil {
 		switch err {
 		case approval.ErrNotFound:
@@ -456,7 +473,7 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 			case "auto_session":
 				c.server.deps.Approvals.AddSessionRule(resolved.AgentName, toolName, resolved.ConversationID, "ws")
 			case "auto_always":
-				if _, aaErr := c.server.deps.Approvals.AddPermanentRule(context.Background(), resolved.AgentName, toolName, "ws"); aaErr != nil {
+				if _, aaErr := c.server.deps.Approvals.AddPermanentRule(resolveCtx, resolved.AgentName, toolName, "ws"); aaErr != nil {
 					c.hub.logger.Error("ws: creating auto-approve rule", "error", aaErr)
 				}
 			}
@@ -469,7 +486,7 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 		action = "Approved"
 	}
 	notifyMsg := fmt.Sprintf("%s via WebSocket: %s", action, resolved.Summary)
-	if err := c.server.deps.Dispatcher.SendVia(context.Background(), resolved.AdapterName, adapter.OutgoingMessage{
+	if err := c.server.deps.Dispatcher.SendVia(resolveCtx, resolved.AdapterName, adapter.OutgoingMessage{
 		ExternalID: resolved.ExternalID,
 		Text:       notifyMsg,
 	}); err != nil {

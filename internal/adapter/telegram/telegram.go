@@ -150,11 +150,15 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 				audioData, err := a.downloadVoiceFile(ctx, update.Message.Voice.FileID)
 				if err != nil {
 					a.logger.Error("downloading voice file", "error", err)
+					reply := tgbotapi.NewMessage(update.Message.Chat.ID, "Sorry, I couldn't download your voice message. Please try again.")
+					_, _ = a.bot.Send(reply)
 					continue
 				}
 				transcribed, err := a.stt.Transcribe(ctx, audioData, "ogg")
 				if err != nil {
 					a.logger.Error("transcribing voice message", "error", err)
+					reply := tgbotapi.NewMessage(update.Message.Chat.ID, "Sorry, I couldn't transcribe your voice message. Please try sending it as text.")
+					_, _ = a.bot.Send(reply)
 					continue
 				}
 				text = transcribed
