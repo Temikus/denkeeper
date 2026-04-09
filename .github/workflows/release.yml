@@ -82,7 +82,7 @@ jobs:
       - uses: sigstore/cosign-installer@v3
       # syft for SBOM generation (goreleaser sboms: section shells out to syft)
       - uses: anchore/sbom-action/download-syft@v0
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
