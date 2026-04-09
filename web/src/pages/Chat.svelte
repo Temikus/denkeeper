@@ -2,7 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
   import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction } from '../chatStore.js'
-  import { wsStatus, initWS, destroyWS, onActivity } from '../wsStore.js'
+  import { wsStatus, onActivity } from '../wsStore.js'
 
   let agents = $state([])
   let sessions = $state([])
@@ -180,7 +180,6 @@
   })
 
   onMount(() => {
-    initWS()
     loadAgents()
     loadSessions()
     loadPendingApprovals()
@@ -196,7 +195,6 @@
   })
   onDestroy(() => {
     unsubActivity?.()
-    destroyWS()
   })
 </script>
 

@@ -1,8 +1,9 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { isAuthenticated, authMode } from './store.js'
   import { currentRoute } from './router.js'
   import { api } from './api.js'
+  import { initWS, destroyWS } from './wsStore.js'
   import Nav from './components/Nav.svelte'
   import Login from './pages/Login.svelte'
   import Overview from './pages/Overview.svelte'
@@ -23,7 +24,8 @@
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
 
-  // On mount, check if we have a valid session cookie (e.g. after OIDC redirect).
+  // On mount, check if we have a valid session cookie (e.g. after OIDC redirect)
+  // and initialize the global WebSocket connection.
   onMount(async () => {
     try {
       const sess = await api.sessionCheck()
@@ -33,7 +35,9 @@
     } catch {
       // Session check failed — fall through to login.
     }
+    initWS()
   })
+  onDestroy(() => destroyWS())
 </script>
 
 {#if !$isAuthenticated}

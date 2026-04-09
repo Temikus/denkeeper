@@ -300,8 +300,12 @@ export async function sendMessage(text) {
       )
     }
   } catch (e) {
-    agentMsg.text = '\u26a0 ' + e.message
     agentMsg.streaming = false
+    // Don't overwrite partial streamed content with the error — show it
+    // in the error bar only. If no content was received at all, show inline.
+    if (!agentMsg.text) {
+      agentMsg.text = '\u26a0 ' + e.message
+    }
     chatState.update(s => ({ ...s, error: e.message }))
     touchMessages()
   } finally {
