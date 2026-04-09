@@ -146,4 +146,17 @@ export const handlers = [
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),
   http.post('/api/v1/setup', () => HttpResponse.json({ key: 'dk_setup123' })),
   http.post('/api/v1/setup/account', () => HttpResponse.json({ ok: true })),
+
+  // Server config
+  http.get('/api/v1/server/config', () => HttpResponse.json({
+    listen: ':8080',
+    tls: false,
+    rate_limit: 100,
+    cors_origins: ['https://example.com'],
+    websocket_enabled: true,
+    websocket_max_connections: 50,
+    websocket_replay_buffer_ttl: '5m',
+    external_url: 'https://den.example.com',
+  })),
+  http.patch('/api/v1/server/config', () => HttpResponse.json({ ok: true })),
 ]
