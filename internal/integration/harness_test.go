@@ -244,7 +244,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	}
 
 	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger)
-	sched := scheduler.New(logger)
+	sched := scheduler.New(logger, nil)
 
 	// API key.
 	apiKey := "dk-integration-test-key"

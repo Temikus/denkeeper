@@ -2,15 +2,25 @@
   import { onMount } from 'svelte'
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import { timezoneGroups, allTimezones } from '../timezones.js'
 
   let config = $state(null)
   let loading = $state(true)
   let error = $state('')
 
+  // External URL editing
   let editing = $state(false)
   let editValue = $state('')
   let saving = $state(false)
   let saveOk = $state(false)
+
+  // Timezone editing
+  let editingTz = $state(false)
+  let tzValue = $state('')
+  let tzCustom = $state(false)
+  let tzFilter = $state('')
+  let savingTz = $state(false)
+  let saveTzOk = $state(false)
 
   async function fetchConfig() {
     loading = true
@@ -49,6 +59,41 @@
     }
   }
 
+  function startEditTz() {
+    tzValue = config.timezone || 'UTC'
+    tzCustom = !allTimezones.includes(tzValue)
+    tzFilter = ''
+    editingTz = true
+  }
+
+  function cancelEditTz() {
+    editingTz = false
+  }
+
+  async function saveTimezone() {
+    savingTz = true
+    error = ''
+    try {
+      await api.updateServerConfig({ timezone: tzValue })
+      config.timezone = tzValue
+      editingTz = false
+      saveTzOk = true
+      setTimeout(() => { saveTzOk = false }, 3000)
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingTz = false
+    }
+  }
+
+  function filteredGroups() {
+    if (!tzFilter) return timezoneGroups
+    const q = tzFilter.toLowerCase()
+    return timezoneGroups
+      .map(g => ({ ...g, zones: g.zones.filter(z => z.toLowerCase().includes(q)) }))
+      .filter(g => g.zones.length > 0)
+  }
+
   onMount(fetchConfig)
 </script>
 
@@ -58,6 +103,64 @@
 {#if loading && !config}
   <p class="loading">Loading...</p>
 {:else if config}
+  <h2 class="section-title">General</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Timezone</div>
+        <div class="config-desc">
+          IANA timezone used for evaluating cron schedule expressions.
+          Changes take effect after restart.
+        </div>
+      </div>
+      {#if !editingTz}
+        <div class="config-value-row">
+          <span class="config-value mono">{config.timezone || 'UTC'}</span>
+          <button class="btn btn-sm" onclick={startEditTz}>Edit</button>
+        </div>
+      {/if}
+    </div>
+    {#if editingTz}
+      <div class="config-edit">
+        {#if !tzCustom}
+          <input
+            type="text"
+            class="input tz-filter"
+            bind:value={tzFilter}
+            placeholder="Filter timezones..."
+          />
+          <select class="input tz-select" bind:value={tzValue} size="8">
+            {#each filteredGroups() as group}
+              <optgroup label={group.label}>
+                {#each group.zones as zone}
+                  <option value={zone}>{zone}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
+          <button class="btn-link" onclick={() => { tzCustom = true }}>Enter custom value</button>
+        {:else}
+          <input
+            type="text"
+            class="input"
+            bind:value={tzValue}
+            placeholder="e.g. America/New_York"
+          />
+          <button class="btn-link" onclick={() => { tzCustom = false }}>Back to list</button>
+        {/if}
+        <div class="config-actions">
+          <button class="btn btn-primary" onclick={saveTimezone} disabled={savingTz || !tzValue.trim()}>
+            {savingTz ? 'Saving...' : 'Save'}
+          </button>
+          <button class="btn" onclick={cancelEditTz} disabled={savingTz}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+    {#if saveTzOk}
+      <div class="save-ok">Saved — restart to apply</div>
+    {/if}
+  </div>
+
   <h2 class="section-title">Networking</h2>
   <div class="grid">
     <div class="card">
@@ -237,4 +340,22 @@
     color: var(--success);
     font-weight: 500;
   }
+
+  .tz-filter {
+    margin-bottom: 6px;
+  }
+  .tz-select {
+    height: auto;
+    font-family: monospace;
+  }
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 0;
+    margin-top: 4px;
+  }
+  .btn-link:hover { text-decoration: underline; }
 </style>

@@ -59,6 +59,7 @@ describe('ServerConfig page', () => {
         websocket_max_connections: 0,
         websocket_replay_buffer_ttl: '',
         external_url: '',
+        timezone: 'UTC',
       })),
     )
     render(ServerConfig)
@@ -74,10 +75,12 @@ describe('ServerConfig page', () => {
   test('Edit button shows input form', async () => {
     render(ServerConfig)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getAllByText('Edit').length).toBeGreaterThanOrEqual(1)
     })
 
-    await fireEvent.click(screen.getByText('Edit'))
+    const editButtons = screen.getAllByText('Edit')
+    // Click the External URL edit button (last one)
+    await fireEvent.click(editButtons[editButtons.length - 1])
     expect(screen.getByRole('textbox')).toBeInTheDocument()
     expect(screen.getByText('Save')).toBeInTheDocument()
     expect(screen.getByText('Cancel')).toBeInTheDocument()
@@ -86,25 +89,27 @@ describe('ServerConfig page', () => {
   test('Cancel returns to view mode', async () => {
     render(ServerConfig)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getAllByText('Edit').length).toBeGreaterThanOrEqual(1)
     })
 
-    await fireEvent.click(screen.getByText('Edit'))
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[editButtons.length - 1])
     expect(screen.getByRole('textbox')).toBeInTheDocument()
 
     await fireEvent.click(screen.getByText('Cancel'))
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-    expect(screen.getByText('Edit')).toBeInTheDocument()
+    expect(screen.getAllByText('Edit').length).toBeGreaterThanOrEqual(1)
   })
 
   test('Save calls PATCH and shows success feedback', async () => {
     vi.useFakeTimers()
     render(ServerConfig)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getAllByText('Edit').length).toBeGreaterThanOrEqual(1)
     })
 
-    await fireEvent.click(screen.getByText('Edit'))
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[editButtons.length - 1])
     const input = screen.getByRole('textbox')
     await fireEvent.input(input, { target: { value: 'https://new.example.com' } })
     await fireEvent.click(screen.getByText('Save'))
@@ -115,6 +120,15 @@ describe('ServerConfig page', () => {
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
 
     vi.useRealTimers()
+  })
+
+  test('renders General section with timezone', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('General')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Timezone')).toBeInTheDocument()
+    expect(screen.getByText('UTC')).toBeInTheDocument()
   })
 
   test('error state shows ErrorBanner', async () => {
@@ -132,7 +146,7 @@ describe('ServerConfig page', () => {
   test('save error shows ErrorBanner', async () => {
     render(ServerConfig)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getAllByText('Edit').length).toBeGreaterThanOrEqual(1)
     })
 
     server.use(
@@ -141,7 +155,8 @@ describe('ServerConfig page', () => {
       ),
     )
 
-    await fireEvent.click(screen.getByText('Edit'))
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[editButtons.length - 1])
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => {

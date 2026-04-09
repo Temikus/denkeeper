@@ -232,6 +232,11 @@ type APIConfig struct {
 	// Used for constructing OAuth callback URLs for remote MCP tool authorization.
 	// If empty, defaults to http(s)://<listen>.
 	ExternalURL string `toml:"external_url"`
+
+	// Timezone is the IANA timezone name used for evaluating cron schedule
+	// expressions (e.g. "America/New_York", "Europe/London"). Default: "UTC".
+	// Changes take effect after restart.
+	Timezone string `toml:"timezone"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults
@@ -737,6 +742,9 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.MCP.RestartCooldown == "" {
 		cfg.MCP.RestartCooldown = "5m"
 	}
+	if cfg.API.Timezone == "" {
+		cfg.API.Timezone = "UTC"
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -801,6 +809,7 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_OIDC_CLIENT_ID", &cfg.API.Auth.OIDC.ClientID)
 	envOverride("DENKEEPER_OIDC_CLIENT_SECRET", &cfg.API.Auth.OIDC.ClientSecret)
 	envOverride("DENKEEPER_API_EXTERNAL_URL", &cfg.API.ExternalURL)
+	envOverride("DENKEEPER_TIMEZONE", &cfg.API.Timezone)
 
 	if v := os.Getenv("DENKEEPER_API_ENABLED"); v == "true" || v == "1" {
 		t := true
@@ -1341,8 +1350,26 @@ func validateAPI(api *APIConfig) error {
 			return fmt.Errorf("config: api.key_file is required when api.tls is true")
 		}
 	}
-	names := make(map[string]bool, len(api.Keys))
-	for i, k := range api.Keys {
+	if err := validateAPIKeys(api.Keys); err != nil {
+		return err
+	}
+	if api.WebSocketReplayBufferTTL != "" {
+		if _, err := time.ParseDuration(api.WebSocketReplayBufferTTL); err != nil {
+			return fmt.Errorf("config: api.websocket_replay_buffer_ttl: invalid duration %q: %w", api.WebSocketReplayBufferTTL, err)
+		}
+	}
+	if err := validateTimezone(api.Timezone); err != nil {
+		return err
+	}
+	if err := validateAuth(&api.Auth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAPIKeys(keys []APIKeyConfig) error {
+	names := make(map[string]bool, len(keys))
+	for i, k := range keys {
 		if k.Name == "" {
 			return fmt.Errorf("config: api.keys[%d]: name is required", i)
 		}
@@ -1362,13 +1389,15 @@ func validateAPI(api *APIConfig) error {
 			}
 		}
 	}
-	if api.WebSocketReplayBufferTTL != "" {
-		if _, err := time.ParseDuration(api.WebSocketReplayBufferTTL); err != nil {
-			return fmt.Errorf("config: api.websocket_replay_buffer_ttl: invalid duration %q: %w", api.WebSocketReplayBufferTTL, err)
-		}
+	return nil
+}
+
+func validateTimezone(tz string) error {
+	if tz == "" {
+		return nil
 	}
-	if err := validateAuth(&api.Auth); err != nil {
-		return err
+	if _, err := time.LoadLocation(tz); err != nil {
+		return fmt.Errorf("config: api.timezone: invalid IANA timezone %q: %w", tz, err)
 	}
 	return nil
 }

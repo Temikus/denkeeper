@@ -363,7 +363,7 @@ func wsTestServerWithProvider(t *testing.T, prov llm.Provider) (*httptest.Server
 		logger,
 	)
 
-	sched := scheduler.New(logger)
+	sched := scheduler.New(logger, nil)
 
 	deps := Deps{
 		Dispatcher:  dispatcher,

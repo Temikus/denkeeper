@@ -65,7 +65,7 @@ func testDepsWithPersona(t *testing.T) Deps {
 		nil, logger,
 	)
 
-	sched := scheduler.New(logger)
+	sched := scheduler.New(logger, nil)
 
 	return Deps{
 		Dispatcher:  dispatcher,

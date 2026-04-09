@@ -6,6 +6,7 @@
   let schedules = []
   let loading = true
   let error = ''
+  let timezone = 'UTC'
 
   // Inline add/edit panel
   let showForm = false
@@ -29,7 +30,9 @@
     loading = true
     error = ''
     try {
-      schedules = (await api.schedules()) || []
+      const [sched, cfg] = await Promise.all([api.schedules(), api.serverConfig()])
+      schedules = sched || []
+      timezone = cfg?.timezone || 'UTC'
     } catch (e) {
       error = e.message
     } finally {
@@ -133,6 +136,8 @@
     <h1 class="page-title">Schedules</h1>
     <button class="btn-primary" onclick={openAdd}>+ Add Schedule</button>
   </div>
+
+  <p class="tz-note">Cron schedules run in <strong>{timezone}</strong> time. <a href="#/server">Change</a></p>
 
   <ErrorBanner message={error} />
 
@@ -258,6 +263,9 @@
 
 <style>
   .page { max-width: 1100px; }
+  .tz-note { font-size: 12px; color: var(--text-muted); margin: -8px 0 12px; }
+  .tz-note a { color: var(--accent); text-decoration: none; }
+  .tz-note a:hover { text-decoration: underline; }
   .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   .name { font-weight: 600; }
   .expr { font-family: monospace; font-size: 12px; white-space: nowrap; }

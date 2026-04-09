@@ -134,9 +134,9 @@ func (b bitset) has(n int) bool {
 	return b&(1<<uint(n)) != 0
 }
 
-// matches reports whether t matches this cron spec (evaluated in UTC).
-func (c *cronSpec) matches(t time.Time) bool {
-	t = t.UTC()
+// matches reports whether t matches this cron spec in the given location.
+func (c *cronSpec) matches(t time.Time, loc *time.Location) bool {
+	t = t.In(loc)
 	return c.minute.has(t.Minute()) &&
 		c.hour.has(t.Hour()) &&
 		c.dom.has(t.Day()) &&
@@ -144,13 +144,13 @@ func (c *cronSpec) matches(t time.Time) bool {
 		c.dow.has(int(t.Weekday()))
 }
 
-// next returns the next time strictly after `after` that matches the spec.
-// Returns zero time if no match is found within one year.
-func (c *cronSpec) next(after time.Time) time.Time {
-	t := after.UTC().Truncate(time.Minute).Add(time.Minute)
+// next returns the next time strictly after `after` that matches the spec
+// in the given location. Returns zero time if no match is found within one year.
+func (c *cronSpec) next(after time.Time, loc *time.Location) time.Time {
+	t := after.In(loc).Truncate(time.Minute).Add(time.Minute)
 	limit := t.Add(366 * 24 * time.Hour)
 	for t.Before(limit) {
-		if c.matches(t) {
+		if c.matches(t, loc) {
 			return t
 		}
 		t = t.Add(time.Minute)

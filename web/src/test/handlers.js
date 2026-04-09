@@ -157,6 +157,7 @@ export const handlers = [
     websocket_max_connections: 50,
     websocket_replay_buffer_ttl: '5m',
     external_url: 'https://den.example.com',
+    timezone: 'UTC',
   })),
   http.patch('/api/v1/server/config', () => HttpResponse.json({ ok: true })),
 ]

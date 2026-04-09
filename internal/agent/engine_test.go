@@ -1827,7 +1827,7 @@ func TestEngine_ScheduleAdd_Autonomous_RegistersSchedule(t *testing.T) {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	sched := scheduler.New(testLogger())
+	sched := scheduler.New(testLogger(), nil)
 
 	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, nil, testLogger())
 	engine.SetScheduler(sched)
@@ -1898,7 +1898,7 @@ func TestEngine_ScheduleAdd_Supervised_SubmitsApproval(t *testing.T) {
 	}
 	approvalMgr := approval.NewManager(approvalStore, testLogger())
 
-	sched := scheduler.New(testLogger())
+	sched := scheduler.New(testLogger(), nil)
 
 	engine := NewEngine("default", router, store, nil, permissions, p, "", nil, nil, approvalMgr, testLogger())
 	engine.SetScheduler(sched)
@@ -2013,7 +2013,7 @@ channel = "telegram:123"
 		t.Fatalf("creating permissions: %v", err)
 	}
 
-	sched := scheduler.New(testLogger())
+	sched := scheduler.New(testLogger(), nil)
 	engine := NewEngine("default", router, store, nil, permissions, nil, "Fallback.", nil, nil, nil, testLogger())
 	engine.SetScheduler(sched)
 

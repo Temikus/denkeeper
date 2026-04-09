@@ -93,18 +93,18 @@ func TestCronSpec_Matches(t *testing.T) {
 
 	// Monday 08:00 UTC — should match.
 	mon8 := time.Date(2024, 1, 8, 8, 0, 0, 0, time.UTC) // Jan 8 2024 is a Monday
-	if !spec.matches(mon8) {
+	if !spec.matches(mon8, time.UTC) {
 		t.Error("expected match for Monday 08:00")
 	}
 
 	// Monday 08:01 — should not match (minute ≠ 0).
-	if spec.matches(mon8.Add(time.Minute)) {
+	if spec.matches(mon8.Add(time.Minute), time.UTC) {
 		t.Error("unexpected match for Monday 08:01")
 	}
 
 	// Saturday 08:00 — should not match (weekend).
 	sat8 := time.Date(2024, 1, 13, 8, 0, 0, 0, time.UTC) // Jan 13 2024 is a Saturday
-	if spec.matches(sat8) {
+	if spec.matches(sat8, time.UTC) {
 		t.Error("unexpected match for Saturday 08:00")
 	}
 }
@@ -117,7 +117,7 @@ func TestCronSpec_Next(t *testing.T) {
 	// Next after 08:00 should be 09:00 the same day.
 	after := time.Date(2024, 6, 1, 8, 0, 0, 0, time.UTC)
 	want := time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC)
-	got := spec.next(after)
+	got := spec.next(after, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("next = %v, want %v", got, want)
 	}
@@ -128,7 +128,7 @@ func TestCronSpec_Next(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScheduler_Register(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	err := s.Register(Config{
 		Name:     "job1",
@@ -161,7 +161,7 @@ func TestScheduler_Register(t *testing.T) {
 }
 
 func TestScheduler_Register_Duplicate(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	cfg := Config{Name: "dup", Type: "agent", Schedule: "@daily", Enabled: true}
 	if err := s.Register(cfg, func(Entry) {}); err != nil {
@@ -173,7 +173,7 @@ func TestScheduler_Register_Duplicate(t *testing.T) {
 }
 
 func TestScheduler_Register_InvalidExpr(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	err := s.Register(Config{
 		Name:     "bad",
@@ -187,7 +187,7 @@ func TestScheduler_Register_InvalidExpr(t *testing.T) {
 }
 
 func TestScheduler_DisabledEntry_NotFired(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	fired := make(chan struct{}, 1)
 	if err := s.Register(Config{
@@ -216,7 +216,7 @@ func TestScheduler_DisabledEntry_NotFired(t *testing.T) {
 }
 
 func TestScheduler_IntervalFires(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	fired := make(chan Entry, 1)
 	if err := s.Register(Config{
@@ -254,7 +254,7 @@ func TestScheduler_IntervalFires(t *testing.T) {
 }
 
 func TestScheduler_EntriesByType(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	_ = s.Register(Config{Name: "sys1", Type: "system", Schedule: "@hourly", Enabled: true}, func(Entry) {})
 	_ = s.Register(Config{Name: "sys2", Type: "system", Schedule: "@daily", Enabled: false}, func(Entry) {})
@@ -275,7 +275,7 @@ func TestScheduler_EntriesByType(t *testing.T) {
 }
 
 func TestScheduler_EntriesByTag(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	_ = s.Register(Config{Name: "j1", Type: "system", Schedule: "@hourly", Enabled: true, Tags: []string{"morning", "briefing"}}, func(Entry) {})
 	_ = s.Register(Config{Name: "j2", Type: "agent", Schedule: "@daily", Enabled: true, Tags: []string{"morning"}}, func(Entry) {})
@@ -297,7 +297,7 @@ func TestScheduler_EntriesByTag(t *testing.T) {
 }
 
 func TestScheduler_MultipleFiresUpdateLastRun(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	count := make(chan struct{}, 5)
 	if err := s.Register(Config{
@@ -332,7 +332,7 @@ func TestScheduler_MultipleFiresUpdateLastRun(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScheduler_RegisterAndStart_Fires(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 	s.Start()
 	defer s.Stop()
 
@@ -363,7 +363,7 @@ func TestScheduler_RegisterAndStart_Fires(t *testing.T) {
 }
 
 func TestScheduler_RegisterAndStart_Disabled(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 	s.Start()
 	defer s.Stop()
 
@@ -387,7 +387,7 @@ func TestScheduler_RegisterAndStart_Disabled(t *testing.T) {
 }
 
 func TestScheduler_RegisterAndStart_Duplicate(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 	s.Start()
 	defer s.Stop()
 
@@ -403,7 +403,7 @@ func TestScheduler_RegisterAndStart_Duplicate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScheduler_GetEntry(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	_ = s.Register(Config{Name: "j1", Type: "agent", Schedule: "@daily", Enabled: true, Skill: "greet"}, func(Entry) {})
 
@@ -422,7 +422,7 @@ func TestScheduler_GetEntry(t *testing.T) {
 }
 
 func TestScheduler_Unregister(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	_ = s.Register(Config{Name: "removable", Type: "agent", Schedule: "@every 1h", Enabled: true}, func(Entry) {})
 
@@ -436,7 +436,7 @@ func TestScheduler_Unregister(t *testing.T) {
 }
 
 func TestScheduler_Unregister_NotFound(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	if err := s.Unregister("ghost"); err == nil {
 		t.Fatal("expected error for nonexistent entry")
@@ -444,7 +444,7 @@ func TestScheduler_Unregister_NotFound(t *testing.T) {
 }
 
 func TestScheduler_Unregister_StopsRunningEntry(t *testing.T) {
-	s := New(discardLogger())
+	s := New(discardLogger(), nil)
 
 	fired := make(chan struct{}, 10)
 	_ = s.Register(Config{Name: "fast", Type: "agent", Schedule: "@every 15ms", Enabled: true}, func(Entry) {

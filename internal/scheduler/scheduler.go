@@ -89,6 +89,7 @@ type Scheduler struct {
 	mu      sync.RWMutex
 	entries map[string]*internalEntry
 	logger  *slog.Logger
+	loc     *time.Location
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
@@ -102,12 +103,17 @@ type internalEntry struct {
 	cancel context.CancelFunc
 }
 
-// New creates a Scheduler. All schedule times are interpreted in UTC.
-func New(logger *slog.Logger) *Scheduler {
+// New creates a Scheduler. Cron expressions are evaluated in the given
+// time.Location. If loc is nil it defaults to UTC.
+func New(logger *slog.Logger, loc *time.Location) *Scheduler {
+	if loc == nil {
+		loc = time.UTC
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		entries: make(map[string]*internalEntry),
 		logger:  logger,
+		loc:     loc,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -155,12 +161,12 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 	}
 
 	if cfg.Enabled {
-		now := time.Now().UTC()
+		now := time.Now().In(s.loc)
 		switch expr.kind {
 		case kindInterval:
 			e.NextRun = now.Add(expr.interval)
 		case kindCron:
-			e.NextRun = expr.cron.next(now)
+			e.NextRun = expr.cron.next(now, s.loc)
 		}
 	}
 
@@ -206,12 +212,12 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 	}
 
 	if cfg.Enabled {
-		now := time.Now().UTC()
+		now := time.Now().In(s.loc)
 		switch expr.kind {
 		case kindInterval:
 			e.NextRun = now.Add(expr.interval)
 		case kindCron:
-			e.NextRun = expr.cron.next(now)
+			e.NextRun = expr.cron.next(now, s.loc)
 		}
 	}
 
@@ -369,7 +375,7 @@ func (s *Scheduler) runInterval(e *internalEntry) {
 		case <-e.ctx.Done():
 			return
 		case t := <-ticker.C:
-			now := t.UTC()
+			now := t.In(s.loc)
 			s.mu.Lock()
 			e.LastRun = now
 			e.NextRun = now.Add(e.expr.interval)
@@ -396,13 +402,13 @@ func (s *Scheduler) runCron(e *internalEntry) {
 		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now().UTC()
+			now := time.Now().In(s.loc)
 			minuteStart := now.Truncate(time.Minute)
 
 			if minuteStart.Equal(lastFiredMinute) {
 				continue // already fired in this minute
 			}
-			if !e.expr.cron.matches(minuteStart) {
+			if !e.expr.cron.matches(minuteStart, s.loc) {
 				continue
 			}
 
@@ -410,7 +416,7 @@ func (s *Scheduler) runCron(e *internalEntry) {
 
 			s.mu.Lock()
 			e.LastRun = minuteStart
-			e.NextRun = e.expr.cron.next(minuteStart)
+			e.NextRun = e.expr.cron.next(minuteStart, s.loc)
 			snapshot := e.Entry
 			job := e.job
 			s.mu.Unlock()

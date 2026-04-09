@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embed IANA timezone database for minimal Docker images
 
 	"github.com/spf13/cobra"
 
@@ -1094,7 +1095,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	globalSkills := loadGlobalSkills(cfg.Agent.SkillsDir, logger)
 
-	sched := scheduler.New(logger)
+	// Timezone is validated by config.Load; LoadLocation cannot fail here.
+	schedLoc, _ := time.LoadLocation(cfg.API.Timezone)
+	sched := scheduler.New(logger, schedLoc)
 
 	browserProfiles := newBrowserProfiles(cfg, browserProfileDir, logger)
 

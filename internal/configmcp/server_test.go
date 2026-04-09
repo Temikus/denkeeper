@@ -48,7 +48,7 @@ func newTestServer(t *testing.T, overrides func(*configmcp.Deps)) (*mcp.ClientSe
 			defer mu.Unlock()
 			skills = append(skills, s)
 		},
-		Sched: scheduler.New(newTestLogger(t)),
+		Sched: scheduler.New(newTestLogger(t), nil),
 		HandleMessage: func(_ context.Context, _ adapter.IncomingMessage) error {
 			return nil
 		},

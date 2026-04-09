@@ -100,7 +100,7 @@ func testDeps() Deps {
 		logger,
 	)
 
-	sched := scheduler.New(logger)
+	sched := scheduler.New(logger, nil)
 
 	return Deps{
 		Dispatcher:  dispatcher,
@@ -1546,7 +1546,7 @@ func TestSkills_NoSkillsReturnsArray(t *testing.T) {
 	)
 	deps := Deps{
 		Dispatcher:  dispatcher,
-		Scheduler:   scheduler.New(logger),
+		Scheduler:   scheduler.New(logger, nil),
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
@@ -2222,7 +2222,7 @@ func TestChat_SSEToolEvents(t *testing.T) {
 		nil, logger,
 	)
 
-	sched := scheduler.New(logger)
+	sched := scheduler.New(logger, nil)
 	cfg := testConfig(allScopesKey())
 	deps := Deps{
 		Dispatcher:  dispatcher,
