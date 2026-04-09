@@ -241,9 +241,9 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 		cfg.Logger.Debug("oauth: using pre-registered client",
 			slog.String("tool", cfg.ToolName),
 			slog.String("client_id", cfg.ClientID))
-		innerCfg.PreregisteredClientConfig = &auth.PreregisteredClientConfig{
-			ClientSecretAuthConfig: &auth.ClientSecretAuthConfig{
-				ClientID:     cfg.ClientID,
+		innerCfg.PreregisteredClient = &oauthex.ClientCredentials{
+			ClientID: cfg.ClientID,
+			ClientSecretAuth: &oauthex.ClientSecretAuth{
 				ClientSecret: cfg.ClientSecret,
 			},
 		}
