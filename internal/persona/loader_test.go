@@ -24,14 +24,14 @@ func TestLoad_AllFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if p.Soul != "I am the soul." {
-		t.Errorf("Soul = %q, want %q", p.Soul, "I am the soul.")
+	if p.GetSoul() != "I am the soul." {
+		t.Errorf("Soul = %q, want %q", p.GetSoul(), "I am the soul.")
 	}
-	if p.User != "User info here." {
-		t.Errorf("User = %q, want %q", p.User, "User info here.")
+	if p.GetUser() != "User info here." {
+		t.Errorf("User = %q, want %q", p.GetUser(), "User info here.")
 	}
-	if p.Memory != "Current context." {
-		t.Errorf("Memory = %q, want %q", p.Memory, "Current context.")
+	if p.GetMemory() != "Current context." {
+		t.Errorf("Memory = %q, want %q", p.GetMemory(), "Current context.")
 	}
 
 	prompt := p.SystemPrompt()
@@ -54,14 +54,14 @@ func TestLoad_SoulOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if p.Soul != "Just soul." {
-		t.Errorf("Soul = %q, want %q", p.Soul, "Just soul.")
+	if p.GetSoul() != "Just soul." {
+		t.Errorf("Soul = %q, want %q", p.GetSoul(), "Just soul.")
 	}
-	if p.User != "" {
-		t.Errorf("User = %q, want empty", p.User)
+	if p.GetUser() != "" {
+		t.Errorf("User = %q, want empty", p.GetUser())
 	}
-	if p.Memory != "" {
-		t.Errorf("Memory = %q, want empty", p.Memory)
+	if p.GetMemory() != "" {
+		t.Errorf("Memory = %q, want empty", p.GetMemory())
 	}
 }
 
@@ -155,9 +155,9 @@ func TestPersona_IsEditable_UnknownSection(t *testing.T) {
 
 func TestSystemPrompt_AllSections(t *testing.T) {
 	p := &Persona{
-		Soul:   "Soul content",
-		User:   "User content",
-		Memory: "Context content",
+		soul:   "Soul content",
+		user:   "User content",
+		memory: "Context content",
 	}
 	prompt := p.SystemPrompt()
 
@@ -168,7 +168,7 @@ func TestSystemPrompt_AllSections(t *testing.T) {
 }
 
 func TestSystemPrompt_SoulOnly(t *testing.T) {
-	p := &Persona{Soul: "Soul only"}
+	p := &Persona{soul: "Soul only"}
 	prompt := p.SystemPrompt()
 
 	if strings.Contains(prompt, "# User") {
@@ -209,8 +209,8 @@ func TestSave_Memory(t *testing.T) {
 	}
 
 	// In-memory state updated (trimmed).
-	if p.Memory != "New memory content." {
-		t.Errorf("Memory = %q, want %q", p.Memory, "New memory content.")
+	if p.GetMemory() != "New memory content." {
+		t.Errorf("Memory = %q, want %q", p.GetMemory(), "New memory content.")
 	}
 
 	// File written to disk.
@@ -235,8 +235,8 @@ func TestSave_User(t *testing.T) {
 	if err := p.Save("user", "Updated user info."); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if p.User != "Updated user info." {
-		t.Errorf("User = %q, want %q", p.User, "Updated user info.")
+	if p.GetUser() != "Updated user info." {
+		t.Errorf("User = %q, want %q", p.GetUser(), "Updated user info.")
 	}
 }
 
@@ -252,8 +252,8 @@ func TestSave_Soul(t *testing.T) {
 	if err := p.Save("soul", "New soul."); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if p.Soul != "New soul." {
-		t.Errorf("Soul = %q, want %q", p.Soul, "New soul.")
+	if p.GetSoul() != "New soul." {
+		t.Errorf("Soul = %q, want %q", p.GetSoul(), "New soul.")
 	}
 
 	data, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
@@ -277,8 +277,8 @@ func TestSave_CaseInsensitive(t *testing.T) {
 	if err := p.Save("MEMORY", "Via uppercase."); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if p.Memory != "Via uppercase." {
-		t.Errorf("Memory = %q, want %q", p.Memory, "Via uppercase.")
+	if p.GetMemory() != "Via uppercase." {
+		t.Errorf("Memory = %q, want %q", p.GetMemory(), "Via uppercase.")
 	}
 }
 
@@ -297,7 +297,7 @@ func TestSave_UnknownSection(t *testing.T) {
 }
 
 func TestSave_NoDirSet(t *testing.T) {
-	p := &Persona{Soul: "Soul."}
+	p := &Persona{soul: "Soul."}
 
 	if err := p.Save("memory", "content"); err == nil {
 		t.Fatal("expected error when dir is not set")
@@ -316,8 +316,8 @@ func TestUpdateMemory(t *testing.T) {
 	if err := p.UpdateMemory("Shorthand memory."); err != nil {
 		t.Fatalf("UpdateMemory: %v", err)
 	}
-	if p.Memory != "Shorthand memory." {
-		t.Errorf("Memory = %q, want %q", p.Memory, "Shorthand memory.")
+	if p.GetMemory() != "Shorthand memory." {
+		t.Errorf("Memory = %q, want %q", p.GetMemory(), "Shorthand memory.")
 	}
 }
 
@@ -341,7 +341,7 @@ func TestMemoryUpdateInstruction_WithDir(t *testing.T) {
 
 func TestMemoryUpdateInstruction_NoDir(t *testing.T) {
 	p := &Persona{
-		Soul: "Soul.",
+		soul: "Soul.",
 		Editable: map[string]bool{
 			"memory": true,
 		},
@@ -424,7 +424,7 @@ func TestSoulUpdateInstruction_Restricted_Empty(t *testing.T) {
 }
 
 func TestSoulUpdateInstruction_NoDir_Empty(t *testing.T) {
-	p := &Persona{Soul: "Soul.", Editable: map[string]bool{"soul": true}}
+	p := &Persona{soul: "Soul.", Editable: map[string]bool{"soul": true}}
 
 	if inst := p.SoulUpdateInstruction("autonomous"); inst != "" {
 		t.Errorf("expected empty instruction when no dir set, got %q", inst)
@@ -506,22 +506,22 @@ func TestLoad_WithIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if p.Identity == nil {
+	if p.GetIdentity() == nil {
 		t.Fatal("Identity should not be nil when IDENTITY.md is present")
 	}
-	if p.Identity.Name != "TestBot" {
-		t.Errorf("Identity.Name = %q, want %q", p.Identity.Name, "TestBot")
+	if p.GetIdentity().Name != "TestBot" {
+		t.Errorf("Identity.Name = %q, want %q", p.GetIdentity().Name, "TestBot")
 	}
-	if p.Identity.Emoji != "🤖" {
-		t.Errorf("Identity.Emoji = %q, want %q", p.Identity.Emoji, "🤖")
+	if p.GetIdentity().Emoji != "🤖" {
+		t.Errorf("Identity.Emoji = %q, want %q", p.GetIdentity().Emoji, "🤖")
 	}
-	if p.Identity.Theme != "helpful" {
-		t.Errorf("Identity.Theme = %q, want %q", p.Identity.Theme, "helpful")
+	if p.GetIdentity().Theme != "helpful" {
+		t.Errorf("Identity.Theme = %q, want %q", p.GetIdentity().Theme, "helpful")
 	}
-	if p.Identity.Body != "Extra notes." {
-		t.Errorf("Identity.Body = %q, want %q", p.Identity.Body, "Extra notes.")
+	if p.GetIdentity().Body != "Extra notes." {
+		t.Errorf("Identity.Body = %q, want %q", p.GetIdentity().Body, "Extra notes.")
 	}
-	if p.IdentityRaw == "" {
+	if p.GetIdentityRaw() == "" {
 		t.Error("IdentityRaw should be set")
 	}
 	if !p.IsEditable("identity") {
@@ -540,18 +540,18 @@ func TestLoad_WithoutIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if p.Identity != nil {
+	if p.GetIdentity() != nil {
 		t.Error("Identity should be nil when IDENTITY.md is absent")
 	}
-	if p.IdentityRaw != "" {
-		t.Errorf("IdentityRaw = %q, want empty", p.IdentityRaw)
+	if p.GetIdentityRaw() != "" {
+		t.Errorf("IdentityRaw = %q, want empty", p.GetIdentityRaw())
 	}
 }
 
 func TestSystemPrompt_WithIdentity(t *testing.T) {
 	p := &Persona{
-		Soul: "Soul content",
-		Identity: &Identity{
+		soul: "Soul content",
+		identity: &Identity{
 			Name:  "TestBot",
 			Emoji: "🤖",
 			Theme: "helpful and concise",
@@ -582,8 +582,8 @@ func TestSystemPrompt_WithIdentity(t *testing.T) {
 
 func TestSystemPrompt_IdentityPartialFields(t *testing.T) {
 	p := &Persona{
-		Soul:     "Soul content",
-		Identity: &Identity{Name: "Helper"},
+		soul:     "Soul content",
+		identity: &Identity{Name: "Helper"},
 	}
 	prompt := p.SystemPrompt()
 
@@ -597,9 +597,9 @@ func TestSystemPrompt_IdentityPartialFields(t *testing.T) {
 
 func TestSystemPrompt_WithoutIdentity_BackwardCompat(t *testing.T) {
 	p := &Persona{
-		Soul:   "Soul content",
-		User:   "User content",
-		Memory: "Context content",
+		soul:   "Soul content",
+		user:   "User content",
+		memory: "Context content",
 	}
 	prompt := p.SystemPrompt()
 
@@ -623,17 +623,17 @@ func TestSave_Identity(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if p.IdentityRaw != strings.TrimSpace(newContent) {
-		t.Errorf("IdentityRaw = %q, want %q", p.IdentityRaw, strings.TrimSpace(newContent))
+	if p.GetIdentityRaw() != strings.TrimSpace(newContent) {
+		t.Errorf("IdentityRaw = %q, want %q", p.GetIdentityRaw(), strings.TrimSpace(newContent))
 	}
-	if p.Identity == nil {
+	if p.GetIdentity() == nil {
 		t.Fatal("Identity should not be nil after save")
 	}
-	if p.Identity.Name != "Updated" {
-		t.Errorf("Identity.Name = %q, want %q", p.Identity.Name, "Updated")
+	if p.GetIdentity().Name != "Updated" {
+		t.Errorf("Identity.Name = %q, want %q", p.GetIdentity().Name, "Updated")
 	}
-	if p.Identity.Emoji != "✨" {
-		t.Errorf("Identity.Emoji = %q, want %q", p.Identity.Emoji, "✨")
+	if p.GetIdentity().Emoji != "✨" {
+		t.Errorf("Identity.Emoji = %q, want %q", p.GetIdentity().Emoji, "✨")
 	}
 
 	// Verify file on disk.
@@ -700,7 +700,7 @@ func TestIdentityUpdateInstruction_Restricted_Empty(t *testing.T) {
 }
 
 func TestIdentityUpdateInstruction_NoDir_Empty(t *testing.T) {
-	p := &Persona{Soul: "Soul.", Editable: map[string]bool{"identity": true}}
+	p := &Persona{soul: "Soul.", Editable: map[string]bool{"identity": true}}
 
 	if inst := p.IdentityUpdateInstruction("autonomous"); inst != "" {
 		t.Errorf("expected empty instruction when no dir set, got %q", inst)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,17 +21,18 @@ type Identity struct {
 // DefaultPrompt is the fallback system prompt when no persona files are available.
 const DefaultPrompt = "You are Denkeeper, a helpful personal AI assistant."
 
-// Persona holds the content of persona definition files.
+// Persona holds the content of persona definition files. All exported fields
+// are guarded by mu; callers must use the accessor methods or hold the lock.
 type Persona struct {
-	dir    string // directory where persona files live; empty = read-only
-	Soul   string // SOUL.md content (required)
-	User   string // USER.md content (optional)
-	Memory string // MEMORY.md content (optional)
+	mu  sync.RWMutex
+	dir string // directory where persona files live; empty = read-only
 
-	// IdentityRaw stores the full IDENTITY.md content for API round-tripping.
-	IdentityRaw string
-	// Identity holds the parsed YAML frontmatter from IDENTITY.md (nil if absent).
-	Identity *Identity
+	// Guarded by mu — use accessor methods for concurrent access.
+	soul        string // SOUL.md content (required)
+	user        string // USER.md content (optional)
+	memory      string // MEMORY.md content (optional)
+	identityRaw string
+	identity    *Identity
 
 	// Editable tracks which sections the agent can modify without elevated permissions.
 	// true = freely writable; false = requires approval or elevated permissions.
@@ -40,6 +42,79 @@ type Persona struct {
 // Dir returns the directory the persona was loaded from.
 // Empty string means no write path is available.
 func (p *Persona) Dir() string { return p.dir }
+
+// GetSoul returns the SOUL.md content.
+func (p *Persona) GetSoul() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.soul
+}
+
+// GetUser returns the USER.md content.
+func (p *Persona) GetUser() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.user
+}
+
+// GetMemory returns the MEMORY.md content.
+func (p *Persona) GetMemory() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.memory
+}
+
+// GetIdentityRaw returns the raw IDENTITY.md content for API round-tripping.
+func (p *Persona) GetIdentityRaw() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.identityRaw
+}
+
+// GetIdentity returns the parsed Identity (may be nil).
+func (p *Persona) GetIdentity() *Identity {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.identity
+}
+
+// Sections returns which sections have content, keyed by section name.
+func (p *Persona) Sections() map[string]bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return map[string]bool{
+		"identity": p.identityRaw != "",
+		"soul":     p.soul != "",
+		"user":     p.user != "",
+		"memory":   p.memory != "",
+	}
+}
+
+// GetSection returns the content for the given section, whether the section
+// is user-editable, whether the agent can mutate it, and whether it exists.
+func (p *Persona) GetSection(section string) (content string, editable, agentMutable, ok bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	switch strings.ToLower(section) {
+	case "identity":
+		return p.identityRaw, p.IsEditableUnlocked(section), p.IsAgentMutable(section), true
+	case "soul":
+		return p.soul, p.IsEditableUnlocked(section), p.IsAgentMutable(section), true
+	case "user":
+		return p.user, p.IsEditableUnlocked(section), p.IsAgentMutable(section), true
+	case "memory":
+		return p.memory, p.IsEditableUnlocked(section), p.IsAgentMutable(section), true
+	default:
+		return "", false, false, false
+	}
+}
+
+// IsEditableUnlocked is like IsEditable but does not acquire the lock.
+// Caller must hold at least mu.RLock.
+func (p *Persona) IsEditableUnlocked(section string) bool {
+	ed, ok := p.Editable[strings.ToLower(section)]
+	return ok && ed
+}
 
 // NewEmpty creates a writable Persona with no content. The directory is created
 // on first Save if it does not exist. Use this when the persona directory is
@@ -77,7 +152,7 @@ func Load(dir string) (*Persona, error) {
 
 	p := &Persona{
 		dir:  dir,
-		Soul: strings.TrimSpace(string(soul)),
+		soul: strings.TrimSpace(string(soul)),
 		Editable: map[string]bool{
 			"identity": true, // editable by user via dashboard/API; agent access governed by permission tier
 			"soul":     true, // editable by user via dashboard/API; agent access governed by permission tier
@@ -88,25 +163,25 @@ func Load(dir string) (*Persona, error) {
 
 	if data, err := os.ReadFile(filepath.Join(dir, "IDENTITY.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
 		raw := strings.TrimSpace(string(data))
-		p.IdentityRaw = raw
+		p.identityRaw = raw
 		if id, parseErr := parseIdentity(raw); parseErr == nil {
-			p.Identity = id
+			p.identity = id
 		}
 	}
 
 	if data, err := os.ReadFile(filepath.Join(dir, "USER.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
-		p.User = strings.TrimSpace(string(data))
+		p.user = strings.TrimSpace(string(data))
 	}
 
 	if data, err := os.ReadFile(filepath.Join(dir, "MEMORY.md")); err == nil { // #nosec G304 -- dir from config, filenames are constants
-		p.Memory = strings.TrimSpace(string(data))
+		p.memory = strings.TrimSpace(string(data))
 	}
 
 	return p, nil
 }
 
 // Save writes content to the named section file atomically and updates the
-// in-memory state. section must be one of "memory", "user", or "soul".
+// in-memory state. section must be one of "identity", "memory", "user", or "soul".
 // Returns an error if the persona was not loaded from a directory.
 func (p *Persona) Save(section, content string) error {
 	if p.dir == "" {
@@ -130,18 +205,22 @@ func (p *Persona) Save(section, content string) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("persona: committing %s: %w", filename, err)
 	}
+
+	// Update in-memory state under the write lock.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	switch strings.ToLower(section) {
 	case "identity":
-		p.IdentityRaw = trimmed
+		p.identityRaw = trimmed
 		if id, parseErr := parseIdentity(trimmed); parseErr == nil {
-			p.Identity = id
+			p.identity = id
 		}
 	case "memory":
-		p.Memory = trimmed
+		p.memory = trimmed
 	case "user":
-		p.User = trimmed
+		p.user = trimmed
 	case "soul":
-		p.Soul = trimmed
+		p.soul = trimmed
 	}
 	return nil
 }
@@ -347,37 +426,40 @@ func (p *Persona) IsAgentMutable(section string) bool {
 
 // SystemPrompt assembles the persona into a single system prompt string.
 func (p *Persona) SystemPrompt() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	var b strings.Builder
 
-	if p.Identity != nil {
+	if p.identity != nil {
 		b.WriteString("# Identity\n\n")
-		if p.Identity.Name != "" {
-			line := "Your name is " + p.Identity.Name
-			if p.Identity.Emoji != "" {
-				line += " " + p.Identity.Emoji
+		if p.identity.Name != "" {
+			line := "Your name is " + p.identity.Name
+			if p.identity.Emoji != "" {
+				line += " " + p.identity.Emoji
 			}
 			b.WriteString(line + ".\n")
 		}
-		if p.Identity.Theme != "" {
-			b.WriteString("Your vibe: " + p.Identity.Theme + ".\n")
+		if p.identity.Theme != "" {
+			b.WriteString("Your vibe: " + p.identity.Theme + ".\n")
 		}
-		if p.Identity.Body != "" {
-			b.WriteString("\n" + p.Identity.Body)
+		if p.identity.Body != "" {
+			b.WriteString("\n" + p.identity.Body)
 		}
 		b.WriteString("\n\n")
 	}
 
 	b.WriteString("# Soul\n\n")
-	b.WriteString(p.Soul)
+	b.WriteString(p.soul)
 
-	if p.User != "" {
+	if p.user != "" {
 		b.WriteString("\n\n# User\n\n")
-		b.WriteString(p.User)
+		b.WriteString(p.user)
 	}
 
-	if p.Memory != "" {
+	if p.memory != "" {
 		b.WriteString("\n\n# Memory\n\n")
-		b.WriteString(p.Memory)
+		b.WriteString(p.memory)
 	}
 
 	return b.String()

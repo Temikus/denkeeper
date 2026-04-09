@@ -562,8 +562,8 @@ func TestEngine_HandleMessage_MemoryUpdate(t *testing.T) {
 	}
 
 	// The persona's in-memory state should be updated.
-	if p.Memory != "User said hi." {
-		t.Errorf("persona.Memory = %q, want %q", p.Memory, "User said hi.")
+	if p.GetMemory() != "User said hi." {
+		t.Errorf("persona.Memory = %q, want %q", p.GetMemory(), "User said hi.")
 	}
 
 	// The MEMORY.md file should have been written.

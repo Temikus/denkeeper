@@ -259,12 +259,7 @@ func (e *Engine) PersonaSections() map[string]bool {
 	if e.persona == nil {
 		return nil
 	}
-	return map[string]bool{
-		"identity": e.persona.IdentityRaw != "",
-		"soul":     e.persona.Soul != "",
-		"user":     e.persona.User != "",
-		"memory":   e.persona.Memory != "",
-	}
+	return e.persona.Sections()
 }
 
 // PersonaSection returns the content, editability, and agent-mutability of a persona section.
@@ -273,19 +268,7 @@ func (e *Engine) PersonaSection(section string) (content string, editable bool, 
 	if e.persona == nil {
 		return "", false, false, false
 	}
-	s := strings.ToLower(section)
-	switch s {
-	case "identity":
-		return e.persona.IdentityRaw, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
-	case "soul":
-		return e.persona.Soul, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
-	case "user":
-		return e.persona.User, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
-	case "memory":
-		return e.persona.Memory, e.persona.IsEditable(s), e.persona.IsAgentMutable(s), true
-	default:
-		return "", false, false, false
-	}
+	return e.persona.GetSection(section)
 }
 
 // SavePersonaSection writes content to the named persona section.
