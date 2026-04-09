@@ -51,6 +51,12 @@ export function getWSClient() {
         sessionHandlers.get(frame.session_id)(frame)
         return
       }
+      // Fallback: route to '__pending__' handler for new sessions where
+      // the server assigned a session ID the client hasn't seen yet.
+      if (frame.session_id && sessionHandlers.has('__pending__')) {
+        sessionHandlers.get('__pending__')(frame)
+        return
+      }
       // Handle cross-adapter activity broadcasts.
       if (frame.type === 'activity') {
         activityCallbacks.forEach(cb => cb(frame))

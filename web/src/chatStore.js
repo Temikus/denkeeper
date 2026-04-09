@@ -125,6 +125,7 @@ function handleToolEvent(agentMsg, evt) {
   if (evt.type === 'content_delta') {
     agentMsg.text += evt.text || ''
     agentMsg.status = ''
+    agentMsg._hadDeltas = true
     touchMessagesThrottled()
     return
   }
@@ -196,7 +197,13 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
 
     const handler = (frame) => {
       if (frame.type === 'content') {
-        agentMsg.text += frame.text || ''
+        // If deltas were already streamed, use the final content as the
+        // authoritative text (replaces accumulated deltas). Otherwise append.
+        if (agentMsg._hadDeltas) {
+          agentMsg.text = frame.text || agentMsg.text
+        } else {
+          agentMsg.text += frame.text || ''
+        }
         touchMessages()
       } else if (frame.type === 'done') {
         agentMsg.streaming = false
@@ -259,6 +266,7 @@ export async function sendMessage(text) {
   const agentMsg = {
     role: 'agent', text: '', thinking: '', streaming: true,
     toolCalls: [], approvals: [], status: '', tokens: 0, costUSD: 0,
+    _hadDeltas: false, // tracks whether content_delta events were received
   }
   activeAgentMsg = agentMsg
 
