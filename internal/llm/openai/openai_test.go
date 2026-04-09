@@ -496,3 +496,98 @@ func TestChatCompletion_NullContent(t *testing.T) {
 		t.Errorf("content = %q, want empty for null content", resp.Content)
 	}
 }
+
+func TestChatCompletion_Streaming(t *testing.T) {
+	sseChunks := "data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n" +
+		"data: [DONE]\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decoding body: %v", err)
+		}
+		if body["stream"] != true {
+			t.Errorf("stream = %v, want true", body["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sseChunks))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, "", server.Client())
+
+	var chunks []string
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+		OnStream: func(c llm.StreamChunk) {
+			if c.ContentDelta != "" {
+				chunks = append(chunks, c.ContentDelta)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "Hello world" {
+		t.Errorf("content = %q, want %q", resp.Content, "Hello world")
+	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("finish_reason = %q, want stop", resp.FinishReason)
+	}
+	if resp.TokensUsed.Total != 7 {
+		t.Errorf("total tokens = %d, want 7", resp.TokensUsed.Total)
+	}
+	if len(chunks) != 2 || chunks[0] != "Hello" || chunks[1] != " world" {
+		t.Errorf("chunks = %v", chunks)
+	}
+}
+
+func TestChatCompletion_StreamingToolCalls(t *testing.T) {
+	sseChunks := "data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"tc1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"k\\\":\\\"v\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sseChunks))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, "", server.Client())
+
+	var contentCallbacks int
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "gpt-4o",
+		Messages: []llm.Message{{Role: "user", Content: "lookup k"}},
+		OnStream: func(c llm.StreamChunk) {
+			if c.ContentDelta != "" {
+				contentCallbacks++
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if contentCallbacks != 0 {
+		t.Errorf("tool call deltas should not trigger content callbacks, got %d", contentCallbacks)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Function.Name != "lookup" {
+		t.Errorf("tool name = %q, want lookup", resp.ToolCalls[0].Function.Name)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %q, want tool_calls", resp.FinishReason)
+	}
+}
+
+func TestSupportsStreaming(t *testing.T) {
+	c := New("key")
+	if !c.SupportsStreaming() {
+		t.Error("expected SupportsStreaming() = true")
+	}
+}

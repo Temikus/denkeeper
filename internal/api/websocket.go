@@ -445,7 +445,13 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 
 		replayBuf := c.hub.replayStore.Buffer(sessionID)
 
+		var streamed bool
 		onEvent := func(evt agent.ChatEvent) {
+			// Only track content_delta — thinking_delta goes to agentMsg.thinking,
+			// not agentMsg.text, so it must not suppress the final content frame.
+			if evt.Type == "content_delta" {
+				streamed = true
+			}
 			seq := c.nextSeq()
 			ef := WSEventFrame{
 				ChatEvent: evt,
@@ -467,15 +473,18 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 			return
 		}
 
-		// Send content and done frames.
-		contentSeq := c.nextSeq()
-		contentFrame := WSEventFrame{
-			ChatEvent: agent.ChatEvent{Type: "content", Text: responseText},
-			SessionID: sessionID,
-			Seq:       contentSeq,
+		// Send content frame only if no content_delta events were streamed,
+		// to avoid duplicating the response text on the client.
+		if !streamed {
+			contentSeq := c.nextSeq()
+			contentFrame := WSEventFrame{
+				ChatEvent: agent.ChatEvent{Type: "content", Text: responseText},
+				SessionID: sessionID,
+				Seq:       contentSeq,
+			}
+			replayBuf.Append(contentFrame)
+			c.sendJSON(contentFrame)
 		}
-		replayBuf.Append(contentFrame)
-		c.sendJSON(contentFrame)
 
 		doneSeq := c.nextSeq()
 		doneFrame := WSEventFrame{

@@ -40,7 +40,14 @@ func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client 
 
 func (c *Client) Name() string { return "openrouter" }
 
+// SupportsStreaming implements llm.StreamingProvider.
+func (c *Client) SupportsStreaming() bool { return true }
+
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if req.OnStream != nil {
+		return c.chatCompletionStream(ctx, req)
+	}
+
 	body := apiRequest{
 		Model:    req.Model,
 		Messages: make([]apiMessage, len(req.Messages)),
@@ -102,6 +109,75 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 
 	return buildChatResponse(&apiResp), nil
+}
+
+// chatCompletionStream handles the streaming path using the shared OAI helper.
+func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	body := apiStreamRequest{
+		Model:         req.Model,
+		Messages:      make([]apiMessage, len(req.Messages)),
+		Tools:         req.Tools,
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+	}
+	if req.MaxTokens > 0 {
+		body.MaxTokens = &req.MaxTokens
+	}
+	if req.Temperature != nil {
+		body.Temperature = req.Temperature
+	}
+	for i, m := range req.Messages {
+		body.Messages[i] = apiMessage{
+			Role: m.Role, Content: m.Content,
+			ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID,
+		}
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling stream request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating stream request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/Temikus/denkeeper")
+	httpReq.Header.Set("X-Title", "Denkeeper")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sending stream request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
+	}
+
+	result, err := llm.ReadOAIStream(resp.Body, req.OnStream)
+	if err != nil {
+		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+
+	chatResp := &llm.ChatResponse{
+		Content:      result.Content,
+		ToolCalls:    result.ToolCalls,
+		Model:        result.Model,
+		FinishReason: result.FinishReason,
+	}
+	if result.Usage != nil {
+		chatResp.TokensUsed = llm.TokenUsage{
+			Prompt:     result.Usage.PromptTokens,
+			Completion: result.Usage.CompletionTokens,
+			Total:      result.Usage.TotalTokens,
+		}
+		chatResp.CostUSD = result.Usage.Cost
+	}
+	return chatResp, nil
 }
 
 // buildChatResponse converts the API response into a ChatResponse and logs
@@ -339,4 +415,19 @@ type keyResponse struct {
 	Data struct {
 		LimitRemaining *float64 `json:"limit_remaining"` // null means unlimited
 	} `json:"data"`
+}
+
+// Streaming request type.
+type apiStreamRequest struct {
+	Model         string         `json:"model"`
+	Messages      []apiMessage   `json:"messages"`
+	MaxTokens     *int           `json:"max_tokens,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
+	Tools         []llm.ToolDef  `json:"tools,omitempty"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }

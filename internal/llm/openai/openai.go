@@ -54,7 +54,14 @@ func NewWithHTTPClient(apiKey, baseURL, organization string, httpClient *http.Cl
 
 func (c *Client) Name() string { return "openai" }
 
+// SupportsStreaming implements llm.StreamingProvider.
+func (c *Client) SupportsStreaming() bool { return true }
+
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if req.OnStream != nil {
+		return c.chatCompletionStream(ctx, req)
+	}
+
 	body := apiRequest{
 		Model:    req.Model,
 		Messages: make([]apiMessage, len(req.Messages)),
@@ -135,6 +142,81 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 			Total:        apiResp.Usage.TotalTokens,
 		},
 	}, nil
+}
+
+// chatCompletionStream handles the streaming path using the shared OAI helper.
+func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	body := apiStreamRequest{
+		Model:    req.Model,
+		Messages: make([]apiMessage, len(req.Messages)),
+		Tools:    req.Tools,
+		Stream:   true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+	}
+	if req.MaxTokens > 0 {
+		body.MaxTokens = &req.MaxTokens
+	}
+	if req.Temperature != nil {
+		body.Temperature = req.Temperature
+	}
+	for i, m := range req.Messages {
+		body.Messages[i] = apiMessage{
+			Role: m.Role, Content: m.Content,
+			ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID,
+		}
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling stream request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating stream request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.organization != "" {
+		httpReq.Header.Set("OpenAI-Organization", c.organization)
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sending stream request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
+	}
+
+	result, err := llm.ReadOAIStream(resp.Body, req.OnStream)
+	if err != nil {
+		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+
+	chatResp := &llm.ChatResponse{
+		Content:      result.Content,
+		ToolCalls:    result.ToolCalls,
+		Model:        result.Model,
+		FinishReason: result.FinishReason,
+	}
+	if result.Usage != nil {
+		var cachedPrompt int
+		if result.Usage.PromptTokensDetails != nil {
+			cachedPrompt = result.Usage.PromptTokensDetails.CachedTokens
+		}
+		promptNonCached := result.Usage.PromptTokens - cachedPrompt
+		chatResp.TokensUsed = llm.TokenUsage{
+			Prompt:       promptNonCached,
+			Completion:   result.Usage.CompletionTokens,
+			CachedPrompt: cachedPrompt,
+			Total:        result.Usage.TotalTokens,
+		}
+	}
+	return chatResp, nil
 }
 
 // ListModels returns available model IDs from the OpenAI-compatible API.
@@ -292,4 +374,19 @@ type apiUsage struct {
 
 type promptTokenDetail struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+// Streaming request type — extends apiRequest with stream fields.
+type apiStreamRequest struct {
+	Model         string         `json:"model"`
+	Messages      []apiMessage   `json:"messages"`
+	MaxTokens     *int           `json:"max_tokens,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
+	Tools         []llm.ToolDef  `json:"tools,omitempty"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }

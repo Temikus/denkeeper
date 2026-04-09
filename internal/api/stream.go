@@ -77,7 +77,13 @@ func (s *SSEStreamSession) SendError(message string) {
 // given StreamSession. This is the shared implementation used by both the
 // SSE handler and the WebSocket handler.
 func (s *Server) runChatStream(ctx context.Context, stream StreamSession, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
+	var streamed bool
 	onEvent := func(evt agent.ChatEvent) {
+		// Only track content_delta — thinking_delta goes to agentMsg.thinking,
+		// not agentMsg.text, so it must not suppress the final content frame.
+		if evt.Type == "content_delta" {
+			streamed = true
+		}
 		stream.SendEvent(evt)
 	}
 
@@ -93,6 +99,10 @@ func (s *Server) runChatStream(ctx context.Context, stream StreamSession, eng *a
 		return
 	}
 
-	stream.SendContent(responseText)
+	// Only send the full content frame if no content_delta events were
+	// streamed, to avoid duplicating the response text on the client.
+	if !streamed {
+		stream.SendContent(responseText)
+	}
 	stream.SendDone(sessionID)
 }

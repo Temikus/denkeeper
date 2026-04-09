@@ -773,3 +773,103 @@ func TestTokenCost_UsesRegistry(t *testing.T) {
 		t.Errorf("source = %q, want %q", source, "registry")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Streaming tests
+// ---------------------------------------------------------------------------
+
+// mockStreamingProvider wraps mockProvider and implements StreamingProvider.
+type mockStreamingProvider struct {
+	mockProvider
+	chunks []StreamChunk
+}
+
+func (m *mockStreamingProvider) SupportsStreaming() bool { return true }
+
+func (m *mockStreamingProvider) ChatCompletion(_ context.Context, req ChatRequest) (*ChatResponse, error) {
+	if req.OnStream != nil {
+		for _, c := range m.chunks {
+			req.OnStream(c)
+		}
+	}
+	return m.response, m.err
+}
+
+func newStreamingRouter(p Provider, name, model string) *Router {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter(name, model, ct)
+	r.RegisterProvider(p)
+	return r
+}
+
+func TestRouter_CompleteStream_CallsCallback(t *testing.T) {
+	provider := &mockStreamingProvider{
+		mockProvider: mockProvider{
+			name:     "primary",
+			response: &ChatResponse{Content: "hello world", FinishReason: "stop"},
+		},
+		chunks: []StreamChunk{
+			{ContentDelta: "hello"},
+			{ContentDelta: " world"},
+		},
+	}
+
+	r := newStreamingRouter(provider, "primary", "model-1")
+	var received []string
+	resp, err := r.CompleteStream(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}, func(c StreamChunk) {
+		if c.ContentDelta != "" {
+			received = append(received, c.ContentDelta)
+		}
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "hello world" {
+		t.Errorf("content = %q, want hello world", resp.Content)
+	}
+	if len(received) != 2 || received[0] != "hello" || received[1] != " world" {
+		t.Errorf("chunks = %v", received)
+	}
+}
+
+func TestRouter_CompleteStream_NonStreamingProviderNoCallback(t *testing.T) {
+	// mockProvider does NOT implement StreamingProvider — callback should never fire.
+	provider := &mockProvider{
+		name:     "primary",
+		response: &ChatResponse{Content: "full response", FinishReason: "stop"},
+	}
+
+	r := newStreamingRouter(provider, "primary", "model-1")
+	var called bool
+	resp, err := r.CompleteStream(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}, func(StreamChunk) {
+		called = true
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "full response" {
+		t.Errorf("content = %q, want full response", resp.Content)
+	}
+	if called {
+		t.Error("callback should not be called for non-streaming provider")
+	}
+}
+
+func TestRouter_CompleteStream_NilCallbackWorksLikeComplete(t *testing.T) {
+	provider := &mockStreamingProvider{
+		mockProvider: mockProvider{
+			name:     "primary",
+			response: &ChatResponse{Content: "response", FinishReason: "stop"},
+		},
+	}
+
+	r := newStreamingRouter(provider, "primary", "model-1")
+	resp, err := r.CompleteStream(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "response" {
+		t.Errorf("content = %q, want response", resp.Content)
+	}
+}
+

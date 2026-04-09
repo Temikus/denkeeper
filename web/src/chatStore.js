@@ -23,6 +23,24 @@ function touchMessages() {
   chatState.update(s => ({ ...s, messages: [...s.messages] }))
 }
 
+// Throttled version for high-frequency streaming deltas (~60fps).
+let _throttleTimer = null
+function touchMessagesThrottled() {
+  if (_throttleTimer) return
+  _throttleTimer = setTimeout(() => {
+    _throttleTimer = null
+    touchMessages()
+  }, 16)
+}
+// Flush any pending throttled update immediately.
+function flushThrottledTouch() {
+  if (_throttleTimer) {
+    clearTimeout(_throttleTimer)
+    _throttleTimer = null
+    touchMessages()
+  }
+}
+
 function saveSession() {
   const { sessionId, agent } = get(chatState)
   if (!sessionId) return
@@ -104,6 +122,17 @@ async function restoreSession() {
 // --- Shared event handler for both WS and SSE ---
 
 function handleToolEvent(agentMsg, evt) {
+  if (evt.type === 'content_delta') {
+    agentMsg.text += evt.text || ''
+    agentMsg.status = ''
+    touchMessagesThrottled()
+    return
+  }
+  if (evt.type === 'thinking_delta') {
+    agentMsg.thinking = (agentMsg.thinking || '') + (evt.text || '')
+    touchMessagesThrottled()
+    return
+  }
   if (evt.type === 'thinking') {
     agentMsg.status = evt.text || 'Thinking...'
     touchMessages()
@@ -172,6 +201,7 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
       } else if (frame.type === 'done') {
         agentMsg.streaming = false
         agentMsg.status = ''
+        flushThrottledTouch()
         const doneSessionId = frame.session_id || reqSessionId
         chatState.update(s => ({ ...s, sessionId: doneSessionId }))
         saveSession()
@@ -227,7 +257,7 @@ export async function sendMessage(text) {
   if (!text || state.sending) return
 
   const agentMsg = {
-    role: 'agent', text: '', streaming: true,
+    role: 'agent', text: '', thinking: '', streaming: true,
     toolCalls: [], approvals: [], status: '', tokens: 0, costUSD: 0,
   }
   activeAgentMsg = agentMsg
@@ -253,6 +283,7 @@ export async function sendMessage(text) {
         (doneSessionId) => {
           agentMsg.streaming = false
           agentMsg.status = ''
+          flushThrottledTouch()
           chatState.update(s => ({ ...s, sessionId: doneSessionId }))
           saveSession()
           touchMessages()

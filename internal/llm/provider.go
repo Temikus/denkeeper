@@ -13,6 +13,23 @@ type Provider interface {
 	HealthCheck(ctx context.Context) error
 }
 
+// StreamChunk carries a single incremental piece of a streaming response.
+type StreamChunk struct {
+	ContentDelta  string // incremental text content
+	ThinkingDelta string // incremental thinking/reasoning content
+}
+
+// StreamCallback is invoked for each chunk during a streaming LLM call.
+// It is called synchronously from the provider's HTTP response reader.
+type StreamCallback func(chunk StreamChunk)
+
+// StreamingProvider is an optional interface. Providers that implement it
+// honour the OnStream callback field on ChatRequest.
+type StreamingProvider interface {
+	Provider
+	SupportsStreaming() bool
+}
+
 // BalanceProvider is an optional interface implemented by providers that can
 // report their remaining credit balance. Returns -1 if the balance is unlimited.
 type BalanceProvider interface {
@@ -71,6 +88,7 @@ type ChatRequest struct {
 	MaxTokens   int
 	Temperature *float64
 	Tools       []ToolDef
+	OnStream    StreamCallback // if non-nil, provider streams chunks via this callback
 }
 
 type Message struct {

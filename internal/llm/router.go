@@ -149,6 +149,17 @@ func (r *Router) currentTools() []ToolDef {
 }
 
 func (r *Router) Complete(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
+	return r.completeInternal(ctx, sessionID, messages, nil)
+}
+
+// CompleteStream is like Complete but enables real-time streaming of content
+// chunks via the onStream callback. If the active provider does not support
+// streaming, it falls back to the non-streaming path transparently.
+func (r *Router) CompleteStream(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback) (*ChatResponse, error) {
+	return r.completeInternal(ctx, sessionID, messages, onStream)
+}
+
+func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback) (*ChatResponse, error) {
 	provider, ok := r.providers[r.defaultProvider]
 	if !ok {
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
@@ -175,9 +186,14 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	// 1. Apply low_funds fallbacks pre-call (first matching rule wins).
 	activeProvider, activeModel := r.applyLowFundsFallback(ctx, sessionID, provider)
 
-	// 2. Make the primary call.
+	// 2. Make the primary call — enable streaming if the provider supports it.
 	currentTools := r.currentTools()
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools}
+	if onStream != nil {
+		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
+			req.OnStream = onStream
+		}
+	}
 	resp, err := activeProvider.ChatCompletion(ctx, req)
 	if err == nil {
 		slog.Debug("llm completion",
@@ -205,7 +221,7 @@ func (r *Router) Complete(ctx context.Context, sessionID string, messages []Mess
 	}
 
 	// 4. Apply error/rate_limit fallbacks in declaration order.
-	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, err)
+	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, onStream, err)
 	if err != nil {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
@@ -279,7 +295,7 @@ func (r *Router) applyLowFundsFallback(ctx context.Context, sessionID string, pr
 
 // applyErrorFallbacks iterates error/rate_limit fallback rules after a failed
 // primary call. Returns the successful response or the last error encountered.
-func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, lastErr error) (*ChatResponse, error) {
+func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback, lastErr error) (*ChatResponse, error) {
 	var resp *ChatResponse
 	err := lastErr
 
@@ -293,7 +309,7 @@ func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, acti
 		slog.Info("fallback triggered",
 			"session", sessionID, "trigger", rule.Trigger, "action", rule.Action, "error", err)
 
-		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages, tools)
+		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages, tools, onStream)
 		if err == nil {
 			return resp, nil
 		}
@@ -314,12 +330,23 @@ func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
 }
 
 // executeFallbackAction performs a single fallback action and returns the result.
-func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef) (*ChatResponse, error) {
+func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback) (*ChatResponse, error) {
+	// buildReq creates a ChatRequest and enables streaming if the provider supports it.
+	buildReq := func(p Provider, model string) ChatRequest {
+		req := ChatRequest{Model: model, Messages: messages, Tools: tools}
+		if onStream != nil {
+			if sp, ok := p.(StreamingProvider); ok && sp.SupportsStreaming() {
+				req.OnStream = onStream
+			}
+		}
+		return req
+	}
+
 	switch rule.Action {
 	case "wait_and_retry":
 		var resp *ChatResponse
 		var callErr error
-		req := ChatRequest{Model: activeModel, Messages: messages, Tools: tools}
+		req := buildReq(activeProvider, activeModel)
 		retryErr := doWaitAndRetry(ctx, rule.MaxRetries, rule.Backoff, func() error {
 			resp, callErr = activeProvider.ChatCompletion(ctx, req)
 			return callErr
@@ -336,10 +363,10 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		if rule.Model != "" {
 			model = rule.Model
 		}
-		return fp.ChatCompletion(ctx, ChatRequest{Model: model, Messages: messages, Tools: tools})
+		return fp.ChatCompletion(ctx, buildReq(fp, model))
 
 	case "switch_model":
-		return activeProvider.ChatCompletion(ctx, ChatRequest{Model: rule.Model, Messages: messages, Tools: tools})
+		return activeProvider.ChatCompletion(ctx, buildReq(activeProvider, rule.Model))
 	}
 
 	return nil, fmt.Errorf("unknown fallback action %q", rule.Action)

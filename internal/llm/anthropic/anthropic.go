@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -49,6 +50,9 @@ func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client 
 }
 
 func (c *Client) Name() string { return "anthropic" }
+
+// SupportsStreaming implements llm.StreamingProvider.
+func (c *Client) SupportsStreaming() bool { return true }
 
 func (c *Client) HealthCheck(ctx context.Context) error {
 	// Anthropic has no dedicated health endpoint; a models list call serves as a proxy.
@@ -103,6 +107,10 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if req.OnStream != nil {
+		return c.chatCompletionStream(ctx, req)
+	}
+
 	apiReq, err := c.buildRequest(req)
 	if err != nil {
 		return nil, err
@@ -144,6 +152,176 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	}
 
 	return c.parseResponse(&apiResp)
+}
+
+// chatCompletionStream handles Anthropic's SSE streaming format.
+func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	apiReq.Stream = true
+
+	body, err := json.Marshal(apiReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling stream request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+messagesEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating stream request: %w", err)
+	}
+	c.setHeaders(httpReq)
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sending stream request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
+		var apiErr apiErrorResponse
+		if json.Unmarshal(respBody, &apiErr) == nil && apiErr.Error.Message != "" {
+			return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: apiErr.Error.Message}
+		}
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
+	}
+
+	return c.readStreamResponse(resp.Body, req.OnStream)
+}
+
+// anthropicStreamAccumulator tracks state while reading an Anthropic SSE stream.
+type anthropicStreamAccumulator struct {
+	out        llm.ChatResponse
+	contentBuf strings.Builder
+	usage      apiUsage
+	tools      map[int]*anthropicToolAccum
+	onStream   llm.StreamCallback
+}
+
+type anthropicToolAccum struct {
+	ID      string
+	Name    string
+	ArgsBuf strings.Builder
+}
+
+func (a *anthropicStreamAccumulator) handleBlockDelta(data string) {
+	var delta struct {
+		Index int `json:"index"`
+		Delta struct {
+			Type        string `json:"type"`
+			Text        string `json:"text,omitempty"`
+			Thinking    string `json:"thinking,omitempty"`
+			PartialJSON string `json:"partial_json,omitempty"`
+		} `json:"delta"`
+	}
+	if json.Unmarshal([]byte(data), &delta) != nil {
+		return
+	}
+	switch delta.Delta.Type {
+	case "text_delta":
+		a.contentBuf.WriteString(delta.Delta.Text)
+		a.onStream(llm.StreamChunk{ContentDelta: delta.Delta.Text})
+	case "thinking_delta":
+		a.onStream(llm.StreamChunk{ThinkingDelta: delta.Delta.Thinking})
+	case "input_json_delta":
+		if acc, ok := a.tools[delta.Index]; ok {
+			acc.ArgsBuf.WriteString(delta.Delta.PartialJSON)
+		}
+	}
+}
+
+func (a *anthropicStreamAccumulator) finish() *llm.ChatResponse {
+	a.out.Content = a.contentBuf.String()
+	a.out.TokensUsed = llm.TokenUsage{
+		Prompt:       a.usage.InputTokens,
+		Completion:   a.usage.OutputTokens,
+		CachedPrompt: a.usage.CacheReadInputTokens,
+		Total:        a.usage.InputTokens + a.usage.OutputTokens + a.usage.CacheReadInputTokens,
+	}
+	for i := 0; i < len(a.tools); i++ {
+		acc, ok := a.tools[i]
+		if !ok {
+			continue
+		}
+		a.out.ToolCalls = append(a.out.ToolCalls, llm.ToolCall{
+			ID:   acc.ID,
+			Type: "function",
+			Function: llm.FunctionCall{
+				Name:      acc.Name,
+				Arguments: acc.ArgsBuf.String(),
+			},
+		})
+	}
+	return &a.out
+}
+
+// readStreamResponse parses the Anthropic SSE event stream and calls onStream
+// for each content/thinking delta.
+func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback) (*llm.ChatResponse, error) {
+	scanner := llm.NewSSEScanner(body)
+	acc := &anthropicStreamAccumulator{
+		tools:    make(map[int]*anthropicToolAccum),
+		onStream: onStream,
+	}
+
+	for scanner.Next() {
+		evt := scanner.Event()
+		switch evt.Type {
+		case "message_start":
+			var msg struct {
+				Message struct {
+					Model string   `json:"model"`
+					Usage apiUsage `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(evt.Data), &msg) == nil {
+				acc.out.Model = msg.Message.Model
+				acc.usage.InputTokens = msg.Message.Usage.InputTokens
+				acc.usage.CacheReadInputTokens = msg.Message.Usage.CacheReadInputTokens
+			}
+
+		case "content_block_start":
+			var block struct {
+				Index        int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+					ID   string `json:"id,omitempty"`
+					Name string `json:"name,omitempty"`
+				} `json:"content_block"`
+			}
+			if json.Unmarshal([]byte(evt.Data), &block) == nil && block.ContentBlock.Type == "tool_use" {
+				acc.tools[block.Index] = &anthropicToolAccum{
+					ID:   block.ContentBlock.ID,
+					Name: block.ContentBlock.Name,
+				}
+			}
+
+		case "content_block_delta":
+			acc.handleBlockDelta(evt.Data)
+
+		case "message_delta":
+			var md struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal([]byte(evt.Data), &md) == nil {
+				acc.out.FinishReason = normalizeStopReason(md.Delta.StopReason)
+				acc.usage.OutputTokens = md.Usage.OutputTokens
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading Anthropic stream: %w", err)
+	}
+
+	return acc.finish(), nil
 }
 
 // setHeaders attaches the required Anthropic authentication and versioning headers.
@@ -301,6 +479,7 @@ type apiRequest struct {
 	Messages    []apiMessage `json:"messages"`
 	Tools       []apiTool    `json:"tools,omitempty"`
 	Temperature *float64     `json:"temperature,omitempty"`
+	Stream      bool         `json:"stream,omitempty"`
 }
 
 type apiMessage struct {

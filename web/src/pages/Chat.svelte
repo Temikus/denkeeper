@@ -326,6 +326,12 @@
             {/each}
           </div>
         {/if}
+        {#if msg.thinking}
+          <details class="thinking-section">
+            <summary>Thinking{#if msg.streaming && !msg.text}<span class="cursor">&#9647;</span>{/if}</summary>
+            <p class="thinking-text">{msg.thinking}</p>
+          </details>
+        {/if}
         {#if msg.costWarning}
           <div class="cost-warning" role="status">{msg.costWarning}</div>
         {/if}
@@ -605,6 +611,31 @@
     color: var(--danger);
     margin-top: 2px;
     word-break: break-word;
+  }
+
+  .thinking-section {
+    margin-bottom: 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .thinking-section summary {
+    padding: 4px 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-style: italic;
+    user-select: none;
+  }
+  .thinking-section summary:hover { color: var(--text); }
+  .thinking-text {
+    padding: 6px 8px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    max-height: 200px;
+    overflow-y: auto;
   }
 
   .cost-warning {

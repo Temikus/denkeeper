@@ -567,12 +567,12 @@ func (e *Engine) applyScheduleAdd(payload string) error {
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
 type ChatEvent struct {
-	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage", "tool_approval"
+	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage", "tool_approval", "content_delta", "thinking_delta"
 	Tool     string  `json:"tool,omitempty"`        // tool name
 	Round    int     `json:"round,omitempty"`       // 1-based tool round
 	Duration int64   `json:"duration_ms,omitempty"` // tool execution time
 	Error    string  `json:"error,omitempty"`       // tool error (if any)
-	Text     string  `json:"text,omitempty"`        // human-readable status message
+	Text     string  `json:"text,omitempty"`        // human-readable status message / content delta
 	Tokens   int     `json:"tokens,omitempty"`      // total tokens used (usage event)
 	CostUSD  float64 `json:"cost_usd,omitempty"`    // estimated cost in USD (usage event)
 
@@ -809,6 +809,22 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 	return convID, nil
 }
 
+// streamCallbackFor returns an llm.StreamCallback that emits content_delta
+// and thinking_delta ChatEvents. Returns nil if onEvent is nil.
+func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
+	if onEvent == nil {
+		return nil
+	}
+	return func(chunk llm.StreamChunk) {
+		if chunk.ContentDelta != "" {
+			onEvent(ChatEvent{Type: "content_delta", Text: chunk.ContentDelta})
+		}
+		if chunk.ThinkingDelta != "" {
+			onEvent(ChatEvent{Type: "thinking_delta", Text: chunk.ThinkingDelta})
+		}
+	}
+}
+
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
 // LLM produces a text response. If onEvent is non-nil, it is called for each
 // tool execution start/end so the caller can stream status to the client.
@@ -817,7 +833,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		onEvent(ChatEvent{Type: "thinking"})
 	}
 
-	resp, err := e.router.Complete(ctx, convID, llmMessages)
+	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
 		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
 	}
@@ -881,7 +897,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		}
 
 		var err error
-		resp, err = e.router.Complete(ctx, convID, llmMessages)
+		resp, err = e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 		if err != nil {
 			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}

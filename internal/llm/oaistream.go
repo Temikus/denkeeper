@@ -1,0 +1,189 @@
+package llm
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+)
+
+// OAIStreamResult holds the accumulated data from an OpenAI-compatible
+// streaming response. Providers call ReadOAIStream to parse the SSE body
+// and then convert this into an llm.ChatResponse.
+type OAIStreamResult struct {
+	Content      string
+	ToolCalls    []ToolCall
+	Model        string
+	FinishReason string
+	Usage        *OAIStreamUsage
+	// ReasoningContent captures reasoning_content deltas (OpenRouter).
+	ReasoningContent string
+}
+
+// OAIStreamUsage mirrors the usage block in the final SSE chunk.
+type OAIStreamUsage struct {
+	PromptTokens        int                   `json:"prompt_tokens"`
+	CompletionTokens    int                   `json:"completion_tokens"`
+	TotalTokens         int                   `json:"total_tokens"`
+	PromptTokensDetails *OAIPromptTokenDetail `json:"prompt_tokens_details,omitempty"`
+	Cost                float64               `json:"cost"` // OpenRouter reports cost here
+}
+
+// OAIPromptTokenDetail holds cached token info from the usage block.
+type OAIPromptTokenDetail struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// oaiStreamAccumulator tracks state while reading an OpenAI SSE stream.
+type oaiStreamAccumulator struct {
+	result       OAIStreamResult
+	contentBuf   strings.Builder
+	reasoningBuf strings.Builder
+	toolAccum    map[int]*oaiToolAccum
+	onStream     StreamCallback
+}
+
+type oaiToolAccum struct {
+	ID      string
+	Type    string
+	Name    string
+	ArgsBuf strings.Builder
+}
+
+// processChunk handles a single parsed SSE chunk.
+func (a *oaiStreamAccumulator) processChunk(chunk *oaiStreamChunk) {
+	if chunk.Model != "" {
+		a.result.Model = chunk.Model
+	}
+	if len(chunk.Choices) > 0 {
+		a.processChoice(&chunk.Choices[0])
+	}
+	if chunk.Usage != nil {
+		a.result.Usage = chunk.Usage
+	}
+}
+
+// processChoice handles the first choice in a streaming chunk.
+func (a *oaiStreamAccumulator) processChoice(choice *oaiStreamChoice) {
+	delta := &choice.Delta
+
+	if delta.Content != "" {
+		a.contentBuf.WriteString(delta.Content)
+		if a.onStream != nil {
+			a.onStream(StreamChunk{ContentDelta: delta.Content})
+		}
+	}
+
+	if delta.ReasoningContent != "" {
+		a.reasoningBuf.WriteString(delta.ReasoningContent)
+		if a.onStream != nil {
+			a.onStream(StreamChunk{ThinkingDelta: delta.ReasoningContent})
+		}
+	}
+
+	for _, tc := range delta.ToolCalls {
+		acc, ok := a.toolAccum[tc.Index]
+		if !ok {
+			acc = &oaiToolAccum{}
+			a.toolAccum[tc.Index] = acc
+		}
+		if tc.ID != "" {
+			acc.ID = tc.ID
+		}
+		if tc.Type != "" {
+			acc.Type = tc.Type
+		}
+		if tc.Function.Name != "" {
+			acc.Name = tc.Function.Name
+		}
+		acc.ArgsBuf.WriteString(tc.Function.Arguments)
+	}
+
+	if choice.FinishReason != nil {
+		a.result.FinishReason = *choice.FinishReason
+	}
+}
+
+// finish builds the final OAIStreamResult from accumulated state.
+func (a *oaiStreamAccumulator) finish() *OAIStreamResult {
+	a.result.Content = a.contentBuf.String()
+	a.result.ReasoningContent = a.reasoningBuf.String()
+
+	if len(a.toolAccum) > 0 {
+		a.result.ToolCalls = make([]ToolCall, 0, len(a.toolAccum))
+		for i := 0; i < len(a.toolAccum); i++ {
+			acc, ok := a.toolAccum[i]
+			if !ok {
+				continue
+			}
+			a.result.ToolCalls = append(a.result.ToolCalls, ToolCall{
+				ID:   acc.ID,
+				Type: acc.Type,
+				Function: FunctionCall{
+					Name:      acc.Name,
+					Arguments: acc.ArgsBuf.String(),
+				},
+			})
+		}
+	}
+
+	return &a.result
+}
+
+// ReadOAIStream reads an OpenAI-compatible SSE stream body and calls onStream
+// for each content/reasoning delta. It accumulates tool calls and usage and
+// returns the full result. onStream may be nil.
+func ReadOAIStream(body io.Reader, onStream StreamCallback) (*OAIStreamResult, error) {
+	scanner := NewSSEScanner(body)
+	acc := &oaiStreamAccumulator{
+		toolAccum: make(map[int]*oaiToolAccum),
+		onStream:  onStream,
+	}
+
+	for scanner.Next() {
+		evt := scanner.Event()
+		var chunk oaiStreamChunk
+		if err := json.Unmarshal([]byte(evt.Data), &chunk); err != nil {
+			continue // skip malformed chunks
+		}
+		acc.processChunk(&chunk)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+
+	return acc.finish(), nil
+}
+
+// OpenAI streaming wire types.
+
+type oaiStreamChunk struct {
+	ID      string            `json:"id"`
+	Model   string            `json:"model"`
+	Choices []oaiStreamChoice `json:"choices"`
+	Usage   *OAIStreamUsage   `json:"usage,omitempty"`
+}
+
+type oaiStreamChoice struct {
+	Delta        oaiStreamDelta `json:"delta"`
+	FinishReason *string        `json:"finish_reason"`
+}
+
+type oaiStreamDelta struct {
+	Content          string              `json:"content,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	ToolCalls        []oaiStreamToolCall `json:"tool_calls,omitempty"`
+}
+
+type oaiStreamToolCall struct {
+	Index    int           `json:"index"`
+	ID       string        `json:"id,omitempty"`
+	Type     string        `json:"type,omitempty"`
+	Function oaiStreamFunc `json:"function,omitempty"`
+}
+
+type oaiStreamFunc struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+}

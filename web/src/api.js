@@ -235,7 +235,7 @@ export const api = {
           }
           if (evt.type === 'content') onChunk(evt.text || '')
           if (evt.type === 'done') { gotDone = true; onDone(evt.session_id || '') }
-          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval' || evt.type === 'cost_limit') onToolEvent?.(evt)
+          if (evt.type === 'thinking' || evt.type === 'usage' || evt.type === 'tool_start' || evt.type === 'tool_end' || evt.type === 'tool_approval' || evt.type === 'cost_limit' || evt.type === 'content_delta' || evt.type === 'thinking_delta') onToolEvent?.(evt)
           if (evt.type === 'error') throw new Error(evt.message || 'stream error')
         }
       }
