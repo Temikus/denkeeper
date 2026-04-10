@@ -7,7 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
 )
 
 func TestAgentConfigUpdate_SessionTier(t *testing.T) {
@@ -156,5 +162,146 @@ func TestAgentConfigUpdate_Description(t *testing.T) {
 	// Verify in-memory config updated.
 	if deps.Config.Agents[0].Description != "Updated description" {
 		t.Errorf("description = %q, want 'Updated description'", deps.Config.Agents[0].Description)
+	}
+}
+
+// testDepsWithAgent creates test deps with a named non-default agent alongside default.
+func testDepsWithAgent(name string) Deps {
+	logger := testLogger()
+	mem, _ := agent.NewInMemoryStore()
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
+
+	mkEngine := func(n string) *agent.Engine {
+		perms, _ := security.NewPermissionEngine("supervised")
+		router := llm.NewRouter("mock", "test-model", costTracker)
+		router.RegisterProvider(&mockProvider{
+			response: &llm.ChatResponse{
+				Content:      "Hello from mock!",
+				TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+				Model:        "test-model",
+				FinishReason: "stop",
+			},
+		})
+		approvalStore, _ := approval.NewInMemoryStore()
+		approvalMgr := approval.NewManager(approvalStore, logger)
+		return agent.NewEngine(n, router, mem, nil, perms, nil, "test", []skill.Skill{}, nil, approvalMgr, logger)
+	}
+
+	dispatcher := agent.NewDispatcher(
+		map[string]*agent.Engine{"default": mkEngine("default"), name: mkEngine(name)},
+		[]agent.Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil,
+		logger,
+	)
+
+	return Deps{
+		Dispatcher:  dispatcher,
+		Scheduler:   scheduler.New(logger, nil),
+		CostTracker: costTracker,
+		Memory:      mem,
+		Config: &config.Config{
+			Agents: []config.AgentInstanceConfig{
+				{Name: "default", Adapters: []string{"telegram"}},
+				{Name: name},
+			},
+		},
+	}
+}
+
+func TestAgentConfigUpdate_Rename(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDepsWithAgent("alice")
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"name": "bob"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/alice", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Old name gone, new name exists.
+	if deps.Dispatcher.Agent("alice") != nil {
+		t.Error("agent 'alice' should no longer exist")
+	}
+	e := deps.Dispatcher.Agent("bob")
+	if e == nil {
+		t.Fatal("agent 'bob' should exist after rename")
+	}
+	if e.Name() != "bob" {
+		t.Errorf("engine name = %q, want 'bob'", e.Name())
+	}
+
+	// In-memory config updated.
+	found := false
+	for _, ac := range deps.Config.Agents {
+		if ac.Name == "bob" {
+			found = true
+		}
+		if ac.Name == "alice" {
+			t.Error("in-memory config still has 'alice'")
+		}
+	}
+	if !found {
+		t.Error("in-memory config missing 'bob'")
+	}
+}
+
+func TestAgentConfigUpdate_RenameDefault(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body, _ := json.Marshal(map[string]any{"name": "custom"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestAgentConfigUpdate_RenameDuplicate(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDepsWithAgent("alice")
+	srv := New(cfg, deps, testLogger())
+
+	// Try to rename alice to default (which already exists).
+	body, _ := json.Marshal(map[string]any{"name": "default"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/alice", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+func TestAgentConfigUpdate_RenameInvalidName(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDepsWithAgent("alice")
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"name": "INVALID NAME!"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/alice", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }

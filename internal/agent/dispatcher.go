@@ -25,6 +25,7 @@ type Binding struct {
 // Dispatcher routes incoming messages to the correct agent Engine based on
 // adapter bindings. It owns the adapter lifecycle and the shared incoming channel.
 type Dispatcher struct {
+	mu       sync.RWMutex
 	agents   map[string]*Engine         // agent name → engine
 	specific map[string]string          // "adapter:externalID" → agent name
 	wildcard map[string]string          // "adapter" → agent name
@@ -87,6 +88,9 @@ func NewDispatcher(
 // resolveAgent finds the Engine that should handle the given message.
 // Priority: specific binding > wildcard binding > "default" agent.
 func (d *Dispatcher) resolveAgent(msg adapter.IncomingMessage) *Engine {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
 	key := msg.Adapter + ":" + msg.ExternalID
 	if name, ok := d.specific[key]; ok {
 		if e, ok := d.agents[name]; ok {
@@ -115,7 +119,9 @@ func (d *Dispatcher) SendFor(adapterName string) SendFunc {
 
 // Dispatch sends a message to a specific agent by name. Used by the scheduler.
 func (d *Dispatcher) Dispatch(ctx context.Context, agentName string, msg adapter.IncomingMessage) error {
+	d.mu.RLock()
 	e, ok := d.agents[agentName]
+	d.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
@@ -130,6 +136,8 @@ func (d *Dispatcher) SendVia(ctx context.Context, adapterName string, msg adapte
 
 // Agents returns the names of all registered agents.
 func (d *Dispatcher) Agents() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	names := make([]string, 0, len(d.agents))
 	for name := range d.agents {
 		names = append(names, name)
@@ -139,7 +147,40 @@ func (d *Dispatcher) Agents() []string {
 
 // Agent returns the Engine for the named agent, or nil if not found.
 func (d *Dispatcher) Agent(name string) *Engine {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.agents[name]
+}
+
+// RenameAgent atomically renames an agent, updating all routing maps.
+func (d *Dispatcher) RenameAgent(oldName, newName string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	e, ok := d.agents[oldName]
+	if !ok {
+		return fmt.Errorf("agent %q not found", oldName)
+	}
+	if _, exists := d.agents[newName]; exists {
+		return fmt.Errorf("agent %q already exists", newName)
+	}
+
+	d.agents[newName] = e
+	delete(d.agents, oldName)
+
+	for k, v := range d.specific {
+		if v == oldName {
+			d.specific[k] = newName
+		}
+	}
+	for k, v := range d.wildcard {
+		if v == oldName {
+			d.wildcard[k] = newName
+		}
+	}
+
+	e.SetName(newName)
+	return nil
 }
 
 // ListModels returns available LLM models by querying the default agent's router.

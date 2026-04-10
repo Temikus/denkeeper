@@ -9,6 +9,11 @@
   let error = $state('')
   let expandedGroup = $state(null)
 
+  // Inline rename state
+  let renamingAgent = $state(null)
+  let renameValue = $state('')
+  let renameSaving = $state(false)
+
   // Persona section state: keyed by section name
   let sectionData = $state({})   // { soul: { content, editable, agent_mutable }, ... }
   let expandedSection = $state(null)
@@ -51,6 +56,34 @@
       error = e.message
     }
   }
+
+  function startRename(agentName, e) {
+    e.stopPropagation()
+    renamingAgent = agentName
+    renameValue = agentName
+  }
+
+  async function confirmRename(oldName) {
+    const newName = renameValue.trim()
+    if (!newName || newName === oldName) { renamingAgent = null; return }
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(newName)) {
+      error = 'Name must be lowercase alphanumeric with hyphens only'
+      return
+    }
+    renameSaving = true
+    try {
+      await api.updateAgentConfig(oldName, { name: newName })
+      agents = (await api.agents()) || []
+      renamingAgent = null
+      const updated = agents.find(a => a.name === newName)
+      if (updated) selectAgent(updated)
+    } catch (e) { error = e.message }
+    finally { renameSaving = false }
+  }
+
+  function cancelRename() { renamingAgent = null }
+
+  function autofocus(node) { node.focus(); node.select() }
 
   async function loadAllSections(agentName) {
     sectionsLoading = true
@@ -298,11 +331,40 @@
       <div
         class="item"
         class:active={selected?.name === a.name}
-        onclick={() => selectAgent(a)}
+        onclick={() => { if (renamingAgent !== a.name) selectAgent(a) }}
         role="button"
         tabindex="0"
       >
-        <div class="name">{a.name}</div>
+        {#if renamingAgent === a.name}
+          <div class="name-edit">
+            <div class="name-edit-row">
+              <!-- svelte-ignore a11y_autofocus -->
+              <input
+                class="name-input"
+                bind:value={renameValue}
+                use:autofocus
+                disabled={renameSaving}
+                onkeydown={(e) => { if (e.key === 'Enter') confirmRename(a.name); if (e.key === 'Escape') cancelRename() }}
+              />
+              <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); confirmRename(a.name) }} disabled={renameSaving} title="Confirm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              </button>
+              <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); cancelRename() }} title="Cancel">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div class="rename-hint">Enter to save · Esc to cancel</div>
+          </div>
+        {:else}
+          <div class="name">
+            <span class="name-text">{a.name}</span>
+            {#if a.name !== 'default'}
+              <button class="edit-btn" onclick={(e) => startRename(a.name, e)} title="Rename agent">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              </button>
+            {/if}
+          </div>
+        {/if}
         <div class="meta">{a.permission_tier} · {a.skill_count} skills</div>
       </div>
     {/each}
@@ -639,7 +701,28 @@
     background: var(--surface);
   }
   .item:hover, .item.active { border-color: var(--accent); }
-  .name { font-weight: 600; }
+  .name { font-weight: 600; display: flex; align-items: center; gap: 4px; }
+  .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .edit-btn {
+    opacity: 0; transition: opacity 0.15s; background: none; border: none;
+    cursor: pointer; padding: 2px; color: var(--text-muted); flex-shrink: 0;
+    display: flex; align-items: center;
+  }
+  .edit-btn:hover { color: var(--text); }
+  .item:hover .edit-btn { opacity: 1; }
+  .name-edit { display: flex; flex-direction: column; gap: 2px; }
+  .name-edit-row { display: flex; align-items: center; gap: 2px; }
+  .name-input {
+    font-weight: 600; font-size: inherit; font-family: inherit;
+    background: var(--bg); border: 1px solid var(--accent); border-radius: 3px;
+    padding: 1px 4px; width: 100%; outline: none; color: var(--text);
+  }
+  .name-action-btn {
+    background: none; border: none; cursor: pointer; padding: 2px;
+    color: var(--text-muted); display: flex; align-items: center; flex-shrink: 0;
+  }
+  .name-action-btn:hover { color: var(--text); }
+  .rename-hint { font-size: 10px; color: var(--text-muted); }
   .meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
   .detail { flex: 1; min-width: 0; }
 

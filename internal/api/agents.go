@@ -3,14 +3,22 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
+var agentNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+func validAgentName(name string) bool {
+	return len(name) > 0 && len(name) <= 64 && agentNameRe.MatchString(name)
+}
+
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
 type agentConfigUpdateInput struct {
+	Name                *string   `json:"name,omitempty"`
 	SessionTier         *string   `json:"session_tier,omitempty"`
 	LLMModel            *string   `json:"llm_model,omitempty"`
 	Description         *string   `json:"description,omitempty"`
@@ -43,6 +51,17 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Handle rename before other mutations.
+	if input.Name != nil && *input.Name != name {
+		code, msg := s.handleAgentRename(name, *input.Name)
+		if code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+		name = *input.Name
+		e = s.deps.Dispatcher.Agent(name)
+	}
+
 	// Apply runtime changes to the engine.
 	if input.SessionTier != nil {
 		if err := e.SetPermissionTier(*input.SessionTier); err != nil {
@@ -61,6 +80,30 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		"name":   name,
 		"status": "updated",
 	})
+}
+
+// handleAgentRename validates and executes an agent rename.
+// Returns (0, "") on success, or (httpStatus, errorMessage) on failure.
+func (s *Server) handleAgentRename(oldName, newName string) (int, string) {
+	if oldName == "default" {
+		return http.StatusBadRequest, "cannot rename the default agent"
+	}
+	if !validAgentName(newName) {
+		return http.StatusBadRequest, "invalid agent name: must be lowercase alphanumeric with hyphens, max 64 chars"
+	}
+	if s.deps.Dispatcher.Agent(newName) != nil {
+		return http.StatusConflict, "agent name already exists"
+	}
+	if err := s.deps.Dispatcher.RenameAgent(oldName, newName); err != nil {
+		return http.StatusInternalServerError, "renaming agent: " + err.Error()
+	}
+	if s.deps.ConfigPath != "" {
+		if err := tool.RenameAgentInConfig(s.deps.ConfigPath, oldName, newName); err != nil {
+			s.logger.Warn("failed to persist agent rename", "old", oldName, "new", newName, "error", err)
+		}
+	}
+	s.renameInMemoryAgent(oldName, newName)
+	return 0, ""
 }
 
 // persistAgentConfig writes changed fields to the TOML config file.
@@ -104,6 +147,19 @@ func (s *Server) updateInMemoryAgentConfig(name string, input *agentConfigUpdate
 		}
 		applyAgentFields(&s.deps.Config.Agents[i], input)
 		return
+	}
+}
+
+// renameInMemoryAgent updates the agent name in the in-memory config slice.
+func (s *Server) renameInMemoryAgent(oldName, newName string) {
+	if s.deps.Config == nil {
+		return
+	}
+	for i := range s.deps.Config.Agents {
+		if s.deps.Config.Agents[i].Name == oldName {
+			s.deps.Config.Agents[i].Name = newName
+			return
+		}
 	}
 }
 

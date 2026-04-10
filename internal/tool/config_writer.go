@@ -318,6 +318,40 @@ func UpdateAgentInConfig(path, name string, changes map[string]any) error {
 	return writeRawConfig(path, raw)
 }
 
+// RenameAgentInConfig changes an agent's name in the TOML config and updates
+// any [[schedules]] entries that reference the old name.
+func RenameAgentInConfig(path, oldName, newName string) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	agents := rawAgents(raw)
+	found := false
+	for i, a := range agents {
+		m, ok := a.(map[string]any)
+		if !ok || m["name"] != oldName {
+			continue
+		}
+		m["name"] = newName
+		agents[i] = m
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("agent %q not found in config", oldName)
+	}
+	raw["agents"] = agents
+
+	for _, s := range rawSchedules(raw) {
+		if m, ok := s.(map[string]any); ok && m["agent"] == oldName {
+			m["agent"] = newName
+		}
+	}
+
+	return writeRawConfig(path, raw)
+}
+
 // rawAgents extracts the agents array from the raw config map.
 func rawAgents(raw map[string]any) []any {
 	switch v := raw["agents"].(type) {

@@ -149,6 +149,9 @@ func (e *Engine) SetScheduler(sched *scheduler.Scheduler) {
 // Name returns the agent's name.
 func (e *Engine) Name() string { return e.name }
 
+// SetName updates the agent's name (used during rename).
+func (e *Engine) SetName(name string) { e.name = name }
+
 // PermissionTier returns the agent's default permission tier.
 func (e *Engine) PermissionTier() string { return e.permissions.Tier() }
 
