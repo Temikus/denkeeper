@@ -11,6 +11,11 @@
   let textareaEl
   let userAtBottom = $state(true)
 
+  function agentLabel() {
+    const a = agents.find(x => x.name === $chatState.agent)
+    return a?.display_name || $chatState.agent
+  }
+
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
   let pollTimer
@@ -206,7 +211,7 @@
       Agent
       <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent">
         {#each agents as a}
-          <option value={a.name}>{a.name}</option>
+          <option value={a.name}>{a.display_name || a.name}</option>
         {/each}
         {#if agents.length === 0}
           <option value="default">default</option>
@@ -280,7 +285,7 @@
     {#each $chatState.messages as msg}
       <div class="bubble {msg.role}" class:streaming={msg.streaming} class:incomplete={msg.text?.startsWith('\u26a0')} aria-label="{msg.role === 'user' ? 'Your message' : 'Agent response'}">
         <div class="bubble-header">
-          <span class="role-label">{msg.role === 'user' ? 'You' : $chatState.agent}</span>
+          <span class="role-label">{msg.role === 'user' ? 'You' : agentLabel()}</span>
           <button class="btn-copy" onclick={() => copyText(msg.text)} title="Copy message" aria-label="Copy message to clipboard">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>

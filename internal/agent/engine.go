@@ -152,6 +152,20 @@ func (e *Engine) Name() string { return e.name }
 // SetName updates the agent's name (used during rename).
 func (e *Engine) SetName(name string) { e.name = name }
 
+// DisplayName returns a human-friendly name derived from the agent's identity
+// persona (if available), falling back to the agent ID.
+func (e *Engine) DisplayName() string {
+	if e.persona != nil {
+		if id := e.persona.GetIdentity(); id != nil && id.Name != "" {
+			if id.Emoji != "" {
+				return id.Emoji + " " + id.Name
+			}
+			return id.Name
+		}
+	}
+	return e.name
+}
+
 // PermissionTier returns the agent's default permission tier.
 func (e *Engine) PermissionTier() string { return e.permissions.Tier() }
 

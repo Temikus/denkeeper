@@ -3236,3 +3236,61 @@ func TestEngine_Chat_IdentityUpdate_Restricted_DropsDirective(t *testing.T) {
 		t.Error("IDENTITY.md should not be written in restricted tier")
 	}
 }
+
+func TestEngine_DisplayName_NoPersona(t *testing.T) {
+	eng := NewEngine("my-agent", nil, nil, nil, nil, nil, "", nil, nil, nil, testLogger())
+	if got := eng.DisplayName(); got != "my-agent" {
+		t.Errorf("DisplayName() = %q, want 'my-agent'", got)
+	}
+}
+
+func TestEngine_DisplayName_WithIdentityName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("---\nname: Moltis\n---\n"), 0600); err != nil {
+		t.Fatalf("writing IDENTITY.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+	eng := NewEngine("my-agent", nil, nil, nil, nil, p, "", nil, nil, nil, testLogger())
+	if got := eng.DisplayName(); got != "Moltis" {
+		t.Errorf("DisplayName() = %q, want 'Moltis'", got)
+	}
+}
+
+func TestEngine_DisplayName_WithIdentityNameAndEmoji(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("---\nname: Moltis\nemoji: \"🧊\"\n---\n"), 0600); err != nil {
+		t.Fatalf("writing IDENTITY.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+	eng := NewEngine("my-agent", nil, nil, nil, nil, p, "", nil, nil, nil, testLogger())
+	if got := eng.DisplayName(); got != "🧊 Moltis" {
+		t.Errorf("DisplayName() = %q, want '🧊 Moltis'", got)
+	}
+}
+
+func TestEngine_DisplayName_WithPersonaNoIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+	eng := NewEngine("my-agent", nil, nil, nil, nil, p, "", nil, nil, nil, testLogger())
+	if got := eng.DisplayName(); got != "my-agent" {
+		t.Errorf("DisplayName() = %q, want 'my-agent'", got)
+	}
+}

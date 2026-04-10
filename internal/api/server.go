@@ -301,6 +301,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	type agentInfo struct {
 		Name           string   `json:"name"`
+		DisplayName    string   `json:"display_name"`
 		PermissionTier string   `json:"permission_tier"`
 		Model          string   `json:"model"`
 		SkillCount     int      `json:"skill_count"`
@@ -322,6 +323,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		}
 		agents = append(agents, agentInfo{
 			Name:           e.Name(),
+			DisplayName:    e.DisplayName(),
 			PermissionTier: e.PermissionTier(),
 			Model:          e.ModelName(),
 			SkillCount:     len(e.Skills()),
@@ -369,6 +371,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":             e.Name(),
+		"display_name":     e.DisplayName(),
 		"permission_tier":  e.PermissionTier(),
 		"model":            e.ModelName(),
 		"has_tools":        e.HasTools(),

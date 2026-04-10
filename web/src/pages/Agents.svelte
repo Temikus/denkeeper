@@ -357,7 +357,7 @@
           </div>
         {:else}
           <div class="name">
-            <span class="name-text">{a.name}</span>
+            <span class="name-text">{a.display_name || a.name}</span>
             {#if a.name !== 'default'}
               <button class="edit-btn" onclick={(e) => startRename(a.name, e)} title="Rename agent">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
