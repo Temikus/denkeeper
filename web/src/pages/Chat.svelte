@@ -333,10 +333,11 @@
         {#if msg.costWarning}
           <div class="cost-warning" role="status">{msg.costWarning}</div>
         {/if}
-        {#if msg.streaming && msg.status && !msg.text}
-          <p class="status">{msg.status}</p>
+        {#if msg.streaming && !msg.text}
+          <span class="typing-dots" aria-label="Thinking"><span></span><span></span><span></span></span>
+        {:else}
+          <p class="text">{msg.text}{#if msg.streaming}<span class="typing-dots inline" aria-label="Typing"><span></span><span></span><span></span></span>{/if}</p>
         {/if}
-        <p class="text">{msg.text}{#if msg.streaming}<span class="cursor">&#9647;</span>{/if}</p>
         {#if msg.tokens}
           <span class="usage">{msg.tokens.toLocaleString()} tokens · ~{formatCost(msg.costUSD)}</span>
         {/if}
@@ -648,8 +649,34 @@
   .status { color: var(--text-muted); font-style: italic; margin: 0 0 4px; font-size: 13px; }
   .text { white-space: pre-wrap; word-break: break-word; margin: 0; }
   .usage { display: block; margin-top: 6px; font-size: 11px; color: var(--text-muted); }
-  .cursor { animation: blink 1s step-end infinite; }
-  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+  .typing-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 0;
+  }
+  .typing-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    animation: dotBounce 1.4s ease-in-out infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.16s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.32s; }
+  .typing-dots.inline {
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .typing-dots.inline span {
+    width: 4px;
+    height: 4px;
+  }
+  @keyframes dotBounce {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+  }
 
   .input-area {
     border-top: 1px solid var(--border);
