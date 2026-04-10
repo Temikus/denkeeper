@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 
@@ -259,6 +260,11 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 			attribute.String("agent", e.Name())))
 	defer span.End()
 
+	// Keep the typing indicator alive for the entire duration of processing.
+	// Telegram's sendChatAction expires after ~5s, so we resend every 4s.
+	stopTyping := d.startTypingTicker(msgCtx, msg)
+	defer stopTyping()
+
 	onEvent := d.buildEventHandler(msgCtx, msg)
 	if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
 		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
@@ -273,6 +279,40 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 		convID := e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
 		d.OnBroadcast(e.Name(), convID, msg.Adapter, "New message processed")
 	}
+}
+
+// typingInterval is the interval at which the typing indicator is refreshed.
+// Telegram's sendChatAction expires after ~5s; we resend at 4s to stay visible.
+// Declared as a var so tests can override it.
+var typingInterval = 4 * time.Second
+
+// startTypingTicker spawns a goroutine that sends typing indicators every 4s
+// until the returned stop function is called. This keeps the indicator alive
+// for the full duration of message processing.
+func (d *Dispatcher) startTypingTicker(ctx context.Context, msg adapter.IncomingMessage) (stop func()) {
+	a, ok := d.adapters[msg.Adapter]
+	if !ok {
+		return func() {}
+	}
+
+	ticker := time.NewTicker(typingInterval)
+	done := make(chan struct{})
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = a.SendTyping(ctx, msg.ExternalID)
+			}
+		}
+	}()
+
+	return func() { close(done) }
 }
 
 // buildEventHandler returns a ChatEventFunc that refreshes typing indicators,

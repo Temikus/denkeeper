@@ -188,9 +188,10 @@ func TestDispatcher_Dispatch_UnknownAgent(t *testing.T) {
 
 // mockAdapter implements adapter.Adapter for dispatcher send tests.
 type mockAdapter struct {
-	name     string
-	sent     []adapter.OutgoingMessage
-	incoming chan<- adapter.IncomingMessage
+	name         string
+	sent         []adapter.OutgoingMessage
+	incoming     chan<- adapter.IncomingMessage
+	sendTypingFn func() // optional hook called by SendTyping
 }
 
 func (m *mockAdapter) Name() string { return m.name }
@@ -202,8 +203,13 @@ func (m *mockAdapter) Send(_ context.Context, msg adapter.OutgoingMessage) error
 	m.sent = append(m.sent, msg)
 	return nil
 }
-func (m *mockAdapter) SendTyping(_ context.Context, _ string) error { return nil }
-func (m *mockAdapter) Stop() error                                  { return nil }
+func (m *mockAdapter) SendTyping(_ context.Context, _ string) error {
+	if m.sendTypingFn != nil {
+		m.sendTypingFn()
+	}
+	return nil
+}
+func (m *mockAdapter) Stop() error { return nil }
 
 func TestDispatcher_SendFor(t *testing.T) {
 	ma := &mockAdapter{name: "telegram"}
@@ -392,6 +398,93 @@ func TestDispatcher_SendErrorFeedback_UnknownAdapter(t *testing.T) {
 	msg := adapter.IncomingMessage{Adapter: "nonexistent", ExternalID: "123"}
 	// Should not panic.
 	d.sendErrorFeedback(context.Background(), msg)
+}
+
+func TestStartTypingTicker_SendsTypingPeriodically(t *testing.T) {
+	var count atomic.Int64
+	ma := &mockAdapter{name: "telegram"}
+	ma.sendTypingFn = func() { count.Add(1) }
+
+	d := NewDispatcher(nil, nil, []adapter.Adapter{ma}, testLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Swap the real interval for a short one so the test runs fast.
+	orig := typingInterval
+	typingInterval = 20 * time.Millisecond
+	t.Cleanup(func() { typingInterval = orig })
+
+	msg := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "42"}
+	stop := d.startTypingTicker(ctx, msg)
+
+	// Wait long enough for at least 2 ticks.
+	time.Sleep(70 * time.Millisecond)
+	stop()
+
+	if got := count.Load(); got < 2 {
+		t.Errorf("expected at least 2 typing calls, got %d", got)
+	}
+}
+
+func TestStartTypingTicker_StopsAfterStop(t *testing.T) {
+	var count atomic.Int64
+	ma := &mockAdapter{name: "telegram"}
+	ma.sendTypingFn = func() { count.Add(1) }
+
+	d := NewDispatcher(nil, nil, []adapter.Adapter{ma}, testLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	orig := typingInterval
+	typingInterval = 20 * time.Millisecond
+	t.Cleanup(func() { typingInterval = orig })
+
+	msg := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "42"}
+	stop := d.startTypingTicker(ctx, msg)
+	time.Sleep(50 * time.Millisecond)
+	stop()
+
+	snapshot := count.Load()
+	// Allow one in-flight tick to complete, then verify count does not grow.
+	time.Sleep(50 * time.Millisecond)
+	if after := count.Load(); after > snapshot+1 {
+		t.Errorf("typing calls continued after stop: snapshot=%d, after=%d", snapshot, after)
+	}
+}
+
+func TestStartTypingTicker_UnknownAdapter_NoOp(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+	msg := adapter.IncomingMessage{Adapter: "nonexistent", ExternalID: "42"}
+	// Should not panic, stop should be callable.
+	stop := d.startTypingTicker(context.Background(), msg)
+	stop()
+}
+
+func TestStartTypingTicker_ContextCancel_Stops(t *testing.T) {
+	var count atomic.Int64
+	ma := &mockAdapter{name: "telegram"}
+	ma.sendTypingFn = func() { count.Add(1) }
+
+	d := NewDispatcher(nil, nil, []adapter.Adapter{ma}, testLogger())
+
+	orig := typingInterval
+	typingInterval = 20 * time.Millisecond
+	t.Cleanup(func() { typingInterval = orig })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	msg := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "42"}
+	_ = d.startTypingTicker(ctx, msg)
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	snapshot := count.Load()
+	time.Sleep(50 * time.Millisecond)
+	if after := count.Load(); after > snapshot+1 {
+		t.Errorf("typing calls continued after context cancel: snapshot=%d, after=%d", snapshot, after)
+	}
 }
 
 // --- activityLog tests ---
