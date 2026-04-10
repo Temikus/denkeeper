@@ -482,6 +482,104 @@ func TestScheduler_Unregister_StopsRunningEntry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Timezone-aware tests
+// ---------------------------------------------------------------------------
+
+func TestCronSpec_Matches_NonUTCTimezone(t *testing.T) {
+	// "0 8 * * *" means 08:00 in the configured timezone.
+	spec, err := parseCronSpec("0 8 * * *")
+	if err != nil {
+		t.Fatalf("parseCronSpec: %v", err)
+	}
+
+	tokyo, err := time.LoadLocation("Asia/Tokyo") // UTC+9
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+
+	// 08:00 Tokyo time = 23:00 UTC the previous day.
+	// Passing a UTC time of 23:00 should match when evaluated in Tokyo (it's 08:00 there).
+	utc23 := time.Date(2024, 6, 1, 23, 0, 0, 0, time.UTC) // 2024-06-02 08:00 JST
+	if !spec.matches(utc23, tokyo) {
+		t.Error("expected match: 23:00 UTC is 08:00 in Asia/Tokyo")
+	}
+
+	// 08:00 UTC should NOT match when evaluated in Tokyo (it's 17:00 there).
+	utc08 := time.Date(2024, 6, 1, 8, 0, 0, 0, time.UTC) // 2024-06-01 17:00 JST
+	if spec.matches(utc08, tokyo) {
+		t.Error("unexpected match: 08:00 UTC is 17:00 in Asia/Tokyo, should not match 08:00 cron")
+	}
+}
+
+func TestCronSpec_Next_NonUTCTimezone(t *testing.T) {
+	// "0 9 * * *" — daily at 09:00 in the configured timezone.
+	spec, err := parseCronSpec("0 9 * * *")
+	if err != nil {
+		t.Fatalf("parseCronSpec: %v", err)
+	}
+
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+
+	// After 2024-06-01 08:00 ET, next should be 09:00 ET the same day.
+	after := time.Date(2024, 6, 1, 8, 0, 0, 0, ny)
+	got := spec.next(after, ny)
+
+	wantHour := 9
+	gotInNY := got.In(ny)
+	if gotInNY.Hour() != wantHour || gotInNY.Minute() != 0 {
+		t.Errorf("next in America/New_York = %v, want 09:00", gotInNY)
+	}
+	if gotInNY.Day() != 1 || gotInNY.Month() != 6 {
+		t.Errorf("next date = %v, want June 1", gotInNY)
+	}
+}
+
+func TestScheduler_Register_UsesConfiguredTimezone(t *testing.T) {
+	// Register a cron entry with a non-UTC timezone and verify NextRun
+	// is computed in that timezone.
+	tokyo, err := time.LoadLocation("Asia/Tokyo") // UTC+9
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+
+	s := New(discardLogger(), tokyo)
+
+	err = s.Register(Config{
+		Name:     "tokyo-morning",
+		Type:     "agent",
+		Schedule: "0 8 * * *", // 08:00 Tokyo time
+		Enabled:  true,
+	}, func(Entry) {})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	e, ok := s.GetEntry("tokyo-morning")
+	if !ok {
+		t.Fatal("GetEntry returned false")
+	}
+
+	// NextRun should be at 08:00 in Tokyo, which is 23:00 UTC the previous day.
+	nextInTokyo := e.NextRun.In(tokyo)
+	if nextInTokyo.Hour() != 8 {
+		t.Errorf("NextRun hour in Tokyo = %d, want 8", nextInTokyo.Hour())
+	}
+	if nextInTokyo.Minute() != 0 {
+		t.Errorf("NextRun minute in Tokyo = %d, want 0", nextInTokyo.Minute())
+	}
+
+	// Verify it's NOT 08:00 UTC (unless we happen to be running at exactly
+	// the right time, which is astronomically unlikely).
+	nextInUTC := e.NextRun.In(time.UTC)
+	if nextInUTC.Hour() != 23 {
+		t.Errorf("NextRun hour in UTC = %d, want 23 (08:00 JST = 23:00 UTC previous day)", nextInUTC.Hour())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

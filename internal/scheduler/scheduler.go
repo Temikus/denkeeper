@@ -251,7 +251,7 @@ func (s *Scheduler) Start() {
 		go s.runEntry(e)
 		active++
 	}
-	s.logger.Info("scheduler started", "total_entries", len(s.entries), "active_entries", active)
+	s.logger.Info("scheduler started", "total_entries", len(s.entries), "active_entries", active, "timezone", s.loc.String())
 }
 
 // Stop signals all schedule goroutines to exit and blocks until they finish.

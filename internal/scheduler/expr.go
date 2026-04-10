@@ -6,10 +6,13 @@ package scheduler
 //
 //	Named shortcuts:
 //	  @hourly              - every hour at minute 0
-//	  @daily, @midnight    - every day at 00:00 UTC
-//	  @weekly              - every Sunday at 00:00 UTC
-//	  @monthly             - 1st of every month at 00:00 UTC
-//	  @yearly, @annually   - 1st January every year at 00:00 UTC
+//	  @daily, @midnight    - every day at 00:00
+//	  @weekly              - every Sunday at 00:00
+//	  @monthly             - 1st of every month at 00:00
+//	  @yearly, @annually   - 1st January every year at 00:00
+//
+//	All times are evaluated in the scheduler's configured timezone
+//	(api.timezone in config, default UTC).
 //
 //	Interval syntax:
 //	  @every <duration>    - fixed interval (e.g. @every 5m, @every 1h30m)
@@ -19,7 +22,7 @@ package scheduler
 //	  <min> <hour> <dom> <month> <dow>
 //	  Fields support: * (all), n (exact), n-m (range), */n or n-m/n (step),
 //	  and comma-separated combinations of the above.
-//	  Example: "0 8 * * 1-5" fires at 08:00 UTC on weekdays.
+//	  Example: "0 8 * * 1-5" fires at 08:00 on weekdays (in the configured timezone).
 //	  Day-of-week: 0 and 7 both mean Sunday.
 
 import (
