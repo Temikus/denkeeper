@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"sync"
@@ -258,47 +259,7 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 			attribute.String("agent", e.Name())))
 	defer span.End()
 
-	// Refresh adapter typing indicator on thinking/tool_start events
-	// so the user sees continuous activity during long processing.
-	// For tool_approval events, send the approval prompt with inline buttons.
-	// Wrapped in recover to prevent a panicking callback from blocking shutdown
-	// (wg.Done would be skipped otherwise).
-	onEvent := func(evt ChatEvent) {
-		defer func() {
-			if r := recover(); r != nil {
-				d.logger.Error("panic in onEvent callback", "recover", r, "adapter", msg.Adapter, "event", evt.Type)
-			}
-		}()
-
-		a, ok := d.adapters[msg.Adapter]
-		if !ok {
-			return
-		}
-		switch evt.Type {
-		case "thinking", "tool_start":
-			_ = a.SendTyping(msgCtx, msg.ExternalID)
-		case "tool_approval":
-			if evt.ApprovalStatus == "auto_approved" {
-				_ = a.Send(msgCtx, adapter.OutgoingMessage{
-					Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
-					ExternalID: msg.ExternalID,
-					Adapter:    msg.Adapter,
-				})
-			} else {
-				_ = a.Send(msgCtx, adapter.OutgoingMessage{
-					Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
-					ExternalID: msg.ExternalID,
-					Adapter:    msg.Adapter,
-					Buttons: []adapter.KeyboardButton{
-						{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-						{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-						{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
-						{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
-					},
-				})
-			}
-		}
-	}
+	onEvent := d.buildEventHandler(msgCtx, msg)
 	if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
 		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
 		span.RecordError(err)
@@ -314,6 +275,102 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 	}
 }
 
+// buildEventHandler returns a ChatEventFunc that refreshes typing indicators,
+// updates the activity log, and renders approval prompts for a single message.
+func (d *Dispatcher) buildEventHandler(ctx context.Context, msg adapter.IncomingMessage) ChatEventFunc {
+	a, aOK := d.adapters[msg.Adapter]
+	if !aOK {
+		return func(ChatEvent) {} // no adapter — no-op
+	}
+
+	debug := false
+	if dc, ok := a.(adapter.DebugChecker); ok {
+		debug = dc.IsDebugByExternalID(msg.ExternalID)
+	}
+
+	var alog *activityLog
+	if !debug {
+		if me, ok := a.(adapter.MessageEditor); ok {
+			alog = &activityLog{editor: me, externalID: msg.ExternalID, adapter: msg.Adapter, logger: d.logger}
+		}
+	}
+
+	return func(evt ChatEvent) {
+		defer func() {
+			if r := recover(); r != nil {
+				d.logger.Error("panic in onEvent callback", "recover", r, "adapter", msg.Adapter, "event", evt.Type)
+			}
+		}()
+
+		switch evt.Type {
+		case "thinking":
+			_ = a.SendTyping(ctx, msg.ExternalID)
+		case "tool_start":
+			_ = a.SendTyping(ctx, msg.ExternalID)
+			if alog != nil {
+				alog.toolStart(ctx, evt.Tool)
+			}
+		case "tool_end":
+			if alog != nil {
+				alog.toolEnd(ctx, evt.Tool, evt.Duration, evt.Error)
+			}
+		case "tool_approval":
+			d.handleToolApproval(ctx, a, msg, evt, debug, alog)
+		}
+	}
+}
+
+// handleToolApproval processes a tool_approval ChatEvent, choosing between
+// debug (verbose) and compact (activity log / expandable blockquote) rendering.
+func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent, debug bool, alog *activityLog) {
+	if evt.ApprovalStatus == "auto_approved" {
+		if debug {
+			_ = a.Send(ctx, adapter.OutgoingMessage{
+				Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
+				ExternalID: msg.ExternalID,
+				Adapter:    msg.Adapter,
+			})
+		} else if alog != nil {
+			alog.autoApproved(ctx, evt.Tool)
+		}
+		return
+	}
+
+	if debug {
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+			ExternalID: msg.ExternalID,
+			Adapter:    msg.Adapter,
+			Buttons: []adapter.KeyboardButton{
+				{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+				{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+				{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
+				{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
+			},
+		})
+		return
+	}
+
+	compactText := fmt.Sprintf(
+		"🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
+		html.EscapeString(evt.Tool),
+		html.EscapeString(evt.Text),
+	)
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Text:       compactText,
+		ParseMode:  "HTML",
+		ExternalID: msg.ExternalID,
+		Adapter:    msg.Adapter,
+		Buttons: []adapter.KeyboardButton{
+			{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+			{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+			{Label: "🔄 Session", CallbackData: evt.ApprovalCallback + ":approve_session"},
+			{Label: "♾️ Always", CallbackData: evt.ApprovalCallback + ":approve_always"},
+		},
+		ButtonLayout: []int{2, 2},
+	})
+}
+
 // sendErrorFeedback attempts to notify the user that their message could not be
 // processed. This prevents the silent-failure scenario where the user sends a
 // message and never receives any response.
@@ -327,4 +384,110 @@ func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.Incoming
 		ExternalID: msg.ExternalID,
 		Text:       "Sorry, I encountered an error processing your message. Please try again.",
 	})
+}
+
+// activityLog accumulates tool events into a single Telegram message that is
+// edited in-place as new events arrive. This replaces the pattern of sending
+// separate messages for each tool_start, tool_end, and auto_approved event.
+//
+// The message uses HTML formatting and looks like:
+//
+//	🔧 search_web — auto-approved
+//	🔧 fetch_url ✅ 340ms
+//	🔧 read_file ⏳
+type activityLog struct {
+	editor     adapter.MessageEditor
+	externalID string
+	adapter    string
+	logger     *slog.Logger
+	messageID  string            // platform message ID, empty until first send
+	lines      []activityLine    // ordered entries
+	toolIndex  map[string]int    // tool name → index in lines (for in-flight updates)
+}
+
+type activityLine struct {
+	tool   string
+	status string // "⏳", "✅ 340ms", "❌ err", "auto-approved"
+}
+
+// render builds the HTML text for the current activity log.
+func (l *activityLog) render() string {
+	var b strings.Builder
+	for i, line := range l.lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "🔧 <b>%s</b> — %s",
+			html.EscapeString(line.tool), line.status)
+	}
+	return b.String()
+}
+
+// flush sends or edits the activity message with the current content.
+func (l *activityLog) flush(ctx context.Context) {
+	text := l.render()
+	if l.messageID == "" {
+		// First event — send a new message and capture its ID.
+		id, err := l.editor.SendAndGetID(ctx, adapter.OutgoingMessage{
+			Text:       text,
+			ParseMode:  "HTML",
+			ExternalID: l.externalID,
+			Adapter:    l.adapter,
+		})
+		if err != nil {
+			l.logger.Debug("activity log: failed to send initial message", "error", err)
+			return
+		}
+		l.messageID = id
+	} else {
+		// Subsequent events — edit in-place.
+		if err := l.editor.EditText(ctx, l.externalID, l.messageID, text, "HTML"); err != nil {
+			l.logger.Debug("activity log: failed to edit message", "error", err)
+		}
+	}
+}
+
+func (l *activityLog) ensureIndex() {
+	if l.toolIndex == nil {
+		l.toolIndex = make(map[string]int)
+	}
+}
+
+func (l *activityLog) autoApproved(ctx context.Context, tool string) {
+	l.ensureIndex()
+	l.lines = append(l.lines, activityLine{tool: tool, status: "auto-approved"})
+	l.toolIndex[tool] = len(l.lines) - 1
+	l.flush(ctx)
+}
+
+func (l *activityLog) toolStart(ctx context.Context, tool string) {
+	l.ensureIndex()
+	// Check if there's already a line for this tool (e.g. from auto-approved).
+	if idx, ok := l.toolIndex[tool]; ok {
+		l.lines[idx].status = "⏳"
+		l.flush(ctx)
+		return
+	}
+	l.lines = append(l.lines, activityLine{tool: tool, status: "⏳"})
+	l.toolIndex[tool] = len(l.lines) - 1
+	l.flush(ctx)
+}
+
+func (l *activityLog) toolEnd(ctx context.Context, tool string, durationMS int64, errMsg string) {
+	l.ensureIndex()
+	idx, ok := l.toolIndex[tool]
+	if !ok {
+		// tool_end without a matching tool_start — add a new line.
+		l.lines = append(l.lines, activityLine{tool: tool})
+		idx = len(l.lines) - 1
+		l.toolIndex[tool] = idx
+	}
+	if errMsg != "" {
+		l.lines[idx].status = "❌"
+	} else {
+		l.lines[idx].status = fmt.Sprintf("✅ %dms", durationMS)
+	}
+	// Remove from index so a second call to the same tool gets a new line.
+	delete(l.toolIndex, tool)
+	l.flush(ctx)
 }

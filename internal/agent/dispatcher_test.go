@@ -393,3 +393,173 @@ func TestDispatcher_SendErrorFeedback_UnknownAdapter(t *testing.T) {
 	// Should not panic.
 	d.sendErrorFeedback(context.Background(), msg)
 }
+
+// --- activityLog tests ---
+
+// mockMessageEditor records SendAndGetID / EditText calls for testing.
+type mockMessageEditor struct {
+	sends []adapter.OutgoingMessage
+	edits []editCall
+	msgID string // returned by SendAndGetID
+}
+
+type editCall struct {
+	externalID string
+	messageID  string
+	text       string
+	parseMode  string
+}
+
+func (m *mockMessageEditor) SendAndGetID(_ context.Context, msg adapter.OutgoingMessage) (string, error) {
+	m.sends = append(m.sends, msg)
+	return m.msgID, nil
+}
+
+func (m *mockMessageEditor) EditText(_ context.Context, externalID, messageID, text, parseMode string) error {
+	m.edits = append(m.edits, editCall{externalID, messageID, text, parseMode})
+	return nil
+}
+
+func TestActivityLog_Render_Empty(t *testing.T) {
+	l := &activityLog{}
+	if got := l.render(); got != "" {
+		t.Errorf("empty render = %q, want empty", got)
+	}
+}
+
+func TestActivityLog_Render_MultipleLines(t *testing.T) {
+	l := &activityLog{
+		lines: []activityLine{
+			{tool: "search", status: "auto-approved"},
+			{tool: "fetch", status: "⏳"},
+			{tool: "read", status: "✅ 42ms"},
+		},
+	}
+	got := l.render()
+	want := "🔧 <b>search</b> — auto-approved\n🔧 <b>fetch</b> — ⏳\n🔧 <b>read</b> — ✅ 42ms"
+	if got != want {
+		t.Errorf("render =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestActivityLog_AutoApproved_SendsNewMessage(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+
+	l.autoApproved(context.Background(), "search_web")
+
+	if len(me.sends) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(me.sends))
+	}
+	if me.sends[0].ParseMode != "HTML" {
+		t.Errorf("expected HTML parse mode, got %q", me.sends[0].ParseMode)
+	}
+	if l.messageID != "msg-1" {
+		t.Errorf("messageID = %q, want msg-1", l.messageID)
+	}
+}
+
+func TestActivityLog_ToolStartEnd_EditsInPlace(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+
+	ctx := context.Background()
+
+	// First event: sends a new message.
+	l.toolStart(ctx, "search")
+	if len(me.sends) != 1 {
+		t.Fatalf("expected 1 send after first toolStart, got %d", len(me.sends))
+	}
+
+	// Second event: edits in place.
+	l.toolEnd(ctx, "search", 150, "")
+	if len(me.edits) != 1 {
+		t.Fatalf("expected 1 edit after toolEnd, got %d", len(me.edits))
+	}
+	if me.edits[0].messageID != "msg-1" {
+		t.Errorf("edit messageID = %q, want msg-1", me.edits[0].messageID)
+	}
+
+	// The rendered text should show the completed tool.
+	got := l.render()
+	if got != "🔧 <b>search</b> — ✅ 150ms" {
+		t.Errorf("unexpected render: %s", got)
+	}
+}
+
+func TestActivityLog_MultipleTools_AccumulatesLines(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+
+	ctx := context.Background()
+
+	l.autoApproved(ctx, "tool_a")
+	l.toolStart(ctx, "tool_a")
+	l.toolEnd(ctx, "tool_a", 100, "")
+	l.autoApproved(ctx, "tool_b")
+	l.toolStart(ctx, "tool_b")
+	l.toolEnd(ctx, "tool_b", 200, "")
+
+	// 1 send + 5 edits.
+	if len(me.sends) != 1 {
+		t.Errorf("expected 1 send, got %d", len(me.sends))
+	}
+	if len(me.edits) != 5 {
+		t.Errorf("expected 5 edits, got %d", len(me.edits))
+	}
+	if len(l.lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(l.lines))
+	}
+}
+
+func TestActivityLog_ToolEnd_WithError(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+
+	ctx := context.Background()
+
+	l.toolStart(ctx, "fetch")
+	l.toolEnd(ctx, "fetch", 0, "connection refused")
+
+	got := l.render()
+	if got != "🔧 <b>fetch</b> — ❌" {
+		t.Errorf("unexpected render: %s", got)
+	}
+}
+
+func TestActivityLog_SameToolCalledTwice(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+
+	ctx := context.Background()
+
+	// First call to "search".
+	l.toolStart(ctx, "search")
+	l.toolEnd(ctx, "search", 100, "")
+
+	// Second call to "search" — should get its own line.
+	l.toolStart(ctx, "search")
+	l.toolEnd(ctx, "search", 200, "")
+
+	if len(l.lines) != 2 {
+		t.Fatalf("expected 2 lines for repeated tool, got %d", len(l.lines))
+	}
+	if l.lines[0].status != "✅ 100ms" {
+		t.Errorf("first call status = %q", l.lines[0].status)
+	}
+	if l.lines[1].status != "✅ 200ms" {
+		t.Errorf("second call status = %q", l.lines[1].status)
+	}
+}
+
+func TestActivityLog_Render_EscapesHTML(t *testing.T) {
+	l := &activityLog{
+		lines: []activityLine{
+			{tool: "<script>alert(1)</script>", status: "✅ 1ms"},
+		},
+	}
+	got := l.render()
+	if got != "🔧 <b>&lt;script&gt;alert(1)&lt;/script&gt;</b> — ✅ 1ms" {
+		t.Errorf("HTML not escaped: %s", got)
+	}
+}

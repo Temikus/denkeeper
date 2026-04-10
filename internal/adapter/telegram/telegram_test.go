@@ -105,6 +105,129 @@ func (m *mockCallbackResolver) Resolve(_ context.Context, _ string) (string, err
 	return m.retStr, nil
 }
 
+func TestDebugToggle(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	chatID := int64(42)
+
+	if a.IsDebug(chatID) {
+		t.Fatal("debug should be off by default")
+	}
+
+	// Toggle on.
+	a.debugMu.Lock()
+	a.debugChats[chatID] = true
+	a.debugMu.Unlock()
+
+	if !a.IsDebug(chatID) {
+		t.Fatal("debug should be on after toggle")
+	}
+
+	// Toggle off.
+	a.debugMu.Lock()
+	a.debugChats[chatID] = false
+	a.debugMu.Unlock()
+
+	if a.IsDebug(chatID) {
+		t.Fatal("debug should be off after second toggle")
+	}
+}
+
+func TestIsDebugByExternalID(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	a.debugMu.Lock()
+	a.debugChats[123] = true
+	a.debugMu.Unlock()
+
+	if !a.IsDebugByExternalID("123") {
+		t.Fatal("expected debug for externalID '123'")
+	}
+	if a.IsDebugByExternalID("456") {
+		t.Fatal("did not expect debug for externalID '456'")
+	}
+	if a.IsDebugByExternalID("not-a-number") {
+		t.Fatal("invalid externalID should return false")
+	}
+}
+
+func TestBuildButtonRows_NoLayout(t *testing.T) {
+	buttons := []adapter.KeyboardButton{
+		{Label: "A", CallbackData: "a"},
+		{Label: "B", CallbackData: "b"},
+		{Label: "C", CallbackData: "c"},
+	}
+	rows := buildButtonRows(buttons, nil)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	for i, row := range rows {
+		if len(row) != 1 {
+			t.Errorf("row %d: expected 1 button, got %d", i, len(row))
+		}
+	}
+}
+
+func TestBuildButtonRows_WithLayout(t *testing.T) {
+	buttons := []adapter.KeyboardButton{
+		{Label: "A", CallbackData: "a"},
+		{Label: "B", CallbackData: "b"},
+		{Label: "C", CallbackData: "c"},
+		{Label: "D", CallbackData: "d"},
+	}
+	rows := buildButtonRows(buttons, []int{2, 2})
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	if len(rows[0]) != 2 {
+		t.Errorf("row 0: expected 2 buttons, got %d", len(rows[0]))
+	}
+	if len(rows[1]) != 2 {
+		t.Errorf("row 1: expected 2 buttons, got %d", len(rows[1]))
+	}
+	if rows[0][0].Text != "A" || rows[0][1].Text != "B" {
+		t.Errorf("row 0 labels wrong: %q %q", rows[0][0].Text, rows[0][1].Text)
+	}
+	if rows[1][0].Text != "C" || rows[1][1].Text != "D" {
+		t.Errorf("row 1 labels wrong: %q %q", rows[1][0].Text, rows[1][1].Text)
+	}
+}
+
+func TestBuildButtonRows_LayoutExceedsButtons(t *testing.T) {
+	buttons := []adapter.KeyboardButton{
+		{Label: "A", CallbackData: "a"},
+		{Label: "B", CallbackData: "b"},
+	}
+	rows := buildButtonRows(buttons, []int{3, 2})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row (second row skipped), got %d", len(rows))
+	}
+	if len(rows[0]) != 2 {
+		t.Errorf("row 0: expected 2 buttons (clamped), got %d", len(rows[0]))
+	}
+}
+
+func TestDebugChecker_Interface(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	// Verify the adapter satisfies the DebugChecker interface.
+	var dc adapter.DebugChecker = a
+	if dc.IsDebugByExternalID("999") {
+		t.Fatal("fresh adapter should not have debug enabled")
+	}
+}
+
+func TestMessageEditor_Interface(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	a := newWithBot(nil, nil, logger, nil)
+
+	// Verify the adapter satisfies the MessageEditor interface.
+	var _ adapter.MessageEditor = a
+}
+
 func TestSetCallbackResolver_Wiring(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	a := newWithBot(nil, nil, logger, nil)

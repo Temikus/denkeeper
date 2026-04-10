@@ -44,12 +44,19 @@ type OutgoingMessage struct {
 	Adapter    string
 	ExternalID string
 	Text       string
+	// ParseMode overrides the default parse mode for this message (e.g. "HTML").
+	// When empty, the adapter uses its default (Markdown for Telegram).
+	ParseMode string
 	// IsVoice signals that the adapter should attempt to send a voice reply
 	// (via TTS) instead of plain text, if configured to do so.
 	IsVoice bool
 	// Buttons, when non-empty, requests the adapter render an inline keyboard.
 	// Ignored during voice replies.
 	Buttons []KeyboardButton
+	// ButtonLayout controls how buttons are arranged into rows. Each element
+	// specifies the number of buttons in that row. For example, [2, 2] creates
+	// two rows of two buttons. When nil, each button gets its own row.
+	ButtonLayout []int
 }
 
 // CallbackResolver handles adapter callback queries (e.g. Telegram inline
@@ -70,4 +77,23 @@ type Adapter interface {
 	// Used by the Dispatcher to keep the indicator alive during long processing.
 	SendTyping(ctx context.Context, externalID string) error
 	Stop() error
+}
+
+// DebugChecker is an optional interface adapters can implement to expose
+// per-chat debug mode. The dispatcher uses this to choose between compact
+// and verbose approval message formatting.
+type DebugChecker interface {
+	IsDebugByExternalID(externalID string) bool
+}
+
+// MessageEditor is an optional interface adapters can implement to support
+// sending a message and receiving its platform-specific ID, then editing that
+// message in-place. Used by the dispatcher's activity log to accumulate tool
+// events into a single updatable message.
+type MessageEditor interface {
+	// SendAndGetID sends a message and returns the platform message ID.
+	SendAndGetID(ctx context.Context, msg OutgoingMessage) (messageID string, err error)
+	// EditText replaces the text of an existing message identified by
+	// externalID (chat) and messageID (message within that chat).
+	EditText(ctx context.Context, externalID, messageID, text, parseMode string) error
 }
