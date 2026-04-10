@@ -14,6 +14,12 @@
   let saving = $state(false)
   let saveOk = $state(false)
 
+  // Process control
+  let reloading = $state(false)
+  let reloadOk = $state(false)
+  let restarting = $state(false)
+  let confirmRestart = $state(false)
+
   // Timezone editing
   let editingTz = $state(false)
   let tzValue = $state('')
@@ -92,6 +98,33 @@
     return timezoneGroups
       .map(g => ({ ...g, zones: g.zones.filter(z => z.toLowerCase().includes(q)) }))
       .filter(g => g.zones.length > 0)
+  }
+
+  async function reloadConfig() {
+    reloading = true
+    error = ''
+    try {
+      await api.reloadConfig()
+      reloadOk = true
+      setTimeout(() => { reloadOk = false }, 3000)
+      await fetchConfig()
+    } catch (e) {
+      error = e.message
+    } finally {
+      reloading = false
+    }
+  }
+
+  async function restartProcess() {
+    restarting = true
+    error = ''
+    try {
+      await api.restartProcess()
+      confirmRestart = false
+    } catch (e) {
+      error = e.message
+      restarting = false
+    }
   }
 
   onMount(fetchConfig)
@@ -234,6 +267,51 @@
       <div class="save-ok">Saved</div>
     {/if}
   </div>
+
+  <h2 class="section-title">Process Control</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Reload Configuration</div>
+        <div class="config-desc">
+          Re-read the TOML config file from disk and update in-memory settings.
+          Some changes (listen address, TLS) still require a full restart.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <button class="btn" onclick={reloadConfig} disabled={reloading}>
+          {reloading ? 'Reloading...' : 'Reload'}
+        </button>
+      </div>
+    </div>
+    {#if reloadOk}
+      <div class="save-ok">Config reloaded</div>
+    {/if}
+  </div>
+
+  <div class="config-card" style="margin-top: 14px;">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Restart Process</div>
+        <div class="config-desc">
+          Send a shutdown signal to the running process.
+          Requires a process manager (systemd, Docker, K8s) to restart automatically.
+        </div>
+      </div>
+      <div class="config-value-row">
+        {#if !confirmRestart}
+          <button class="btn btn-danger" onclick={() => { confirmRestart = true }}>
+            Restart
+          </button>
+        {:else}
+          <button class="btn btn-danger" onclick={restartProcess} disabled={restarting}>
+            {restarting ? 'Restarting...' : 'Confirm Restart'}
+          </button>
+          <button class="btn" onclick={() => { confirmRestart = false }} disabled={restarting}>Cancel</button>
+        {/if}
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -333,6 +411,12 @@
     border-color: var(--accent);
   }
   .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn-danger {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+  }
+  .btn-danger:hover { opacity: 0.9; }
 
   .save-ok {
     margin-top: 8px;

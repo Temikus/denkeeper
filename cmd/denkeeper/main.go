@@ -1153,6 +1153,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 			ConfigPath:      path,
 			ModelLister:     dispatcher.ListModels,
 			OAuthDeps:       oauthDeps,
+			ReloadFunc:      buildReloadFunc(path, cfg, logger),
+			RestartFunc:     selfRestartFunc,
 		}, logger); err != nil {
 			return err
 		}
@@ -1175,6 +1177,30 @@ func wireCallbackResolver(tgAdapter *telegram.Adapter, approvalMgr *approval.Man
 	if tgAdapter != nil {
 		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalMgr, logger))
 	}
+}
+
+// buildReloadFunc returns a function that re-reads the config file from disk
+// and overwrites cfg in place, allowing hot-reloading of most settings.
+func buildReloadFunc(path string, cfg *config.Config, logger *slog.Logger) func() error {
+	return func() error {
+		newCfg, err := config.Load(path)
+		if err != nil {
+			return fmt.Errorf("reloading config: %w", err)
+		}
+		*cfg = *newCfg
+		logger.Info("config reloaded from disk", "path", path)
+		return nil
+	}
+}
+
+// selfRestartFunc sends SIGTERM to the current process so that a process
+// manager (systemd, Docker, K8s) can restart it.
+func selfRestartFunc() error {
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		return fmt.Errorf("finding own process: %w", err)
+	}
+	return p.Signal(syscall.SIGTERM)
 }
 
 // handleShutdownSignals starts a goroutine that cancels the context on SIGINT/SIGTERM.

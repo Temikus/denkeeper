@@ -87,6 +87,37 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+func (s *Server) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.ReloadFunc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config reload not available"})
+		return
+	}
+	s.logger.Info("config reload requested via API")
+	if err := s.deps.ReloadFunc(); err != nil {
+		s.logger.Error("config reload failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "reload failed: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+}
+
+func (s *Server) handleRestartProcess(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.RestartFunc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "process restart not available"})
+		return
+	}
+	s.logger.Info("process restart requested via API")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarting"})
+
+	// Send the signal after writing the response so the client gets the 200.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if err := s.deps.RestartFunc(); err != nil {
+			s.logger.Error("process restart failed", "error", err)
+		}
+	}()
+}
+
 func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 	if s.deps.ConfigPath == "" {
 		return

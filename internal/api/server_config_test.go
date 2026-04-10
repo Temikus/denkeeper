@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -193,5 +194,106 @@ func TestUpdateAPIConfig_Persistence(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("listen")) {
 		t.Errorf("persisted config lost listen field; got:\n%s", content)
+	}
+}
+
+func TestReloadConfig_Success(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	called := false
+	deps.ReloadFunc = func() error {
+		called = true
+		return nil
+	}
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodPost, "/api/v1/server/reload")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !called {
+		t.Error("ReloadFunc was not called")
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "reloaded" {
+		t.Errorf("status = %q, want reloaded", resp["status"])
+	}
+}
+
+func TestReloadConfig_Error(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	deps.ReloadFunc = func() error {
+		return errors.New("parse error")
+	}
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodPost, "/api/v1/server/reload")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
+func TestReloadConfig_Unavailable(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	// ReloadFunc is nil by default.
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodPost, "/api/v1/server/reload")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestRestartProcess_Success(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	called := false
+	deps.RestartFunc = func() error {
+		called = true
+		return nil
+	}
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodPost, "/api/v1/server/restart")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "restarting" {
+		t.Errorf("status = %q, want restarting", resp["status"])
+	}
+	// RestartFunc runs asynchronously after a delay, so we don't assert called=true
+	// in a unit test — just verify the response is correct.
+	_ = called
+}
+
+func TestRestartProcess_Unavailable(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodPost, "/api/v1/server/restart")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }

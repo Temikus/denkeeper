@@ -49,6 +49,8 @@ type Deps struct {
 	SetupPIN        string                             // one-time PIN for account setup (empty = disabled)
 	ModelLister     func(ctx context.Context) []string // returns available LLM models; nil = endpoint returns 503
 	OAuthDeps       *OAuthDeps                         // nil = OAuth tool endpoints return 503
+	ReloadFunc      func() error                       // nil = reload endpoint returns 503
+	RestartFunc     func() error                       // nil = restart endpoint returns 503
 }
 
 // Server is the external REST API server.
@@ -191,6 +193,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Server config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/server/config", s.RequireScope("admin", s.handleGetServerConfig))
 	mux.HandleFunc("PATCH /api/v1/server/config", s.RequireScope("admin", s.handlePatchServerConfig))
+	mux.HandleFunc("POST /api/v1/server/reload", s.RequireScope("admin", s.handleReloadConfig))
+	mux.HandleFunc("POST /api/v1/server/restart", s.RequireScope("admin", s.handleRestartProcess))
 
 	// API key management endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/keys", s.RequireScope("admin", s.handleListKeys))

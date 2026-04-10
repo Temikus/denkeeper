@@ -180,6 +180,8 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify(data),
   }),
+  reloadConfig: () => apiFetch('/api/v1/server/reload', { method: 'POST' }),
+  restartProcess: () => apiFetch('/api/v1/server/restart', { method: 'POST' }),
 
   // API Keys
   listKeys: () => apiFetch('/api/v1/keys'),
