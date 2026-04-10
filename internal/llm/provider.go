@@ -42,6 +42,13 @@ type ModelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+// ModelDetailLister is an optional interface for providers that can return
+// enriched model metadata (pricing, capabilities). Providers that implement
+// this are preferred over the static heuristic in Router.ListModelDetails.
+type ModelDetailLister interface {
+	ListModelDetails(ctx context.Context) ([]ModelInfo, error)
+}
+
 // LLMError is returned by providers for API-level failures.
 // Use errors.As to unwrap from wrapped errors.
 type LLMError struct {
@@ -144,4 +151,15 @@ type ProviderMetadata struct {
 	Name    string
 	BaseURL string
 	Models  []string
+}
+
+// ModelInfo holds enriched metadata about an available LLM model.
+type ModelInfo struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Provider      string   `json:"provider"`
+	InputPerMTok  *float64 `json:"input_per_mtok"`  // nil = pricing unknown
+	OutputPerMTok *float64 `json:"output_per_mtok"` // nil = pricing unknown
+	SupportsTools bool     `json:"supports_tools"`
+	WeeklyTokens  int64    `json:"weekly_tokens"` // 0 = unknown; used for popularity sort
 }

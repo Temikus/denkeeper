@@ -2351,3 +2351,65 @@ func TestHandleModels_RequiresAuth(t *testing.T) {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
+
+func TestHandleModelDetails_ReturnsList(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	inp := 3.0
+	out := 15.0
+	deps.ModelDetailLister = func(_ context.Context) []llm.ModelInfo {
+		return []llm.ModelInfo{
+			{ID: "anthropic/claude-opus-4", Name: "Claude Opus 4", Provider: "openrouter", InputPerMTok: &inp, OutputPerMTok: &out, SupportsTools: true},
+		}
+	}
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/models/details")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	models, ok := resp["models"].([]any)
+	if !ok {
+		t.Fatalf("models field missing or wrong type: %v", resp)
+	}
+	if len(models) != 1 {
+		t.Errorf("len(models) = %d, want 1", len(models))
+	}
+}
+
+func TestHandleModelDetails_NilListerReturns503(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	// ModelDetailLister is nil (not configured)
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/models/details")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleModelDetails_RequiresAuth(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.ModelDetailLister = func(_ context.Context) []llm.ModelInfo { return nil }
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models/details", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+}

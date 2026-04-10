@@ -9,16 +9,29 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
-const defaultBaseURL = "https://openrouter.ai/api/v1"
+const (
+	defaultBaseURL  = "https://openrouter.ai/api/v1"
+	modelDetailsTTL = 5 * time.Minute
+)
+
+type modelDetailsCache struct {
+	models    []llm.ModelInfo
+	fetchedAt time.Time
+}
 
 type Client struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+
+	detailsMu    sync.Mutex
+	detailsCache *modelDetailsCache
 }
 
 func New(apiKey string) *Client {
@@ -247,6 +260,207 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 		models[i] = m.ID
 	}
 	return models, nil
+}
+
+// ListModelDetails returns enriched model metadata from the OpenRouter API,
+// including pricing, tool support, and weekly usage for popularity sorting.
+// Results are cached for 5 minutes to avoid repeated heavy API calls.
+func (c *Client) ListModelDetails(ctx context.Context) ([]llm.ModelInfo, error) {
+	c.detailsMu.Lock()
+	if c.detailsCache != nil && time.Since(c.detailsCache.fetchedAt) < modelDetailsTTL {
+		cached := c.detailsCache.models
+		c.detailsMu.Unlock()
+		return cached, nil
+	}
+	c.detailsMu.Unlock()
+
+	models, err := c.fetchModelDetails(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	c.detailsMu.Lock()
+	c.detailsCache = &modelDetailsCache{models: models, fetchedAt: time.Now()}
+	c.detailsMu.Unlock()
+
+	return models, nil
+}
+
+// fetchModelDetails does the actual work of fetching from /models and /find.
+func (c *Client) fetchModelDetails(ctx context.Context) ([]llm.ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("listing model details: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("listing model details returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []modelsEntry `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing model details response: %w", err)
+	}
+
+	// Fetch weekly analytics + permaslug mappings (best-effort).
+	permaslugs, analytics := c.fetchFrontendData(ctx)
+
+	models := make([]llm.ModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		info := llm.ModelInfo{
+			ID:            m.ID,
+			Name:          m.Name,
+			Provider:      "openrouter",
+			SupportsTools: m.supportsTools(),
+		}
+		if inp, err := m.Pricing.inputPerMTok(); err == nil {
+			info.InputPerMTok = &inp
+		}
+		if out, err := m.Pricing.outputPerMTok(); err == nil {
+			info.OutputPerMTok = &out
+		}
+		// Analytics is keyed by permaslug, not slug. Look up via mapping.
+		// Variant IDs (e.g. "model:free") are pre-registered in the map.
+		if pslug, ok := permaslugs[m.ID]; ok {
+			if a, ok := analytics[pslug]; ok {
+				info.WeeklyTokens = a.TotalPromptTokens + a.TotalCompletionTokens
+			}
+		}
+		models = append(models, info)
+	}
+	return models, nil
+}
+
+const frontendBaseURL = "https://openrouter.ai/api/frontend"
+
+const frontendTimeout = 10 * time.Second
+
+// fetchFrontendData fetches model permaslug mappings and weekly analytics from
+// the public OpenRouter frontend API. Returns empty maps on any error.
+func (c *Client) fetchFrontendData(ctx context.Context) (permaslugs map[string]string, analytics map[string]analyticsEntry) {
+	ctx, cancel := context.WithTimeout(ctx, frontendTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, frontendBaseURL+"/models/find", nil)
+	if err != nil {
+		slog.Debug("openrouter: failed to build frontend request", "error", err)
+		return nil, nil
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		slog.Debug("openrouter: failed to fetch frontend data", "error", err)
+		return nil, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("openrouter: frontend API returned non-200", "status", resp.StatusCode)
+		return nil, nil
+	}
+
+	var result struct {
+		Data struct {
+			Models    []frontendModel           `json:"models"`
+			Analytics map[string]analyticsEntry `json:"analytics"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		slog.Debug("openrouter: failed to parse frontend data", "error", err)
+		return nil, nil
+	}
+
+	// Collect the set of variant suffixes from analytics keys (e.g. "free", "thinking").
+	variantSuffixes := make(map[string]bool)
+	for _, entry := range result.Data.Analytics {
+		if entry.Variant != "" && entry.Variant != "standard" {
+			variantSuffixes[entry.Variant] = true
+		}
+	}
+
+	// Build slug → permaslug mapping. Also register variant forms
+	// (e.g. "slug:free" → same permaslug) so that variant model IDs
+	// from /api/v1/models resolve correctly.
+	permaslugs = make(map[string]string, len(result.Data.Models)*2)
+	for _, m := range result.Data.Models {
+		permaslugs[m.Slug] = m.Permaslug
+		for suffix := range variantSuffixes {
+			permaslugs[m.Slug+":"+suffix] = m.Permaslug
+		}
+	}
+
+	// Aggregate analytics across variants using the model_permaslug field.
+	aggregated := make(map[string]analyticsEntry, len(result.Data.Analytics))
+	for _, entry := range result.Data.Analytics {
+		agg := aggregated[entry.ModelPermaslug]
+		agg.TotalPromptTokens += entry.TotalPromptTokens
+		agg.TotalCompletionTokens += entry.TotalCompletionTokens
+		aggregated[entry.ModelPermaslug] = agg
+	}
+	return permaslugs, aggregated
+}
+
+type frontendModel struct {
+	Slug      string `json:"slug"`
+	Permaslug string `json:"permaslug"`
+}
+
+type analyticsEntry struct {
+	ModelPermaslug        string `json:"model_permaslug"`
+	Variant               string `json:"variant"`
+	TotalCompletionTokens int64  `json:"total_completion_tokens"`
+	TotalPromptTokens     int64  `json:"total_prompt_tokens"`
+}
+
+// modelsEntry represents a single model from the OpenRouter /models response.
+type modelsEntry struct {
+	ID                  string        `json:"id"`
+	Name                string        `json:"name"`
+	Pricing             modelsPricing `json:"pricing"`
+	SupportedParameters []string      `json:"supported_parameters"`
+}
+
+// supportsTools checks if "tools" is in the model's supported parameters.
+func (m *modelsEntry) supportsTools() bool {
+	for _, p := range m.SupportedParameters {
+		if p == "tools" {
+			return true
+		}
+	}
+	return false
+}
+
+// modelsPricing holds per-token pricing strings from the OpenRouter API.
+type modelsPricing struct {
+	Prompt     string `json:"prompt"`     // cost per token (USD)
+	Completion string `json:"completion"` // cost per token (USD)
+}
+
+// inputPerMTok converts the per-token prompt price to per-million-token.
+func (p modelsPricing) inputPerMTok() (float64, error) {
+	var perToken float64
+	if _, err := fmt.Sscanf(p.Prompt, "%f", &perToken); err != nil {
+		return 0, err
+	}
+	return perToken * 1_000_000, nil
+}
+
+// outputPerMTok converts the per-token completion price to per-million-token.
+func (p modelsPricing) outputPerMTok() (float64, error) {
+	var perToken float64
+	if _, err := fmt.Sscanf(p.Completion, "%f", &perToken); err != nil {
+		return 0, err
+	}
+	return perToken * 1_000_000, nil
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +86,112 @@ func (r *Router) ListModels(ctx context.Context) []string {
 	// Sort for deterministic output.
 	sort.Strings(result)
 	return result
+}
+
+// ListModelDetails queries all providers and returns enriched model metadata
+// including pricing and tool support. Providers implementing ModelDetailLister
+// supply authoritative data; others fall back to the pricing registry and a
+// static tool-support heuristic.
+func (r *Router) ListModelDetails(ctx context.Context) []ModelInfo {
+	seen := make(map[string]bool)
+	var result []ModelInfo
+
+	for _, p := range r.providers {
+		// Prefer rich metadata from providers that support it.
+		if dl, ok := p.(ModelDetailLister); ok {
+			models, err := dl.ListModelDetails(ctx)
+			if err != nil {
+				slog.Warn("listing model details from provider failed", "provider", p.Name(), "error", err)
+				continue
+			}
+			for _, m := range models {
+				if seen[m.ID] {
+					continue
+				}
+				seen[m.ID] = true
+				result = append(result, m)
+			}
+			continue
+		}
+
+		// Fall back to basic model listing with static enrichment.
+		lister, ok := p.(ModelLister)
+		if !ok {
+			continue
+		}
+		models, err := lister.ListModels(ctx)
+		if err != nil {
+			slog.Warn("listing models from provider failed", "provider", p.Name(), "error", err)
+			continue
+		}
+		for _, m := range models {
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			info := ModelInfo{
+				ID:            m,
+				Name:          modelDisplayName(m),
+				Provider:      p.Name(),
+				SupportsTools: modelSupportsTools(m),
+			}
+			if r.pricing != nil {
+				if price, ok := r.pricing.Lookup(m); ok {
+					info.InputPerMTok = &price.InputPerMTok
+					info.OutputPerMTok = &price.OutputPerMTok
+				}
+			}
+			result = append(result, info)
+		}
+	}
+
+	// Sort by popularity (weekly tokens descending), alphabetical tiebreaker.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].WeeklyTokens != result[j].WeeklyTokens {
+			return result[i].WeeklyTokens > result[j].WeeklyTokens
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result
+}
+
+// modelDisplayName derives a human-friendly name from a model ID.
+// It strips the provider prefix (e.g. "anthropic/claude-3-opus" → "claude-3-opus")
+// and replaces hyphens with spaces, then title-cases.
+func modelDisplayName(id string) string {
+	name := id
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.ReplaceAll(name, "-", " ")
+	// Title-case each word.
+	words := strings.Fields(name)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// modelSupportsTools returns true if the model is known to support tool/function calling.
+func modelSupportsTools(id string) bool {
+	toolPrefixes := []string{
+		"claude-3", "claude-sonnet-4", "claude-opus-4",
+		"anthropic/claude-3", "anthropic/claude-sonnet-4", "anthropic/claude-opus-4",
+		"gpt-4", "gpt-3.5-turbo",
+		"openai/gpt-4", "openai/gpt-3.5-turbo",
+		"o1", "o3", "o4",
+		"openai/o1", "openai/o3", "openai/o4",
+		"gemini-", "google/gemini-",
+		"mistralai/mistral-large", "mistralai/mistral-medium", "mistralai/mistral-small",
+	}
+	for _, prefix := range toolPrefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetDefaultModel changes the router's default model for subsequent requests.

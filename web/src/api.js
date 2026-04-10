@@ -39,6 +39,7 @@ export const api = {
   // Agents
   agents: () => apiFetch('/api/v1/agents'),
   models: () => apiFetch('/api/v1/models').then(r => r.models || []).catch(() => []),
+  modelDetails: () => apiFetch('/api/v1/models/details').then(r => r.models || []).catch(() => []),
   agent: name => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`),
 
   // Agent config mutation

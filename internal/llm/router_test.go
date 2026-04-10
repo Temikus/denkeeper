@@ -873,3 +873,141 @@ func TestRouter_CompleteStream_NilCallbackWorksLikeComplete(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ListModelDetails
+// ---------------------------------------------------------------------------
+
+// listingMockProvider implements ModelLister (but not ModelDetailLister) for testing.
+type listingMockProvider struct {
+	mockProvider
+	models []string
+}
+
+func (l *listingMockProvider) ListModels(_ context.Context) ([]string, error) {
+	return l.models, nil
+}
+
+// modelDetailsMockProvider implements ModelDetailLister for testing.
+type modelDetailsMockProvider struct {
+	mockProvider
+	models []ModelInfo
+	err    error
+}
+
+func (m *modelDetailsMockProvider) ListModelDetails(_ context.Context) ([]ModelInfo, error) {
+	return m.models, m.err
+}
+
+func TestRouter_ListModelDetails_UsesDetailLister(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{}, nil)
+	r := NewRouter("p1", "m", ct)
+	inp, out := 3.0, 15.0
+	p := &modelDetailsMockProvider{
+		mockProvider: mockProvider{name: "p1", response: &ChatResponse{}},
+		models: []ModelInfo{
+			{ID: "anthropic/claude-3-opus", Name: "Claude 3 Opus", Provider: "p1", InputPerMTok: &inp, OutputPerMTok: &out, SupportsTools: true, WeeklyTokens: 1000},
+			{ID: "anthropic/claude-3-haiku", Name: "Claude 3 Haiku", Provider: "p1", InputPerMTok: &inp, OutputPerMTok: &out, SupportsTools: true, WeeklyTokens: 500},
+		},
+	}
+	r.RegisterProvider(p)
+
+	got := r.ListModelDetails(context.Background())
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	// Should be sorted by WeeklyTokens descending.
+	if got[0].ID != "anthropic/claude-3-opus" {
+		t.Errorf("got[0].ID = %q, want claude-3-opus (highest tokens)", got[0].ID)
+	}
+	if !got[0].SupportsTools {
+		t.Error("expected SupportsTools = true")
+	}
+}
+
+func TestRouter_ListModelDetails_FallbackToStaticEnrichment(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{}, nil)
+	r := NewRouter("p1", "m", ct)
+	// Provider implements ModelLister but not ModelDetailLister.
+	p := &listingMockProvider{
+		mockProvider: mockProvider{name: "p1", response: &ChatResponse{}},
+		models:       []string{"anthropic/claude-3-opus", "meta-llama/llama-3.1-8b"},
+	}
+	r.RegisterProvider(p)
+	reg := pricing.New()
+	r.SetPricing(reg)
+
+	got := r.ListModelDetails(context.Background())
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	// claude-3-opus should have tool support and pricing.
+	var opus ModelInfo
+	for _, m := range got {
+		if m.ID == "anthropic/claude-3-opus" {
+			opus = m
+		}
+	}
+	if !opus.SupportsTools {
+		t.Error("claude-3-opus: expected SupportsTools = true")
+	}
+	if opus.InputPerMTok == nil {
+		t.Error("claude-3-opus: expected non-nil InputPerMTok from registry")
+	}
+}
+
+func TestRouter_ListModelDetails_DetailListerErrorFallsThrough(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{}, nil)
+	r := NewRouter("p1", "m", ct)
+	p := &modelDetailsMockProvider{
+		mockProvider: mockProvider{name: "p1", response: &ChatResponse{}},
+		err:          fmt.Errorf("provider down"),
+	}
+	r.RegisterProvider(p)
+
+	// Should return empty rather than panic.
+	got := r.ListModelDetails(context.Background())
+	if got == nil {
+		got = []ModelInfo{} // nil is also acceptable
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty result on error, got %d", len(got))
+	}
+}
+
+func TestModelDisplayName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"anthropic/claude-3-opus", "Claude 3 Opus"},
+		{"openai/gpt-4o", "Gpt 4o"},
+		{"meta-llama/llama-3.1-8b", "Llama 3.1 8b"},
+		{"simple", "Simple"},
+	}
+	for _, c := range cases {
+		got := modelDisplayName(c.in)
+		if got != c.want {
+			t.Errorf("modelDisplayName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestModelSupportsTools(t *testing.T) {
+	yes := []string{
+		"anthropic/claude-3-opus",
+		"anthropic/claude-sonnet-4-20250514",
+		"openai/gpt-4o",
+		"google/gemini-2.5-flash",
+	}
+	no := []string{
+		"meta-llama/llama-3.1-8b",
+		"unknown/model-x",
+	}
+	for _, id := range yes {
+		if !modelSupportsTools(id) {
+			t.Errorf("modelSupportsTools(%q) = false, want true", id)
+		}
+	}
+	for _, id := range no {
+		if modelSupportsTools(id) {
+			t.Errorf("modelSupportsTools(%q) = true, want false", id)
+		}
+	}
+}

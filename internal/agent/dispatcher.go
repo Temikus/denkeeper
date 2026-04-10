@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/llm"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -193,6 +194,17 @@ func (d *Dispatcher) ListModels(ctx context.Context) []string {
 	// Fall back to first available agent.
 	for _, e := range d.agents {
 		return e.ListModels(ctx)
+	}
+	return nil
+}
+
+// ListModelDetails returns enriched model metadata by querying the default agent's router.
+func (d *Dispatcher) ListModelDetails(ctx context.Context) []llm.ModelInfo {
+	if e := d.agents["default"]; e != nil {
+		return e.ListModelDetails(ctx)
+	}
+	for _, e := range d.agents {
+		return e.ListModelDetails(ctx)
 	}
 	return nil
 }
@@ -440,9 +452,9 @@ type activityLog struct {
 	externalID string
 	adapter    string
 	logger     *slog.Logger
-	messageID  string            // platform message ID, empty until first send
-	lines      []activityLine    // ordered entries
-	toolIndex  map[string]int    // tool name → index in lines (for in-flight updates)
+	messageID  string         // platform message ID, empty until first send
+	lines      []activityLine // ordered entries
+	toolIndex  map[string]int // tool name → index in lines (for in-flight updates)
 }
 
 type activityLine struct {

@@ -30,27 +30,28 @@ import (
 
 // Deps holds the application dependencies the API server needs to serve data.
 type Deps struct {
-	Dispatcher      *agent.Dispatcher
-	Scheduler       *scheduler.Scheduler
-	CostTracker     *llm.CostTracker
-	Memory          agent.MemoryStore
-	Config          *config.Config
-	Approvals       *approval.Manager                  // nil = approval endpoints return 503
-	LifecycleMgr    *tool.LifecycleManager             // nil = tool CRUD endpoints return 503
-	BrowserProfiles *browser.ProfileService            // nil = browser endpoints return 503
-	WebHandler      http.Handler                       // nil = no web dashboard served
-	MetricsHandler  http.Handler                       // nil = no /metrics endpoint
-	KeyStore        *KeyStore                          // nil = API key CRUD endpoints return 503
-	KVStore         kv.Store                           // nil = KV endpoints return 503
-	ConfigPath      string                             // TOML config path for schedule persistence
-	Sessions        *SessionManager                    // nil = no session-based auth
-	OIDCProvider    *OIDCProvider                      // nil = no OIDC endpoints
-	PasswordHash    string                             // bcrypt hash for password login
-	SetupPIN        string                             // one-time PIN for account setup (empty = disabled)
-	ModelLister     func(ctx context.Context) []string // returns available LLM models; nil = endpoint returns 503
-	OAuthDeps       *OAuthDeps                         // nil = OAuth tool endpoints return 503
-	ReloadFunc      func() error                       // nil = reload endpoint returns 503
-	RestartFunc     func() error                       // nil = restart endpoint returns 503
+	Dispatcher        *agent.Dispatcher
+	Scheduler         *scheduler.Scheduler
+	CostTracker       *llm.CostTracker
+	Memory            agent.MemoryStore
+	Config            *config.Config
+	Approvals         *approval.Manager                         // nil = approval endpoints return 503
+	LifecycleMgr      *tool.LifecycleManager                    // nil = tool CRUD endpoints return 503
+	BrowserProfiles   *browser.ProfileService                   // nil = browser endpoints return 503
+	WebHandler        http.Handler                              // nil = no web dashboard served
+	MetricsHandler    http.Handler                              // nil = no /metrics endpoint
+	KeyStore          *KeyStore                                 // nil = API key CRUD endpoints return 503
+	KVStore           kv.Store                                  // nil = KV endpoints return 503
+	ConfigPath        string                                    // TOML config path for schedule persistence
+	Sessions          *SessionManager                           // nil = no session-based auth
+	OIDCProvider      *OIDCProvider                             // nil = no OIDC endpoints
+	PasswordHash      string                                    // bcrypt hash for password login
+	SetupPIN          string                                    // one-time PIN for account setup (empty = disabled)
+	ModelLister       func(ctx context.Context) []string        // returns available LLM models; nil = endpoint returns 503
+	ModelDetailLister func(ctx context.Context) []llm.ModelInfo // returns enriched model metadata; nil = endpoint returns 503
+	OAuthDeps         *OAuthDeps                                // nil = OAuth tool endpoints return 503
+	ReloadFunc        func() error                              // nil = reload endpoint returns 503
+	RestartFunc       func() error                              // nil = restart endpoint returns 503
 }
 
 // Server is the external REST API server.
@@ -132,6 +133,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
 	mux.HandleFunc("GET /api/v1/models", s.RequireScope("agents:read", s.handleModels))
+	mux.HandleFunc("GET /api/v1/models/details", s.RequireScope("agents:read", s.handleModelDetails))
 	mux.HandleFunc("GET /api/v1/skills", s.RequireScope("skills:read", s.handleSkills))
 	mux.HandleFunc("GET /api/v1/skills/{agent}", s.RequireScope("skills:read", s.handleSkillsByAgent))
 	mux.HandleFunc("GET /api/v1/skills/{agent}/{name}", s.RequireScope("skills:read", s.handleGetSkill))
@@ -445,6 +447,16 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	models := s.deps.ModelLister(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
+// handleModelDetails returns enriched LLM model metadata from all configured providers.
+func (s *Server) handleModelDetails(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ModelDetailLister == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "model details not available"})
+		return
+	}
+	models := s.deps.ModelDetailLister(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
