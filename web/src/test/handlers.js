@@ -19,6 +19,12 @@ export const handlers = [
 
   // Models
   http.get('/api/v1/models', () => HttpResponse.json({ models: ['claude-3-opus', 'gpt-4o'] })),
+  http.get('/api/v1/models/details', () => HttpResponse.json({ models: [
+    { id: 'anthropic/claude-3-opus', name: 'Anthropic: Claude 3 Opus', provider: 'openrouter', input_per_mtok: 15.0, output_per_mtok: 75.0, supports_tools: true, weekly_tokens: 500000000 },
+    { id: 'openai/gpt-4o', name: 'OpenAI: GPT-4o', provider: 'openrouter', input_per_mtok: 2.5, output_per_mtok: 10.0, supports_tools: true, weekly_tokens: 1000000000 },
+    { id: 'meta-llama/llama-3.1-8b', name: 'Meta: Llama 3.1 8B', provider: 'openrouter', input_per_mtok: 0.05, output_per_mtok: 0.08, supports_tools: false, weekly_tokens: 200000000 },
+    { id: 'google/gemma-2-9b:free', name: 'Google: Gemma 2 9B (free)', provider: 'openrouter', input_per_mtok: 0, output_per_mtok: 0, supports_tools: false, weekly_tokens: 100000000 },
+  ] })),
 
   // Costs
   http.get('/api/v1/costs', () => HttpResponse.json(costs)),
