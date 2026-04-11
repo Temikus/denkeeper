@@ -377,6 +377,56 @@ func rawSchedules(raw map[string]any) []any {
 }
 
 // ---------------------------------------------------------------------------
+// LLM config persistence
+// ---------------------------------------------------------------------------
+
+// UpdateLLMConfig persists changes to top-level [llm] keys (default_provider,
+// default_model, cost_limit_soft, cost_limit_hard). Only keys present in
+// changes are applied (partial update).
+func UpdateLLMConfig(path string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		llmSection = map[string]any{}
+	}
+	for k, v := range changes {
+		llmSection[k] = v
+	}
+	raw["llm"] = llmSection
+
+	return writeRawConfig(path, raw)
+}
+
+// UpdateLLMProviderConfig persists changes to [llm.<provider>] in the TOML
+// config. Only keys present in changes are applied (partial update).
+func UpdateLLMProviderConfig(path, provider string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		llmSection = map[string]any{}
+	}
+	provSection, ok := llmSection[provider].(map[string]any)
+	if !ok {
+		provSection = map[string]any{}
+	}
+	for k, v := range changes {
+		provSection[k] = v
+	}
+	llmSection[provider] = provSection
+	raw["llm"] = llmSection
+
+	return writeRawConfig(path, raw)
+}
+
+// ---------------------------------------------------------------------------
 // API config persistence
 // ---------------------------------------------------------------------------
 

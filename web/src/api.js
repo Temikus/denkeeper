@@ -39,7 +39,7 @@ export const api = {
   // Agents
   agents: () => apiFetch('/api/v1/agents'),
   models: () => apiFetch('/api/v1/models').then(r => r.models || []).catch(() => []),
-  modelDetails: () => apiFetch('/api/v1/models/details').then(r => r.models || []).catch(() => []),
+  modelDetails: (provider) => apiFetch(`/api/v1/models/details${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`).then(r => r.models || []).catch(() => []),
   agent: name => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`),
 
   // Agent config mutation
@@ -174,6 +174,17 @@ export const api = {
   deleteBrowserProfile: name => apiFetch(`/api/v1/browser/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   browserSessions: () => apiFetch('/api/v1/browser/sessions'),
   browserConfig: () => apiFetch('/api/v1/browser/config'),
+
+  // LLM providers
+  llmProviders: () => apiFetch('/api/v1/llm/providers'),
+  updateLLMProvider: (name, data) => apiFetch(`/api/v1/llm/providers/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  updateLLMConfig: (data) => apiFetch('/api/v1/llm/config', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
 
   // Server config
   serverConfig: () => apiFetch('/api/v1/server/config'),

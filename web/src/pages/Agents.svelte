@@ -3,6 +3,7 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
+  import FallbackRulesModal from '../components/FallbackRulesModal.svelte'
 
   let agents = $state([])
   let selected = $state(null)
@@ -203,6 +204,10 @@
   let configSaving = $state(false)
   let configSaveOk = $state(false)
 
+  // Fallback rules modal
+  let showFallbackModal = $state(false)
+  let fallbackRules = $state([])
+
   function initConfigForm(d) {
     configTier = d.permission_tier || 'supervised'
     configModel = d.model || ''
@@ -254,6 +259,22 @@
       error = e.message
     } finally {
       configSaving = false
+    }
+  }
+
+  function openFallbackModal() {
+    fallbackRules = JSON.parse(JSON.stringify(detail.fallbacks || []))
+    showFallbackModal = true
+  }
+
+  async function saveFallbackRules(rules) {
+    error = ''
+    try {
+      await api.updateAgentConfig(detail.name, { fallbacks: rules })
+      detail = await api.agent(detail.name)
+      showFallbackModal = false
+    } catch(e) {
+      error = e.message
     }
   }
 
@@ -444,6 +465,17 @@
             <div class="stat-label">ADAPTERS</div>
             <div class="stat-value">{(detail.adapters || []).join(', ') || '—'}</div>
           </div>
+        </div>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="stat-card" onclick={openFallbackModal} role="button" tabindex="0">
+          <div class="stat-icon" style="background: rgba(220,120,60,0.12); color: #dc783c;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </div>
+          <div class="stat-text">
+            <div class="stat-label">FALLBACKS</div>
+            <div class="stat-value">{(detail.fallbacks || []).length} rule{(detail.fallbacks || []).length !== 1 ? 's' : ''}</div>
+          </div>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
       </div>
 
@@ -676,6 +708,14 @@
     <p class="empty select-prompt">Select an agent to view details.</p>
   {/if}
 </div>
+
+{#if showFallbackModal}
+  <FallbackRulesModal
+    bind:rules={fallbackRules}
+    onSave={saveFallbackRules}
+    onClose={() => { showFallbackModal = false }}
+  />
+{/if}
 
 <style>
   /* Layout */

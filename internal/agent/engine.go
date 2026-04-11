@@ -188,9 +188,12 @@ func (e *Engine) ListModels(ctx context.Context) []string {
 }
 
 // ListModelDetails returns enriched model metadata from all registered providers.
-func (e *Engine) ListModelDetails(ctx context.Context) []llm.ModelInfo {
-	return e.router.ListModelDetails(ctx)
+func (e *Engine) ListModelDetails(ctx context.Context, providerFilter string) []llm.ModelInfo {
+	return e.router.ListModelDetails(ctx, providerFilter)
 }
+
+// LLMRouter returns the engine's LLM router for runtime configuration updates.
+func (e *Engine) LLMRouter() *llm.Router { return e.router }
 
 // SetModel changes the engine's default LLM model.
 func (e *Engine) SetModel(model string) {

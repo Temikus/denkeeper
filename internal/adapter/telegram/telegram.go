@@ -33,7 +33,7 @@ type Adapter struct {
 	ttsVoice         string
 	autoVoiceReply   bool
 	callbackResolver adapter.CallbackResolver // nil = ignore callback queries
-	debugChats       map[int64]bool            // per-chat debug toggle
+	debugChats       map[int64]bool           // per-chat debug toggle
 	debugMu          sync.RWMutex
 }
 

@@ -305,3 +305,158 @@ func TestAgentConfigUpdate_RenameInvalidName(t *testing.T) {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
+
+func TestAgentConfigUpdate_Fallbacks_Valid(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	rules := []map[string]any{
+		{"trigger": "rate_limit", "action": "wait_and_retry", "max_retries": 3, "backoff": "exponential"},
+		{"trigger": "error", "action": "switch_provider", "provider": "ollama", "model": "llama3"},
+	}
+	body, _ := json.Marshal(map[string]any{"fallbacks": rules})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Verify in-memory config updated.
+	got := deps.Config.Agents[0].Fallbacks
+	if len(got) != 2 {
+		t.Fatalf("fallbacks len = %d, want 2", len(got))
+	}
+	if got[0].Trigger != "rate_limit" || got[0].Action != "wait_and_retry" || got[0].MaxRetries != 3 {
+		t.Errorf("fallback[0] = %+v, unexpected", got[0])
+	}
+	if got[1].Trigger != "error" || got[1].Provider != "ollama" {
+		t.Errorf("fallback[1] = %+v, unexpected", got[1])
+	}
+}
+
+func TestAgentConfigUpdate_Fallbacks_InvalidTrigger(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rules := []map[string]any{
+		{"trigger": "invalid", "action": "wait_and_retry", "max_retries": 1},
+	}
+	body, _ := json.Marshal(map[string]any{"fallbacks": rules})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAgentConfigUpdate_Fallbacks_MissingProvider(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rules := []map[string]any{
+		{"trigger": "error", "action": "switch_provider"},
+	}
+	body, _ := json.Marshal(map[string]any{"fallbacks": rules})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAgentConfigUpdate_Fallbacks_EmptyClears(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Config.Agents[0].Fallbacks = []config.FallbackConfig{
+		{Trigger: "error", Action: "wait_and_retry", MaxRetries: 1},
+	}
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"fallbacks": []any{}})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if len(deps.Config.Agents[0].Fallbacks) != 0 {
+		t.Errorf("fallbacks should be empty, got %d", len(deps.Config.Agents[0].Fallbacks))
+	}
+}
+
+func TestAgentDetail_IncludesFallbacks(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Config.Agents[0].Fallbacks = []config.FallbackConfig{
+		{Trigger: "rate_limit", Action: "wait_and_retry", MaxRetries: 3, Backoff: "exponential"},
+	}
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	fb, ok := resp["fallbacks"].([]any)
+	if !ok {
+		t.Fatalf("fallbacks field missing or wrong type: %v", resp["fallbacks"])
+	}
+	if len(fb) != 1 {
+		t.Errorf("fallbacks len = %d, want 1", len(fb))
+	}
+}
+
+func TestAgentDetail_FallbacksEmptyNotNull(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	fb, ok := resp["fallbacks"].([]any)
+	if !ok {
+		t.Fatalf("fallbacks should be an array, got %T", resp["fallbacks"])
+	}
+	if len(fb) != 0 {
+		t.Errorf("fallbacks should be empty, got %d", len(fb))
+	}
+}

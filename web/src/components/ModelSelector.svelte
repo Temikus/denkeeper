@@ -1,16 +1,25 @@
 <script>
   import { api } from '../api.js'
 
-  let { value = $bindable(''), onchange } = $props()
+  let { value = $bindable(''), onchange, provider = '' } = $props()
 
   let models = $state([])
   let search = $state('')
   let toolsOnly = $state(true)
   let sortBy = $state('popularity') // 'name' | 'price' | 'popularity'
+  let providerFilter = $state('') // internal filter when provider prop is not set
   let open = $state(false)
   let loading = $state(false)
   let inputEl = $state(null)
   let containerEl = $state(null)
+  let loadedProvider = $state(null) // tracks which provider filter was used for the last fetch
+
+  // Known provider names from the lightweight /llm/providers endpoint.
+  let knownProviders = $state([])
+  let providersLoaded = $state(false)
+
+  // Effective provider: external prop takes precedence over internal filter.
+  let activeProvider = $derived(provider || providerFilter)
 
   let filtered = $derived(() => {
     let list = models
@@ -32,17 +41,47 @@
     return list
   })
 
-  async function load() {
-    if (models.length || loading) return
+  // Fetch the lightweight provider list for the dropdown (no external API calls).
+  async function loadProviders() {
+    if (providersLoaded) return
+    try {
+      const data = await api.llmProviders()
+      knownProviders = (data.providers || []).filter(p => p.enabled).map(p => p.name)
+    } catch {
+      knownProviders = []
+    }
+    providersLoaded = true
+  }
+
+  async function loadModels(forProvider) {
+    if (loading) return
+    // Skip if we already loaded for this exact provider filter.
+    if (models.length && loadedProvider === (forProvider || '')) return
     loading = true
-    models = await api.modelDetails()
+    models = await api.modelDetails(forProvider || '')
+    loadedProvider = forProvider || ''
     loading = false
   }
 
   function handleFocus() {
-    load()
+    loadProviders()
+    // When provider prop is set, or user already picked one, load models immediately.
+    // Otherwise wait for them to pick a provider first.
+    if (activeProvider) {
+      loadModels(activeProvider)
+    }
     open = true
     search = ''
+  }
+
+  function onProviderChange(e) {
+    providerFilter = e.target.value
+    if (e.target.value) {
+      loadModels(e.target.value)
+    } else {
+      // "All providers" — fetch everything.
+      loadModels('')
+    }
   }
 
   function handleBlur(e) {
@@ -121,6 +160,19 @@
           placeholder="Filter models…"
           autocomplete="off"
         />
+        {#if !provider}
+          <select
+            class="provider-select"
+            value={providerFilter}
+            onchange={onProviderChange}
+            onmousedown={(e) => e.stopPropagation()}
+          >
+            <option value="" disabled={!providerFilter}>Provider{providerFilter ? ': All' : ''}</option>
+            {#each knownProviders as p}
+              <option value={p}>{p}</option>
+            {/each}
+          </select>
+        {/if}
         <label class="model-filter">
           <input type="checkbox" bind:checked={toolsOnly} />
           Tools
@@ -136,6 +188,8 @@
 
       {#if loading}
         <div class="model-empty">Loading models…</div>
+      {:else if !activeProvider && !models.length}
+        <div class="model-empty">Select a provider to browse models, or type a model ID above</div>
       {:else if !filtered().length}
         <div class="model-empty">No models found</div>
       {:else}
@@ -231,6 +285,18 @@
     outline: none;
   }
   .model-search:focus { border-color: var(--accent); }
+
+  .provider-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 4px 6px;
+    font-size: 11px;
+    cursor: pointer;
+    outline: none;
+  }
+  .provider-select:focus { border-color: var(--accent); }
 
   .model-filter {
     display: flex;

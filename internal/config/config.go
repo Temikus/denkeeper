@@ -374,6 +374,10 @@ type AgentInstanceConfig struct {
 	// CostLimitHard overrides the global cost_limit_hard for this agent.
 	// Nil means inherit global. 0 means disabled.
 	CostLimitHard *float64 `toml:"cost_limit_hard"`
+
+	// Fallbacks overrides the global [[llm.fallback]] rules for this agent.
+	// When non-empty, these rules replace (not merge with) the global fallbacks.
+	Fallbacks []FallbackConfig `toml:"fallback"`
 }
 
 // VoiceConfig controls speech-to-text and text-to-speech.
@@ -507,13 +511,13 @@ type OpenAIConfig struct {
 // FallbackConfig defines a single fallback rule for the LLM router.
 // Rules are evaluated in declaration order; first match wins per trigger type.
 type FallbackConfig struct {
-	Trigger    string  `toml:"trigger"`     // "error" | "rate_limit" | "low_funds"
-	Action     string  `toml:"action"`      // "switch_provider" | "switch_model" | "wait_and_retry"
-	Provider   string  `toml:"provider"`    // required for switch_provider
-	Model      string  `toml:"model"`       // required for switch_model; optional for switch_provider
-	Threshold  float64 `toml:"threshold"`   // required for low_funds (USD remaining)
-	MaxRetries int     `toml:"max_retries"` // required for wait_and_retry
-	Backoff    string  `toml:"backoff"`     // "exponential" (default) | "constant"
+	Trigger    string  `toml:"trigger"     json:"trigger"`               // "error" | "rate_limit" | "low_funds"
+	Action     string  `toml:"action"      json:"action"`                // "switch_provider" | "switch_model" | "wait_and_retry"
+	Provider   string  `toml:"provider"    json:"provider,omitempty"`    // required for switch_provider
+	Model      string  `toml:"model"       json:"model,omitempty"`       // required for switch_model; optional for switch_provider
+	Threshold  float64 `toml:"threshold"   json:"threshold,omitempty"`   // required for low_funds (USD remaining)
+	MaxRetries int     `toml:"max_retries" json:"max_retries,omitempty"` // required for wait_and_retry
+	Backoff    string  `toml:"backoff"     json:"backoff,omitempty"`     // "exponential" (default) | "constant"
 }
 
 type OpenRouterConfig struct {
@@ -1114,6 +1118,11 @@ func validateCostLimits(cfg *Config) error {
 		if err := validateAgentCostLimits(a, cfg.LLM.CostLimitSoft, cfg.LLM.CostLimitHard); err != nil {
 			return err
 		}
+		if len(a.Fallbacks) > 0 {
+			if err := validateFallbacks(a.Fallbacks); err != nil {
+				return fmt.Errorf("config: agents[%s]: %w", a.Name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -1247,6 +1256,12 @@ func validateVoice(v *VoiceConfig) error {
 		return fmt.Errorf("config: voice.tts_voice: invalid voice %q — must be one of: alloy, echo, fable, onyx, nova, shimmer", v.TTSVoice)
 	}
 	return nil
+}
+
+// ValidateFallbacks checks that each fallback rule has valid trigger/action
+// combinations and all required fields for its action type.
+func ValidateFallbacks(fallbacks []FallbackConfig) error {
+	return validateFallbacks(fallbacks)
 }
 
 func validateFallbacks(fallbacks []FallbackConfig) error {

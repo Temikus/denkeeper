@@ -153,6 +153,20 @@ export const handlers = [
   http.post('/api/v1/setup', () => HttpResponse.json({ key: 'dk_setup123' })),
   http.post('/api/v1/setup/account', () => HttpResponse.json({ ok: true })),
 
+  // LLM Providers
+  http.get('/api/v1/llm/providers', () => HttpResponse.json({
+    default_provider: 'openrouter',
+    default_model: 'anthropic/claude-3-opus',
+    cost_limit_soft: 0.5,
+    cost_limit_hard: 1.0,
+    providers: [
+      { name: 'anthropic', enabled: false, api_key_set: false },
+      { name: 'openrouter', enabled: true, api_key_set: true },
+      { name: 'openai', enabled: false, api_key_set: false },
+      { name: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
+    ],
+  })),
+
   // Server config
   http.get('/api/v1/server/config', () => HttpResponse.json({
     listen: ':8080',

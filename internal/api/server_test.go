@@ -2357,7 +2357,7 @@ func TestHandleModelDetails_ReturnsList(t *testing.T) {
 	deps := testDeps()
 	inp := 3.0
 	out := 15.0
-	deps.ModelDetailLister = func(_ context.Context) []llm.ModelInfo {
+	deps.ModelDetailLister = func(_ context.Context, _ string) []llm.ModelInfo {
 		return []llm.ModelInfo{
 			{ID: "anthropic/claude-opus-4", Name: "Claude Opus 4", Provider: "openrouter", InputPerMTok: &inp, OutputPerMTok: &out, SupportsTools: true},
 		}
@@ -2402,7 +2402,7 @@ func TestHandleModelDetails_NilListerReturns503(t *testing.T) {
 func TestHandleModelDetails_RequiresAuth(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	deps.ModelDetailLister = func(_ context.Context) []llm.ModelInfo { return nil }
+	deps.ModelDetailLister = func(_ context.Context, _ string) []llm.ModelInfo { return nil }
 	srv := New(cfg, deps, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/models/details", nil)

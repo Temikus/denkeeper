@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
@@ -18,11 +19,12 @@ func validAgentName(name string) bool {
 
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
 type agentConfigUpdateInput struct {
-	Name                *string   `json:"name,omitempty"`
-	SessionTier         *string   `json:"session_tier,omitempty"`
-	LLMModel            *string   `json:"llm_model,omitempty"`
-	Description         *string   `json:"description,omitempty"`
-	BrowserURLAllowlist *[]string `json:"browser_url_allowlist,omitempty"`
+	Name                *string                  `json:"name,omitempty"`
+	SessionTier         *string                  `json:"session_tier,omitempty"`
+	LLMModel            *string                  `json:"llm_model,omitempty"`
+	Description         *string                  `json:"description,omitempty"`
+	BrowserURLAllowlist *[]string                `json:"browser_url_allowlist,omitempty"`
+	Fallbacks           *[]config.FallbackConfig `json:"fallbacks,omitempty"`
 }
 
 func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +64,14 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		e = s.deps.Dispatcher.Agent(name)
 	}
 
+	// Validate fallback rules before applying any changes.
+	if input.Fallbacks != nil {
+		if err := config.ValidateFallbacks(*input.Fallbacks); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
 	// Apply runtime changes to the engine.
 	if input.SessionTier != nil {
 		if err := e.SetPermissionTier(*input.SessionTier); err != nil {
@@ -71,6 +81,9 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	}
 	if input.LLMModel != nil {
 		e.SetModel(*input.LLMModel)
+	}
+	if input.Fallbacks != nil {
+		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
 	}
 
 	s.persistAgentConfig(name, &input)
@@ -106,6 +119,23 @@ func (s *Server) handleAgentRename(oldName, newName string) (int, string) {
 	return 0, ""
 }
 
+// convertFallbackConfigs converts config fallback rules to LLM router rules.
+func convertFallbackConfigs(cfgs []config.FallbackConfig) []llm.FallbackRule {
+	rules := make([]llm.FallbackRule, len(cfgs))
+	for i, f := range cfgs {
+		rules[i] = llm.FallbackRule{
+			Trigger:    f.Trigger,
+			Action:     f.Action,
+			Provider:   f.Provider,
+			Model:      f.Model,
+			Threshold:  f.Threshold,
+			MaxRetries: f.MaxRetries,
+			Backoff:    f.Backoff,
+		}
+	}
+	return rules
+}
+
 // persistAgentConfig writes changed fields to the TOML config file.
 func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) {
 	if s.deps.ConfigPath == "" {
@@ -128,6 +158,9 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 			allowlist[i] = d
 		}
 		changes["browser_url_allowlist"] = allowlist
+	}
+	if input.Fallbacks != nil {
+		changes["fallback"] = serializeFallbacks(*input.Fallbacks)
 	}
 	if len(changes) > 0 {
 		if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
@@ -176,4 +209,35 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	if input.BrowserURLAllowlist != nil {
 		ac.BrowserURLAllowlist = *input.BrowserURLAllowlist
 	}
+	if input.Fallbacks != nil {
+		ac.Fallbacks = *input.Fallbacks
+	}
+}
+
+// serializeFallbacks converts fallback configs to a slice of maps for TOML persistence.
+func serializeFallbacks(fbs []config.FallbackConfig) []any {
+	result := make([]any, len(fbs))
+	for i, f := range fbs {
+		m := map[string]any{
+			"trigger": f.Trigger,
+			"action":  f.Action,
+		}
+		if f.Provider != "" {
+			m["provider"] = f.Provider
+		}
+		if f.Model != "" {
+			m["model"] = f.Model
+		}
+		if f.Threshold > 0 {
+			m["threshold"] = f.Threshold
+		}
+		if f.MaxRetries > 0 {
+			m["max_retries"] = f.MaxRetries
+		}
+		if f.Backoff != "" {
+			m["backoff"] = f.Backoff
+		}
+		result[i] = m
+	}
+	return result
 }

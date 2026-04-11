@@ -2,3 +2,4 @@
 go = "1.25.9"
 hugo-extended = "latest"
 "golangci-lint" = "latest"
+"go:github.com/air-verse/air" = "latest"

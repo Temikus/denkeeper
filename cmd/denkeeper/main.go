@@ -207,21 +207,7 @@ func initLLMClients(cfg *config.Config) llmClients {
 		}
 	}
 
-	var fallbackRules []llm.FallbackRule
-	if len(cfg.LLM.Fallbacks) > 0 {
-		fallbackRules = make([]llm.FallbackRule, len(cfg.LLM.Fallbacks))
-		for i, f := range cfg.LLM.Fallbacks {
-			fallbackRules[i] = llm.FallbackRule{
-				Trigger:    f.Trigger,
-				Action:     f.Action,
-				Provider:   f.Provider,
-				Model:      f.Model,
-				Threshold:  f.Threshold,
-				MaxRetries: f.MaxRetries,
-				Backoff:    f.Backoff,
-			}
-		}
-	}
+	fallbackRules := convertFallbacks(cfg.LLM.Fallbacks)
 
 	// Build pricing registry with bundled defaults + operator overrides.
 	reg := pricing.New()
@@ -721,6 +707,26 @@ func loadAgentSkills(ac config.AgentInstanceConfig, abc agentBuildCtx) agentSkil
 	}
 }
 
+// convertFallbacks converts config fallback rules to LLM router fallback rules.
+func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
+	if len(cfgs) == 0 {
+		return nil
+	}
+	rules := make([]llm.FallbackRule, len(cfgs))
+	for i, f := range cfgs {
+		rules[i] = llm.FallbackRule{
+			Trigger:    f.Trigger,
+			Action:     f.Action,
+			Provider:   f.Provider,
+			Model:      f.Model,
+			Threshold:  f.Threshold,
+			MaxRetries: f.MaxRetries,
+			Backoff:    f.Backoff,
+		}
+	}
+	return rules
+}
+
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
 func buildAgentRouter(model string, abc agentBuildCtx) *llm.Router {
 	router := llm.NewRouter(abc.cfg.LLM.DefaultProvider, model, abc.llm.cost)
@@ -790,6 +796,11 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		model = ac.LLMModel
 	}
 	agentRouter := buildAgentRouter(model, abc)
+
+	// Per-agent fallback overrides replace global rules when defined.
+	if len(ac.Fallbacks) > 0 {
+		agentRouter.SetFallbacks(convertFallbacks(ac.Fallbacks))
+	}
 
 	sendVia := func(ctx context.Context, msg adapter.OutgoingMessage) error {
 		name := msg.Adapter

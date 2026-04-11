@@ -19,6 +19,7 @@
   import ApiKeys from './pages/ApiKeys.svelte'
   import Costs from './pages/Costs.svelte'
   import ServerConfig from './pages/ServerConfig.svelte'
+  import Providers from './pages/Providers.svelte'
   import './shared.css'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -68,6 +69,8 @@
         <Chat />
       {:else if route === 'server'}
         <ServerConfig />
+      {:else if route === 'providers'}
+        <Providers />
       {:else if route === 'costs'}
         <Costs />
       {:else if route === 'keys'}

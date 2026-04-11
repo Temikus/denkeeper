@@ -911,7 +911,7 @@ func TestRouter_ListModelDetails_UsesDetailLister(t *testing.T) {
 	}
 	r.RegisterProvider(p)
 
-	got := r.ListModelDetails(context.Background())
+	got := r.ListModelDetails(context.Background(), "")
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -936,7 +936,7 @@ func TestRouter_ListModelDetails_FallbackToStaticEnrichment(t *testing.T) {
 	reg := pricing.New()
 	r.SetPricing(reg)
 
-	got := r.ListModelDetails(context.Background())
+	got := r.ListModelDetails(context.Background(), "")
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -965,7 +965,7 @@ func TestRouter_ListModelDetails_DetailListerErrorFallsThrough(t *testing.T) {
 	r.RegisterProvider(p)
 
 	// Should return empty rather than panic.
-	got := r.ListModelDetails(context.Background())
+	got := r.ListModelDetails(context.Background(), "")
 	if got == nil {
 		got = []ModelInfo{} // nil is also acceptable
 	}

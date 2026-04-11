@@ -147,10 +147,10 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 // chatCompletionStream handles the streaming path using the shared OAI helper.
 func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	body := apiStreamRequest{
-		Model:    req.Model,
-		Messages: make([]apiMessage, len(req.Messages)),
-		Tools:    req.Tools,
-		Stream:   true,
+		Model:         req.Model,
+		Messages:      make([]apiMessage, len(req.Messages)),
+		Tools:         req.Tools,
+		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 	if req.MaxTokens > 0 {

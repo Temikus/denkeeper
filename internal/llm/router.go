@@ -91,12 +91,16 @@ func (r *Router) ListModels(ctx context.Context) []string {
 // ListModelDetails queries all providers and returns enriched model metadata
 // including pricing and tool support. Providers implementing ModelDetailLister
 // supply authoritative data; others fall back to the pricing registry and a
-// static tool-support heuristic.
-func (r *Router) ListModelDetails(ctx context.Context) []ModelInfo {
+// static tool-support heuristic. When providerFilter is non-empty only the
+// matching provider is queried, which avoids expensive remote calls.
+func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []ModelInfo {
 	seen := make(map[string]bool)
 	var result []ModelInfo
 
 	for _, p := range r.providers {
+		if providerFilter != "" && p.Name() != providerFilter {
+			continue
+		}
 		// Prefer rich metadata from providers that support it.
 		if dl, ok := p.(ModelDetailLister); ok {
 			models, err := dl.ListModelDetails(ctx)

@@ -1,6 +1,6 @@
 export const agents = [
-  { name: 'default', llm_model: 'claude-3-opus', model: 'claude-3-opus', adapters: ['telegram'], permission_tier: 'autonomous', skill_count: 2, has_tools: true },
-  { name: 'helper', llm_model: 'gpt-4o', model: 'gpt-4o', adapters: ['discord'], permission_tier: 'supervised', skill_count: 0, has_tools: false },
+  { name: 'default', llm_model: 'claude-3-opus', model: 'claude-3-opus', adapters: ['telegram'], permission_tier: 'autonomous', skill_count: 2, has_tools: true, fallbacks: [] },
+  { name: 'helper', llm_model: 'gpt-4o', model: 'gpt-4o', adapters: ['discord'], permission_tier: 'supervised', skill_count: 0, has_tools: false, fallbacks: [] },
 ]
 
 export const sessions = [

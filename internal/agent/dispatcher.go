@@ -199,12 +199,13 @@ func (d *Dispatcher) ListModels(ctx context.Context) []string {
 }
 
 // ListModelDetails returns enriched model metadata by querying the default agent's router.
-func (d *Dispatcher) ListModelDetails(ctx context.Context) []llm.ModelInfo {
+// When providerFilter is non-empty only the named provider is queried.
+func (d *Dispatcher) ListModelDetails(ctx context.Context, providerFilter string) []llm.ModelInfo {
 	if e := d.agents["default"]; e != nil {
-		return e.ListModelDetails(ctx)
+		return e.ListModelDetails(ctx, providerFilter)
 	}
 	for _, e := range d.agents {
-		return e.ListModelDetails(ctx)
+		return e.ListModelDetails(ctx, providerFilter)
 	}
 	return nil
 }

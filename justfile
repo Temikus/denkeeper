@@ -36,19 +36,28 @@ test-integration:
 test-pkg pkg:
     go test {{go_tags}} -race -v ./{{pkg}}/...
 
-# Start the agent (optionally pass config path: just serve ./denkeeper.toml)
+# Start the agent with live reload (optionally pass config path: just serve ./denkeeper.toml)
 serve config="":
     #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
-        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve --config "{{config}}"
+        air -- serve --config "{{config}}"
     else
-        go run -tags mcp_go_client_oauth ./cmd/denkeeper serve
+        air
     fi
 
-# Run with debug logging
+# Run with debug logging and live reload
 serve-debug config="":
     #!/usr/bin/env sh
     export DENKEEPER_LOG_LEVEL=debug
+    if [ -n "{{config}}" ]; then
+        air -- serve --config "{{config}}"
+    else
+        air
+    fi
+
+# Start the agent without live reload (optionally pass config path)
+serve-once config="":
+    #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
         go run -tags mcp_go_client_oauth ./cmd/denkeeper serve --config "{{config}}"
     else

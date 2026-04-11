@@ -514,3 +514,121 @@ listen = ":8080"
 		t.Error("config should contain new password_hash")
 	}
 }
+
+func TestUpdateAgentInConfig_FallbackRoundTrip(t *testing.T) {
+	path := writeTestConfig(t, `[api]
+enabled = true
+
+[llm]
+default_provider = "ollama"
+default_model = "llama3"
+
+[[agents]]
+name = "default"
+session_tier = "supervised"
+llm_model = "claude-3-opus"
+`)
+
+	// Write fallback rules via UpdateAgentInConfig.
+	fallbacks := []any{
+		map[string]any{
+			"trigger":     "rate_limit",
+			"action":      "wait_and_retry",
+			"max_retries": 3,
+			"backoff":     "exponential",
+		},
+		map[string]any{
+			"trigger":  "error",
+			"action":   "switch_provider",
+			"provider": "ollama",
+			"model":    "llama3",
+		},
+		map[string]any{
+			"trigger":   "low_funds",
+			"action":    "switch_model",
+			"model":     "claude-haiku",
+			"threshold": 2.5,
+		},
+	}
+	if err := UpdateAgentInConfig(path, "default", map[string]any{"fallback": fallbacks}); err != nil {
+		t.Fatalf("UpdateAgentInConfig: %v", err)
+	}
+
+	// Verify TOML contains the fallback data.
+	content := readConfig(t, path)
+	if !strings.Contains(content, "rate_limit") {
+		t.Errorf("TOML missing rate_limit trigger; content:\n%s", content)
+	}
+	if !strings.Contains(content, "wait_and_retry") {
+		t.Errorf("TOML missing wait_and_retry action; content:\n%s", content)
+	}
+	if !strings.Contains(content, "ollama") {
+		t.Errorf("TOML missing ollama provider; content:\n%s", content)
+	}
+
+	// Round-trip: load the config and verify fallbacks are parsed correctly.
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("agents len = %d, want 1", len(cfg.Agents))
+	}
+	fb := cfg.Agents[0].Fallbacks
+	if len(fb) != 3 {
+		t.Fatalf("fallbacks len = %d, want 3", len(fb))
+	}
+
+	// Rule 1: wait_and_retry
+	if fb[0].Trigger != "rate_limit" || fb[0].Action != "wait_and_retry" || fb[0].MaxRetries != 3 || fb[0].Backoff != "exponential" {
+		t.Errorf("fallback[0] = %+v, unexpected", fb[0])
+	}
+	// Rule 2: switch_provider
+	if fb[1].Trigger != "error" || fb[1].Action != "switch_provider" || fb[1].Provider != "ollama" || fb[1].Model != "llama3" {
+		t.Errorf("fallback[1] = %+v, unexpected", fb[1])
+	}
+	// Rule 3: switch_model with threshold
+	if fb[2].Trigger != "low_funds" || fb[2].Action != "switch_model" || fb[2].Model != "claude-haiku" || fb[2].Threshold != 2.5 {
+		t.Errorf("fallback[2] = %+v, unexpected", fb[2])
+	}
+
+	// Verify existing fields survived.
+	if cfg.Agents[0].SessionTier != "supervised" {
+		t.Errorf("session_tier lost during fallback update")
+	}
+	if cfg.Agents[0].LLMModel != "claude-3-opus" {
+		t.Errorf("llm_model lost during fallback update")
+	}
+}
+
+func TestUpdateAgentInConfig_FallbackEmptyClears(t *testing.T) {
+	path := writeTestConfig(t, `[api]
+enabled = true
+
+[llm]
+default_provider = "ollama"
+default_model = "llama3"
+
+[[agents]]
+name = "default"
+
+[[agents.fallback]]
+trigger = "error"
+action = "wait_and_retry"
+max_retries = 1
+`)
+
+	// Write empty fallbacks to clear.
+	if err := UpdateAgentInConfig(path, "default", map[string]any{"fallback": []any{}}); err != nil {
+		t.Fatalf("UpdateAgentInConfig: %v", err)
+	}
+
+	// Round-trip: fallbacks should be empty.
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(cfg.Agents[0].Fallbacks) != 0 {
+		t.Errorf("fallbacks should be empty after clearing, got %d", len(cfg.Agents[0].Fallbacks))
+	}
+}

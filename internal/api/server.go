@@ -35,23 +35,23 @@ type Deps struct {
 	CostTracker       *llm.CostTracker
 	Memory            agent.MemoryStore
 	Config            *config.Config
-	Approvals         *approval.Manager                         // nil = approval endpoints return 503
-	LifecycleMgr      *tool.LifecycleManager                    // nil = tool CRUD endpoints return 503
-	BrowserProfiles   *browser.ProfileService                   // nil = browser endpoints return 503
-	WebHandler        http.Handler                              // nil = no web dashboard served
-	MetricsHandler    http.Handler                              // nil = no /metrics endpoint
-	KeyStore          *KeyStore                                 // nil = API key CRUD endpoints return 503
-	KVStore           kv.Store                                  // nil = KV endpoints return 503
-	ConfigPath        string                                    // TOML config path for schedule persistence
-	Sessions          *SessionManager                           // nil = no session-based auth
-	OIDCProvider      *OIDCProvider                             // nil = no OIDC endpoints
-	PasswordHash      string                                    // bcrypt hash for password login
-	SetupPIN          string                                    // one-time PIN for account setup (empty = disabled)
-	ModelLister       func(ctx context.Context) []string        // returns available LLM models; nil = endpoint returns 503
-	ModelDetailLister func(ctx context.Context) []llm.ModelInfo // returns enriched model metadata; nil = endpoint returns 503
-	OAuthDeps         *OAuthDeps                                // nil = OAuth tool endpoints return 503
-	ReloadFunc        func() error                              // nil = reload endpoint returns 503
-	RestartFunc       func() error                              // nil = restart endpoint returns 503
+	Approvals         *approval.Manager                                                // nil = approval endpoints return 503
+	LifecycleMgr      *tool.LifecycleManager                                           // nil = tool CRUD endpoints return 503
+	BrowserProfiles   *browser.ProfileService                                          // nil = browser endpoints return 503
+	WebHandler        http.Handler                                                     // nil = no web dashboard served
+	MetricsHandler    http.Handler                                                     // nil = no /metrics endpoint
+	KeyStore          *KeyStore                                                        // nil = API key CRUD endpoints return 503
+	KVStore           kv.Store                                                         // nil = KV endpoints return 503
+	ConfigPath        string                                                           // TOML config path for schedule persistence
+	Sessions          *SessionManager                                                  // nil = no session-based auth
+	OIDCProvider      *OIDCProvider                                                    // nil = no OIDC endpoints
+	PasswordHash      string                                                           // bcrypt hash for password login
+	SetupPIN          string                                                           // one-time PIN for account setup (empty = disabled)
+	ModelLister       func(ctx context.Context) []string                               // returns available LLM models; nil = endpoint returns 503
+	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo // returns enriched model metadata; nil = endpoint returns 503
+	OAuthDeps         *OAuthDeps                                                       // nil = OAuth tool endpoints return 503
+	ReloadFunc        func() error                                                     // nil = reload endpoint returns 503
+	RestartFunc       func() error                                                     // nil = restart endpoint returns 503
 }
 
 // Server is the external REST API server.
@@ -191,6 +191,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/kv/{agent}", s.RequireScope("kv:read", s.handleListKV))
 	mux.HandleFunc("GET /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:read", s.handleGetKV))
 	mux.HandleFunc("DELETE /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:write", s.handleDeleteKV))
+
+	// LLM provider config endpoints (require admin scope).
+	mux.HandleFunc("GET /api/v1/llm/providers", s.RequireScope("admin", s.handleGetLLMProviders))
+	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
+	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
 
 	// Server config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/server/config", s.RequireScope("admin", s.handleGetServerConfig))
@@ -368,11 +373,16 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var adapters []string
+	var fallbacks []config.FallbackConfig
 	for _, ac := range s.deps.Config.Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
+			fallbacks = ac.Fallbacks
 			break
 		}
+	}
+	if fallbacks == nil {
+		fallbacks = []config.FallbackConfig{}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -386,6 +396,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		"tool_names":       e.ToolNames(),
 		"persona_dir":      e.PersonaDir(),
 		"persona_sections": e.PersonaSections(),
+		"fallbacks":        fallbacks,
 	})
 }
 
@@ -451,12 +462,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleModelDetails returns enriched LLM model metadata from all configured providers.
+// Accepts optional ?provider= query parameter to fetch only that provider's models.
 func (s *Server) handleModelDetails(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ModelDetailLister == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "model details not available"})
 		return
 	}
-	models := s.deps.ModelDetailLister(r.Context())
+	providerFilter := r.URL.Query().Get("provider")
+	models := s.deps.ModelDetailLister(r.Context(), providerFilter)
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
