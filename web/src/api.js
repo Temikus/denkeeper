@@ -261,6 +261,12 @@ export const api = {
     }
   },
 
+  // Auth management (requires auth).
+  authStatus: () => apiFetch('/api/v1/auth/status'),
+  listAuthSessions: () => apiFetch('/api/v1/auth/sessions'),
+  revokeAuthSession: (id) => apiFetch(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  revokeAllAuthSessions: () => apiFetch('/api/v1/auth/sessions', { method: 'DELETE' }),
+
   // Auth endpoints (no auth required).
   authConfig: () => fetch('/auth/config').then(r => r.json()),
   passwordLogin: (password) => fetch('/auth/login', {

@@ -169,6 +169,9 @@ func (e *Engine) DisplayName() string {
 // PermissionTier returns the agent's default permission tier.
 func (e *Engine) PermissionTier() string { return e.permissions.Tier() }
 
+// ProviderName returns the agent's default LLM provider.
+func (e *Engine) ProviderName() string { return e.router.DefaultProvider() }
+
 // ModelName returns the agent's default LLM model.
 func (e *Engine) ModelName() string { return e.router.DefaultModel() }
 
@@ -942,6 +945,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 
 		// Check soft cost limit between tool rounds — allows the model to
 		// produce a final response but prevents further tool calls.
+		// Hard limits are enforced by the router before each LLM call.
 		if e.router.CostTracker().ExceedsSoftLimit(convID) {
 			if onEvent != nil {
 				onEvent(ChatEvent{Type: "cost_limit", Text: "Session approaching cost limit — pausing tool use."})

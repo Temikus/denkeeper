@@ -314,6 +314,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		Name           string   `json:"name"`
 		DisplayName    string   `json:"display_name"`
 		PermissionTier string   `json:"permission_tier"`
+		Provider       string   `json:"provider"`
 		Model          string   `json:"model"`
 		SkillCount     int      `json:"skill_count"`
 		HasTools       bool     `json:"has_tools"`
@@ -336,6 +337,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 			Name:           e.Name(),
 			DisplayName:    e.DisplayName(),
 			PermissionTier: e.PermissionTier(),
+			Provider:       e.ProviderName(),
 			Model:          e.ModelName(),
 			SkillCount:     len(e.Skills()),
 			HasTools:       e.HasTools(),
@@ -389,6 +391,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		"name":             e.Name(),
 		"display_name":     e.DisplayName(),
 		"permission_tier":  e.PermissionTier(),
+		"provider":         e.ProviderName(),
 		"model":            e.ModelName(),
 		"has_tools":        e.HasTools(),
 		"adapters":         adapters,

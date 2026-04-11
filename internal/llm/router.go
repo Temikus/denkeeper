@@ -55,6 +55,9 @@ type Router struct {
 	mErrors   metric.Int64Counter
 }
 
+// DefaultProvider returns the router's default provider name.
+func (r *Router) DefaultProvider() string { return r.defaultProvider }
+
 // DefaultModel returns the router's default model name.
 func (r *Router) DefaultModel() string { return r.defaultModel }
 

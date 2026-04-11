@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,52 @@ func TestReadOAIStream_ToolCallAccumulation(t *testing.T) {
 	}
 	if tc.Function.Arguments != `{"q":"hello"}` {
 		t.Errorf("tool call args = %q", tc.Function.Arguments)
+	}
+}
+
+func TestReadOAIStream_SSEErrorEvent_NestedMessage(t *testing.T) {
+	// LM Studio sends {"error":{"message":"..."},"message":"..."} with event: error.
+	body := "event: error\ndata: {\"error\":{\"message\":\"context length exceeded\"},\"message\":\"context length exceeded\"}\n\n"
+	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "context length exceeded") {
+		t.Errorf("error = %q, want it to contain 'context length exceeded'", err.Error())
+	}
+	var llmErr *LLMError
+	if !errors.As(err, &llmErr) {
+		t.Fatal("expected *LLMError")
+	}
+	if llmErr.StatusCode != 400 {
+		t.Errorf("status = %d, want 400", llmErr.StatusCode)
+	}
+	if llmErr.Retryable() {
+		t.Error("SSE error events should not be retryable")
+	}
+}
+
+func TestReadOAIStream_SSEErrorEvent_FlatString(t *testing.T) {
+	// Some servers send {"error":"plain string"}.
+	body := "event: error\ndata: {\"error\":\"model not found\"}\n\n"
+	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "model not found") {
+		t.Errorf("error = %q, want it to contain 'model not found'", err.Error())
+	}
+}
+
+func TestReadOAIStream_SSEErrorEvent_Unparseable(t *testing.T) {
+	// Fall back to raw data when JSON doesn't match known shapes.
+	body := "event: error\ndata: something went wrong\n\n"
+	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "something went wrong") {
+		t.Errorf("error = %q, want it to contain 'something went wrong'", err.Error())
 	}
 }
 

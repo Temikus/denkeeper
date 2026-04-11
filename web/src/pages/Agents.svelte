@@ -423,7 +423,7 @@
           </div>
           <div class="stat-text">
             <div class="stat-label">MODEL</div>
-            <div class="stat-value mono">{detail.model || '—'}</div>
+            <div class="stat-value mono">{detail.provider ? detail.provider + ' / ' : ''}{detail.model || '—'}</div>
           </div>
           <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
@@ -485,7 +485,7 @@
           {#if expandedCard === 'model'}
             <div class="config-panel-title">Model Configuration</div>
             <div class="config-panel-body">
-              <label class="config-label" for="cfg-model">LLM Model</label>
+              <label class="config-label" for="cfg-model">Model</label>
               <ModelSelector bind:value={configModel} />
               <label class="config-label" for="cfg-desc">Description</label>
               <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />

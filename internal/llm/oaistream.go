@@ -142,6 +142,16 @@ func ReadOAIStream(body io.Reader, onStream StreamCallback) (*OAIStreamResult, e
 
 	for scanner.Next() {
 		evt := scanner.Event()
+
+		// Some OpenAI-compatible servers (e.g. LM Studio) send errors as
+		// SSE events with "event: error" and HTTP 200. Detect and surface them.
+		// Returned as LLMError with status 400 so the router treats it as
+		// non-retryable (context-length, invalid model, etc.).
+		if evt.Type == "error" {
+			msg := extractSSEErrorMessage(evt.Data)
+			return nil, &LLMError{StatusCode: 400, Message: msg}
+		}
+
 		var chunk oaiStreamChunk
 		if err := json.Unmarshal([]byte(evt.Data), &chunk); err != nil {
 			continue // skip malformed chunks
@@ -186,4 +196,36 @@ type oaiStreamToolCall struct {
 type oaiStreamFunc struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+}
+
+// extractSSEErrorMessage tries to pull a human-readable message from an SSE
+// error event payload. It handles both {"error":{"message":"..."}} (OpenAI)
+// and {"message":"..."} / {"error":"..."} (LM Studio) shapes.
+func extractSSEErrorMessage(data string) string {
+	// Try {"error":{"message":"..."}} (OpenAI standard).
+	var nested struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &nested); err == nil {
+		if nested.Error.Message != "" {
+			return nested.Error.Message
+		}
+		if nested.Message != "" {
+			return nested.Message
+		}
+	}
+
+	// Try {"error":"..."} (flat string).
+	var flat struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(data), &flat); err == nil && flat.Error != "" {
+		return flat.Error
+	}
+
+	// Fall back to raw data.
+	return data
 }

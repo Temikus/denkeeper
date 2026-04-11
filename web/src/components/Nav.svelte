@@ -38,6 +38,7 @@
         { id: 'providers', label: 'Providers' },
         { id: 'costs',     label: 'Costs' },
         { id: 'keys',      label: 'API Keys' },
+        { id: 'settings',  label: 'Settings' },
       ],
     },
   ]

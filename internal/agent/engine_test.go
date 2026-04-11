@@ -3280,6 +3280,157 @@ func TestEngine_DisplayName_WithIdentityNameAndEmoji(t *testing.T) {
 	}
 }
 
+func TestEngine_SoftLimitBreaksToolLoop(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Provider returns tool_calls three times, then stop.
+	// With soft limit hit after round 1, we should only see 1 tool round.
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_weather", Arguments: `{"city":"London"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				// Second LLM call (after tool execution) — still wants more tools.
+				ToolCalls:    []llm.ToolCall{{ID: "call_2", Type: "function", Function: llm.FunctionCall{Name: "get_time", Arguments: `{}`}}},
+				Content:      "Intermediate result.",
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Final answer.",
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	// Soft limit = 0.001 USD. Pre-seed cost to exceed it.
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Soft: 0.001}, nil)
+	convID := "default:test:chat-softlimit"
+	costTracker.Record(convID, 0.01) // already over soft limit
+
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
+
+	var events []ChatEvent
+	onEvent := func(evt ChatEvent) {
+		events = append(events, evt)
+	}
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-softlimit",
+		UserID:     "user-1",
+		Text:       "What's the weather?",
+		Timestamp:  time.Now(),
+	}, onEvent)
+	if err != nil {
+		t.Fatalf("soft limit should not return error, got: %v", err)
+	}
+
+	// The loop should have broken after round 1 due to soft limit.
+	// The response should contain the intermediate content from the second response.
+	if text == "" {
+		t.Error("expected non-empty response text")
+	}
+
+	// Verify cost_limit event was emitted.
+	var foundCostLimit bool
+	for _, evt := range events {
+		if evt.Type == "cost_limit" {
+			foundCostLimit = true
+			if !strings.Contains(evt.Text, "approaching cost limit") {
+				t.Errorf("cost_limit event text = %q, want contains 'approaching cost limit'", evt.Text)
+			}
+		}
+	}
+	if !foundCostLimit {
+		t.Errorf("expected cost_limit event in events: %+v", events)
+	}
+
+	// Provider should have been called exactly 2 times (initial + 1 tool round),
+	// not 3 (would mean soft limit didn't break the loop).
+	if provider.callIndex != 2 {
+		t.Errorf("provider called %d times, want 2 (soft limit should break loop after round 1)", provider.callIndex)
+	}
+}
+
+func TestEngine_NoLimitCompletesToolLoop(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "get_weather", Arguments: `{"city":"London"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "call_2", Type: "function", Function: llm.FunctionCall{Name: "get_time", Arguments: `{}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "London is sunny and it's 3pm.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	// Zero limits = disabled.
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "You are a test assistant.", nil, toolMgr, nil, testLogger())
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-nolimit",
+		UserID:     "user-1",
+		Text:       "What's the weather and time?",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if text != "London is sunny and it's 3pm." {
+		t.Errorf("response = %q, want %q", text, "London is sunny and it's 3pm.")
+	}
+
+	// All 3 provider responses should have been consumed (2 tool rounds + final).
+	if provider.callIndex != 3 {
+		t.Errorf("provider called %d times, want 3 (all rounds completed)", provider.callIndex)
+	}
+}
+
 func TestEngine_DisplayName_WithPersonaNoIdentity(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {

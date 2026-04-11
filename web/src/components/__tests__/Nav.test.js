@@ -13,8 +13,8 @@ describe('Nav', () => {
   test('renders all navigation links', () => {
     const { container } = render(Nav, { props: { active: 'overview' } })
     const links = container.querySelectorAll('.nav-item')
-    // 2 top links (overview, chat) + 4 agents section + 4 platform section + 4 admin section = 14
-    expect(links).toHaveLength(14)
+    // 2 top links (overview, chat) + 4 agents section + 4 platform section + 5 admin section = 15
+    expect(links).toHaveLength(15)
   })
 
   test('has a theme toggle button', () => {

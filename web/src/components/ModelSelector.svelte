@@ -89,11 +89,11 @@
     setTimeout(() => { open = false }, 180)
   }
 
-  function select(id) {
-    value = id
+  function select(m) {
+    value = m.id
     open = false
     search = ''
-    onchange?.(id)
+    onchange?.(m.id)
   }
 
   function formatCost(v) {
@@ -198,7 +198,7 @@
             <button
               class="model-option"
               class:selected={m.id === value}
-              onmousedown={(e) => { e.preventDefault(); select(m.id) }}
+              onmousedown={(e) => { e.preventDefault(); select(m) }}
             >
               <div class="model-option-left">
                 <span class="model-option-name">{m.name}</span>

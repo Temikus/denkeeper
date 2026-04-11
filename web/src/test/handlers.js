@@ -148,6 +148,36 @@ export const handlers = [
   }),
   http.post('/auth/logout', () => HttpResponse.json({ ok: true })),
 
+  // Auth management
+  http.get('/api/v1/auth/status', () => HttpResponse.json({
+    password_enabled: true,
+    oidc_enabled: false,
+    sessions_trackable: true,
+    active_session_count: 2,
+  })),
+  http.get('/api/v1/auth/sessions', () => HttpResponse.json([
+    {
+      id: 'sess_abc123',
+      email: 'admin@example.com',
+      user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      ip: '192.168.1.10',
+      created_at: '2026-04-10T10:00:00Z',
+      expires_at: '2026-04-17T10:00:00Z',
+      last_seen_at: '2026-04-11T08:30:00Z',
+    },
+    {
+      id: 'sess_def456',
+      email: 'admin@example.com',
+      user_agent: 'curl/8.4.0',
+      ip: '10.0.0.1',
+      created_at: '2026-04-09T14:00:00Z',
+      expires_at: '2026-04-16T14:00:00Z',
+      last_seen_at: '2026-04-11T06:00:00Z',
+    },
+  ])),
+  http.delete('/api/v1/auth/sessions/:id', () => new HttpResponse(null, { status: 204 })),
+  http.delete('/api/v1/auth/sessions', () => HttpResponse.json({ revoked: 2 })),
+
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),
   http.post('/api/v1/setup', () => HttpResponse.json({ key: 'dk_setup123' })),
