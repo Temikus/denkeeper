@@ -1,0 +1,33 @@
+{{- $title := "" }}
+{{- if .Params.title }}
+  {{ $title = .Params.title }}
+{{- else }}
+  {{ $title = site.Params.title }}
+{{- end }}
+<title>{{ $title }}</title>
+
+{{- $description := "" }}
+{{- if .Params.description }}
+  {{ $description = .Params.description }}
+{{- else }}
+  {{ $description = site.Params.Description }}
+{{- end }}
+<meta name="description" content="{{ $description }}">
+
+<!-- Favicon -->
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+<!-- Open Graph -->
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:description" content="{{ $description }}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:image" content="{{ "cover.png" | absURL }}">
+<meta property="og:site_name" content="{{ site.Title }}">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{ $title }}">
+<meta name="twitter:description" content="{{ $description }}">
+<meta name="twitter:image" content="{{ "cover.png" | absURL }}">
