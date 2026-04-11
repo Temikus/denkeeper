@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 func testPasswordHash(password string) string {
@@ -301,5 +305,246 @@ func TestAuthenticate_SessionCookie(t *testing.T) {
 	}
 	if name != "admin" {
 		t.Errorf("expected name=admin, got %q", name)
+	}
+}
+
+// testServerWithConfig creates a test server with a writable TOML config file.
+func testServerWithConfig(t *testing.T, passwordHash string) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte("[api]\n[api.auth]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := hex.EncodeToString(make([]byte, 32))
+	sm, err := NewSessionManager(key, 24*time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.API.Auth.PreferredLoginMethod = "auto"
+	return &Server{
+		cfg:          testConfig(),
+		deps:         Deps{ConfigPath: cfgPath, Config: cfg},
+		logger:       testLogger(),
+		limiters:     make(map[string]*rateLimiter),
+		sessions:     sm,
+		passwordHash: passwordHash,
+		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
+	}, cfgPath
+}
+
+func TestHandlePasswordChange_Success(t *testing.T) {
+	s, _ := testServerWithConfig(t, testPasswordHash("oldpass"))
+	defer s.loginLimiter.stop()
+
+	body := `{"current_password":"oldpass","new_password":"newpass1234"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handlePasswordChange(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify hash was updated and authenticates with new password.
+	if err := bcrypt.CompareHashAndPassword([]byte(s.passwordHash), []byte("newpass1234")); err != nil {
+		t.Error("new password hash does not verify")
+	}
+}
+
+func TestHandlePasswordChange_WrongCurrent(t *testing.T) {
+	s, _ := testServerWithConfig(t, testPasswordHash("correct"))
+	defer s.loginLimiter.stop()
+
+	body := `{"current_password":"wrong","new_password":"newpass1234"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handlePasswordChange(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandlePasswordChange_WeakNew(t *testing.T) {
+	s, _ := testServerWithConfig(t, testPasswordHash("correct"))
+	defer s.loginLimiter.stop()
+
+	body := `{"current_password":"correct","new_password":"short"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handlePasswordChange(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandlePasswordChange_NotConfigured(t *testing.T) {
+	s, _ := testServerWithConfig(t, "")
+	defer s.loginLimiter.stop()
+
+	body := `{"current_password":"x","new_password":"longpassword"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handlePasswordChange(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandlePasswordChange_RateLimited(t *testing.T) {
+	s, _ := testServerWithConfig(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	// Exhaust rate limit.
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"current_password":"wrong","new_password":"whatever1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "5.5.5.5:1234"
+		rec := httptest.NewRecorder()
+		s.handlePasswordChange(rec, req)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", strings.NewReader(`{"current_password":"pw","new_password":"newpass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "5.5.5.5:1234"
+	rec := httptest.NewRecorder()
+	s.handlePasswordChange(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", rec.Code)
+	}
+}
+
+func TestHandleAuthPreferences_Valid(t *testing.T) {
+	s, _ := testServerWithConfig(t, "")
+	defer s.loginLimiter.stop()
+
+	body := `{"preferred_login_method":"password"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/preferences", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleAuthPreferences(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if s.deps.Config.API.Auth.PreferredLoginMethod != "password" {
+		t.Errorf("expected in-memory update to 'password', got %q", s.deps.Config.API.Auth.PreferredLoginMethod)
+	}
+}
+
+func TestHandleAuthPreferences_Invalid(t *testing.T) {
+	s, _ := testServerWithConfig(t, "")
+	defer s.loginLimiter.stop()
+
+	body := `{"preferred_login_method":"magic"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/preferences", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.handleAuthPreferences(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleOIDCTest_NoOIDC(t *testing.T) {
+	s, _ := testServerWithConfig(t, "")
+	defer s.loginLimiter.stop()
+	// s.oidcProvider is nil by default.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/test", nil)
+	rec := httptest.NewRecorder()
+	s.handleOIDCTest(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleOIDCTest_Reachable(t *testing.T) {
+	// Spin up a minimal OIDC discovery mock.
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		doc := map[string]any{
+			"issuer":                                "",
+			"authorization_endpoint":                "/authorize",
+			"token_endpoint":                        "/token",
+			"userinfo_endpoint":                     "/userinfo",
+			"jwks_uri":                              "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		}
+		// Set issuer to the request's host so go-oidc issuer validation passes.
+		doc["issuer"] = "http://" + r.Host
+		doc["authorization_endpoint"] = "http://" + r.Host + "/authorize"
+		doc["token_endpoint"] = "http://" + r.Host + "/token"
+		doc["userinfo_endpoint"] = "http://" + r.Host + "/userinfo"
+		doc["jwks_uri"] = "http://" + r.Host + "/jwks"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(doc) //nolint:errcheck
+	}))
+	defer mock.Close()
+
+	s, _ := testServerWithConfig(t, "")
+	defer s.loginLimiter.stop()
+	// Set up a non-nil oidcProvider so the guard passes.
+	s.oidcProvider = &OIDCProvider{}
+	s.deps.Config.API.Auth.OIDC.Issuer = mock.URL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/test", nil)
+	rec := httptest.NewRecorder()
+	s.handleOIDCTest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp["ok"] != true {
+		t.Error("expected ok=true")
+	}
+	endpoints, _ := resp["endpoints"].(map[string]any)
+	if endpoints["authorization"] == "" {
+		t.Error("expected authorization endpoint")
+	}
+	if endpoints["userinfo"] == "" {
+		t.Error("expected userinfo endpoint")
+	}
+}
+
+func TestHandleAuthStatus_Enriched(t *testing.T) {
+	s, _ := testServerWithConfig(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+	s.deps.Config.API.Auth.OIDC.Issuer = "https://accounts.example.com"
+	s.deps.Config.API.Auth.OIDC.AllowedEmails = []string{"user@example.com"}
+	s.deps.Config.API.Auth.PreferredLoginMethod = "password"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	rec := httptest.NewRecorder()
+	s.handleAuthStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp["password_enabled"] != true {
+		t.Error("expected password_enabled=true")
+	}
+	if resp["oidc_issuer"] != "https://accounts.example.com" {
+		t.Errorf("expected oidc_issuer, got %v", resp["oidc_issuer"])
+	}
+	if resp["preferred_login_method"] != "password" {
+		t.Errorf("expected preferred_login_method=password, got %v", resp["preferred_login_method"])
 	}
 }

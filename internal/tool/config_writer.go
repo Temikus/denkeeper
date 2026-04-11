@@ -503,6 +503,32 @@ func SetAuthConfig(path, passwordHash, sessionSecret string) error {
 	return writeRawConfig(path, raw)
 }
 
+// UpdateAuthConfig applies partial updates to the [api.auth] section of the
+// TOML config. Only keys present in changes are written; other fields are
+// preserved. Used for password changes and preference updates.
+func UpdateAuthConfig(path string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	apiSection, ok := raw["api"].(map[string]any)
+	if !ok {
+		apiSection = map[string]any{}
+	}
+	authSection, ok := apiSection["auth"].(map[string]any)
+	if !ok {
+		authSection = map[string]any{}
+	}
+	for k, v := range changes {
+		authSection[k] = v
+	}
+	apiSection["auth"] = authSection
+	raw["api"] = apiSection
+
+	return writeRawConfig(path, raw)
+}
+
 // readRawConfig reads a TOML file into a generic map.
 func readRawConfig(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- TOML config path from startup

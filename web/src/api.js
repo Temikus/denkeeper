@@ -266,6 +266,15 @@ export const api = {
   listAuthSessions: () => apiFetch('/api/v1/auth/sessions'),
   revokeAuthSession: (id) => apiFetch(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   revokeAllAuthSessions: () => apiFetch('/api/v1/auth/sessions', { method: 'DELETE' }),
+  changePassword: (currentPassword, newPassword) => apiFetch('/api/v1/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  }),
+  testOIDC: () => apiFetch('/api/v1/auth/oidc/test'),
+  updateAuthPreferences: (method) => apiFetch('/api/v1/auth/preferences', {
+    method: 'POST',
+    body: JSON.stringify({ preferred_login_method: method }),
+  }),
 
   // Auth endpoints (no auth required).
   authConfig: () => fetch('/auth/config').then(r => r.json()),

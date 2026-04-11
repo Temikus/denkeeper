@@ -221,6 +221,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/auth/sessions/{id}", s.RequireScope("admin", s.handleRevokeSession))
 	mux.HandleFunc("DELETE /api/v1/auth/sessions", s.RequireScope("admin", s.handleRevokeAllSessions))
 	mux.HandleFunc("GET /api/v1/auth/status", s.RequireScope("admin", s.handleAuthStatus))
+	mux.HandleFunc("POST /api/v1/auth/password", s.RequireScope("admin", s.handlePasswordChange))
+	mux.HandleFunc("GET /api/v1/auth/oidc/test", s.RequireScope("admin", s.handleOIDCTest))
+	mux.HandleFunc("POST /api/v1/auth/preferences", s.RequireScope("admin", s.handleAuthPreferences))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)
@@ -263,6 +266,11 @@ func (s *Server) Run(ctx context.Context) error {
 	// Start periodic replay-buffer cleanup (stops when ctx is cancelled).
 	if s.wsHub != nil {
 		s.wsHub.StartCleanup(ctx)
+	}
+
+	// Start periodic session record cleanup (stops when ctx is cancelled).
+	if s.sessions != nil && s.sessions.Store != nil {
+		s.sessions.Store.StartCleanup(ctx, 6*time.Hour, s.logger)
 	}
 
 	errCh := make(chan error, 1)

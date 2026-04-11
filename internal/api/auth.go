@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,7 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // rateBucket tracks login attempts for a single IP.
@@ -306,7 +310,162 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// OIDC details.
+	if s.deps.Config != nil {
+		resp["oidc_issuer"] = s.deps.Config.API.Auth.OIDC.Issuer
+		resp["oidc_allowed_emails"] = s.deps.Config.API.Auth.OIDC.AllowedEmails
+
+		pref := s.deps.Config.API.Auth.PreferredLoginMethod
+		if pref == "" {
+			pref = "auto"
+		}
+		resp["preferred_login_method"] = pref
+	}
+
+	// API key count.
+	if s.deps.KeyStore != nil {
+		keys, err := s.deps.KeyStore.List(r.Context())
+		if err == nil {
+			resp["api_keys_count"] = len(keys)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePasswordChange allows an authenticated admin to change the dashboard password.
+func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
+	if s.passwordHash == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "password login not configured"})
+		return
+	}
+
+	// Rate limiting (reuse login limiter).
+	ip := clientIP(r)
+	if !s.loginLimiter.allow(ip) {
+		retryAfter := s.loginLimiter.retryAfter(ip)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts"})
+		return
+	}
+
+	var input struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(s.passwordHash), []byte(input.CurrentPassword)); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid current password"})
+		return
+	}
+
+	if len(input.NewPassword) < 8 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "new password must be at least 8 characters"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), 13)
+	if err != nil {
+		s.logger.Error("hashing new password", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})
+		return
+	}
+
+	if s.deps.ConfigPath != "" {
+		if err := tool.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{"password_hash": string(hash)}); err != nil {
+			s.logger.Error("persisting password change", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save configuration"})
+			return
+		}
+	}
+
+	s.passwordHash = string(hash)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleOIDCTest performs a fresh OIDC discovery against the configured issuer.
+func (s *Server) handleOIDCTest(w http.ResponseWriter, r *http.Request) {
+	if s.oidcProvider == nil || s.deps.Config == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "OIDC not configured"})
+		return
+	}
+
+	issuer := s.deps.Config.API.Auth.OIDC.Issuer
+	if issuer == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "OIDC issuer not configured"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":    false,
+			"error": fmt.Sprintf("discovery failed: %v", err),
+		})
+		return
+	}
+
+	endpoint := provider.Endpoint()
+
+	// Extract userinfo_endpoint from discovery document.
+	var disc struct {
+		UserInfo string `json:"userinfo_endpoint"`
+	}
+	_ = provider.Claims(&disc)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"issuer": issuer,
+		"endpoints": map[string]string{
+			"authorization": endpoint.AuthURL,
+			"token":         endpoint.TokenURL,
+			"userinfo":      disc.UserInfo,
+		},
+	})
+}
+
+// handleAuthPreferences updates the preferred login method.
+func (s *Server) handleAuthPreferences(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		PreferredLoginMethod string `json:"preferred_login_method"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	switch input.PreferredLoginMethod {
+	case "auto", "password", "apikey":
+		// valid
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "preferred_login_method must be one of: auto, password, apikey",
+		})
+		return
+	}
+
+	if s.deps.ConfigPath != "" {
+		if err := tool.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{
+			"preferred_login_method": input.PreferredLoginMethod,
+		}); err != nil {
+			s.logger.Error("persisting auth preferences", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save configuration"})
+			return
+		}
+	}
+
+	if s.deps.Config != nil {
+		s.deps.Config.API.Auth.PreferredLoginMethod = input.PreferredLoginMethod
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // isValidOrigin checks if the origin is allowed by CORS config or matches the server host.

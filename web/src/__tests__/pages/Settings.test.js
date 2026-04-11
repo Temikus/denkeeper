@@ -142,6 +142,177 @@ describe('Settings page', () => {
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
+  // --- Section 2: Password Management ---
+
+  test('password section shows form when password enabled', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Current password')).toBeInTheDocument()
+      expect(screen.getByText('Change Password')).toBeInTheDocument()
+    })
+  })
+
+  test('password section shows not configured when disabled', async () => {
+    server.use(
+      http.get('/api/v1/auth/status', () => HttpResponse.json({
+        password_enabled: false,
+        oidc_enabled: false,
+        sessions_trackable: true,
+        active_session_count: 0,
+        preferred_login_method: 'auto',
+      }))
+    )
+
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText(/Password login is not configured/)).toBeInTheDocument()
+    })
+  })
+
+  test('password strength indicator shows levels', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Change Password')).toBeInTheDocument()
+    })
+
+    const inputs = document.querySelectorAll('input[type="password"]')
+    // inputs[1] is the "New password" field
+    await fireEvent.input(inputs[1], { target: { value: 'short' } })
+    await waitFor(() => {
+      expect(screen.getByText('Too short')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(inputs[1], { target: { value: 'eightchr' } })
+    await waitFor(() => {
+      expect(screen.getByText('OK')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(inputs[1], { target: { value: 'twelvecharss' } })
+    await waitFor(() => {
+      expect(screen.getByText('Strong')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(inputs[1], { target: { value: 'sixteencharacter' } })
+    await waitFor(() => {
+      expect(screen.getByText('Very strong')).toBeInTheDocument()
+    })
+  })
+
+  test('password change mismatch shows error', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Change Password')).toBeInTheDocument()
+    })
+
+    const inputs = document.querySelectorAll('input[type="password"]')
+    await fireEvent.input(inputs[0], { target: { value: 'correct' } })
+    await fireEvent.input(inputs[1], { target: { value: 'newpass1234' } })
+    await fireEvent.input(inputs[2], { target: { value: 'mismatch' } })
+    await fireEvent.click(screen.getByText('Change Password'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Passwords do not match')).toBeInTheDocument()
+    })
+  })
+
+  test('password change success shows banner', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Change Password')).toBeInTheDocument()
+    })
+
+    const inputs = document.querySelectorAll('input[type="password"]')
+    await fireEvent.input(inputs[0], { target: { value: 'correct' } })
+    await fireEvent.input(inputs[1], { target: { value: 'newpass1234' } })
+    await fireEvent.input(inputs[2], { target: { value: 'newpass1234' } })
+    await fireEvent.click(screen.getByText('Change Password'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Password changed successfully')).toBeInTheDocument()
+    })
+  })
+
+  // --- Section 3: OIDC Status ---
+
+  test('OIDC section shows not configured when disabled', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText(/OIDC is not configured/)).toBeInTheDocument()
+    })
+  })
+
+  test('OIDC section shows issuer and test button when enabled', async () => {
+    server.use(
+      http.get('/api/v1/auth/status', () => HttpResponse.json({
+        password_enabled: true,
+        oidc_enabled: true,
+        sessions_trackable: true,
+        active_session_count: 2,
+        oidc_issuer: 'https://accounts.example.com',
+        oidc_allowed_emails: ['user@example.com'],
+        preferred_login_method: 'auto',
+      }))
+    )
+
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('https://accounts.example.com')).toBeInTheDocument()
+      expect(screen.getByText('user@example.com')).toBeInTheDocument()
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+  })
+
+  test('OIDC test connection shows success', async () => {
+    server.use(
+      http.get('/api/v1/auth/status', () => HttpResponse.json({
+        password_enabled: true,
+        oidc_enabled: true,
+        sessions_trackable: true,
+        active_session_count: 2,
+        oidc_issuer: 'https://accounts.example.com',
+        oidc_allowed_emails: ['user@example.com'],
+        preferred_login_method: 'auto',
+      }))
+    )
+
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => {
+      expect(screen.getByText(/Connection successful/)).toBeInTheDocument()
+    })
+  })
+
+  // --- Section 5: Login Preferences ---
+
+  test('preferences section renders dropdown', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Login Preferences')).toBeInTheDocument()
+      const select = document.querySelector('#pref-login')
+      expect(select).toBeInTheDocument()
+      expect(select.value).toBe('auto')
+    })
+  })
+
+  test('preferences save calls API', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Login Preferences')).toBeInTheDocument()
+    })
+
+    const select = document.querySelector('#pref-login')
+    await fireEvent.change(select, { target: { value: 'password' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Login preference saved')).toBeInTheDocument()
+    })
+  })
+
   test('collapsible sections toggle', async () => {
     render(Settings)
     await waitFor(() => {

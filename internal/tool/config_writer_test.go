@@ -632,3 +632,48 @@ max_retries = 1
 		t.Errorf("fallbacks should be empty after clearing, got %d", len(cfg.Agents[0].Fallbacks))
 	}
 }
+
+func TestUpdateAuthConfig_PreferredLogin(t *testing.T) {
+	path := writeTestConfig(t, `[api.auth]
+password_hash = "$2a$13$existing"
+session_secret = "aabb"
+`)
+
+	if err := UpdateAuthConfig(path, map[string]any{"preferred_login_method": "password"}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "preferred_login_method") {
+		t.Error("should contain preferred_login_method")
+	}
+	if !strings.Contains(content, "$2a$13$existing") {
+		t.Error("should preserve password_hash")
+	}
+	if !strings.Contains(content, "aabb") {
+		t.Error("should preserve session_secret")
+	}
+}
+
+func TestUpdateAuthConfig_PasswordOnly(t *testing.T) {
+	path := writeTestConfig(t, `[api.auth]
+password_hash = "$2a$13$old"
+session_secret = "ccdd"
+preferred_login_method = "apikey"
+`)
+
+	if err := UpdateAuthConfig(path, map[string]any{"password_hash": "$2b$13$new"}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "$2b$13$new") {
+		t.Error("should contain new password_hash")
+	}
+	if !strings.Contains(content, "apikey") {
+		t.Error("should preserve preferred_login_method")
+	}
+	if !strings.Contains(content, "ccdd") {
+		t.Error("should preserve session_secret")
+	}
+}

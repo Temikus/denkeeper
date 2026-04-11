@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -192,5 +194,36 @@ func TestSessionStore_Count(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+func TestSessionStore_StartCleanup(t *testing.T) {
+	// Use a temp file instead of :memory: so the cleanup goroutine shares the same DB.
+	store, err := NewSessionStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create an already-expired session.
+	_, _ = store.Create(ctx, "admin@test.com", []string{}, "ua", "127.0.0.1", time.Now().Add(-1*time.Hour))
+	// Create a valid session.
+	_, _ = store.Create(ctx, "admin@test.com", []string{}, "ua", "127.0.0.1", time.Now().Add(1*time.Hour))
+
+	logger := slog.Default()
+	store.StartCleanup(ctx, 50*time.Millisecond, logger)
+
+	// Wait for at least one cleanup tick.
+	time.Sleep(200 * time.Millisecond)
+
+	count, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 session after cleanup, got %d", count)
 	}
 }

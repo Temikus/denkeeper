@@ -154,6 +154,10 @@ export const handlers = [
     oidc_enabled: false,
     sessions_trackable: true,
     active_session_count: 2,
+    oidc_issuer: '',
+    oidc_allowed_emails: null,
+    api_keys_count: 1,
+    preferred_login_method: 'auto',
   })),
   http.get('/api/v1/auth/sessions', () => HttpResponse.json([
     {
@@ -177,6 +181,28 @@ export const handlers = [
   ])),
   http.delete('/api/v1/auth/sessions/:id', () => new HttpResponse(null, { status: 204 })),
   http.delete('/api/v1/auth/sessions', () => HttpResponse.json({ revoked: 2 })),
+  http.post('/api/v1/auth/password', async ({ request }) => {
+    const body = await request.json()
+    if (body.current_password !== 'correct') {
+      return HttpResponse.json({ error: 'invalid current password' }, { status: 401 })
+    }
+    if (!body.new_password || body.new_password.length < 8) {
+      return HttpResponse.json({ error: 'new password must be at least 8 characters' }, { status: 400 })
+    }
+    return HttpResponse.json({ ok: true })
+  }),
+  http.get('/api/v1/auth/oidc/test', () => HttpResponse.json({
+    ok: true,
+    issuer: 'https://accounts.example.com',
+    endpoints: { authorization: '/authorize', token: '/token', userinfo: '/userinfo' },
+  })),
+  http.post('/api/v1/auth/preferences', async ({ request }) => {
+    const body = await request.json()
+    if (!['auto', 'password', 'apikey'].includes(body.preferred_login_method)) {
+      return HttpResponse.json({ error: 'invalid value' }, { status: 400 })
+    }
+    return HttpResponse.json({ ok: true })
+  }),
 
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),

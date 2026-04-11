@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -179,6 +180,28 @@ func (ss *SessionStore) Count(ctx context.Context) (int, error) {
 // Close closes the underlying database connection.
 func (ss *SessionStore) Close() error {
 	return ss.db.Close()
+}
+
+// StartCleanup launches a background goroutine that periodically purges
+// expired session records. It stops when ctx is cancelled.
+func (ss *SessionStore) StartCleanup(ctx context.Context, interval time.Duration, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				count, err := ss.PurgeExpired(ctx)
+				if err != nil {
+					logger.Error("session cleanup failed", "error", err)
+				} else if count > 0 {
+					logger.Info("purged expired sessions", "count", count)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 // ScopesFromRecord parses the JSON scopes string into a string slice.

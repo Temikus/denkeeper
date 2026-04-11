@@ -295,6 +295,11 @@ type APIAuthConfig struct {
 	SessionSecret string `toml:"session_secret"`
 	// SessionMaxAge is the session cookie lifetime as a Go duration string. Default: "24h".
 	SessionMaxAge string `toml:"session_max_age"`
+	// PreferredLoginMethod controls which login method is shown first on the login page.
+	// Values: "auto" (default), "password", "apikey".
+	PreferredLoginMethod string `toml:"preferred_login_method"`
+	// SessionRecordRetention is how long to keep session records after expiry. Default: "720h" (30 days).
+	SessionRecordRetention string `toml:"session_record_retention"`
 	// OIDC configures optional OpenID Connect SSO.
 	OIDC OIDCConfig `toml:"oidc"`
 }
@@ -886,6 +891,12 @@ func applyMiscDefaults(cfg *Config) {
 func applyAuthDefaults(cfg *Config) {
 	if cfg.API.Auth.SessionMaxAge == "" {
 		cfg.API.Auth.SessionMaxAge = "24h"
+	}
+	if cfg.API.Auth.PreferredLoginMethod == "" {
+		cfg.API.Auth.PreferredLoginMethod = "auto"
+	}
+	if cfg.API.Auth.SessionRecordRetention == "" {
+		cfg.API.Auth.SessionRecordRetention = "720h"
 	}
 	if cfg.API.Auth.OIDC.Enabled && len(cfg.API.Auth.OIDC.Scopes) == 0 {
 		cfg.API.Auth.OIDC.Scopes = []string{"openid", "email", "profile"}

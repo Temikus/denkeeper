@@ -134,6 +134,11 @@ Key endpoints (all require auth unless noted):
 - `GET /api/v1/llm/providers` (scope `admin`) — list LLM providers with current config
 - `PATCH /api/v1/llm/providers/{name}` (scope `admin`) — update provider config (API key, base URL, etc.)
 - `PATCH /api/v1/llm/config` (scope `admin`) — update global LLM config (default provider, model, etc.)
+- `GET /api/v1/auth/status` (scope `admin`) — auth config summary (password, OIDC, sessions, preferences)
+- `GET/DELETE /api/v1/auth/sessions` (scope `admin`) — session list + revoke
+- `POST /api/v1/auth/password` (scope `admin`) — change password (bcrypt verify + re-hash + persist)
+- `GET /api/v1/auth/oidc/test` (scope `admin`) — test OIDC provider reachability (fresh discovery, 10s timeout)
+- `POST /api/v1/auth/preferences` (scope `admin`) — set preferred login method (auto/password/apikey)
 - `POST /api/v1/server/reload` (scope `admin`) — reload config from disk
 - `POST /api/v1/server/restart` (scope `admin`) — restart the server process
 
@@ -175,7 +180,7 @@ Every user-facing feature must include thoughtful UX treatment.
 
 ## Current State
 
-Phase 11 (LLM provider management + streaming) complete. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
+Phase 11 (LLM provider management + streaming) complete. Phase 12 (Auth & Onboarding UX Uplift) partially complete: Settings page with all 5 sections (Auth Overview, Password Management, OIDC Status, Session Management, Login Preferences), password change endpoint, OIDC connectivity test, auth preferences persistence, enriched auth/status API, session cleanup goroutine. Remaining: 12d (login page improvements), 12e (onboarding checklist). All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
 
