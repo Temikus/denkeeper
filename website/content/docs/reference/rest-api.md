@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-06T00:00:00+00:00
+lastmod: 2026-04-11T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -73,6 +73,64 @@ The web dashboard connects via WebSocket by default and falls back to SSE after 
 **Scope:** `agents:read`
 
 List available LLM models from all configured providers.
+
+### `GET /api/v1/models/details`
+
+**Scope:** `agents:read`
+
+Get detailed model information including pricing data.
+
+## LLM Providers
+
+### `GET /api/v1/llm/providers`
+
+**Scope:** `admin`
+
+List all LLM providers with their current configuration (API keys are redacted).
+
+### `PATCH /api/v1/llm/providers/{name}`
+
+**Scope:** `admin`
+
+Update a provider's configuration (API key, base URL, etc.). Changes take effect immediately and are persisted to config.
+
+**Request body:**
+
+```json
+{
+  "api_key": "sk-...",
+  "base_url": "https://api.openai.com/v1"
+}
+```
+
+### `PATCH /api/v1/llm/config`
+
+**Scope:** `admin`
+
+Update global LLM configuration (default provider, default model).
+
+**Request body:**
+
+```json
+{
+  "default_provider": "anthropic",
+  "default_model": "claude-sonnet-4-5"
+}
+```
+
+## Server Admin
+
+### `POST /api/v1/server/reload`
+
+**Scope:** `admin`
+
+Reload the server configuration from disk without restarting.
+
+### `POST /api/v1/server/restart`
+
+**Scope:** `admin`
+
+Restart the server process.
 
 ## Sessions
 

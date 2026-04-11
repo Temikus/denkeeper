@@ -123,12 +123,12 @@ cosign verify \
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
-- **Web dashboard** — embedded Svelte UI (served via the API server) with overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, and API key management; includes dark mode toggle and warm light theme
+- **Web dashboard** — embedded Svelte UI (served via the API server) with 15 pages: overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, LLM provider config, settings, and API key management; includes dark mode toggle and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
 - **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
-- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with SSE streaming and WebSocket transport, session management, approval CRUD, tool/plugin CRUD, and API key management
+- **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with real-time token streaming (SSE + WebSocket), session management, approval CRUD, tool/plugin CRUD, LLM provider management, server reload/restart, and API key management
 - **Dashboard authentication** — password login (bcrypt), OAuth2/OIDC SSO (PKCE), session cookies (AES-256-GCM)
 - **OpenTelemetry observability** — Prometheus `/metrics` endpoint and optional OTLP trace export
 - **CLI plugin signing** — `denkeeper plugin keygen/sign/verify` commands for Ed25519 plugin binary signing and verification
@@ -343,6 +343,12 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
 | `GET` | `/api/v1/ws` | `chat` | WebSocket upgrade for bidirectional streaming (auth via `?token=` or session cookie) |
 | `GET` | `/api/v1/models` | `agents:read` | List available LLM models from all providers |
+| `GET` | `/api/v1/models/details` | `agents:read` | Model details with pricing info |
+| `GET` | `/api/v1/llm/providers` | `admin` | List LLM providers with current config |
+| `PATCH` | `/api/v1/llm/providers/{name}` | `admin` | Update provider config (API key, base URL) |
+| `PATCH` | `/api/v1/llm/config` | `admin` | Update global LLM config (default provider, model) |
+| `POST` | `/api/v1/server/reload` | `admin` | Reload config from disk |
+| `POST` | `/api/v1/server/restart` | `admin` | Restart the server process |
 | `GET` | `/api/v1/sessions` | `sessions:read` | List all conversations |
 | `GET` | `/api/v1/sessions/{id}/messages` | `sessions:read` | Get messages for a session |
 | `DELETE` | `/api/v1/sessions/{id}` | `sessions:read` | Delete a session and its history |

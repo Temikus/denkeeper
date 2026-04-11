@@ -120,6 +120,7 @@ Key endpoints (all require auth unless noted):
 - `POST /api/v1/chat` (scope `chat`) — JSON or SSE streaming
 - `GET /api/v1/ws` — WebSocket upgrade (auth via `?token=` or session cookie)
 - `GET /api/v1/models` (scope `agents:read`) — available LLM models from all providers
+- `GET /api/v1/models/details` (scope `agents:read`) — model details with pricing info
 - `GET/POST/DELETE /api/v1/approvals/...` — approval CRUD; `POST /approve` accepts `?auto_approve=session|permanent` to simultaneously create an auto-approve rule
 - `GET/POST/DELETE /api/v1/auto-approve` (scope `approvals:read/write`) — auto-approve rule CRUD; `GET` accepts `?agent=` filter
 - `GET/POST/PATCH/DELETE /api/v1/schedules/...` — schedule CRUD
@@ -129,7 +130,12 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
-- `PATCH /api/v1/agents/{name}` — agent config mutation
+- `PATCH /api/v1/agents/{name}` — agent config mutation; supports `name` (rename), `session_tier`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`
+- `GET /api/v1/llm/providers` (scope `admin`) — list LLM providers with current config
+- `PATCH /api/v1/llm/providers/{name}` (scope `admin`) — update provider config (API key, base URL, etc.)
+- `PATCH /api/v1/llm/config` (scope `admin`) — update global LLM config (default provider, model, etc.)
+- `POST /api/v1/server/reload` (scope `admin`) — reload config from disk
+- `POST /api/v1/server/restart` (scope `admin`) — restart the server process
 
 Chat streaming events (SSE and WebSocket): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
 
@@ -137,7 +143,7 @@ Chat streaming events (SSE and WebSocket): `thinking`, `tool_start`, `tool_end`,
 
 `internal/web/` embeds a Svelte SPA compiled to `web/dist/` via `//go:embed dist`.
 
-13 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, KV Store, Costs, Agents, API Keys.
+15 pages: Login, Overview, Chat, Approvals, Sessions, Schedules, Skills, Tools, Browser, KV Store, Costs, Agents, API Keys, Providers, Settings.
 
 **WebSocket transport** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to a bidirectional WebSocket. The web dashboard auto-connects via WS and falls back to SSE after 3 failed reconnect attempts. `WSHub` manages connections with per-connection replay buffer (`websocket_replay_buffer_ttl`, default 5m). Config: `api.websocket_enabled` (default true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl`. Frame types defined in `wsframes.go`.
 
@@ -169,7 +175,7 @@ Every user-facing feature must include thoughtful UX treatment.
 
 ## Current State
 
-Phase 10 (web UI testing) complete. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (13 pages) with WebSocket streaming.
+Phase 11 (LLM provider management + streaming) complete. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
 
