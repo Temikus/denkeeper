@@ -88,7 +88,7 @@ type Request struct {
 	ExpiresAt  *time.Time `db:"expires_at"  json:"expires_at,omitempty"`
 	ResolvedAt *time.Time `db:"resolved_at" json:"resolved_at,omitempty"`
 
-	// ResolvedBy records who resolved the approval: "telegram", "api", or "expired".
+	// ResolvedBy records who resolved the approval: "telegram", "api", "ws", "expired", or "auto_approve".
 	ResolvedBy string `db:"resolved_by" json:"resolved_by,omitempty"`
 }
 

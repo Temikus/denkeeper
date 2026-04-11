@@ -19,7 +19,7 @@ func TestShouldAutoApprove_SessionRule(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule("default", "web_search", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
 
 	ok, scope := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
 	if !ok {
@@ -34,7 +34,7 @@ func TestShouldAutoApprove_SessionRuleDifferentConversation(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule("default", "web_search", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
 
 	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv2")
 	if ok {
@@ -64,7 +64,7 @@ func TestShouldAutoApprove_SessionTakesPrecedence(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule("default", "web_search", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
 	if _, err := m.AddPermanentRule(ctx, "default", "web_search", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -144,9 +144,9 @@ func TestClearSessionRules(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule("default", "tool_a", "conv1", "test")
-	m.AddSessionRule("default", "tool_b", "conv1", "test")
-	m.AddSessionRule("default", "tool_a", "conv2", "test")
+	m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "tool_b", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "tool_a", "conv2", "test")
 
 	m.ClearSessionRules("conv1")
 
@@ -169,7 +169,7 @@ func TestListAutoApproveRules_CombinesSessionAndPermanent(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 
-	m.AddSessionRule("default", "tool_a", "conv1", "test")
+	m.AddSessionRule(ctx, "default", "tool_a", "conv1", "test")
 	if _, err := m.AddPermanentRule(ctx, "default", "tool_b", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -286,5 +286,85 @@ func TestResolveByCallback_ApproveAlways_CreatesPermanentRule(t *testing.T) {
 	}
 	if scope != ScopePermanent {
 		t.Errorf("expected permanent scope, got %q", scope)
+	}
+}
+
+func TestAutoResolvePending_PermanentRule(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	// Submit three pending approvals for the same tool.
+	resolved := make([]bool, 3)
+	for i := range 3 {
+		idx := i
+		action := func(_ context.Context, _ string) error {
+			resolved[idx] = true
+			return nil
+		}
+		_, err := m.Submit(ctx, "default", ActionKindToolCall,
+			`Execute tool "web_search" with args: {"q":"test"}`, `{"q":"test"}`,
+			"ext", "ws", "conv1", action)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Also submit one for a different tool — should NOT be resolved.
+	differentResolved := false
+	_, err := m.Submit(ctx, "default", ActionKindToolCall,
+		`Execute tool "other_tool" with args: {}`, `{}`,
+		"ext", "ws", "conv1", func(_ context.Context, _ string) error {
+			differentResolved = true
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Creating a permanent rule should auto-resolve the 3 web_search approvals.
+	if _, err := m.AddPermanentRule(ctx, "default", "web_search", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, r := range resolved {
+		if !r {
+			t.Errorf("expected pending approval %d to be auto-resolved", i)
+		}
+	}
+	if differentResolved {
+		t.Error("other_tool approval should NOT have been auto-resolved")
+	}
+
+	// Verify all web_search approvals are no longer pending.
+	pending, err := m.List(ctx, StatusPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pending {
+		if ExtractToolName(p.Summary) == "web_search" {
+			t.Error("web_search approval should not be pending after auto-resolve")
+		}
+	}
+}
+
+func TestAutoResolvePending_SessionRule(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	resolved := false
+	_, err := m.Submit(ctx, "default", ActionKindToolCall,
+		`Execute tool "web_search" with args: {}`, `{}`,
+		"ext", "ws", "conv1", func(_ context.Context, _ string) error {
+			resolved = true
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.AddSessionRule(ctx, "default", "web_search", "conv1", "test")
+
+	if !resolved {
+		t.Error("expected pending approval to be auto-resolved by session rule")
 	}
 }

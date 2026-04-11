@@ -818,7 +818,7 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 				if toolName != "" && resolved.Kind == approval.ActionKindToolCall {
 					switch autoScope {
 					case "session":
-						s.deps.Approvals.AddSessionRule(resolved.AgentName, toolName, resolved.ConversationID, "api")
+						s.deps.Approvals.AddSessionRule(r.Context(), resolved.AgentName, toolName, resolved.ConversationID, "api")
 					case "permanent":
 						if _, aaErr := s.deps.Approvals.AddPermanentRule(r.Context(), resolved.AgentName, toolName, "api"); aaErr != nil {
 							s.logger.Error("creating auto-approve rule via approval", "error", aaErr)
@@ -889,7 +889,7 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id required for session scope"})
 			return
 		}
-		s.deps.Approvals.AddSessionRule(body.Agent, body.Tool, body.ConversationID, "api")
+		s.deps.Approvals.AddSessionRule(r.Context(), body.Agent, body.Tool, body.ConversationID, "api")
 		writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "scope": "session"})
 	case "permanent", "":
 		rule, err := s.deps.Approvals.AddPermanentRule(r.Context(), body.Agent, body.Tool, "api")

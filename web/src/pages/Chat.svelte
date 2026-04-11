@@ -290,44 +290,55 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
-        {#if msg.approvals?.length > 0}
-          <div class="approval-cards">
-            {#each msg.approvals as appr}
-              <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
-                <span class="approval-icon" aria-hidden="true">{approvalStatusIcon(appr.status)}</span>
-                <span class="sr-only">{approvalStatusLabel(appr.status)}</span>
-                <span class="tool-name">{appr.tool}</span>
-                {#if appr.status === 'pending'}
-                  <div class="approval-actions">
-                    <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
-                    <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
-                    <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always Approve</button>
+        {#if (msg.approvals?.length > 0) || (msg.toolCalls?.length > 0)}
+          {@const pendingCount = (msg.approvals || []).filter(a => a.status === 'pending').length}
+          {@const totalCalls = Math.max((msg.toolCalls || []).length, (msg.approvals || []).length)}
+          {@const runningCount = (msg.toolCalls || []).filter(t => t.status === 'running').length}
+          {@const errorCount = (msg.toolCalls || []).filter(t => t.status === 'error').length}
+          <details class="tool-activity" open={pendingCount > 0 || runningCount > 0}>
+            <summary class="tool-activity-summary">
+              Tools: {totalCalls} {totalCalls === 1 ? 'call' : 'calls'}{#if pendingCount > 0} <span class="pending-count">({pendingCount} pending)</span>{/if}{#if runningCount > 0} <span class="running-count">({runningCount} running)</span>{/if}{#if errorCount > 0} <span class="error-count">({errorCount} failed)</span>{/if}
+            </summary>
+            {#if msg.approvals?.length > 0}
+              <div class="approval-cards">
+                {#each msg.approvals as appr}
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
+                    <span class="approval-icon" aria-hidden="true">{approvalStatusIcon(appr.status)}</span>
+                    <span class="sr-only">{approvalStatusLabel(appr.status)}</span>
+                    <span class="tool-name">{appr.tool}</span>
+                    {#if appr.status === 'pending'}
+                      <div class="approval-actions">
+                        <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
+                        <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
+                        <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always Approve</button>
+                      </div>
+                    {:else}
+                      <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
+                    {/if}
                   </div>
-                {:else}
-                  <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
-                {/if}
+                {/each}
               </div>
-            {/each}
-          </div>
-        {/if}
-        {#if msg.toolCalls?.length > 0}
-          <div class="tool-calls">
-            {#each msg.toolCalls as tc}
-              <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'} title={tc.error || ''}>
-                <span class="tool-icon" aria-hidden="true">{toolStatusIcon(tc.status)}</span>
-                <span class="sr-only">{tc.status}</span>
-                <span class="tool-name">{tc.name}</span>
-                {#if tc.status === 'running'}
-                  <span class="tool-dur">running</span>
-                {:else if tc.duration != null}
-                  <span class="tool-dur">{tc.duration}ms</span>
-                {/if}
-                {#if tc.error}
-                  <span class="tool-error">{tc.error}</span>
-                {/if}
+            {/if}
+            {#if msg.toolCalls?.length > 0}
+              <div class="tool-calls">
+                {#each msg.toolCalls as tc}
+                  <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'} title={tc.error || ''}>
+                    <span class="tool-icon" aria-hidden="true">{toolStatusIcon(tc.status)}</span>
+                    <span class="sr-only">{tc.status}</span>
+                    <span class="tool-name">{tc.name}</span>
+                    {#if tc.status === 'running'}
+                      <span class="tool-dur">running</span>
+                    {:else if tc.duration != null}
+                      <span class="tool-dur">{tc.duration}ms</span>
+                    {/if}
+                    {#if tc.error}
+                      <span class="tool-error">{tc.error}</span>
+                    {/if}
+                  </div>
+                {/each}
               </div>
-            {/each}
-          </div>
+            {/if}
+          </details>
         {/if}
         {#if msg.thinking}
           <details class="thinking-section">
@@ -552,7 +563,7 @@
   .btn-copy:hover { opacity: 1 !important; }
   .bubble.user .btn-copy { color: #fff; }
 
-  .approval-cards { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .approval-cards { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
   .approval-card {
     font-size: 12px;
     display: flex;
@@ -591,7 +602,28 @@
     font-style: italic;
   }
 
-  .tool-calls { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .tool-activity {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .tool-activity-summary {
+    padding: 6px 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    user-select: none;
+    font-size: 12px;
+  }
+  .tool-activity-summary:hover { color: var(--text); }
+  .tool-activity[open] > .tool-activity-summary { border-bottom: 1px solid var(--border); }
+  .pending-count { color: var(--accent); font-weight: 600; }
+  .running-count { color: var(--accent); }
+  .error-count { color: var(--danger); }
+  .tool-activity .approval-cards,
+  .tool-activity .tool-calls { padding: 4px; }
+
+  .tool-calls { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
   .tool-call {
     font-size: 12px;
     color: var(--text-muted);

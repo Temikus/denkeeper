@@ -223,7 +223,7 @@ func (m *Manager) createAutoApproveFromCallback(ctx context.Context, action Call
 
 	switch action {
 	case CallbackApproveSession:
-		m.AddSessionRule(req.AgentName, toolName, req.ConversationID, resolvedBy)
+		m.AddSessionRule(ctx, req.AgentName, toolName, req.ConversationID, resolvedBy)
 	case CallbackApproveAlways:
 		if _, err := m.AddPermanentRule(ctx, req.AgentName, toolName, resolvedBy); err != nil {
 			m.logger.Error("failed to create permanent auto-approve rule", "error", err)
@@ -401,11 +401,13 @@ func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, co
 }
 
 // AddSessionRule creates an ephemeral auto-approve rule for the current conversation.
-func (m *Manager) AddSessionRule(agentName, toolName, conversationID, createdBy string) {
+// After storing the rule it auto-resolves any pending approvals for the same agent+tool.
+func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conversationID, createdBy string) {
 	key := sessionRuleKey(agentName, conversationID, toolName)
 	m.sessionRules.Store(key, true)
 	m.logger.Info("session auto-approve rule added",
 		"agent", agentName, "tool", toolName, "conversation", conversationID, "by", createdBy)
+	m.autoResolvePending(ctx, agentName, toolName)
 }
 
 // AddPermanentRule creates a persistent auto-approve rule for the given agent+tool.
@@ -425,7 +427,36 @@ func (m *Manager) AddPermanentRule(ctx context.Context, agentName, toolName, cre
 	}
 	m.logger.Info("permanent auto-approve rule added",
 		"id", rule.ID, "agent", agentName, "tool", toolName, "by", createdBy)
+	m.autoResolvePending(ctx, agentName, toolName)
 	return &rule, nil
+}
+
+// autoResolvePending approves all pending approvals for the given agent+tool.
+// Called after an auto-approve rule is created so that already-queued approvals
+// for the same tool are resolved instead of going stale.
+func (m *Manager) autoResolvePending(ctx context.Context, agentName, toolName string) {
+	pending, err := m.store.List(ctx, StatusPending)
+	if err != nil {
+		m.logger.Warn("auto-resolve: failed to list pending approvals", "error", err)
+		return
+	}
+	for _, req := range pending {
+		if req.AgentName != agentName {
+			continue
+		}
+		if req.Kind != ActionKindToolCall {
+			continue
+		}
+		if ExtractToolName(req.Summary) != toolName {
+			continue
+		}
+		if _, resolveErr := m.Resolve(ctx, req.ID, true, "auto_approve"); resolveErr != nil {
+			m.logger.Warn("auto-resolve: failed to resolve pending approval",
+				"id", req.ID, "error", resolveErr)
+		} else {
+			m.logger.Info("auto-resolved pending approval", "id", req.ID, "tool", toolName)
+		}
+	}
 }
 
 // RemoveAutoApproveRule deletes a permanent auto-approve rule by ID.
