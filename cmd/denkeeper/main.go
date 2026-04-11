@@ -596,6 +596,8 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		BrowserProfiles:    abc.browserProfiles,
 		GetPersonaSection:  e.PersonaSection,
 		SavePersonaSection: e.SavePersonaSection,
+		AppendMemoryEntry:  e.AppendMemoryEntry,
+		RemoveMemoryEntry:  e.RemoveMemoryEntry,
 		ConfigPath:         abc.configPath,
 		Logger:             abc.logger,
 	})

@@ -183,7 +183,20 @@ func Load(dir string) (*Persona, error) {
 // Save writes content to the named section file atomically and updates the
 // in-memory state. section must be one of "identity", "memory", "user", or "soul".
 // Returns an error if the persona was not loaded from a directory.
+//
+// The write lock is held for the entire operation (file I/O + in-memory update)
+// so that read-modify-write callers like AppendMemoryEntry can use saveLocked
+// without a race window. This means concurrent readers (GetMemory, etc.) block
+// during file I/O — acceptable at current concurrency levels but worth revisiting
+// if persona access ever becomes a hot path.
 func (p *Persona) Save(section, content string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.saveLocked(section, content)
+}
+
+// saveLocked performs the actual save. Caller must hold p.mu write lock.
+func (p *Persona) saveLocked(section, content string) error {
 	if p.dir == "" {
 		return fmt.Errorf("persona: no directory set, cannot save %q section", section)
 	}
@@ -206,9 +219,6 @@ func (p *Persona) Save(section, content string) error {
 		return fmt.Errorf("persona: committing %s: %w", filename, err)
 	}
 
-	// Update in-memory state under the write lock.
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	switch strings.ToLower(section) {
 	case "identity":
 		p.identityRaw = trimmed
@@ -231,6 +241,104 @@ func (p *Persona) UpdateMemory(content string) error {
 	return p.Save("memory", content)
 }
 
+// AppendMemoryEntry reads the current MEMORY.md, appends a new entry separated
+// by "---", and writes the result back. If memory is currently empty the entry
+// is written without a separator. The entire read-modify-write is atomic.
+func (p *Persona) AppendMemoryEntry(entry string) error {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return fmt.Errorf("persona: empty memory entry")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var updated string
+	if p.memory == "" {
+		updated = entry
+	} else {
+		updated = p.memory + "\n\n---\n\n" + entry
+	}
+	return p.saveLocked("memory", updated)
+}
+
+// RemoveMemoryEntry finds and removes a memory entry whose first line starts
+// with "## <heading>" (case-insensitive match). Entries are separated by blank-
+// line-surrounded "---" lines. Returns an error if no matching entry is found.
+// The entire read-modify-write is atomic.
+func (p *Persona) RemoveMemoryEntry(heading string) error {
+	heading = strings.TrimSpace(heading)
+	if heading == "" {
+		return fmt.Errorf("persona: empty heading")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.memory == "" {
+		return fmt.Errorf("persona: memory is empty, nothing to remove")
+	}
+
+	parts := splitMemoryEntries(p.memory)
+	target := strings.ToLower("## " + heading)
+
+	var kept []string
+	found := false
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		firstLine := trimmed
+		if idx := strings.IndexByte(trimmed, '\n'); idx != -1 {
+			firstLine = trimmed[:idx]
+		}
+		if strings.ToLower(strings.TrimSpace(firstLine)) == target {
+			found = true
+			continue
+		}
+		kept = append(kept, trimmed)
+	}
+	if !found {
+		return fmt.Errorf("persona: no memory entry with heading %q found", heading)
+	}
+
+	updated := strings.Join(kept, "\n\n---\n\n")
+	return p.saveLocked("memory", updated)
+}
+
+// splitMemoryEntries splits memory content on "---" separator lines that are
+// surrounded by blank lines (the format produced by AppendMemoryEntry). A lone
+// "---" at the very start or end of the content also counts as a separator.
+// This avoids splitting on YAML frontmatter delimiters or markdown horizontal
+// rules that appear inline.
+func splitMemoryEntries(content string) []string {
+	lines := strings.Split(content, "\n")
+	n := len(lines)
+	var parts []string
+	var current []string
+
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "---" {
+			current = append(current, line)
+			continue
+		}
+		// Check if this "---" is a memory separator: preceded by a blank
+		// line (or at start) AND followed by a blank line (or at end).
+		prevBlank := i == 0 || strings.TrimSpace(lines[i-1]) == ""
+		nextBlank := i == n-1 || strings.TrimSpace(lines[i+1]) == ""
+		if prevBlank && nextBlank {
+			if len(current) > 0 {
+				parts = append(parts, strings.Join(current, "\n"))
+				current = nil
+			}
+		} else {
+			current = append(current, line)
+		}
+	}
+	if len(current) > 0 {
+		parts = append(parts, strings.Join(current, "\n"))
+	}
+	return parts
+}
+
 // sectionFilename maps a section name to its filename.
 func sectionFilename(section string) (string, error) {
 	switch strings.ToLower(section) {
@@ -245,116 +353,6 @@ func sectionFilename(section string) (string, error) {
 	default:
 		return "", fmt.Errorf("persona: unknown section %q, must be one of: identity, memory, user, soul", section)
 	}
-}
-
-// MemoryUpdateInstruction returns the system prompt fragment that instructs the
-// agent how to signal a memory update. Returns an empty string if no write path
-// is available (dir not set or memory is not editable).
-func (p *Persona) MemoryUpdateInstruction() string {
-	if p.dir == "" || !p.IsEditable("memory") {
-		return ""
-	}
-	return `## Memory Updates
-
-If important context emerges during this conversation that you should remember for future sessions, include a memory update block at the end of your response:
-
-[MEMORY_UPDATE]
-<complete updated MEMORY.md content>
-[/MEMORY_UPDATE]
-
-The content between the tags replaces MEMORY.md entirely — preserve any existing context you want to keep. Only include this when genuinely useful information needs to persist across sessions. Omit it entirely when no update is needed.`
-}
-
-// UserUpdateInstruction returns the system prompt fragment that instructs the
-// agent how to request a USER.md update via a [USER_UPDATE] directive.
-// Returns an empty string if the persona has no write path or the tier is
-// "restricted" (which cannot write user files).
-func (p *Persona) UserUpdateInstruction(tier string) string {
-	if p.dir == "" || tier == "restricted" {
-		return ""
-	}
-	var modeNote string
-	if tier == "autonomous" {
-		modeNote = "In autonomous mode, this will be applied directly."
-	} else {
-		modeNote = "In supervised mode, this will be presented for your approval before being applied."
-	}
-	return `## User Profile Updates
-
-If the user shares important personal information they want remembered persistently ` +
-		`(name, preferences, background details, routines), include a user update block ` +
-		`at the end of your response:
-
-[USER_UPDATE]
-<complete updated USER.md content>
-[/USER_UPDATE]
-
-` + modeNote + ` Only include this when the user explicitly shares information they want ` +
-		`persisted across sessions. Omit entirely when not needed.`
-}
-
-// SoulUpdateInstruction returns the system prompt fragment that instructs the
-// agent how to request a SOUL.md update via a [SOUL_UPDATE] directive.
-// Returns an empty string if the persona has no write path or the tier is
-// "restricted" (which cannot write soul files).
-func (p *Persona) SoulUpdateInstruction(tier string) string {
-	if p.dir == "" || tier == "restricted" {
-		return ""
-	}
-	var modeNote string
-	if tier == "autonomous" {
-		modeNote = "In autonomous mode, this will be applied directly."
-	} else {
-		modeNote = "In supervised mode, this will be presented for your approval before being applied."
-	}
-	return `---
-
-_This file is yours to evolve. As you learn who you are, update it._
-
-## Soul Evolution
-
-If your core identity, values, or personality should evolve based on your experiences ` +
-		`and growth, include a soul update block at the end of your response:
-
-[SOUL_UPDATE]
-<complete updated SOUL.md content>
-[/SOUL_UPDATE]
-
-` + modeNote + ` Only include this when you have a genuine reason to evolve your identity. ` +
-		`Omit entirely when not needed.`
-}
-
-// IdentityUpdateInstruction returns the system prompt fragment that instructs the
-// agent how to request an IDENTITY.md update via an [IDENTITY_UPDATE] directive.
-// Returns an empty string if the persona has no write path or the tier is
-// "restricted" (which cannot write identity files).
-func (p *Persona) IdentityUpdateInstruction(tier string) string {
-	if p.dir == "" || tier == "restricted" {
-		return ""
-	}
-	var modeNote string
-	if tier == "autonomous" {
-		modeNote = "In autonomous mode, this will be applied directly."
-	} else {
-		modeNote = "In supervised mode, this will be presented for your approval before being applied."
-	}
-	return `## Identity Updates
-
-If your name, emoji, theme, or identity metadata should change, include an identity update block ` +
-		`at the end of your response. Preserve the YAML frontmatter format:
-
-[IDENTITY_UPDATE]
----
-name: YourName
-emoji: "🤖"
-theme: your vibe description
----
-
-Any additional identity notes here.
-[/IDENTITY_UPDATE]
-
-` + modeNote + ` Only include this when your identity metadata genuinely needs updating. ` +
-		`Omit entirely when not needed.`
 }
 
 // parseIdentity parses IDENTITY.md content: optional YAML frontmatter delimited

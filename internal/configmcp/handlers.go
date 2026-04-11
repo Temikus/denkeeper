@@ -1015,7 +1015,7 @@ func applyOrSubmit(
 		}
 		return toolText("Done: " + summary), nil
 
-	case "supervised":
+	case "supervised", "restricted":
 		if deps.Approvals == nil {
 			// No manager wired — fall back to immediate execution.
 			if err := fn(ctx, payload); err != nil {

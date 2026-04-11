@@ -123,7 +123,15 @@
         <tr>
           <td class="id">{a.id.slice(0, 8)}…</td>
           <td>{a.kind}</td>
-          <td class="summary">{a.summary}</td>
+          <td class="summary">
+            {a.summary}
+            {#if a.payload}
+              <details class="payload-details">
+                <summary>Show payload</summary>
+                <pre>{a.payload}</pre>
+              </details>
+            {/if}
+          </td>
           <td>{a.agent_name || '—'}</td>
           <td><StatusBadge status={a.status} /></td>
           <td class="date">{fmtDate(a.created_at)}</td>
@@ -215,7 +223,31 @@
   .filter-btn:hover  { color: var(--text); border-color: var(--text-muted); }
   .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(200, 78, 53, 0.1); }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
-  .summary { max-width: 280px; }
+  .summary { max-width: 380px; }
+  .payload-details {
+    margin-top: 4px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .payload-details summary {
+    padding: 2px 6px;
+    cursor: pointer;
+    color: var(--text-muted);
+    user-select: none;
+    font-size: 11px;
+  }
+  .payload-details pre {
+    padding: 6px 8px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    background: var(--surface);
+  }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
   .actions { display: flex; gap: 6px; white-space: nowrap; }
   .btn-ok  { padding: 4px 10px; border: none; border-radius: var(--radius); background: var(--success); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }

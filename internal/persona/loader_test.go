@@ -321,7 +321,7 @@ func TestUpdateMemory(t *testing.T) {
 	}
 }
 
-func TestMemoryUpdateInstruction_WithDir(t *testing.T) {
+func TestAppendMemoryEntry_Empty(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
 
@@ -330,68 +330,37 @@ func TestMemoryUpdateInstruction_WithDir(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	inst := p.MemoryUpdateInstruction()
-	if inst == "" {
-		t.Fatal("expected non-empty instruction when dir is set and memory is editable")
+	if err := p.AppendMemoryEntry("First entry"); err != nil {
+		t.Fatalf("AppendMemoryEntry: %v", err)
 	}
-	if !strings.Contains(inst, "[MEMORY_UPDATE]") {
-		t.Error("instruction should contain the memory update tags")
-	}
-}
-
-func TestMemoryUpdateInstruction_NoDir(t *testing.T) {
-	p := &Persona{
-		soul: "Soul.",
-		Editable: map[string]bool{
-			"memory": true,
-		},
-	}
-
-	if inst := p.MemoryUpdateInstruction(); inst != "" {
-		t.Errorf("expected empty instruction when dir is not set, got %q", inst)
+	if p.GetMemory() != "First entry" {
+		t.Errorf("Memory = %q, want %q", p.GetMemory(), "First entry")
 	}
 }
 
-func TestMemoryUpdateInstruction_MemoryNotEditable(t *testing.T) {
+func TestAppendMemoryEntry_Existing(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
-
-	p, err := Load(dir)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	p.Editable["memory"] = false
-
-	if inst := p.MemoryUpdateInstruction(); inst != "" {
-		t.Errorf("expected empty instruction when memory is not editable, got %q", inst)
-	}
-}
-
-func TestSoulUpdateInstruction_Autonomous(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), "## Existing\n\nSome context.")
 
 	p, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	inst := p.SoulUpdateInstruction("autonomous")
-	if inst == "" {
-		t.Fatal("expected non-empty instruction for autonomous tier")
+	if err := p.AppendMemoryEntry("## New\n\nNew context."); err != nil {
+		t.Fatalf("AppendMemoryEntry: %v", err)
 	}
-	if !strings.Contains(inst, "[SOUL_UPDATE]") {
-		t.Error("instruction should contain [SOUL_UPDATE] tag")
+	mem := p.GetMemory()
+	if !strings.Contains(mem, "Existing") || !strings.Contains(mem, "New context.") {
+		t.Errorf("Memory should contain both entries, got %q", mem)
 	}
-	if !strings.Contains(inst, "applied directly") {
-		t.Error("instruction should mention autonomous mode applies directly")
-	}
-	if !strings.Contains(inst, "This file is yours to evolve") {
-		t.Error("instruction should contain the evolution tagline")
+	if !strings.Contains(mem, "---") {
+		t.Error("Memory entries should be separated by ---")
 	}
 }
 
-func TestSoulUpdateInstruction_Supervised(t *testing.T) {
+func TestAppendMemoryEntry_EmptyContent(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
 
@@ -400,16 +369,49 @@ func TestSoulUpdateInstruction_Supervised(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	inst := p.SoulUpdateInstruction("supervised")
-	if inst == "" {
-		t.Fatal("expected non-empty instruction for supervised tier")
-	}
-	if !strings.Contains(inst, "approval") {
-		t.Error("instruction should mention approval for supervised mode")
+	if err := p.AppendMemoryEntry("  "); err == nil {
+		t.Error("expected error for empty entry")
 	}
 }
 
-func TestSoulUpdateInstruction_Restricted_Empty(t *testing.T) {
+func TestRemoveMemoryEntry_Found(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), "## Keep\n\nKeep this.\n\n---\n\n## Remove\n\nRemove this.\n\n---\n\n## Also Keep\n\nKeep too.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if err := p.RemoveMemoryEntry("Remove"); err != nil {
+		t.Fatalf("RemoveMemoryEntry: %v", err)
+	}
+	mem := p.GetMemory()
+	if strings.Contains(mem, "Remove this.") {
+		t.Errorf("Memory should not contain removed entry, got %q", mem)
+	}
+	if !strings.Contains(mem, "Keep this.") || !strings.Contains(mem, "Keep too.") {
+		t.Errorf("Memory should still contain kept entries, got %q", mem)
+	}
+}
+
+func TestRemoveMemoryEntry_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), "## Existing\n\nData.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if err := p.RemoveMemoryEntry("NonExistent"); err == nil {
+		t.Error("expected error when heading not found")
+	}
+}
+
+func TestRemoveMemoryEntry_EmptyMemory(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
 
@@ -418,16 +420,8 @@ func TestSoulUpdateInstruction_Restricted_Empty(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if inst := p.SoulUpdateInstruction("restricted"); inst != "" {
-		t.Errorf("expected empty instruction for restricted tier, got %q", inst)
-	}
-}
-
-func TestSoulUpdateInstruction_NoDir_Empty(t *testing.T) {
-	p := &Persona{soul: "Soul.", Editable: map[string]bool{"soul": true}}
-
-	if inst := p.SoulUpdateInstruction("autonomous"); inst != "" {
-		t.Errorf("expected empty instruction when no dir set, got %q", inst)
+	if err := p.RemoveMemoryEntry("Anything"); err == nil {
+		t.Error("expected error when memory is empty")
 	}
 }
 
@@ -643,67 +637,6 @@ func TestSave_Identity(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "name: Updated") {
 		t.Error("IDENTITY.md should contain updated name on disk")
-	}
-}
-
-func TestIdentityUpdateInstruction_Autonomous(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
-
-	p, err := Load(dir)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	inst := p.IdentityUpdateInstruction("autonomous")
-	if inst == "" {
-		t.Fatal("expected non-empty instruction for autonomous tier")
-	}
-	if !strings.Contains(inst, "[IDENTITY_UPDATE]") {
-		t.Error("instruction should contain [IDENTITY_UPDATE] tag")
-	}
-	if !strings.Contains(inst, "applied directly") {
-		t.Error("instruction should mention autonomous mode applies directly")
-	}
-}
-
-func TestIdentityUpdateInstruction_Supervised(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
-
-	p, err := Load(dir)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	inst := p.IdentityUpdateInstruction("supervised")
-	if inst == "" {
-		t.Fatal("expected non-empty instruction for supervised tier")
-	}
-	if !strings.Contains(inst, "approval") {
-		t.Error("instruction should mention approval for supervised mode")
-	}
-}
-
-func TestIdentityUpdateInstruction_Restricted_Empty(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
-
-	p, err := Load(dir)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if inst := p.IdentityUpdateInstruction("restricted"); inst != "" {
-		t.Errorf("expected empty instruction for restricted tier, got %q", inst)
-	}
-}
-
-func TestIdentityUpdateInstruction_NoDir_Empty(t *testing.T) {
-	p := &Persona{soul: "Soul.", Editable: map[string]bool{"identity": true}}
-
-	if inst := p.IdentityUpdateInstruction("autonomous"); inst != "" {
-		t.Errorf("expected empty instruction when no dir set, got %q", inst)
 	}
 }
 

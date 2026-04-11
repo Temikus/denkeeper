@@ -91,6 +91,14 @@ type Deps struct {
 	// persona_update is disabled.
 	SavePersonaSection func(section, content string) error
 
+	// AppendMemoryEntry adds a new entry to MEMORY.md separated by "---".
+	// If nil, persona_memory_manage append is disabled.
+	AppendMemoryEntry func(entry string) error
+
+	// RemoveMemoryEntry removes a memory entry by heading from MEMORY.md.
+	// If nil, persona_memory_manage remove is disabled.
+	RemoveMemoryEntry func(heading string) error
+
 	// ConfigPath is the path to the TOML config file. When non-empty,
 	// schedule mutations are persisted to disk so they survive restarts.
 	ConfigPath string
