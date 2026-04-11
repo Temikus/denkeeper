@@ -481,6 +481,9 @@ func TestAgents_ListsAgents(t *testing.T) {
 	if agents[0]["name"] != "default" {
 		t.Errorf("name = %v, want default", agents[0]["name"])
 	}
+	if agents[0]["provider"] != "mock" {
+		t.Errorf("provider = %v, want mock", agents[0]["provider"])
+	}
 	if agents[0]["model"] != "test-model" {
 		t.Errorf("model = %v, want test-model", agents[0]["model"])
 	}
@@ -520,6 +523,12 @@ func TestAgent_SingleAgent(t *testing.T) {
 	var detail map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if detail["provider"] != "mock" {
+		t.Errorf("provider = %v, want mock", detail["provider"])
+	}
+	if detail["model"] != "test-model" {
+		t.Errorf("model = %v, want test-model", detail["model"])
 	}
 	skills, ok := detail["skills"].([]any)
 	if !ok {
