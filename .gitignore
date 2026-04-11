@@ -67,3 +67,5 @@ website/resources/
 website/.hugo_build.lock
 hugo_stats.json
 .hugo_build.lock
+web/coverage
+node_modules/.vite/vitest
