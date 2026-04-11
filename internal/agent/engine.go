@@ -735,8 +735,15 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	ctx = context.WithValue(ctx, ctxKeyAdapter, msg.Adapter)
 	ctx = context.WithValue(ctx, ctxKeyExternalID, msg.ExternalID)
 
-	resp, _, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, onEvent)
+	// Wrap onEvent to accumulate content_delta text. If the context is
+	// cancelled mid-stream, savePartialResponse uses the accumulated content
+	// to keep the conversation history consistent.
+	var streamedContent strings.Builder
+	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
+
+	resp, _, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
+		e.savePartialResponse(ctx, convID, streamedContent.String())
 		return "", nil, err
 	}
 
@@ -775,7 +782,17 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		)
 	}
 
-	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
+	// Use a background context for storing the assistant response so it
+	// persists even if the caller's context was cancelled between the LLM
+	// returning and this point (e.g. WebSocket disconnect during directive
+	// processing).
+	saveCtx := ctx
+	if ctx.Err() != nil {
+		var saveCancel context.CancelFunc
+		saveCtx, saveCancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer saveCancel()
+	}
+	if err := e.memory.AddMessage(saveCtx, convID, StoredMessage{
 		Role:       "assistant",
 		Content:    responseText,
 		TokensUsed: resp.TokensUsed.Total,
@@ -835,6 +852,42 @@ func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMe
 		return "", fmt.Errorf("getting conversation: %w", err)
 	}
 	return convID, nil
+}
+
+// wrapEventForPartialCapture wraps onEvent to accumulate content_delta text
+// into buf. Returns onEvent unchanged when it is nil.
+func wrapEventForPartialCapture(onEvent ChatEventFunc, buf *strings.Builder) ChatEventFunc {
+	if onEvent == nil {
+		return nil
+	}
+	return func(evt ChatEvent) {
+		if evt.Type == "content_delta" {
+			buf.WriteString(evt.Text)
+		}
+		onEvent(evt)
+	}
+}
+
+// savePartialResponse persists partial streamed content when the caller's
+// context was cancelled (e.g. client disconnect) and some content was already
+// streamed. It uses a fresh background context so storage succeeds even though
+// the original context is done.
+func (e *Engine) savePartialResponse(ctx context.Context, convID, content string) {
+	if ctx.Err() == nil || content == "" {
+		return
+	}
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.memory.AddMessage(saveCtx, convID, StoredMessage{
+		Role:    "assistant",
+		Content: content,
+	}); err != nil {
+		e.logger.Warn("failed to save partial response after disconnect",
+			"error", err, "conversation", convID, "partial_len", len(content))
+	} else {
+		e.logger.Info("saved partial response after disconnect",
+			"conversation", convID, "partial_len", len(content))
+	}
 }
 
 // streamCallbackFor returns an llm.StreamCallback that emits content_delta

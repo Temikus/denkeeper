@@ -3445,3 +3445,149 @@ func TestEngine_DisplayName_WithPersonaNoIdentity(t *testing.T) {
 		t.Errorf("DisplayName() = %q, want 'my-agent'", got)
 	}
 }
+
+// streamingCancelProvider is a streaming mock that emits content_delta chunks,
+// then cancels the provided cancel func and returns context.Canceled — simulating
+// a client disconnect that occurs while the LLM is still streaming.
+type streamingCancelProvider struct {
+	chunks []string
+	cancel context.CancelFunc // called after all chunks are emitted
+}
+
+func (p *streamingCancelProvider) Name() string                        { return "streaming-cancel-mock" }
+func (p *streamingCancelProvider) SupportsStreaming() bool             { return true }
+func (p *streamingCancelProvider) HealthCheck(_ context.Context) error { return nil }
+func (p *streamingCancelProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if req.OnStream != nil {
+		for _, c := range p.chunks {
+			req.OnStream(llm.StreamChunk{ContentDelta: c})
+		}
+	}
+	// Simulate disconnect: cancel the context then report it as the error.
+	if p.cancel != nil {
+		p.cancel()
+	}
+	return nil, context.Canceled
+}
+
+// TestEngine_ChatWithEvents_PartialResponseSavedOnContextCancel verifies that
+// accumulated streaming content is stored in the DB when the context is
+// cancelled mid-stream (e.g. WebSocket client disconnects).
+func TestEngine_ChatWithEvents_PartialResponseSavedOnContextCancel(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Context starts valid so DB setup succeeds; the provider cancels it
+	// after emitting chunks, before returning.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	provider := &streamingCancelProvider{
+		chunks: []string{"Hello", " from", " partial"},
+		cancel: cancel,
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("streaming-cancel-mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	engine := NewEngine("default", router, store, nil, permissions, nil, "sys", nil, nil, nil, testLogger())
+
+	sessionID := "partial-save-session"
+	msg := adapter.IncomingMessage{
+		Adapter:        "ws",
+		ExternalID:     sessionID,
+		ConversationID: sessionID,
+		Text:           "Hi",
+		Timestamp:      time.Now(),
+	}
+
+	_, err = engine.ChatWithEvents(ctx, msg, func(ChatEvent) {})
+	// Expect an error because the context was cancelled.
+	if err == nil {
+		t.Fatal("expected error due to context cancellation, got nil")
+	}
+
+	// Give the background save a moment to complete.
+	time.Sleep(100 * time.Millisecond)
+
+	// The partial streamed content must be persisted.
+	msgs, err := store.GetMessages(context.Background(), sessionID, 10)
+	if err != nil {
+		t.Fatalf("getting messages: %v", err)
+	}
+
+	var assistantMsgs []StoredMessage
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			assistantMsgs = append(assistantMsgs, m)
+		}
+	}
+	if len(assistantMsgs) != 1 {
+		t.Fatalf("got %d assistant messages, want 1", len(assistantMsgs))
+	}
+	if assistantMsgs[0].Content != "Hello from partial" {
+		t.Errorf("partial content = %q, want %q", assistantMsgs[0].Content, "Hello from partial")
+	}
+}
+
+// TestEngine_ChatWithEvents_NoPartialSaveWhenNoContent verifies that no
+// assistant message is written when the context is cancelled before any
+// streaming content was received.
+func TestEngine_ChatWithEvents_NoPartialSaveWhenNoContent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	provider := &streamingCancelProvider{
+		chunks: nil, // no chunks emitted before cancel
+		cancel: cancel,
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("streaming-cancel-mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	engine := NewEngine("default", router, store, nil, permissions, nil, "sys", nil, nil, nil, testLogger())
+
+	sessionID := "no-content-cancel-session"
+	msg := adapter.IncomingMessage{
+		Adapter:        "ws",
+		ExternalID:     sessionID,
+		ConversationID: sessionID,
+		Text:           "Hi",
+		Timestamp:      time.Now(),
+	}
+
+	_, err = engine.ChatWithEvents(ctx, msg, func(ChatEvent) {})
+	if err == nil {
+		t.Fatal("expected error due to context cancellation, got nil")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	msgs, err := store.GetMessages(context.Background(), sessionID, 10)
+	if err != nil {
+		t.Fatalf("getting messages: %v", err)
+	}
+
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			t.Errorf("unexpected assistant message stored when no content was streamed: %q", m.Content)
+		}
+	}
+}
