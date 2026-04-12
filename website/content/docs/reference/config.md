@@ -272,7 +272,7 @@ Tools can also be added and removed at runtime via the REST API (`tools:write` s
 | `traces_endpoint` | string | — | OTLP HTTP endpoint for trace export (e.g. `"http://localhost:4318"`) |
 | `service_name` | string | `"denkeeper"` | Service name for the OTel resource |
 
-Env override: `DENKEEPER_OTEL_TRACES_ENDPOINT` sets `traces_endpoint`.
+Env overrides: `DENKEEPER_OTEL_ENABLED` sets `enabled`, `DENKEEPER_OTEL_TRACES_ENDPOINT` sets `traces_endpoint`.
 
 When enabled, Prometheus metrics are exposed at `GET /metrics` (no auth required). Traces are only exported when `traces_endpoint` is set.
 

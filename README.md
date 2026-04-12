@@ -243,6 +243,7 @@ Secrets and select config fields can be set via environment variables, which tak
 | `DENKEEPER_OIDC_CLIENT_ID` | `api.auth.oidc.client_id` |
 | `DENKEEPER_OIDC_CLIENT_SECRET` | `api.auth.oidc.client_secret` |
 | `DENKEEPER_API_WEBSOCKET_ENABLED` | `api.websocket_enabled` (accepts `"true"` or `"false"`) |
+| `DENKEEPER_OTEL_ENABLED` | `otel.enabled` (accepts `"true"` or `"false"`) |
 | `DENKEEPER_OTEL_TRACES_ENDPOINT` | `otel.traces_endpoint` (OTLP HTTP endpoint) |
 
 A Helm chart is available in [`deploy/helm/denkeeper/`](deploy/helm/denkeeper/) for Kubernetes deployments.

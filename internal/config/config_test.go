@@ -2084,6 +2084,36 @@ func TestApplyEnvOverrides_APIEnabledBoolParsing(t *testing.T) {
 	}
 }
 
+func TestApplyEnvOverrides_OTelEnabledBoolParsing(t *testing.T) {
+	t.Setenv("DENKEEPER_OTEL_ENABLED", "true")
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+	if !cfg.OTel.Enabled {
+		t.Error("OTel.Enabled should be true when env is \"true\"")
+	}
+
+	t.Setenv("DENKEEPER_OTEL_ENABLED", "1")
+	cfg = &Config{}
+	applyEnvOverrides(cfg)
+	if !cfg.OTel.Enabled {
+		t.Error("OTel.Enabled should be true when env is \"1\"")
+	}
+
+	t.Setenv("DENKEEPER_OTEL_ENABLED", "false")
+	cfg = &Config{OTel: OTelConfig{Enabled: true}}
+	applyEnvOverrides(cfg)
+	if cfg.OTel.Enabled {
+		t.Error("OTel.Enabled should be false when env is \"false\"")
+	}
+
+	t.Setenv("DENKEEPER_OTEL_ENABLED", "0")
+	cfg = &Config{OTel: OTelConfig{Enabled: true}}
+	applyEnvOverrides(cfg)
+	if cfg.OTel.Enabled {
+		t.Error("OTel.Enabled should be false when env is \"0\"")
+	}
+}
+
 func TestApplyEnvOverrides_AllSecrets(t *testing.T) {
 	t.Setenv("DENKEEPER_TELEGRAM_TOKEN", "tg-token")
 	t.Setenv("DENKEEPER_DISCORD_TOKEN", "dc-token")

@@ -908,6 +908,11 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_SESSION_TIER", &cfg.Session.Tier)
 	envOverride("DENKEEPER_SEARCH_API_KEY", &cfg.Web.Search.APIKey)
 	envOverride("DENKEEPER_OTEL_TRACES_ENDPOINT", &cfg.OTel.TracesEndpoint)
+	if v := os.Getenv("DENKEEPER_OTEL_ENABLED"); v == "true" || v == "1" {
+		cfg.OTel.Enabled = true
+	} else if v == "false" || v == "0" {
+		cfg.OTel.Enabled = false
+	}
 	envOverride("DENKEEPER_API_AUTH_SESSION_SECRET", &cfg.API.Auth.SessionSecret)
 	envOverride("DENKEEPER_OIDC_CLIENT_ID", &cfg.API.Auth.OIDC.ClientID)
 	envOverride("DENKEEPER_OIDC_CLIENT_SECRET", &cfg.API.Auth.OIDC.ClientSecret)
