@@ -25,6 +25,9 @@ export default async function globalSetup() {
   }
 
   // Start mock LLM server for chat tests.
-  const server = await startMockLLM(MOCK_LLM_PORT)
-  globalThis.__e2eMockLLM = server
+  // In CI, the workflow step already starts it — skip to avoid EADDRINUSE.
+  if (!process.env.CI) {
+    const server = await startMockLLM(MOCK_LLM_PORT)
+    globalThis.__e2eMockLLM = server
+  }
 }
