@@ -239,3 +239,40 @@ func TestConnectSSE_FallbackToLegacy(t *testing.T) {
 		t.Errorf("transport = %q, want %q", transport, "sse-legacy")
 	}
 }
+
+func TestRestartServer_LegacySSE_PreservesTransport(t *testing.T) {
+	// Register with a legacy-only SSE server so transport is negotiated to "sse-legacy".
+	ts := startLegacySSEServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+
+	err := m.RegisterServer(context.Background(), "legacy-tool", cfg)
+	if err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	m.mu.RLock()
+	sc := m.servers["legacy-tool"]
+	m.mu.RUnlock()
+	if sc.transport != "sse-legacy" {
+		t.Fatalf("expected transport %q after initial connect, got %q", "sse-legacy", sc.transport)
+	}
+
+	// Restart should reconnect via legacy SSE directly (no streamable HTTP attempt).
+	err = m.RestartServer(context.Background(), "legacy-tool")
+	if err != nil {
+		t.Fatalf("RestartServer failed: %v", err)
+	}
+
+	m.mu.RLock()
+	sc = m.servers["legacy-tool"]
+	m.mu.RUnlock()
+	if sc.transport != "sse-legacy" {
+		t.Errorf("transport after restart = %q, want %q", sc.transport, "sse-legacy")
+	}
+}

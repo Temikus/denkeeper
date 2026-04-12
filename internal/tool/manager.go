@@ -140,14 +140,36 @@ func (m *Manager) RegisterServer(ctx context.Context, name string, cfg config.To
 		transport = "stdio"
 	}
 
+	ctx, span := toolTracer.Start(ctx, "tool.connect", trace.WithAttributes(
+		attribute.String("tool.server", name),
+		attribute.String("tool.transport.requested", transport),
+	))
+	defer span.End()
+
+	var err error
 	switch transport {
 	case "stdio":
-		return m.registerStdio(ctx, name, cfg)
-	case "sse":
-		return m.registerSSE(ctx, name, cfg)
+		err = m.registerStdio(ctx, name, cfg)
+	case "sse", "sse-legacy":
+		err = m.registerSSE(ctx, name, cfg)
 	default:
-		return fmt.Errorf("unsupported transport %q for MCP server %q", transport, name)
+		err = fmt.Errorf("unsupported transport %q for MCP server %q", transport, name)
 	}
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	// Record the negotiated transport after successful connection.
+	m.mu.RLock()
+	if sc, ok := m.servers[name]; ok {
+		span.SetAttributes(attribute.String("tool.transport.negotiated", sc.transport))
+	}
+	m.mu.RUnlock()
+	span.SetStatus(codes.Ok, "")
+	return nil
 }
 
 // registerStdio spawns an MCP server subprocess and connects over stdio.
@@ -326,26 +348,32 @@ func (m *Manager) connectSSE(
 	streamableTransport *mcp.StreamableClientTransport,
 	resolvedURL string,
 ) (*mcp.ClientSession, string, error) {
-	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "denkeeper",
-		Version: "v1.0.0",
-	}, nil)
+	// If a previous connection already negotiated legacy SSE, skip the
+	// Streamable HTTP attempt to avoid a pointless 405 round-trip on restart.
+	var streamableErr error
+	if cfg.Transport != "sse-legacy" {
+		client := mcp.NewClient(&mcp.Implementation{
+			Name:    "denkeeper",
+			Version: "v1.0.0",
+		}, nil)
 
-	session, streamableErr := client.Connect(ctx, streamableTransport, nil)
-	if streamableErr == nil {
-		m.logger.Info("connected to remote MCP server via Streamable HTTP",
-			slog.String("tool", name))
-		return session, "sse", nil
+		var session *mcp.ClientSession
+		session, streamableErr = client.Connect(ctx, streamableTransport, nil)
+		if streamableErr == nil {
+			m.logger.Info("connected to remote MCP server via Streamable HTTP",
+				slog.String("tool", name))
+			return session, "sse", nil
+		}
+
+		// OAuth tools require Streamable HTTP for the auth handler — no fallback.
+		if cfg.Auth == "oauth" {
+			return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), streamableErr)
+		}
+
+		m.logger.Info("streamable HTTP failed, falling back to legacy SSE",
+			slog.String("tool", name),
+			slog.String("error", streamableErr.Error()))
 	}
-
-	// OAuth tools require Streamable HTTP for the auth handler — no fallback.
-	if cfg.Auth == "oauth" {
-		return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s: %w", name, redactURL(resolvedURL), streamableErr)
-	}
-
-	m.logger.Info("streamable HTTP failed, falling back to legacy SSE",
-		slog.String("tool", name),
-		slog.String("error", streamableErr.Error()))
 
 	legacyTransport := &mcp.SSEClientTransport{
 		Endpoint:   resolvedURL,
@@ -360,8 +388,12 @@ func (m *Manager) connectSSE(
 
 	session, err := legacyClient.Connect(ctx, legacyTransport, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s (tried Streamable HTTP and legacy SSE): streamable: %v; legacy SSE: %w",
-			name, redactURL(resolvedURL), streamableErr, err)
+		if streamableErr != nil {
+			return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s (tried Streamable HTTP and legacy SSE): streamable: %v; legacy SSE: %w",
+				name, redactURL(resolvedURL), streamableErr, err)
+		}
+		return nil, "", fmt.Errorf("connecting to remote MCP server %q at %s via legacy SSE: %w",
+			name, redactURL(resolvedURL), err)
 	}
 
 	m.logger.Info("connected to remote MCP server via legacy SSE",
@@ -679,6 +711,11 @@ func (m *Manager) RestartServer(ctx context.Context, name string) error {
 		return fmt.Errorf("server %q is not registered", name)
 	}
 	cfg := sc.cfg
+	// Carry over the negotiated transport so restarts skip failed protocols
+	// (e.g. don't retry Streamable HTTP for servers that only support legacy SSE).
+	if sc.transport != "" && sc.transport != cfg.Transport {
+		cfg.Transport = sc.transport
+	}
 	transport := sc.transport
 	url := sc.url
 	m.mu.RUnlock()
@@ -896,17 +933,28 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 			continue
 		}
 
-		if err := m.probeServer(ctx, sc); err != nil {
+		probeCtx, probeSpan := toolTracer.Start(ctx, "tool.health_check", trace.WithAttributes(
+			attribute.String("tool.server", name),
+			attribute.String("tool.transport", sc.transport),
+		))
+		if err := m.probeServer(probeCtx, sc); err != nil {
+			probeSpan.RecordError(err)
+			probeSpan.SetStatus(codes.Error, err.Error())
 			m.logger.Warn("MCP server health check failed", "server", name, "error", err)
-			m.handleServerFailure(ctx, sc, maxAttempts, cooldown, err.Error())
-		} else if sc.lastError != "" {
-			// Server recovered — reset health state.
-			m.mu.Lock()
-			if !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
-				sc.restartCount = 0
+			m.handleServerFailure(probeCtx, sc, maxAttempts, cooldown, err.Error())
+			probeSpan.End()
+		} else {
+			probeSpan.SetStatus(codes.Ok, "")
+			probeSpan.End()
+			if sc.lastError != "" {
+				// Server recovered — reset health state.
+				m.mu.Lock()
+				if !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
+					sc.restartCount = 0
+				}
+				sc.lastError = ""
+				m.mu.Unlock()
 			}
-			sc.lastError = ""
-			m.mu.Unlock()
 		}
 	}
 }
@@ -935,20 +983,35 @@ func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAt
 
 	attempt := sc.restartCount
 	cfg := sc.cfg
+	// Carry over the negotiated transport so restarts skip failed protocols
+	// (e.g. don't retry Streamable HTTP for servers that only support legacy SSE).
+	if sc.transport != "" && sc.transport != cfg.Transport {
+		cfg.Transport = sc.transport
+	}
 	name := sc.name
 	m.mu.Unlock()
+
+	ctx, span := toolTracer.Start(ctx, "tool.restart", trace.WithAttributes(
+		attribute.String("tool.server", name),
+		attribute.Int("tool.restart.attempt", attempt),
+		attribute.String("tool.restart.trigger", errMsg),
+		attribute.String("tool.transport", cfg.Transport),
+	))
+	defer span.End()
 
 	// Exponential backoff: 2^(attempt-1) seconds, capped at 60s.
 	backoffSecs := 1 << (attempt - 1)
 	if backoffSecs > 60 {
 		backoffSecs = 60
 	}
+	span.SetAttributes(attribute.Int("tool.restart.backoff_secs", backoffSecs))
 	m.logger.Info("restarting MCP server",
 		"server", name, "attempt", attempt, "backoff_secs", backoffSecs)
 
 	select {
 	case <-time.After(time.Duration(backoffSecs) * time.Second):
 	case <-ctx.Done():
+		span.SetStatus(codes.Error, "context cancelled during backoff")
 		return
 	}
 
@@ -964,11 +1027,14 @@ func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAt
 	m.mu.Unlock()
 
 	if err := m.RegisterServer(ctx, name, cfg); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		m.logger.Error("MCP server restart failed", "server", name, "attempt", attempt, "error", err)
 		m.mu.Lock()
 		sc.lastError = err.Error()
 		m.mu.Unlock()
 	} else {
+		span.SetStatus(codes.Ok, "")
 		m.logger.Info("MCP server restarted successfully", "server", name, "attempt", attempt)
 		// RegisterServer creates a new serverConn — update health state.
 		m.mu.Lock()
