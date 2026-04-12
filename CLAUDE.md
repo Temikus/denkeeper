@@ -139,6 +139,8 @@ Key endpoints (all require auth unless noted):
 - `POST /api/v1/auth/password` (scope `admin`) — change password (bcrypt verify + re-hash + persist)
 - `GET /api/v1/auth/oidc/test` (scope `admin`) — test OIDC provider reachability (fresh discovery, 10s timeout)
 - `POST /api/v1/auth/preferences` (scope `admin`) — set preferred login method (auto/password/apikey)
+- `GET /api/v1/onboarding` (scope `admin`) — checklist of 5 setup milestones; `show_onboarding` false when all done or dismissed
+- `POST /api/v1/onboarding/dismiss` (scope `admin`) — persist `onboarding_dismissed=true` to TOML, hide card
 - `POST /api/v1/server/reload` (scope `admin`) — reload config from disk
 - `POST /api/v1/server/restart` (scope `admin`) — restart the server process
 
@@ -180,7 +182,7 @@ Every user-facing feature must include thoughtful UX treatment.
 
 ## Current State
 
-Phase 11 (LLM provider management + streaming) complete. Phase 12 (Auth & Onboarding UX Uplift) partially complete: Settings page with all 5 sections, all backend auth endpoints (password change, OIDC test, preferences, session tracking), login page improvements (preferred method persistence via localStorage + server config, user-friendly error messages for 429/403/503, CSS fade transitions, inline OIDC SSO error handling). Remaining: 12e (onboarding checklist), 12f (auth test coverage). All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
+Phase 12 (Auth & Onboarding UX Uplift) complete: Settings page with all 5 sections (including "(this session)" indicator), all backend auth endpoints (password change, OIDC test, preferences, session tracking), login page improvements, onboarding checklist (12e) with Overview page card and dismiss flow, auth test coverage (12f). Shared `Collapsible.svelte` component extracted from Settings page. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
 

@@ -523,6 +523,196 @@ func TestHandleOIDCTest_Reachable(t *testing.T) {
 	}
 }
 
+func TestHandleAuthStatus_NoAuth(t *testing.T) {
+	s := testServerWithAuth(t, "")
+	defer s.loginLimiter.stop()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	rec := httptest.NewRecorder()
+	s.handleAuthStatus(rec, req)
+
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp["password_enabled"] != false {
+		t.Error("expected password_enabled=false")
+	}
+	if resp["oidc_enabled"] != false {
+		t.Error("expected oidc_enabled=false")
+	}
+	if resp["sessions_trackable"] != false {
+		t.Error("expected sessions_trackable=false")
+	}
+}
+
+func TestHandleListSessions_Success(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	// Create a session via the manager (simulates login).
+	loginW := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	loginReq.Header.Set("User-Agent", "test-browser")
+	if err := s.sessions.CreateWithRequest(loginW, loginReq, Session{
+		Email: "admin@example.com", Scopes: []string{"admin"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginW.Result().Cookies()[0]
+
+	// Create a second session directly in the store.
+	_, _ = store.Create(loginReq.Context(), "admin@example.com", []string{"admin"}, "curl/8.0", "10.0.0.1", time.Now().Add(24*time.Hour))
+
+	// List sessions with the cookie.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/sessions", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.handleListSessions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Sessions         []SessionRecord `json:"sessions"`
+		CurrentSessionID string          `json:"current_session_id"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(resp.Sessions))
+	}
+	if resp.CurrentSessionID == "" {
+		t.Error("expected non-empty current_session_id")
+	}
+	// Verify the current session ID matches one of the records.
+	found := false
+	for _, s := range resp.Sessions {
+		if s.ID == resp.CurrentSessionID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("current_session_id does not match any session record")
+	}
+}
+
+func TestHandleListSessions_NoStore(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+	// Store is nil by default from testServerWithAuth.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/sessions", nil)
+	rec := httptest.NewRecorder()
+	s.handleListSessions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleRevokeSession_Success(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	id, _ := store.Create(ctx, "admin@example.com", []string{"admin"}, "ua", "127.0.0.1", time.Now().Add(24*time.Hour))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/"+id, nil)
+	req.SetPathValue("id", id)
+	rec := httptest.NewRecorder()
+	s.handleRevokeSession(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+
+	// Verify session is gone.
+	_, lookupErr := store.Get(ctx, id)
+	if lookupErr == nil {
+		t.Error("expected session to be deleted from store")
+	}
+}
+
+func TestHandleRevokeSession_MissingID(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions/", nil)
+	req.SetPathValue("id", "")
+	rec := httptest.NewRecorder()
+	s.handleRevokeSession(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleRevokeAllSessions_Success(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	// Create the "current" session via the manager.
+	loginW := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := s.sessions.CreateWithRequest(loginW, loginReq, Session{
+		Email: "admin@example.com", Scopes: []string{"admin"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginW.Result().Cookies()[0]
+
+	// Create 2 more sessions.
+	ctx := loginReq.Context()
+	_, _ = store.Create(ctx, "admin@example.com", []string{"admin"}, "ua1", "1.2.3.4", time.Now().Add(24*time.Hour))
+	_, _ = store.Create(ctx, "admin@example.com", []string{"admin"}, "ua2", "5.6.7.8", time.Now().Add(24*time.Hour))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	s.handleRevokeAllSessions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	revoked, ok := resp["revoked"].(float64)
+	if !ok || revoked != 3 {
+		t.Errorf("expected revoked=3, got %v", resp["revoked"])
+	}
+}
+
 func TestHandleAuthStatus_Enriched(t *testing.T) {
 	s, _ := testServerWithConfig(t, testPasswordHash("pw"))
 	defer s.loginLimiter.stop()

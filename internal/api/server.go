@@ -224,6 +224,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/auth/password", s.RequireScope("admin", s.handlePasswordChange))
 	mux.HandleFunc("GET /api/v1/auth/oidc/test", s.RequireScope("admin", s.handleOIDCTest))
 	mux.HandleFunc("POST /api/v1/auth/preferences", s.RequireScope("admin", s.handleAuthPreferences))
+	mux.HandleFunc("GET /api/v1/onboarding", s.RequireScope("admin", s.handleOnboarding))
+	mux.HandleFunc("POST /api/v1/onboarding/dismiss", s.RequireScope("admin", s.handleOnboardingDismiss))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)

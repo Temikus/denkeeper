@@ -164,6 +164,90 @@ describe('Overview page', () => {
     })
   })
 
+  test('onboarding card renders when show_onboarding is true', async () => {
+    server.use(
+      http.get('/api/v1/onboarding', () => HttpResponse.json({
+        show_onboarding: true,
+        steps: [
+          { id: 'auth', label: 'Set up authentication', done: true },
+          { id: 'agent', label: 'Configure an agent', done: false },
+          { id: 'adapter', label: 'Connect a chat adapter', done: false },
+          { id: 'provider', label: 'Add an LLM provider', done: true },
+          { id: 'skill', label: 'Create a skill file', done: false },
+        ],
+        dismissed: false,
+      })),
+    )
+
+    render(Overview)
+    await waitFor(() => {
+      expect(screen.getByText('Setup Checklist')).toBeInTheDocument()
+    })
+
+    // Completed steps show checkmark, incomplete steps are links
+    expect(screen.getByText('Configure an agent').closest('a')).toBeTruthy()
+    expect(screen.queryByText('Welcome to Denkeeper!')).not.toBeInTheDocument()
+  })
+
+  test('welcome banner shows when all steps incomplete', async () => {
+    server.use(
+      http.get('/api/v1/onboarding', () => HttpResponse.json({
+        show_onboarding: true,
+        steps: [
+          { id: 'auth', label: 'Set up authentication', done: false },
+          { id: 'agent', label: 'Configure an agent', done: false },
+          { id: 'adapter', label: 'Connect a chat adapter', done: false },
+          { id: 'provider', label: 'Add an LLM provider', done: false },
+          { id: 'skill', label: 'Create a skill file', done: false },
+        ],
+        dismissed: false,
+      })),
+    )
+
+    render(Overview)
+    await waitFor(() => {
+      expect(screen.getByText(/Welcome to Denkeeper/)).toBeInTheDocument()
+    })
+  })
+
+  test('onboarding card not shown when dismissed', async () => {
+    server.use(
+      http.get('/api/v1/onboarding', () => HttpResponse.json({
+        show_onboarding: false,
+        steps: [],
+        dismissed: true,
+      })),
+    )
+
+    render(Overview)
+    await waitFor(() => {
+      expect(screen.getByText('Status')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Setup Checklist')).not.toBeInTheDocument()
+  })
+
+  test('dismiss button hides onboarding card', async () => {
+    server.use(
+      http.get('/api/v1/onboarding', () => HttpResponse.json({
+        show_onboarding: true,
+        steps: [
+          { id: 'auth', label: 'Set up authentication', done: false },
+        ],
+        dismissed: false,
+      })),
+    )
+
+    render(Overview)
+    await waitFor(() => {
+      expect(screen.getByText('Setup Checklist')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Dismiss'))
+    await waitFor(() => {
+      expect(screen.queryByText('Setup Checklist')).not.toBeInTheDocument()
+    })
+  })
+
   test('no cost breakdown section when session_costs is empty', async () => {
     server.use(
       http.get('/api/v1/costs', () =>

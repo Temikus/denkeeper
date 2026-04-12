@@ -172,6 +172,37 @@ func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 	return &s, nil
 }
 
+// ReadID extracts the session ID from the encrypted cookie without a full
+// session lookup. Returns "" for legacy cookies or on any error.
+func (sm *SessionManager) ReadID(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+
+	ciphertext, err := base64.URLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return ""
+	}
+
+	nonceSize := sm.gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return ""
+	}
+
+	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := sm.gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return ""
+	}
+
+	var payload sessionCookiePayload
+	if json.Unmarshal(plaintext, &payload) == nil && payload.ID != "" {
+		return payload.ID
+	}
+	return ""
+}
+
 // Clear removes the session cookie.
 func (sm *SessionManager) Clear(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is set dynamically via sm.secure

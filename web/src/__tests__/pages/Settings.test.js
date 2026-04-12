@@ -47,6 +47,16 @@ describe('Settings page', () => {
     })
   })
 
+  test('shows "(this session)" badge on current session row', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('(this session)')).toBeInTheDocument()
+    })
+    // The badge should be next to the first session (sess_abc123), not the second
+    const badges = screen.getAllByText('(this session)')
+    expect(badges).toHaveLength(1)
+  })
+
   test('revoke button shows confirm then revokes', async () => {
     render(Settings)
     await waitFor(() => {
@@ -310,6 +320,34 @@ describe('Settings page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Login preference saved')).toBeInTheDocument()
+    })
+  })
+
+  test('OIDC test button shows error inline', async () => {
+    server.use(
+      http.get('/api/v1/auth/status', () => HttpResponse.json({
+        password_enabled: true,
+        oidc_enabled: true,
+        sessions_trackable: true,
+        active_session_count: 1,
+        oidc_issuer: 'https://accounts.example.com',
+        oidc_allowed_emails: ['user@example.com'],
+        preferred_login_method: 'auto',
+      })),
+      http.get('/api/v1/auth/oidc/test', () => HttpResponse.json({
+        ok: false,
+        error: 'connection refused',
+      })),
+    )
+
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => {
+      expect(screen.getByText(/connection refused/)).toBeInTheDocument()
     })
   })
 

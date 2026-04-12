@@ -5,6 +5,7 @@
   import { navigate } from '../router.js'
 
   let data = $state(null)
+  let onboarding = $state(null)
   let error = $state('')
   let sortBy = $state('cost')
   let sortAsc = $state(false)
@@ -28,15 +29,32 @@
     }
   }
 
+  const stepLinks = {
+    auth: '#/settings',
+    agent: '#/agents',
+    adapter: '#/agents',
+    provider: '#/providers',
+    skill: '#/skills',
+  }
+
+  async function dismissOnboarding() {
+    try {
+      await api.dismissOnboarding()
+      onboarding = { ...onboarding, dismissed: true, show_onboarding: false }
+    } catch { /* ignore */ }
+  }
+
   onMount(async () => {
     try {
-      const [health, agents, costs, approvals] = await Promise.all([
+      const [health, agents, costs, approvals, ob] = await Promise.all([
         api.health(),
         api.agents(),
         api.costs(),
         api.approvals('pending').catch(() => []),
+        api.onboarding().catch(() => null),
       ])
       data = { health, agents, costs, pendingCount: approvals.length }
+      onboarding = ob
     } catch (e) {
       error = e.message
     }
@@ -45,6 +63,28 @@
 
 <h1 class="page-title">Overview</h1>
 <ErrorBanner message={error} />
+
+{#if onboarding?.show_onboarding}
+  <div class="onboarding-card">
+    {#if onboarding.steps.every(s => !s.done)}
+      <p class="welcome-banner">Welcome to Denkeeper! Let's get your agent set up.</p>
+    {/if}
+    <h2 class="onboarding-title">Setup Checklist</h2>
+    <ul class="onboarding-steps">
+      {#each onboarding.steps as step}
+        <li class="step" class:done={step.done}>
+          <span class="step-check">{step.done ? '\u2713' : '\u25CB'}</span>
+          {#if step.done}
+            <span>{step.label}</span>
+          {:else}
+            <a href={stepLinks[step.id]}>{step.label}</a>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+    <button class="btn btn-sm dismiss-btn" onclick={dismissOnboarding}>Dismiss</button>
+  </div>
+{/if}
 
 {#if data}
   <div class="grid">
@@ -191,4 +231,44 @@
   .tier { background: var(--border); padding: 1px 6px; border-radius: 10px; }
   .agent-model { font-size: 11px; color: var(--text-muted); font-family: monospace; }
   .loading { color: var(--text-muted); }
+
+  /* Onboarding */
+  .onboarding-card {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .welcome-banner {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+  .onboarding-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .onboarding-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 14px;
+  }
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 14px;
+  }
+  .step.done { color: var(--text-muted); }
+  .step.done .step-check { color: var(--success); }
+  .step-check { width: 18px; text-align: center; font-size: 14px; }
+  .step a { color: var(--accent); text-decoration: none; }
+  .step a:hover { text-decoration: underline; }
+  .dismiss-btn { font-size: 12px; }
 </style>

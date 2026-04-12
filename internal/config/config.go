@@ -237,6 +237,10 @@ type APIConfig struct {
 	// expressions (e.g. "America/New_York", "Europe/London"). Default: "UTC".
 	// Changes take effect after restart.
 	Timezone string `toml:"timezone"`
+
+	// OnboardingDismissed hides the onboarding checklist on the Overview page.
+	// Set automatically via POST /api/v1/onboarding/dismiss.
+	OnboardingDismissed bool `toml:"onboarding_dismissed"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults

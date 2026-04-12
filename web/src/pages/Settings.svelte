@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import Collapsible from '../components/Collapsible.svelte'
 
   let authStatus = $state(null)
   let sessions = $state([])
@@ -10,6 +11,7 @@
   let successMsg = $state('')
   let revoking = $state(null) // session ID being revoked, or 'all'
   let confirmRevoke = $state(null) // session ID or 'all' pending confirmation
+  let currentSessionId = $state(null)
 
   // Sections
   let showAuth = $state(true)
@@ -38,12 +40,13 @@
     loading = true
     error = ''
     try {
-      const [status, sess] = await Promise.all([
+      const [status, sessData] = await Promise.all([
         api.authStatus(),
-        api.listAuthSessions().catch(() => []),
+        api.listAuthSessions().catch(() => ({ sessions: [] })),
       ])
       authStatus = status
-      sessions = Array.isArray(sess) ? sess : []
+      sessions = sessData.sessions || (Array.isArray(sessData) ? sessData : [])
+      currentSessionId = sessData.current_session_id || null
       prefLogin = status?.preferred_login_method || 'auto'
     } catch (e) {
       error = e.message
@@ -176,13 +179,8 @@
   <p class="loading">Loading...</p>
 {:else}
   <!-- Auth Methods Overview -->
-  <button class="section-toggle" aria-expanded={showAuth} aria-controls="section-auth" onclick={() => showAuth = !showAuth}>
-    <span class="section-arrow" class:open={showAuth}>&#x25B6;</span>
-    <h2 class="section-title" id="heading-auth">Authentication</h2>
-  </button>
-
-  {#if showAuth && authStatus}
-    <div class="section-body" id="section-auth" role="region" aria-labelledby="heading-auth">
+  <Collapsible title="Authentication" bind:open={showAuth} id="auth">
+    {#if authStatus}
       <div class="auth-pills">
         <span class="auth-pill" class:enabled={authStatus.password_enabled} class:disabled={!authStatus.password_enabled}>
           Password {authStatus.password_enabled ? 'Enabled' : 'Disabled'}
@@ -198,17 +196,11 @@
       {#if authStatus.active_session_count !== undefined}
         <p class="session-count">{authStatus.active_session_count} active session{authStatus.active_session_count !== 1 ? 's' : ''}</p>
       {/if}
-    </div>
-  {/if}
+    {/if}
+  </Collapsible>
 
   <!-- Password Management -->
-  <button class="section-toggle" aria-expanded={showPassword} aria-controls="section-password" onclick={() => showPassword = !showPassword}>
-    <span class="section-arrow" class:open={showPassword}>&#x25B6;</span>
-    <h2 class="section-title" id="heading-password">Password</h2>
-  </button>
-
-  {#if showPassword}
-    <div class="section-body" id="section-password" role="region" aria-labelledby="heading-password">
+  <Collapsible title="Password" bind:open={showPassword} id="password">
       {#if !authStatus?.password_enabled}
         <p class="info-text">Password login is not configured. Use <code>denkeeper passwd</code> or the setup wizard to set a password.</p>
       {:else}
@@ -240,17 +232,10 @@
           </button>
         </form>
       {/if}
-    </div>
-  {/if}
+  </Collapsible>
 
   <!-- OIDC Status -->
-  <button class="section-toggle" aria-expanded={showOIDC} aria-controls="section-oidc" onclick={() => showOIDC = !showOIDC}>
-    <span class="section-arrow" class:open={showOIDC}>&#x25B6;</span>
-    <h2 class="section-title" id="heading-oidc">OIDC / SSO</h2>
-  </button>
-
-  {#if showOIDC}
-    <div class="section-body" id="section-oidc" role="region" aria-labelledby="heading-oidc">
+  <Collapsible title="OIDC / SSO" bind:open={showOIDC} id="oidc">
       {#if !authStatus?.oidc_enabled}
         <p class="info-text">OIDC is not configured. See the <a href="https://docs.moltis.org/denkeeper/configuration/#oidc" target="_blank" rel="noopener">documentation</a> for setup instructions.</p>
       {:else}
@@ -272,17 +257,10 @@
         {/if}
         <p class="info-text">OIDC configuration changes require editing <code>denkeeper.toml</code> directly. This is an intentional security boundary.</p>
       {/if}
-    </div>
-  {/if}
+  </Collapsible>
 
   <!-- Session Management -->
-  <button class="section-toggle" aria-expanded={showSessions} aria-controls="section-sessions" onclick={() => showSessions = !showSessions}>
-    <span class="section-arrow" class:open={showSessions}>&#x25B6;</span>
-    <h2 class="section-title" id="heading-sessions">Sessions</h2>
-  </button>
-
-  {#if showSessions}
-    <div class="section-body" id="section-sessions" role="region" aria-labelledby="heading-sessions">
+  <Collapsible title="Sessions" bind:open={showSessions} id="sessions">
       {#if sessions.length === 0}
         <p class="empty-state">No active sessions to display.</p>
       {:else}
@@ -300,7 +278,12 @@
             <tbody>
               {#each sessions as sess (sess.id)}
                 <tr>
-                  <td class="ua-cell" title={sess.user_agent}>{shortAgent(sess.user_agent)}</td>
+                  <td class="ua-cell" title={sess.user_agent}>
+                    {shortAgent(sess.user_agent)}
+                    {#if sess.id === currentSessionId}
+                      <span class="current-badge">(this session)</span>
+                    {/if}
+                  </td>
                   <td class="mono">{sess.ip || '—'}</td>
                   <td>{formatDate(sess.created_at)}</td>
                   <td>{formatDate(sess.last_seen_at)}</td>
@@ -331,17 +314,10 @@
           {/if}
         </div>
       {/if}
-    </div>
-  {/if}
+  </Collapsible>
 
   <!-- Login Preferences -->
-  <button class="section-toggle" aria-expanded={showPrefs} aria-controls="section-prefs" onclick={() => showPrefs = !showPrefs}>
-    <span class="section-arrow" class:open={showPrefs}>&#x25B6;</span>
-    <h2 class="section-title" id="heading-prefs">Login Preferences</h2>
-  </button>
-
-  {#if showPrefs}
-    <div class="section-body" id="section-prefs" role="region" aria-labelledby="heading-prefs">
+  <Collapsible title="Login Preferences" bind:open={showPrefs} id="prefs">
       <div class="pref-row">
         <label class="field-label" for="pref-login">
           Preferred login method
@@ -356,8 +332,7 @@
         </button>
       </div>
       <p class="info-text">"Auto" shows password login if configured, otherwise API key.</p>
-    </div>
-  {/if}
+  </Collapsible>
 {/if}
 
 <style>
@@ -373,43 +348,6 @@
     background: color-mix(in srgb, var(--success) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
     border-radius: var(--radius);
-  }
-
-  .section-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 10px 0;
-    width: 100%;
-    text-align: left;
-  }
-
-  .section-toggle:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-    border-radius: var(--radius);
-  }
-
-  .section-arrow {
-    font-size: 10px;
-    color: var(--text-muted);
-    transition: transform 0.2s;
-    display: inline-block;
-  }
-  .section-arrow.open { transform: rotate(90deg); }
-
-  .section-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-    margin: 0;
-  }
-
-  .section-body {
-    padding: 0 0 20px 18px;
   }
 
   /* Auth pills */
@@ -484,6 +422,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .current-badge {
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 500;
+    margin-left: 6px;
   }
 
   .action-cell {

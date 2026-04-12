@@ -252,7 +252,11 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, records)
+	currentID := s.sessions.ReadID(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions":           records,
+		"current_session_id": currentID,
+	})
 }
 
 // handleRevokeSession revokes a single session by ID.

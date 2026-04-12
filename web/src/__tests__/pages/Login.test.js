@@ -340,6 +340,120 @@ describe('Login page', () => {
     })
   })
 
+  test('server preferred_login_method apikey sets default tab', async () => {
+    server.use(
+      http.get('/auth/config', () =>
+        HttpResponse.json({ password_enabled: true, oidc_enabled: false, preferred_login_method: 'apikey' })
+      ),
+      http.get('/api/v1/setup', () =>
+        HttpResponse.json({ setup_required: false, account_setup_available: false })
+      ),
+    )
+
+    render(Login)
+    await waitFor(() => {
+      // API Key tab should be active (the input placeholder for API key)
+      expect(screen.getByPlaceholderText(/API Key/i)).toBeInTheDocument()
+    })
+  })
+
+  test('localStorage preferred method overrides server config', async () => {
+    localStorage.setItem('dk_preferred_method', 'password')
+    server.use(
+      http.get('/auth/config', () =>
+        HttpResponse.json({ password_enabled: true, oidc_enabled: false, preferred_login_method: 'apikey' })
+      ),
+      http.get('/api/v1/setup', () =>
+        HttpResponse.json({ setup_required: false, account_setup_available: false })
+      ),
+    )
+
+    render(Login)
+    await waitFor(() => {
+      // Password tab should be active (password input visible)
+      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
+    })
+    localStorage.removeItem('dk_preferred_method')
+  })
+
+  test('error 429 shows friendly rate limit message', async () => {
+    server.use(
+      http.get('/auth/config', () =>
+        HttpResponse.json({ password_enabled: true, oidc_enabled: false })
+      ),
+      http.get('/api/v1/setup', () =>
+        HttpResponse.json({ setup_required: false, account_setup_available: false })
+      ),
+      http.post('/auth/login', () =>
+        new HttpResponse(JSON.stringify({ error: 'rate limited' }), { status: 429 })
+      ),
+    )
+
+    render(Login)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByPlaceholderText(/Password/i), { target: { value: 'testpass' } })
+    await fireEvent.click(screen.getByText('Sign in'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Too many login attempts/)).toBeInTheDocument()
+    })
+  })
+
+  test('error 403 shows access denied message', async () => {
+    server.use(
+      http.get('/auth/config', () =>
+        HttpResponse.json({ password_enabled: true, oidc_enabled: false })
+      ),
+      http.get('/api/v1/setup', () =>
+        HttpResponse.json({ setup_required: false, account_setup_available: false })
+      ),
+      http.post('/auth/login', () =>
+        new HttpResponse(JSON.stringify({ error: 'forbidden' }), { status: 403 })
+      ),
+    )
+
+    render(Login)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByPlaceholderText(/Password/i), { target: { value: 'testpass' } })
+    await fireEvent.click(screen.getByText('Sign in'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Access denied/)).toBeInTheDocument()
+    })
+  })
+
+  test('error 503 shows service starting message', async () => {
+    server.use(
+      http.get('/auth/config', () =>
+        HttpResponse.json({ password_enabled: true, oidc_enabled: false })
+      ),
+      http.get('/api/v1/setup', () =>
+        HttpResponse.json({ setup_required: false, account_setup_available: false })
+      ),
+      http.post('/auth/login', () =>
+        new HttpResponse(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+      ),
+    )
+
+    render(Login)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByPlaceholderText(/Password/i), { target: { value: 'testpass' } })
+    await fireEvent.click(screen.getByText('Sign in'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/Server is starting up/)).toBeInTheDocument()
+    })
+  })
+
   test('account setup short password shows error', async () => {
     server.use(
       http.get('/auth/config', () =>

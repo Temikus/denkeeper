@@ -276,6 +276,10 @@ export const api = {
     body: JSON.stringify({ preferred_login_method: method }),
   }),
 
+  // Onboarding.
+  onboarding: () => apiFetch('/api/v1/onboarding'),
+  dismissOnboarding: () => apiFetch('/api/v1/onboarding/dismiss', { method: 'POST' }),
+
   // Auth endpoints (no auth required).
   authConfig: () => fetch('/auth/config').then(r => r.json()),
   passwordLogin: (password) => fetch('/auth/login', {

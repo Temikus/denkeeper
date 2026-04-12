@@ -159,26 +159,29 @@ export const handlers = [
     api_keys_count: 1,
     preferred_login_method: 'auto',
   })),
-  http.get('/api/v1/auth/sessions', () => HttpResponse.json([
-    {
-      id: 'sess_abc123',
-      email: 'admin@example.com',
-      user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-      ip: '192.168.1.10',
-      created_at: '2026-04-10T10:00:00Z',
-      expires_at: '2026-04-17T10:00:00Z',
-      last_seen_at: '2026-04-11T08:30:00Z',
-    },
-    {
-      id: 'sess_def456',
-      email: 'admin@example.com',
-      user_agent: 'curl/8.4.0',
-      ip: '10.0.0.1',
-      created_at: '2026-04-09T14:00:00Z',
-      expires_at: '2026-04-16T14:00:00Z',
-      last_seen_at: '2026-04-11T06:00:00Z',
-    },
-  ])),
+  http.get('/api/v1/auth/sessions', () => HttpResponse.json({
+    sessions: [
+      {
+        id: 'sess_abc123',
+        email: 'admin@example.com',
+        user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        ip: '192.168.1.10',
+        created_at: '2026-04-10T10:00:00Z',
+        expires_at: '2026-04-17T10:00:00Z',
+        last_seen_at: '2026-04-11T08:30:00Z',
+      },
+      {
+        id: 'sess_def456',
+        email: 'admin@example.com',
+        user_agent: 'curl/8.4.0',
+        ip: '10.0.0.1',
+        created_at: '2026-04-09T14:00:00Z',
+        expires_at: '2026-04-16T14:00:00Z',
+        last_seen_at: '2026-04-11T06:00:00Z',
+      },
+    ],
+    current_session_id: 'sess_abc123',
+  })),
   http.delete('/api/v1/auth/sessions/:id', () => new HttpResponse(null, { status: 204 })),
   http.delete('/api/v1/auth/sessions', () => HttpResponse.json({ revoked: 2 })),
   http.post('/api/v1/auth/password', async ({ request }) => {
@@ -203,6 +206,20 @@ export const handlers = [
     }
     return HttpResponse.json({ ok: true })
   }),
+
+  // Onboarding (default: all done, not shown)
+  http.get('/api/v1/onboarding', () => HttpResponse.json({
+    show_onboarding: false,
+    steps: [
+      { id: 'auth', label: 'Set up authentication', done: true },
+      { id: 'agent', label: 'Configure an agent', done: true },
+      { id: 'adapter', label: 'Connect a chat adapter', done: true },
+      { id: 'provider', label: 'Add an LLM provider', done: true },
+      { id: 'skill', label: 'Create a skill file', done: true },
+    ],
+    dismissed: false,
+  })),
+  http.post('/api/v1/onboarding/dismiss', () => new HttpResponse(null, { status: 204 })),
 
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),
