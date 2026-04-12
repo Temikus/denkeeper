@@ -10,8 +10,8 @@ export class NavHelper {
   /** Navigate to a page by clicking its nav link. */
   async goto(pageName) {
     await this.page.click(`nav a:has-text("${pageName}")`)
-    // Wait for navigation to settle.
-    await this.page.waitForLoadState('networkidle')
+    // Wait for page content to render instead of networkidle.
+    await this.page.locator('.page-title, h1, h2').first().waitFor({ state: 'visible', timeout: 5000 })
   }
 
   /** Get the currently active nav item text. */
@@ -25,7 +25,7 @@ export class NavHelper {
 
   /** Toggle dark/light theme if a toggle exists. */
   async toggleTheme() {
-    const toggle = this.page.locator('[data-testid="theme-toggle"], button:has-text("theme"), .theme-toggle')
+    const toggle = this.page.locator('[data-testid="theme-toggle"]')
     if (await toggle.count() > 0) {
       await toggle.first().click()
     }

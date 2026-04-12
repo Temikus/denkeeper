@@ -208,6 +208,18 @@ jobs:
           dir="$(mktemp -d)"
           mkdir -p "$dir/agents/default" "$dir/skills" "$dir/data"
           echo "DENKEEPER_DATA_DIR=$dir" >> "$GITHUB_ENV"
+      - name: Start mock LLM server
+        run: |
+          cd web && node -e "
+            import('./test/e2e/helpers/mock-llm.js')
+              .then(m => m.startMockLLM(19111))
+              .then(() => console.log('Mock LLM ready on :19111'))
+          " &
+          for i in $(seq 1 10); do
+            curl -sf http://127.0.0.1:19111/api/tags > /dev/null && echo "Mock LLM ready" && exit 0
+            sleep 0.5
+          done
+          echo "Mock LLM failed to start" && exit 1
       - name: Start denkeeper
         run: |
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &

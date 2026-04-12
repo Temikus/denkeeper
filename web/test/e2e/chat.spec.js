@@ -45,10 +45,11 @@ test.describe('Chat conversation', () => {
     await chat.waitForResponse()
 
     // After the response, the session selector should have an option beyond "New session".
-    // Wait briefly for session list to refresh.
-    await page.waitForTimeout(1000)
-    const optionCount = await sessionSel.locator('option').count()
-    expect(optionCount).toBeGreaterThan(1)
+    // Poll until the session list refreshes (driven by async loadSessions call).
+    await expect(async () => {
+      const optionCount = await sessionSel.locator('option').count()
+      expect(optionCount).toBeGreaterThan(1)
+    }).toPass({ timeout: 5000 })
   })
 
   test('shows empty state before any messages', async ({ page }) => {

@@ -11,25 +11,27 @@ test.describe('Schedules CRUD via UI', () => {
   })
 
   test('create, edit, and delete a schedule', async ({ page }) => {
+    const suffix = Date.now().toString(36)
+    const schedName = `e2e-sched-${suffix}`
     const schedules = new SchedulesPage(page)
     await schedules.goto()
 
     // Create a new schedule.
     await schedules.clickAdd()
     await schedules.fillForm({
-      name: 'e2e-test-sched',
+      name: schedName,
       expression: '@daily',
       channel: 'api:test',
     })
     await schedules.save()
 
     // Verify the row appears.
-    const row = schedules.row('e2e-test-sched')
+    const row = schedules.row(schedName)
     await expect(row).toBeVisible()
     await expect(row.locator('.expr').first()).toContainText('@daily')
 
     // Edit: change the expression.
-    await schedules.editRow('e2e-test-sched')
+    await schedules.editRow(schedName)
     const form = page.locator('[data-testid="schedule-form"]')
     const exprInput = form.locator('input[placeholder*="@daily"]')
     await exprInput.clear()
@@ -40,7 +42,7 @@ test.describe('Schedules CRUD via UI', () => {
     await expect(row.locator('.expr').first()).toContainText('@hourly')
 
     // Delete.
-    await schedules.deleteRow('e2e-test-sched')
+    await schedules.deleteRow(schedName)
     await schedules.confirmDelete()
 
     // Verify row is gone.
