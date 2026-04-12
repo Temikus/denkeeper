@@ -730,8 +730,8 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 }
 
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
-func buildAgentRouter(model string, abc agentBuildCtx) *llm.Router {
-	router := llm.NewRouter(abc.cfg.LLM.DefaultProvider, model, abc.llm.cost)
+func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
+	router := llm.NewRouter(provider, model, abc.llm.cost)
 	router.RegisterProvider(abc.llm.ollama)
 	if abc.llm.openRouter != nil {
 		router.RegisterProvider(abc.llm.openRouter)
@@ -797,7 +797,11 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	if ac.LLMModel != "" {
 		model = ac.LLMModel
 	}
-	agentRouter := buildAgentRouter(model, abc)
+	provider := abc.cfg.LLM.DefaultProvider
+	if ac.LLMProvider != "" {
+		provider = ac.LLMProvider
+	}
+	agentRouter := buildAgentRouter(provider, model, abc)
 
 	// Per-agent fallback overrides replace global rules when defined.
 	if len(ac.Fallbacks) > 0 {

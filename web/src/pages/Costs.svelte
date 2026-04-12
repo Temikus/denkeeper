@@ -190,7 +190,7 @@
         <tbody>
           {#each sortedAgents as a}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <tr class="clickable" class:expanded={expandedAgent === a.agent} onclick={() => toggleAgent(a.agent)} role="button" tabindex="0">
+            <tr class="row-clickable" class:row-expanded={expandedAgent === a.agent} onclick={() => toggleAgent(a.agent)} role="button" tabindex="0">
               <td class="agent-name">{a.agent}</td>
               <td class="num mono">{a.sessions}</td>
               <td class="num mono">{a.messages}</td>
@@ -274,9 +274,7 @@
   .data-table tbody tr:hover { background: var(--hover-overlay); }
   .num { text-align: right; }
   .mono { font-family: monospace; }
-  .clickable { cursor: pointer; }
-  .clickable:hover { background: var(--hover-overlay); }
-  .expanded { background: rgba(200, 78, 53, 0.08); }
+  /* Expansion styles: uses shared .row-clickable and .row-expanded from shared.css */
   .agent-name { font-weight: 600; }
   .sub-header th {
     background: var(--hover-overlay);

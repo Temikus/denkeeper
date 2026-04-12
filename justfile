@@ -101,6 +101,9 @@ vet:
 # Run all checks (fmt, vet, lint, test)
 check: fmt-check vet lint lint-ui test test-ui
 
+# Run all checks including E2E (requires running server)
+check-full: check test-e2e
+
 # Tidy modules
 tidy:
     go mod tidy

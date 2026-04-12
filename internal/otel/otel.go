@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -56,6 +57,10 @@ func Setup(cfg Config, logger *slog.Logger) (shutdown func(context.Context) erro
 		sdkmetric.WithReader(promExp),
 	)
 	otel.SetMeterProvider(meterProvider)
+
+	// W3C Trace Context propagation — always enabled so inbound traceparent
+	// headers create child spans even when this instance is not exporting traces.
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	// Traces — optional OTLP HTTP push exporter.
 	var tracerProvider *sdktrace.TracerProvider

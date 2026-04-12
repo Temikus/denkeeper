@@ -10,6 +10,7 @@
   let detail = $state(null)
   let error = $state('')
   let expandedGroup = $state(null)
+  let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
 
   // Inline rename state
   let renamingAgent = $state(null)
@@ -35,7 +36,14 @@
 
   onMount(async () => {
     try {
-      agents = (await api.agents()) || []
+      const [agentList, providerData] = await Promise.all([
+        api.agents(),
+        api.llmProviders().catch(() => null),
+      ])
+      agents = agentList || []
+      if (providerData?.providers) {
+        enabledProviders = providerData.providers.filter(p => p.enabled).map(p => p.name)
+      }
       if (agents.length) selectAgent(agents[0])
     } catch(e) {
       error = e.message
@@ -199,6 +207,7 @@
   let expandedCard = $state(null)  // 'model' | 'permission' | 'tools' | 'adapters' | null
   let configTier = $state('')
   let configModel = $state('')
+  let configProvider = $state('')
   let configDescription = $state('')
   let configAllowlist = $state('')
   let configSaving = $state(false)
@@ -211,6 +220,7 @@
   function initConfigForm(d) {
     configTier = d.permission_tier || 'supervised'
     configModel = d.model || ''
+    configProvider = d.provider || ''
     configDescription = ''
     configAllowlist = ''
     if (agents.length) {
@@ -242,6 +252,7 @@
       const data = {}
       if (expandedCard === 'model') {
         if (configModel !== detail.model) data.llm_model = configModel
+        if (configProvider && configProvider !== detail.provider) data.llm_provider = configProvider
         if (configDescription !== undefined) data.description = configDescription
       } else if (expandedCard === 'permission') {
         if (configTier !== detail.permission_tier) data.session_tier = configTier
@@ -425,7 +436,7 @@
             <div class="stat-label">MODEL</div>
             <div class="stat-value mono">{detail.provider ? detail.provider + ' / ' : ''}{detail.model || '—'}</div>
           </div>
-          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <svg class="chevron-toggle down" class:open={expandedCard === 'model'} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="stat-card" class:expanded={expandedCard === 'permission'} onclick={() => toggleCard('permission')} role="button" tabindex="0" aria-expanded={expandedCard === 'permission'}>
@@ -438,7 +449,7 @@
               <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
             </div>
           </div>
-          <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <svg class="chevron-toggle down" class:open={expandedCard === 'permission'} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="stat-card stat-card-static">
           <div class="stat-icon" style="background: rgba(76,175,125,0.12); color: var(--success);">
@@ -485,8 +496,17 @@
           {#if expandedCard === 'model'}
             <div class="config-panel-title">Model Configuration</div>
             <div class="config-panel-body">
+              <label class="config-label" for="cfg-provider">Provider</label>
+              <select id="cfg-provider" class="config-input" bind:value={configProvider}>
+                {#if configProvider && !enabledProviders.includes(configProvider)}
+                  <option value={configProvider}>{configProvider}</option>
+                {/if}
+                {#each enabledProviders as p}
+                  <option value={p}>{p}</option>
+                {/each}
+              </select>
               <label class="config-label" for="cfg-model">Model</label>
-              <ModelSelector bind:value={configModel} />
+              <ModelSelector bind:value={configModel} onchange={(id, prov) => { if (prov) configProvider = prov }} />
               <label class="config-label" for="cfg-desc">Description</label>
               <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
             </div>
@@ -788,11 +808,7 @@
   .stat-text { flex: 1; min-width: 0; }
   .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
   .stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
-  .chevron {
-    flex-shrink: 0; color: var(--text-muted);
-    transition: transform 0.2s;
-  }
-  .stat-card.expanded .chevron { transform: rotate(180deg); }
+  /* Chevron rotation: uses shared .chevron-toggle from shared.css */
 
   /* Full-width config panel below stat cards */
   .config-panel {
@@ -992,6 +1008,6 @@
     .stat-cards { grid-template-columns: 1fr; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .chevron, .stat-card, .sp-preview, .section-name, .config-panel { transition: none; }
+    .stat-card, .sp-preview, .section-name, .config-panel { transition: none; }
   }
 </style>

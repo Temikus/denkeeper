@@ -725,6 +725,38 @@ func TestRouter_SetDefaultModel(t *testing.T) {
 	}
 }
 
+func TestRouter_SetDefaultProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "m1", ct)
+	r.RegisterProvider(&mockProvider{name: "mock"})
+	r.RegisterProvider(&mockProvider{name: "other"})
+
+	if r.DefaultProvider() != "mock" {
+		t.Fatalf("initial provider = %q, want mock", r.DefaultProvider())
+	}
+
+	if err := r.SetDefaultProvider("other"); err != nil {
+		t.Fatalf("SetDefaultProvider(other) = %v, want nil", err)
+	}
+	if r.DefaultProvider() != "other" {
+		t.Errorf("provider after set = %q, want other", r.DefaultProvider())
+	}
+}
+
+func TestRouter_SetDefaultProvider_UnknownReturnsError(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "m1", ct)
+	r.RegisterProvider(&mockProvider{name: "mock"})
+
+	err := r.SetDefaultProvider("nonexistent")
+	if err == nil {
+		t.Fatal("SetDefaultProvider(nonexistent) = nil, want error")
+	}
+	if r.DefaultProvider() != "mock" {
+		t.Errorf("provider should remain mock, got %q", r.DefaultProvider())
+	}
+}
+
 func TestTokenCost_PrefersProviderCost(t *testing.T) {
 	resp := &ChatResponse{
 		CostUSD:    0.00123,

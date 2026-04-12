@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
@@ -21,6 +22,7 @@ func validAgentName(name string) bool {
 type agentConfigUpdateInput struct {
 	Name                *string                  `json:"name,omitempty"`
 	SessionTier         *string                  `json:"session_tier,omitempty"`
+	LLMProvider         *string                  `json:"llm_provider,omitempty"`
 	LLMModel            *string                  `json:"llm_model,omitempty"`
 	Description         *string                  `json:"description,omitempty"`
 	BrowserURLAllowlist *[]string                `json:"browser_url_allowlist,omitempty"`
@@ -73,17 +75,9 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Apply runtime changes to the engine.
-	if input.SessionTier != nil {
-		if err := e.SetPermissionTier(*input.SessionTier); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "setting permission tier: " + err.Error()})
-			return
-		}
-	}
-	if input.LLMModel != nil {
-		e.SetModel(*input.LLMModel)
-	}
-	if input.Fallbacks != nil {
-		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
+	if httpStatus, errMsg := applyAgentRuntimeChanges(e, &input); httpStatus != 0 {
+		writeJSON(w, httpStatus, map[string]string{"error": errMsg})
+		return
 	}
 
 	s.persistAgentConfig(name, &input)
@@ -93,6 +87,28 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		"name":   name,
 		"status": "updated",
 	})
+}
+
+// applyAgentRuntimeChanges mutates the engine for the fields present in input.
+// Returns (0, "") on success or (httpStatus, errorMessage) on failure.
+func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (int, string) {
+	if input.SessionTier != nil {
+		if err := e.SetPermissionTier(*input.SessionTier); err != nil {
+			return http.StatusInternalServerError, "setting permission tier: " + err.Error()
+		}
+	}
+	if input.LLMProvider != nil {
+		if err := e.SetProvider(*input.LLMProvider); err != nil {
+			return http.StatusBadRequest, "invalid llm_provider: " + err.Error()
+		}
+	}
+	if input.LLMModel != nil {
+		e.SetModel(*input.LLMModel)
+	}
+	if input.Fallbacks != nil {
+		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
+	}
+	return 0, ""
 }
 
 // handleAgentRename validates and executes an agent rename.
@@ -145,6 +161,9 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 	changes := make(map[string]any)
 	if input.SessionTier != nil {
 		changes["session_tier"] = *input.SessionTier
+	}
+	if input.LLMProvider != nil {
+		changes["llm_provider"] = *input.LLMProvider
 	}
 	if input.LLMModel != nil {
 		changes["llm_model"] = *input.LLMModel
@@ -199,6 +218,9 @@ func (s *Server) renameInMemoryAgent(oldName, newName string) {
 func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
 	if input.SessionTier != nil {
 		ac.SessionTier = *input.SessionTier
+	}
+	if input.LLMProvider != nil {
+		ac.LLMProvider = *input.LLMProvider
 	}
 	if input.LLMModel != nil {
 		ac.LLMModel = *input.LLMModel

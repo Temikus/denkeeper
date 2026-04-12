@@ -9,6 +9,7 @@ import Login from '../../pages/Login.svelte'
 beforeEach(() => {
   token.clear()
   authMode.set(null)
+  localStorage.removeItem('dk_preferred_method')
 })
 
 describe('Login page', () => {
@@ -373,7 +374,6 @@ describe('Login page', () => {
       // Password tab should be active (password input visible)
       expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
     })
-    localStorage.removeItem('dk_preferred_method')
   })
 
   test('error 429 shows friendly rate limit message', async () => {

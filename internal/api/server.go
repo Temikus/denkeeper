@@ -25,6 +25,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -241,6 +242,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	handler = s.middlewareSecurityHeaders(handler)
 	handler = s.middlewareCORS(handler)
 	handler = s.middlewareRecover(handler)
+	handler = otelhttp.NewHandler(handler, "denkeeper.http")
 
 	s.httpServer = &http.Server{
 		Addr:              cfg.Listen,

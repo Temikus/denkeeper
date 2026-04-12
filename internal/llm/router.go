@@ -204,6 +204,16 @@ func modelSupportsTools(id string) bool {
 // SetDefaultModel changes the router's default model for subsequent requests.
 func (r *Router) SetDefaultModel(model string) { r.defaultModel = model }
 
+// SetDefaultProvider changes the router's default provider for subsequent requests.
+// Returns an error if the provider is not registered.
+func (r *Router) SetDefaultProvider(provider string) error {
+	if _, ok := r.providers[provider]; !ok {
+		return fmt.Errorf("unknown provider %q", provider)
+	}
+	r.defaultProvider = provider
+	return nil
+}
+
 func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *Router {
 	meter := otel.Meter("denkeeper.llm")
 	tracer := otel.Tracer("denkeeper.llm")

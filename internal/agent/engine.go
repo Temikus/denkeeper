@@ -181,6 +181,11 @@ func (e *Engine) SetModel(model string) {
 	e.router.SetDefaultModel(model)
 }
 
+// SetProvider changes the engine's default LLM provider.
+func (e *Engine) SetProvider(provider string) error {
+	return e.router.SetDefaultProvider(provider)
+}
+
 // Skills returns the agent's loaded skills (global + agent-specific, merged).
 func (e *Engine) Skills() []skill.Skill {
 	e.skillsMu.RLock()

@@ -132,7 +132,7 @@
       <tbody>
         {#each entries as entry}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <tr class="row" class:expanded={expandedKey === entry.key} onclick={() => toggleExpand(entry.key)} tabindex="0">
+          <tr class="row row-clickable" class:row-expanded={expandedKey === entry.key} onclick={() => toggleExpand(entry.key)} tabindex="0">
             <td class="mono key-cell">{entry.key}</td>
             <td class="mono val-cell">{truncate(entry.value, 80)}</td>
             <td class="ttl-cell">{formatExpiry(entry.expires_at)}</td>
@@ -199,9 +199,7 @@
   }
   td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
   tr:last-child td { border-bottom: none; }
-  .row { cursor: pointer; }
-  .row:hover { background: var(--hover-overlay); }
-  .row.expanded { background: rgba(200, 78, 53, 0.08); }
+  /* Row expansion: uses shared .row-clickable and .row-expanded from shared.css */
   .key-cell { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val-cell { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
   .ttl-cell { white-space: nowrap; width: 60px; }

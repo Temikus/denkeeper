@@ -279,6 +279,32 @@
   color: var(--text);
 }
 
+/* ---------- Expandable rows / cards -------------------------------------- */
+
+.row-clickable {
+  cursor: pointer;
+}
+.row-clickable:hover {
+  background: var(--hover-overlay);
+}
+
+.row-expanded {
+  background: rgba(200, 78, 53, 0.08);
+}
+
+.chevron-toggle {
+  display: inline-flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.chevron-toggle.open {
+  transform: rotate(90deg);
+}
+.chevron-toggle.down.open {
+  transform: rotate(180deg);
+}
+
 /* ---------- Animations --------------------------------------------------- */
 
 @keyframes fade-in {

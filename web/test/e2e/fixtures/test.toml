@@ -1,33 +1,27 @@
-# Minimal config for E2E testing.
-# Uses a no-op LLM provider (Ollama with unreachable endpoint) and SQLite.
-#
-# data_dir is set via DENKEEPER_DATA_DIR env var (created by globalSetup.js).
-# All paths (db, persona, skills) derive from data_dir automatically.
-
-[llm]
-default_provider = "ollama"
-default_model = "test-model"
-cost_limit_hard = 100.0
-
-[llm.ollama]
-base_url = "http://127.0.0.1:19111"   # mock LLM server started by global-setup.js
-
 [api]
-listen = ":8080"
-login_rate_limit = 0  # disable for E2E tests
+listen = ':8080'
+login_rate_limit = 0
 
 [api.auth]
-password_hash = "$2a$13$7GUyWo4wSXOVEW5GqDRqOeHggYFzyYvkwhFfl/kPcyCP28.l6vrm."  # "test"
-session_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-session_max_age = "24h"
+password_hash = '$2a$13$7GUyWo4wSXOVEW5GqDRqOeHggYFzyYvkwhFfl/kPcyCP28.l6vrm.'
+session_max_age = '24h'
+session_secret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
 [[api.keys]]
-name = "e2e-test"
-key = "e2e-test-token-12345678"
-scopes = ["admin", "chat", "sessions:read", "costs:read", "skills:read", "skills:write", "schedules:read", "schedules:write", "approvals:read", "approvals:write", "tools:read", "tools:write", "kv:read", "kv:write", "agents:read", "agents:write"]
+key = 'e2e-test-token-12345678'
+name = 'e2e-test'
+scopes = ['admin', 'chat', 'sessions:read', 'costs:read', 'skills:read', 'skills:write', 'schedules:read', 'schedules:write', 'approvals:read', 'approvals:write', 'tools:read', 'tools:write', 'kv:read', 'kv:write', 'agents:read', 'agents:write']
+
+[llm]
+cost_limit_hard = 100.0
+default_model = 'test-model'
+default_provider = 'ollama'
+
+[llm.ollama]
+base_url = 'http://127.0.0.1:19111'
 
 [session]
-tier = "autonomous"
+tier = 'autonomous'
 
 [web]
 enabled = false

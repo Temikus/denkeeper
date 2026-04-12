@@ -366,6 +366,10 @@ type AgentInstanceConfig struct {
 	// "telegram:12345" — specific: only messages from that chat ID.
 	Adapters []string `toml:"adapters"`
 
+	// LLMProvider overrides the global default_provider for this agent.
+	// Must match a registered provider name (e.g. "anthropic", "openrouter", "openai", "ollama").
+	LLMProvider string `toml:"llm_provider"`
+
 	// LLMModel overrides the global default_model for this agent.
 	LLMModel string `toml:"llm_model"`
 

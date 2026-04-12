@@ -44,7 +44,7 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 - `llm.Provider` — LLM backends (Anthropic, OpenRouter, OpenAI, Ollama)
 - `agent.MemoryStore` — conversation persistence (SQLite)
 
-**Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters`, `llm_model`, `session_tier`. If no `[[agents]]` section exists, a single `"default"` agent is synthesized.
+**Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters`, `llm_provider`, `llm_model`, `session_tier`. If no `[[agents]]` section exists, a single `"default"` agent is synthesized. `llm_provider` overrides the global `default_provider` for that agent, enabling different agents to use different LLM backends.
 
 **Data directory**: All default paths (db, persona, skills) are derived from a single base directory. Set via `DENKEEPER_DATA_DIR` env var, `data_dir` in TOML, or defaults to `~/.denkeeper`. The Helm chart sets `DENKEEPER_DATA_DIR=/data` so everything lands on the writable PVC.
 
@@ -130,7 +130,7 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
-- `PATCH /api/v1/agents/{name}` — agent config mutation; supports `name` (rename), `session_tier`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`
+- `PATCH /api/v1/agents/{name}` — agent config mutation; supports `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`
 - `GET /api/v1/llm/providers` (scope `admin`) — list LLM providers with current config
 - `PATCH /api/v1/llm/providers/{name}` (scope `admin`) — update provider config (API key, base URL, etc.)
 - `PATCH /api/v1/llm/config` (scope `admin`) — update global LLM config (default provider, model, etc.)
@@ -182,7 +182,7 @@ Every user-facing feature must include thoughtful UX treatment.
 
 ## Current State
 
-Phase 12 (Auth & Onboarding UX Uplift) complete: Settings page with all 5 sections (including "(this session)" indicator), all backend auth endpoints (password change, OIDC test, preferences, session tracking), login page improvements, onboarding checklist (12e) with Overview page card and dismiss flow, auth test coverage (12f). Shared `Collapsible.svelte` component extracted from Settings page. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
+Phase 12 (Auth & Onboarding UX Uplift) complete: Settings page with all 5 sections (including "(this session)" indicator), all backend auth endpoints (password change, OIDC test, preferences, session tracking), login page improvements, onboarding checklist (12e) with Overview page card and dismiss flow, auth test coverage (12f). Shared `Collapsible.svelte` component extracted from Settings page. All core systems implemented: multi-agent routing, 4 LLM providers, Telegram/Discord adapters, MCP tools with health monitoring and OAuth 2.1, plugin system (subprocess + Docker + K8s), approval workflows (including supervised tool calls with auto-approve rules and auto-resolve), KV store, browser automation, web search/fetch, pricing registry, OAuth2/OIDC auth, OTel observability, web dashboard (15 pages) with real-time token-by-token WebSocket streaming. Per-agent fallback rules, per-agent provider routing (`llm_provider`), inline agent rename, LLM provider config via web UI, server reload/restart via admin API.
 
 CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
 

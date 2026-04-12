@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -60,6 +61,75 @@ func TestAgentConfigUpdate_LLMModel(t *testing.T) {
 	e := deps.Dispatcher.Agent("default")
 	if e.ModelName() != "new-model-v2" {
 		t.Errorf("model = %q, want new-model-v2", e.ModelName())
+	}
+}
+
+func TestAgentConfigUpdate_LLMProvider(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+
+	// Build deps with two registered providers.
+	logger := testLogger()
+	mem, _ := agent.NewInMemoryStore()
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
+	perms, _ := security.NewPermissionEngine("supervised")
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&namedMockProvider{
+		name:     "mock",
+		response: &llm.ChatResponse{Content: "mock reply", TokensUsed: llm.TokenUsage{Total: 1}},
+	})
+	router.RegisterProvider(&namedMockProvider{
+		name:     "other",
+		response: &llm.ChatResponse{Content: "other reply", TokensUsed: llm.TokenUsage{Total: 1}},
+	})
+	approvalStore, _ := approval.NewInMemoryStore()
+	approvalMgr := approval.NewManager(approvalStore, logger)
+	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{}, nil, approvalMgr, logger)
+	dispatcher := agent.NewDispatcher(
+		map[string]*agent.Engine{"default": e},
+		[]agent.Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil, logger,
+	)
+	deps := Deps{
+		Dispatcher:  dispatcher,
+		CostTracker: costTracker,
+		Memory:      mem,
+		Config:      &config.Config{Agents: []config.AgentInstanceConfig{{Name: "default"}}},
+	}
+
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"llm_provider": "other"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if e.ProviderName() != "other" {
+		t.Errorf("provider = %q, want other", e.ProviderName())
+	}
+}
+
+func TestAgentConfigUpdate_LLMProvider_Unknown(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"llm_provider": "nonexistent"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 
@@ -164,6 +234,18 @@ func TestAgentConfigUpdate_Description(t *testing.T) {
 		t.Errorf("description = %q, want 'Updated description'", deps.Config.Agents[0].Description)
 	}
 }
+
+// namedMockProvider is a mock LLM provider with a configurable name.
+type namedMockProvider struct {
+	name     string
+	response *llm.ChatResponse
+}
+
+func (m *namedMockProvider) Name() string { return m.name }
+func (m *namedMockProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return m.response, nil
+}
+func (m *namedMockProvider) HealthCheck(_ context.Context) error { return nil }
 
 // testDepsWithAgent creates test deps with a named non-default agent alongside default.
 func testDepsWithAgent(name string) Deps {

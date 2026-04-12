@@ -93,7 +93,7 @@
     value = m.id
     open = false
     search = ''
-    onchange?.(m.id)
+    onchange?.(m.id, m.provider)
   }
 
   function formatCost(v) {

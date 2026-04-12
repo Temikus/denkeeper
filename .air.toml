@@ -1,0 +1,32 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # Build with required tags
+  cmd = "go build -tags mcp_go_client_oauth -o ./tmp/denkeeper ./cmd/denkeeper"
+  # Binary and args
+  bin = "./tmp/denkeeper"
+  args_bin = ["serve"]
+  # Watch Go source files
+  include_ext = ["go", "toml"]
+  include_dir = ["cmd", "internal"]
+  # Skip non-Go directories and build artifacts
+  exclude_dir = ["web", "website", "node_modules", "pkg", "tmp", "deploy", "design", "docs", "test", "data", "agents", "assets", "public", "packaging", ".git"]
+  exclude_regex = ["_test\\.go$"]
+  # Delay after change detected (ms)
+  delay = 1000
+  # Stop running old binary before building
+  stop_on_error = true
+  # Send SIGINT instead of SIGKILL for graceful shutdown
+  send_interrupt = true
+  # Wait for old process to exit (ms)
+  kill_delay = 500
+
+[log]
+  time = false
+  main_only = true
+
+[color]
+  main = "green"
+  build = "yellow"
+  runner = "cyan"

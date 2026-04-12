@@ -947,7 +947,7 @@
                     </div>
                     <div class="defs-tool-info">
                       <div class="defs-tool-name-row">
-                        <span class="defs-chevron" class:open={expandedTool === td.name}>
+                        <span class="chevron-toggle" class:open={expandedTool === td.name}>
                           <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 2L7 5L3.5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </span>
                         <code class="defs-tool-name">{td.name}</code>
@@ -1477,15 +1477,7 @@
     align-items: center;
     gap: 4px;
   }
-  .defs-chevron {
-    display: inline-flex;
-    color: var(--text-muted);
-    transition: transform 0.15s ease;
-    flex-shrink: 0;
-  }
-  .defs-chevron.open {
-    transform: rotate(90deg);
-  }
+  /* Chevron rotation: uses shared .chevron-toggle from shared.css */
   .defs-tool-name {
     font-size: 14px;
     font-weight: 600;
