@@ -9,7 +9,24 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var (
+	schedTracer   = otel.Tracer("denkeeper.scheduler")
+	schedMeter    = otel.Meter("denkeeper.scheduler")
+	schedDuration metric.Float64Histogram
+)
+
+func init() {
+	schedDuration, _ = schedMeter.Float64Histogram("denkeeper.scheduler.duration",
+		metric.WithDescription("Scheduled job execution latency in seconds"),
+		metric.WithUnit("s"))
+}
 
 // ScheduleType classifies the priority and security context of a schedule.
 type ScheduleType string
@@ -384,7 +401,7 @@ func (s *Scheduler) runInterval(e *internalEntry) {
 			s.mu.Unlock()
 
 			s.logFire(snapshot)
-			job(snapshot)
+			s.runJobTraced(e.ctx, snapshot, job)
 		}
 	}
 }
@@ -422,9 +439,29 @@ func (s *Scheduler) runCron(e *internalEntry) {
 			s.mu.Unlock()
 
 			s.logFire(snapshot)
-			job(snapshot)
+			s.runJobTraced(e.ctx, snapshot, job)
 		}
 	}
+}
+
+func (s *Scheduler) runJobTraced(ctx context.Context, snapshot Entry, job JobFunc) {
+	_, span := schedTracer.Start(ctx, "scheduler.run", trace.WithAttributes(
+		attribute.String("schedule.name", snapshot.Name),
+		attribute.String("schedule.type", string(snapshot.Type)),
+		attribute.String("schedule.skill", snapshot.Skill),
+	))
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		schedDuration.Record(ctx, elapsed,
+			metric.WithAttributes(
+				attribute.String("schedule.name", snapshot.Name),
+				attribute.String("schedule.type", string(snapshot.Type)),
+			))
+		span.End()
+	}()
+
+	job(snapshot)
 }
 
 func (s *Scheduler) logFire(e Entry) {

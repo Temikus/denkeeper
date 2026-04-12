@@ -14,10 +14,27 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 )
+
+var (
+	toolTracer   = otel.Tracer("denkeeper.tool")
+	toolMeter    = otel.Meter("denkeeper.tool")
+	toolDuration metric.Float64Histogram
+)
+
+func init() {
+	toolDuration, _ = toolMeter.Float64Histogram("denkeeper.tool.duration",
+		metric.WithDescription("Tool execution latency in seconds"),
+		metric.WithUnit("s"))
+}
 
 // serverConn tracks a connected MCP server subprocess and its session.
 type serverConn struct {
@@ -519,14 +536,36 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
 	}
 
+	serverName := sc.name
+	ctx, span := toolTracer.Start(ctx, "tool.execute", trace.WithAttributes(
+		attribute.String("tool.name", call.Function.Name),
+		attribute.String("tool.server", serverName),
+	))
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		toolDuration.Record(ctx, elapsed,
+			metric.WithAttributes(
+				attribute.String("tool.name", call.Function.Name),
+				attribute.String("tool.server", serverName),
+			))
+		span.End()
+	}()
+
 	if sc.session == nil {
-		return "", fmt.Errorf("tool %q is not connected (OAuth authorization required)", call.Function.Name)
+		err := fmt.Errorf("tool %q is not connected (OAuth authorization required)", call.Function.Name)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 
 	var arguments map[string]any
 	if call.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
-			return "", fmt.Errorf("parsing tool arguments: %w", err)
+			err = fmt.Errorf("parsing tool arguments: %w", err)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return "", err
 		}
 	}
 
@@ -535,7 +574,10 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		Arguments: arguments,
 	})
 	if err != nil {
-		return "", fmt.Errorf("calling tool %q: %w", call.Function.Name, err)
+		err = fmt.Errorf("calling tool %q: %w", call.Function.Name, err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 
 	// Extract text from content blocks.
@@ -550,9 +592,13 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	}
 
 	if result.IsError {
-		return text, fmt.Errorf("tool %q returned error: %s", call.Function.Name, text)
+		err = fmt.Errorf("tool %q returned error: %s", call.Function.Name, text)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return text, err
 	}
 
+	span.SetStatus(codes.Ok, "")
 	return text, nil
 }
 

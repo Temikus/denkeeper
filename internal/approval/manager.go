@@ -9,7 +9,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var (
+	approvalTracer  = otel.Tracer("denkeeper.approval")
+	approvalMeter   = otel.Meter("denkeeper.approval")
+	approvalWaitDur metric.Float64Histogram
+)
+
+func init() {
+	approvalWaitDur, _ = approvalMeter.Float64Histogram("denkeeper.approval.wait_duration",
+		metric.WithDescription("Time spent waiting for approval resolution in seconds"),
+		metric.WithUnit("s"))
+}
 
 // Manager coordinates the persistent Store with the in-memory action Registry.
 // It is the primary API used by the Engine and REST API server.
@@ -274,13 +291,31 @@ func (m *Manager) SubmitAndWait(
 	adapterName string,
 	conversationID string,
 ) (Status, *Request, error) {
+	ctx, span := approvalTracer.Start(ctx, "approval.wait", trace.WithAttributes(
+		attribute.String("approval.agent", agentName),
+		attribute.String("approval.kind", string(kind)),
+	))
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		approvalWaitDur.Record(ctx, elapsed,
+			metric.WithAttributes(
+				attribute.String("approval.agent", agentName),
+				attribute.String("approval.kind", string(kind)),
+			))
+		span.End()
+	}()
+
 	// No-op action — the caller acts on the returned status.
 	noOp := func(_ context.Context, _ string) error { return nil }
 
 	req, err := m.Submit(ctx, agentName, kind, summary, payload, externalID, adapterName, conversationID, noOp)
 	if err != nil {
+		span.SetAttributes(attribute.String("approval.resolution", "error"))
 		return StatusDenied, nil, err
 	}
+
+	span.SetAttributes(attribute.String("approval.id", req.ID))
 
 	ch := make(chan Status, 1)
 	m.waiterMu.Lock()
@@ -295,8 +330,10 @@ func (m *Manager) SubmitAndWait(
 
 	select {
 	case status := <-ch:
+		span.SetAttributes(attribute.String("approval.resolution", string(status)))
 		return status, req, nil
 	case <-ctx.Done():
+		span.SetAttributes(attribute.String("approval.resolution", "expired"))
 		return StatusExpired, req, ctx.Err()
 	}
 }
