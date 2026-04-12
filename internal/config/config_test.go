@@ -1641,7 +1641,7 @@ default_provider = "anthropic"
 	if err == nil {
 		t.Fatal("expected error for anthropic provider without api_key")
 	}
-	if !strings.Contains(err.Error(), "llm.anthropic.api_key") {
+	if !strings.Contains(err.Error(), "requires an api_key") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -2511,7 +2511,7 @@ default_provider = "openai"
 	if err == nil {
 		t.Fatal("expected error for openai provider without api_key")
 	}
-	if !strings.Contains(err.Error(), "llm.openai.api_key") {
+	if !strings.Contains(err.Error(), "requires an api_key") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -2555,7 +2555,7 @@ model = "gpt-4o"
 	if err == nil {
 		t.Fatal("expected error when openai is fallback provider without api_key")
 	}
-	if !strings.Contains(err.Error(), "llm.openai.api_key") {
+	if !strings.Contains(err.Error(), "requires an api_key") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

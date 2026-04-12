@@ -103,13 +103,10 @@ func parseChannel(channel string) (adapterName, externalID string, ok bool) {
 
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
-	openRouter *openrouter.Client
-	ollama     *ollama.Client
-	anthropic  *anthropicllm.Client
-	openAI     *openaillm.Client
-	cost       *llm.CostTracker
-	fallbacks  []llm.FallbackRule
-	pricing    *pricing.Registry
+	providers map[string]llm.Provider // keyed by instance name
+	cost      *llm.CostTracker
+	fallbacks []llm.FallbackRule
+	pricing   *pricing.Registry
 }
 
 // stores holds the initialized persistence stores and the approval manager.
@@ -189,21 +186,11 @@ func initLogger(cfg *config.Config) *slog.Logger {
 }
 
 func initLLMClients(cfg *config.Config) llmClients {
-	var orClient *openrouter.Client
-	if cfg.LLM.OpenRouter.APIKey != "" {
-		orClient = openrouter.New(cfg.LLM.OpenRouter.APIKey)
-	}
-	ollamaClient := ollama.New(cfg.LLM.Ollama.BaseURL)
-	var anthropicClient *anthropicllm.Client
-	if cfg.LLM.Anthropic.APIKey != "" {
-		anthropicClient = anthropicllm.New(cfg.LLM.Anthropic.APIKey)
-	}
-	var openAIClient *openaillm.Client
-	if cfg.LLM.OpenAI.APIKey != "" {
-		if cfg.LLM.OpenAI.BaseURL != "" {
-			openAIClient = openaillm.NewWithBaseURL(cfg.LLM.OpenAI.APIKey, cfg.LLM.OpenAI.BaseURL)
-		} else {
-			openAIClient = openaillm.New(cfg.LLM.OpenAI.APIKey)
+	providers := make(map[string]llm.Provider, len(cfg.LLM.Providers))
+	for _, pc := range cfg.LLM.Providers {
+		p := createProvider(pc)
+		if p != nil {
+			providers[pc.Name] = p
 		}
 	}
 
@@ -223,13 +210,26 @@ func initLLMClients(cfg *config.Config) llmClients {
 	}
 
 	return llmClients{
-		openRouter: orClient,
-		ollama:     ollamaClient,
-		anthropic:  anthropicClient,
-		openAI:     openAIClient,
-		cost:       buildCostTracker(cfg),
-		fallbacks:  fallbackRules,
-		pricing:    reg,
+		providers: providers,
+		cost:      buildCostTracker(cfg),
+		fallbacks: fallbackRules,
+		pricing:   reg,
+	}
+}
+
+// createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
+func createProvider(pc config.ProviderInstanceConfig) llm.Provider {
+	switch pc.Type {
+	case "anthropic":
+		return anthropicllm.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
+	case "openai":
+		return openaillm.NewFull(pc.Name, pc.APIKey, pc.BaseURL, pc.Organization)
+	case "openrouter":
+		return openrouter.NewFull(pc.Name, pc.APIKey)
+	case "ollama":
+		return ollama.NewFull(pc.Name, pc.BaseURL)
+	default:
+		return nil
 	}
 }
 
@@ -732,15 +732,8 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
 func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
 	router := llm.NewRouter(provider, model, abc.llm.cost)
-	router.RegisterProvider(abc.llm.ollama)
-	if abc.llm.openRouter != nil {
-		router.RegisterProvider(abc.llm.openRouter)
-	}
-	if abc.llm.anthropic != nil {
-		router.RegisterProvider(abc.llm.anthropic)
-	}
-	if abc.llm.openAI != nil {
-		router.RegisterProvider(abc.llm.openAI)
+	for _, p := range abc.llm.providers {
+		router.RegisterProvider(p)
 	}
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)

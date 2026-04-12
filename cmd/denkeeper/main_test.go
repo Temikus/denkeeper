@@ -101,14 +101,8 @@ func TestInitLogger_JSONFormat(t *testing.T) {
 func TestInitLLMClients_NoProviders(t *testing.T) {
 	cfg := &config.Config{}
 	clients := initLLMClients(cfg)
-	if clients.openRouter != nil {
-		t.Error("expected nil openRouter when no API key set")
-	}
-	if clients.ollama == nil {
-		t.Error("expected non-nil ollama client (always created)")
-	}
-	if clients.anthropic != nil {
-		t.Error("expected nil anthropic when no API key set")
+	if len(clients.providers) != 0 {
+		t.Errorf("expected 0 providers when none configured, got %d", len(clients.providers))
 	}
 	if clients.cost == nil {
 		t.Fatal("expected non-nil cost tracker")
@@ -121,24 +115,28 @@ func TestInitLLMClients_NoProviders(t *testing.T) {
 func TestInitLLMClients_WithOpenRouterKey(t *testing.T) {
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouter: config.OpenRouterConfig{APIKey: "test-key"},
+			Providers: []config.ProviderInstanceConfig{
+				{Name: "openrouter", Type: "openrouter", APIKey: "test-key"},
+			},
 		},
 	}
 	clients := initLLMClients(cfg)
-	if clients.openRouter == nil {
-		t.Error("expected non-nil openRouter with API key")
+	if clients.providers["openrouter"] == nil {
+		t.Error("expected non-nil openrouter provider with API key")
 	}
 }
 
 func TestInitLLMClients_WithAnthropicKey(t *testing.T) {
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			Anthropic: config.AnthropicConfig{APIKey: "test-key"},
+			Providers: []config.ProviderInstanceConfig{
+				{Name: "anthropic", Type: "anthropic", APIKey: "test-key"},
+			},
 		},
 	}
 	clients := initLLMClients(cfg)
-	if clients.anthropic == nil {
-		t.Error("expected non-nil anthropic with API key")
+	if clients.providers["anthropic"] == nil {
+		t.Error("expected non-nil anthropic provider with API key")
 	}
 }
 

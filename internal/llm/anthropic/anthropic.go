@@ -31,6 +31,7 @@ const (
 
 // Client implements llm.Provider against the Anthropic Messages API.
 type Client struct {
+	name    string
 	apiKey  string
 	baseURL string
 	http    *http.Client
@@ -39,8 +40,25 @@ type Client struct {
 // New creates a Client with the given API key and default base URL.
 func New(apiKey string) *Client {
 	return &Client{
+		name:    "anthropic",
 		apiKey:  apiKey,
 		baseURL: defaultBaseURL,
+		http:    http.DefaultClient,
+	}
+}
+
+// NewFull creates a named Client with a custom base URL.
+func NewFull(name, apiKey, baseURL string) *Client {
+	if name == "" {
+		name = "anthropic"
+	}
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	return &Client{
+		name:    name,
+		apiKey:  apiKey,
+		baseURL: baseURL,
 		http:    http.DefaultClient,
 	}
 }
@@ -51,13 +69,14 @@ func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client 
 		baseURL = defaultBaseURL
 	}
 	return &Client{
+		name:    "anthropic",
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		http:    httpClient,
 	}
 }
 
-func (c *Client) Name() string { return "anthropic" }
+func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }

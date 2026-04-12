@@ -34,6 +34,7 @@ type modelDetailsCache struct {
 }
 
 type Client struct {
+	name    string
 	apiKey  string
 	baseURL string
 	http    *http.Client
@@ -44,6 +45,20 @@ type Client struct {
 
 func New(apiKey string) *Client {
 	return &Client{
+		name:    "openrouter",
+		apiKey:  apiKey,
+		baseURL: defaultBaseURL,
+		http:    http.DefaultClient,
+	}
+}
+
+// NewFull creates a named client.
+func NewFull(name, apiKey string) *Client {
+	if name == "" {
+		name = "openrouter"
+	}
+	return &Client{
+		name:    name,
 		apiKey:  apiKey,
 		baseURL: defaultBaseURL,
 		http:    http.DefaultClient,
@@ -53,13 +68,14 @@ func New(apiKey string) *Client {
 // NewWithHTTPClient creates a client with a custom HTTP client (for testing).
 func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client {
 	return &Client{
+		name:    "openrouter",
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		http:    httpClient,
 	}
 }
 
-func (c *Client) Name() string { return "openrouter" }
+func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }

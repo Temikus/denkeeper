@@ -24,6 +24,7 @@ const defaultBaseURL = "http://localhost:11434"
 // Client implements llm.Provider using Ollama's OpenAI-compatible API.
 // No API key is required; Ollama runs locally.
 type Client struct {
+	name    string
 	baseURL string
 	http    *http.Client
 }
@@ -35,6 +36,22 @@ func New(baseURL string) *Client {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
+		name:    "ollama",
+		baseURL: baseURL,
+		http:    http.DefaultClient,
+	}
+}
+
+// NewFull creates a named Client pointing at baseURL.
+func NewFull(name, baseURL string) *Client {
+	if name == "" {
+		name = "ollama"
+	}
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	return &Client{
+		name:    name,
 		baseURL: baseURL,
 		http:    http.DefaultClient,
 	}
@@ -46,12 +63,13 @@ func NewWithHTTPClient(baseURL string, httpClient *http.Client) *Client {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
+		name:    "ollama",
 		baseURL: baseURL,
 		http:    httpClient,
 	}
 }
 
-func (c *Client) Name() string { return "ollama" }
+func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }

@@ -490,16 +490,46 @@ type TelegramConfig struct {
 }
 
 type LLMConfig struct {
-	DefaultProvider   string           `toml:"default_provider"`
-	DefaultModel      string           `toml:"default_model"`
-	OpenRouter        OpenRouterConfig `toml:"openrouter"`
-	Ollama            OllamaConfig     `toml:"ollama"`
-	Anthropic         AnthropicConfig  `toml:"anthropic"`
-	OpenAI            OpenAIConfig     `toml:"openai"`
-	MaxCostPerSession float64          `toml:"max_cost_per_session"` // Deprecated: use CostLimitHard.
-	CostLimitSoft     float64          `toml:"cost_limit_soft"`
-	CostLimitHard     float64          `toml:"cost_limit_hard"`
-	Fallbacks         []FallbackConfig `toml:"fallback"`
+	DefaultProvider   string                   `toml:"default_provider"`
+	DefaultModel      string                   `toml:"default_model"`
+	Providers         []ProviderInstanceConfig `toml:"providers"`
+	OpenRouter        OpenRouterConfig         `toml:"openrouter"`
+	Ollama            OllamaConfig             `toml:"ollama"`
+	Anthropic         AnthropicConfig          `toml:"anthropic"`
+	OpenAI            OpenAIConfig             `toml:"openai"`
+	MaxCostPerSession float64                  `toml:"max_cost_per_session"` // Deprecated: use CostLimitHard.
+	CostLimitSoft     float64                  `toml:"cost_limit_soft"`
+	CostLimitHard     float64                  `toml:"cost_limit_hard"`
+	Fallbacks         []FallbackConfig         `toml:"fallback"`
+}
+
+// ProviderInstanceConfig defines a named LLM provider instance.
+// Multiple instances of the same type are allowed (e.g. two OpenAI-compatible endpoints).
+type ProviderInstanceConfig struct {
+	Name         string `toml:"name"         json:"name"`
+	Type         string `toml:"type"         json:"type"` // "anthropic", "openai", "openrouter", "ollama"
+	APIKey       string `toml:"api_key"      json:"-"`
+	BaseURL      string `toml:"base_url"     json:"base_url,omitempty"`
+	Organization string `toml:"organization" json:"organization,omitempty"` // openai-specific
+}
+
+// ProviderNames returns the names of all configured provider instances.
+func (l *LLMConfig) ProviderNames() []string {
+	names := make([]string, len(l.Providers))
+	for i, p := range l.Providers {
+		names[i] = p.Name
+	}
+	return names
+}
+
+// HasProvider returns true if a provider with the given name is configured.
+func (l *LLMConfig) HasProvider(name string) bool {
+	for _, p := range l.Providers {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // AnthropicConfig configures the Anthropic direct LLM provider.
@@ -699,11 +729,67 @@ func applyDefaults(cfg *Config) {
 	applyScalarDefaults(cfg)
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
+	synthesizeLegacyProviders(cfg)
 	expandEnvVars(cfg)
 	applyMiscDefaults(cfg)
 	synthesizeDefaultAgent(cfg)
 	applyAgentDefaults(cfg)
 	applyScheduleDefaults(cfg)
+}
+
+// synthesizeLegacyProviders converts the old-style [llm.openai], [llm.anthropic], etc.
+// config sections into ProviderInstanceConfig entries. Legacy entries are only added
+// if no [[llm.providers]] entry with the same name already exists. This allows users
+// to migrate incrementally from the old single-slot syntax to the new array syntax.
+func synthesizeLegacyProviders(cfg *Config) {
+	add := func(name, typ, apiKey, baseURL, org string) {
+		if cfg.LLM.HasProvider(name) {
+			return
+		}
+		cfg.LLM.Providers = append(cfg.LLM.Providers, ProviderInstanceConfig{
+			Name:         name,
+			Type:         typ,
+			APIKey:       apiKey,
+			BaseURL:      baseURL,
+			Organization: org,
+		})
+	}
+
+	// Always synthesize entries for legacy provider sections. Even if the API key
+	// is missing, we need the entry so validation can produce a clear "requires
+	// api_key" error rather than "provider not found". The key check happens in
+	// validateProviderAPIKeys.
+	if cfg.LLM.Anthropic.APIKey != "" || isLegacyProviderReferenced(cfg, "anthropic") {
+		add("anthropic", "anthropic", cfg.LLM.Anthropic.APIKey, cfg.LLM.Anthropic.BaseURL, "")
+	}
+	if cfg.LLM.OpenRouter.APIKey != "" || isLegacyProviderReferenced(cfg, "openrouter") {
+		add("openrouter", "openrouter", cfg.LLM.OpenRouter.APIKey, "", "")
+	}
+	if cfg.LLM.OpenAI.APIKey != "" || isLegacyProviderReferenced(cfg, "openai") {
+		add("openai", "openai", cfg.LLM.OpenAI.APIKey, cfg.LLM.OpenAI.BaseURL, cfg.LLM.OpenAI.Organization)
+	}
+	if cfg.LLM.Ollama.BaseURL != "" || isLegacyProviderReferenced(cfg, "ollama") {
+		add("ollama", "ollama", "", cfg.LLM.Ollama.BaseURL, "")
+	}
+}
+
+// isLegacyProviderReferenced returns true if the named provider type is referenced
+// as the default provider, by any agent's llm_provider, or by any fallback rule.
+func isLegacyProviderReferenced(cfg *Config, name string) bool {
+	if cfg.LLM.DefaultProvider == name {
+		return true
+	}
+	for _, a := range cfg.Agents {
+		if a.LLMProvider == name {
+			return true
+		}
+	}
+	for _, f := range cfg.LLM.Fallbacks {
+		if f.Provider == name {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveDataDir sets cfg.DataDir from DENKEEPER_DATA_DIR env var, the TOML
@@ -1023,37 +1109,69 @@ func validateTier(tier, context string) error {
 	return nil
 }
 
-// needsOpenRouter reports whether the config references the openrouter provider
-// in either the default provider or any fallback rule, meaning an API key is required.
-func needsOpenRouter(cfg *Config) bool {
-	if cfg.LLM.DefaultProvider == "openrouter" {
-		return true
-	}
-	for _, f := range cfg.LLM.Fallbacks {
-		if f.Provider == "openrouter" {
-			return true
-		}
-	}
-	return false
+// validProviderTypes is the set of recognized LLM provider types.
+var validProviderTypes = map[string]bool{
+	"anthropic": true, "openai": true, "openrouter": true, "ollama": true,
 }
 
-// needsAnthropic reports whether the config's default provider is anthropic.
-func needsAnthropic(cfg *Config) bool {
-	return cfg.LLM.DefaultProvider == "anthropic"
+// providerNeedsAPIKey reports whether the given provider type requires an API key.
+func providerNeedsAPIKey(typ string) bool {
+	return typ != "ollama"
 }
 
-// needsOpenAI reports whether the config references the openai provider
-// in either the default provider or any fallback rule, meaning an API key is required.
-func needsOpenAI(cfg *Config) bool {
-	if cfg.LLM.DefaultProvider == "openai" {
-		return true
+// validateProviderInstances checks provider names, types, and required fields.
+func validateProviderInstances(cfg *Config) error {
+	seen := make(map[string]bool)
+	for i, p := range cfg.LLM.Providers {
+		if p.Name == "" {
+			return fmt.Errorf("config: llm.providers[%d]: name is required", i)
+		}
+		if !validProviderTypes[p.Type] {
+			return fmt.Errorf("config: llm.providers[%d] %q: invalid type %q — must be one of: anthropic, openai, openrouter, ollama", i, p.Name, p.Type)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("config: llm.providers[%d]: duplicate provider name %q", i, p.Name)
+		}
+		seen[p.Name] = true
 	}
-	for _, f := range cfg.LLM.Fallbacks {
-		if f.Provider == "openai" {
-			return true
+
+	// Validate default_provider references an existing provider instance.
+	if cfg.LLM.DefaultProvider != "" && !cfg.LLM.HasProvider(cfg.LLM.DefaultProvider) {
+		return fmt.Errorf("config: llm.default_provider %q does not match any configured provider instance", cfg.LLM.DefaultProvider)
+	}
+
+	// Validate agent llm_provider references.
+	for _, a := range cfg.Agents {
+		if a.LLMProvider != "" && !cfg.LLM.HasProvider(a.LLMProvider) {
+			return fmt.Errorf("config: agent %q: llm_provider %q does not match any configured provider instance", a.Name, a.LLMProvider)
 		}
 	}
-	return false
+
+	return nil
+}
+
+// validateProviderAPIKeys checks that referenced providers have required API keys.
+func validateProviderAPIKeys(cfg *Config) error {
+	// Collect all provider names that are actively referenced.
+	referenced := make(map[string]bool)
+	referenced[cfg.LLM.DefaultProvider] = true
+	for _, f := range cfg.LLM.Fallbacks {
+		if f.Provider != "" {
+			referenced[f.Provider] = true
+		}
+	}
+	for _, a := range cfg.Agents {
+		if a.LLMProvider != "" {
+			referenced[a.LLMProvider] = true
+		}
+	}
+
+	for _, p := range cfg.LLM.Providers {
+		if referenced[p.Name] && providerNeedsAPIKey(p.Type) && p.APIKey == "" {
+			return fmt.Errorf("config: provider %q (type %s) requires an api_key", p.Name, p.Type)
+		}
+	}
+	return nil
 }
 
 // validateAdaptersAndProviders checks adapter tokens, allowed-user lists, and LLM provider keys.
@@ -1067,14 +1185,11 @@ func validateAdaptersAndProviders(cfg *Config) error {
 	if cfg.Discord.Token != "" && len(cfg.Discord.AllowedUsers) == 0 {
 		return fmt.Errorf("config: discord.allowed_users must not be empty when discord.token is set (security requirement)")
 	}
-	if needsOpenRouter(cfg) && cfg.LLM.OpenRouter.APIKey == "" {
-		return fmt.Errorf("config: llm.openrouter.api_key is required when using openrouter provider")
+	if err := validateProviderInstances(cfg); err != nil {
+		return err
 	}
-	if needsAnthropic(cfg) && cfg.LLM.Anthropic.APIKey == "" {
-		return fmt.Errorf("config: llm.anthropic.api_key is required when using anthropic provider")
-	}
-	if needsOpenAI(cfg) && cfg.LLM.OpenAI.APIKey == "" {
-		return fmt.Errorf("config: llm.openai.api_key is required when using openai provider")
+	if err := validateProviderAPIKeys(cfg); err != nil {
+		return err
 	}
 	return nil
 }

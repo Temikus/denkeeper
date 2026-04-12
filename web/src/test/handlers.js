@@ -233,10 +233,10 @@ export const handlers = [
     cost_limit_soft: 0.5,
     cost_limit_hard: 1.0,
     providers: [
-      { name: 'anthropic', enabled: false, api_key_set: false },
-      { name: 'openrouter', enabled: true, api_key_set: true },
-      { name: 'openai', enabled: false, api_key_set: false },
-      { name: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
+      { name: 'anthropic', type: 'anthropic', enabled: false, api_key_set: false },
+      { name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true },
+      { name: 'openai', type: 'openai', enabled: false, api_key_set: false },
+      { name: 'ollama', type: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
     ],
   })),
 

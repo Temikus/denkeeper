@@ -426,6 +426,48 @@ func UpdateLLMProviderConfig(path, provider string, changes map[string]any) erro
 	return writeRawConfig(path, raw)
 }
 
+// UpdateLLMProviderInstanceConfig persists changes to a named entry in
+// [[llm.providers]]. If the provider uses legacy config (i.e. it appears in
+// [llm.<type>] rather than [[llm.providers]]), it falls back to the old-style
+// persistence path.
+func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) error {
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		llmSection = map[string]any{}
+	}
+
+	providers, _ := llmSection["providers"].([]any)
+	found := false
+	for i, entry := range providers {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["name"] == name {
+			for k, v := range changes {
+				m[k] = v
+			}
+			providers[i] = m
+			found = true
+			break
+		}
+	}
+
+	if found {
+		llmSection["providers"] = providers
+		raw["llm"] = llmSection
+		return writeRawConfig(path, raw)
+	}
+
+	// Fall back to legacy [llm.<name>] section (for configs not yet migrated).
+	return UpdateLLMProviderConfig(path, name, changes)
+}
+
 // ---------------------------------------------------------------------------
 // API config persistence
 // ---------------------------------------------------------------------------

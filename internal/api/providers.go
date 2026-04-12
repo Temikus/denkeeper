@@ -4,17 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"slices"
 
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
-
-// knownProviders is the ordered list of LLM provider names we expose in the UI.
-var knownProviders = []string{"anthropic", "openrouter", "openai", "ollama"}
 
 // providerInfo is the JSON shape returned by GET /api/v1/llm/providers.
 type providerInfo struct {
 	Name         string `json:"name"`
+	Type         string `json:"type"`
 	Enabled      bool   `json:"enabled"`
 	APIKeySet    bool   `json:"api_key_set"`
 	BaseURL      string `json:"base_url,omitempty"`
@@ -32,30 +30,16 @@ type llmProvidersResponse struct {
 func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.deps.Config.LLM
 
-	providers := []providerInfo{
-		{
-			Name:      "anthropic",
-			Enabled:   cfg.Anthropic.APIKey != "",
-			APIKeySet: cfg.Anthropic.APIKey != "",
-			BaseURL:   cfg.Anthropic.BaseURL,
-		},
-		{
-			Name:      "openrouter",
-			Enabled:   cfg.OpenRouter.APIKey != "",
-			APIKeySet: cfg.OpenRouter.APIKey != "",
-		},
-		{
-			Name:         "openai",
-			Enabled:      cfg.OpenAI.APIKey != "",
-			APIKeySet:    cfg.OpenAI.APIKey != "",
-			BaseURL:      cfg.OpenAI.BaseURL,
-			Organization: cfg.OpenAI.Organization,
-		},
-		{
-			Name:    "ollama",
-			Enabled: true, // Ollama is always enabled (local, no API key).
-			BaseURL: cfg.Ollama.BaseURL,
-		},
+	providers := make([]providerInfo, 0, len(cfg.Providers))
+	for _, pc := range cfg.Providers {
+		providers = append(providers, providerInfo{
+			Name:         pc.Name,
+			Type:         pc.Type,
+			Enabled:      pc.APIKey != "" || pc.Type == "ollama",
+			APIKeySet:    pc.APIKey != "",
+			BaseURL:      pc.BaseURL,
+			Organization: pc.Organization,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, llmProvidersResponse{
@@ -76,9 +60,10 @@ type providerUpdateInput struct {
 
 func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if !slices.Contains(knownProviders, name) {
+	pc := s.findProviderInstance(name)
+	if pc == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "unknown provider: must be one of anthropic, openrouter, openai, ollama",
+			"error": "unknown provider: " + name,
 		})
 		return
 	}
@@ -100,10 +85,10 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Organization is only valid for OpenAI.
-	if input.Organization != nil && name != "openai" {
+	// Organization is only valid for OpenAI-type providers.
+	if input.Organization != nil && pc.Type != "openai" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "organization is only supported for the openai provider",
+			"error": "organization is only supported for openai-type providers",
 		})
 		return
 	}
@@ -115,33 +100,51 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// findProviderInstance returns a pointer to the named provider in config, or nil.
+func (s *Server) findProviderInstance(name string) *config.ProviderInstanceConfig {
+	for i := range s.deps.Config.LLM.Providers {
+		if s.deps.Config.LLM.Providers[i].Name == name {
+			return &s.deps.Config.LLM.Providers[i]
+		}
+	}
+	return nil
+}
+
 func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput) {
+	pc := s.findProviderInstance(name)
+	if pc == nil {
+		return
+	}
+	if input.APIKey != nil {
+		pc.APIKey = *input.APIKey
+	}
+	if input.BaseURL != nil {
+		pc.BaseURL = *input.BaseURL
+	}
+	if input.Organization != nil {
+		pc.Organization = *input.Organization
+	}
+
+	// Keep legacy structs in sync for backward compat.
+	s.syncLegacyProviderConfig(name, pc)
+}
+
+// syncLegacyProviderConfig mirrors changes from a ProviderInstanceConfig back
+// to the old-style config struct fields so existing code paths that read the
+// legacy fields stay correct.
+func (s *Server) syncLegacyProviderConfig(name string, pc *config.ProviderInstanceConfig) {
 	switch name {
 	case "anthropic":
-		if input.APIKey != nil {
-			s.deps.Config.LLM.Anthropic.APIKey = *input.APIKey
-		}
-		if input.BaseURL != nil {
-			s.deps.Config.LLM.Anthropic.BaseURL = *input.BaseURL
-		}
+		s.deps.Config.LLM.Anthropic.APIKey = pc.APIKey
+		s.deps.Config.LLM.Anthropic.BaseURL = pc.BaseURL
 	case "openrouter":
-		if input.APIKey != nil {
-			s.deps.Config.LLM.OpenRouter.APIKey = *input.APIKey
-		}
+		s.deps.Config.LLM.OpenRouter.APIKey = pc.APIKey
 	case "openai":
-		if input.APIKey != nil {
-			s.deps.Config.LLM.OpenAI.APIKey = *input.APIKey
-		}
-		if input.BaseURL != nil {
-			s.deps.Config.LLM.OpenAI.BaseURL = *input.BaseURL
-		}
-		if input.Organization != nil {
-			s.deps.Config.LLM.OpenAI.Organization = *input.Organization
-		}
+		s.deps.Config.LLM.OpenAI.APIKey = pc.APIKey
+		s.deps.Config.LLM.OpenAI.BaseURL = pc.BaseURL
+		s.deps.Config.LLM.OpenAI.Organization = pc.Organization
 	case "ollama":
-		if input.BaseURL != nil {
-			s.deps.Config.LLM.Ollama.BaseURL = *input.BaseURL
-		}
+		s.deps.Config.LLM.Ollama.BaseURL = pc.BaseURL
 	}
 }
 
@@ -161,7 +164,7 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput) {
 		changes["organization"] = *input.Organization
 	}
 	if len(changes) > 0 {
-		if err := tool.UpdateLLMProviderConfig(s.deps.ConfigPath, name, changes); err != nil {
+		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist LLM provider config", "provider", name, "error", err)
 		}
 	}
@@ -183,9 +186,9 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if input.DefaultProvider != nil && *input.DefaultProvider != "" {
-		if !slices.Contains(knownProviders, *input.DefaultProvider) {
+		if !s.deps.Config.LLM.HasProvider(*input.DefaultProvider) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid default_provider: must be one of anthropic, openrouter, openai, ollama",
+				"error": "invalid default_provider: " + *input.DefaultProvider + " is not a configured provider",
 			})
 			return
 		}

@@ -22,10 +22,10 @@ var tracer = otel.Tracer("denkeeper.llm.openai")
 
 const defaultBaseURL = "https://api.openai.com/v1"
 
-// modelPricing holds per-million-token pricing (input, output) in USD.
 // Client implements llm.Provider for the OpenAI Chat Completions API.
 // Compatible with any OpenAI-format endpoint (OpenAI, Azure OpenAI, vLLM, LiteLLM).
 type Client struct {
+	name         string
 	apiKey       string
 	baseURL      string
 	organization string
@@ -35,6 +35,7 @@ type Client struct {
 // New creates a client with the default OpenAI base URL.
 func New(apiKey string) *Client {
 	return &Client{
+		name:    "openai",
 		apiKey:  apiKey,
 		baseURL: defaultBaseURL,
 		http:    http.DefaultClient,
@@ -44,15 +45,34 @@ func New(apiKey string) *Client {
 // NewWithBaseURL creates a client with a custom base URL (for Azure, vLLM, etc.).
 func NewWithBaseURL(apiKey, baseURL string) *Client {
 	return &Client{
+		name:    "openai",
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		http:    http.DefaultClient,
 	}
 }
 
+// NewFull creates a named client with all options.
+func NewFull(name, apiKey, baseURL, organization string) *Client {
+	if name == "" {
+		name = "openai"
+	}
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	return &Client{
+		name:         name,
+		apiKey:       apiKey,
+		baseURL:      baseURL,
+		organization: organization,
+		http:         http.DefaultClient,
+	}
+}
+
 // NewWithHTTPClient creates a client with a custom HTTP client (for testing).
 func NewWithHTTPClient(apiKey, baseURL, organization string, httpClient *http.Client) *Client {
 	return &Client{
+		name:         "openai",
 		apiKey:       apiKey,
 		baseURL:      baseURL,
 		organization: organization,
@@ -60,7 +80,7 @@ func NewWithHTTPClient(apiKey, baseURL, organization string, httpClient *http.Cl
 	}
 }
 
-func (c *Client) Name() string { return "openai" }
+func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }

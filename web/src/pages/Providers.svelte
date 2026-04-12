@@ -20,18 +20,27 @@
   let savingProvider = $state(false)
   let saveProviderOk = $state(null)
 
-  const providerLabels = {
+  const typeLabels = {
     anthropic: 'Anthropic',
     openrouter: 'OpenRouter',
     openai: 'OpenAI',
     ollama: 'Ollama',
   }
 
-  const providerDescriptions = {
+  const typeDescriptions = {
     anthropic: 'Direct access to Claude models. Requires an API key from console.anthropic.com.',
     openrouter: 'Multi-model gateway with access to models from many providers.',
     openai: 'GPT models and OpenAI-compatible endpoints (Azure, vLLM, LiteLLM).',
     ollama: 'Local model inference. No API key required.',
+  }
+
+  function providerLabel(p) {
+    const tl = typeLabels[p.type] || p.type
+    return p.name === p.type ? tl : `${p.name} (${tl})`
+  }
+
+  function providerDescription(p) {
+    return typeDescriptions[p.type] || ''
   }
 
   async function fetchData() {
@@ -119,7 +128,7 @@
       if (providerDraft.base_url !== (p?.base_url || '')) {
         patch.base_url = providerDraft.base_url
       }
-      if (editingProvider === 'openai' && providerDraft.organization !== (p?.organization || '')) {
+      if (p?.type === 'openai' && providerDraft.organization !== (p?.organization || '')) {
         patch.organization = providerDraft.organization
       }
 
@@ -145,8 +154,8 @@
     }
   }
 
-  function hasEditableFields(name) {
-    return name !== 'openrouter'
+  function hasEditableFields(p) {
+    return p.type !== 'openrouter'
   }
 
   onMount(fetchData)
@@ -189,7 +198,7 @@
           <select id="default-provider" class="input" bind:value={configDraft.default_provider}>
             <option value="">— none —</option>
             {#each data.providers as p}
-              <option value={p.name}>{providerLabels[p.name]}</option>
+              <option value={p.name}>{providerLabel(p)}</option>
             {/each}
           </select>
         </div>
@@ -225,29 +234,29 @@
     <div class="config-card provider-card">
       <div class="provider-header">
         <div class="provider-title">
-          <span class="provider-name">{providerLabels[p.name]}</span>
+          <span class="provider-name">{providerLabel(p)}</span>
           <span class="provider-status" class:enabled={p.enabled} class:disabled={!p.enabled}>
             {p.enabled ? 'Enabled' : 'Not configured'}
           </span>
         </div>
-        <div class="provider-desc">{providerDescriptions[p.name]}</div>
+        <div class="provider-desc">{providerDescription(p)}</div>
       </div>
 
       {#if editingProvider !== p.name}
         <div class="provider-fields">
-          {#if p.name !== 'ollama'}
+          {#if p.type !== 'ollama'}
             <div class="field-row">
               <span class="field-label">API Key</span>
               <span class="field-value">{p.api_key_set ? 'Configured' : 'Not set'}</span>
             </div>
           {/if}
-          {#if p.name === 'anthropic' || p.name === 'openai' || p.name === 'ollama'}
+          {#if p.type !== 'openrouter'}
             <div class="field-row">
               <span class="field-label">Base URL</span>
               <span class="field-value mono">{p.base_url || '(default)'}</span>
             </div>
           {/if}
-          {#if p.name === 'openai'}
+          {#if p.type === 'openai'}
             <div class="field-row">
               <span class="field-label">Organization</span>
               <span class="field-value mono">{p.organization || '(none)'}</span>
@@ -259,7 +268,7 @@
         </div>
       {:else}
         <div class="edit-form">
-          {#if p.name !== 'ollama'}
+          {#if p.type !== 'ollama'}
             <div class="form-row">
               <label class="form-label" for="api-key-{p.name}">API Key</label>
               <input
@@ -271,7 +280,7 @@
               />
             </div>
           {/if}
-          {#if hasEditableFields(p.name)}
+          {#if hasEditableFields(p)}
             <div class="form-row">
               <label class="form-label" for="base-url-{p.name}">Base URL</label>
               <input
@@ -279,11 +288,11 @@
                 type="url"
                 class="input"
                 bind:value={providerDraft.base_url}
-                placeholder={p.name === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com'}
+                placeholder={p.type === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com'}
               />
             </div>
           {/if}
-          {#if p.name === 'openai'}
+          {#if p.type === 'openai'}
             <div class="form-row">
               <label class="form-label" for="org-{p.name}">Organization</label>
               <input
