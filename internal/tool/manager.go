@@ -609,9 +609,13 @@ func (m *Manager) UnregisterServer(name string) error {
 
 	delete(m.servers, name)
 
+	// Best-effort session cleanup. The server is already removed from the map,
+	// so returning an error here would leave callers in an inconsistent state
+	// (entry gone but error returned). Log and move on.
 	if sc.session != nil {
 		if err := sc.session.Close(); err != nil {
-			return fmt.Errorf("closing MCP server %q: %w", name, err)
+			m.logger.Warn("error closing MCP session during unregister",
+				"server", name, "error", err)
 		}
 	}
 	return nil
@@ -619,6 +623,8 @@ func (m *Manager) UnregisterServer(name string) error {
 
 // RestartServer stops and re-registers an MCP server using its stored config.
 // It resets the server's health state (disabled flag, error, restart count).
+// If re-registration fails the server remains visible with status "error"
+// so the user can retry or the health checker can pick it up.
 func (m *Manager) RestartServer(ctx context.Context, name string) error {
 	m.mu.RLock()
 	sc, ok := m.servers[name]
@@ -627,13 +633,32 @@ func (m *Manager) RestartServer(ctx context.Context, name string) error {
 		return fmt.Errorf("server %q is not registered", name)
 	}
 	cfg := sc.cfg
+	transport := sc.transport
+	url := sc.url
 	m.mu.RUnlock()
 
 	if err := m.UnregisterServer(name); err != nil {
 		return fmt.Errorf("stopping server %q: %w", name, err)
 	}
 
+	// Re-add a placeholder so registerSSE sees isReregistration=true (needed
+	// for OAuth tools) and so the tool stays visible if RegisterServer fails.
+	m.mu.Lock()
+	placeholder := &serverConn{
+		name:      name,
+		transport: transport,
+		url:       url,
+		cfg:       cfg,
+	}
+	m.servers[name] = placeholder
+	m.mu.Unlock()
+
 	if err := m.RegisterServer(ctx, name, cfg); err != nil {
+		// Registration failed — keep the placeholder with error status so the
+		// tool remains visible in the UI and can be retried.
+		m.mu.Lock()
+		placeholder.lastError = err.Error()
+		m.mu.Unlock()
 		return fmt.Errorf("restarting server %q: %w", name, err)
 	}
 
@@ -883,12 +908,19 @@ func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAt
 
 	// Close old session, re-register.
 	_ = m.UnregisterServer(name)
+
+	// Re-add the old entry so registerSSE sees isReregistration=true (needed
+	// for OAuth tools) and so the tool stays visible if RegisterServer fails.
+	// Keep sc.session as-is (closed but non-nil) so the health checker's
+	// next cycle can probe it, fail, and retry via handleServerFailure.
+	m.mu.Lock()
+	m.servers[name] = sc
+	m.mu.Unlock()
+
 	if err := m.RegisterServer(ctx, name, cfg); err != nil {
 		m.logger.Error("MCP server restart failed", "server", name, "attempt", attempt, "error", err)
 		m.mu.Lock()
-		// Re-add a placeholder so the next health check can retry.
 		sc.lastError = err.Error()
-		m.servers[name] = sc
 		m.mu.Unlock()
 	} else {
 		m.logger.Info("MCP server restarted successfully", "server", name, "attempt", attempt)
