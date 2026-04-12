@@ -26,8 +26,20 @@ import (
 	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/crypto/bcrypt"
 )
+
+var (
+	sseMeter       = otel.Meter("denkeeper.sse")
+	sseActiveGauge metric.Int64UpDownCounter
+)
+
+func init() {
+	sseActiveGauge, _ = sseMeter.Int64UpDownCounter("denkeeper.sse.active_streams",
+		metric.WithDescription("Number of active SSE streaming connections"))
+}
 
 // Deps holds the application dependencies the API server needs to serve data.
 type Deps struct {
@@ -702,6 +714,9 @@ func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agen
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+
+	sseActiveGauge.Add(r.Context(), 1)
+	defer sseActiveGauge.Add(r.Context(), -1)
 
 	stream := NewSSEStreamSession(w)
 	s.runChatStream(r.Context(), stream, eng, msg, sessionID)

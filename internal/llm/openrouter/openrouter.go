@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,8 +13,15 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Temikus/denkeeper/internal/llm"
 )
+
+var tracer = otel.Tracer("denkeeper.llm.openrouter")
 
 const (
 	defaultBaseURL  = "https://openrouter.ai/api/v1"
@@ -57,6 +65,26 @@ func (c *Client) Name() string { return "openrouter" }
 func (c *Client) SupportsStreaming() bool { return true }
 
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	ctx, span := tracer.Start(ctx, "llm.provider.call", trace.WithAttributes(
+		attribute.String("llm.provider", c.Name()),
+		attribute.String("llm.model", req.Model),
+	))
+	defer func() { span.End() }()
+
+	resp, err := c.chatCompletionInner(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		var llmErr *llm.LLMError
+		if errors.As(err, &llmErr) {
+			span.SetAttributes(attribute.Int("http.status_code", llmErr.StatusCode))
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	if req.OnStream != nil {
 		return c.chatCompletionStream(ctx, req)
 	}

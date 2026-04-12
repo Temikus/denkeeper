@@ -11,11 +11,26 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
 )
+
+var (
+	wsTracer      = otel.Tracer("denkeeper.ws")
+	wsMeter       = otel.Meter("denkeeper.ws")
+	wsActiveGauge metric.Int64UpDownCounter
+)
+
+func init() {
+	wsActiveGauge, _ = wsMeter.Int64UpDownCounter("denkeeper.ws.active_connections",
+		metric.WithDescription("Number of active WebSocket connections"))
+}
 
 const (
 	// wsPingInterval is how often the server sends ping frames.
@@ -176,6 +191,9 @@ type WSConn struct {
 
 	// seqCounter provides monotonically increasing sequence numbers.
 	seqCounter atomic.Int64
+
+	// otelSpan tracks the connection lifetime for tracing.
+	otelSpan trace.Span
 }
 
 func newWSConn(conn *websocket.Conn, hub *WSHub, server *Server, keyName string) *WSConn {
@@ -206,6 +224,11 @@ func (c *WSConn) Close(code int, text string) {
 		// Cancel the connection-level context so all in-flight chat
 		// goroutines stop when the client disconnects.
 		c.connCancel()
+
+		if c.otelSpan != nil {
+			c.otelSpan.End()
+			wsActiveGauge.Add(context.Background(), -1)
+		}
 	})
 	msg := websocket.FormatCloseMessage(code, text)
 	_ = c.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(wsWriteTimeout))
@@ -622,6 +645,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		wsc.Close(websocket.CloseTryAgainLater, "max connections reached")
 		return
 	}
+
+	_, span := wsTracer.Start(context.Background(), "ws.connection", trace.WithAttributes(
+		attribute.String("user_id", keyName),
+	))
+	wsc.otelSpan = span
+	wsActiveGauge.Add(context.Background(), 1)
 
 	s.logger.Info("ws: client connected", "key", keyName, "remote", conn.RemoteAddr())
 	wsc.Start()

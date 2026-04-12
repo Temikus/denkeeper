@@ -78,6 +78,15 @@ enabled = false
     const mockToolPath = join(HERE, 'helpers', 'mock-mcp-tool.js')
     const repoRoot = join(HERE, '..', '..', '..')
 
+    // In CI the pre-built binary is downloaded to the repo root; locally use go run.
+    const isCI = !!process.env.CI
+    const binaryPath = process.env.DENKEEPER_BINARY || join(repoRoot, 'denkeeper-linux-amd64')
+    const spawnCmd = isCI ? binaryPath : 'go'
+    const spawnArgs = isCI
+      ? ['serve', '--config', configPath]
+      : ['run', '-tags', 'mcp_go_client_oauth', './cmd/denkeeper', 'serve', '--config', configPath]
+    const spawnCwd = isCI ? undefined : repoRoot
+
     // Start denkeeper with supervised config.
     let output = ''
     await new Promise((resolve, reject) => {
@@ -86,10 +95,10 @@ enabled = false
       }, 60000)
 
       server = spawn(
-        'go',
-        ['run', '-tags', 'mcp_go_client_oauth', './cmd/denkeeper', 'serve', '--config', configPath],
+        spawnCmd,
+        spawnArgs,
         {
-          cwd: repoRoot,
+          cwd: spawnCwd,
           env: { ...process.env, DENKEEPER_DATA_DIR: tmpDir },
           stdio: ['ignore', 'pipe', 'pipe'],
         },
