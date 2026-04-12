@@ -10,7 +10,7 @@ default_model = "test-model"
 cost_limit_hard = 100.0
 
 [llm.ollama]
-base_url = "http://127.0.0.1:1"   # unreachable — chat will fail gracefully
+base_url = "http://127.0.0.1:19111"   # mock LLM server started by global-setup.js
 
 [api]
 listen = ":8080"

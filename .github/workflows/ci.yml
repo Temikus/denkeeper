@@ -211,8 +211,11 @@ jobs:
       - name: Start denkeeper
         run: |
           ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
-          sleep 3
-          curl -sf http://localhost:8080/ > /dev/null && echo "Server ready" || echo "Server not responding"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/api/v1/health > /dev/null && echo "Server ready" && exit 0
+            sleep 1
+          done
+          echo "Server failed to start within 30s" && exit 1
         env:
           BASE_URL: http://localhost:8080
       - name: Run E2E tests

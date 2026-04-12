@@ -209,7 +209,7 @@
   <div class="toolbar" role="toolbar" aria-label="Chat controls">
     <label>
       Agent
-      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent">
+      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent" data-testid="agent-selector">
         {#each agents as a}
           <option value={a.name}>{a.display_name || a.name}</option>
         {/each}
@@ -220,7 +220,7 @@
     </label>
     <label>
       Session
-      <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring} aria-label="Select session">
+      <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring} aria-label="Select session" data-testid="session-selector">
         <option value="">New session</option>
         {#each sessions as s}
           <option value={s.id}>{s.adapter && s.adapter !== 'ws' && s.adapter !== 'api' && s.adapter !== 'sched' ? s.adapter : s.id.slice(0, 8)} — {s.message_count} msgs — {new Date(s.created_at).toLocaleDateString()}</option>
@@ -269,7 +269,7 @@
   {/if}
 
   <!-- Message list -->
-  <div class="messages" bind:this={messagesEl} onscroll={handleScroll} role="log" aria-label="Chat messages" aria-live="off">
+  <div class="messages" bind:this={messagesEl} onscroll={handleScroll} role="log" aria-label="Chat messages" aria-live="off" data-testid="chat-messages">
     {#if $chatState.restoring}
       <div class="empty">
         <div class="restoring-indicator">
@@ -378,8 +378,9 @@
         placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
         rows="1"
         aria-label="Chat message input"
+        data-testid="chat-input"
       ></textarea>
-      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()} aria-label={$chatState.sending ? 'Sending message' : 'Send message'}>
+      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()} aria-label={$chatState.sending ? 'Sending message' : 'Send message'} data-testid="chat-send">
         {$chatState.sending ? '...' : 'Send'}
       </button>
     </div>

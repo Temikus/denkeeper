@@ -31,10 +31,25 @@ test.describe('Authentication', () => {
     expect(await login.isLoggedIn()).toBe(true)
 
     // Find and click logout.
-    const logoutBtn = page.locator('button:has-text("Logout"), a:has-text("Logout"), button:has-text("Log out")')
+    const logoutBtn = page.locator('[data-testid="logout-btn"]')
     if (await logoutBtn.count() > 0) {
       await logoutBtn.first().click()
       await expect(page.locator('input[type="password"]')).toBeVisible({ timeout: 5000 })
     }
+  })
+
+  test('redirects to login when session is cleared', async ({ page }) => {
+    const login = new LoginPage(page)
+    await login.goto()
+    await login.loginWithPassword('test')
+    expect(await login.isLoggedIn()).toBe(true)
+
+    // Clear all cookies to simulate session expiry.
+    await page.context().clearCookies()
+
+    // Navigate to a page that requires auth.
+    await page.goto('/#/agents')
+    // Wait for the app to detect the missing session and redirect to login.
+    await expect(page.locator('input[type="password"]')).toBeVisible({ timeout: 10000 })
   })
 })

@@ -339,8 +339,9 @@
           onkeydown={handlePasswordKeydown}
           autocomplete="current-password"
           disabled={loginLoading}
+          data-testid="password-input"
         />
-        <button type="submit" onclick={handlePasswordLogin} disabled={loginLoading}>
+        <button type="submit" onclick={handlePasswordLogin} disabled={loginLoading} data-testid="login-submit">
           {loginLoading ? 'Signing in...' : 'Sign in'}
         </button>
       {:else}

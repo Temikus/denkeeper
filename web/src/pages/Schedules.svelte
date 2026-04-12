@@ -134,7 +134,7 @@
 <div class="page">
   <div class="page-header">
     <h1 class="page-title">Schedules</h1>
-    <button class="btn-primary" onclick={openAdd}>+ Add Schedule</button>
+    <button class="btn-primary" onclick={openAdd} data-testid="add-schedule-btn">+ Add Schedule</button>
   </div>
 
   <p class="tz-note">Cron schedules run in <strong>{timezone}</strong> time. <a href="#/server">Change</a></p>
@@ -144,7 +144,7 @@
   <!-- Inline Add/Edit Panel -->
   <div class="inline-panel" class:open={showForm}>
     <div class="inline-panel-inner">
-      <div class="inline-form">
+      <div class="inline-form" data-testid="schedule-form">
         <h2 class="form-title">{editingName ? 'Edit Schedule' : 'Add Schedule'}</h2>
         <label>
           Name
@@ -221,7 +221,7 @@
       </thead>
       <tbody>
         {#each schedules as s}
-          <tr>
+          <tr data-testid="schedule-row-{s.name}">
             <td class="name">{s.name}</td>
             <td class="expr">{s.expression}</td>
             <td>{s.skill || '—'}</td>
@@ -248,7 +248,7 @@
 {#if confirmDelete}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
   <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDelete = null }} role="dialog" aria-modal="true">
-    <div class="confirm-modal">
+    <div class="confirm-modal" data-testid="delete-confirm">
       <h2>Delete Schedule</h2>
       <p>Delete <strong>{confirmDelete}</strong>? This will stop the schedule and remove it from the configuration.</p>
       <div class="modal-actions">

@@ -103,6 +103,7 @@
       onclick={() => navigate('approvals')}
       role="button"
       tabindex="0"
+      data-testid="pending-approvals-card"
     >
       <div class="label">Pending Approvals</div>
       <div class="value" class:warn={data.pendingCount > 0}>{data.pendingCount}</div>
