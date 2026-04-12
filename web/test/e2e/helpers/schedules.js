@@ -15,7 +15,8 @@ export class SchedulesPage {
   /** Click the "+ Add Schedule" button to open the form. */
   async clickAdd() {
     await this.page.locator('[data-testid="add-schedule-btn"]').click()
-    await this.page.locator('[data-testid="schedule-form"]').waitFor({ state: 'visible' })
+    // Wait for the inline panel to expand (has .open class).
+    await this.page.locator('.inline-panel.open').waitFor({ state: 'visible' })
   }
 
   /**
@@ -42,8 +43,9 @@ export class SchedulesPage {
   async save() {
     const form = this.page.locator('[data-testid="schedule-form"]')
     await form.locator('button.btn-primary').click()
-    // Wait for form to close.
-    await this.page.locator('[data-testid="schedule-form"]').waitFor({ state: 'hidden', timeout: 10000 })
+    // The inline panel collapses via CSS grid animation (loses .open class).
+    // Wait for the panel to no longer have the .open class.
+    await this.page.locator('.inline-panel.open').waitFor({ state: 'hidden', timeout: 10000 })
   }
 
   /** Get a table row by schedule name. */
@@ -54,7 +56,7 @@ export class SchedulesPage {
   /** Click the Edit button on a schedule row. */
   async editRow(name) {
     await this.row(name).locator('button:has-text("Edit")').click()
-    await this.page.locator('[data-testid="schedule-form"]').waitFor({ state: 'visible' })
+    await this.page.locator('.inline-panel.open').waitFor({ state: 'visible' })
   }
 
   /** Click the Delete button on a schedule row. */

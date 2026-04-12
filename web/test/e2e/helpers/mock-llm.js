@@ -1,5 +1,5 @@
-// mock-llm.js — lightweight HTTP server that mimics the Ollama /api/chat endpoint.
-// Returns a deterministic streamed response for E2E tests.
+// mock-llm.js — lightweight HTTP server that mimics Ollama's OpenAI-compatible
+// /v1/chat/completions endpoint. Returns a deterministic SSE-streamed response.
 
 import { createServer } from 'node:http'
 
@@ -13,34 +13,46 @@ const RESPONSE_TEXT = 'Hello from E2E mock!'
 export function startMockLLM(port) {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
-      // Ollama chat endpoint: POST /api/chat
-      if (req.method === 'POST' && req.url === '/api/chat') {
-        // Drain request body before responding.
+      // OpenAI-compatible chat completions (used by Ollama provider).
+      if (req.method === 'POST' && req.url === '/v1/chat/completions') {
         let body = ''
         req.on('data', (chunk) => { body += chunk })
         req.on('end', () => {
-          res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          })
 
-          // Ollama streams newline-delimited JSON objects.
-          // First chunk: partial content.
-          res.write(JSON.stringify({
+          // SSE chunk with content.
+          res.write('data: ' + JSON.stringify({
+            id: 'e2e-1',
             model: 'test-model',
-            created_at: new Date().toISOString(),
-            message: { role: 'assistant', content: RESPONSE_TEXT },
-            done: false,
-          }) + '\n')
+            choices: [{
+              index: 0,
+              delta: { content: RESPONSE_TEXT },
+              finish_reason: null,
+            }],
+          }) + '\n\n')
 
-          // Final chunk: done with usage stats.
-          res.write(JSON.stringify({
+          // Final SSE chunk with finish_reason and usage.
+          res.write('data: ' + JSON.stringify({
+            id: 'e2e-1',
             model: 'test-model',
-            created_at: new Date().toISOString(),
-            message: { role: 'assistant', content: '' },
-            done: true,
-            total_duration: 100000000,
-            prompt_eval_count: 10,
-            eval_count: 5,
-          }) + '\n')
+            choices: [{
+              index: 0,
+              delta: {},
+              finish_reason: 'stop',
+            }],
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 5,
+              total_tokens: 15,
+            },
+          }) + '\n\n')
 
+          // SSE done sentinel.
+          res.write('data: [DONE]\n\n')
           res.end()
         })
         return

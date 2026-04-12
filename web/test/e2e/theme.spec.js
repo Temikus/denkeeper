@@ -16,11 +16,11 @@ test.describe('Theme persistence', () => {
     await page.locator('[data-testid="theme-toggle"]').click()
     await expect(html).toHaveClass(/dark/)
 
-    // Reload the page and log back in.
+    // Reload the page — session cookie persists, so we stay logged in.
     await page.reload()
-    await login.loginWithPassword('test')
+    await page.locator('nav').waitFor({ state: 'visible', timeout: 10000 })
 
-    // Theme should persist.
+    // Theme should persist via localStorage.
     await expect(html).toHaveClass(/dark/)
   })
 
