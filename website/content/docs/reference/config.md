@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-06T00:00:00+00:00
+lastmod: 2026-04-13T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -28,30 +28,58 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `default_provider` | string | `"openrouter"` | `"openrouter"`, `"anthropic"`, `"ollama"`, or `"openai"` |
+| `default_provider` | string | `"openrouter"` | Name of the provider instance to use by default (must match a configured instance name) |
 | `default_model` | string | — | Model identifier (format depends on provider) |
-| `max_cost_per_session` | float | `0` (unlimited) | Maximum estimated cost per session in USD |
+| `cost_limit_soft` | float | `0` | Soft cost limit per session in USD (warns but continues) |
+| `cost_limit_hard` | float | `1.0` | Hard cost limit per session in USD (stops generation) |
 
-## `[llm.openrouter]`
+## `[[llm.providers]]`
+
+Named provider instances. Multiple entries of the same `type` are allowed, enabling e.g. OpenAI + a local LM Studio endpoint simultaneously. Each instance is addressable by its unique `name`.
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Unique instance name (used in `default_provider` and per-agent `llm_provider`) |
+| `type` | string | Provider type: `"anthropic"`, `"openai"`, `"openrouter"`, or `"ollama"` |
+| `api_key` | string | API key (required for all types except `ollama`) |
+| `base_url` | string | API endpoint override (useful for Azure, vLLM, LM Studio, etc.) |
+| `organization` | string | OpenAI organization ID (openai type only) |
+
+```toml
+[[llm.providers]]
+name = "openai"
+type = "openai"
+api_key = "sk-..."
+
+[[llm.providers]]
+name = "lmstudio"
+type = "openai"
+base_url = "http://localhost:1234/v1"
+api_key = "lm-studio"
+```
+
+**Legacy single-slot syntax** (`[llm.openai]`, `[llm.anthropic]`, etc.) is still supported and auto-converted at startup. The two styles can coexist; an explicit `[[llm.providers]]` entry with the same name takes precedence.
+
+## `[llm.openrouter]` *(legacy)*
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `api_key` | string | *required* | OpenRouter API key |
 
-## `[llm.anthropic]`
+## `[llm.anthropic]` *(legacy)*
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `api_key` | string | *required* | Anthropic API key (`sk-ant-...`) |
 | `base_url` | string | `"https://api.anthropic.com"` | API endpoint override |
 
-## `[llm.ollama]`
+## `[llm.ollama]` *(legacy)*
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `base_url` | string | `"http://localhost:11434"` | Ollama server URL |
 
-## `[llm.openai]`
+## `[llm.openai]` *(legacy)*
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -87,8 +115,11 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | `description` | string | — | Agent description |
 | `persona_dir` | string | — | Path to persona files |
 | `adapters` | string[] | — | Adapter bindings (e.g., `["telegram"]`, `["telegram:12345"]`) |
+| `llm_provider` | string | — | Override default provider (must match a configured provider instance name) |
 | `llm_model` | string | — | Override default model |
 | `session_tier` | string | — | Override default permission tier |
+| `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
+| `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
 
 ## `[memory]`
 

@@ -194,13 +194,14 @@ Key sections:
 |---------|---------|
 | `[telegram]` | Bot token and allowed user IDs |
 | `[discord]` | Bot token and allowed user snowflake IDs |
-| `[llm]` | Default provider (`anthropic`/`openrouter`/`ollama`), model, and per-session cost cap |
-| `[llm.anthropic]` | Anthropic API key (direct provider; no OpenRouter key needed) |
-| `[llm.openrouter]` | OpenRouter API key |
-| `[llm.ollama]` | Ollama base URL (default: `http://localhost:11434`) |
+| `[llm]` | Default provider name, model, and per-session cost limits (`cost_limit_soft`, `cost_limit_hard`) |
+| `[[llm.providers]]` | Named provider instances — multiple instances of the same type allowed (e.g. OpenAI + LM Studio) |
+| `[llm.anthropic]` | Anthropic API key — legacy single-slot syntax, auto-converted to `[[llm.providers]]` |
+| `[llm.openrouter]` | OpenRouter API key — legacy single-slot syntax |
+| `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
-| `[[agents]]` | Multi-agent definitions (persona, skills, LLM model, adapter bindings) |
+| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings) |
 | `[mcp]` | Global MCP settings — request timeout, auto-restart, max restart attempts, restart cooldown, SSE URL allowlist |
 | `[tools.*]` | MCP tool server definitions — stdio (subprocess) or SSE (remote) transport, URL, headers, per-server timeout override |
 | `[plugins.*]` | Plugin definitions — subprocess or Docker-sandboxed (capability declarations) |

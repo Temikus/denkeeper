@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-11T00:00:00+00:00
+lastmod: 2026-04-13T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -391,6 +391,76 @@ All API endpoints (except health, setup, auth, and metrics) require authenticati
 ```bash
 curl -H "Authorization: Bearer dk_yourkey" https://localhost:8080/api/v1/approvals
 ```
+
+## Auth Admin
+
+These endpoints require `admin` scope.
+
+### `GET /api/v1/auth/status`
+
+Returns auth configuration summary (password enabled, OIDC enabled, session settings, preferred login method).
+
+### `GET /api/v1/auth/sessions`
+
+List all active sessions.
+
+### `DELETE /api/v1/auth/sessions/{id}`
+
+Revoke a session.
+
+### `POST /api/v1/auth/password`
+
+Change the server password. Verifies the current password before re-hashing.
+
+```json
+{ "current_password": "old", "new_password": "new" }
+```
+
+### `GET /api/v1/auth/oidc/test`
+
+Test OIDC provider reachability (fresh discovery, 10 s timeout).
+
+### `POST /api/v1/auth/preferences`
+
+Set preferred login method (`auto`, `password`, or `apikey`).
+
+```json
+{ "preferred_method": "password" }
+```
+
+### `GET /api/v1/onboarding`
+
+Checklist of 5 setup milestones. `show_onboarding` is `false` when all milestones are complete or the card has been dismissed.
+
+### `POST /api/v1/onboarding/dismiss`
+
+Persist `onboarding_dismissed = true` to the TOML config and hide the onboarding card.
+
+## KV Store
+
+### `GET /api/v1/kv`
+
+**Scope:** `kv:read`
+
+List KV keys for the authenticated agent (or all agents with `admin` scope).
+
+### `GET /api/v1/kv/{key}`
+
+**Scope:** `kv:read`
+
+Get a value by key.
+
+### `PUT /api/v1/kv/{key}`
+
+**Scope:** `kv:write`
+
+Set a value. Optionally accepts a `ttl` field (seconds).
+
+### `DELETE /api/v1/kv/{key}`
+
+**Scope:** `kv:write`
+
+Delete a key.
 
 ## Auth Endpoints
 
