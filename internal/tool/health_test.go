@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -107,5 +108,72 @@ func TestHandleServerFailure_MaxAttempts(t *testing.T) {
 	}
 	if sc.restartCount != 4 {
 		t.Errorf("restartCount = %d, want 4", sc.restartCount)
+	}
+}
+
+func TestRestartServer_SSE_Success(t *testing.T) {
+	ts := startStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+
+	err := m.RegisterServer(context.Background(), "test-sse", cfg)
+	if err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	err = m.RestartServer(context.Background(), "test-sse")
+	if err != nil {
+		t.Fatalf("RestartServer failed: %v", err)
+	}
+
+	info, ok := m.ServerInfo("test-sse")
+	if !ok {
+		t.Fatal("server should be registered after restart")
+	}
+	if info.Status != "connected" {
+		t.Errorf("Status = %q, want %q", info.Status, "connected")
+	}
+	if len(info.ToolNames) != 1 || info.ToolNames[0] != "greet" {
+		t.Errorf("ToolNames = %v, want [greet]", info.ToolNames)
+	}
+}
+
+func TestRestartServer_SSE_RecoveryOnFailure(t *testing.T) {
+	ts := startStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 2})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+
+	err := m.RegisterServer(context.Background(), "test-sse", cfg)
+	if err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+
+	// Shut down the remote server so reconnection fails.
+	ts.Close()
+
+	err = m.RestartServer(context.Background(), "test-sse")
+	if err == nil {
+		t.Fatal("expected error from RestartServer after remote server shutdown")
+	}
+
+	// The tool should still be visible with error status, not lost.
+	info, ok := m.ServerInfo("test-sse")
+	if !ok {
+		t.Fatal("server should still be registered after failed restart")
+	}
+	if info.Status != "error" {
+		t.Errorf("Status = %q, want %q", info.Status, "error")
+	}
+	if info.LastError == "" {
+		t.Error("LastError should be set after failed restart")
 	}
 }
