@@ -78,10 +78,28 @@
     { value: 'tools:write',      label: 'tools:write' },
   ]
 
+  // Map HTTP status codes to user-friendly error messages.
+  function friendlyError(res) {
+    switch (res.status) {
+      case 429: {
+        const retry = res.headers.get('Retry-After')
+        return retry
+          ? `Too many login attempts. Please try again in ${retry} seconds.`
+          : 'Too many login attempts. Please try again later.'
+      }
+      case 403:
+        return 'Access denied. Check your credentials or contact the administrator.'
+      case 503:
+        return 'Server is starting up. Please wait a moment and try again.'
+      default:
+        return null // fall through to default handling
+    }
+  }
+
   onMount(async () => {
     // Fetch auth config and setup status in parallel.
     const [authCfg, setupStatus] = await Promise.all([
-      api.authConfig().catch(() => ({ password_enabled: false, oidc_enabled: false })),
+      api.authConfig().catch(() => ({ password_enabled: false, oidc_enabled: false, preferred_login_method: 'auto' })),
       api.setupStatus().catch(() => ({ setup_required: false, account_setup_available: false })),
     ])
 
@@ -94,8 +112,19 @@
       setupTab = accountSetupAvailable ? 'account' : 'apikey'
       mode = 'setup'
     } else {
-      // Choose the best default login method.
-      activeMethod = passwordEnabled ? 'password' : 'apikey'
+      // Preferred method priority: localStorage override → server preference → auto.
+      const localPref = localStorage.getItem('dk_preferred_method')
+      const serverPref = authCfg.preferred_login_method || 'auto'
+      const pref = localPref || (serverPref !== 'auto' ? serverPref : null)
+
+      if (pref === 'password' && passwordEnabled) {
+        activeMethod = 'password'
+      } else if (pref === 'apikey') {
+        activeMethod = 'apikey'
+      } else {
+        // auto: prefer password when available
+        activeMethod = passwordEnabled ? 'password' : 'apikey'
+      }
       mode = 'login'
     }
   })
@@ -115,10 +144,21 @@
     }
     loginLoading = true
     try {
-      await api.passwordLogin(passwordInput.trim())
+      const res = await api.rawPasswordLogin(passwordInput.trim())
+      const friendly = friendlyError(res)
+      if (friendly) {
+        loginError = friendly
+        return
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        loginError = body.error || 'Login failed.'
+        return
+      }
+      localStorage.setItem('dk_preferred_method', 'password')
       authMode.set('session')
-    } catch (e) {
-      loginError = e.message || 'Login failed.'
+    } catch {
+      loginError = 'Could not reach the Denkeeper API.'
     } finally {
       loginLoading = false
     }
@@ -141,6 +181,11 @@
       const res = await fetch('/api/v1/agents', {
         headers: { 'Authorization': `Bearer ${keyInput.trim()}` },
       })
+      const friendly = friendlyError(res)
+      if (friendly) {
+        loginError = friendly
+        return
+      }
       if (res.status === 401) {
         loginError = 'Invalid API key or insufficient scopes.'
         return
@@ -149,6 +194,7 @@
         loginError = `Server error: HTTP ${res.status}`
         return
       }
+      localStorage.setItem('dk_preferred_method', 'apikey')
       token.set(keyInput.trim())
     } catch {
       loginError = 'Could not reach the Denkeeper API.'
@@ -250,6 +296,7 @@
 
 <div class="login-page">
   <div class="card">
+    <div class="card-content" class:visible={mode !== 'loading'}>
 
     {#if mode === 'loading'}
       <h1>Denkeeper</h1>
@@ -403,6 +450,7 @@
       <button onclick={proceedToLogin}>Log in with this key</button>
     {/if}
 
+    </div>
   </div>
 </div>
 
@@ -420,9 +468,6 @@
     border-radius: var(--radius);
     padding: 40px;
     width: min(420px, 90vw);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
   }
   h1 { font-size: 22px; font-weight: 700; color: var(--accent); }
   .subtitle { color: var(--text-muted); font-size: 13px; }
@@ -549,6 +594,16 @@
     padding: 4px 10px;
     font-size: 12px;
     flex-shrink: 0;
+  }
+  .card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    opacity: 0;
+    transition: opacity 200ms ease-in;
+  }
+  .card-content.visible {
+    opacity: 1;
   }
   .hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
   code { background: var(--border); padding: 1px 4px; border-radius: 3px; }

@@ -103,9 +103,14 @@ func (rl *loginRateLimiter) stop() {
 
 // handleAuthConfig returns which auth methods are available (no auth required).
 func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
-	resp := map[string]bool{
-		"password_enabled": s.passwordHash != "",
-		"oidc_enabled":     s.oidcProvider != nil,
+	pref := "auto"
+	if s.deps.Config != nil && s.deps.Config.API.Auth.PreferredLoginMethod != "" {
+		pref = s.deps.Config.API.Auth.PreferredLoginMethod
+	}
+	resp := map[string]any{
+		"password_enabled":       s.passwordHash != "",
+		"oidc_enabled":           s.oidcProvider != nil,
+		"preferred_login_method": pref,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck

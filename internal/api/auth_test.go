@@ -47,13 +47,16 @@ func TestHandleAuthConfig_NothingEnabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleAuthConfig(rec, req)
 
-	var resp map[string]bool
+	var resp map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if resp["password_enabled"] {
+	if resp["password_enabled"] != false {
 		t.Error("expected password_enabled=false")
 	}
-	if resp["oidc_enabled"] {
+	if resp["oidc_enabled"] != false {
 		t.Error("expected oidc_enabled=false")
+	}
+	if resp["preferred_login_method"] != "auto" {
+		t.Errorf("expected preferred_login_method=auto, got %v", resp["preferred_login_method"])
 	}
 }
 
@@ -65,9 +68,9 @@ func TestHandleAuthConfig_PasswordEnabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.handleAuthConfig(rec, req)
 
-	var resp map[string]bool
+	var resp map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&resp)
-	if !resp["password_enabled"] {
+	if resp["password_enabled"] != true {
 		t.Error("expected password_enabled=true")
 	}
 }

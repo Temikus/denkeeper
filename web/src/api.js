@@ -289,6 +289,12 @@ export const api = {
     }
     return r.json()
   }),
+  // Returns the raw Response for status code / header inspection.
+  rawPasswordLogin: (password) => fetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  }),
   logout: () => fetch('/auth/logout', { method: 'POST' }).then(r => r.json()),
   sessionCheck: () => fetch('/auth/session').then(r => r.json()),
 }
