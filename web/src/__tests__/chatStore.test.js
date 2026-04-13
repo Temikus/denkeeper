@@ -554,3 +554,38 @@ describe('handleToolEvent: tool_start marks pending approvals as approved', () =
     expect(agentMsg.approvals[0].status).toBe('pending')
   })
 })
+
+describe('handleToolEvent: tool_id-based matching', () => {
+  test('tool_end matches by tool_id when available', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_start', tool: 'web_fetch', tool_id: 'call_1', round: 1 })
+      onToolEvent({ type: 'tool_start', tool: 'web_fetch', tool_id: 'call_2', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_fetch', tool_id: 'call_2', round: 1, duration_ms: 100 })
+      onToolEvent({ type: 'tool_end', tool: 'web_fetch', tool_id: 'call_1', round: 1, duration_ms: 300 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('fetch two pages')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls).toHaveLength(2)
+    expect(agentMsg.toolCalls[0].id).toBe('call_1')
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBe(300)
+    expect(agentMsg.toolCalls[1].id).toBe('call_2')
+    expect(agentMsg.toolCalls[1].status).toBe('done')
+    expect(agentMsg.toolCalls[1].duration).toBe(100)
+  })
+
+  test('tool_end falls back to name+round when tool_id is absent', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', round: 1, duration_ms: 200 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBe(200)
+  })
+})

@@ -376,6 +376,7 @@ When creating or updating schedules, use this channel value unless the user spec
 type ChatEvent struct {
 	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage", "tool_approval", "content_delta", "thinking_delta"
 	Tool     string  `json:"tool,omitempty"`        // tool name
+	ToolID   string  `json:"tool_id,omitempty"`     // unique tool call ID (from LLM response)
 	Round    int     `json:"round,omitempty"`       // 1-based tool round
 	Duration int64   `json:"duration_ms,omitempty"` // tool execution time
 	Error    string  `json:"error,omitempty"`       // tool error (if any)
@@ -800,7 +801,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	}
 
 	if onEvent != nil {
-		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, Round: round})
+		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
 	}
 
 	toolStart := time.Now()
@@ -825,7 +826,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	}
 
 	if onEvent != nil {
-		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, Round: round, Duration: toolDur.Milliseconds()}
+		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Duration: toolDur.Milliseconds()}
 		if execErr != nil {
 			evt.Error = execErr.Error()
 		}

@@ -90,12 +90,10 @@
     $chatState.messages = [...$chatState.messages]
     try {
       await resolveApprovalAction(appr, approve, autoApproveScope)
-      // Status will be updated by tool_start event for approved tools;
-      // for denied, update immediately.
-      if (!approve) {
-        appr.status = 'denied'
-        $chatState.messages = [...$chatState.messages]
-      }
+      // Update status on success so the approval card reflects the
+      // action without waiting for the tool_start SSE event.
+      appr.status = approve ? 'approved' : 'denied'
+      $chatState.messages = [...$chatState.messages]
     } catch (e) {
       appr.resolving = false
       $chatState.messages = [...$chatState.messages]

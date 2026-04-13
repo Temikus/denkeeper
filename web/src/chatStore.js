@@ -171,10 +171,12 @@ function handleToolEvent(agentMsg, evt) {
       pendingAppr.status = 'approved'
       agentMsg.approvals = [...agentMsg.approvals]
     }
-    agentMsg.toolCalls = [...agentMsg.toolCalls, { name: evt.tool, round: evt.round, status: 'running' }]
+    agentMsg.toolCalls = [...agentMsg.toolCalls, { id: evt.tool_id, name: evt.tool, round: evt.round, status: 'running' }]
   }
   if (evt.type === 'tool_end') {
-    const tc = agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
+    const tc = evt.tool_id
+      ? agentMsg.toolCalls.find(t => t.id === evt.tool_id)
+      : agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
     if (tc) {
       tc.status = evt.error ? 'error' : 'done'
       tc.duration = evt.duration_ms
