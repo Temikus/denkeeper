@@ -310,7 +310,7 @@ func TestSSRFSafeTransport_BlocksLoopback(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &http.Client{Transport: SSRFSafeTransport(false)}
+	client := &http.Client{Transport: SSRFSafeTransport(false, 0, 0)}
 	_, err := client.Get(ts.URL)
 	if err == nil {
 		t.Fatal("expected connection to 127.0.0.1 to be blocked with allowLoopback=false")
@@ -323,7 +323,7 @@ func TestSSRFSafeTransport_AllowsLoopback(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := &http.Client{Transport: SSRFSafeTransport(true)}
+	client := &http.Client{Transport: SSRFSafeTransport(true, 0, 0)}
 	resp, err := client.Get(ts.URL)
 	if err != nil {
 		t.Fatalf("expected connection to 127.0.0.1 to succeed with allowLoopback=true, got: %v", err)

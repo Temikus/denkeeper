@@ -2855,6 +2855,9 @@ func TestParse_MCPDefaults(t *testing.T) {
 	if cfg.MCP.RequestTimeoutSecs != 30 {
 		t.Errorf("MCP.RequestTimeoutSecs = %d, want 30", cfg.MCP.RequestTimeoutSecs)
 	}
+	if cfg.MCP.SSEKeepAliveSecs != 15 {
+		t.Errorf("MCP.SSEKeepAliveSecs = %d, want 15", cfg.MCP.SSEKeepAliveSecs)
+	}
 	if cfg.MCP.AutoRestart == nil || !*cfg.MCP.AutoRestart {
 		t.Error("MCP.AutoRestart should default to true")
 	}
@@ -2890,6 +2893,34 @@ url_allowlist = ["api.example.com", "*.internal.corp"]
 	}
 	if len(cfg.MCP.URLAllowlist) != 2 {
 		t.Errorf("MCP.URLAllowlist len = %d, want 2", len(cfg.MCP.URLAllowlist))
+	}
+}
+
+func TestParse_MCPSSEKeepAliveExplicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+sse_keep_alive_secs = 30
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MCP.SSEKeepAliveSecs != 30 {
+		t.Errorf("MCP.SSEKeepAliveSecs = %d, want 30", cfg.MCP.SSEKeepAliveSecs)
+	}
+}
+
+func TestParse_MCPSSEKeepAliveNegativeRejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+sse_keep_alive_secs = -1
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative sse_keep_alive_secs")
+	}
+	if !strings.Contains(err.Error(), "sse_keep_alive_secs") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -2933,6 +2964,7 @@ func TestParse_ToolSSEHeaders(t *testing.T) {
 transport = "sse"
 url = "https://mcp.example.com"
 request_timeout_secs = 45
+sse_keep_alive_secs = 20
 
 [tools.remote.headers]
 Authorization = "Bearer test-token"
@@ -2948,6 +2980,9 @@ X-Custom = "value"
 	}
 	if tc.RequestTimeoutSecs != 45 {
 		t.Errorf("RequestTimeoutSecs = %d, want 45", tc.RequestTimeoutSecs)
+	}
+	if tc.SSEKeepAliveSecs != 20 {
+		t.Errorf("SSEKeepAliveSecs = %d, want 20", tc.SSEKeepAliveSecs)
 	}
 }
 

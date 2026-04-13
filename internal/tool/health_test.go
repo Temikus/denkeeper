@@ -157,7 +157,10 @@ func TestRestartServer_SSE_RecoveryOnFailure(t *testing.T) {
 		t.Fatalf("initial registration failed: %v", err)
 	}
 
-	// Shut down the remote server so reconnection fails.
+	// Forcibly close client connections before shutting down the test server,
+	// otherwise ts.Close() blocks waiting for the long-lived SSE connection
+	// (no http.Client.Timeout to kill it).
+	ts.CloseClientConnections()
 	ts.Close()
 
 	err = m.RestartServer(context.Background(), "test-sse")

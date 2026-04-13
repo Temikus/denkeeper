@@ -70,6 +70,9 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	if cfg.RequestTimeoutSecs > 0 {
 		entry["request_timeout_secs"] = cfg.RequestTimeoutSecs
 	}
+	if cfg.SSEKeepAliveSecs > 0 {
+		entry["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
+	}
 	if cfg.Auth != "" {
 		entry["auth"] = cfg.Auth
 	}
@@ -80,11 +83,7 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 		entry["client_secret"] = cfg.ClientSecret
 	}
 	if len(cfg.Scopes) > 0 {
-		scopes := make([]any, len(cfg.Scopes))
-		for i, s := range cfg.Scopes {
-			scopes[i] = s
-		}
-		entry["scopes"] = scopes
+		entry["scopes"] = cfg.Scopes
 	}
 	if cfg.AllowLoopback {
 		entry["allow_loopback"] = true

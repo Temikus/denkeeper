@@ -1106,6 +1106,7 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		resp["env"] = cfg.Env
 		resp["headers"] = cfg.Headers
 		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
+		resp["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
 		if cfg.Auth != "" {
 			resp["auth"] = cfg.Auth
 		}
@@ -1162,6 +1163,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		URL                string            `json:"url"`
 		Headers            map[string]string `json:"headers"`
 		RequestTimeoutSecs int               `json:"request_timeout_secs"`
+		SSEKeepAliveSecs   int               `json:"sse_keep_alive_secs"`
 		Auth               string            `json:"auth"`
 		ClientID           string            `json:"client_id"`
 		ClientSecret       string            `json:"client_secret"`
@@ -1185,6 +1187,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		URL:                body.URL,
 		Headers:            body.Headers,
 		RequestTimeoutSecs: body.RequestTimeoutSecs,
+		SSEKeepAliveSecs:   body.SSEKeepAliveSecs,
 		Auth:               body.Auth,
 		ClientID:           body.ClientID,
 		ClientSecret:       body.ClientSecret,
@@ -1215,6 +1218,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		URL                string            `json:"url"`
 		Headers            map[string]string `json:"headers"`
 		RequestTimeoutSecs int               `json:"request_timeout_secs"`
+		SSEKeepAliveSecs   int               `json:"sse_keep_alive_secs"`
 		Auth               string            `json:"auth"`
 		ClientID           string            `json:"client_id"`
 		ClientSecret       string            `json:"client_secret"`
@@ -1234,6 +1238,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		URL:                body.URL,
 		Headers:            body.Headers,
 		RequestTimeoutSecs: body.RequestTimeoutSecs,
+		SSEKeepAliveSecs:   body.SSEKeepAliveSecs,
 		Auth:               body.Auth,
 		ClientID:           body.ClientID,
 		ClientSecret:       body.ClientSecret,

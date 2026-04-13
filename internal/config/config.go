@@ -409,8 +409,11 @@ type VoiceOpenAIConfig struct {
 
 // MCPConfig holds global MCP settings that apply to all tool servers.
 type MCPConfig struct {
-	// RequestTimeoutSecs is the default per-request timeout for MCP calls. Default: 30.
+	// RequestTimeoutSecs is the default per-request timeout for individual MCP calls
+	// (applied via context deadline, not http.Client.Timeout). Default: 30.
 	RequestTimeoutSecs int `toml:"request_timeout_secs"`
+	// SSEKeepAliveSecs is the TCP keepalive interval for SSE connections. Default: 15.
+	SSEKeepAliveSecs int `toml:"sse_keep_alive_secs"`
 	// AutoRestart enables automatic restart of crashed MCP servers. Default: true.
 	AutoRestart *bool `toml:"auto_restart"`
 	// MaxRestartAttempts is the maximum number of consecutive restart attempts before
@@ -433,6 +436,7 @@ type ToolConfig struct {
 	URL                string            `toml:"url"`                  // required for sse transport
 	Headers            map[string]string `toml:"headers"`              // optional HTTP headers for sse
 	RequestTimeoutSecs int               `toml:"request_timeout_secs"` // per-server override (0 = use global)
+	SSEKeepAliveSecs   int               `toml:"sse_keep_alive_secs"`  // per-server override (0 = use global)
 
 	// OAuth fields — only valid when Transport is "sse".
 	Auth         string   `toml:"auth"`          // "" (none) or "oauth"
@@ -841,6 +845,9 @@ func applyScalarDefaults(cfg *Config) {
 	}
 	if cfg.MCP.RequestTimeoutSecs == 0 {
 		cfg.MCP.RequestTimeoutSecs = 30
+	}
+	if cfg.MCP.SSEKeepAliveSecs == 0 {
+		cfg.MCP.SSEKeepAliveSecs = 15
 	}
 	if cfg.MCP.AutoRestart == nil {
 		t := true
@@ -1666,6 +1673,9 @@ func validateAuth(auth *APIAuthConfig) error {
 func validateMCP(mcp *MCPConfig) error {
 	if mcp.RequestTimeoutSecs < 0 {
 		return fmt.Errorf("config: mcp.request_timeout_secs must be non-negative")
+	}
+	if mcp.SSEKeepAliveSecs < 0 {
+		return fmt.Errorf("config: mcp.sse_keep_alive_secs must be non-negative")
 	}
 	if mcp.MaxRestartAttempts < 0 {
 		return fmt.Errorf("config: mcp.max_restart_attempts must be non-negative")

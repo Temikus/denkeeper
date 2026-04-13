@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // validateToolURL checks that rawURL is a valid HTTP(S) URL that does not
@@ -195,13 +196,28 @@ func isBlockedIP(ip net.IP, allowLoopback bool) bool {
 // SSRF-sensitive IP addresses at TCP connect time via net.Dialer.Control.
 // This prevents DNS-rebinding attacks where a hostname resolves to a blocked IP
 // after passing the initial string-based URL validation.
-func SSRFSafeTransport(allowLoopback bool) *http.Transport {
+// The keepAlive parameter sets the TCP keepalive interval for connections;
+// use 0 for the default (15s).
+func SSRFSafeTransport(allowLoopback bool, keepAlive time.Duration, requestTimeout time.Duration) *http.Transport {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		base = &http.Transport{}
 	}
+	if keepAlive == 0 {
+		keepAlive = 15 * time.Second
+	}
+	if requestTimeout == 0 {
+		requestTimeout = 30 * time.Second
+	}
 	transport := base.Clone()
+	// ResponseHeaderTimeout guards against servers that accept the TCP
+	// connection but never send response headers (hung initialize, etc.).
+	// Unlike http.Client.Timeout it does NOT cover the response body,
+	// so long-lived SSE streams are unaffected.
+	transport.ResponseHeaderTimeout = requestTimeout
 	transport.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: keepAlive,
 		Control: func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {

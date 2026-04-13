@@ -381,6 +381,44 @@ token = "test-token"
 	}
 }
 
+func TestAddToolToConfig_SSEKeepAlivePersistedWhenSet(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test-token"
+`)
+
+	if err := addToolToConfig(path, "local-mcp", config.ToolConfig{
+		Transport:        "sse",
+		URL:              "http://localhost:8080/events",
+		AllowLoopback:    true,
+		SSEKeepAliveSecs: 30,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "sse_keep_alive_secs") {
+		t.Error("config should contain sse_keep_alive_secs when set")
+	}
+}
+
+func TestAddToolToConfig_SSEKeepAliveOmittedWhenZero(t *testing.T) {
+	path := writeTestConfig(t, `[telegram]
+token = "test-token"
+`)
+
+	if err := addToolToConfig(path, "remote-mcp", config.ToolConfig{
+		Transport: "sse",
+		URL:       "https://mcp.example.com/events",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "sse_keep_alive_secs") {
+		t.Error("config should not contain sse_keep_alive_secs when zero")
+	}
+}
+
 func TestAddToolToConfig_AllowLoopbackPersisted(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "test-token"

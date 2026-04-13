@@ -17,6 +17,7 @@
   let toolURL = ''
   let toolHeaderPairs = []
   let toolTimeoutSecs = ''
+  let toolKeepAliveSecs = ''
   let toolEnvPairs = []
   let toolAuth = ''         // '' or 'oauth'
   let toolClientID = ''
@@ -198,7 +199,7 @@
   function resetToolForm() {
     editingToolName = null
     toolName = ''; toolTransport = 'stdio'; toolCommand = ''; toolArgs = ''
-    toolURL = ''; toolHeaderPairs = []; toolTimeoutSecs = ''; toolEnvPairs = []
+    toolURL = ''; toolHeaderPairs = []; toolTimeoutSecs = ''; toolKeepAliveSecs = ''; toolEnvPairs = []
     toolAuth = ''; toolClientID = ''; toolClientSecret = ''; toolScopes = ''
     showOAuthAdvanced = false
     showConnSettings = false
@@ -229,6 +230,7 @@
       toolURL = info.url || ''
       toolHeaderPairs = objToEnvPairs(info.headers)
       toolTimeoutSecs = info.request_timeout_secs ? String(info.request_timeout_secs) : ''
+      toolKeepAliveSecs = info.sse_keep_alive_secs ? String(info.sse_keep_alive_secs) : ''
       toolEnvPairs = objToEnvPairs(info.env)
       toolAuth = info.auth || ''
       toolClientID = info.client_id || ''
@@ -267,6 +269,8 @@
     if (Object.keys(env).length > 0) cfg.env = env
     const timeout = parseInt(toolTimeoutSecs, 10)
     if (timeout > 0) cfg.request_timeout_secs = timeout
+    const keepAlive = parseInt(toolKeepAliveSecs, 10)
+    if (keepAlive > 0) cfg.sse_keep_alive_secs = keepAlive
     if (toolAuth === 'oauth') {
       cfg.auth = 'oauth'
       if (toolClientID.trim()) cfg.client_id = toolClientID.trim()
@@ -598,11 +602,21 @@
                     </div>
                   {/each}
                 </div>
-                <div class="timeout-row">
-                  <span class="timeout-label">Request timeout</span>
-                  <div class="timeout-input">
-                    <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
-                    <span class="timeout-unit">sec</span>
+                <div class="timeouts-section">
+                  <span class="env-label">Timeouts</span>
+                  <div class="timeout-row">
+                    <span class="timeout-label">Per-request</span>
+                    <div class="timeout-input">
+                      <input type="number" bind:value={toolTimeoutSecs} placeholder="30" min="1" />
+                      <span class="timeout-unit">sec</span>
+                    </div>
+                  </div>
+                  <div class="timeout-row">
+                    <span class="timeout-label">Keep-alive interval</span>
+                    <div class="timeout-input">
+                      <input type="number" bind:value={toolKeepAliveSecs} placeholder="15" min="1" />
+                      <span class="timeout-unit">sec</span>
+                    </div>
                   </div>
                 </div>
                 <div class="unsafe-section">
@@ -1246,6 +1260,7 @@
     gap: 12px;
   }
 
+  .timeouts-section { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
   .timeout-row {
     display: flex;
     align-items: center;

@@ -257,7 +257,15 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	// SSRFSafeTransport validates resolved IPs at TCP connect time to prevent
 	// DNS-rebinding attacks; redirectCheckingRoundTripper provides fast-path
 	// string-based URL validation for each redirect hop.
-	baseRT := http.RoundTripper(SSRFSafeTransport(cfg.AllowLoopback))
+	keepAlive := time.Duration(m.mcpCfg.SSEKeepAliveSecs) * time.Second
+	if cfg.SSEKeepAliveSecs > 0 {
+		keepAlive = time.Duration(cfg.SSEKeepAliveSecs) * time.Second
+	}
+	requestTimeout := time.Duration(m.mcpCfg.RequestTimeoutSecs) * time.Second
+	if cfg.RequestTimeoutSecs > 0 {
+		requestTimeout = time.Duration(cfg.RequestTimeoutSecs) * time.Second
+	}
+	baseRT := http.RoundTripper(SSRFSafeTransport(cfg.AllowLoopback, keepAlive, requestTimeout))
 	rt := http.RoundTripper(&redirectCheckingRoundTripper{
 		base:          baseRT,
 		allowlist:     m.mcpCfg.URLAllowlist,
@@ -267,14 +275,13 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		rt = &headerRoundTripper{base: rt, headers: resolvedHeaders}
 	}
 
-	timeout := time.Duration(m.mcpCfg.RequestTimeoutSecs) * time.Second
-	if cfg.RequestTimeoutSecs > 0 {
-		timeout = time.Duration(cfg.RequestTimeoutSecs) * time.Second
-	}
-
+	// Do NOT set http.Client.Timeout — it covers the entire HTTP request
+	// lifecycle including streaming SSE/Streamable HTTP responses, killing
+	// long-lived connections after the timeout fires. Per-request timeouts
+	// are applied via context deadlines on individual MCP calls instead
+	// (see probeServer, Execute, and discoverTools).
 	httpClient := &http.Client{
 		Transport: rt,
-		Timeout:   timeout,
 	}
 
 	streamableTransport := &mcp.StreamableClientTransport{
@@ -350,6 +357,11 @@ func (m *Manager) connectSSE(
 ) (*mcp.ClientSession, string, error) {
 	// If a previous connection already negotiated legacy SSE, skip the
 	// Streamable HTTP attempt to avoid a pointless 405 round-trip on restart.
+	//
+	// Note: we pass the parent ctx (not a short-lived timeout context) to
+	// Connect because MCP sessions — especially legacy SSE — use the context
+	// for the lifetime of the persistent stream. The TCP dial timeout (30s)
+	// in SSRFSafeTransport handles connection-establishment timeouts.
 	var streamableErr error
 	if cfg.Transport != "sse-legacy" {
 		client := mcp.NewClient(&mcp.Implementation{
@@ -445,7 +457,13 @@ func (m *Manager) setupOAuth(name string, cfg config.ToolConfig, httpClient *htt
 // discoverTools calls ListTools on the server's session and populates the
 // manager's toolMap and toolDefs. Called by both RegisterServer and RegisterSession.
 func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
-	result, err := sc.session.ListTools(ctx, nil)
+	timeout := time.Duration(m.mcpCfg.RequestTimeoutSecs) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	discoverCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := sc.session.ListTools(discoverCtx, nil)
 	if err != nil {
 		_ = sc.session.Close()
 		return fmt.Errorf("listing tools from MCP server %q: %w", sc.name, err)
