@@ -218,7 +218,10 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.request.body.size", len(body)))
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+messagesEndpoint, bytes.NewReader(body))
+	streamCtx, streamCancel := context.WithCancelCause(ctx)
+	defer streamCancel(nil)
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+messagesEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("creating stream request: %w", err)
 	}
@@ -239,7 +242,8 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
 	}
 
-	return c.readStreamResponse(resp.Body, req.OnStream)
+	idle := llm.StreamIdleConfigFor(streamCtx, req.StreamIdleTimeout, streamCancel)
+	return c.readStreamResponse(resp.Body, req.OnStream, idle)
 }
 
 // anthropicStreamAccumulator tracks state while reading an Anthropic SSE stream.
@@ -309,8 +313,16 @@ func (a *anthropicStreamAccumulator) finish() *llm.ChatResponse {
 }
 
 // readStreamResponse parses the Anthropic SSE event stream and calls onStream
-// for each content/thinking delta.
-func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback) (*llm.ChatResponse, error) {
+// for each content/thinking delta. If idle is non-nil, the body is wrapped
+// with an IdleTimeoutReader; when the timeout fires, ErrStreamIdleTimeout is
+// returned directly.
+func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback, idle *llm.StreamIdleConfig) (*llm.ChatResponse, error) {
+	if idle != nil && idle.Timeout > 0 {
+		itr := llm.NewIdleTimeoutReader(body, idle.Timeout, idle.Cancel)
+		defer itr.Stop()
+		body = itr
+	}
+
 	scanner := llm.NewSSEScanner(body)
 	acc := &anthropicStreamAccumulator{
 		tools:    make(map[int]*anthropicToolAccum),
@@ -369,6 +381,9 @@ func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback)
 	}
 
 	if err := scanner.Err(); err != nil {
+		if idle != nil && errors.Is(context.Cause(idle.Ctx), llm.ErrStreamIdleTimeout) {
+			return nil, llm.ErrStreamIdleTimeout
+		}
 		return nil, fmt.Errorf("reading Anthropic stream: %w", err)
 	}
 

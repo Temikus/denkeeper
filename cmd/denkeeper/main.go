@@ -98,10 +98,11 @@ func parseChannel(channel string) (adapterName, externalID string, ok bool) {
 
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
-	providers map[string]llm.Provider // keyed by instance name
-	cost      *llm.CostTracker
-	fallbacks []llm.FallbackRule
-	pricing   *pricing.Registry
+	providers         map[string]llm.Provider // keyed by instance name
+	cost              *llm.CostTracker
+	fallbacks         []llm.FallbackRule
+	pricing           *pricing.Registry
+	streamIdleTimeout time.Duration
 }
 
 // stores holds the initialized persistence stores and the approval manager.
@@ -205,10 +206,11 @@ func initLLMClients(cfg *config.Config) llmClients {
 	}
 
 	return llmClients{
-		providers: providers,
-		cost:      buildCostTracker(cfg),
-		fallbacks: fallbackRules,
-		pricing:   reg,
+		providers:         providers,
+		cost:              buildCostTracker(cfg),
+		fallbacks:         fallbackRules,
+		pricing:           reg,
+		streamIdleTimeout: time.Duration(cfg.LLM.StreamIdleTimeoutSecs) * time.Second,
 	}
 }
 
@@ -735,6 +737,9 @@ func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
 	}
 	if abc.llm.pricing != nil {
 		router.SetPricing(abc.llm.pricing)
+	}
+	if abc.llm.streamIdleTimeout > 0 {
+		router.SetStreamIdleTimeout(abc.llm.streamIdleTimeout)
 	}
 	return router
 }

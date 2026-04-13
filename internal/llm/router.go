@@ -37,15 +37,16 @@ const balanceCacheTTL = 5 * time.Minute
 
 // Router selects the appropriate LLM provider for a request.
 type Router struct {
-	providers       map[string]Provider
-	defaultProvider string
-	defaultModel    string
-	costTracker     *CostTracker
-	fallbacks       []FallbackRule
-	toolSource      func() []ToolDef  // dynamic tool resolution; nil = no tools
-	pricing         *pricing.Registry // model pricing lookup; nil = legacy fallback
-	balanceCache    map[string]balanceCacheEntry
-	mu              sync.Mutex // protects balanceCache
+	providers         map[string]Provider
+	defaultProvider   string
+	defaultModel      string
+	costTracker       *CostTracker
+	fallbacks         []FallbackRule
+	toolSource        func() []ToolDef  // dynamic tool resolution; nil = no tools
+	pricing           *pricing.Registry // model pricing lookup; nil = legacy fallback
+	streamIdleTimeout time.Duration     // idle timeout for LLM SSE streams; 0 = disabled
+	balanceCache      map[string]balanceCacheEntry
+	mu                sync.Mutex // protects balanceCache
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
 	tracer    trace.Tracer
@@ -257,6 +258,12 @@ func (r *Router) SetPricing(reg *pricing.Registry) {
 	r.pricing = reg
 }
 
+// SetStreamIdleTimeout configures the idle timeout applied to LLM SSE streams.
+// If no data arrives within this duration, the stream is cancelled. Zero disables.
+func (r *Router) SetStreamIdleTimeout(d time.Duration) {
+	r.streamIdleTimeout = d
+}
+
 // SetTools configures a dynamic tool definition source. The function is
 // called on every LLM request so that tools added at runtime are visible
 // immediately.
@@ -313,7 +320,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 
 	// 2. Make the primary call — enable streaming if the provider supports it.
 	currentTools := r.currentTools()
-	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools}
+	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
 	if onStream != nil {
 		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
 			req.OnStream = onStream

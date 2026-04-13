@@ -486,7 +486,7 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 				return
 			}
 			c.hub.logger.Error("ws: chat error", "error", err, "session", sessionID)
-			c.sendError(sessionID, "internal", "failed to process message")
+			c.sendError(sessionID, "internal", chatErrorMessage(err))
 			return
 		}
 

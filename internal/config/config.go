@@ -503,17 +503,18 @@ type TelegramConfig struct {
 }
 
 type LLMConfig struct {
-	DefaultProvider   string                   `toml:"default_provider"`
-	DefaultModel      string                   `toml:"default_model"`
-	Providers         []ProviderInstanceConfig `toml:"providers"`
-	OpenRouter        OpenRouterConfig         `toml:"openrouter"`
-	Ollama            OllamaConfig             `toml:"ollama"`
-	Anthropic         AnthropicConfig          `toml:"anthropic"`
-	OpenAI            OpenAIConfig             `toml:"openai"`
-	MaxCostPerSession float64                  `toml:"max_cost_per_session"` // Deprecated: use CostLimitHard.
-	CostLimitSoft     float64                  `toml:"cost_limit_soft"`
-	CostLimitHard     float64                  `toml:"cost_limit_hard"`
-	Fallbacks         []FallbackConfig         `toml:"fallback"`
+	DefaultProvider       string                   `toml:"default_provider"`
+	DefaultModel          string                   `toml:"default_model"`
+	Providers             []ProviderInstanceConfig `toml:"providers"`
+	OpenRouter            OpenRouterConfig         `toml:"openrouter"`
+	Ollama                OllamaConfig             `toml:"ollama"`
+	Anthropic             AnthropicConfig          `toml:"anthropic"`
+	OpenAI                OpenAIConfig             `toml:"openai"`
+	MaxCostPerSession     float64                  `toml:"max_cost_per_session"` // Deprecated: use CostLimitHard.
+	CostLimitSoft         float64                  `toml:"cost_limit_soft"`
+	CostLimitHard         float64                  `toml:"cost_limit_hard"`
+	StreamIdleTimeoutSecs int                      `toml:"stream_idle_timeout_secs"`
+	Fallbacks             []FallbackConfig         `toml:"fallback"`
 }
 
 // ProviderInstanceConfig defines a named LLM provider instance.
@@ -883,6 +884,12 @@ func applyLLMDefaults(cfg *Config) {
 	// Keep deprecated field in sync for backward compat.
 	if cfg.LLM.MaxCostPerSession == 0 {
 		cfg.LLM.MaxCostPerSession = cfg.LLM.CostLimitHard
+	}
+
+	// Default idle timeout for LLM SSE streams: 120s. This catches stalled
+	// provider connections without affecting actively-streaming responses.
+	if cfg.LLM.StreamIdleTimeoutSecs == 0 {
+		cfg.LLM.StreamIdleTimeoutSecs = 120
 	}
 
 	for i := range cfg.LLM.Fallbacks {

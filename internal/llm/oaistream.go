@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -133,7 +135,18 @@ func (a *oaiStreamAccumulator) finish() *OAIStreamResult {
 // ReadOAIStream reads an OpenAI-compatible SSE stream body and calls onStream
 // for each content/reasoning delta. It accumulates tool calls and usage and
 // returns the full result. onStream may be nil.
-func ReadOAIStream(body io.Reader, onStream StreamCallback) (*OAIStreamResult, error) {
+//
+// If idle is non-nil, the body is wrapped with an IdleTimeoutReader that
+// cancels the stream if no data arrives within idle.Timeout. When the idle
+// timeout fires, ErrStreamIdleTimeout is returned directly so callers can
+// match it with errors.Is.
+func ReadOAIStream(body io.Reader, onStream StreamCallback, idle *StreamIdleConfig) (*OAIStreamResult, error) {
+	if idle != nil && idle.Timeout > 0 {
+		itr := NewIdleTimeoutReader(body, idle.Timeout, idle.Cancel)
+		defer itr.Stop()
+		body = itr
+	}
+
 	scanner := NewSSEScanner(body)
 	acc := &oaiStreamAccumulator{
 		toolAccum: make(map[int]*oaiToolAccum),
@@ -160,6 +173,11 @@ func ReadOAIStream(body io.Reader, onStream StreamCallback) (*OAIStreamResult, e
 	}
 
 	if err := scanner.Err(); err != nil {
+		// Surface idle timeout as the root cause instead of a generic
+		// "context canceled" read error.
+		if idle != nil && errors.Is(context.Cause(idle.Ctx), ErrStreamIdleTimeout) {
+			return nil, ErrStreamIdleTimeout
+		}
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
 

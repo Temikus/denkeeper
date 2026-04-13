@@ -199,7 +199,10 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.request.body.size", len(jsonBody)))
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
+	streamCtx, streamCancel := context.WithCancelCause(ctx)
+	defer streamCancel(nil)
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("creating stream request: %w", err)
 	}
@@ -216,7 +219,8 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
 	}
 
-	result, err := llm.ReadOAIStream(resp.Body, req.OnStream)
+	idle := llm.StreamIdleConfigFor(streamCtx, req.StreamIdleTimeout, streamCancel)
+	result, err := llm.ReadOAIStream(resp.Body, req.OnStream, idle)
 	if err != nil {
 		return nil, fmt.Errorf("reading stream: %w", err)
 	}

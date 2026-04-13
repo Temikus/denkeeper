@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Provider defines the interface for LLM backends.
@@ -90,12 +91,13 @@ func isRateLimit(err error) bool {
 }
 
 type ChatRequest struct {
-	Model       string
-	Messages    []Message
-	MaxTokens   int
-	Temperature *float64
-	Tools       []ToolDef
-	OnStream    StreamCallback // if non-nil, provider streams chunks via this callback
+	Model             string
+	Messages          []Message
+	MaxTokens         int
+	Temperature       *float64
+	Tools             []ToolDef
+	OnStream          StreamCallback // if non-nil, provider streams chunks via this callback
+	StreamIdleTimeout time.Duration  // if > 0, cancel the SSE stream if no data arrives within this duration
 }
 
 type Message struct {

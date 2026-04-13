@@ -29,7 +29,7 @@ func TestReadOAIStream_ContentDelta(t *testing.T) {
 		if c.ContentDelta != "" {
 			chunks = append(chunks, c.ContentDelta)
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestReadOAIStream_NilCallback(t *testing.T) {
 		`{"id":"1","model":"gpt-4o","choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}`,
 		`{"id":"1","model":"gpt-4o","choices":[{"delta":{},"finish_reason":"stop"}]}`,
 	)
-	result, err := ReadOAIStream(strings.NewReader(body), nil)
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestReadOAIStream_ReasoningDelta(t *testing.T) {
 	result, err := ReadOAIStream(strings.NewReader(body), func(c StreamChunk) {
 		reasoning += c.ThinkingDelta
 		content += c.ContentDelta
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestReadOAIStream_ToolCallAccumulation(t *testing.T) {
 		if c.ContentDelta != "" {
 			contentCallbacks++
 		}
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestReadOAIStream_ToolCallAccumulation(t *testing.T) {
 func TestReadOAIStream_SSEErrorEvent_NestedMessage(t *testing.T) {
 	// LM Studio sends {"error":{"message":"..."},"message":"..."} with event: error.
 	body := "event: error\ndata: {\"error\":{\"message\":\"context length exceeded\"},\"message\":\"context length exceeded\"}\n\n"
-	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	_, err := ReadOAIStream(strings.NewReader(body), nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -149,7 +149,7 @@ func TestReadOAIStream_SSEErrorEvent_NestedMessage(t *testing.T) {
 func TestReadOAIStream_SSEErrorEvent_FlatString(t *testing.T) {
 	// Some servers send {"error":"plain string"}.
 	body := "event: error\ndata: {\"error\":\"model not found\"}\n\n"
-	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	_, err := ReadOAIStream(strings.NewReader(body), nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -161,7 +161,7 @@ func TestReadOAIStream_SSEErrorEvent_FlatString(t *testing.T) {
 func TestReadOAIStream_SSEErrorEvent_Unparseable(t *testing.T) {
 	// Fall back to raw data when JSON doesn't match known shapes.
 	body := "event: error\ndata: something went wrong\n\n"
-	_, err := ReadOAIStream(strings.NewReader(body), nil)
+	_, err := ReadOAIStream(strings.NewReader(body), nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -172,7 +172,7 @@ func TestReadOAIStream_SSEErrorEvent_Unparseable(t *testing.T) {
 
 func TestReadOAIStream_MalformedChunksSkipped(t *testing.T) {
 	body := "data: not-json\n\ndata: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
-	result, err := ReadOAIStream(strings.NewReader(body), nil)
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
