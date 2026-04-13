@@ -370,10 +370,12 @@ describe('Login page', () => {
     )
 
     render(Login)
+    // Wait for onMount to complete (mode transitions from 'loading' to 'login').
     await waitFor(() => {
-      // Password tab should be active (password input visible)
-      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
+      expect(screen.getByText('Sign in to access the dashboard.')).toBeInTheDocument()
     })
+    // Password tab should be active despite server preferring apikey.
+    expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
   })
 
   test('error 429 shows friendly rate limit message', async () => {
