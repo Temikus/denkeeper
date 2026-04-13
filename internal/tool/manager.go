@@ -590,6 +590,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	ctx, span := toolTracer.Start(ctx, "tool.execute", trace.WithAttributes(
 		attribute.String("tool.name", call.Function.Name),
 		attribute.String("tool.server", serverName),
+		attribute.Int("tool.args.size_bytes", len(call.Function.Arguments)),
 	))
 	start := time.Now()
 	defer func() {
@@ -640,6 +641,8 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 			text += tc.Text
 		}
 	}
+
+	span.SetAttributes(attribute.Int("tool.result.size_bytes", len(text)))
 
 	if result.IsError {
 		err = fmt.Errorf("tool %q returned error: %s", call.Function.Name, text)

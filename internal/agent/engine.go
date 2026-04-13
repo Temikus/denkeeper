@@ -429,7 +429,9 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	defer e.mSessions.Add(ctx, -1, metric.WithAttributes(agentAttr))
 
 	ctx, span := e.tracer.Start(ctx, "agent.chat",
-		trace.WithAttributes(agentAttr, adapterAttr))
+		trace.WithAttributes(agentAttr, adapterAttr,
+			attribute.String("agent.permission_tier", perms.Tier()),
+		))
 	defer span.End()
 	chatStart := time.Now()
 	defer func() {
@@ -442,6 +444,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	if err != nil {
 		return "", nil, err
 	}
+	span.SetAttributes(attribute.String("conversation.id", convID))
 
 	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:    "user",
@@ -674,6 +677,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	totalCost += resp.CostUSD
 
 	supervised := perms.Tier() == "supervised" && e.approvals != nil
+	parentSpan := trace.SpanFromContext(ctx)
 	var toolRounds int
 	var accumulatedContent strings.Builder
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
@@ -681,6 +685,8 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		if round >= maxToolRounds {
 			return nil, llmMessages, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
 		}
+
+		recordToolRoundEvent(parentSpan, round+1, resp.ToolCalls)
 
 		// Preserve any text content the model produced alongside tool calls.
 		if resp.Content != "" {
@@ -733,6 +739,10 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		}
 	}
 
+	if toolRounds > 0 {
+		parentSpan.SetAttributes(attribute.Int("agent.tool_rounds", toolRounds))
+	}
+
 	// If the model returned empty content after tool rounds, try to recover.
 	if resp.Content == "" && toolRounds > 0 {
 		var err error
@@ -750,6 +760,19 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
 	return resp, llmMessages, nil
+}
+
+// recordToolRoundEvent adds a span event for a tool-call round.
+func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) {
+	names := make([]string, len(toolCalls))
+	for i, tc := range toolCalls {
+		names[i] = tc.Function.Name
+	}
+	span.AddEvent("tool_call_round", trace.WithAttributes(
+		attribute.Int("round", round),
+		attribute.Int("tool_call_count", len(toolCalls)),
+		attribute.StringSlice("tool_names", names),
+	))
 }
 
 // recoverEmptyToolResponse attempts to recover when the LLM returns empty

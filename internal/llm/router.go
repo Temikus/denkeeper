@@ -295,9 +295,10 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 
 	ctx, span := r.tracer.Start(ctx, "llm.complete",
 		trace.WithAttributes(
-			attribute.String("llm.provider", r.defaultProvider),
-			attribute.String("llm.model", r.defaultModel),
+			attribute.String("gen_ai.system", r.defaultProvider),
+			attribute.String("gen_ai.request.model", r.defaultModel),
 			attribute.String("session.id", sessionID),
+			attribute.Int("gen_ai.request.message_count", len(messages)),
 		))
 	defer span.End()
 	start := time.Now()
@@ -330,6 +331,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		)
 		cost, source := TokenCost(resp, r.pricing)
 		r.recordOTelSuccess(start, resp, cost, source, attrs)
+		r.setSpanResponseAttrs(span, resp, cost)
 		r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 		if source == "unknown" {
 			slog.Warn("no pricing data for model", "model", resp.Model)
@@ -354,6 +356,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 
 	cost, source := TokenCost(resp, r.pricing)
 	r.recordOTelSuccess(start, resp, cost, source, attrs)
+	r.setSpanResponseAttrs(span, resp, cost)
 	r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 	if source == "unknown" {
 		slog.Warn("no pricing data for model", "model", resp.Model)
@@ -376,6 +379,26 @@ func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, cost flo
 	if cost > 0 {
 		r.mCost.Add(ctx, cost, attrs,
 			metric.WithAttributes(attribute.String("pricing_source", pricingSource)))
+	}
+}
+
+// setSpanResponseAttrs adds GenAI semantic convention attributes to the span
+// after a successful LLM completion.
+func (r *Router) setSpanResponseAttrs(span trace.Span, resp *ChatResponse, cost float64) {
+	span.SetAttributes(
+		attribute.String("gen_ai.response.model", resp.Model),
+		attribute.String("gen_ai.response.finish_reasons", resp.FinishReason),
+		attribute.Int("gen_ai.usage.input_tokens", resp.TokensUsed.Prompt),
+		attribute.Int("gen_ai.usage.output_tokens", resp.TokensUsed.Completion),
+	)
+	if resp.TokensUsed.CachedPrompt > 0 {
+		span.SetAttributes(attribute.Int("gen_ai.usage.cached_tokens", resp.TokensUsed.CachedPrompt))
+	}
+	if cost > 0 {
+		span.SetAttributes(attribute.Float64("gen_ai.usage.cost", cost))
+	}
+	if len(resp.ToolCalls) > 0 {
+		span.SetAttributes(attribute.Int("gen_ai.response.tool_calls", len(resp.ToolCalls)))
 	}
 }
 

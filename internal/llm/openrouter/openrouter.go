@@ -82,8 +82,8 @@ func (c *Client) SupportsStreaming() bool { return true }
 
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	ctx, span := tracer.Start(ctx, "llm.provider.call", trace.WithAttributes(
-		attribute.String("llm.provider", c.Name()),
-		attribute.String("llm.model", req.Model),
+		attribute.String("gen_ai.system", c.Name()),
+		attribute.String("gen_ai.request.model", req.Model),
 	))
 	defer func() { span.End() }()
 
@@ -97,6 +97,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 		}
 		return nil, err
 	}
+	span.SetAttributes(attribute.String("gen_ai.response.model", resp.Model))
 	return resp, nil
 }
 
@@ -130,6 +131,7 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.request.body.size", len(jsonBody)))
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -151,6 +153,7 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.response.body.size", len(respBody)))
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
@@ -194,6 +197,7 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("marshaling stream request: %w", err)
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("http.request.body.size", len(jsonBody)))
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(jsonBody))
 	if err != nil {
