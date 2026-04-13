@@ -88,3 +88,53 @@ func TestSetup_SetsW3CPropagator(t *testing.T) {
 	_ = ctx
 	_ = sc
 }
+
+func TestParseEndpoint_HTTPUrl(t *testing.T) {
+	host, secure := parseEndpoint("http://otel-collector:4318")
+	if host != "otel-collector:4318" {
+		t.Errorf("got host %q, want %q", host, "otel-collector:4318")
+	}
+	if secure {
+		t.Error("expected insecure for http:// scheme")
+	}
+}
+
+func TestParseEndpoint_HTTPSUrl(t *testing.T) {
+	host, secure := parseEndpoint("https://traces.example.com:443")
+	if host != "traces.example.com:443" {
+		t.Errorf("got host %q, want %q", host, "traces.example.com:443")
+	}
+	if !secure {
+		t.Error("expected secure for https:// scheme")
+	}
+}
+
+func TestParseEndpoint_HTTPSNoPort(t *testing.T) {
+	host, secure := parseEndpoint("https://traces.example.com")
+	if host != "traces.example.com" {
+		t.Errorf("got host %q, want %q", host, "traces.example.com")
+	}
+	if !secure {
+		t.Error("expected secure for https:// scheme")
+	}
+}
+
+func TestParseEndpoint_BareHostPort(t *testing.T) {
+	host, secure := parseEndpoint("otel-collector:4318")
+	if host != "otel-collector:4318" {
+		t.Errorf("got host %q, want %q", host, "otel-collector:4318")
+	}
+	if secure {
+		t.Error("expected insecure for bare host:port")
+	}
+}
+
+func TestParseEndpoint_URLWithPath(t *testing.T) {
+	host, secure := parseEndpoint("http://collector:4318/v1/traces")
+	if host != "collector:4318" {
+		t.Errorf("got host %q, want %q", host, "collector:4318")
+	}
+	if secure {
+		t.Error("expected insecure for http:// scheme")
+	}
+}

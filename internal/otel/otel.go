@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -23,7 +25,7 @@ import (
 // Config mirrors config.OTelConfig from the TOML layer.
 type Config struct {
 	Enabled        bool
-	TracesEndpoint string // OTLP HTTP endpoint, e.g. "http://localhost:4318"
+	TracesEndpoint string // OTLP HTTP endpoint, e.g. "http://localhost:4318" or "localhost:4318"
 	ServiceName    string // defaults to "denkeeper"
 }
 
@@ -65,10 +67,14 @@ func Setup(cfg Config, logger *slog.Logger) (shutdown func(context.Context) erro
 	// Traces — optional OTLP HTTP push exporter.
 	var tracerProvider *sdktrace.TracerProvider
 	if cfg.TracesEndpoint != "" {
-		traceExp, traceErr := otlptracehttp.New(context.Background(),
-			otlptracehttp.WithEndpoint(cfg.TracesEndpoint),
-			otlptracehttp.WithInsecure(), // users can front with TLS proxy
-		)
+		hostPort, secure := parseEndpoint(cfg.TracesEndpoint)
+		opts := []otlptracehttp.Option{
+			otlptracehttp.WithEndpoint(hostPort),
+		}
+		if !secure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		traceExp, traceErr := otlptracehttp.New(context.Background(), opts...)
 		if traceErr != nil {
 			// Non-fatal: metrics still work, just warn.
 			logger.Warn("otel: failed to create trace exporter, tracing disabled", "error", traceErr)
@@ -96,6 +102,27 @@ func Setup(cfg Config, logger *slog.Logger) (shutdown func(context.Context) erro
 		}
 		return firstErr
 	}, nil
+}
+
+// parseEndpoint normalises a traces endpoint value into the host:port form
+// that otlptracehttp.WithEndpoint expects. Users commonly provide a full URL
+// (e.g. "http://collector:4318") but the SDK treats the value as a literal
+// host, producing a malformed URL like "http://http:%2F%2Fcollector:4318/...".
+//
+// Returns the host:port string and whether TLS should be used.
+func parseEndpoint(raw string) (hostPort string, secure bool) {
+	// If it looks like a URL (has a scheme), parse it.
+	if strings.Contains(raw, "://") {
+		if u, err := url.Parse(raw); err == nil {
+			secure = u.Scheme == "https"
+			hostPort = u.Host
+			if hostPort != "" {
+				return hostPort, secure
+			}
+		}
+	}
+	// Bare host:port — pass through, assume insecure.
+	return raw, false
 }
 
 // PrometheusHandler returns an HTTP handler that serves Prometheus metrics.
