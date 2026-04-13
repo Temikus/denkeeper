@@ -442,8 +442,8 @@ func TestEngine_HandleMessage_CustomSystemPrompt(t *testing.T) {
 	if mp.lastRequest.Messages[0].Role != "system" {
 		t.Errorf("first message role = %q, want system", mp.lastRequest.Messages[0].Role)
 	}
-	if mp.lastRequest.Messages[0].Content != customPrompt {
-		t.Errorf("system prompt = %q, want %q", mp.lastRequest.Messages[0].Content, customPrompt)
+	if !strings.HasPrefix(mp.lastRequest.Messages[0].Content, customPrompt) {
+		t.Errorf("system prompt = %q, want prefix %q", mp.lastRequest.Messages[0].Content, customPrompt)
 	}
 }
 
@@ -829,6 +829,274 @@ func TestEngine_SupervisedToolCallApproval_Denied(t *testing.T) {
 	// The LLM should have received the denial message and responded.
 	if len(sent.msgs) < 1 {
 		t.Fatal("expected at least 1 sent message")
+	}
+}
+
+func TestEngine_ApprovalTimeout_RetryThenApproved(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Here are the search results.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+	engine.SetApprovalConfig(150*time.Millisecond, 1) // short timeout, 1 retry
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-retry",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	// Let first attempt time out, then approve the retry.
+	time.Sleep(250 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) < 1 {
+		t.Fatal("expected at least 1 pending approval after retry")
+	}
+	// Approve the latest one.
+	_, _ = mgr.Resolve(ctx, approvals[len(approvals)-1].ID, true, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessage")
+	}
+
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
+	}
+}
+
+func TestEngine_ApprovalTimeout_RetriesExhausted(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "The tool timed out.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+	engine.SetApprovalConfig(100*time.Millisecond, 1) // short timeout, 1 retry — both will time out
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = engine.HandleMessage(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-exhausted",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "search for test",
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	// The LLM should have received the timeout and produced a response.
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
+	}
+}
+
+func TestEngine_ApprovalDenied_NoRetry(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Denied.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+	engine.SetApprovalConfig(5*time.Second, 2) // retries configured but denial should NOT retry
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-deny-no-retry",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	// Deny immediately.
+	time.Sleep(100 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	_, _ = mgr.Resolve(ctx, approvals[0].ID, false, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessage")
+	}
+
+	// Should only have 1 approval total (no retry on denial).
+	allApprovals, _ := mgr.List(ctx, "")
+	pendingCount := 0
+	for _, a := range allApprovals {
+		if a.Status == approval.StatusPending {
+			pendingCount++
+		}
+	}
+	if pendingCount > 0 {
+		t.Errorf("expected 0 pending approvals after denial, got %d", pendingCount)
+	}
+}
+
+func TestBuildSystemPrompt_IncludesSessionContext(t *testing.T) {
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	prompt := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "387956986",
+	})
+	if !strings.Contains(prompt, "telegram:387956986") {
+		t.Error("system prompt should contain the delivery channel")
+	}
+	if !strings.Contains(prompt, "Session Context") {
+		t.Error("system prompt should contain Session Context section")
+	}
+}
+
+func TestBuildSystemPrompt_NoAdapterOmitsContext(t *testing.T) {
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	prompt := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	if strings.Contains(prompt, "Session Context") {
+		t.Error("system prompt should NOT contain Session Context when adapter is empty")
 	}
 }
 

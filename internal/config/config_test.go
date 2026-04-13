@@ -1344,6 +1344,73 @@ agent = "nonexistent"
 	}
 }
 
+func TestParse_Schedules_InvalidChannelFormat(t *testing.T) {
+	for _, ch := range []string{"telegram", ":123456", "telegram:", ""} {
+		label := ch
+		if label == "" {
+			continue // empty channel is allowed (schedule fires but skips delivery)
+		}
+		tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "bad-chan"
+type = "agent"
+schedule = "@daily"
+channel = "` + ch + `"
+`)
+		_, err := Parse(tomlData)
+		if err == nil {
+			t.Errorf("channel=%q: expected error for invalid channel format", label)
+		}
+	}
+}
+
+func TestParse_Schedules_ValidChannel(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "good-chan"
+type = "agent"
+schedule = "@daily"
+channel = "telegram:387956986"
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Fatalf("unexpected error for valid channel: %v", err)
+	}
+}
+
+func TestParse_Session_ApprovalTimeout_Valid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[session]
+approval_timeout = "10m"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Session.ApprovalTimeout != "10m" {
+		t.Errorf("ApprovalTimeout = %q, want 10m", cfg.Session.ApprovalTimeout)
+	}
+}
+
+func TestParse_Session_ApprovalTimeout_Invalid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[session]
+approval_timeout = "banana"
+`)
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected error for invalid approval_timeout")
+	}
+}
+
+func TestParse_Session_ApprovalTimeout_Default(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Session.ApprovalTimeout != "5m" {
+		t.Errorf("ApprovalTimeout = %q, want 5m", cfg.Session.ApprovalTimeout)
+	}
+}
+
 func TestParse_Plugins(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [plugins.web-scraper]

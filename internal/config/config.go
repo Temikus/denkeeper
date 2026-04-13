@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -477,6 +478,14 @@ type PluginConfig struct {
 // SessionConfig controls the default permission tier for agent sessions.
 type SessionConfig struct {
 	Tier string `toml:"tier"` // "supervised" (default), "autonomous", "restricted"
+
+	// ApprovalTimeout is how long to wait for operator approval before timing
+	// out. Accepts Go duration strings (e.g. "5m", "30s"). Default: "5m".
+	ApprovalTimeout string `toml:"approval_timeout"`
+
+	// ApprovalRetries is the number of times to re-submit a timed-out approval
+	// before reporting failure to the LLM. Default: 0 (no retries).
+	ApprovalRetries int `toml:"approval_retries"`
 }
 
 type AgentConfig struct {
@@ -820,9 +829,7 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.Log.Format == "" {
 		cfg.Log.Format = "text"
 	}
-	if cfg.Session.Tier == "" {
-		cfg.Session.Tier = "supervised"
-	}
+	applySessionDefaults(&cfg.Session)
 	if cfg.Sandbox.Runtime == "" {
 		cfg.Sandbox.Runtime = "docker"
 	}
@@ -906,6 +913,12 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_MEMORY_DB_PATH", &cfg.Memory.DBPath)
 	envOverride("DENKEEPER_API_LISTEN", &cfg.API.Listen)
 	envOverride("DENKEEPER_SESSION_TIER", &cfg.Session.Tier)
+	envOverride("DENKEEPER_APPROVAL_TIMEOUT", &cfg.Session.ApprovalTimeout)
+	if v := os.Getenv("DENKEEPER_APPROVAL_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Session.ApprovalRetries = n
+		}
+	}
 	envOverride("DENKEEPER_SEARCH_API_KEY", &cfg.Web.Search.APIKey)
 	envOverride("DENKEEPER_OTEL_TRACES_ENDPOINT", &cfg.OTel.TracesEndpoint)
 	if v := os.Getenv("DENKEEPER_OTEL_ENABLED"); v == "true" || v == "1" {
@@ -1107,6 +1120,28 @@ var validTiers = map[string]bool{
 	"restricted": true,
 }
 
+func applySessionDefaults(s *SessionConfig) {
+	if s.Tier == "" {
+		s.Tier = "supervised"
+	}
+	if s.ApprovalTimeout == "" {
+		s.ApprovalTimeout = "5m"
+	}
+}
+
+func validateSessionConfig(s *SessionConfig) error {
+	if err := validateTier(s.Tier, "session.tier"); err != nil {
+		return fmt.Errorf("validate session tier: %w", err)
+	}
+	if _, err := time.ParseDuration(s.ApprovalTimeout); err != nil {
+		return fmt.Errorf("config: session.approval_timeout: invalid duration %q: %w", s.ApprovalTimeout, err)
+	}
+	if s.ApprovalRetries < 0 {
+		return fmt.Errorf("config: session.approval_retries must be >= 0, got %d", s.ApprovalRetries)
+	}
+	return nil
+}
+
 func validateTier(tier, context string) error {
 	if !validTiers[tier] {
 		return fmt.Errorf("config: %s: invalid tier %q — must be one of: supervised, autonomous, restricted", context, tier)
@@ -1203,8 +1238,8 @@ func validate(cfg *Config) error {
 	if err := validateAdaptersAndProviders(cfg); err != nil {
 		return fmt.Errorf("validate adapters/providers: %w", err)
 	}
-	if err := validateTier(cfg.Session.Tier, "session.tier"); err != nil {
-		return fmt.Errorf("validate session tier: %w", err)
+	if err := validateSessionConfig(&cfg.Session); err != nil {
+		return err
 	}
 	if err := validateFallbacks(cfg.LLM.Fallbacks); err != nil {
 		return fmt.Errorf("validate fallbacks: %w", err)
@@ -1484,6 +1519,33 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool) e
 		if s.Agent != "" && !agentNames[s.Agent] {
 			return fmt.Errorf("config: schedule %q: agent %q does not exist", s.Name, s.Agent)
 		}
+
+		if err := validateChannel(s.Name, s.Channel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ParseChannel splits a channel string like "telegram:123456" into adapter
+// name and external ID. Returns false if the format is invalid.
+func ParseChannel(channel string) (adapterName, externalID string, ok bool) {
+	idx := strings.IndexByte(channel, ':')
+	if idx <= 0 || idx == len(channel)-1 {
+		return "", "", false
+	}
+	return channel[:idx], channel[idx+1:], true
+}
+
+func validateChannel(scheduleName, channel string) error {
+	if channel == "" {
+		return nil
+	}
+	if _, _, ok := ParseChannel(channel); !ok {
+		return fmt.Errorf(
+			"config: schedule %q: channel %q is not in adapter:externalID format (e.g. \"telegram:123456\")",
+			scheduleName, channel,
+		)
 	}
 	return nil
 }

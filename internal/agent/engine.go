@@ -26,7 +26,7 @@ import (
 const maxContextMessages = 50
 const maxToolRounds = 10
 const toolExecTimeout = 30 * time.Second
-const approvalTimeout = 5 * time.Minute
+const defaultApprovalTimeout = 5 * time.Minute
 const maxConversationIDLen = 256
 
 // SendFunc is a callback for sending a response back to the originating adapter.
@@ -47,6 +47,10 @@ type Engine struct {
 	skills         []skill.Skill     // filtered per-message based on triggers
 	tools          *tool.Manager     // nil = no tools available
 	approvals      *approval.Manager // nil = supervised tool calls execute immediately
+
+	// Approval configuration (set via SetApprovalConfig after construction).
+	approvalTimeout time.Duration // default 5m
+	approvalRetries int           // default 0 (no retries)
 
 	// Extension fields wired in after construction via SetSkillDirs / SetScheduler.
 	agentSkillsDir  string               // where to write new agent skill files
@@ -89,23 +93,33 @@ func NewEngine(
 		metric.WithDescription("Tool calls executed"))
 
 	return &Engine{
-		name:           name,
-		router:         router,
-		memory:         memory,
-		sendFunc:       sendFunc,
-		permissions:    permissions,
-		persona:        p,
-		fallbackPrompt: fallbackPrompt,
-		skills:         skills,
-		tools:          tools,
-		approvals:      approvals,
-		logger:         logger.With("agent", name),
-		tracer:         tracer,
-		mMessages:      msgs,
-		mSessions:      sessions,
-		mChatDur:       chatDur,
-		mToolCalls:     toolCalls,
+		name:            name,
+		router:          router,
+		memory:          memory,
+		sendFunc:        sendFunc,
+		permissions:     permissions,
+		persona:         p,
+		fallbackPrompt:  fallbackPrompt,
+		skills:          skills,
+		tools:           tools,
+		approvals:       approvals,
+		approvalTimeout: defaultApprovalTimeout,
+		logger:          logger.With("agent", name),
+		tracer:          tracer,
+		mMessages:       msgs,
+		mSessions:       sessions,
+		mChatDur:        chatDur,
+		mToolCalls:      toolCalls,
 	}
+}
+
+// SetApprovalConfig configures the approval timeout and retry count.
+// Call this after NewEngine, before the engine starts handling messages.
+func (e *Engine) SetApprovalConfig(timeout time.Duration, retries int) {
+	if timeout > 0 {
+		e.approvalTimeout = timeout
+	}
+	e.approvalRetries = retries
 }
 
 // SetSkillDirs configures the directories used for skill creation and hot-reload.
@@ -331,6 +345,17 @@ You have tools to manage your persona sections. Use them proactively:
 User/soul/identity updates may require approval depending on your permission tier. Memory writes are always direct.`
 	} else {
 		base = e.fallbackPrompt
+	}
+
+	// Inject session context so the agent knows its current delivery channel.
+	if msg.Adapter != "" && msg.ExternalID != "" {
+		base += fmt.Sprintf(`
+
+## Session Context
+
+You are currently connected via the %q adapter. Your delivery channel is: %s:%s
+When creating or updating schedules, use this channel value unless the user specifies otherwise.`,
+			msg.Adapter, msg.Adapter, msg.ExternalID)
 	}
 
 	e.skillsMu.RLock()
@@ -811,59 +836,81 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 
 // awaitToolApproval submits a tool call for approval and blocks until the
 // operator approves or denies it. Emits a "tool_approval" ChatEvent so the
-// adapter can render inline buttons. Returns the result string and whether
-// the tool was approved.
+// adapter can render inline buttons. On timeout, retries up to
+// e.approvalRetries times before giving up. Returns the result string and
+// whether the tool was approved.
 func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, bool) {
-	summary := fmt.Sprintf("Execute tool %q with args: %s", tc.Function.Name, tc.Function.Arguments)
-
-	// Extract adapter routing from context — stored by chatWithApproval.
 	adapterName, _ := ctx.Value(ctxKeyAdapter).(string)
 	externalID, _ := ctx.Value(ctxKeyExternalID).(string)
-
-	e.logger.Info("submitting tool call for approval",
-		"tool", tc.Function.Name, "round", round, "conversation", convID)
-
-	// Use Submit (non-blocking) so we can emit the event before blocking.
 	noOp := func(_ context.Context, _ string) error { return nil }
-	req, err := e.approvals.Submit(
-		ctx, e.name, approval.ActionKindToolCall, summary,
-		tc.Function.Arguments, externalID, adapterName, convID, noOp,
-	)
-	if err != nil {
-		e.logger.Warn("tool approval submit failed", "tool", tc.Function.Name, "error", err)
-		return fmt.Sprintf("Tool call approval failed: %v", err), false
+
+	maxAttempts := 1 + e.approvalRetries
+	var prevReqID string
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Expire the previous timed-out approval so stale buttons don't linger.
+		if prevReqID != "" {
+			if _, err := e.approvals.Resolve(ctx, prevReqID, false, "timeout-retry"); err != nil {
+				e.logger.Debug("failed to expire previous approval on retry", "id", prevReqID, "error", err)
+			}
+		}
+
+		summary := fmt.Sprintf("Execute tool %q with args: %s", tc.Function.Name, tc.Function.Arguments)
+		if attempt > 1 {
+			summary = fmt.Sprintf("[retry %d/%d] %s", attempt-1, e.approvalRetries, summary)
+		}
+
+		e.logger.Info("submitting tool call for approval",
+			"tool", tc.Function.Name, "round", round,
+			"conversation", convID, "attempt", attempt)
+
+		req, err := e.approvals.Submit(
+			ctx, e.name, approval.ActionKindToolCall, summary,
+			tc.Function.Arguments, externalID, adapterName, convID, noOp,
+		)
+		if err != nil {
+			e.logger.Warn("tool approval submit failed", "tool", tc.Function.Name, "error", err)
+			return fmt.Sprintf("Tool call approval failed: %v", err), false
+		}
+
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:             "tool_approval",
+				Tool:             tc.Function.Name,
+				Round:            round,
+				Text:             summary,
+				ApprovalID:       req.ID,
+				ApprovalCallback: req.CallbackData,
+			})
+		}
+
+		approvalCtx, approvalCancel := context.WithTimeout(ctx, e.approvalTimeout)
+		status := e.approvals.WaitForResolution(approvalCtx, req.ID)
+		timedOut := approvalCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
+		approvalCancel()
+
+		if timedOut {
+			prevReqID = req.ID
+			if attempt < maxAttempts {
+				e.logger.Warn("tool approval timed out, retrying",
+					"tool", tc.Function.Name, "id", req.ID,
+					"attempt", attempt, "max_attempts", maxAttempts)
+				continue
+			}
+			e.logger.Warn("tool approval timed out",
+				"tool", tc.Function.Name, "id", req.ID,
+				"timeout", e.approvalTimeout)
+			return "Tool approval timed out — no response from operator.", false
+		}
+
+		if status == approval.StatusApproved {
+			e.logger.Info("tool call approved", "tool", tc.Function.Name, "id", req.ID)
+			return "", true
+		}
+
+		e.logger.Info("tool call denied", "tool", tc.Function.Name, "id", req.ID)
+		return "Tool call was denied by the operator.", false
 	}
-
-	// Emit event so the adapter can send the approval prompt to the user.
-	if onEvent != nil {
-		onEvent(ChatEvent{
-			Type:             "tool_approval",
-			Tool:             tc.Function.Name,
-			Round:            round,
-			Text:             summary,
-			ApprovalID:       req.ID,
-			ApprovalCallback: req.CallbackData,
-		})
-	}
-
-	// Block until the approval is resolved by the operator or the timeout expires.
-	approvalCtx, approvalCancel := context.WithTimeout(ctx, approvalTimeout)
-	defer approvalCancel()
-	status := e.approvals.WaitForResolution(approvalCtx, req.ID)
-
-	if approvalCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-		e.logger.Warn("tool approval timed out", "tool", tc.Function.Name, "id", req.ID,
-			"timeout", approvalTimeout)
-		return "Tool approval timed out — no response from operator.", false
-	}
-
-	if status == approval.StatusApproved {
-		e.logger.Info("tool call approved", "tool", tc.Function.Name, "id", req.ID)
-		return "", true
-	}
-
-	e.logger.Info("tool call denied", "tool", tc.Function.Name, "id", req.ID)
-	return "Tool call was denied by the operator.", false
+	return "Tool approval timed out — no response from operator.", false
 }
 
 // Context keys for adapter routing info passed through the pipeline.

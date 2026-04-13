@@ -85,7 +85,7 @@ func (s *Server) registerTools() {
 				"name":         {"type": "string",  "description": "Unique schedule identifier"},
 				"schedule":     {"type": "string",  "description": "Timing expression: @daily, @every 5m, or 5-field cron"},
 				"skill":        {"type": "string",  "description": "Skill name to invoke when the schedule fires"},
-				"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format"},
+				"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context."},
 				"session_mode": {"type": "string",  "description": "shared or isolated (default: isolated)"},
 				"session_tier": {"type": "string",  "description": "Permission tier override for this schedule"},
 				"tags":         {"type": "array", "items": {"type": "string"}, "description": "Freeform labels"},
@@ -200,7 +200,7 @@ func (s *Server) registerTools() {
 				"name":         {"type": "string",  "description": "Name of the schedule to update"},
 				"schedule":     {"type": "string",  "description": "New timing expression"},
 				"skill":        {"type": "string",  "description": "New skill name"},
-				"channel":      {"type": "string",  "description": "New delivery channel (adapter:externalID)"},
+				"channel":      {"type": "string",  "description": "New delivery channel in adapter:externalID format (e.g. telegram:387956986). Use the channel from your Session Context."},
 				"session_mode": {"type": "string",  "description": "shared or isolated"},
 				"session_tier": {"type": "string",  "description": "Permission tier override"},
 				"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
@@ -462,8 +462,7 @@ func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return input, "invalid schedule expression: " + err.Error()
 	}
-	colonIdx := strings.IndexByte(input.Channel, ':')
-	if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
+	if _, _, ok := config.ParseChannel(input.Channel); !ok {
 		return input, fmt.Sprintf("channel %q is not in adapter:externalID format", input.Channel)
 	}
 	return input, ""
@@ -606,8 +605,7 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 	if input.Channel != nil {
 		channel = *input.Channel
 	}
-	colonIdx := strings.IndexByte(channel, ':')
-	if colonIdx <= 0 || colonIdx == len(channel)-1 {
+	if _, _, ok := config.ParseChannel(channel); !ok {
 		return scheduler.Config{}, fmt.Sprintf("channel %q is not in adapter:externalID format", channel)
 	}
 	sessionMode := existing.SessionMode
@@ -1152,9 +1150,7 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 // BuildScheduleJob returns a JobFunc that dispatches a message when the
 // schedule fires. Used by both schedule_add and schedule_update.
 func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger) scheduler.JobFunc {
-	colonIdx := strings.IndexByte(cfg.Channel, ':')
-	adapterName := cfg.Channel[:colonIdx]
-	externalID := cfg.Channel[colonIdx+1:]
+	adapterName, externalID, _ := config.ParseChannel(cfg.Channel)
 
 	text := "[Scheduled trigger: " + cfg.Name + "]"
 	if cfg.Skill != "" {

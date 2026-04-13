@@ -91,14 +91,9 @@ func main() {
 	}
 }
 
-// parseChannel splits a "adapter:externalID" channel string into its parts.
-// Returns ok=false if the format is invalid.
+// parseChannel delegates to config.ParseChannel for backward compatibility.
 func parseChannel(channel string) (adapterName, externalID string, ok bool) {
-	idx := strings.IndexByte(channel, ':')
-	if idx <= 0 || idx == len(channel)-1 {
-		return "", "", false
-	}
-	return channel[:idx], channel[idx+1:], true
+	return config.ParseChannel(channel)
 }
 
 // llmClients holds the initialized LLM provider clients.
@@ -824,6 +819,8 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	)
 	e.SetSkillDirs(sr.agentSkillsDir, sr.globalSkillsDir)
 	e.SetScheduler(abc.sched)
+	approvalTimeout, _ := time.ParseDuration(abc.cfg.Session.ApprovalTimeout) // validated by config.Parse
+	e.SetApprovalConfig(approvalTimeout, abc.cfg.Session.ApprovalRetries)
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
