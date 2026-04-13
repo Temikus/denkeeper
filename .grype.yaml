@@ -1,0 +1,19 @@
+# Grype configuration for container image scanning.
+#
+# Vulnerabilities are temporarily ignored when a fix is tracked in
+# the Grype DB but the Alpine package maintainers have not yet
+# released the patched version.  Remove entries once `apk upgrade`
+# pulls in the fix.
+#
+# Last reviewed: 2026-04-13
+
+ignore:
+  # OpenSSL 3.5.5-r0 — fixes not yet released for Alpine 3.23
+  - vulnerability: CVE-2026-28389
+  - vulnerability: CVE-2026-28390
+  - vulnerability: CVE-2026-2673
+  - vulnerability: CVE-2026-28388
+  - vulnerability: CVE-2026-31790
+
+  # musl 1.2.5-r21 — fix not yet released for Alpine 3.23
+  - vulnerability: CVE-2026-40200
