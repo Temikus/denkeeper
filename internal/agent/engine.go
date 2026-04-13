@@ -23,7 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const maxContextMessages = 50
+const defaultMaxContextMessages = 50
 const maxToolRounds = 10
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
@@ -47,6 +47,9 @@ type Engine struct {
 	skills         []skill.Skill     // filtered per-message based on triggers
 	tools          *tool.Manager     // nil = no tools available
 	approvals      *approval.Manager // nil = supervised tool calls execute immediately
+
+	// maxContextMessages limits conversation history sent to the LLM.
+	maxContextMessages int
 
 	// Approval configuration (set via SetApprovalConfig after construction).
 	approvalTimeout time.Duration // default 5m
@@ -93,23 +96,32 @@ func NewEngine(
 		metric.WithDescription("Tool calls executed"))
 
 	return &Engine{
-		name:            name,
-		router:          router,
-		memory:          memory,
-		sendFunc:        sendFunc,
-		permissions:     permissions,
-		persona:         p,
-		fallbackPrompt:  fallbackPrompt,
-		skills:          skills,
-		tools:           tools,
-		approvals:       approvals,
-		approvalTimeout: defaultApprovalTimeout,
-		logger:          logger.With("agent", name),
-		tracer:          tracer,
-		mMessages:       msgs,
-		mSessions:       sessions,
-		mChatDur:        chatDur,
-		mToolCalls:      toolCalls,
+		name:               name,
+		router:             router,
+		memory:             memory,
+		sendFunc:           sendFunc,
+		permissions:        permissions,
+		persona:            p,
+		fallbackPrompt:     fallbackPrompt,
+		skills:             skills,
+		tools:              tools,
+		approvals:          approvals,
+		maxContextMessages: defaultMaxContextMessages,
+		approvalTimeout:    defaultApprovalTimeout,
+		logger:             logger.With("agent", name),
+		tracer:             tracer,
+		mMessages:          msgs,
+		mSessions:          sessions,
+		mChatDur:           chatDur,
+		mToolCalls:         toolCalls,
+	}
+}
+
+// SetMaxContextMessages overrides the default context message limit.
+// Call this after NewEngine, before the engine starts handling messages.
+func (e *Engine) SetMaxContextMessages(n int) {
+	if n > 0 {
+		e.maxContextMessages = n
 	}
 }
 
@@ -453,13 +465,24 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, fmt.Errorf("storing user message: %w", err)
 	}
 
-	history, err := e.memory.GetMessages(ctx, convID, maxContextMessages)
+	history, err := e.memory.GetMessages(ctx, convID, e.maxContextMessages)
 	if err != nil {
 		return "", nil, fmt.Errorf("loading history: %w", err)
 	}
+	truncated := len(history) >= e.maxContextMessages
+	if truncated {
+		e.logger.Warn("conversation history truncated to context limit",
+			"conversation_id", convID, "limit", e.maxContextMessages)
+	}
 
-	llmMessages := make([]llm.Message, 0, len(history)+1)
+	llmMessages := make([]llm.Message, 0, len(history)+2)
 	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms, msg)})
+	if truncated {
+		llmMessages = append(llmMessages, llm.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("[Conversation history truncated — only the most recent %d messages are shown. Earlier messages have been omitted. Do not assume context from before this point.]", e.maxContextMessages),
+		})
+	}
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}

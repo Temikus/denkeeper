@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -149,12 +150,14 @@ func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limi
 	var messages []StoredMessage
 	err := s.db.SelectContext(ctx, &messages,
 		`SELECT id, conversation_id, role, content, tokens_used, cost, created_at
-		 FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?`,
+		 FROM messages WHERE conversation_id = ?
+		 ORDER BY created_at DESC LIMIT ?`,
 		convID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting messages: %w", err)
 	}
+	slices.Reverse(messages)
 	return messages, nil
 }
 

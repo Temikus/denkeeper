@@ -389,6 +389,11 @@ type AgentInstanceConfig struct {
 	// Nil means inherit global. 0 means disabled.
 	CostLimitHard *float64 `toml:"cost_limit_hard"`
 
+	// MaxContextMessages limits the number of conversation messages included in
+	// the LLM context window. When a conversation exceeds this limit, only the
+	// most recent N messages are sent. 0 means use the default (50).
+	MaxContextMessages int `toml:"max_context_messages"`
+
 	// Fallbacks overrides the global [[llm.fallback]] rules for this agent.
 	// When non-empty, these rules replace (not merge with) the global fallbacks.
 	Fallbacks []FallbackConfig `toml:"fallback"`
@@ -1401,6 +1406,10 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 			if err := validateTier(a.SessionTier, fmt.Sprintf("agent %q: session_tier", a.Name)); err != nil {
 				return nil, err
 			}
+		}
+
+		if a.MaxContextMessages < 0 {
+			return nil, fmt.Errorf("config: agent %q: max_context_messages must be >= 0 (0 = default)", a.Name)
 		}
 
 		for _, binding := range a.Adapters {

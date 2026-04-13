@@ -822,6 +822,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		abc.approvalManager,
 		abc.logger,
 	)
+	e.SetMaxContextMessages(ac.MaxContextMessages)
 	e.SetSkillDirs(sr.agentSkillsDir, sr.globalSkillsDir)
 	e.SetScheduler(abc.sched)
 	approvalTimeout, _ := time.ParseDuration(abc.cfg.Session.ApprovalTimeout) // validated by config.Parse

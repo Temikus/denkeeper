@@ -424,11 +424,13 @@ func (c *Client) buildRequest(req llm.ChatRequest) (*apiRequest, error) {
 		}
 	}
 
-	// Split system message from conversation messages.
-	// Anthropic takes the system prompt as a top-level field, not a message.
+	// Split system messages from conversation messages.
+	// Anthropic takes the system prompt as a single top-level field, so
+	// multiple system messages are concatenated with a separator.
+	var systemParts []string
 	for _, m := range req.Messages {
 		if m.Role == "system" {
-			out.System = m.Content
+			systemParts = append(systemParts, m.Content)
 			continue
 		}
 
@@ -437,6 +439,9 @@ func (c *Client) buildRequest(req llm.ChatRequest) (*apiRequest, error) {
 			return nil, err
 		}
 		out.Messages = append(out.Messages, msg)
+	}
+	if len(systemParts) > 0 {
+		out.System = strings.Join(systemParts, "\n\n")
 	}
 
 	return out, nil

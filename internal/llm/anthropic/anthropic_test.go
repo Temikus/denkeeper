@@ -105,6 +105,44 @@ func TestChatCompletion_SystemPrompt(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_MultipleSystemMessages(t *testing.T) {
+	var gotReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		resp := apiResponse{
+			Content: []contentBlock{{Type: "text", Text: "ok"}},
+			Usage:   apiUsage{InputTokens: 5, OutputTokens: 1},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "claude-haiku-4-5",
+		Messages: []llm.Message{
+			{Role: "system", Content: "You are a helpful assistant."},
+			{Role: "system", Content: "[History truncated]"},
+			{Role: "user", Content: "Hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Multiple system messages should be concatenated into the single top-level field.
+	if gotReq.System != "You are a helpful assistant.\n\n[History truncated]" {
+		t.Errorf("system = %q, want concatenated system messages", gotReq.System)
+	}
+	// Only the user message should remain in messages.
+	if len(gotReq.Messages) != 1 || gotReq.Messages[0].Role != "user" {
+		t.Errorf("unexpected messages: %+v", gotReq.Messages)
+	}
+}
+
 func TestChatCompletion_ToolUseResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := apiResponse{

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -72,13 +73,71 @@ func TestMemoryStore_AddAndGetMessages(t *testing.T) {
 		t.Errorf("message[1] = %+v, want assistant/Hi there!", got[1])
 	}
 
-	// Test limit
+	// Test limit — must return the NEWEST messages, not oldest.
 	limited, err := store.GetMessages(ctx, convID, 2)
 	if err != nil {
 		t.Fatalf("GetMessages with limit: %v", err)
 	}
 	if len(limited) != 2 {
 		t.Fatalf("got %d messages with limit 2, want 2", len(limited))
+	}
+	if limited[0].Content != "Hi there!" {
+		t.Errorf("limited[0].Content = %q, want %q", limited[0].Content, "Hi there!")
+	}
+	if limited[1].Content != "How are you?" {
+		t.Errorf("limited[1].Content = %q, want %q", limited[1].Content, "How are you?")
+	}
+}
+
+func TestMemoryStore_GetMessages_LimitReturnsNewest(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "limit-newest")
+
+	// Insert 60 messages to exceed the typical context limit of 50.
+	for i := 1; i <= 60; i++ {
+		role := "user"
+		if i%2 == 0 {
+			role = "assistant"
+		}
+		if err := store.AddMessage(ctx, convID, StoredMessage{
+			Role:    role,
+			Content: fmt.Sprintf("message-%d", i),
+		}); err != nil {
+			t.Fatalf("AddMessage(%d): %v", i, err)
+		}
+	}
+
+	// Fetch with limit=50 — must return messages 11-60 (newest), not 1-50.
+	got, err := store.GetMessages(ctx, convID, 50)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("got %d messages, want 50", len(got))
+	}
+
+	// First returned message should be the 11th overall.
+	if got[0].Content != "message-11" {
+		t.Errorf("first message = %q, want %q (expected newest messages)", got[0].Content, "message-11")
+	}
+	// Last returned message should be the most recent (60th).
+	if got[49].Content != "message-60" {
+		t.Errorf("last message = %q, want %q", got[49].Content, "message-60")
+	}
+
+	// Verify chronological order is preserved.
+	for i := 1; i < len(got); i++ {
+		if got[i].CreatedAt.Before(got[i-1].CreatedAt) {
+			t.Errorf("messages not in chronological order: [%d]=%v > [%d]=%v",
+				i-1, got[i-1].CreatedAt, i, got[i].CreatedAt)
+			break
+		}
 	}
 }
 

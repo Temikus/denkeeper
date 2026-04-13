@@ -2246,3 +2246,135 @@ func TestEngine_ChatWithEvents_NoPartialSaveWhenNoContent(t *testing.T) {
 		}
 	}
 }
+
+func TestEngine_HandleMessage_TruncationNotice(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	mock := &mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "OK",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	}
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(mock)
+
+	sent := &sentMessages{}
+	permissions, _ := security.NewPermissionEngine("supervised")
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "System prompt.", nil, nil, nil, testLogger())
+	// Set a very low context limit so we can trigger truncation easily.
+	engine.SetMaxContextMessages(5)
+
+	ctx := context.Background()
+	convID := "default:test:trunc-chat"
+
+	// Pre-populate 6 messages (exceeds the limit of 5).
+	_ = store.GetOrCreateConversationByID(ctx, convID, "test", "trunc-chat")
+	for i := 0; i < 6; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		_ = store.AddMessage(ctx, convID, StoredMessage{
+			Role:    role,
+			Content: fmt.Sprintf("msg-%d", i),
+		})
+	}
+
+	// Send a new message — this brings total to 7, well over the limit of 5.
+	msg := adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "trunc-chat",
+		UserID:     "user-1",
+		Text:       "latest message",
+		Timestamp:  time.Now(),
+	}
+	if err := engine.HandleMessage(ctx, msg); err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	// Verify the LLM received a truncation notice as the second system message.
+	req := mock.lastRequest
+	if req == nil {
+		t.Fatal("mock provider received no request")
+	}
+
+	// First message should be the main system prompt.
+	if req.Messages[0].Role != "system" {
+		t.Fatalf("messages[0].Role = %q, want system", req.Messages[0].Role)
+	}
+	if !strings.Contains(req.Messages[0].Content, "System prompt.") {
+		t.Errorf("messages[0] should contain system prompt, got %q", req.Messages[0].Content)
+	}
+
+	// Second message should be the truncation notice.
+	if req.Messages[1].Role != "system" {
+		t.Fatalf("messages[1].Role = %q, want system (truncation notice)", req.Messages[1].Role)
+	}
+	if !strings.Contains(req.Messages[1].Content, "truncated") {
+		t.Errorf("messages[1] should be truncation notice, got %q", req.Messages[1].Content)
+	}
+
+	// The latest user message must be present (not dropped by truncation).
+	lastMsg := req.Messages[len(req.Messages)-1]
+	if lastMsg.Role != "user" || lastMsg.Content != "latest message" {
+		t.Errorf("last message = %s/%q, want user/\"latest message\"", lastMsg.Role, lastMsg.Content)
+	}
+}
+
+func TestEngine_HandleMessage_NoTruncationNotice_WhenUnderLimit(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	mock := &mockProvider{
+		response: &llm.ChatResponse{
+			Content:    "OK",
+			TokensUsed: llm.TokenUsage{Total: 10},
+		},
+	}
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(mock)
+
+	sent := &sentMessages{}
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "System prompt.", nil, nil, nil, testLogger())
+
+	ctx := context.Background()
+	msg := adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "short-chat",
+		UserID:     "user-1",
+		Text:       "hello",
+		Timestamp:  time.Now(),
+	}
+	if err := engine.HandleMessage(ctx, msg); err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	// With only 1 message (well under the default limit of 50), there should be
+	// no truncation notice — just system prompt + user message.
+	req := mock.lastRequest
+	if req == nil {
+		t.Fatal("mock provider received no request")
+	}
+
+	systemCount := 0
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			systemCount++
+		}
+	}
+	if systemCount != 1 {
+		t.Errorf("got %d system messages, want 1 (no truncation notice expected)", systemCount)
+	}
+}
