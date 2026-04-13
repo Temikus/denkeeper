@@ -159,6 +159,25 @@ namespace:
   create: false
   name: denkeeper
 
+# -- Extra environment variables injected into the denkeeper container.
+# Each entry follows the Kubernetes container env spec.
+extraEnv: []
+# - name: DENKEEPER_LOG_LEVEL
+#   value: "debug"
+# - name: MY_SECRET_VAR
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: my-key
+
+# -- Extra envFrom sources injected into the denkeeper container.
+# Useful for bulk-loading env vars from ConfigMaps or Secrets.
+extraEnvFrom: []
+# - secretRef:
+#     name: my-extra-secrets
+# - configMapRef:
+#     name: my-extra-config
+
 # -- Extra containers injected into the pod alongside the main denkeeper container.
 # Useful for MCP server sidecars that communicate over localhost or a shared volume.
 # Each entry is a full Kubernetes container spec.
