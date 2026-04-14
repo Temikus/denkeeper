@@ -203,10 +203,8 @@ func TestSessionStore_StartCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close() //nolint:errcheck
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Create an already-expired session.
 	_, _ = store.Create(ctx, "admin@test.com", []string{}, "ua", "127.0.0.1", time.Now().Add(-1*time.Hour))
@@ -226,4 +224,12 @@ func TestSessionStore_StartCleanup(t *testing.T) {
 	if count != 1 {
 		t.Errorf("expected 1 session after cleanup, got %d", count)
 	}
+
+	// Cancel the context and let the cleanup goroutine drain before closing
+	// the DB. Without this gap the goroutine may be mid-PurgeExpired when
+	// Close() runs, causing a "disk I/O error" that poisons the SQLite
+	// driver's global state and makes subsequent tests flaky.
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	_ = store.Close()
 }
