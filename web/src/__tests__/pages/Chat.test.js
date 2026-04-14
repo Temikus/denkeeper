@@ -162,7 +162,8 @@ describe('Chat page', () => {
       const approveButtons = screen.getAllByText('Approve')
       expect(approveButtons.length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText('Deny').length).toBeGreaterThanOrEqual(1)
-      expect(screen.getAllByText('Always Approve').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('15 min').length).toBeGreaterThanOrEqual(1)
+      expect(screen.getAllByText('Always').length).toBeGreaterThanOrEqual(1)
     })
   })
 

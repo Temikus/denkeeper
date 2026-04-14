@@ -259,7 +259,8 @@
           <div class="approval-actions">
             <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {appr.summary}">Approve</button>
             <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {appr.summary}">Deny</button>
-            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.summary}">Always Approve</button>
+            <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.summary} for 15 minutes">15 min</button>
+            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.summary}">Always</button>
           </div>
         </div>
       {/each}
@@ -308,7 +309,8 @@
                       <div class="approval-actions">
                         <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
                         <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
-                        <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always Approve</button>
+                        <button class="btn-appr btn-session" onclick={() => resolveApproval(appr, true, 'session')} disabled={appr.resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.tool} for 15 minutes">15 min</button>
+                        <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
                       </div>
                     {:else}
                       <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
@@ -592,6 +594,8 @@
   .btn-ok:hover:not(:disabled) { background: var(--accent); color: #fff; }
   .btn-bad { border-color: var(--danger); color: var(--danger); }
   .btn-bad:hover:not(:disabled) { background: var(--danger); color: #fff; }
+  .btn-session { border-color: var(--accent); color: var(--accent); opacity: 0.75; }
+  .btn-session:hover:not(:disabled) { background: var(--accent); color: #fff; opacity: 1; }
   .btn-auto { border-color: var(--text-muted); color: var(--text-muted); }
   .btn-auto:hover:not(:disabled) { background: var(--text-muted); color: #fff; }
   .approval-badge {

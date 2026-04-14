@@ -397,7 +397,7 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 			Buttons: []adapter.KeyboardButton{
 				{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
 				{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-				{Label: "🔄 Auto (session)", CallbackData: evt.ApprovalCallback + ":approve_session"},
+				{Label: "🔄 Auto (15 min)", CallbackData: evt.ApprovalCallback + ":approve_session"},
 				{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
 			},
 		})
@@ -417,7 +417,7 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 		Buttons: []adapter.KeyboardButton{
 			{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
 			{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-			{Label: "🔄 Session", CallbackData: evt.ApprovalCallback + ":approve_session"},
+			{Label: "🔄 15 min", CallbackData: evt.ApprovalCallback + ":approve_session"},
 			{Label: "♾️ Always", CallbackData: evt.ApprovalCallback + ":approve_always"},
 		},
 		ButtonLayout: []int{2, 2},
