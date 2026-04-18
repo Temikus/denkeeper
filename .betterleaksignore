@@ -1,0 +1,2 @@
+# E2E test token — intentionally hardcoded dummy value
+2fb74e70f3b26786f5ba6fc3e1d0017a6fcab71b:.github/workflows/ci.yml:curl-auth-header:217
