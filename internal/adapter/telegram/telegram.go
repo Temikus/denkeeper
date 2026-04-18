@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -329,16 +330,28 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 		return
 	}
 
-	// Compact mode: show toast + edit message in-place.
-	answer := tgbotapi.CallbackConfig{
-		CallbackQueryID: cq.ID,
-		Text:            responseText,
-	}
+	// Compact mode: for approvals, silently delete the message since the tool
+	// execution result will follow shortly. For denials/errors, edit in-place.
+	isApprove := strings.HasSuffix(cq.Data, ":approve") ||
+		strings.HasSuffix(cq.Data, ":approve_session") ||
+		strings.HasSuffix(cq.Data, ":approve_always")
+
+	// Always answer the callback to clear the loading spinner.
+	answer := tgbotapi.NewCallback(cq.ID, "")
 	if _, err := a.bot.Request(answer); err != nil {
 		a.logger.Warn("failed to answer callback query", "error", err)
 	}
 
-	// Replace the entire approval message with a short one-liner.
+	if isApprove {
+		// Approval: just delete the prompt — no confirmation needed.
+		del := tgbotapi.NewDeleteMessage(chatID, cq.Message.MessageID)
+		if _, delErr := a.bot.Request(del); delErr != nil {
+			a.logger.Debug("failed to delete approval message", "error", delErr)
+		}
+		return
+	}
+
+	// Deny / error / timeout: replace the approval message with the response.
 	editText := tgbotapi.NewEditMessageText(chatID, cq.Message.MessageID, responseText)
 	if _, editErr := a.bot.Request(editText); editErr != nil {
 		a.logger.Debug("failed to edit approval message in-place", "error", editErr)
