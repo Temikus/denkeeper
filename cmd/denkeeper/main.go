@@ -314,15 +314,66 @@ func initOAuthAndRegisterTools(ctx context.Context, cfg *config.Config, mgr *too
 	return oauthSt, oauthDeps, nil
 }
 
+// registerWithInitRetry wraps mgr.RegisterServer with exponential-backoff
+// retry for remote (sse/http) transports. Stdio transports register once —
+// their lifecycle is owned by the subprocess we spawn, so retry makes no sense.
+//
+// Motivation: when the MCP server runs in a sibling container (common for
+// mcp-proxy) it may not be ready when denkeeper boots, and a permanent disable
+// on first connection-refused would strand the tool for the lifetime of the
+// pod.
+func registerWithInitRetry(ctx context.Context, mgr *tool.Manager, mcpCfg config.MCPConfig, name string, tc config.ToolConfig, logger *slog.Logger) error {
+	isRemote := tc.Transport == "sse" || tc.Transport == "sse-legacy" || tc.Transport == "http"
+	attempts := 1
+	if isRemote && mcpCfg.InitRetryAttempts > 0 {
+		attempts = mcpCfg.InitRetryAttempts
+	}
+
+	baseBackoff := 2 * time.Second
+	if d, err := time.ParseDuration(mcpCfg.InitRetryBackoff); err == nil && d > 0 {
+		baseBackoff = d
+	}
+	const maxBackoff = 30 * time.Second
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err := mgr.RegisterServer(ctx, name, tc)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		// Exponential backoff: base * 2^(attempt-1), capped at maxBackoff.
+		shift := attempt - 1
+		if shift >= 63 {
+			shift = 63
+		}
+		delay := baseBackoff << shift
+		if delay > maxBackoff || delay <= 0 {
+			delay = maxBackoff
+		}
+		logger.Warn("tool server initial connection failed, will retry",
+			"name", name, "attempt", attempt, "next_backoff", delay.String(), "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return lastErr
+}
+
 // registerNonOAuthTools registers tools that don't require OAuth at startup.
 // OAuth tools are deferred until after initOAuthSupport wires the handler factory.
-func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConfig, mgr *tool.Manager, logger *slog.Logger) error {
+func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConfig, mgr *tool.Manager, mcpCfg config.MCPConfig, logger *slog.Logger) error {
 	for name, tc := range tools {
 		if tc.Auth == "oauth" {
 			logger.Info("tool server deferred (needs OAuth)", "name", name)
 			continue
 		}
-		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
+		if err := registerWithInitRetry(ctx, mgr, mcpCfg, name, tc, logger); err != nil {
 			logger.Error("tool server disabled due to initialization error — fix the configuration and restart",
 				"name", name, "error", err)
 			continue
@@ -340,7 +391,7 @@ func registerDeferredOAuthTools(ctx context.Context, cfg *config.Config, mgr *to
 		if tc.Auth != "oauth" {
 			continue
 		}
-		if err := mgr.RegisterServer(ctx, name, tc); err != nil {
+		if err := registerWithInitRetry(ctx, mgr, cfg.MCP, name, tc, logger); err != nil {
 			logger.Error("OAuth tool server disabled due to initialization error — fix the configuration and restart",
 				"name", name, "error", err)
 			continue
@@ -364,7 +415,7 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 
 	if len(cfg.Tools) > 0 {
 		ensureToolMgr()
-		if err := registerNonOAuthTools(ctx, cfg.Tools, sharedToolMgr, logger); err != nil {
+		if err := registerNonOAuthTools(ctx, cfg.Tools, sharedToolMgr, cfg.MCP, logger); err != nil {
 			return nil, "", cleanups, err
 		}
 	}
@@ -864,6 +915,20 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 		if !ok && sc.Channel != "" {
 			logger.Warn("schedule has invalid channel format, skipping", "name", sc.Name, "channel", sc.Channel)
 			continue
+		}
+
+		// Fail fast when a schedule references a skill that doesn't exist on
+		// the target agent. Without this check the schedule would fire silently
+		// at its cron time with only a runtime tool error buried in the logs.
+		if sc.Skill != "" {
+			eng := dispatcher.Agent(sc.Agent)
+			if eng == nil {
+				return fmt.Errorf("schedule %q targets unknown agent %q", sc.Name, sc.Agent)
+			}
+			if _, skillOK := eng.GetSkill(sc.Skill); !skillOK {
+				return fmt.Errorf("schedule %q references missing skill %q on agent %q (fix the skill name or create the skill before the schedule fires)",
+					sc.Name, sc.Skill, sc.Agent)
+			}
 		}
 
 		jobMsg := adapter.IncomingMessage{

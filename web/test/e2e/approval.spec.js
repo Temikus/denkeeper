@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { startMockLLMWithTools } from './helpers/mock-llm-tools.js'
+import { ChatPage } from './helpers/chat.js'
 
 const HERE = import.meta.dirname
 const API_TOKEN = 'e2e-test-token-12345678'
@@ -266,5 +267,78 @@ enabled = false
     expect(checkRes.ok).toBe(true)
     const updated = await checkRes.json()
     expect(updated.status).toBe('approved')
+  })
+
+  test('approve tool call via browser UI', async ({ page }, testInfo) => {
+    testInfo.setTimeout(60000)
+    // Log in.
+    await page.goto(BASE)
+    await page.fill('input[type="password"]', 'test')
+    await page.click('button[type="submit"]')
+    await page.locator('nav').waitFor({ state: 'visible', timeout: 10000 })
+
+    // Navigate to Chat and send a message that triggers a tool call.
+    const chat = new ChatPage(page)
+    await page.goto(`${BASE}/#/chat`)
+    await page.locator('[data-testid="chat-input"]').waitFor({ state: 'visible', timeout: 10000 })
+    await chat.sendMessage('Please use echo tool')
+
+    // Wait for the pending approval card to appear in the chat bubble.
+    const pendingCard = page.locator('.bubble .approval-card.pending')
+    await pendingCard.first().waitFor({ state: 'visible', timeout: 20000 })
+
+    // Verify the tool name is shown.
+    await expect(pendingCard.first().locator('.tool-name')).toContainText('echo')
+
+    // Click Approve.
+    await pendingCard.first().locator('.btn-appr.btn-ok').click()
+
+    // Wait for the approval badge to show "approved".
+    await expect(
+      page.locator('.bubble .approval-card .approval-badge').filter({ hasText: 'approved' }),
+    ).toBeVisible({ timeout: 10000 })
+
+    // Wait for the tool call to complete.
+    await expect(
+      page.locator('.bubble .tool-call.done'),
+    ).toBeVisible({ timeout: 10000 })
+
+    // Wait for the final assistant response with text from the mock LLM.
+    await expect(
+      page.locator('.bubble.agent .text').filter({ hasText: 'Tool result received!' }),
+    ).toBeVisible({ timeout: 15000 })
+  })
+
+  test('deny tool call via browser UI', async ({ page }, testInfo) => {
+    testInfo.setTimeout(60000)
+    // Log in.
+    await page.goto(BASE)
+    await page.fill('input[type="password"]', 'test')
+    await page.click('button[type="submit"]')
+    await page.locator('nav').waitFor({ state: 'visible', timeout: 10000 })
+
+    // Navigate to Chat and send a message that triggers a tool call.
+    const chat = new ChatPage(page)
+    await page.goto(`${BASE}/#/chat`)
+    await page.locator('[data-testid="chat-input"]').waitFor({ state: 'visible', timeout: 10000 })
+    await chat.sendMessage('Please use echo tool')
+
+    // Wait for the pending approval card to appear.
+    const pendingCard = page.locator('.bubble .approval-card.pending')
+    await pendingCard.first().waitFor({ state: 'visible', timeout: 20000 })
+
+    // Click Deny.
+    await pendingCard.first().locator('.btn-appr.btn-bad').click()
+
+    // Wait for the approval badge to show "denied".
+    await expect(
+      page.locator('.bubble .approval-card .approval-badge').filter({ hasText: 'denied' }),
+    ).toBeVisible({ timeout: 10000 })
+
+    // The LLM receives "Tool call was denied" and produces a follow-up response.
+    // The mock LLM returns "Tool result received!" for any non-tool-call message.
+    await expect(
+      page.locator('.bubble.agent:not(.streaming)').last(),
+    ).toBeVisible({ timeout: 15000 })
   })
 })

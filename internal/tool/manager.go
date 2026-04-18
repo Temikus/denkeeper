@@ -967,15 +967,17 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		} else {
 			probeSpan.SetStatus(codes.Ok, "")
 			probeSpan.End()
-			if sc.lastError != "" {
-				// Server recovered — reset health state.
-				m.mu.Lock()
-				if !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
-					sc.restartCount = 0
-				}
-				sc.lastError = ""
-				m.mu.Unlock()
+			// Reset the consecutive-failure counter after the server has been
+			// connected longer than the cooldown. This must run on every
+			// healthy probe (not just error→success transitions), otherwise
+			// the counter drifts monotonically across intermittent failures
+			// separated by long healthy periods.
+			m.mu.Lock()
+			if sc.restartCount > 0 && !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
+				sc.restartCount = 0
 			}
+			sc.lastError = ""
+			m.mu.Unlock()
 		}
 	}
 }

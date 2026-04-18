@@ -370,12 +370,13 @@ describe('Login page', () => {
     )
 
     render(Login)
-    // Wait for onMount to complete (mode transitions from 'loading' to 'login').
+    // Wait for onMount to complete and Svelte to flush all state updates.
+    // Both conditions must hold in the same tick to avoid a race where the
+    // subtitle appears before activeMethod is reflected in the DOM.
     await waitFor(() => {
       expect(screen.getByText('Sign in to access the dashboard.')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
     })
-    // Password tab should be active despite server preferring apikey.
-    expect(screen.getByPlaceholderText(/Password/i)).toBeInTheDocument()
   })
 
   test('error 429 shows friendly rate limit message', async () => {

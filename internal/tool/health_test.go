@@ -143,6 +143,76 @@ func TestRestartServer_SSE_Success(t *testing.T) {
 	}
 }
 
+// TestCheckServers_ResetsRestartCountAfterCooldown covers the bug where
+// restartCount drifted monotonically across intermittent failures because the
+// reset path only triggered on an error→healthy transition. A healthy probe
+// on a server that was never cleared should reset the counter once the server
+// has been connected longer than the cooldown.
+func TestCheckServers_ResetsRestartCountAfterCooldown(t *testing.T) {
+	ts := startStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+
+	if err := m.RegisterServer(context.Background(), "test-sse", cfg); err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	m.mu.Lock()
+	sc := m.servers["test-sse"]
+	// Simulate a prior failure that bumped the counter and an old connection
+	// timestamp beyond the cooldown. lastError is empty — this is the state
+	// after a successful restart, which previously skipped the reset path.
+	sc.restartCount = 2
+	sc.connectedAt = time.Now().Add(-10 * time.Minute)
+	sc.lastError = ""
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute)
+
+	m.mu.RLock()
+	got := sc.restartCount
+	m.mu.RUnlock()
+	if got != 0 {
+		t.Errorf("restartCount = %d after healthy probe past cooldown, want 0", got)
+	}
+}
+
+func TestCheckServers_DoesNotResetWithinCooldown(t *testing.T) {
+	ts := startStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+
+	if err := m.RegisterServer(context.Background(), "test-sse", cfg); err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	m.mu.Lock()
+	sc := m.servers["test-sse"]
+	sc.restartCount = 1
+	sc.connectedAt = time.Now().Add(-1 * time.Minute) // still within cooldown
+	sc.lastError = ""
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute)
+
+	m.mu.RLock()
+	got := sc.restartCount
+	m.mu.RUnlock()
+	if got != 1 {
+		t.Errorf("restartCount = %d after healthy probe within cooldown, want 1 (reset too eagerly)", got)
+	}
+}
+
 func TestRestartServer_SSE_RecoveryOnFailure(t *testing.T) {
 	ts := startStreamableServer(t)
 	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 2})

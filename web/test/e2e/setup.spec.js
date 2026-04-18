@@ -150,6 +150,22 @@ enabled = false
 
     // After successful account setup, user should be logged in (nav bar visible).
     await expect(page.locator('nav')).toBeVisible({ timeout: 10000 })
+
+    // Verify redirect to Overview page with live health data.
+    await expect(page.locator('.card .label')).first().toBeVisible({ timeout: 10000 })
+
+    // Health status should show "ok".
+    const statusValue = page.locator('.card').filter({ has: page.locator('.label', { hasText: 'Status' }) }).locator('.value')
+    await expect(statusValue).toHaveText('ok', { timeout: 10000 })
+
+    // Agents count should be at least 1 (the "default" agent).
+    const agentsValue = page.locator('.card').filter({ has: page.locator('.label', { hasText: 'Agents' }) }).locator('.value')
+    await expect(agentsValue).toBeVisible()
+    const agentCount = await agentsValue.textContent()
+    expect(Number(agentCount)).toBeGreaterThanOrEqual(1)
+
+    // Agent card section should render with the "default" agent.
+    await expect(page.locator('.agent-card .agent-name').filter({ hasText: 'default' })).toBeVisible({ timeout: 5000 })
   })
 
   test('can create API key via setup wizard', async () => {

@@ -427,6 +427,13 @@ type MCPConfig struct {
 	// RestartCooldown is the duration a server must stay connected before its
 	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
 	RestartCooldown string `toml:"restart_cooldown"`
+	// InitRetryAttempts is the number of times to retry the initial connection
+	// to a remote MCP server at startup before giving up. Applies only to
+	// sse/http transports. Default: 5. Set to 1 to disable retries.
+	InitRetryAttempts int `toml:"init_retry_attempts"`
+	// InitRetryBackoff is the base backoff between initial-connection retries
+	// (e.g. "2s"). Each attempt doubles the delay up to 30s. Default: "2s".
+	InitRetryBackoff string `toml:"init_retry_backoff"`
 	// URLAllowlist restricts which hosts SSE tool servers may connect to.
 	// Supports wildcards (e.g. "*.internal.corp"). Empty = all non-blocked hosts allowed.
 	URLAllowlist []string `toml:"url_allowlist"`
@@ -849,24 +856,34 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.OTel.ServiceName == "" {
 		cfg.OTel.ServiceName = "denkeeper"
 	}
-	if cfg.MCP.RequestTimeoutSecs == 0 {
-		cfg.MCP.RequestTimeoutSecs = 30
-	}
-	if cfg.MCP.SSEKeepAliveSecs == 0 {
-		cfg.MCP.SSEKeepAliveSecs = 15
-	}
-	if cfg.MCP.AutoRestart == nil {
-		t := true
-		cfg.MCP.AutoRestart = &t
-	}
-	if cfg.MCP.MaxRestartAttempts == 0 {
-		cfg.MCP.MaxRestartAttempts = 3
-	}
-	if cfg.MCP.RestartCooldown == "" {
-		cfg.MCP.RestartCooldown = "5m"
-	}
+	applyMCPDefaults(&cfg.MCP)
 	if cfg.API.Timezone == "" {
 		cfg.API.Timezone = "UTC"
+	}
+}
+
+func applyMCPDefaults(mcp *MCPConfig) {
+	if mcp.RequestTimeoutSecs == 0 {
+		mcp.RequestTimeoutSecs = 30
+	}
+	if mcp.SSEKeepAliveSecs == 0 {
+		mcp.SSEKeepAliveSecs = 15
+	}
+	if mcp.AutoRestart == nil {
+		t := true
+		mcp.AutoRestart = &t
+	}
+	if mcp.MaxRestartAttempts == 0 {
+		mcp.MaxRestartAttempts = 3
+	}
+	if mcp.RestartCooldown == "" {
+		mcp.RestartCooldown = "5m"
+	}
+	if mcp.InitRetryAttempts == 0 {
+		mcp.InitRetryAttempts = 5
+	}
+	if mcp.InitRetryBackoff == "" {
+		mcp.InitRetryBackoff = "2s"
 	}
 }
 
@@ -1699,6 +1716,14 @@ func validateMCP(mcp *MCPConfig) error {
 	if mcp.RestartCooldown != "" {
 		if _, err := time.ParseDuration(mcp.RestartCooldown); err != nil {
 			return fmt.Errorf("config: mcp.restart_cooldown: invalid duration %q: %w", mcp.RestartCooldown, err)
+		}
+	}
+	if mcp.InitRetryAttempts < 1 {
+		return fmt.Errorf("config: mcp.init_retry_attempts must be at least 1 (set to 1 to disable retries)")
+	}
+	if mcp.InitRetryBackoff != "" {
+		if _, err := time.ParseDuration(mcp.InitRetryBackoff); err != nil {
+			return fmt.Errorf("config: mcp.init_retry_backoff: invalid duration %q: %w", mcp.InitRetryBackoff, err)
 		}
 	}
 	return nil
