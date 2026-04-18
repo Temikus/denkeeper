@@ -101,6 +101,24 @@ vet:
 # Run all checks (fmt, vet, lint, test)
 check: fmt-check vet lint lint-ui test test-ui
 
+# Run all checks with minimal output (for agent hooks)
+hook:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    steps=("just fmt-check" "just vet" "just lint" "just lint-ui" "just test" "just test-ui")
+    labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui")
+    tmpfile=$(mktemp)
+    trap 'rm -f "$tmpfile"' EXIT
+    for i in "${!steps[@]}"; do
+        if ${steps[$i]} >"$tmpfile" 2>&1; then
+            echo "✓ ${labels[$i]}"
+        else
+            echo "✗ ${labels[$i]}"
+            cat "$tmpfile"
+            exit 1
+        fi
+    done
+
 # Run all checks including E2E (requires running server)
 check-full: check test-e2e
 
