@@ -53,7 +53,7 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-
-      - run: go test -tags mcp_go_client_oauth -race ./...
+      - run: go test -race ./...
 
   release:
     name: Release

@@ -1,9 +1,5 @@
 version: "2"
 
-run:
-  build-tags:
-    - mcp_go_client_oauth
-
 linters:
   enable:
     - errcheck

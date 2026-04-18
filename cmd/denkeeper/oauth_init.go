@@ -1,5 +1,3 @@
-//go:build mcp_go_client_oauth
-
 package main
 
 import (

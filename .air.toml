@@ -2,8 +2,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  # Build with required tags
-  cmd = "go build -tags mcp_go_client_oauth -o ./tmp/denkeeper ./cmd/denkeeper"
+  cmd = "go build -o ./tmp/denkeeper ./cmd/denkeeper"
   # Binary and args
   bin = "./tmp/denkeeper"
   args_bin = ["serve"]

@@ -1,5 +1,3 @@
-//go:build mcp_go_client_oauth
-
 package tool
 
 import (
@@ -14,8 +12,6 @@ import (
 )
 
 // setTransportOAuthHandler assigns the OAuth handler to the StreamableClientTransport.
-// This function exists in a build-tag-gated file because it references
-// auth.OAuthHandler which has an unexported interface method.
 func setTransportOAuthHandler(t *mcp.StreamableClientTransport, handler any) {
 	if h, ok := handler.(auth.OAuthHandler); ok {
 		t.OAuthHandler = h

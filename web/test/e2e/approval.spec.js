@@ -85,7 +85,7 @@ enabled = false
     const spawnCmd = isCI ? binaryPath : 'go'
     const spawnArgs = isCI
       ? ['serve', '--config', configPath]
-      : ['run', '-tags', 'mcp_go_client_oauth', './cmd/denkeeper', 'serve', '--config', configPath]
+      : ['run', './cmd/denkeeper', 'serve', '--config', configPath]
     const spawnCwd = isCI ? undefined : repoRoot
 
     // Start denkeeper with supervised config.

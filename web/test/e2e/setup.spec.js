@@ -69,7 +69,7 @@ enabled = false
 
       server = spawn(
         'go',
-        ['run', '-tags', 'mcp_go_client_oauth', './cmd/denkeeper', 'serve', '--config', configPath],
+        ['run', './cmd/denkeeper', 'serve', '--config', configPath],
         {
           cwd: repoRoot,
           env: { ...process.env, DENKEEPER_DATA_DIR: tmpDir },
