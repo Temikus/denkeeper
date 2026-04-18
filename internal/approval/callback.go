@@ -59,7 +59,7 @@ func (h *Handler) Resolve(ctx context.Context, data string) (string, error) {
 	_, action, _ := parseCallback(data)
 	switch action {
 	case CallbackApproveSession:
-		return "✅ Approved (auto-approve for this session): " + resolved.Summary, nil
+		return "✅ Approved (auto-approve for 15 min): " + resolved.Summary, nil
 	case CallbackApproveAlways:
 		return "✅ Approved (auto-approve always): " + resolved.Summary, nil
 	case CallbackApprove:

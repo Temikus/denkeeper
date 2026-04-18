@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestShouldAutoApprove_NoRules(t *testing.T) {
@@ -366,5 +367,60 @@ func TestAutoResolvePending_SessionRule(t *testing.T) {
 
 	if !resolved {
 		t.Error("expected pending approval to be auto-resolved by session rule")
+	}
+}
+
+func TestShouldAutoApprove_SessionRuleExpired(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	// Manually store an already-expired session rule.
+	key := sessionRuleKey("default", "conv1", "web_search")
+	m.sessionRules.Store(key, time.Now().Add(-1*time.Minute))
+
+	ok, _ := m.ShouldAutoApprove(ctx, "default", "web_search", "conv1")
+	if ok {
+		t.Error("expired session rule should not match")
+	}
+
+	// Verify the expired rule was cleaned up.
+	if _, loaded := m.sessionRules.Load(key); loaded {
+		t.Error("expired session rule should have been deleted")
+	}
+}
+
+func TestListAutoApproveRules_ExcludesExpired(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	// Add one active and one expired session rule.
+	m.AddSessionRule(ctx, "default", "tool_active", "conv1", "test")
+
+	expiredKey := sessionRuleKey("default", "conv1", "tool_expired")
+	m.sessionRules.Store(expiredKey, time.Now().Add(-1*time.Minute))
+
+	rules, err := m.ListAutoApproveRules(ctx, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, r := range rules {
+		if r.ToolName == "tool_expired" {
+			t.Error("expired session rule should not appear in listing")
+		}
+	}
+
+	// The active rule should be present.
+	found := false
+	for _, r := range rules {
+		if r.ToolName == "tool_active" {
+			found = true
+			if r.ExpiresAt == nil {
+				t.Error("active session rule should have ExpiresAt set")
+			}
+		}
+	}
+	if !found {
+		t.Error("active session rule should appear in listing")
 	}
 }

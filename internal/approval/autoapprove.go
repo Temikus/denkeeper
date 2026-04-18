@@ -20,14 +20,15 @@ const (
 )
 
 // AutoApproveRule is a rule that allows a specific tool to bypass the approval
-// workflow for a given agent. Session-scoped rules are held in memory;
-// permanent rules are persisted in SQLite.
+// workflow for a given agent. Session-scoped rules are held in memory and
+// expire after a TTL; permanent rules are persisted in SQLite.
 type AutoApproveRule struct {
 	ID             string           `db:"id"              json:"id"`
 	AgentName      string           `db:"agent_name"      json:"agent_name"`
 	ToolName       string           `db:"tool_name"       json:"tool_name"`
 	Scope          AutoApproveScope `db:"scope"           json:"scope"`
 	ConversationID string           `db:"conversation_id" json:"conversation_id,omitempty"`
+	ExpiresAt      *time.Time       `db:"-"               json:"expires_at,omitempty"`
 	CreatedAt      time.Time        `db:"created_at"      json:"created_at"`
 	CreatedBy      string           `db:"created_by"      json:"created_by"`
 }

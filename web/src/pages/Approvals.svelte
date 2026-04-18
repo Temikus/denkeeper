@@ -154,7 +154,7 @@
 
 <!-- Auto-Approve Rules Section -->
 <h2 class="section-title">Auto-Approve Rules</h2>
-<p class="section-desc">Rules that automatically approve tool calls without prompting. Session rules are ephemeral; permanent rules survive restarts.</p>
+<p class="section-desc">Rules that automatically approve tool calls without prompting. Timed rules expire after 15 minutes; permanent rules survive restarts.</p>
 
 <ErrorBanner message={autoError} />
 

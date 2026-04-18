@@ -62,6 +62,10 @@ func NewManager(store Store, logger *slog.Logger) *Manager {
 // automatically expired by the background worker.
 const DefaultTTL = 24 * time.Hour
 
+// SessionRuleTTL is the duration a session auto-approve rule stays active.
+// After this period, the rule expires and the user must re-approve.
+const SessionRuleTTL = 15 * time.Minute
+
 // Submit creates a new pending approval, registers the action closure, and
 // returns the persisted Request with its ID populated. The request expires
 // after DefaultTTL if not resolved.
@@ -419,10 +423,14 @@ func sessionRuleKey(agentName, conversationID, toolName string) string {
 // It checks session rules (in-memory) first, then permanent rules (DB).
 // Returns (true, scope) on match, (false, "") on no match.
 func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, conversationID string) (bool, AutoApproveScope) {
-	// 1. Session rules (in-memory, conversation-scoped).
+	// 1. Session rules (in-memory, conversation-scoped, time-limited).
 	key := sessionRuleKey(agentName, conversationID, toolName)
-	if _, ok := m.sessionRules.Load(key); ok {
-		return true, ScopeSession
+	if v, ok := m.sessionRules.Load(key); ok {
+		if expiresAt, isTime := v.(time.Time); isTime && time.Now().Before(expiresAt) {
+			return true, ScopeSession
+		}
+		// Expired — clean up lazily.
+		m.sessionRules.Delete(key)
 	}
 
 	// 2. Permanent rules (DB, agent-scoped).
@@ -437,13 +445,16 @@ func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, co
 	return false, ""
 }
 
-// AddSessionRule creates an ephemeral auto-approve rule for the current conversation.
+// AddSessionRule creates a time-limited auto-approve rule for the current conversation.
+// The rule expires after SessionRuleTTL (15 minutes).
 // After storing the rule it auto-resolves any pending approvals for the same agent+tool.
 func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conversationID, createdBy string) {
 	key := sessionRuleKey(agentName, conversationID, toolName)
-	m.sessionRules.Store(key, true)
+	expiresAt := time.Now().Add(SessionRuleTTL)
+	m.sessionRules.Store(key, expiresAt)
 	m.logger.Info("session auto-approve rule added",
-		"agent", agentName, "tool", toolName, "conversation", conversationID, "by", createdBy)
+		"agent", agentName, "tool", toolName, "conversation", conversationID,
+		"by", createdBy, "expires_at", expiresAt.Format(time.RFC3339))
 	m.autoResolvePending(ctx, agentName, toolName)
 }
 
@@ -522,10 +533,16 @@ func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([
 		rules = append(rules, dbRules...)
 	}
 
-	// Session rules from memory.
-	m.sessionRules.Range(func(key, _ any) bool {
+	// Session rules from memory (skip expired).
+	now := time.Now()
+	m.sessionRules.Range(func(key, val any) bool {
 		k, ok := key.(string)
 		if !ok {
+			return true
+		}
+		expiresAt, isTime := val.(time.Time)
+		if !isTime || !now.Before(expiresAt) {
+			m.sessionRules.Delete(key) // clean up expired
 			return true
 		}
 		parts := strings.SplitN(k, "\x00", 3)
@@ -541,6 +558,7 @@ func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([
 			ToolName:       tool,
 			Scope:          ScopeSession,
 			ConversationID: convID,
+			ExpiresAt:      &expiresAt,
 		})
 		return true
 	})
