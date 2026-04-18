@@ -613,6 +613,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		AppendSkill:    e.AppendSkill,
 		GetSkill:       e.GetSkill,
 		UpdateSkill:    e.UpdateSkill,
+		RemoveSkill:    e.RemoveSkill,
 		Sched:          abc.sched,
 		HandleMessage:  e.HandleMessage,
 		Approvals:      abc.approvalManager,

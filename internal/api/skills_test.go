@@ -229,6 +229,88 @@ func TestUpdateSkill_Success(t *testing.T) {
 	}
 }
 
+func TestRenameSkill_Success(t *testing.T) {
+	deps := testDepsWithSkillsDir(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	// Create a skill.
+	createBody := `{"name":"old-name","body":"# Content"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/skills/default", strings.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	// Rename it.
+	renameBody := `{"name":"new-name"}`
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/skills/default/old-name", strings.NewReader(renameBody))
+	req2.Header.Set("Authorization", "Bearer dk-test-key")
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("rename: status = %d, want %d; body: %s", rec2.Code, http.StatusOK, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), `"name":"new-name"`) {
+		t.Errorf("response should contain new name: %s", rec2.Body.String())
+	}
+
+	// Old name should be gone.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/skills/default/old-name", nil)
+	req3.Header.Set("Authorization", "Bearer dk-test-key")
+	rec3 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusNotFound {
+		t.Errorf("GET old name: status = %d, want %d", rec3.Code, http.StatusNotFound)
+	}
+
+	// New name should be accessible.
+	req4 := httptest.NewRequest(http.MethodGet, "/api/v1/skills/default/new-name", nil)
+	req4.Header.Set("Authorization", "Bearer dk-test-key")
+	rec4 := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec4, req4)
+
+	if rec4.Code != http.StatusOK {
+		t.Errorf("GET new name: status = %d, want %d; body: %s", rec4.Code, http.StatusOK, rec4.Body.String())
+	}
+}
+
+func TestRenameSkill_Conflict(t *testing.T) {
+	deps := testDepsWithSkillsDir(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	// Create two skills.
+	for _, name := range []string{"skill-a", "skill-b"} {
+		body := `{"name":"` + name + `","body":"# Content"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/skills/default", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer dk-test-key")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: status = %d", name, rec.Code)
+		}
+	}
+
+	// Try to rename skill-a to skill-b (conflict).
+	renameBody := `{"name":"skill-b"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/skills/default/skill-a", strings.NewReader(renameBody))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("rename to existing: status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
 func TestDeleteSkill_Success(t *testing.T) {
 	deps := testDepsWithSkillsDir(t)
 	srv := New(testConfig(allScopesKey()), deps, testLogger())

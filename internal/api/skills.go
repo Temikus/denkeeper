@@ -101,6 +101,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 type skillUpdateInput struct {
+	Name        *string  `json:"name"`
 	Description *string  `json:"description"`
 	Version     *string  `json:"version"`
 	Triggers    []string `json:"triggers"`
@@ -137,34 +138,37 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Merge with existing values.
-	description := existing.Description
-	if input.Description != nil {
-		description = *input.Description
-	}
-	version := existing.Version
-	if input.Version != nil {
-		version = *input.Version
-	}
-	triggers := existing.Triggers
-	if input.Triggers != nil {
-		triggers = input.Triggers
-	}
-	body := existing.Body
-	if input.Body != nil {
-		body = *input.Body
+	// Determine effective name (rename or keep).
+	newName := skillName
+	isRename := false
+	if input.Name != nil && strings.TrimSpace(*input.Name) != "" && *input.Name != skillName {
+		newName = strings.TrimSpace(*input.Name)
+		isRename = true
+		// Check for conflicts with existing skills.
+		if _, exists := e.GetSkill(newName); exists {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("skill %q already exists", newName)})
+			return
+		}
 	}
 
-	payload := configmcp.BuildSkillPayload(skillName, description, version, triggers, body)
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
 
-	if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.logger, skillName, payload); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("updating skill: %v", err)})
-		return
+	if isRename {
+		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.logger, skillName, payload); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
+			return
+		}
+		s.logger.Info("skill renamed via API", "agent", agentName, "old", skillName, "new", newName)
+	} else {
+		if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.logger, skillName, payload); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("updating skill: %v", err)})
+			return
+		}
+		s.logger.Info("skill updated via API", "agent", agentName, "name", skillName)
 	}
 
-	s.logger.Info("skill updated via API", "agent", agentName, "name", skillName)
 	writeJSON(w, http.StatusOK, map[string]string{
-		"name":   skillName,
+		"name":   newName,
 		"agent":  agentName,
 		"status": "updated",
 	})

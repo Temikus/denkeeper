@@ -1525,6 +1525,7 @@ func TestSkillUpdate_Success(t *testing.T) {
 			updatedSkill = s
 			return true
 		}
+		d.RemoveSkill = func(_ string) bool { return true }
 		d.PermissionTier = func() string { return "autonomous" }
 	})
 
@@ -1568,6 +1569,132 @@ func TestSkillUpdate_Restricted(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(text), "denied") && !strings.Contains(strings.ToLower(text), "restricted") {
 		t.Errorf("error should mention denied/restricted: %s", text)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: skill_update with rename (new_name)
+// --------------------------------------------------------------------------
+
+func TestSkillUpdate_Rename_Success(t *testing.T) {
+	var mu sync.RWMutex
+	skills := map[string]skill.Skill{
+		"old-skill": {
+			Name:        "old-skill",
+			Description: "Original",
+			Version:     "1.0",
+			Body:        "# Old content",
+		},
+	}
+
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		if err := os.MkdirAll(d.AgentSkillsDir, 0755); err != nil {
+			t.Fatalf("creating skills dir: %v", err)
+		}
+		// Write the old skill file to disk so rename can remove it.
+		oldPayload := configmcp.BuildSkillPayload("old-skill", "Original", "1.0", nil, "# Old content")
+		if err := os.WriteFile(filepath.Join(d.AgentSkillsDir, "old-skill.md"), []byte(oldPayload+"\n"), 0600); err != nil {
+			t.Fatalf("writing old skill file: %v", err)
+		}
+
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			mu.RLock()
+			defer mu.RUnlock()
+			s, ok := skills[name]
+			return s, ok
+		}
+		d.UpdateSkill = func(name string, s skill.Skill) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if _, ok := skills[name]; !ok {
+				return false
+			}
+			skills[name] = s
+			return true
+		}
+		d.RemoveSkill = func(name string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if _, ok := skills[name]; !ok {
+				return false
+			}
+			delete(skills, name)
+			return true
+		}
+		d.AppendSkill = func(s skill.Skill) {
+			mu.Lock()
+			defer mu.Unlock()
+			skills[s.Name] = s
+		}
+		d.PermissionTier = func() string { return "autonomous" }
+	})
+
+	text, isErr := callTool(t, session, "skill_update", map[string]any{
+		"name":     "old-skill",
+		"new_name": "new-skill",
+		"version":  "2.0",
+	})
+	if isErr {
+		t.Fatalf("skill_update rename error: %s", text)
+	}
+
+	// Old skill should be gone from in-memory map.
+	mu.RLock()
+	_, oldExists := skills["old-skill"]
+	newSkill, newExists := skills["new-skill"]
+	mu.RUnlock()
+
+	if oldExists {
+		t.Error("old skill should be removed after rename")
+	}
+	if !newExists {
+		t.Fatal("new skill should exist after rename")
+	}
+	if newSkill.Version != "2.0" {
+		t.Errorf("version = %q, want 2.0", newSkill.Version)
+	}
+
+	// New file should exist on disk.
+	newFile := filepath.Join(deps.AgentSkillsDir, "new-skill.md")
+	if _, err := os.Stat(newFile); err != nil {
+		t.Errorf("new skill file should exist: %v", err)
+	}
+
+	// Old file should be removed.
+	oldFile := filepath.Join(deps.AgentSkillsDir, "old-skill.md")
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Errorf("old skill file should be removed, err = %v", err)
+	}
+}
+
+func TestSkillUpdate_Rename_Conflict(t *testing.T) {
+	skills := map[string]skill.Skill{
+		"skill-a": {Name: "skill-a", Body: "# A"},
+		"skill-b": {Name: "skill-b", Body: "# B"},
+	}
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		if err := os.MkdirAll(d.AgentSkillsDir, 0755); err != nil {
+			t.Fatalf("creating skills dir: %v", err)
+		}
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			s, ok := skills[name]
+			return s, ok
+		}
+		d.UpdateSkill = func(_ string, _ skill.Skill) bool { return true }
+		d.RemoveSkill = func(_ string) bool { return true }
+		d.PermissionTier = func() string { return "autonomous" }
+	})
+
+	text, isErr := callTool(t, session, "skill_update", map[string]any{
+		"name":     "skill-a",
+		"new_name": "skill-b",
+	})
+	if !isErr {
+		t.Fatalf("expected error for conflicting rename, got: %s", text)
+	}
+	if !strings.Contains(text, "already exists") {
+		t.Errorf("error should mention 'already exists': %s", text)
 	}
 }
 

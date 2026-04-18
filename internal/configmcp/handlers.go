@@ -66,6 +66,7 @@ func (s *Server) registerTools() {
 				"type": "object",
 				"properties": {
 					"name":        {"type": "string",  "description": "Name of the skill to update (must already exist)"},
+					"new_name":    {"type": "string",  "description": "Rename the skill to this name (omit to keep current name)"},
 					"description":{"type": "string",  "description": "New description (omit to keep current)"},
 					"version":     {"type": "string",  "description": "New version (omit to keep current)"},
 					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current)"},
@@ -376,6 +377,28 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 	return toolText(string(data)), nil
 }
 
+// MergeSkillFields merges optional update fields with existing skill values and
+// returns the payload built with the given name.
+func MergeSkillFields(name string, existing skill.Skill, desc, ver *string, triggers []string, body *string) string {
+	description := existing.Description
+	if desc != nil {
+		description = *desc
+	}
+	version := existing.Version
+	if ver != nil {
+		version = *ver
+	}
+	trig := existing.Triggers
+	if triggers != nil {
+		trig = triggers
+	}
+	b := existing.Body
+	if body != nil {
+		b = *body
+	}
+	return BuildSkillPayload(name, description, version, trig, b)
+}
+
 func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.deps.AgentSkillsDir == "" {
 		return toolError("skill_update is not available: no agent skills directory configured"), nil
@@ -388,6 +411,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 
 	var input struct {
 		Name        string   `json:"name"`
+		NewName     *string  `json:"new_name"`
 		Description *string  `json:"description"`
 		Version     *string  `json:"version"`
 		Triggers    []string `json:"triggers"`
@@ -405,33 +429,39 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
 	}
 
-	// Merge: use existing values for omitted fields.
-	description := existing.Description
-	if input.Description != nil {
-		description = *input.Description
-	}
-	version := existing.Version
-	if input.Version != nil {
-		version = *input.Version
-	}
-	triggers := existing.Triggers
-	if input.Triggers != nil {
-		triggers = input.Triggers
-	}
-	body := existing.Body
-	if input.Body != nil {
-		body = *input.Body
+	// Determine effective name.
+	effectiveName := input.Name
+	isRename := false
+	if input.NewName != nil && strings.TrimSpace(*input.NewName) != "" && *input.NewName != input.Name {
+		effectiveName = strings.TrimSpace(*input.NewName)
+		isRename = true
+		if _, exists := s.deps.GetSkill(effectiveName); exists {
+			return toolError(fmt.Sprintf("skill %q already exists", effectiveName)), nil
+		}
 	}
 
-	payload := BuildSkillPayload(input.Name, description, version, triggers, body)
+	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body)
 
 	deps := s.deps
-	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		return ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, input.Name, p)
-	})
+	var applyFn approval.ActionFunc
+	if isRename {
+		oldName := input.Name
+		applyFn = approval.ActionFunc(func(_ context.Context, p string) error {
+			return ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p)
+		})
+	} else {
+		applyFn = approval.ActionFunc(func(_ context.Context, p string) error {
+			return ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, input.Name, p)
+		})
+	}
+
+	summary := "Update skill: " + input.Name
+	if isRename {
+		summary = fmt.Sprintf("Rename skill: %s → %s", input.Name, effectiveName)
+	}
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
-		"Update skill: "+input.Name, payload, applyFn)
+		summary, payload, applyFn)
 }
 
 type scheduleAddInput struct {
@@ -1098,6 +1128,41 @@ func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skil
 
 	updateSkill(name, *s)
 	logger.Info("skill updated via config MCP", "name", name, "file", filename)
+	return nil
+}
+
+// ApplySkillRename writes the skill under its new name, removes the old file,
+// and updates the in-memory skill list (remove old + append new).
+func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appendSkill func(skill.Skill), logger interface {
+	Info(string, ...any)
+}, oldName string, payload string) error {
+	s, err := skill.ParseFile("(runtime)", []byte(payload))
+	if err != nil {
+		return fmt.Errorf("parsing skill: %w", err)
+	}
+
+	// Write new file first (crash-safe: worst case both files exist).
+	newFilename := filepath.Join(agentSkillsDir, s.Name+".md")
+	tmp := newFilename + ".tmp"
+	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+	if err := os.Rename(tmp, newFilename); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("committing skill file: %w", err)
+	}
+
+	// Remove old file.
+	oldFilename := filepath.Join(agentSkillsDir, oldName+".md")
+	if err := os.Remove(oldFilename); err != nil && !os.IsNotExist(err) {
+		logger.Info("old skill file removal failed (new file written successfully)", "old", oldName, "new", s.Name, "error", err)
+	}
+
+	// Update in-memory: remove old, append new.
+	removeSkill(oldName)
+	appendSkill(*s)
+	logger.Info("skill renamed via config MCP", "old", oldName, "new", s.Name, "file", newFilename)
 	return nil
 }
 

@@ -83,7 +83,10 @@
     try {
       const triggers = formTriggers.trim() ? formTriggers.split(',').map(t => t.trim()).filter(Boolean) : []
       if (editingSkill) {
+        const trimmedName = formName.trim()
+        const nameChanged = trimmedName !== editingSkill.name
         await api.updateSkill(editingSkill.agent, editingSkill.name, {
+          name: nameChanged ? trimmedName : undefined,
           description: formDescription || undefined,
           version: formVersion || undefined,
           triggers: triggers.length ? triggers : undefined,
@@ -175,7 +178,7 @@
         {/if}
         <label>
           Name
-          <input type="text" bind:value={formName} placeholder="e.g. daily-report" disabled={!!editingSkill} />
+          <input type="text" bind:value={formName} placeholder="e.g. daily-report" />
         </label>
         <label>
           Description <span class="hint">(optional)</span>

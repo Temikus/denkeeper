@@ -48,6 +48,10 @@ type Deps struct {
 	// If nil, skill_update is disabled.
 	UpdateSkill func(string, skill.Skill) bool
 
+	// RemoveSkill removes a skill by name. Returns false if not found.
+	// Required for skill rename support.
+	RemoveSkill func(string) bool
+
 	// Sched is the shared scheduler instance. If nil, schedule_add is disabled.
 	Sched *scheduler.Scheduler
 
