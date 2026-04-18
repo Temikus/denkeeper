@@ -427,6 +427,7 @@ just test-v          # Verbose test output
 just test-pkg <pkg>  # Test a single package (e.g. just test-pkg internal/agent)
 just test-cover      # Tests with coverage report
 just test-cover-html # Open coverage in browser
+just test-integration # E2E integration tests (full in-process server + mock LLM)
 just lint            # Run golangci-lint
 just lint-fix        # Lint with auto-fix
 just fmt             # Format all Go files
