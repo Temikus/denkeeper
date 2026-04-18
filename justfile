@@ -30,7 +30,7 @@ test-cover-html: test-cover
 
 # Run integration tests (requires -tags=integration)
 test-integration:
-    go test -race -v -tags=integration ./internal/integration/...
+    go test {{go_tags}},integration -race -v ./internal/integration/...
 
 # Run tests for a specific package (e.g. just test-pkg internal/agent)
 test-pkg pkg:

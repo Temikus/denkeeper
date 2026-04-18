@@ -24,6 +24,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,15 @@ type HarnessOpts struct {
 
 	// Scopes configures the API key scopes. If nil, all scopes are granted.
 	Scopes []string
+
+	// ConfigPath sets the TOML config path for handlers that persist to disk
+	// (schedules, tools). If empty, those handlers may return 503.
+	ConfigPath string
+
+	// WithLifecycleMgr, when true, creates a tool.LifecycleManager with an
+	// empty tool.Manager so that tool CRUD endpoints are available.
+	// Requires ConfigPath to be set for persistence.
+	WithLifecycleMgr bool
 }
 
 type agentSetup struct {
@@ -261,13 +271,21 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		},
 	}
 
+	var lifecycleMgr *tool.LifecycleManager
+	if opts.WithLifecycleMgr {
+		toolMgr := tool.NewManager(logger)
+		lifecycleMgr = tool.NewLifecycleManager(toolMgr, opts.ConfigPath, 0, logger)
+	}
+
 	deps := api.Deps{
-		Dispatcher:  dispatcher,
-		Scheduler:   sched,
-		CostTracker: costTracker,
-		Memory:      mem,
-		Approvals:   approvalMgr,
-		KVStore:     kvStore,
+		Dispatcher:   dispatcher,
+		Scheduler:    sched,
+		CostTracker:  costTracker,
+		Memory:       mem,
+		Approvals:    approvalMgr,
+		KVStore:      kvStore,
+		ConfigPath:   opts.ConfigPath,
+		LifecycleMgr: lifecycleMgr,
 		Config: &config.Config{
 			Agents: agentConfigs,
 		},
