@@ -36,6 +36,7 @@ func testServerWithAuth(t *testing.T, passwordHash string) *Server {
 		sessions:     sm,
 		passwordHash: passwordHash,
 		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
+		bcryptCost:   bcrypt.MinCost,
 	}
 }
 
@@ -334,6 +335,7 @@ func testServerWithConfig(t *testing.T, passwordHash string) (*Server, string) {
 		sessions:     sm,
 		passwordHash: passwordHash,
 		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
+		bcryptCost:   bcrypt.MinCost,
 	}, cfgPath
 }
 

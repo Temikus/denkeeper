@@ -377,7 +377,7 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), 13)
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), s.bcryptCost)
 	if err != nil {
 		s.logger.Error("hashing new password", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to hash password"})

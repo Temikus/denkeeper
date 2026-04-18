@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // testServerWithPIN creates a server with a setup PIN set and no auth configured.
@@ -29,6 +31,7 @@ func testServerWithPIN(t *testing.T, pin string) *Server {
 		limiters:     make(map[string]*rateLimiter),
 		loginLimiter: newLoginRateLimiter(5, 15*time.Minute),
 		setupPIN:     pin,
+		bcryptCost:   bcrypt.MinCost,
 	}
 }
 

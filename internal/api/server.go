@@ -94,6 +94,10 @@ type Server struct {
 
 	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
 	wsHub *WSHub
+
+	// bcryptCost controls the bcrypt cost factor for password hashing.
+	// Defaults to 13; tests override to bcrypt.MinCost for speed.
+	bcryptCost int
 }
 
 // New creates a new API server. The server is not started until Run is called.
@@ -108,6 +112,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		oidcProvider: deps.OIDCProvider,
 		loginLimiter: newLoginRateLimiter(cfg.GetLoginRateLimit(), cfg.GetLoginRateWindow()),
 		setupPIN:     deps.SetupPIN,
+		bcryptCost:   13,
 	}
 
 	mux := http.NewServeMux()
@@ -1778,8 +1783,8 @@ func (s *Server) handleSetupAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash password with bcrypt (cost 13, consistent with `denkeeper passwd`).
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 13)
+	// Hash password with bcrypt (consistent with `denkeeper passwd`).
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), s.bcryptCost)
 	if err != nil {
 		s.logger.Error("hashing password", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
