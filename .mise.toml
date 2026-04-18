@@ -1,5 +1,5 @@
 [tools]
-go = "1.25.9"
+go = "1.26.2"
 hugo-extended = "latest"
 "golangci-lint" = "latest"
 "go:github.com/air-verse/air" = "latest"
