@@ -1237,6 +1237,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 			OAuthDeps:         oauthDeps,
 			ReloadFunc:        buildReloadFunc(path, cfg, logger),
 			RestartFunc:       selfRestartFunc,
+			Version:           version,
+			Commit:            commit,
+			BuildDate:         date,
 		}, logger); err != nil {
 			return err
 		}

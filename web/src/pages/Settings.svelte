@@ -5,6 +5,7 @@
   import Collapsible from '../components/Collapsible.svelte'
 
   let authStatus = $state(null)
+  let serverInfo = $state(null)
   let sessions = $state([])
   let loading = $state(true)
   let error = $state('')
@@ -40,14 +41,16 @@
     loading = true
     error = ''
     try {
-      const [status, sessData] = await Promise.all([
+      const [status, sessData, srvConfig] = await Promise.all([
         api.authStatus(),
         api.listAuthSessions().catch(() => ({ sessions: [] })),
+        api.serverConfig().catch(() => null),
       ])
       authStatus = status
       sessions = sessData.sessions || (Array.isArray(sessData) ? sessData : [])
       currentSessionId = sessData.current_session_id || null
       prefLogin = status?.preferred_login_method || 'auto'
+      serverInfo = srvConfig
     } catch (e) {
       error = e.message
     } finally {
@@ -333,6 +336,21 @@
       </div>
       <p class="info-text">"Auto" shows password login if configured, otherwise API key.</p>
   </Collapsible>
+
+  {#if serverInfo?.version}
+    <div class="version-info">
+      <span class="version-label">Version</span>
+      <span class="mono">{serverInfo.version}</span>
+      {#if serverInfo.commit && serverInfo.commit !== 'unknown'}
+        <span class="version-sep">&middot;</span>
+        <span class="mono">{serverInfo.commit.slice(0, 7)}</span>
+      {/if}
+      {#if serverInfo.go_version}
+        <span class="version-sep">&middot;</span>
+        <span class="mono">{serverInfo.go_version}</span>
+      {/if}
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -568,4 +586,22 @@
     max-width: 360px;
   }
   .pref-row .field-label { flex: 1; }
+
+  /* Version info */
+  .version-info {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .version-label {
+    font-weight: 500;
+  }
+  .version-sep {
+    opacity: 0.4;
+  }
 </style>

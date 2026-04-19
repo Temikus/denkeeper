@@ -16,9 +16,9 @@ import (
 
 // personaTestEnv bundles test server state for persona tests.
 type personaTestEnv struct {
-	state      *testPersonaState
-	session    *mcp.ClientSession
-	approvals  *approval.Manager
+	state     *testPersonaState
+	session   *mcp.ClientSession
+	approvals *approval.Manager
 }
 
 func (e *personaTestEnv) call(t *testing.T, name string, args any) (string, bool) {

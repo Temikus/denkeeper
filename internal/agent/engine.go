@@ -65,8 +65,8 @@ type Engine struct {
 	// in-process MCP servers (configmcp) can retrieve it. The MCP JSON-RPC
 	// boundary prevents context.Context propagation, so we bridge via this
 	// field. Protected by adapterCtxMu; set at the start of each message.
-	adapterCtxMu  sync.RWMutex
-	adapterCtx    adapterRouting
+	adapterCtxMu sync.RWMutex
+	adapterCtx   adapterRouting
 
 	logger *slog.Logger
 

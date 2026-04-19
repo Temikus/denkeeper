@@ -65,6 +65,9 @@ type Deps struct {
 	OAuthDeps         *OAuthDeps                                                       // nil = OAuth tool endpoints return 503
 	ReloadFunc        func() error                                                     // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                     // nil = restart endpoint returns 503
+	Version           string                                                           // build version (e.g. "1.2.3" or "dev")
+	Commit            string                                                           // git commit hash
+	BuildDate         string                                                           // build timestamp
 }
 
 // Server is the external REST API server.

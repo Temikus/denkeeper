@@ -65,17 +65,17 @@ type SkillUsageRecord struct {
 
 // ConversationStatsRow holds aggregated telemetry for a conversation.
 type ConversationStatsRow struct {
-	ConversationID   string    `db:"conversation_id"   json:"conversation_id"`
-	TotalMessages    int       `db:"total_messages"    json:"total_messages"`
-	TotalCost        float64   `db:"total_cost"        json:"total_cost"`
-	TotalPrompt      int       `db:"total_tokens_prompt"      json:"total_tokens_prompt"`
-	TotalCompletion  int       `db:"total_tokens_completion"  json:"total_tokens_completion"`
-	TotalCached      int       `db:"total_tokens_cached"      json:"total_tokens_cached"`
-	TotalToolCalls   int       `db:"total_tool_calls"  json:"total_tool_calls"`
-	TotalToolErrors  int       `db:"total_tool_errors" json:"total_tool_errors"`
-	LastModel        string    `db:"last_model"        json:"last_model"`
-	LastProvider     string    `db:"last_provider"     json:"last_provider"`
-	UpdatedAt        time.Time `db:"updated_at"        json:"updated_at"`
+	ConversationID  string    `db:"conversation_id"   json:"conversation_id"`
+	TotalMessages   int       `db:"total_messages"    json:"total_messages"`
+	TotalCost       float64   `db:"total_cost"        json:"total_cost"`
+	TotalPrompt     int       `db:"total_tokens_prompt"      json:"total_tokens_prompt"`
+	TotalCompletion int       `db:"total_tokens_completion"  json:"total_tokens_completion"`
+	TotalCached     int       `db:"total_tokens_cached"      json:"total_tokens_cached"`
+	TotalToolCalls  int       `db:"total_tool_calls"  json:"total_tool_calls"`
+	TotalToolErrors int       `db:"total_tool_errors" json:"total_tool_errors"`
+	LastModel       string    `db:"last_model"        json:"last_model"`
+	LastProvider    string    `db:"last_provider"     json:"last_provider"`
+	UpdatedAt       time.Time `db:"updated_at"        json:"updated_at"`
 }
 
 // ConversationInfoWithStats combines conversation metadata with telemetry stats.
@@ -635,20 +635,20 @@ func (s *SQLiteMemoryStore) PruneByCount(ctx context.Context, maxConversations i
 
 // TelemetrySummary holds aggregated telemetry for the summary endpoint.
 type TelemetrySummary struct {
-	ByModel []ModelCostSummary `json:"by_model"`
-	ByTool  []ToolUsageSummary `json:"by_tool"`
+	ByModel []ModelCostSummary  `json:"by_model"`
+	ByTool  []ToolUsageSummary  `json:"by_tool"`
 	BySkill []SkillUsageSummary `json:"by_skill"`
 }
 
 // ModelCostSummary aggregates cost/token data per model.
 type ModelCostSummary struct {
-	Model         string  `db:"model"          json:"model"`
-	Provider      string  `db:"provider"       json:"provider"`
-	TotalCost     float64 `db:"total_cost"     json:"total_cost"`
-	MessageCount  int     `db:"message_count"  json:"message_count"`
-	TotalPrompt   int     `db:"total_prompt"   json:"total_tokens_prompt"`
-	TotalCompl    int     `db:"total_completion" json:"total_tokens_completion"`
-	TotalCached   int     `db:"total_cached"   json:"total_tokens_cached"`
+	Model        string  `db:"model"          json:"model"`
+	Provider     string  `db:"provider"       json:"provider"`
+	TotalCost    float64 `db:"total_cost"     json:"total_cost"`
+	MessageCount int     `db:"message_count"  json:"message_count"`
+	TotalPrompt  int     `db:"total_prompt"   json:"total_tokens_prompt"`
+	TotalCompl   int     `db:"total_completion" json:"total_tokens_completion"`
+	TotalCached  int     `db:"total_cached"   json:"total_tokens_cached"`
 }
 
 // ToolUsageSummary aggregates tool call data per tool.
@@ -723,4 +723,3 @@ func buildTimeFilter(since, until *time.Time) (string, []any) {
 func (s *SQLiteMemoryStore) Close() error {
 	return s.db.Close()
 }
-

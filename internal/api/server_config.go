@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"runtime"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -20,6 +21,10 @@ type serverConfigResponse struct {
 	WebSocketEnabled         bool     `json:"websocket_enabled"`
 	WebSocketMaxConnections  int      `json:"websocket_max_connections"`
 	WebSocketReplayBufferTTL string   `json:"websocket_replay_buffer_ttl"`
+	Version                  string   `json:"version"`
+	Commit                   string   `json:"commit"`
+	BuildDate                string   `json:"build_date"`
+	GoVersion                string   `json:"go_version"`
 }
 
 // serverConfigUpdateInput holds the mutable fields for PATCH /api/v1/server/config.
@@ -40,6 +45,10 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		WebSocketEnabled:         cfg.IsWebSocketEnabled(),
 		WebSocketMaxConnections:  cfg.WebSocketMaxConnections,
 		WebSocketReplayBufferTTL: cfg.WebSocketReplayBufferTTL,
+		Version:                  s.deps.Version,
+		Commit:                   s.deps.Commit,
+		BuildDate:                s.deps.BuildDate,
+		GoVersion:                runtime.Version(),
 	}
 	if resp.CORSOrigins == nil {
 		resp.CORSOrigins = []string{}

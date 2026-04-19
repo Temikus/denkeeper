@@ -26,6 +26,9 @@ func testDepsWithServerConfig() Deps {
 		WebSocketReplayBufferTTL: "5m",
 		ExternalURL:              "https://den.example.com",
 	}
+	deps.Version = "1.2.3"
+	deps.Commit = "abc1234"
+	deps.BuildDate = "2025-01-01"
 	return deps
 }
 
@@ -63,6 +66,18 @@ func TestGetServerConfig_Success(t *testing.T) {
 	}
 	if resp.WebSocketMaxConnections != 50 {
 		t.Errorf("websocket_max_connections = %d, want 50", resp.WebSocketMaxConnections)
+	}
+	if resp.Version != "1.2.3" {
+		t.Errorf("version = %q, want 1.2.3", resp.Version)
+	}
+	if resp.Commit != "abc1234" {
+		t.Errorf("commit = %q, want abc1234", resp.Commit)
+	}
+	if resp.BuildDate != "2025-01-01" {
+		t.Errorf("build_date = %q, want 2025-01-01", resp.BuildDate)
+	}
+	if resp.GoVersion == "" {
+		t.Error("go_version should not be empty")
 	}
 }
 
