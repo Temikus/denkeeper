@@ -4,20 +4,18 @@
 // on text-directive extraction from LLM responses.
 //
 // The server runs in-process using mcp.NewInMemoryTransports so no subprocess
-// is spawned, approval manager references are shared directly, and latency is
-// negligible.
+// is spawned and latency is negligible. Approval for Config MCP tool calls is
+// handled by the Engine's supervised tool-call flow, not by Config MCP itself.
 package configmcp
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
-	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -61,10 +59,6 @@ type Deps struct {
 	// is disabled.
 	HandleMessage func(ctx context.Context, msg adapter.IncomingMessage) error
 
-	// Approvals is the shared approval manager. If nil, supervised mutations are
-	// executed immediately (same behaviour as autonomous tier).
-	Approvals *approval.Manager
-
 	// PermissionTier returns the current effective tier for the agent
 	// ("autonomous", "supervised", or "restricted").
 	PermissionTier func() string
@@ -103,17 +97,6 @@ type Deps struct {
 	// RemoveMemoryEntry removes a memory entry by heading from MEMORY.md.
 	// If nil, persona_memory_manage remove is disabled.
 	RemoveMemoryEntry func(heading string) error
-
-	// AdapterContext returns the adapter routing context for the current
-	// in-flight message (adapter name, external ID, conversation ID).
-	// Used to populate approval requests so notifications route back to the
-	// originating adapter. If nil, routing context is unknown and approvals
-	// will have empty adapter fields.
-	AdapterContext func() (adapterName, externalID, conversationID string)
-
-	// ApprovalTimeout overrides the default 5-minute timeout for supervised
-	// approval waits. If zero, defaultApprovalTimeout is used.
-	ApprovalTimeout time.Duration
 
 	// ConfigPath is the path to the TOML config file. When non-empty,
 	// schedule mutations are persisted to disk so they survive restarts.

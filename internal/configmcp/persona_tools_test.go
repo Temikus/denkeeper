@@ -1,24 +1,20 @@
 package configmcp_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 )
 
 // personaTestEnv bundles test server state for persona tests.
 type personaTestEnv struct {
-	state     *testPersonaState
-	session   *mcp.ClientSession
-	approvals *approval.Manager
+	state   *testPersonaState
+	session *mcp.ClientSession
 }
 
 func (e *personaTestEnv) call(t *testing.T, name string, args any) (string, bool) {
@@ -38,15 +34,8 @@ func newTestServerWithPersona(t *testing.T, tier string) *personaTestEnv {
 		},
 	}
 
-	approvalStore, err := approval.NewInMemoryStore()
-	if err != nil {
-		t.Fatalf("creating approval store: %v", err)
-	}
-	approvalMgr := approval.NewManager(approvalStore, newTestLogger(t))
-
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
 		d.PermissionTier = func() string { return tier }
-		d.Approvals = approvalMgr
 		d.GetPersonaSection = func(section string) (string, bool, bool, bool) {
 			content, ok := state.sections[section]
 			if !ok {
@@ -81,7 +70,7 @@ func newTestServerWithPersona(t *testing.T, tier string) *personaTestEnv {
 		}
 	})
 
-	return &personaTestEnv{state: state, session: session, approvals: approvalMgr}
+	return &personaTestEnv{state: state, session: session}
 }
 
 type testPersonaState struct {
@@ -149,55 +138,36 @@ func TestPersonaUpdate_Soul_Autonomous(t *testing.T) {
 func TestPersonaUpdate_Soul_Supervised(t *testing.T) {
 	env := newTestServerWithPersona(t, "supervised")
 
-	resolveAsync(t, env.approvals, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	text, isErr, err := callToolCtx(ctx, env.session, "persona_update", map[string]string{
+	text, isErr := env.call(t, "persona_update", map[string]string{
 		"section": "soul",
 		"content": "I am a curious explorer.",
 	})
-	if err != nil {
-		t.Fatalf("callToolCtx: %v", err)
-	}
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	if !strings.Contains(text, "approved") {
-		t.Errorf("expected approved message, got: %s", text)
+	if !strings.Contains(text, "Done:") {
+		t.Errorf("expected done message, got: %s", text)
 	}
-	// Soul should be updated after approval.
 	if env.state.sections["soul"] != "I am a curious explorer." {
-		t.Errorf("soul should be updated after approval: %q", env.state.sections["soul"])
+		t.Errorf("soul should be updated: %q", env.state.sections["soul"])
 	}
 }
 
 func TestPersonaUpdate_Soul_Restricted(t *testing.T) {
 	env := newTestServerWithPersona(t, "restricted")
 
-	resolveAsync(t, env.approvals, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	text, isErr, err := callToolCtx(ctx, env.session, "persona_update", map[string]string{
+	text, isErr := env.call(t, "persona_update", map[string]string{
 		"section": "soul",
 		"content": "I am free now.",
 	})
-	if err != nil {
-		t.Fatalf("callToolCtx: %v", err)
-	}
 	if isErr {
-		t.Fatalf("unexpected error for restricted tier: %s", text)
+		t.Fatalf("unexpected error: %s", text)
 	}
-	// Restricted tier blocks until approved (same as supervised).
-	if !strings.Contains(text, "approved") {
-		t.Errorf("expected approved message, got: %s", text)
+	if !strings.Contains(text, "Done:") {
+		t.Errorf("expected done message, got: %s", text)
 	}
-	// Soul should be updated after approval.
 	if env.state.sections["soul"] != "I am free now." {
-		t.Errorf("soul should be updated after approval: %q", env.state.sections["soul"])
+		t.Errorf("soul should be updated: %q", env.state.sections["soul"])
 	}
 }
 

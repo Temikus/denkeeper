@@ -28,6 +28,14 @@ func init() {
 		metric.WithUnit("s"))
 }
 
+// waiterResult carries both the resolution status and any error from the
+// action function through the waiter channel, so that SubmitAndWait callers
+// learn when an approved action failed to execute.
+type waiterResult struct {
+	Status    Status
+	ActionErr error // non-nil when the action function returned an error
+}
+
 // Manager coordinates the persistent Store with the in-memory action Registry.
 // It is the primary API used by the Engine and REST API server.
 type Manager struct {
@@ -37,7 +45,7 @@ type Manager struct {
 	logger    *slog.Logger
 
 	waiterMu sync.Mutex
-	waiters  map[string]chan Status // notified when an approval is resolved
+	waiters  map[string]chan waiterResult // notified when an approval is resolved
 
 	// sessionRules holds ephemeral auto-approve rules keyed by "agent\x00convID\x00tool".
 	sessionRules sync.Map
@@ -50,7 +58,7 @@ func NewManager(store Store, logger *slog.Logger) *Manager {
 		store:    store,
 		registry: NewRegistry(),
 		logger:   logger,
-		waiters:  make(map[string]chan Status),
+		waiters:  make(map[string]chan waiterResult),
 	}
 	if as, ok := store.(AutoApproveStore); ok {
 		m.autoStore = as
@@ -146,15 +154,13 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 			if err != nil {
 				return nil, fmt.Errorf("fetching approved request: %w", err)
 			}
-			if err := fn(ctx, req.Payload); err != nil {
-				m.logger.Error("approval action failed", "id", id, "error", err)
-				// The status is already set to approved in the DB; we log the error
-				// but still return the resolved record so the caller can notify.
-				m.notifyWaiter(id, StatusApproved)
-				return req, fmt.Errorf("approval action: %w", err)
+			if actionErr := fn(ctx, req.Payload); actionErr != nil {
+				m.logger.Error("approval action failed", "id", id, "error", actionErr)
+				m.notifyWaiterWithErr(id, StatusApproved, actionErr)
+				return req, fmt.Errorf("approval action: %w", actionErr)
 			}
 			m.logger.Info("approval action executed", "id", id, "resolvedBy", resolvedBy)
-			m.notifyWaiter(id, StatusApproved)
+			m.notifyWaiterWithErr(id, StatusApproved, nil)
 			return req, nil
 		}
 	} else {
@@ -164,10 +170,10 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 	}
 
 	// Fetch the updated record BEFORE notifying the waiter so that any
-	// goroutine unblocked by notifyWaiter (e.g. SubmitAndWait returning)
+	// goroutine unblocked by notifyWaiterWithErr (e.g. SubmitAndWait returning)
 	// cannot race to close the underlying store before we finish the Get.
 	req, err := m.store.Get(ctx, id)
-	m.notifyWaiter(id, status)
+	m.notifyWaiterWithErr(id, status, nil)
 	return req, err
 }
 
@@ -231,10 +237,10 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		resolvedStatus = StatusApproved
 		fn, ok := m.registry.Pop(req.ID)
 		if ok {
-			if err := fn(ctx, req.Payload); err != nil {
-				m.logger.Error("approval action failed", "id", req.ID, "error", err)
-				m.notifyWaiter(req.ID, resolvedStatus)
-				return req, fmt.Errorf("approval action: %w", err)
+			if actionErr := fn(ctx, req.Payload); actionErr != nil {
+				m.logger.Error("approval action failed", "id", req.ID, "error", actionErr)
+				m.notifyWaiterWithErr(req.ID, resolvedStatus, actionErr)
+				return req, fmt.Errorf("approval action: %w", actionErr)
 			}
 			m.logger.Info("approval action executed via callback", "id", req.ID)
 		} else {
@@ -248,7 +254,7 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		m.logger.Info("approval denied via callback", "id", req.ID)
 	}
 
-	m.notifyWaiter(req.ID, resolvedStatus)
+	m.notifyWaiterWithErr(req.ID, resolvedStatus, nil)
 	return req, nil
 }
 
@@ -290,13 +296,14 @@ func ExtractToolName(summary string) string {
 	return rest[:end]
 }
 
-// notifyWaiter signals any goroutine blocked in SubmitAndWait for the given ID.
-func (m *Manager) notifyWaiter(id string, status Status) {
+// notifyWaiterWithErr signals any goroutine blocked in SubmitAndWait for the
+// given ID, carrying both the resolution status and any action error.
+func (m *Manager) notifyWaiterWithErr(id string, status Status, actionErr error) {
 	m.waiterMu.Lock()
 	defer m.waiterMu.Unlock()
 	if ch, ok := m.waiters[id]; ok {
 		select {
-		case ch <- status:
+		case ch <- waiterResult{Status: status, ActionErr: actionErr}:
 		default:
 		}
 	}
@@ -343,7 +350,7 @@ func (m *Manager) SubmitAndWait(
 	// Pre-register the waiter channel BEFORE submitting, so that a
 	// near-instant Resolve never drops the notification.
 	id := generateID()
-	ch := make(chan Status, 1)
+	ch := make(chan waiterResult, 1)
 	m.waiterMu.Lock()
 	m.waiters[id] = ch
 	m.waiterMu.Unlock()
@@ -363,9 +370,9 @@ func (m *Manager) SubmitAndWait(
 	span.SetAttributes(attribute.String("approval.id", req.ID))
 
 	select {
-	case status := <-ch:
-		span.SetAttributes(attribute.String("approval.resolution", string(status)))
-		return status, req, nil
+	case result := <-ch:
+		span.SetAttributes(attribute.String("approval.resolution", string(result.Status)))
+		return result.Status, req, result.ActionErr
 	case <-ctx.Done():
 		span.SetAttributes(attribute.String("approval.resolution", "expired"))
 		return StatusExpired, req, ctx.Err()
@@ -374,8 +381,10 @@ func (m *Manager) SubmitAndWait(
 
 // WaitForResolution blocks until the approval with the given ID is resolved.
 // Returns StatusApproved, StatusDenied, or StatusExpired (if the context is cancelled).
+// Note: this method does not surface action errors — use SubmitAndWait when you
+// need to know whether the action function succeeded.
 func (m *Manager) WaitForResolution(ctx context.Context, id string) Status {
-	ch := make(chan Status, 1)
+	ch := make(chan waiterResult, 1)
 	m.waiterMu.Lock()
 	m.waiters[id] = ch
 	m.waiterMu.Unlock()
@@ -387,8 +396,8 @@ func (m *Manager) WaitForResolution(ctx context.Context, id string) Status {
 	}()
 
 	select {
-	case status := <-ch:
-		return status
+	case result := <-ch:
+		return result.Status
 	case <-ctx.Done():
 		return StatusExpired
 	}

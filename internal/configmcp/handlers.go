@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pelletier/go-toml/v2"
@@ -25,7 +24,7 @@ import (
 func (s *Server) registerTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "skill_create",
-		Description: "Create a new skill file for this agent. In supervised mode the creation is submitted for user approval.",
+		Description: "Create a new skill file for this agent. In supervised mode the tool call requires operator approval.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -62,7 +61,7 @@ func (s *Server) registerTools() {
 	if s.deps.UpdateSkill != nil {
 		s.mcpServer.AddTool(&mcp.Tool{
 			Name:        "skill_update",
-			Description: "Update an existing skill's content. In supervised mode the update is submitted for user approval.",
+			Description: "Update an existing skill's content. In supervised mode the tool call requires operator approval.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -80,7 +79,7 @@ func (s *Server) registerTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_add",
-		Description: "Register a new recurring schedule for this agent. In supervised mode it is submitted for user approval.",
+		Description: "Register a new recurring schedule for this agent. In supervised mode the tool call requires operator approval.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -105,7 +104,7 @@ func (s *Server) registerTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "skill_delete",
-		Description: "Delete an existing skill by name. Removes it from memory and deletes the skill file. In supervised mode the deletion is submitted for user approval.",
+		Description: "Delete an existing skill by name. Removes it from memory and deletes the skill file. In supervised mode the tool call requires operator approval.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -117,7 +116,7 @@ func (s *Server) registerTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_delete",
-		Description: "Delete an existing schedule by name. Removes it from the scheduler and from the config file. In supervised mode the deletion is submitted for user approval.",
+		Description: "Delete an existing schedule by name. Removes it from the scheduler and from the config file. In supervised mode the tool call requires operator approval.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -1158,88 +1157,33 @@ func (s *Server) handlePluginRemove(ctx context.Context, req *mcp.CallToolReques
 // Shared helpers
 // --------------------------------------------------------------------------
 
-// defaultApprovalTimeout is the maximum time applyOrSubmit will wait for an
-// operator to approve or deny a config MCP action before timing out.
-const defaultApprovalTimeout = 5 * time.Minute
-
-// applyOrSubmit either executes fn immediately (autonomous tier) or submits
-// it to the approval manager and blocks until resolved (supervised/restricted).
+// applyOrSubmit executes the action function directly and returns the result.
 //
-// When forceApproval is true, the action requires approval even in autonomous
-// mode (used for destructive operations like browser profile deletion).
+// Design invariant: Config MCP tools are always called through the Engine's
+// tool execution path (engine.executeToolCall → tools.Execute). In supervised
+// mode, the Engine obtains operator approval via a ChatEvent + inline keyboard
+// BEFORE invoking the tool. Config MCP must not submit its own approval
+// because (a) the operator has already approved the tool call, and (b) Config
+// MCP has no mechanism to emit a ChatEvent, so a second approval request would
+// never be surfaced and would silently time out.
 //
-// The adapter context is captured eagerly via deps.AdapterContext at call time,
-// not lazily inside a goroutine, to avoid races if concurrent messages change
-// the engine's adapter state.
+// Individual handlers guard against restricted mode before reaching this point.
+//
+// The kind and forceApproval parameters are retained for call-site compatibility
+// but are unused.
 func applyOrSubmit(
 	ctx context.Context,
-	deps Deps,
-	kind approval.ActionKind,
+	_ Deps,
+	_ approval.ActionKind,
 	summary string,
 	payload string,
 	fn approval.ActionFunc,
-	forceApproval bool,
+	_ bool,
 ) (*mcp.CallToolResult, error) {
-	tier := deps.PermissionTier()
-
-	// Fast path: autonomous tier without forceApproval executes immediately.
-	if tier == "autonomous" && !forceApproval {
-		if err := fn(ctx, payload); err != nil {
-			return toolError(fmt.Sprintf("action failed: %v", err)), nil
-		}
-		return toolText("Done: " + summary), nil
+	if err := fn(ctx, payload); err != nil {
+		return toolError(fmt.Sprintf("action failed: %v", err)), nil
 	}
-
-	// All other cases require approval (supervised, restricted, or forceApproval).
-	if tier != "autonomous" && tier != "supervised" && tier != "restricted" {
-		return toolError("action not permitted in current permission tier"), nil
-	}
-
-	if deps.Approvals == nil {
-		// No manager wired — fall back to immediate execution.
-		if err := fn(ctx, payload); err != nil {
-			return toolError(fmt.Sprintf("action failed: %v", err)), nil
-		}
-		return toolText("Done: " + summary), nil
-	}
-
-	// Capture adapter context eagerly (fix: avoids race if another message
-	// changes the engine's adapter state before SubmitAndWait completes).
-	var adapterName, externalID, conversationID string
-	if deps.AdapterContext != nil {
-		adapterName, externalID, conversationID = deps.AdapterContext()
-	}
-
-	timeout := deps.ApprovalTimeout
-	if timeout == 0 {
-		timeout = defaultApprovalTimeout
-	}
-	approvalCtx, approvalCancel := context.WithTimeout(ctx, timeout)
-	defer approvalCancel()
-
-	status, _, err := deps.Approvals.SubmitAndWait(
-		approvalCtx,
-		deps.AgentName,
-		kind,
-		summary,
-		payload,
-		externalID,
-		adapterName,
-		conversationID,
-		fn,
-	)
-	if err != nil && status != approval.StatusExpired {
-		return toolError(fmt.Sprintf("approval failed: %v", err)), nil
-	}
-
-	switch status {
-	case approval.StatusApproved:
-		return toolText("Done (approved): " + summary), nil
-	case approval.StatusDenied:
-		return toolText("Denied by operator: " + summary), nil
-	default:
-		return toolError("approval timed out: " + summary), nil
-	}
+	return toolText("Done: " + summary), nil
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the

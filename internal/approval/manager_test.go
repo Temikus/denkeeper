@@ -448,8 +448,60 @@ func TestManager_SubmitAndWait_NilAction(t *testing.T) {
 	}
 }
 
+func TestManager_SubmitAndWait_ActionError_Propagated(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	actionErr := errors.New("config persistence failed")
+
+	// Resolve in background — use direct Resolve call instead of resolveAfter
+	// because Resolve itself returns the action error and resolveAfter would
+	// report that as a test failure.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		deadline := time.After(5 * time.Second)
+		for {
+			reqs, _ := m.List(ctx, StatusPending)
+			if len(reqs) > 0 {
+				// Resolve returns the action error — that's expected here.
+				_, _ = m.Resolve(ctx, reqs[0].ID, true, "operator")
+				return
+			}
+			select {
+			case <-deadline:
+				return
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}()
+
+	status, _, err := m.SubmitAndWait(ctx, "default", ActionKindModifySchedule,
+		"Update schedule: test", "payload", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error {
+			return actionErr
+		},
+	)
+	// Status should still be approved (the approval was granted).
+	if status != StatusApproved {
+		t.Errorf("status = %q, want %q", status, StatusApproved)
+	}
+	// But the error from the action function must be surfaced.
+	if err == nil {
+		t.Fatal("expected action error to propagate through SubmitAndWait")
+	}
+	if !errors.Is(err, actionErr) {
+		t.Errorf("error = %v, want wrapped %v", err, actionErr)
+	}
+}
+
 // resolveAfter polls for the first pending request and resolves it.
 // It retries every 10ms for up to 5s after the initial delay.
+//
+// WARNING: This helper reports Resolve errors as test failures via t.Errorf.
+// Do NOT use it when the action function is expected to fail — use a manual
+// goroutine that discards the Resolve error instead (see
+// TestManager_SubmitAndWait_ActionError_Propagated for an example).
 func resolveAfter(t *testing.T, m *Manager, approve bool, delay time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

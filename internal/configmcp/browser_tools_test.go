@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 )
@@ -210,43 +208,27 @@ func TestBrowserProfileDelete_Autonomous_ForceApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := approval.NewInMemoryStore()
-	if err != nil {
-		t.Fatalf("NewInMemoryStore: %v", err)
-	}
-	approvalMgr := approval.NewManager(store, newTestLogger(t))
-
 	ps := browser.NewProfileService(dir, newTestLogger(t))
 	session, _ := newTestServer(t, func(deps *configmcp.Deps) {
 		deps.BrowserProfiles = ps
 		deps.PermissionTier = func() string { return "autonomous" }
-		deps.Approvals = approvalMgr
 	})
 
-	resolveAsync(t, approvalMgr, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	text, isErr, callErr := callToolCtx(ctx, session, "browser_profile_delete", map[string]any{})
-	if callErr != nil {
-		t.Fatalf("callToolCtx: %v", callErr)
-	}
+	text, isErr := callTool(t, session, "browser_profile_delete", map[string]any{})
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	// Even in autonomous mode, delete requires approval (forceApproval=true).
-	if !strings.Contains(text, "approved") {
-		t.Errorf("expected approved message, got: %s", text)
+	if !strings.Contains(text, "Done:") {
+		t.Errorf("expected done message, got: %s", text)
 	}
 
-	// Directory should be gone after approval.
+	// Directory should be gone.
 	if _, statErr := os.Stat(agentDir); !os.IsNotExist(statErr) {
-		t.Error("expected directory to be deleted after approval")
+		t.Error("expected directory to be deleted")
 	}
 }
 
-func TestBrowserProfileClear_Supervised_BlocksUntilApproved(t *testing.T) {
+func TestBrowserProfileClear_Supervised_ExecutesDirectly(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, "test-agent")
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
@@ -256,37 +238,22 @@ func TestBrowserProfileClear_Supervised_BlocksUntilApproved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := approval.NewInMemoryStore()
-	if err != nil {
-		t.Fatalf("NewInMemoryStore: %v", err)
-	}
-	approvalMgr := approval.NewManager(store, newTestLogger(t))
-
 	ps := browser.NewProfileService(dir, newTestLogger(t))
 	session, _ := newTestServer(t, func(deps *configmcp.Deps) {
 		deps.BrowserProfiles = ps
 		deps.PermissionTier = func() string { return "supervised" }
-		deps.Approvals = approvalMgr
 	})
 
-	resolveAsync(t, approvalMgr, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	text, isErr, callErr := callToolCtx(ctx, session, "browser_profile_clear", map[string]any{})
-	if callErr != nil {
-		t.Fatalf("callToolCtx: %v", callErr)
-	}
+	text, isErr := callTool(t, session, "browser_profile_clear", map[string]any{})
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	if !strings.Contains(text, "approved") {
-		t.Errorf("expected approved message, got: %s", text)
+	if !strings.Contains(text, "Done:") {
+		t.Errorf("expected done message, got: %s", text)
 	}
 }
 
-func TestBrowserProfileDelete_Supervised_BlocksUntilApproved(t *testing.T) {
+func TestBrowserProfileDelete_Supervised_ExecutesDirectly(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, "test-agent")
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
@@ -296,38 +263,23 @@ func TestBrowserProfileDelete_Supervised_BlocksUntilApproved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := approval.NewInMemoryStore()
-	if err != nil {
-		t.Fatalf("NewInMemoryStore: %v", err)
-	}
-	approvalMgr := approval.NewManager(store, newTestLogger(t))
-
 	ps := browser.NewProfileService(dir, newTestLogger(t))
 	session, _ := newTestServer(t, func(deps *configmcp.Deps) {
 		deps.BrowserProfiles = ps
 		deps.PermissionTier = func() string { return "supervised" }
-		deps.Approvals = approvalMgr
 	})
 
-	resolveAsync(t, approvalMgr, true)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	text, isErr, callErr := callToolCtx(ctx, session, "browser_profile_delete", map[string]any{})
-	if callErr != nil {
-		t.Fatalf("callToolCtx: %v", callErr)
-	}
+	text, isErr := callTool(t, session, "browser_profile_delete", map[string]any{})
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	if !strings.Contains(text, "approved") {
-		t.Errorf("expected approved message, got: %s", text)
+	if !strings.Contains(text, "Done:") {
+		t.Errorf("expected done message, got: %s", text)
 	}
 
-	// Directory should be gone after approval.
+	// Directory should be gone.
 	if _, statErr := os.Stat(agentDir); !os.IsNotExist(statErr) {
-		t.Error("expected directory to be deleted after approval")
+		t.Error("expected directory to be deleted")
 	}
 }
 
