@@ -572,6 +572,18 @@ func (m *Manager) ServerToolDefs(serverName string) ([]llm.ToolDef, bool) {
 	return defs, true
 }
 
+// ToolServer returns the MCP server name that hosts the given tool.
+// Returns an empty string if the tool is not found.
+func (m *Manager) ToolServer(toolName string) string {
+	m.mu.RLock()
+	sc, ok := m.toolMap[toolName]
+	m.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return sc.name
+}
+
 // Execute runs a single tool call and returns the text result.
 // If the tool is not found locally, it delegates to the parent manager.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {

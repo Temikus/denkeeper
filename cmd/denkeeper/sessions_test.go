@@ -43,11 +43,11 @@ func TestSessionsList_WithData(t *testing.T) {
 
 	ctx := context.Background()
 	id1, _ := store.GetOrCreateConversation(ctx, "telegram", "user1")
-	_ = store.AddMessage(ctx, id1, agent.StoredMessage{Role: "user", Content: "hello", Cost: 0.001})
-	_ = store.AddMessage(ctx, id1, agent.StoredMessage{Role: "assistant", Content: "hi", Cost: 0.002})
+	_, _ = store.AddMessage(ctx, id1, agent.StoredMessage{Role: "user", Content: "hello", Cost: 0.001})
+	_, _ = store.AddMessage(ctx, id1, agent.StoredMessage{Role: "assistant", Content: "hi", Cost: 0.002})
 
 	id2, _ := store.GetOrCreateConversation(ctx, "discord", "user2")
-	_ = store.AddMessage(ctx, id2, agent.StoredMessage{Role: "user", Content: "hey"})
+	_, _ = store.AddMessage(ctx, id2, agent.StoredMessage{Role: "user", Content: "hey"})
 
 	convos, err := store.ListConversations(ctx)
 	if err != nil {
@@ -70,8 +70,8 @@ func TestSessionsShow_Exists(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "show-test")
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello world"})
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi there!"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello world"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi there!"})
 
 	msgs, err := store.GetMessages(ctx, convID, 10000)
 	if err != nil {
@@ -104,8 +104,8 @@ func TestSessionsExport_JSON(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "json-test")
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello", Cost: 0.001, TokensUsed: 5})
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi!", Cost: 0.002, TokensUsed: 10})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello", Cost: 0.001, TokensUsed: 5})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi!", Cost: 0.002, TokensUsed: 10})
 
 	msgs, _ := store.GetMessages(ctx, convID, 10000)
 	exported := make([]exportMessage, len(msgs))
@@ -145,8 +145,8 @@ func TestSessionsExport_Text(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "text-test")
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello"})
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi!"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "Hello"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "assistant", Content: "Hi!"})
 
 	msgs, _ := store.GetMessages(ctx, convID, 10000)
 	if len(msgs) != 2 {
@@ -177,7 +177,7 @@ func TestSessionsExport_InvalidFormat(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "fmt-test")
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "hello"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "hello"})
 
 	msgs, _ := store.GetMessages(ctx, convID, 10000)
 	if len(msgs) == 0 {
@@ -203,7 +203,7 @@ func TestSessionsDelete_WithYes(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "del-test")
-	_ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "delete me"})
+	_, _ = store.AddMessage(ctx, convID, agent.StoredMessage{Role: "user", Content: "delete me"})
 
 	if err := store.DeleteConversation(ctx, convID); err != nil {
 		t.Fatalf("deleting: %v", err)
@@ -222,7 +222,7 @@ func TestSessionsPrune_RemovesOld(t *testing.T) {
 	ctx := context.Background()
 
 	oldID, _ := store.GetOrCreateConversation(ctx, "telegram", "old")
-	_ = store.AddMessage(ctx, oldID, agent.StoredMessage{Role: "user", Content: "old msg"})
+	_, _ = store.AddMessage(ctx, oldID, agent.StoredMessage{Role: "user", Content: "old msg"})
 
 	// Backdate the old conversation using the unexported db field (same package).
 	// Note: we can't access store.db from _test package, so we test via the
@@ -232,7 +232,7 @@ func TestSessionsPrune_RemovesOld(t *testing.T) {
 	// Since we can't backdate from the test package (external), verify the
 	// counting and pruning methods work with current data at least.
 	newID, _ := store.GetOrCreateConversation(ctx, "telegram", "new")
-	_ = store.AddMessage(ctx, newID, agent.StoredMessage{Role: "user", Content: "new msg"})
+	_, _ = store.AddMessage(ctx, newID, agent.StoredMessage{Role: "user", Content: "new msg"})
 
 	convos, _ := store.ListConversations(ctx)
 	if len(convos) != 2 {

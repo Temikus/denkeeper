@@ -172,7 +172,7 @@
             </select>
           </label>
           <label>
-            Session Tier <span class="hint">(optional)</span>
+            <span style="white-space: nowrap">Session Tier <span class="hint">(optional)</span></span>
             <select bind:value={formSessionTier}>
               <option value="">Default</option>
               <option value="autonomous">Autonomous</option>

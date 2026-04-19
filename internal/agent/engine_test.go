@@ -1078,14 +1078,14 @@ func TestBuildSystemPrompt_IncludesSessionContext(t *testing.T) {
 	permissions, _ := security.NewPermissionEngine("supervised")
 	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
 
-	prompt := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{
 		Adapter:    "telegram",
 		ExternalID: "387956986",
 	})
-	if !strings.Contains(prompt, "telegram:387956986") {
+	if !strings.Contains(result.prompt, "telegram:387956986") {
 		t.Error("system prompt should contain the delivery channel")
 	}
-	if !strings.Contains(prompt, "Session Context") {
+	if !strings.Contains(result.prompt, "Session Context") {
 		t.Error("system prompt should contain Session Context section")
 	}
 }
@@ -1094,8 +1094,8 @@ func TestBuildSystemPrompt_NoAdapterOmitsContext(t *testing.T) {
 	permissions, _ := security.NewPermissionEngine("supervised")
 	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
 
-	prompt := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
-	if strings.Contains(prompt, "Session Context") {
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	if strings.Contains(result.prompt, "Session Context") {
 		t.Error("system prompt should NOT contain Session Context when adapter is empty")
 	}
 }
@@ -2281,7 +2281,7 @@ func TestEngine_HandleMessage_TruncationNotice(t *testing.T) {
 		if i%2 == 1 {
 			role = "assistant"
 		}
-		_ = store.AddMessage(ctx, convID, StoredMessage{
+		_, _ = store.AddMessage(ctx, convID, StoredMessage{
 			Role:    role,
 			Content: fmt.Sprintf("msg-%d", i),
 		})

@@ -707,7 +707,7 @@ func TestSessions_ListsConversations(t *testing.T) {
 	ctx := context.Background()
 	// Create a conversation with a message.
 	_, _ = deps.Memory.GetOrCreateConversation(ctx, "telegram", "12345")
-	_ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
+	_, _ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
 		Role: "user", Content: "hello",
 	})
 
@@ -738,10 +738,10 @@ func TestSessionMessages_ReturnsMessages(t *testing.T) {
 	deps := testDeps()
 	ctx := context.Background()
 	_, _ = deps.Memory.GetOrCreateConversation(ctx, "telegram", "12345")
-	_ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
+	_, _ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
 		Role: "user", Content: "hello",
 	})
-	_ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
+	_, _ = deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
 		Role: "assistant", Content: "hi there", TokensUsed: 10,
 	})
 
@@ -991,7 +991,7 @@ func TestDeleteSession_DeletesConversation(t *testing.T) {
 
 	// Create a conversation via the memory store.
 	_, _ = deps.Memory.GetOrCreateConversation(ctx, "telegram", "del-test")
-	_ = deps.Memory.AddMessage(ctx, "telegram:del-test", agent.StoredMessage{Role: "user", Content: "hello"})
+	_, _ = deps.Memory.AddMessage(ctx, "telegram:del-test", agent.StoredMessage{Role: "user", Content: "hello"})
 
 	srv := New(cfg, deps, testLogger())
 
@@ -1036,6 +1036,188 @@ func TestDeleteSession_RequiresAuth(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry endpoints
+// ---------------------------------------------------------------------------
+
+func TestSessionStats_ReturnsStats(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "api", "s1")
+	_, _ = deps.Memory.AddMessage(ctx, "api:s1", agent.StoredMessage{
+		Role: "assistant", Content: "hi", Cost: 0.01,
+		Model: "gpt-4", Provider: "openai",
+		TokensPrompt: 100, TokensCompletion: 50,
+	})
+
+	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck // test helper; always SQLiteMemoryStore
+	_ = store.UpdateConversationStats(ctx, "api:s1", agent.StoredMessage{
+		Cost: 0.01, Model: "gpt-4", Provider: "openai",
+		TokensPrompt: 100, TokensCompletion: 50,
+	}, 1, 0)
+
+	srv := New(cfg, deps, testLogger())
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/api:s1/stats"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var stats agent.ConversationStatsRow
+	if err := json.NewDecoder(rec.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if stats.LastModel != "gpt-4" {
+		t.Errorf("last_model = %q, want gpt-4", stats.LastModel)
+	}
+	if stats.TotalCost != 0.01 {
+		t.Errorf("total_cost = %f, want 0.01", stats.TotalCost)
+	}
+}
+
+func TestSessionStats_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/nonexistent/stats"))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestSessionToolCalls_ReturnsRecords(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "api", "t1")
+	msgID, _ := deps.Memory.AddMessage(ctx, "api:t1", agent.StoredMessage{Role: "assistant", Content: "used tools"})
+
+	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck // test helper; always SQLiteMemoryStore
+	_ = store.AddToolCalls(ctx, "api:t1", msgID, []agent.ToolCallRecord{
+		{ToolName: "web_search", ServerName: "web", Round: 1, DurationMs: 100, Success: true},
+	})
+
+	srv := New(cfg, deps, testLogger())
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/api:t1/tool-calls"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var records []agent.ToolCallRecord
+	if err := json.NewDecoder(rec.Body).Decode(&records); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(records) != 1 || records[0].ToolName != "web_search" {
+		t.Errorf("tool calls: %+v", records)
+	}
+}
+
+func TestSessionToolCalls_EmptyForUnknown(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/nonexistent/tool-calls"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var records []agent.ToolCallRecord
+	_ = json.NewDecoder(rec.Body).Decode(&records)
+	if len(records) != 0 {
+		t.Errorf("expected empty, got %d records", len(records))
+	}
+}
+
+func TestSessionSkills_ReturnsRecords(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "api", "sk1")
+	msgID, _ := deps.Memory.AddMessage(ctx, "api:sk1", agent.StoredMessage{Role: "user", Content: "hello"})
+
+	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck // test helper; always SQLiteMemoryStore
+	_ = store.AddSkillUsages(ctx, "api:sk1", msgID, []agent.SkillUsageRecord{
+		{SkillName: "greeting", MatchType: "always"},
+	})
+
+	srv := New(cfg, deps, testLogger())
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/api:sk1/skills"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var records []agent.SkillUsageRecord
+	if err := json.NewDecoder(rec.Body).Decode(&records); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(records) != 1 || records[0].SkillName != "greeting" {
+		t.Errorf("skill usages: %+v", records)
+	}
+}
+
+func TestTelemetrySummary_ReturnsAggregation(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "api", "sum1")
+	msgID, _ := deps.Memory.AddMessage(ctx, "api:sum1", agent.StoredMessage{
+		Role: "assistant", Content: "hi", Model: "gpt-4", Provider: "openai",
+		Cost: 0.01, TokensPrompt: 100, TokensCompletion: 50,
+	})
+
+	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck // test helper; always SQLiteMemoryStore
+	_ = store.AddToolCalls(ctx, "api:sum1", msgID, []agent.ToolCallRecord{
+		{ToolName: "search", ServerName: "web", DurationMs: 100, Success: true},
+	})
+
+	srv := New(cfg, deps, testLogger())
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/telemetry/summary"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var summary agent.TelemetrySummary
+	if err := json.NewDecoder(rec.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(summary.ByModel) != 1 || summary.ByModel[0].Model != "gpt-4" {
+		t.Errorf("by_model: %+v", summary.ByModel)
+	}
+	if len(summary.ByTool) != 1 || summary.ByTool[0].ToolName != "search" {
+		t.Errorf("by_tool: %+v", summary.ByTool)
+	}
+}
+
+func TestTelemetrySummary_WithTimeFilter(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "api", "tf1")
+	_, _ = deps.Memory.AddMessage(ctx, "api:tf1", agent.StoredMessage{
+		Role: "assistant", Content: "hi", Model: "gpt-4", Provider: "openai",
+		Cost: 0.01, TokensPrompt: 100, TokensCompletion: 50,
+	})
+
+	srv := New(cfg, deps, testLogger())
+
+	// Query far in the future — should return nothing.
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/telemetry/summary?since=2099-01-01T00:00:00Z"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var summary agent.TelemetrySummary
+	_ = json.NewDecoder(rec.Body).Decode(&summary)
+	if len(summary.ByModel) != 0 {
+		t.Errorf("expected empty with future filter, got %d models", len(summary.ByModel))
 	}
 }
 

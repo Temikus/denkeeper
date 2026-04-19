@@ -164,7 +164,11 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleDeleteSchedule))
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/stats", s.RequireScope("sessions:read", s.handleSessionStats))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-calls", s.RequireScope("sessions:read", s.handleSessionToolCalls))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/skills", s.RequireScope("sessions:read", s.handleSessionSkills))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
+	mux.HandleFunc("GET /api/v1/telemetry/summary", s.RequireScope("costs:read", s.handleTelemetrySummary))
 
 	// Approval endpoints.
 	mux.HandleFunc("GET /api/v1/approvals", s.RequireScope("approvals:read", s.handleListApprovals))
@@ -624,7 +628,21 @@ func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleSessions lists all conversations from the memory store.
+// When backed by a TelemetryStore, includes telemetry stats.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if store, ok := s.deps.Memory.(agent.TelemetryStore); ok {
+		convos, err := store.ListConversationsWithStats(r.Context())
+		if err != nil {
+			s.logger.Error("listing conversations with stats", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			return
+		}
+		if convos == nil {
+			convos = []agent.ConversationInfoWithStats{}
+		}
+		writeJSON(w, http.StatusOK, convos)
+		return
+	}
 	convos, err := s.deps.Memory.ListConversations(r.Context())
 	if err != nil {
 		s.logger.Error("listing conversations", "error", err)
@@ -751,22 +769,124 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type messageInfo struct {
-		Role       string    `json:"role"`
-		Content    string    `json:"content"`
-		TokensUsed int       `json:"tokens_used,omitempty"`
-		CreatedAt  time.Time `json:"created_at"`
+		Role             string    `json:"role"`
+		Content          string    `json:"content"`
+		TokensUsed       int       `json:"tokens_used,omitempty"`
+		Cost             float64   `json:"cost,omitempty"`
+		Model            string    `json:"model,omitempty"`
+		Provider         string    `json:"provider,omitempty"`
+		TokensPrompt     int       `json:"tokens_prompt,omitempty"`
+		TokensCompletion int       `json:"tokens_completion,omitempty"`
+		TokensCached     int       `json:"tokens_cached,omitempty"`
+		CreatedAt        time.Time `json:"created_at"`
 	}
 
 	out := make([]messageInfo, len(messages))
 	for i, m := range messages {
 		out[i] = messageInfo{
-			Role:       m.Role,
-			Content:    m.Content,
-			TokensUsed: m.TokensUsed,
-			CreatedAt:  m.CreatedAt,
+			Role:             m.Role,
+			Content:          m.Content,
+			TokensUsed:       m.TokensUsed,
+			Cost:             m.Cost,
+			Model:            m.Model,
+			Provider:         m.Provider,
+			TokensPrompt:     m.TokensPrompt,
+			TokensCompletion: m.TokensCompletion,
+			TokensCached:     m.TokensCached,
+			CreatedAt:        m.CreatedAt,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSessionStats returns aggregated telemetry for a conversation.
+func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.deps.Memory.(agent.TelemetryStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
+		return
+	}
+	id := r.PathValue("id")
+	stats, err := store.GetConversationStats(r.Context(), id)
+	if err != nil {
+		s.logger.Error("getting conversation stats", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if stats == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no stats for session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleSessionToolCalls returns tool call records for a conversation.
+func (s *Server) handleSessionToolCalls(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.deps.Memory.(agent.TelemetryStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
+		return
+	}
+	id := r.PathValue("id")
+	records, err := store.GetToolCalls(r.Context(), id)
+	if err != nil {
+		s.logger.Error("getting tool calls", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if records == nil {
+		records = []agent.ToolCallRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
+}
+
+// handleSessionSkills returns skill usage records for a conversation.
+func (s *Server) handleSessionSkills(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.deps.Memory.(agent.TelemetryStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
+		return
+	}
+	id := r.PathValue("id")
+	records, err := store.GetSkillUsages(r.Context(), id)
+	if err != nil {
+		s.logger.Error("getting skill usages", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	if records == nil {
+		records = []agent.SkillUsageRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
+}
+
+// handleTelemetrySummary returns aggregated telemetry for A/B comparison.
+func (s *Server) handleTelemetrySummary(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.deps.Memory.(agent.TelemetryStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
+		return
+	}
+
+	var since, until *time.Time
+	if v := r.URL.Query().Get("since"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			since = &t
+		}
+	}
+	if v := r.URL.Query().Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			until = &t
+		}
+	}
+
+	summary, err := store.GetTelemetrySummary(r.Context(), since, until)
+	if err != nil {
+		s.logger.Error("getting telemetry summary", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 // ---------------------------------------------------------------------------

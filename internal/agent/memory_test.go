@@ -52,7 +52,7 @@ func TestMemoryStore_AddAndGetMessages(t *testing.T) {
 	}
 
 	for _, msg := range messages {
-		if err := store.AddMessage(ctx, convID, msg); err != nil {
+		if _, err := store.AddMessage(ctx, convID, msg); err != nil {
 			t.Fatalf("AddMessage: %v", err)
 		}
 	}
@@ -105,7 +105,7 @@ func TestMemoryStore_GetMessages_LimitReturnsNewest(t *testing.T) {
 		if i%2 == 0 {
 			role = "assistant"
 		}
-		if err := store.AddMessage(ctx, convID, StoredMessage{
+		if _, err := store.AddMessage(ctx, convID, StoredMessage{
 			Role:    role,
 			Content: fmt.Sprintf("message-%d", i),
 		}); err != nil {
@@ -173,7 +173,7 @@ func TestMemoryStore_MessageOrdering(t *testing.T) {
 	// Insert messages — SQLite AUTOINCREMENT ensures ordering by insertion
 	contents := []string{"first", "second", "third", "fourth"}
 	for _, c := range contents {
-		if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: c}); err != nil {
+		if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: c}); err != nil {
 			t.Fatalf("AddMessage(%s): %v", c, err)
 		}
 	}
@@ -203,7 +203,7 @@ func TestMemoryStore_LargeContent(t *testing.T) {
 	convID, _ := store.GetOrCreateConversation(ctx, "test", "large")
 
 	largeContent := strings.Repeat("A", 10000)
-	if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: largeContent}); err != nil {
+	if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: largeContent}); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 	}
 
 	// Messages can be stored against the created conversation.
-	if err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "trigger"}); err != nil {
+	if _, err := store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "trigger"}); err != nil {
 		t.Fatalf("AddMessage: %v", err)
 	}
 
@@ -266,8 +266,8 @@ func TestMemoryStore_DeleteConversation(t *testing.T) {
 
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "del-user")
-	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi"})
-	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hello"})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi"})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hello"})
 
 	// Delete the conversation.
 	if err := store.DeleteConversation(ctx, convID); err != nil {
@@ -320,10 +320,10 @@ func TestMemoryStore_MultipleConversations(t *testing.T) {
 	conv1, _ := store.GetOrCreateConversation(ctx, "telegram", "user1")
 	conv2, _ := store.GetOrCreateConversation(ctx, "telegram", "user2")
 
-	if err := store.AddMessage(ctx, conv1, StoredMessage{Role: "user", Content: "msg for conv1"}); err != nil {
+	if _, err := store.AddMessage(ctx, conv1, StoredMessage{Role: "user", Content: "msg for conv1"}); err != nil {
 		t.Fatalf("AddMessage conv1: %v", err)
 	}
-	if err := store.AddMessage(ctx, conv2, StoredMessage{Role: "user", Content: "msg for conv2"}); err != nil {
+	if _, err := store.AddMessage(ctx, conv2, StoredMessage{Role: "user", Content: "msg for conv2"}); err != nil {
 		t.Fatalf("AddMessage conv2: %v", err)
 	}
 
@@ -354,9 +354,9 @@ func TestConversationCost_Sum(t *testing.T) {
 	ctx := context.Background()
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "cost-test")
 
-	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi", Cost: 0.001})
-	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hey", Cost: 0.002})
-	_ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "bye", Cost: 0.003})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hi", Cost: 0.001})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "assistant", Content: "hey", Cost: 0.002})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "bye", Cost: 0.003})
 
 	cost, err := store.ConversationCost(ctx, convID)
 	if err != nil {
@@ -397,13 +397,13 @@ func TestPruneConversations_RemovesOld(t *testing.T) {
 
 	// Create two conversations: one old, one new.
 	oldID, _ := store.GetOrCreateConversation(ctx, "telegram", "old-conv")
-	_ = store.AddMessage(ctx, oldID, StoredMessage{Role: "user", Content: "old msg"})
+	_, _ = store.AddMessage(ctx, oldID, StoredMessage{Role: "user", Content: "old msg"})
 
 	// Backdate the old conversation.
 	_, _ = store.db.ExecContext(ctx, `UPDATE conversations SET created_at = datetime('now', '-60 days') WHERE id = ?`, oldID)
 
 	newID, _ := store.GetOrCreateConversation(ctx, "telegram", "new-conv")
-	_ = store.AddMessage(ctx, newID, StoredMessage{Role: "user", Content: "new msg"})
+	_, _ = store.AddMessage(ctx, newID, StoredMessage{Role: "user", Content: "new msg"})
 
 	// Prune conversations older than 30 days.
 	cutoff := time.Now().Add(-30 * 24 * time.Hour) // 30 days
@@ -455,5 +455,398 @@ func TestCountConversationsBefore(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry persistence tests
+// ---------------------------------------------------------------------------
+
+func TestAddMessage_ReturnsID(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+
+	id1, err := store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "hi"})
+	if err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if id1 <= 0 {
+		t.Errorf("expected positive ID, got %d", id1)
+	}
+
+	id2, err := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "hello"})
+	if err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if id2 <= id1 {
+		t.Errorf("second ID (%d) should be > first (%d)", id2, id1)
+	}
+}
+
+func TestAddMessage_TelemetryFields(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+
+	_, err = store.AddMessage(ctx, "test:1", StoredMessage{
+		Role:             "assistant",
+		Content:          "hello",
+		TokensUsed:       150,
+		Cost:             0.005,
+		Model:            "claude-3-opus",
+		Provider:         "anthropic",
+		TokensPrompt:     100,
+		TokensCompletion: 50,
+		TokensCached:     20,
+	})
+	if err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	msgs, err := store.GetMessages(ctx, "test:1", 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	m := msgs[0]
+	if m.Model != "claude-3-opus" {
+		t.Errorf("model = %q, want claude-3-opus", m.Model)
+	}
+	if m.Provider != "anthropic" {
+		t.Errorf("provider = %q, want anthropic", m.Provider)
+	}
+	if m.TokensPrompt != 100 {
+		t.Errorf("tokens_prompt = %d, want 100", m.TokensPrompt)
+	}
+	if m.TokensCompletion != 50 {
+		t.Errorf("tokens_completion = %d, want 50", m.TokensCompletion)
+	}
+	if m.TokensCached != 20 {
+		t.Errorf("tokens_cached = %d, want 20", m.TokensCached)
+	}
+	if m.Cost != 0.005 {
+		t.Errorf("cost = %f, want 0.005", m.Cost)
+	}
+}
+
+func TestAddToolCalls_RoundTrip(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "used tools"})
+
+	calls := []ToolCallRecord{
+		{ToolName: "web_search", ServerName: "web-tools", Round: 1, DurationMs: 200, Success: true},
+		{ToolName: "read_file", ServerName: "filesystem", Round: 1, DurationMs: 50, Success: false, ErrorMsg: "not found"},
+	}
+	if err := store.AddToolCalls(ctx, "test:1", msgID, calls); err != nil {
+		t.Fatalf("AddToolCalls: %v", err)
+	}
+
+	got, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(got))
+	}
+	if got[0].ToolName != "web_search" || got[0].ServerName != "web-tools" || !got[0].Success {
+		t.Errorf("first tool call mismatch: %+v", got[0])
+	}
+	if got[1].ToolName != "read_file" || got[1].Success || got[1].ErrorMsg != "not found" {
+		t.Errorf("second tool call mismatch: %+v", got[1])
+	}
+}
+
+func TestAddToolCalls_Empty(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Should not error on empty slice.
+	if err := store.AddToolCalls(context.Background(), "x", 1, nil); err != nil {
+		t.Fatalf("AddToolCalls(nil): %v", err)
+	}
+}
+
+func TestAddSkillUsages_RoundTrip(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "hello"})
+
+	skills := []SkillUsageRecord{
+		{SkillName: "greeting", MatchType: "always"},
+		{SkillName: "search", MatchType: "command"},
+	}
+	if err := store.AddSkillUsages(ctx, "test:1", msgID, skills); err != nil {
+		t.Fatalf("AddSkillUsages: %v", err)
+	}
+
+	got, err := store.GetSkillUsages(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetSkillUsages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 skill usages, got %d", len(got))
+	}
+	if got[0].SkillName != "greeting" || got[0].MatchType != "always" {
+		t.Errorf("first skill mismatch: %+v", got[0])
+	}
+}
+
+func TestUpdateConversationStats_Incremental(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+
+	// First message.
+	msg1 := StoredMessage{
+		Cost: 0.01, Model: "gpt-4", Provider: "openai",
+		TokensPrompt: 100, TokensCompletion: 50, TokensCached: 10,
+	}
+	if err := store.UpdateConversationStats(ctx, "test:1", msg1, 2, 1); err != nil {
+		t.Fatalf("UpdateConversationStats: %v", err)
+	}
+
+	stats, err := store.GetConversationStats(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetConversationStats: %v", err)
+	}
+	if stats.TotalMessages != 1 || stats.TotalCost != 0.01 || stats.LastModel != "gpt-4" {
+		t.Errorf("after first: messages=%d cost=%f model=%s", stats.TotalMessages, stats.TotalCost, stats.LastModel)
+	}
+	if stats.TotalToolCalls != 2 || stats.TotalToolErrors != 1 {
+		t.Errorf("after first: tool_calls=%d errors=%d", stats.TotalToolCalls, stats.TotalToolErrors)
+	}
+
+	// Second message with different model.
+	msg2 := StoredMessage{
+		Cost: 0.02, Model: "claude-3-opus", Provider: "anthropic",
+		TokensPrompt: 200, TokensCompletion: 100, TokensCached: 0,
+	}
+	if err := store.UpdateConversationStats(ctx, "test:1", msg2, 0, 0); err != nil {
+		t.Fatalf("UpdateConversationStats: %v", err)
+	}
+
+	stats, err = store.GetConversationStats(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetConversationStats: %v", err)
+	}
+	if stats.TotalMessages != 2 {
+		t.Errorf("total_messages = %d, want 2", stats.TotalMessages)
+	}
+	if stats.TotalCost < 0.029 || stats.TotalCost > 0.031 {
+		t.Errorf("total_cost = %f, want ~0.03", stats.TotalCost)
+	}
+	if stats.LastModel != "claude-3-opus" || stats.LastProvider != "anthropic" {
+		t.Errorf("last_model=%s last_provider=%s", stats.LastModel, stats.LastProvider)
+	}
+	if stats.TotalPrompt != 300 || stats.TotalCompletion != 150 {
+		t.Errorf("prompt=%d completion=%d", stats.TotalPrompt, stats.TotalCompletion)
+	}
+}
+
+func TestGetConversationStats_NotFound(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	stats, err := store.GetConversationStats(context.Background(), "nonexistent")
+	if err != nil {
+		t.Fatalf("GetConversationStats: %v", err)
+	}
+	if stats != nil {
+		t.Errorf("expected nil stats for nonexistent conversation, got %+v", stats)
+	}
+}
+
+func TestPruneConversations_CascadesToTelemetry(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "tg", "old")
+	_, _ = store.db.ExecContext(ctx, `UPDATE conversations SET created_at = datetime('now', '-90 days') WHERE id = 'tg:old'`)
+	msgID, _ := store.AddMessage(ctx, "tg:old", StoredMessage{Role: "assistant", Content: "hi"})
+	_ = store.AddToolCalls(ctx, "tg:old", msgID, []ToolCallRecord{{ToolName: "t1", Success: true}})
+	_ = store.AddSkillUsages(ctx, "tg:old", msgID, []SkillUsageRecord{{SkillName: "s1", MatchType: "always"}})
+	_ = store.UpdateConversationStats(ctx, "tg:old", StoredMessage{Cost: 0.01}, 1, 0)
+
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	n, err := store.PruneConversations(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneConversations: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("pruned %d, want 1", n)
+	}
+
+	// All telemetry should be gone.
+	tc, _ := store.GetToolCalls(ctx, "tg:old")
+	if len(tc) != 0 {
+		t.Errorf("tool calls remain: %d", len(tc))
+	}
+	su, _ := store.GetSkillUsages(ctx, "tg:old")
+	if len(su) != 0 {
+		t.Errorf("skill usages remain: %d", len(su))
+	}
+	stats, _ := store.GetConversationStats(ctx, "tg:old")
+	if stats != nil {
+		t.Errorf("conversation stats remain: %+v", stats)
+	}
+}
+
+func TestPruneByCount_RemovesOldest(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		_, _ = store.GetOrCreateConversation(ctx, "tg", fmt.Sprintf("%d", i))
+		_, _ = store.AddMessage(ctx, fmt.Sprintf("tg:%d", i), StoredMessage{Role: "user", Content: "msg"})
+	}
+
+	n, err := store.PruneByCount(ctx, 3)
+	if err != nil {
+		t.Fatalf("PruneByCount: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("pruned %d, want 2", n)
+	}
+
+	convos, _ := store.ListConversations(ctx)
+	if len(convos) != 3 {
+		t.Errorf("remaining conversations: %d, want 3", len(convos))
+	}
+}
+
+func TestDeleteConversation_CascadesToTelemetry(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "hi"})
+	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{{ToolName: "t1", Success: true}})
+	_ = store.AddSkillUsages(ctx, "test:1", msgID, []SkillUsageRecord{{SkillName: "s1", MatchType: "always"}})
+	_ = store.UpdateConversationStats(ctx, "test:1", StoredMessage{Cost: 0.01}, 1, 0)
+
+	if err := store.DeleteConversation(ctx, "test:1"); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
+
+	tc, _ := store.GetToolCalls(ctx, "test:1")
+	if len(tc) != 0 {
+		t.Errorf("tool calls remain: %d", len(tc))
+	}
+	su, _ := store.GetSkillUsages(ctx, "test:1")
+	if len(su) != 0 {
+		t.Errorf("skill usages remain: %d", len(su))
+	}
+	stats, _ := store.GetConversationStats(ctx, "test:1")
+	if stats != nil {
+		t.Errorf("conversation stats remain: %+v", stats)
+	}
+}
+
+func TestListConversationsWithStats(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	_, _ = store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "hi"})
+	_ = store.UpdateConversationStats(ctx, "test:1", StoredMessage{
+		Cost: 0.05, Model: "gpt-4", Provider: "openai",
+		TokensPrompt: 100, TokensCompletion: 50,
+	}, 0, 0)
+
+	convos, err := store.ListConversationsWithStats(ctx)
+	if err != nil {
+		t.Fatalf("ListConversationsWithStats: %v", err)
+	}
+	if len(convos) != 1 {
+		t.Fatalf("expected 1, got %d", len(convos))
+	}
+	if convos[0].TotalCost != 0.05 || convos[0].LastModel != "gpt-4" {
+		t.Errorf("stats mismatch: cost=%f model=%s", convos[0].TotalCost, convos[0].LastModel)
+	}
+}
+
+func TestGetTelemetrySummary(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{
+		Role: "assistant", Content: "hi", Model: "gpt-4", Provider: "openai",
+		Cost: 0.01, TokensPrompt: 100, TokensCompletion: 50,
+	})
+	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "search", ServerName: "web", DurationMs: 100, Success: true},
+	})
+	userMsgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "query"})
+	_ = store.AddSkillUsages(ctx, "test:1", userMsgID, []SkillUsageRecord{
+		{SkillName: "greeting", MatchType: "always"},
+	})
+
+	summary, err := store.GetTelemetrySummary(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if len(summary.ByModel) != 1 || summary.ByModel[0].Model != "gpt-4" {
+		t.Errorf("by_model: %+v", summary.ByModel)
+	}
+	if len(summary.ByTool) != 1 || summary.ByTool[0].ToolName != "search" {
+		t.Errorf("by_tool: %+v", summary.ByTool)
+	}
+	if len(summary.BySkill) != 1 || summary.BySkill[0].SkillName != "greeting" {
+		t.Errorf("by_skill: %+v", summary.BySkill)
 	}
 }

@@ -1143,6 +1143,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	st.approvalManager.StartExpiryWorker(ctx, time.Hour)
 
 	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
+	startMemoryCleanupWorker(ctx, st.memory, &cfg.Memory, logger)
 
 	sharedToolMgr, browserProfileDir, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
@@ -1404,4 +1405,50 @@ func startKVCleanupWorker(ctx context.Context, store *kv.SQLiteStore, interval t
 			}
 		}
 	}()
+}
+
+// startMemoryCleanupWorker runs a background goroutine that enforces
+// retention policies (time-based and count-based) on stored conversations.
+// No-op if the memory store does not support telemetry (PruneByCount).
+func startMemoryCleanupWorker(ctx context.Context, mem agent.MemoryStore, cfg *config.MemoryConfig, logger *slog.Logger) {
+	store, ok := mem.(*agent.SQLiteMemoryStore)
+	if !ok {
+		return
+	}
+	interval, err := time.ParseDuration(cfg.CleanupInterval)
+	if err != nil {
+		interval = time.Hour
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runMemoryCleanup(ctx, store, cfg, logger)
+			}
+		}
+	}()
+}
+
+func runMemoryCleanup(ctx context.Context, store *agent.SQLiteMemoryStore, cfg *config.MemoryConfig, logger *slog.Logger) {
+	if cfg.RetentionDays > 0 {
+		cutoff := time.Now().Add(-time.Duration(cfg.RetentionDays) * 24 * time.Hour)
+		n, err := store.PruneConversations(ctx, cutoff)
+		if err != nil {
+			logger.Warn("memory retention prune failed", "error", err)
+		} else if n > 0 {
+			logger.Info("pruned old conversations", "count", n, "retention_days", cfg.RetentionDays)
+		}
+	}
+	if cfg.MaxConversations > 0 {
+		n, err := store.PruneByCount(ctx, cfg.MaxConversations)
+		if err != nil {
+			logger.Warn("memory count prune failed", "error", err)
+		} else if n > 0 {
+			logger.Info("pruned excess conversations", "count", n, "max", cfg.MaxConversations)
+		}
+	}
 }

@@ -599,8 +599,15 @@ type OllamaConfig struct {
 	BaseURL string `toml:"base_url"`
 }
 
+// MemoryConfig configures conversation persistence and retention.
 type MemoryConfig struct {
 	DBPath string `toml:"db_path"`
+	// RetentionDays is how long conversations are kept. 0 = unlimited. Default 90.
+	RetentionDays int `toml:"retention_days"`
+	// MaxConversations limits the total number of stored conversations. 0 = unlimited. Default 10000.
+	MaxConversations int `toml:"max_conversations"`
+	// CleanupInterval is how often retention policies are enforced (Go duration string). Default "1h".
+	CleanupInterval string `toml:"cleanup_interval"`
 }
 
 // KVConfig configures the per-agent key-value store.
@@ -834,6 +841,15 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.Memory.DBPath == "" {
 		cfg.Memory.DBPath = filepath.Join(cfg.DataDir, "data", "memory.db")
 	}
+	if cfg.Memory.RetentionDays == 0 {
+		cfg.Memory.RetentionDays = 90
+	}
+	if cfg.Memory.MaxConversations == 0 {
+		cfg.Memory.MaxConversations = 10000
+	}
+	if cfg.Memory.CleanupInterval == "" {
+		cfg.Memory.CleanupInterval = "1h"
+	}
 	if cfg.Agent.PersonaDir == "" {
 		cfg.Agent.PersonaDir = filepath.Join(cfg.DataDir, "agents", "default")
 	}
@@ -932,6 +948,14 @@ func envOverride(name string, target *string) {
 	}
 }
 
+func envOverrideInt(name string, target *int) {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*target = n
+		}
+	}
+}
+
 func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_TELEGRAM_TOKEN", &cfg.Telegram.Token)
 	envOverride("DENKEEPER_DISCORD_TOKEN", &cfg.Discord.Token)
@@ -947,14 +971,12 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_LOG_LEVEL", &cfg.Log.Level)
 	envOverride("DENKEEPER_LOG_FORMAT", &cfg.Log.Format)
 	envOverride("DENKEEPER_MEMORY_DB_PATH", &cfg.Memory.DBPath)
+	envOverrideInt("DENKEEPER_MEMORY_RETENTION_DAYS", &cfg.Memory.RetentionDays)
+	envOverrideInt("DENKEEPER_MEMORY_MAX_CONVERSATIONS", &cfg.Memory.MaxConversations)
 	envOverride("DENKEEPER_API_LISTEN", &cfg.API.Listen)
 	envOverride("DENKEEPER_SESSION_TIER", &cfg.Session.Tier)
 	envOverride("DENKEEPER_APPROVAL_TIMEOUT", &cfg.Session.ApprovalTimeout)
-	if v := os.Getenv("DENKEEPER_APPROVAL_RETRIES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Session.ApprovalRetries = n
-		}
-	}
+	envOverrideInt("DENKEEPER_APPROVAL_RETRIES", &cfg.Session.ApprovalRetries)
 	envOverride("DENKEEPER_SEARCH_API_KEY", &cfg.Web.Search.APIKey)
 	envOverride("DENKEEPER_OTEL_TRACES_ENDPOINT", &cfg.OTel.TracesEndpoint)
 	if v := os.Getenv("DENKEEPER_OTEL_ENABLED"); v == "true" || v == "1" {
@@ -1310,6 +1332,24 @@ func validate(cfg *Config) error {
 	}
 	if err := validateSandbox(&cfg.Sandbox); err != nil {
 		return fmt.Errorf("validate sandbox: %w", err)
+	}
+	if err := validateMemory(&cfg.Memory); err != nil {
+		return fmt.Errorf("validate memory: %w", err)
+	}
+	return nil
+}
+
+func validateMemory(cfg *MemoryConfig) error {
+	if cfg.RetentionDays < 0 {
+		return fmt.Errorf("memory.retention_days must be >= 0, got %d", cfg.RetentionDays)
+	}
+	if cfg.MaxConversations < 0 {
+		return fmt.Errorf("memory.max_conversations must be >= 0, got %d", cfg.MaxConversations)
+	}
+	if cfg.CleanupInterval != "" {
+		if _, err := time.ParseDuration(cfg.CleanupInterval); err != nil {
+			return fmt.Errorf("memory.cleanup_interval: %w", err)
+		}
 	}
 	return nil
 }

@@ -3260,3 +3260,43 @@ adapters = ["telegram:99999"]
 		t.Errorf("agent persona_dir = %q, want /data/agents/helper", cfg.Agents[1].PersonaDir)
 	}
 }
+
+func TestMemoryConfig_Defaults(t *testing.T) {
+	toml := []byte(`
+[llm]
+default_provider = "openrouter"
+[llm.openrouter]
+api_key = "sk-test"
+`)
+	cfg, err := Parse(toml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Memory.RetentionDays != 90 {
+		t.Errorf("retention_days = %d, want 90", cfg.Memory.RetentionDays)
+	}
+	if cfg.Memory.MaxConversations != 10000 {
+		t.Errorf("max_conversations = %d, want 10000", cfg.Memory.MaxConversations)
+	}
+	if cfg.Memory.CleanupInterval != "1h" {
+		t.Errorf("cleanup_interval = %q, want 1h", cfg.Memory.CleanupInterval)
+	}
+}
+
+func TestMemoryConfig_Validation(t *testing.T) {
+	toml := []byte(`
+[llm]
+default_provider = "openrouter"
+[llm.openrouter]
+api_key = "sk-test"
+[memory]
+cleanup_interval = "not-a-duration"
+`)
+	_, err := Parse(toml)
+	if err == nil {
+		t.Fatal("expected validation error for bad cleanup_interval")
+	}
+	if !strings.Contains(err.Error(), "cleanup_interval") {
+		t.Errorf("error should mention cleanup_interval: %v", err)
+	}
+}

@@ -335,11 +335,18 @@ func (e *Engine) RemoveMemoryEntry(heading string) error {
 	return e.persona.RemoveMemoryEntry(heading)
 }
 
+// buildSystemPromptResult holds the system prompt and the skills that were
+// matched for this message (used for telemetry persistence).
+type buildSystemPromptResult struct {
+	prompt        string
+	matchedSkills []skill.Skill
+}
+
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
 // or the fallback string, appending trigger-matched skill instructions.
 // Persona management (memory, soul, identity, user) is handled via MCP tools
 // whose descriptions guide the agent on when and how to use them.
-func (e *Engine) buildSystemPrompt(_ *security.PermissionEngine, msg adapter.IncomingMessage) string {
+func (e *Engine) buildSystemPrompt(_ *security.PermissionEngine, msg adapter.IncomingMessage) buildSystemPromptResult {
 	var base string
 	if e.persona != nil {
 		base = e.persona.SystemPrompt()
@@ -379,9 +386,60 @@ When creating or updating schedules, use this channel value unless the user spec
 		SkillName:   msg.SkillName,
 	})
 	if suffix := skill.BuildPromptSection(matched); suffix != "" {
-		return base + "\n\n" + suffix
+		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: matched}
 	}
-	return base
+	return buildSystemPromptResult{prompt: base, matchedSkills: matched}
+}
+
+// persistTelemetry writes tool calls, skill usages, and conversation stats
+// after an assistant message is stored. Errors are logged but not propagated —
+// telemetry failures must not break the chat pipeline.
+func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID, assistMsgID int64, assistMsg StoredMessage, toolRecords []ToolCallRecord, matched []skill.Skill, msg adapter.IncomingMessage) {
+	store, ok := e.memory.(TelemetryStore)
+	if !ok {
+		return
+	}
+
+	// Persist tool call records.
+	toolErrors := 0
+	for _, r := range toolRecords {
+		if !r.Success {
+			toolErrors++
+		}
+	}
+	if err := store.AddToolCalls(ctx, convID, assistMsgID, toolRecords); err != nil {
+		e.logger.Warn("failed to persist tool calls", "error", err, "conversation", convID)
+	}
+
+	// Persist skill usages (matched skills passed from buildSystemPrompt).
+	if len(matched) > 0 {
+		records := make([]SkillUsageRecord, len(matched))
+		for i, s := range matched {
+			records[i] = SkillUsageRecord{
+				SkillName: s.Name,
+				MatchType: classifySkillMatch(s, msg),
+			}
+		}
+		if err := store.AddSkillUsages(ctx, convID, userMsgID, records); err != nil {
+			e.logger.Warn("failed to persist skill usages", "error", err, "conversation", convID)
+		}
+	}
+
+	// Update conversation stats.
+	if err := store.UpdateConversationStats(ctx, convID, assistMsg, len(toolRecords), toolErrors); err != nil {
+		e.logger.Warn("failed to update conversation stats", "error", err, "conversation", convID)
+	}
+}
+
+// classifySkillMatch determines the match type for a skill.
+func classifySkillMatch(s skill.Skill, msg adapter.IncomingMessage) string {
+	if msg.SkillName != "" && msg.SkillName == s.Name {
+		return "schedule"
+	}
+	if len(s.Triggers) == 0 {
+		return "always"
+	}
+	return "command"
 }
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
@@ -458,10 +516,11 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	}
 	span.SetAttributes(attribute.String("conversation.id", convID))
 
-	if err := e.memory.AddMessage(ctx, convID, StoredMessage{
+	userMsgID, err := e.memory.AddMessage(ctx, convID, StoredMessage{
 		Role:    "user",
 		Content: msg.Text,
-	}); err != nil {
+	})
+	if err != nil {
 		return "", nil, fmt.Errorf("storing user message: %w", err)
 	}
 
@@ -475,8 +534,10 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 			"conversation_id", convID, "limit", e.maxContextMessages)
 	}
 
+	sysResult := e.buildSystemPrompt(perms, msg)
+
 	llmMessages := make([]llm.Message, 0, len(history)+2)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: e.buildSystemPrompt(perms, msg)})
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: sysResult.prompt})
 	if truncated {
 		llmMessages = append(llmMessages, llm.Message{
 			Role:    "system",
@@ -497,18 +558,17 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	resp, _, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
+	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
 		e.savePartialResponse(ctx, convID, streamedContent.String())
 		return "", nil, err
 	}
 
 	if onEvent != nil {
-		cost, _ := llm.TokenCost(resp, nil)
 		onEvent(ChatEvent{
 			Type:    "usage",
 			Tokens:  resp.TokensUsed.Total,
-			CostUSD: cost,
+			CostUSD: resp.CostUSD,
 		})
 	}
 
@@ -543,13 +603,24 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		saveCtx, saveCancel = context.WithTimeout(context.Background(), 5*time.Second)
 		defer saveCancel()
 	}
-	if err := e.memory.AddMessage(saveCtx, convID, StoredMessage{
-		Role:       "assistant",
-		Content:    responseText,
-		TokensUsed: resp.TokensUsed.Total,
-	}); err != nil {
+	assistMsg := StoredMessage{
+		Role:             "assistant",
+		Content:          responseText,
+		TokensUsed:       resp.TokensUsed.Total,
+		Cost:             resp.CostUSD,
+		Model:            resp.Model,
+		Provider:         e.router.DefaultProvider(),
+		TokensPrompt:     resp.TokensUsed.Prompt,
+		TokensCompletion: resp.TokensUsed.Completion,
+		TokensCached:     resp.TokensUsed.CachedPrompt,
+	}
+	assistMsgID, err := e.memory.AddMessage(saveCtx, convID, assistMsg)
+	if err != nil {
 		return "", nil, fmt.Errorf("storing assistant message: %w", err)
 	}
+
+	// Persist telemetry data (tool calls, skill usages, stats).
+	e.persistTelemetry(saveCtx, convID, userMsgID, assistMsgID, assistMsg, toolRecords, sysResult.matchedSkills, msg)
 
 	e.logger.Info("chat complete",
 		"adapter", msg.Adapter,
@@ -629,7 +700,7 @@ func (e *Engine) savePartialResponse(ctx context.Context, convID, content string
 	}
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := e.memory.AddMessage(saveCtx, convID, StoredMessage{
+	if _, err := e.memory.AddMessage(saveCtx, convID, StoredMessage{
 		Role:    "assistant",
 		Content: content,
 	}); err != nil {
@@ -658,40 +729,41 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 }
 
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
-// LLM produces a text response. If onEvent is non-nil, it is called for each
-// tool execution start/end so the caller can stream status to the client.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+// LLM produces a text response. Returns the response, messages, collected
+// tool call records for persistence, and any error.
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
 	}
 
 	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
-		return nil, llmMessages, fmt.Errorf("LLM completion: %w", err)
+		return nil, llmMessages, nil, fmt.Errorf("LLM completion: %w", err)
 	}
 
 	// Validate tool execution preconditions before entering the loop.
 	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
 		if e.tools == nil {
-			return nil, llmMessages, fmt.Errorf("LLM requested tool calls but no tool manager configured")
+			return nil, llmMessages, nil, fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
 		if !perms.CanExecute("use_tools") {
-			return nil, llmMessages, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+			return nil, llmMessages, nil, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 	}
 
-	resp, llmMessages, err = e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
+	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
 	if err != nil {
-		return nil, llmMessages, err
+		return nil, llmMessages, nil, err
 	}
 
-	return resp, llmMessages, nil
+	return resp, llmMessages, toolRecords, nil
 }
 
 // executeToolRounds runs the tool-call loop, accumulating tokens/cost across
-// all rounds. If the model returns empty content after completing tool rounds,
+// all rounds. Returns the final response, messages, collected tool call records,
+// and any error. If the model returns empty content after completing tool rounds,
 // it attempts to recover by using intermediate content or nudging the model.
-func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Prompt += resp.TokensUsed.Prompt
@@ -702,11 +774,12 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	supervised := perms.Tier() == "supervised" && e.approvals != nil
 	parentSpan := trace.SpanFromContext(ctx)
 	var toolRounds int
+	var toolRecords []ToolCallRecord
 	var accumulatedContent strings.Builder
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		toolRounds++
 		if round >= maxToolRounds {
-			return nil, llmMessages, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+			return nil, llmMessages, toolRecords, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
 		}
 
 		recordToolRoundEvent(parentSpan, round+1, resp.ToolCalls)
@@ -721,7 +794,8 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
 				attribute.String("tool_name", tc.Function.Name)))
-			result := e.executeToolCall(ctx, tc, round+1, convID, supervised, onEvent)
+			result, record := e.executeToolCall(ctx, tc, round+1, convID, supervised, onEvent)
+			toolRecords = append(toolRecords, record)
 			llmMessages = append(llmMessages, llm.Message{
 				Role: "tool", Content: result, ToolCallID: tc.ID,
 			})
@@ -734,7 +808,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		var err error
 		resp, err = e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 		if err != nil {
-			return nil, llmMessages, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+			return nil, llmMessages, toolRecords, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
 
 		totalUsage.Prompt += resp.TokensUsed.Prompt
@@ -771,7 +845,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		var err error
 		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, accumulatedContent.String())
 		if err != nil {
-			return nil, llmMessages, err
+			return nil, llmMessages, toolRecords, err
 		}
 		totalUsage.Prompt += resp.TokensUsed.Prompt
 		totalUsage.Completion += resp.TokensUsed.Completion
@@ -782,7 +856,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// Replace per-round usage with accumulated totals.
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
-	return resp, llmMessages, nil
+	return resp, llmMessages, toolRecords, nil
 }
 
 // recordToolRoundEvent adds a span event for a tool-call round.
@@ -823,8 +897,17 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),
 // then executing it and emitting tool_start/tool_end ChatEvents.
-// Returns the tool result string to be fed back to the LLM.
-func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc) string {
+// Returns the tool result string and a ToolCallRecord for persistence.
+func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc) (string, ToolCallRecord) {
+	record := ToolCallRecord{
+		ToolName: tc.Function.Name,
+		Round:    round,
+		Success:  true,
+	}
+	if e.tools != nil {
+		record.ServerName = e.tools.ToolServer(tc.Function.Name)
+	}
+
 	// Supervised tier: check auto-approve rules first, then request human approval.
 	if supervised {
 		if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
@@ -841,7 +924,9 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		} else {
 			result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
 			if !approved {
-				return result
+				record.Success = false
+				record.ErrorMsg = "denied"
+				return result, record
 			}
 		}
 	}
@@ -856,6 +941,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	defer toolCancel()
 	result, execErr := e.tools.Execute(toolCtx, tc)
 	toolDur := time.Since(toolStart)
+	record.DurationMs = toolDur.Milliseconds()
 
 	if execErr != nil && toolCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 		execErr = fmt.Errorf("tool execution timed out after %s", toolExecTimeout)
@@ -866,6 +952,8 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		e.logger.Warn("tool execution failed", "tool", tc.Function.Name, "round", round,
 			"duration_ms", toolDur.Milliseconds(), "error", execErr)
 		result = fmt.Sprintf("Tool error: %v", execErr)
+		record.Success = false
+		record.ErrorMsg = execErr.Error()
 	} else {
 		e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round,
 			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
@@ -878,7 +966,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		}
 		onEvent(evt)
 	}
-	return result
+	return result, record
 }
 
 // awaitToolApproval submits a tool call for approval and blocks until the
