@@ -251,6 +251,9 @@ export const handlers = [
     websocket_replay_buffer_ttl: '5m',
     external_url: 'https://den.example.com',
     timezone: 'UTC',
+    version: 'v0.25.0',
+    commit: 'abc1234def5678',
+    go_version: 'go1.22.0',
   })),
   http.patch('/api/v1/server/config', () => HttpResponse.json({ ok: true })),
 ]

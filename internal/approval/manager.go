@@ -163,8 +163,12 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 		m.logger.Info("approval denied", "id", id, "resolvedBy", resolvedBy)
 	}
 
+	// Fetch the updated record BEFORE notifying the waiter so that any
+	// goroutine unblocked by notifyWaiter (e.g. SubmitAndWait returning)
+	// cannot race to close the underlying store before we finish the Get.
+	req, err := m.store.Get(ctx, id)
 	m.notifyWaiter(id, status)
-	return m.store.Get(ctx, id)
+	return req, err
 }
 
 // ErrStaleCallback is returned by ResolveByCallback when the callback refers to
