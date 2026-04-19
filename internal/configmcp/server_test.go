@@ -350,6 +350,46 @@ func TestScheduleAdd_RestrictedTier(t *testing.T) {
 	}
 }
 
+func TestScheduleAdd_MissingSkill(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(_ string) (skill.Skill, bool) {
+			return skill.Skill{}, false
+		}
+	})
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "bad-skill-sched",
+		"schedule": "@daily",
+		"channel":  "telegram:123",
+		"skill":    "nonexistent",
+	})
+	if !isErr {
+		t.Fatalf("expected error for missing skill, got: %s", text)
+	}
+	if !strings.Contains(text, "nonexistent") {
+		t.Errorf("expected error to mention skill name; got: %s", text)
+	}
+}
+
+func TestScheduleAdd_ValidSkill(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "greet" {
+				return skill.Skill{Name: "greet"}, true
+			}
+			return skill.Skill{}, false
+		}
+	})
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "good-skill-sched",
+		"schedule": "@daily",
+		"channel":  "telegram:123",
+		"skill":    "greet",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: schedule_list
 // --------------------------------------------------------------------------
@@ -1057,6 +1097,37 @@ func TestScheduleUpdate_NotFound(t *testing.T) {
 	})
 	if !isErr {
 		t.Fatal("expected error for nonexistent schedule")
+	}
+}
+
+func TestScheduleUpdate_MissingSkill(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "greet" {
+				return skill.Skill{Name: "greet"}, true
+			}
+			return skill.Skill{}, false
+		}
+	})
+
+	// Create a schedule with a valid skill.
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "skill-update-test", "schedule": "@daily", "channel": "telegram:1", "skill": "greet",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	// Update to a nonexistent skill.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "skill-update-test",
+		"skill": "nonexistent",
+	})
+	if !isErr {
+		t.Fatalf("expected error for missing skill, got: %s", text)
+	}
+	if !strings.Contains(text, "nonexistent") {
+		t.Errorf("expected error to mention skill name; got: %s", text)
 	}
 }
 

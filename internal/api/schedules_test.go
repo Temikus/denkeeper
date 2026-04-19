@@ -90,6 +90,31 @@ func TestCreateSchedule_InvalidChannel(t *testing.T) {
 	}
 }
 
+func TestCreateSchedule_MissingSkill(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body := `{
+		"name":"bad-skill-sched",
+		"schedule":"@daily",
+		"channel":"telegram:123",
+		"skill":"nonexistent-skill"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "nonexistent-skill") {
+		t.Errorf("expected error to mention skill name; body: %s", rec.Body.String())
+	}
+}
+
 func TestCreateSchedule_NilScheduler(t *testing.T) {
 	deps := testDeps()
 	deps.Scheduler = nil
@@ -130,6 +155,46 @@ func TestUpdateSchedule_Success(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestUpdateSchedule_MissingSkill(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	// Register a schedule with a valid skill first.
+	_ = deps.Scheduler.Register(scheduler.Config{
+		Name:     "update-skill",
+		Type:     "agent",
+		Schedule: "@daily",
+		Skill:    "greet",
+		Channel:  "telegram:123",
+		Enabled:  true,
+	}, func(_ scheduler.Entry) {})
+
+	// Try to update it to reference a nonexistent skill.
+	body := `{"skill":"nonexistent-skill"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/schedules/update-skill", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "nonexistent-skill") {
+		t.Errorf("expected error to mention skill name; body: %s", rec.Body.String())
+	}
+
+	// Original schedule should still be intact.
+	entry, ok := deps.Scheduler.GetEntry("update-skill")
+	if !ok {
+		t.Fatal("schedule should still exist after failed update")
+	}
+	if entry.Skill != "greet" {
+		t.Errorf("skill = %q, want greet (should be unchanged)", entry.Skill)
 	}
 }
 

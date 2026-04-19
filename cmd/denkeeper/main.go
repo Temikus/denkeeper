@@ -918,17 +918,16 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			continue
 		}
 
-		// Fail fast when a schedule references a skill that doesn't exist on
-		// the target agent. Without this check the schedule would fire silently
-		// at its cron time with only a runtime tool error buried in the logs.
+		// Unknown agent = broken config → hard error. Missing skill = stale
+		// reference that can be fixed at runtime → warn and skip.
 		if sc.Skill != "" {
 			eng := dispatcher.Agent(sc.Agent)
 			if eng == nil {
 				return fmt.Errorf("schedule %q targets unknown agent %q", sc.Name, sc.Agent)
 			}
 			if _, skillOK := eng.GetSkill(sc.Skill); !skillOK {
-				return fmt.Errorf("schedule %q references missing skill %q on agent %q (fix the skill name or create the skill before the schedule fires)",
-					sc.Name, sc.Skill, sc.Agent)
+				logger.Error("schedule references missing skill, skipping", "name", sc.Name, "skill", sc.Skill, "agent", sc.Agent)
+				continue
 			}
 		}
 
@@ -947,6 +946,7 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			Type:        sc.Type,
 			Schedule:    sc.Schedule,
 			Skill:       sc.Skill,
+			Agent:       sc.Agent,
 			SessionTier: sc.SessionTier,
 			SessionMode: sc.SessionMode,
 			Channel:     sc.Channel,

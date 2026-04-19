@@ -88,11 +88,21 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if input.Skill != "" {
+		if _, ok := e.GetSkill(input.Skill); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("skill %q not found on agent %q", input.Skill, agentName),
+			})
+			return
+		}
+	}
+
 	cfg := scheduler.Config{
 		Name:        input.Name,
 		Type:        string(scheduler.ScheduleTypeAgent),
 		Schedule:    input.Schedule,
 		Skill:       input.Skill,
+		Agent:       agentName,
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
@@ -148,13 +158,23 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine the agent for job wiring. The schedule doesn't store agent
-	// directly, so we fall back to "default".
-	agentName := "default"
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = "default"
+	}
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "default agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
 		return
+	}
+
+	if cfg.Skill != "" {
+		if _, ok := e.GetSkill(cfg.Skill); !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": fmt.Sprintf("skill %q not found on agent %q", cfg.Skill, agentName),
+			})
+			return
+		}
 	}
 
 	if err := s.deps.Scheduler.Unregister(name); err != nil {

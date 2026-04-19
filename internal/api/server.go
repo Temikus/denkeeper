@@ -588,6 +588,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
 		Type        string   `json:"type"`
 		Expression  string   `json:"expression"`
 		Skill       string   `json:"skill,omitempty"`
+		Agent       string   `json:"agent,omitempty"`
 		SessionTier string   `json:"session_tier,omitempty"`
 		SessionMode string   `json:"session_mode,omitempty"`
 		Channel     string   `json:"channel,omitempty"`
@@ -604,6 +605,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
 			Type:        string(e.Type),
 			Expression:  e.Expr,
 			Skill:       e.Skill,
+			Agent:       e.Agent,
 			SessionTier: e.SessionTier,
 			SessionMode: e.SessionMode,
 			Channel:     e.Channel,

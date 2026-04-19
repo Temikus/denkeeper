@@ -516,6 +516,12 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		return toolError(errMsg), nil
 	}
 
+	if input.Skill != "" && s.deps.GetSkill != nil {
+		if _, ok := s.deps.GetSkill(input.Skill); !ok {
+			return toolError(fmt.Sprintf("skill %q not found on agent %q", input.Skill, s.deps.AgentName)), nil
+		}
+	}
+
 	enabled := true
 	if input.Enabled != nil {
 		enabled = *input.Enabled
@@ -536,6 +542,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		Type:        string(scheduler.ScheduleTypeAgent),
 		Schedule:    input.Schedule,
 		Skill:       input.Skill,
+		Agent:       s.deps.AgentName,
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
@@ -576,6 +583,7 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 		Type        string `json:"type"`
 		Schedule    string `json:"schedule"`
 		Skill       string `json:"skill,omitempty"`
+		Agent       string `json:"agent,omitempty"`
 		Channel     string `json:"channel,omitempty"`
 		SessionMode string `json:"session_mode,omitempty"`
 		Enabled     bool   `json:"enabled"`
@@ -589,6 +597,7 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 			Type:        string(e.Type),
 			Schedule:    e.Expr,
 			Skill:       e.Skill,
+			Agent:       e.Agent,
 			Channel:     e.Channel,
 			SessionMode: e.SessionMode,
 			Enabled:     e.Enabled,
@@ -660,6 +669,7 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 		Type:        string(scheduler.ScheduleTypeAgent),
 		Schedule:    expr,
 		Skill:       skill,
+		Agent:       existing.Agent,
 		SessionTier: sessionTier,
 		SessionMode: sessionMode,
 		Channel:     channel,
@@ -695,6 +705,12 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	cfg, errMsg := MergeScheduleUpdate(existing, input)
 	if errMsg != "" {
 		return toolError(errMsg), nil
+	}
+
+	if cfg.Skill != "" && s.deps.GetSkill != nil {
+		if _, ok := s.deps.GetSkill(cfg.Skill); !ok {
+			return toolError(fmt.Sprintf("skill %q not found on agent %q", cfg.Skill, s.deps.AgentName)), nil
+		}
 	}
 
 	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,

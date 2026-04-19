@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/skill"
 )
 
 func TestParseChannel_ValidInput(t *testing.T) {
@@ -292,5 +295,155 @@ func TestKVCleanupDuration_Invalid(t *testing.T) {
 func TestKVCleanupDuration_Zero(t *testing.T) {
 	if got := kvCleanupDuration("0s"); got.String() != "1h0m0s" {
 		t.Errorf("kvCleanupDuration(0s) = %v, want 1h (fallback for non-positive)", got)
+	}
+}
+
+// --- registerSchedules tests ---
+
+func testBoolPtr(v bool) *bool { return &v }
+
+func testDispatcher(t *testing.T, agentName string, skills []skill.Skill) *agent.Dispatcher {
+	t.Helper()
+	eng := agent.NewEngine(
+		agentName,
+		nil, // router
+		nil, // memory
+		nil, // sendFunc
+		nil, // permissions
+		nil, // persona
+		"",  // fallbackPrompt
+		skills,
+		nil, // tools
+		nil, // approvals
+		slog.Default(),
+	)
+	agents := map[string]*agent.Engine{agentName: eng}
+	return agent.NewDispatcher(agents, nil, nil, slog.Default())
+}
+
+func TestRegisterSchedules_MissingSkillSkips(t *testing.T) {
+	disp := testDispatcher(t, "default", []skill.Skill{
+		{Name: "existing-skill"},
+	})
+	sched := scheduler.New(slog.Default(), nil)
+
+	cfg := &config.Config{
+		Schedules: []config.ScheduleConfig{
+			{
+				Name:     "bad-schedule",
+				Type:     "agent",
+				Schedule: "@daily",
+				Skill:    "nonexistent-skill",
+				Agent:    "default",
+				Channel:  "telegram:123",
+				Enabled:  testBoolPtr(true),
+			},
+		},
+	}
+
+	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	if err != nil {
+		t.Fatalf("expected no error for missing skill, got: %v", err)
+	}
+
+	// The schedule should NOT have been registered.
+	if _, ok := sched.GetEntry("bad-schedule"); ok {
+		t.Error("schedule with missing skill should not be registered")
+	}
+}
+
+func TestRegisterSchedules_UnknownAgentErrors(t *testing.T) {
+	disp := testDispatcher(t, "default", nil)
+	sched := scheduler.New(slog.Default(), nil)
+
+	cfg := &config.Config{
+		Schedules: []config.ScheduleConfig{
+			{
+				Name:     "bad-agent-schedule",
+				Type:     "agent",
+				Schedule: "@daily",
+				Skill:    "some-skill",
+				Agent:    "nonexistent-agent",
+				Channel:  "telegram:123",
+				Enabled:  testBoolPtr(true),
+			},
+		},
+	}
+
+	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	if err == nil {
+		t.Fatal("expected error for unknown agent, got nil")
+	}
+}
+
+func TestRegisterSchedules_ValidSkillRegisters(t *testing.T) {
+	disp := testDispatcher(t, "default", []skill.Skill{
+		{Name: "daily-report"},
+	})
+	sched := scheduler.New(slog.Default(), nil)
+
+	cfg := &config.Config{
+		Schedules: []config.ScheduleConfig{
+			{
+				Name:     "good-schedule",
+				Type:     "agent",
+				Schedule: "@daily",
+				Skill:    "daily-report",
+				Agent:    "default",
+				Channel:  "telegram:123",
+				Enabled:  testBoolPtr(true),
+			},
+		},
+	}
+
+	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := sched.GetEntry("good-schedule"); !ok {
+		t.Error("valid schedule should be registered")
+	}
+}
+
+func TestRegisterSchedules_MixedValidAndInvalid(t *testing.T) {
+	disp := testDispatcher(t, "default", []skill.Skill{
+		{Name: "real-skill"},
+	})
+	sched := scheduler.New(slog.Default(), nil)
+
+	cfg := &config.Config{
+		Schedules: []config.ScheduleConfig{
+			{
+				Name:     "bad-one",
+				Type:     "agent",
+				Schedule: "@daily",
+				Skill:    "missing-skill",
+				Agent:    "default",
+				Channel:  "telegram:123",
+				Enabled:  testBoolPtr(true),
+			},
+			{
+				Name:     "good-one",
+				Type:     "agent",
+				Schedule: "@hourly",
+				Skill:    "real-skill",
+				Agent:    "default",
+				Channel:  "telegram:456",
+				Enabled:  testBoolPtr(true),
+			},
+		},
+	}
+
+	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := sched.GetEntry("bad-one"); ok {
+		t.Error("bad schedule should be skipped")
+	}
+	if _, ok := sched.GetEntry("good-one"); !ok {
+		t.Error("valid schedule should still be registered")
 	}
 }

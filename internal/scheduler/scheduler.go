@@ -60,6 +60,10 @@ type Config struct {
 	// Skill is the name of the skill to invoke when this schedule fires.
 	Skill string
 
+	// Agent is the name of the agent this schedule targets. Defaults to
+	// "default" when unset.
+	Agent string
+
 	// SessionTier is the permission tier for the session spawned on each run.
 	SessionTier string
 
@@ -86,6 +90,7 @@ type Entry struct {
 	Type        ScheduleType
 	Expr        string // original schedule expression string
 	Skill       string
+	Agent       string
 	SessionTier string
 	SessionMode string
 	Channel     string
@@ -165,6 +170,7 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 			Type:        ScheduleType(cfg.Type),
 			Expr:        cfg.Schedule,
 			Skill:       cfg.Skill,
+			Agent:       cfg.Agent,
 			SessionTier: cfg.SessionTier,
 			SessionMode: cfg.SessionMode,
 			Channel:     cfg.Channel,
@@ -216,6 +222,7 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 			Type:        ScheduleType(cfg.Type),
 			Expr:        cfg.Schedule,
 			Skill:       cfg.Skill,
+			Agent:       cfg.Agent,
 			SessionTier: cfg.SessionTier,
 			SessionMode: cfg.SessionMode,
 			Channel:     cfg.Channel,
