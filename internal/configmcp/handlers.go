@@ -103,6 +103,30 @@ func (s *Server) registerTools() {
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, s.handleScheduleList)
 
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "skill_delete",
+		Description: "Delete an existing skill by name. Removes it from memory and deletes the skill file. In supervised mode the deletion is submitted for user approval.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Name of the skill to delete"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handleSkillDelete)
+
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "schedule_delete",
+		Description: "Delete an existing schedule by name. Removes it from the scheduler and from the config file. In supervised mode the deletion is submitted for user approval.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Name of the schedule to delete"}
+			},
+			"required": ["name"]
+		}`),
+	}, s.handleScheduleDelete)
+
 	// Tool & plugin management tools.
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "tool_list",
@@ -743,6 +767,97 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
 		"Update schedule: "+input.Name, payload, applyFn, false)
+}
+
+func (s *Server) handleSkillDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.AgentSkillsDir == "" {
+		return toolError("skill_delete is not available: no agent skills directory configured"), nil
+	}
+	if s.deps.RemoveSkill == nil {
+		return toolError("skill_delete is not available: no skill removal configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("skill_delete is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	if s.deps.GetSkill != nil {
+		if _, ok := s.deps.GetSkill(input.Name); !ok {
+			return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
+		}
+	}
+
+	deps := s.deps
+	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
+		if !deps.RemoveSkill(input.Name) {
+			return fmt.Errorf("skill %q not found", input.Name)
+		}
+		filename := filepath.Join(deps.AgentSkillsDir, input.Name+".md")
+		if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
+			deps.Logger.Info("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
+		}
+		deps.Logger.Info("skill deleted via config MCP", "name", input.Name)
+		return nil
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindDeleteSkill,
+		"Delete skill: "+input.Name, input.Name, applyFn, false)
+}
+
+func (s *Server) handleScheduleDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.Sched == nil {
+		return toolError("schedule_delete is not available: no scheduler configured"), nil
+	}
+
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("schedule_delete is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+
+	if _, ok := s.deps.Sched.GetEntry(input.Name); !ok {
+		return toolError(fmt.Sprintf("schedule %q not found", input.Name)), nil
+	}
+
+	schedRef := s.deps.Sched
+	configPath := s.deps.ConfigPath
+	logger := s.deps.Logger
+
+	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
+		if err := schedRef.Unregister(input.Name); err != nil {
+			return fmt.Errorf("unregistering schedule: %w", err)
+		}
+		if configPath != "" {
+			if err := tool.RemoveScheduleFromConfig(configPath, input.Name); err != nil {
+				logger.Error("schedule deleted but config persistence failed", "name", input.Name, "error", err)
+			}
+		}
+		logger.Info("schedule deleted via config MCP", "name", input.Name)
+		return nil
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
+		"Delete schedule: "+input.Name, input.Name, applyFn, false)
 }
 
 func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

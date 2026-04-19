@@ -12,6 +12,11 @@
   let expandedKey = $state(null)
   let confirmDelete = $state(null)
   let deleting = $state(false)
+  let showSetForm = $state(false)
+  let setKey = $state('')
+  let setValue = $state('')
+  let setTTL = $state('')
+  let saving = $state(false)
 
   onMount(async () => {
     try {
@@ -71,6 +76,24 @@
     }
   }
 
+  async function doSet() {
+    if (!setKey.trim()) return
+    saving = true
+    error = ''
+    try {
+      await api.kvSet(selectedAgent, setKey.trim(), setValue, setTTL.trim() || undefined)
+      setKey = ''
+      setValue = ''
+      setTTL = ''
+      showSetForm = false
+      await loadEntries()
+    } catch (e) {
+      error = e.message
+    } finally {
+      saving = false
+    }
+  }
+
   function truncate(s, n) {
     return s.length > n ? s.slice(0, n) + '\u2026' : s
   }
@@ -92,7 +115,13 @@
   }
 </script>
 
-<h1 class="page-title">KV Store</h1>
+<div class="page-header">
+  <h1 class="page-title">KV Store</h1>
+  <button class="btn-primary" onclick={() => showSetForm = !showSetForm} aria-expanded={showSetForm} disabled={!selectedAgent}>
+    {showSetForm ? 'Cancel' : 'Set Key'}
+  </button>
+</div>
+
 <ErrorBanner message={error} />
 
 <div class="controls">
@@ -111,6 +140,34 @@
       <button class="btn-ghost" onclick={applyFilter} disabled={loading}>Filter</button>
     </div>
   </label>
+</div>
+
+<div class="inline-panel" class:open={showSetForm}>
+  <div class="inline-panel-inner">
+    <form class="inline-form" onsubmit={(e) => { e.preventDefault(); doSet() }}>
+      <h2 class="form-title">Set Key</h2>
+      <div class="row">
+        <label>
+          Key
+          <input type="text" bind:value={setKey} placeholder="my-key" />
+        </label>
+        <label>
+          TTL
+          <input type="text" bind:value={setTTL} placeholder="5m, 24h (optional)" />
+        </label>
+      </div>
+      <label>
+        Value
+        <textarea bind:value={setValue} placeholder="Value (max 64KB)"></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn-ghost" onclick={() => showSetForm = false}>Cancel</button>
+        <button type="submit" class="btn-primary" disabled={saving || !setKey.trim()}>
+          {saving ? 'Saving\u2026' : 'Save'}
+        </button>
+      </div>
+    </form>
+  </div>
 </div>
 
 {#if loading}
@@ -166,7 +223,7 @@
   <div class="overlay" onclick={() => confirmDelete = null} role="dialog" tabindex="-1">
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
     <div class="confirm-modal" onclick={(e) => e.stopPropagation()}>
-      <h3>Delete key?</h3>
+      <h2>Delete key?</h2>
       <p>Are you sure you want to delete <code>{confirmDelete}</code> from agent <strong>{selectedAgent}</strong>?</p>
       <div class="modal-actions">
         <button class="btn-ghost" onclick={() => confirmDelete = null} disabled={deleting}>Cancel</button>
@@ -177,7 +234,6 @@
 {/if}
 
 <style>
-  .page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
   .controls { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
   .control-label { font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
   .control-label select, .control-label input {
@@ -187,6 +243,7 @@
   .control-label select:focus, .control-label input:focus { outline: none; border-color: var(--accent); }
   .filter-row { display: flex; gap: 6px; }
   .filter-row input { min-width: 180px; }
+  .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   .table-wrapper {
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); overflow-x: auto;
@@ -215,9 +272,5 @@
   }
   .expanded-meta { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
   .btn-sm.btn-danger { padding: 3px 8px; font-size: 12px; }
-
-  /* KV confirm-modal overrides (uses h3 instead of h2, tighter spacing) */
-  .confirm-modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
-  .confirm-modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
   .confirm-modal code { background: var(--bg); padding: 2px 6px; border-radius: 3px; font-size: 12px; }
 </style>

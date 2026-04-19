@@ -2091,6 +2091,204 @@ func TestScheduleUpdate_PersistsToConfig(t *testing.T) {
 	}
 }
 
+func TestScheduleDelete_Success(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	// First add a schedule.
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "to-delete",
+		"schedule": "@daily",
+		"channel":  "telegram:12345",
+	})
+	if isErr {
+		t.Fatalf("schedule_add error: %s", text)
+	}
+
+	// Delete it.
+	text, isErr = callTool(t, session, "schedule_delete", map[string]any{
+		"name": "to-delete",
+	})
+	if isErr {
+		t.Fatalf("schedule_delete error: %s", text)
+	}
+	if !strings.Contains(text, "to-delete") {
+		t.Errorf("response should mention schedule name, got: %s", text)
+	}
+}
+
+func TestScheduleDelete_NotFound(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
+		"name": "nonexistent",
+	})
+	if !isErr {
+		t.Fatalf("expected error for nonexistent schedule, got: %s", text)
+	}
+}
+
+func TestScheduleDelete_NoScheduler(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.Sched = nil
+		d.HandleMessage = nil
+	})
+
+	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
+		"name": "any",
+	})
+	if !isErr {
+		t.Fatalf("expected error when scheduler is nil, got: %s", text)
+	}
+}
+
+func TestScheduleDelete_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
+		"name": "any",
+	})
+	if !isErr {
+		t.Fatalf("expected error for restricted tier, got: %s", text)
+	}
+}
+
+func TestScheduleDelete_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+
+	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
+		"name": "",
+	})
+	if !isErr {
+		t.Fatalf("expected error for empty name, got: %s", text)
+	}
+}
+
+func TestScheduleDelete_PersistsToConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ConfigPath = configPath
+	})
+
+	// Add a schedule (persists to config).
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "persist-delete",
+		"schedule": "@daily",
+		"channel":  "telegram:1",
+	})
+	if isErr {
+		t.Fatalf("schedule_add error: %s", text)
+	}
+
+	// Verify it was written.
+	content, _ := os.ReadFile(configPath)
+	if !strings.Contains(string(content), "persist-delete") {
+		t.Fatal("config should contain schedule before deletion")
+	}
+
+	// Delete it.
+	text, isErr = callTool(t, session, "schedule_delete", map[string]any{
+		"name": "persist-delete",
+	})
+	if isErr {
+		t.Fatalf("schedule_delete error: %s", text)
+	}
+
+	// Verify it was removed from config.
+	content, _ = os.ReadFile(configPath)
+	if strings.Contains(string(content), "persist-delete") {
+		t.Errorf("config should not contain deleted schedule, got:\n%s", content)
+	}
+}
+
+func TestSkillDelete_Success(t *testing.T) {
+	var removedName string
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "doomed" {
+				return skill.Skill{Name: "doomed", Body: "# Doomed"}, true
+			}
+			return skill.Skill{}, false
+		}
+		d.RemoveSkill = func(name string) bool {
+			removedName = name
+			return true
+		}
+	})
+
+	// Create the skill file on disk so deletion can remove it.
+	if err := os.MkdirAll(deps.AgentSkillsDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deps.AgentSkillsDir, "doomed.md"), []byte("# Doomed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	text, isErr := callTool(t, session, "skill_delete", map[string]any{
+		"name": "doomed",
+	})
+	if isErr {
+		t.Fatalf("skill_delete error: %s", text)
+	}
+	if removedName != "doomed" {
+		t.Errorf("RemoveSkill called with %q, want doomed", removedName)
+	}
+
+	// Verify file is gone.
+	if _, err := os.Stat(filepath.Join(deps.AgentSkillsDir, "doomed.md")); !os.IsNotExist(err) {
+		t.Error("skill file should have been deleted")
+	}
+}
+
+func TestSkillDelete_NotFound(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(_ string) (skill.Skill, bool) { return skill.Skill{}, false }
+		d.RemoveSkill = func(_ string) bool { return false }
+	})
+
+	text, isErr := callTool(t, session, "skill_delete", map[string]any{
+		"name": "nonexistent",
+	})
+	if !isErr {
+		t.Fatalf("expected error for nonexistent skill, got: %s", text)
+	}
+}
+
+func TestSkillDelete_RestrictedTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(_ string) (skill.Skill, bool) { return skill.Skill{}, false }
+		d.RemoveSkill = func(_ string) bool { return true }
+		d.PermissionTier = func() string { return "restricted" }
+	})
+
+	text, isErr := callTool(t, session, "skill_delete", map[string]any{
+		"name": "any",
+	})
+	if !isErr {
+		t.Fatalf("expected error for restricted tier, got: %s", text)
+	}
+}
+
+func TestSkillDelete_MissingName(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(_ string) (skill.Skill, bool) { return skill.Skill{}, false }
+		d.RemoveSkill = func(_ string) bool { return true }
+	})
+
+	text, isErr := callTool(t, session, "skill_delete", map[string]any{
+		"name": "",
+	})
+	if !isErr {
+		t.Fatalf("expected error for empty name, got: %s", text)
+	}
+}
+
 func TestScheduleAdd_NoConfigPath_NoPersistence(t *testing.T) {
 	session, _ := newTestServer(t, nil) // no ConfigPath set
 

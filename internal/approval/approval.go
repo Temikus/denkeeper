@@ -45,6 +45,9 @@ const (
 	// ActionKindUpdateSkill is a request to update or rename an existing skill.
 	ActionKindUpdateSkill ActionKind = "update_skill"
 
+	// ActionKindDeleteSkill is a request to delete an existing skill.
+	ActionKindDeleteSkill ActionKind = "delete_skill"
+
 	// ActionKindModifySchedule is a request to register a new schedule entry at runtime.
 	ActionKindModifySchedule ActionKind = "modify_schedule"
 

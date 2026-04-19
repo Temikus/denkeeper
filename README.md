@@ -391,6 +391,8 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `POST` | `/api/v1/plugins` | `tools:write` | Add a plugin |
 | `DELETE` | `/api/v1/plugins/{name}` | `tools:write` | Remove a plugin |
 | `GET` | `/api/v1/kv/{agent}` | `kv:read` | List KV keys for an agent |
+| `GET` | `/api/v1/kv/{agent}/{key}` | `kv:read` | Get a KV key value |
+| `PUT` | `/api/v1/kv/{agent}/{key}` | `kv:write` | Set a KV key value (body: `{"value":"...","ttl":"5m"}`) |
 | `DELETE` | `/api/v1/kv/{agent}/{key}` | `kv:write` | Delete a KV key |
 
 **Chat example:**

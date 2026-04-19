@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -83,6 +84,55 @@ func (s *Server) handleGetKV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"key":   key,
 		"value": value,
+	})
+}
+
+// handleSetKV creates or updates a key-value pair.
+func (s *Server) handleSetKV(w http.ResponseWriter, r *http.Request) {
+	if !s.kvRequired(w) {
+		return
+	}
+
+	agentName := r.PathValue("agent")
+	key := r.PathValue("key")
+
+	if s.deps.Dispatcher.Agent(agentName) == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+
+	var body struct {
+		Value string `json:"value"`
+		TTL   string `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body: " + err.Error()})
+		return
+	}
+
+	var ttl time.Duration
+	if body.TTL != "" {
+		var err error
+		ttl, err = time.ParseDuration(body.TTL)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid ttl %q: %v", body.TTL, err)})
+			return
+		}
+		if ttl < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ttl must be non-negative"})
+			return
+		}
+	}
+
+	if err := s.deps.KVStore.Set(r.Context(), agentName, key, body.Value, ttl); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("setting key: %v", err)})
+		return
+	}
+
+	s.logger.Info("kv key set via API", "agent", agentName, "key", key)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key":   key,
+		"value": body.Value,
 	})
 }
 

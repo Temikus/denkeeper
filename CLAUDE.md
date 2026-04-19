@@ -78,7 +78,7 @@ Three tiers: `autonomous` (all actions), `supervised` (chat + tools with approva
 
 `internal/approval/` manages requests requiring human sign-off. Flow: Engine submits to Manager → Manager persists + registers closure → Engine attaches Approve/Deny inline keyboard → user clicks → callback handler resolves → closure invoked.
 
-Ten action kinds: `user_update`, `soul_update`, `identity_update`, `create_skill`, `update_skill`, `modify_schedule`, `install_tool`, `modify_config`, `browser_profile`, `tool_call`.
+Eleven action kinds: `user_update`, `soul_update`, `identity_update`, `create_skill`, `update_skill`, `delete_skill`, `modify_schedule`, `install_tool`, `modify_config`, `browser_profile`, `tool_call`.
 
 **Supervised tool call approval**: When `permission_tier = "supervised"`, each MCP tool call is submitted for approval before execution. Engine first checks `Manager.ShouldAutoApprove()` — if a matching rule exists, the tool executes immediately and a `tool_approval` ChatEvent with `approval_status: "auto_approved"` is emitted. Otherwise Engine blocks on `Manager.WaitForResolution(ctx, id)`. Dispatcher intercepts pending `"tool_approval"` ChatEvents and sends inline keyboard messages with four buttons: Approve, Deny, Auto (session), Auto (always). Denied tool calls feed "Tool call was denied by the operator." to the LLM.
 
@@ -128,7 +128,7 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PATCH/DELETE /api/v1/schedules/...` — schedule CRUD
 - `GET/POST/PUT/DELETE /api/v1/skills/...` — skill CRUD
 - `GET/PUT /api/v1/agents/{name}/persona/{section}` — persona sections
-- `GET/DELETE /api/v1/kv/...` — KV store
+- `GET/PUT/DELETE /api/v1/kv/...` — KV store
 - `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server

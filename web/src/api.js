@@ -166,6 +166,10 @@ export const api = {
     return apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}${params}`)
   },
   kvGet: (agent, key) => apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}/${encodeURIComponent(key)}`),
+  kvSet: (agent, key, value, ttl) => apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value, ttl: ttl || undefined }),
+  }),
   kvDelete: (agent, key) => apiFetch(`/api/v1/kv/${encodeURIComponent(agent)}/${encodeURIComponent(key)}`, { method: 'DELETE' }),
 
   // Browser

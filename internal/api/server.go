@@ -215,6 +215,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// KV store endpoints.
 	mux.HandleFunc("GET /api/v1/kv/{agent}", s.RequireScope("kv:read", s.handleListKV))
 	mux.HandleFunc("GET /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:read", s.handleGetKV))
+	mux.HandleFunc("PUT /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:write", s.handleSetKV))
 	mux.HandleFunc("DELETE /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:write", s.handleDeleteKV))
 
 	// LLM provider config endpoints (require admin scope).

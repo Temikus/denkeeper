@@ -438,25 +438,25 @@ Persist `onboarding_dismissed = true` to the TOML config and hide the onboarding
 
 ## KV Store
 
-### `GET /api/v1/kv`
+### `GET /api/v1/kv/{agent}`
 
 **Scope:** `kv:read`
 
-List KV keys for the authenticated agent (or all agents with `admin` scope).
+List KV keys for an agent. Accepts optional `?prefix=` query parameter.
 
-### `GET /api/v1/kv/{key}`
+### `GET /api/v1/kv/{agent}/{key}`
 
 **Scope:** `kv:read`
 
-Get a value by key.
+Get a value by key. Returns `404` if not found.
 
-### `PUT /api/v1/kv/{key}`
+### `PUT /api/v1/kv/{agent}/{key}`
 
 **Scope:** `kv:write`
 
-Set a value. Optionally accepts a `ttl` field (seconds).
+Set a value. Body: `{"value": "...", "ttl": "5m"}` (`ttl` is optional; omit for no expiry).
 
-### `DELETE /api/v1/kv/{key}`
+### `DELETE /api/v1/kv/{agent}/{key}`
 
 **Scope:** `kv:write`
 
