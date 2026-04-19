@@ -1,17 +1,33 @@
 package configmcp_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 )
 
+// personaTestEnv bundles test server state for persona tests.
+type personaTestEnv struct {
+	state      *testPersonaState
+	session    *mcp.ClientSession
+	approvals  *approval.Manager
+}
+
+func (e *personaTestEnv) call(t *testing.T, name string, args any) (string, bool) {
+	t.Helper()
+	return callTool(t, e.session, name, args)
+}
+
 // newTestServerWithPersona creates a test server with persona callbacks wired.
-func newTestServerWithPersona(t *testing.T, tier string) (*testPersonaState, func(string, any) (string, bool)) {
+func newTestServerWithPersona(t *testing.T, tier string) *personaTestEnv {
 	t.Helper()
 
 	state := &testPersonaState{
@@ -65,11 +81,7 @@ func newTestServerWithPersona(t *testing.T, tier string) (*testPersonaState, fun
 		}
 	})
 
-	call := func(name string, args any) (string, bool) {
-		return callTool(t, session, name, args)
-	}
-
-	return state, call
+	return &personaTestEnv{state: state, session: session, approvals: approvalMgr}
 }
 
 type testPersonaState struct {
@@ -77,9 +89,9 @@ type testPersonaState struct {
 }
 
 func TestPersonaGet_Soul(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_get", map[string]string{"section": "soul"})
+	text, isErr := env.call(t, "persona_get", map[string]string{"section": "soul"})
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
@@ -96,8 +108,8 @@ func TestPersonaGet_Soul(t *testing.T) {
 	if resp.Section != "soul" {
 		t.Errorf("section = %q, want soul", resp.Section)
 	}
-	if resp.Content != state.sections["soul"] {
-		t.Errorf("content = %q, want %q", resp.Content, state.sections["soul"])
+	if resp.Content != env.state.sections["soul"] {
+		t.Errorf("content = %q, want %q", resp.Content, env.state.sections["soul"])
 	}
 	if !resp.AgentMutable {
 		t.Error("soul should be agent_mutable")
@@ -105,9 +117,9 @@ func TestPersonaGet_Soul(t *testing.T) {
 }
 
 func TestPersonaGet_UnknownSection(t *testing.T) {
-	_, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_get", map[string]string{"section": "unknown"})
+	text, isErr := env.call(t, "persona_get", map[string]string{"section": "unknown"})
 	if !isErr {
 		t.Fatalf("expected error for unknown section, got: %s", text)
 	}
@@ -117,9 +129,9 @@ func TestPersonaGet_UnknownSection(t *testing.T) {
 }
 
 func TestPersonaUpdate_Soul_Autonomous(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_update", map[string]string{
+	text, isErr := env.call(t, "persona_update", map[string]string{
 		"section": "soul",
 		"content": "I am a curious explorer.",
 	})
@@ -129,54 +141,70 @@ func TestPersonaUpdate_Soul_Autonomous(t *testing.T) {
 	if !strings.Contains(text, "Done") {
 		t.Errorf("expected Done response, got: %s", text)
 	}
-	if state.sections["soul"] != "I am a curious explorer." {
-		t.Errorf("soul not updated: %q", state.sections["soul"])
+	if env.state.sections["soul"] != "I am a curious explorer." {
+		t.Errorf("soul not updated: %q", env.state.sections["soul"])
 	}
 }
 
 func TestPersonaUpdate_Soul_Supervised(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "supervised")
+	env := newTestServerWithPersona(t, "supervised")
 
-	text, isErr := call("persona_update", map[string]string{
+	resolveAsync(t, env.approvals, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, err := callToolCtx(ctx, env.session, "persona_update", map[string]string{
 		"section": "soul",
 		"content": "I am a curious explorer.",
 	})
+	if err != nil {
+		t.Fatalf("callToolCtx: %v", err)
+	}
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	if !strings.Contains(text, "approval") {
-		t.Errorf("expected approval submission, got: %s", text)
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
 	}
-	// Soul should NOT be updated yet.
-	if state.sections["soul"] != "I am a helpful assistant." {
-		t.Errorf("soul should not be updated before approval: %q", state.sections["soul"])
+	// Soul should be updated after approval.
+	if env.state.sections["soul"] != "I am a curious explorer." {
+		t.Errorf("soul should be updated after approval: %q", env.state.sections["soul"])
 	}
 }
 
 func TestPersonaUpdate_Soul_Restricted(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "restricted")
+	env := newTestServerWithPersona(t, "restricted")
 
-	text, isErr := call("persona_update", map[string]string{
+	resolveAsync(t, env.approvals, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, err := callToolCtx(ctx, env.session, "persona_update", map[string]string{
 		"section": "soul",
 		"content": "I am free now.",
 	})
+	if err != nil {
+		t.Fatalf("callToolCtx: %v", err)
+	}
 	if isErr {
 		t.Fatalf("unexpected error for restricted tier: %s", text)
 	}
-	// Restricted tier submits for approval (same as supervised).
-	if !strings.Contains(text, "Submitted for approval") {
-		t.Errorf("expected approval submission, got: %s", text)
+	// Restricted tier blocks until approved (same as supervised).
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
 	}
-	// Soul should be unchanged until approved.
-	if state.sections["soul"] != "I am a helpful assistant." {
-		t.Errorf("soul should not be modified until approved: %q", state.sections["soul"])
+	// Soul should be updated after approval.
+	if env.state.sections["soul"] != "I am free now." {
+		t.Errorf("soul should be updated after approval: %q", env.state.sections["soul"])
 	}
 }
 
 func TestPersonaUpdate_Memory_DirectWrite(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "restricted")
+	env := newTestServerWithPersona(t, "restricted")
 
-	text, isErr := call("persona_update", map[string]string{
+	text, isErr := env.call(t, "persona_update", map[string]string{
 		"section": "memory",
 		"content": "User discussed soul updates.",
 	})
@@ -184,8 +212,8 @@ func TestPersonaUpdate_Memory_DirectWrite(t *testing.T) {
 		t.Fatalf("unexpected error: %s", text)
 	}
 	// Memory should be written directly regardless of tier.
-	if state.sections["memory"] != "User discussed soul updates." {
-		t.Errorf("memory not updated: %q", state.sections["memory"])
+	if env.state.sections["memory"] != "User discussed soul updates." {
+		t.Errorf("memory not updated: %q", env.state.sections["memory"])
 	}
 }
 
@@ -194,9 +222,9 @@ func TestPersonaUpdate_Memory_DirectWrite(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPersonaMemoryManage_Append(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "restricted")
+	env := newTestServerWithPersona(t, "restricted")
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "append",
 		"content":   "## New Entry\n\nUser mentioned Go testing.",
 	})
@@ -206,7 +234,7 @@ func TestPersonaMemoryManage_Append(t *testing.T) {
 	if !strings.Contains(text, `"ok": true`) {
 		t.Errorf("expected ok response, got: %s", text)
 	}
-	mem := state.sections["memory"]
+	mem := env.state.sections["memory"]
 	if !strings.Contains(mem, "Last talked about testing.") {
 		t.Errorf("original memory should be preserved, got: %q", mem)
 	}
@@ -219,9 +247,9 @@ func TestPersonaMemoryManage_Append(t *testing.T) {
 }
 
 func TestPersonaMemoryManage_Append_EmptyContent(t *testing.T) {
-	_, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "append",
 		"content":   "  ",
 	})
@@ -231,11 +259,11 @@ func TestPersonaMemoryManage_Append_EmptyContent(t *testing.T) {
 }
 
 func TestPersonaMemoryManage_Remove(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 	// Pre-seed memory with a heading that RemoveMemoryEntry can find.
-	state.sections["memory"] = "## Old\n\nOld stuff."
+	env.state.sections["memory"] = "## Old\n\nOld stuff."
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "remove",
 		"heading":   "Old",
 	})
@@ -248,9 +276,9 @@ func TestPersonaMemoryManage_Remove(t *testing.T) {
 }
 
 func TestPersonaMemoryManage_Remove_NotFound(t *testing.T) {
-	_, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "remove",
 		"heading":   "NonExistent",
 	})
@@ -260,25 +288,25 @@ func TestPersonaMemoryManage_Remove_NotFound(t *testing.T) {
 }
 
 func TestPersonaMemoryManage_Replace(t *testing.T) {
-	state, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "replace",
 		"content":   "Completely new memory.",
 	})
 	if isErr {
 		t.Fatalf("unexpected error: %s", text)
 	}
-	if state.sections["memory"] != "Completely new memory." {
-		t.Errorf("memory not replaced: %q", state.sections["memory"])
+	if env.state.sections["memory"] != "Completely new memory." {
+		t.Errorf("memory not replaced: %q", env.state.sections["memory"])
 	}
 	_ = text
 }
 
 func TestPersonaMemoryManage_UnknownOperation(t *testing.T) {
-	_, call := newTestServerWithPersona(t, "autonomous")
+	env := newTestServerWithPersona(t, "autonomous")
 
-	text, isErr := call("persona_memory_manage", map[string]string{
+	text, isErr := env.call(t, "persona_memory_manage", map[string]string{
 		"operation": "delete",
 	})
 	if !isErr {

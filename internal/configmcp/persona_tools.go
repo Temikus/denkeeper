@@ -139,7 +139,7 @@ func (s *Server) handlePersonaUpdate(ctx context.Context, req *mcp.CallToolReque
 	}
 	summary := fmt.Sprintf("Update persona section: %s", section)
 
-	return applyOrSubmit(ctx, s.deps, kind, summary, input.Content, applyFn)
+	return applyOrSubmit(ctx, s.deps, kind, summary, input.Content, applyFn, false)
 }
 
 func (s *Server) handlePersonaMemoryManage(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -102,6 +103,17 @@ type Deps struct {
 	// RemoveMemoryEntry removes a memory entry by heading from MEMORY.md.
 	// If nil, persona_memory_manage remove is disabled.
 	RemoveMemoryEntry func(heading string) error
+
+	// AdapterContext returns the adapter routing context for the current
+	// in-flight message (adapter name, external ID, conversation ID).
+	// Used to populate approval requests so notifications route back to the
+	// originating adapter. If nil, routing context is unknown and approvals
+	// will have empty adapter fields.
+	AdapterContext func() (adapterName, externalID, conversationID string)
+
+	// ApprovalTimeout overrides the default 5-minute timeout for supervised
+	// approval waits. If zero, defaultApprovalTimeout is used.
+	ApprovalTimeout time.Duration
 
 	// ConfigPath is the path to the TOML config file. When non-empty,
 	// schedule mutations are persisted to disk so they survive restarts.

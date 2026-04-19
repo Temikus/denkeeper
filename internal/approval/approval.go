@@ -42,6 +42,9 @@ const (
 	// ActionKindCreateSkill is a request to create a new skill file in the agent's skills directory.
 	ActionKindCreateSkill ActionKind = "create_skill"
 
+	// ActionKindUpdateSkill is a request to update or rename an existing skill.
+	ActionKindUpdateSkill ActionKind = "update_skill"
+
 	// ActionKindModifySchedule is a request to register a new schedule entry at runtime.
 	ActionKindModifySchedule ActionKind = "modify_schedule"
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/agentctx"
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
@@ -59,6 +60,13 @@ type Engine struct {
 	agentSkillsDir  string               // where to write new agent skill files
 	globalSkillsDir string               // base global skills dir (for merge on reload)
 	sched           *scheduler.Scheduler // nil = scheduling disabled
+
+	// adapterCtx stores the current message's adapter routing info so that
+	// in-process MCP servers (configmcp) can retrieve it. The MCP JSON-RPC
+	// boundary prevents context.Context propagation, so we bridge via this
+	// field. Protected by adapterCtxMu; set at the start of each message.
+	adapterCtxMu  sync.RWMutex
+	adapterCtx    adapterRouting
 
 	logger *slog.Logger
 
@@ -548,9 +556,13 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
 	}
 
-	// Store adapter routing info in context for tool approval submissions.
-	ctx = context.WithValue(ctx, ctxKeyAdapter, msg.Adapter)
-	ctx = context.WithValue(ctx, ctxKeyExternalID, msg.ExternalID)
+	// Store adapter routing info in context for tool approval submissions,
+	// and in the engine struct for in-process MCP servers (configmcp) that
+	// can't receive context values across the JSON-RPC boundary.
+	ctx = agentctx.WithAdapter(ctx, msg.Adapter)
+	ctx = agentctx.WithExternalID(ctx, msg.ExternalID)
+	ctx = agentctx.WithConversationID(ctx, convID)
+	e.setAdapterContext(msg.Adapter, msg.ExternalID, convID)
 
 	// Wrap onEvent to accumulate content_delta text. If the context is
 	// cancelled mid-stream, savePartialResponse uses the accumulated content
@@ -975,8 +987,8 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 // e.approvalRetries times before giving up. Returns the result string and
 // whether the tool was approved.
 func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, bool) {
-	adapterName, _ := ctx.Value(ctxKeyAdapter).(string)
-	externalID, _ := ctx.Value(ctxKeyExternalID).(string)
+	adapterName := agentctx.Adapter(ctx)
+	externalID := agentctx.ExternalID(ctx)
 	noOp := func(_ context.Context, _ string) error { return nil }
 
 	maxAttempts := 1 + e.approvalRetries
@@ -1048,13 +1060,34 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 	return "Tool approval timed out — no response from operator.", false
 }
 
-// Context keys for adapter routing info passed through the pipeline.
-type ctxKey string
+// adapterRouting stores adapter routing info for the current message.
+// This lives on the Engine (not solely in context) because MCP tool
+// handlers receive a JSON-RPC context that cannot carry Go values.
+type adapterRouting struct {
+	adapter        string
+	externalID     string
+	conversationID string
+}
 
-const (
-	ctxKeyAdapter    ctxKey = "adapter"
-	ctxKeyExternalID ctxKey = "external_id"
-)
+// setAdapterContext stores the current message's adapter routing info.
+func (e *Engine) setAdapterContext(adapter, externalID, conversationID string) {
+	e.adapterCtxMu.Lock()
+	e.adapterCtx = adapterRouting{
+		adapter:        adapter,
+		externalID:     externalID,
+		conversationID: conversationID,
+	}
+	e.adapterCtxMu.Unlock()
+}
+
+// AdapterContext returns the adapter routing info for the current in-flight
+// message. Designed to be wired into configmcp.Deps.AdapterContext so that
+// in-process MCP servers can populate approval requests with routing info.
+func (e *Engine) AdapterContext() (adapterName, externalID, conversationID string) {
+	e.adapterCtxMu.RLock()
+	defer e.adapterCtxMu.RUnlock()
+	return e.adapterCtx.adapter, e.adapterCtx.externalID, e.adapterCtx.conversationID
+}
 
 // validateConversationID checks that a client-supplied conversation ID is
 // reasonable: non-empty, within length limits, and contains only safe characters.

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 )
 
 func newTestManager(t *testing.T) *Manager {
@@ -351,4 +352,127 @@ func TestManager_WaitForResolution_ViaCallback(t *testing.T) {
 	if status != StatusApproved {
 		t.Errorf("WaitForResolution via callback = %q, want %q", status, StatusApproved)
 	}
+}
+
+func TestManager_SubmitAndWait_Approved(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	var actionPayload string
+
+	// Resolve the first pending request after a short delay.
+	// SubmitAndWait blocks on select{} so the main goroutine holds no
+	// SQLite locks when this fires — no contention.
+	resolveAfter(t, m, true, 50*time.Millisecond)
+
+	status, req, err := m.SubmitAndWait(ctx, "default", ActionKindToolCall,
+		"Run tool X", "tool-payload", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, p string) error {
+			actionPayload = p
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubmitAndWait: %v", err)
+	}
+	if status != StatusApproved {
+		t.Errorf("status = %q, want %q", status, StatusApproved)
+	}
+	if req == nil || req.ID == "" {
+		t.Error("expected non-nil request with ID")
+	}
+	if actionPayload != "tool-payload" {
+		t.Errorf("action payload = %q, want %q", actionPayload, "tool-payload")
+	}
+}
+
+func TestManager_SubmitAndWait_Denied(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	actionCalled := false
+	resolveAfter(t, m, false, 50*time.Millisecond)
+
+	status, _, err := m.SubmitAndWait(ctx, "default", ActionKindToolCall,
+		"Run tool X", "payload", "ext-1", "telegram", "conv-1",
+		func(_ context.Context, _ string) error {
+			actionCalled = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("SubmitAndWait: %v", err)
+	}
+	if status != StatusDenied {
+		t.Errorf("status = %q, want %q", status, StatusDenied)
+	}
+	if actionCalled {
+		t.Error("action should not be called on denial")
+	}
+}
+
+func TestManager_SubmitAndWait_ContextCancelled(t *testing.T) {
+	m := newTestManager(t)
+
+	// Use a generous timeout so submit always succeeds even on slow CI.
+	// Never resolve the request — the context expiration is what we're testing.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	status, _, err := m.SubmitAndWait(ctx, "default", ActionKindToolCall,
+		"Run tool X", "payload", "ext-1", "telegram", "conv-1", nil,
+	)
+	if status != StatusExpired {
+		t.Errorf("status = %q, want %q", status, StatusExpired)
+	}
+	if err == nil {
+		t.Error("expected context error")
+	}
+}
+
+func TestManager_SubmitAndWait_NilAction(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	resolveAfter(t, m, true, 50*time.Millisecond)
+
+	// Should not panic with nil action.
+	status, _, err := m.SubmitAndWait(ctx, "default", ActionKindToolCall,
+		"Run tool X", "payload", "ext-1", "telegram", "conv-1", nil,
+	)
+	if err != nil {
+		t.Fatalf("SubmitAndWait: %v", err)
+	}
+	if status != StatusApproved {
+		t.Errorf("status = %q, want %q", status, StatusApproved)
+	}
+}
+
+// resolveAfter polls for the first pending request and resolves it.
+// It retries every 10ms for up to 5s after the initial delay.
+func resolveAfter(t *testing.T, m *Manager, approve bool, delay time.Duration) {
+	t.Helper()
+	go func() {
+		time.Sleep(delay)
+		deadline := time.After(5 * time.Second)
+		for {
+			reqs, err := m.List(context.Background(), StatusPending)
+			if err != nil {
+				t.Errorf("resolveAfter List: %v", err)
+				return
+			}
+			if len(reqs) > 0 {
+				if _, err := m.Resolve(context.Background(), reqs[0].ID, approve, "operator"); err != nil {
+					t.Errorf("resolveAfter Resolve: %v", err)
+				}
+				return
+			}
+			select {
+			case <-deadline:
+				t.Errorf("resolveAfter: no pending request within timeout")
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
 }

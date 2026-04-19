@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pelletier/go-toml/v2"
@@ -311,7 +312,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
-		"Create new skill: "+input.Name, payload, applyFn)
+		"Create new skill: "+input.Name, payload, applyFn, false)
 }
 
 func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -460,8 +461,8 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		summary = fmt.Sprintf("Rename skill: %s → %s", input.Name, effectiveName)
 	}
 
-	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
-		summary, payload, applyFn)
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindUpdateSkill,
+		summary, payload, applyFn, false)
 }
 
 type scheduleAddInput struct {
@@ -570,7 +571,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
-		"Add schedule: "+input.Name+" ("+input.Schedule+")", payload, applyFn)
+		"Add schedule: "+input.Name+" ("+input.Schedule+")", payload, applyFn, false)
 }
 
 func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -741,7 +742,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifySchedule,
-		"Update schedule: "+input.Name, payload, applyFn)
+		"Update schedule: "+input.Name, payload, applyFn, false)
 }
 
 func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -782,7 +783,7 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 
 	summary := fmt.Sprintf("Set %d fallback rule(s)", len(input.Rules))
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindModifyConfig,
-		summary, string(payload), applyFn)
+		summary, string(payload), applyFn, false)
 }
 
 func (s *Server) handleGetCostSummary(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -869,7 +870,7 @@ func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
-		summary, strings.TrimSpace(string(payload)), applyFn)
+		summary, strings.TrimSpace(string(payload)), applyFn, false)
 }
 
 func (s *Server) handleToolRemove(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -900,7 +901,7 @@ func (s *Server) handleToolRemove(ctx context.Context, req *mcp.CallToolRequest)
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
-		summary, input.Name, applyFn)
+		summary, input.Name, applyFn, false)
 }
 
 func (s *Server) handleToolRestart(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -931,7 +932,7 @@ func (s *Server) handleToolRestart(ctx context.Context, req *mcp.CallToolRequest
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
-		summary, input.Name, applyFn)
+		summary, input.Name, applyFn, false)
 }
 
 func (s *Server) handlePluginList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1004,7 +1005,7 @@ func (s *Server) handlePluginAdd(ctx context.Context, req *mcp.CallToolRequest) 
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
-		summary, strings.TrimSpace(string(payload)), applyFn)
+		summary, strings.TrimSpace(string(payload)), applyFn, false)
 }
 
 func (s *Server) handlePluginRemove(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1035,15 +1036,26 @@ func (s *Server) handlePluginRemove(ctx context.Context, req *mcp.CallToolReques
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindInstallTool,
-		summary, input.Name, applyFn)
+		summary, input.Name, applyFn, false)
 }
 
 // --------------------------------------------------------------------------
 // Shared helpers
 // --------------------------------------------------------------------------
 
+// defaultApprovalTimeout is the maximum time applyOrSubmit will wait for an
+// operator to approve or deny a config MCP action before timing out.
+const defaultApprovalTimeout = 5 * time.Minute
+
 // applyOrSubmit either executes fn immediately (autonomous tier) or submits
-// it to the approval manager (supervised tier). Returns a text tool result.
+// it to the approval manager and blocks until resolved (supervised/restricted).
+//
+// When forceApproval is true, the action requires approval even in autonomous
+// mode (used for destructive operations like browser profile deletion).
+//
+// The adapter context is captured eagerly via deps.AdapterContext at call time,
+// not lazily inside a goroutine, to avoid races if concurrent messages change
+// the engine's adapter state.
 func applyOrSubmit(
 	ctx context.Context,
 	deps Deps,
@@ -1051,40 +1063,67 @@ func applyOrSubmit(
 	summary string,
 	payload string,
 	fn approval.ActionFunc,
+	forceApproval bool,
 ) (*mcp.CallToolResult, error) {
-	switch deps.PermissionTier() {
-	case "autonomous":
+	tier := deps.PermissionTier()
+
+	// Fast path: autonomous tier without forceApproval executes immediately.
+	if tier == "autonomous" && !forceApproval {
 		if err := fn(ctx, payload); err != nil {
 			return toolError(fmt.Sprintf("action failed: %v", err)), nil
 		}
 		return toolText("Done: " + summary), nil
+	}
 
-	case "supervised", "restricted":
-		if deps.Approvals == nil {
-			// No manager wired — fall back to immediate execution.
-			if err := fn(ctx, payload); err != nil {
-				return toolError(fmt.Sprintf("action failed: %v", err)), nil
-			}
-			return toolText("Done: " + summary), nil
-		}
-		_, submitErr := deps.Approvals.Submit(
-			ctx,
-			deps.AgentName,
-			kind,
-			summary,
-			payload,
-			"", // externalID — unknown at tool-call time; approval can be resolved via API
-			"", // adapterName
-			"", // conversationID
-			fn,
-		)
-		if submitErr != nil {
-			return toolError(fmt.Sprintf("approval submit failed: %v", submitErr)), nil
-		}
-		return toolText("Submitted for approval: " + summary), nil
-
-	default:
+	// All other cases require approval (supervised, restricted, or forceApproval).
+	if tier != "autonomous" && tier != "supervised" && tier != "restricted" {
 		return toolError("action not permitted in current permission tier"), nil
+	}
+
+	if deps.Approvals == nil {
+		// No manager wired — fall back to immediate execution.
+		if err := fn(ctx, payload); err != nil {
+			return toolError(fmt.Sprintf("action failed: %v", err)), nil
+		}
+		return toolText("Done: " + summary), nil
+	}
+
+	// Capture adapter context eagerly (fix: avoids race if another message
+	// changes the engine's adapter state before SubmitAndWait completes).
+	var adapterName, externalID, conversationID string
+	if deps.AdapterContext != nil {
+		adapterName, externalID, conversationID = deps.AdapterContext()
+	}
+
+	timeout := deps.ApprovalTimeout
+	if timeout == 0 {
+		timeout = defaultApprovalTimeout
+	}
+	approvalCtx, approvalCancel := context.WithTimeout(ctx, timeout)
+	defer approvalCancel()
+
+	status, _, err := deps.Approvals.SubmitAndWait(
+		approvalCtx,
+		deps.AgentName,
+		kind,
+		summary,
+		payload,
+		externalID,
+		adapterName,
+		conversationID,
+		fn,
+	)
+	if err != nil && status != approval.StatusExpired {
+		return toolError(fmt.Sprintf("approval failed: %v", err)), nil
+	}
+
+	switch status {
+	case approval.StatusApproved:
+		return toolText("Done (approved): " + summary), nil
+	case approval.StatusDenied:
+		return toolText("Denied by operator: " + summary), nil
+	default:
+		return toolError("approval timed out: " + summary), nil
 	}
 }
 

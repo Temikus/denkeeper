@@ -88,7 +88,7 @@ func (s *Server) handleBrowserProfileClear(ctx context.Context, req *mcp.CallToo
 		return s.deps.BrowserProfiles.Clear(ctx, agent)
 	})
 
-	return applyOrSubmit(ctx, s.deps, approval.ActionKindBrowserProfile, summary, agent, applyFn)
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindBrowserProfile, summary, agent, applyFn, false)
 }
 
 func (s *Server) handleBrowserProfileDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -104,30 +104,8 @@ func (s *Server) handleBrowserProfileDelete(ctx context.Context, req *mcp.CallTo
 		return s.deps.BrowserProfiles.Delete(ctx, agent)
 	})
 
-	// Delete always requires approval regardless of tier.
-	if s.deps.Approvals == nil {
-		// No approval manager — execute immediately as fallback.
-		if err := applyFn(ctx, agent); err != nil {
-			return toolError(fmt.Sprintf("action failed: %v", err)), nil
-		}
-		return toolText("Done: " + summary), nil
-	}
-
-	_, submitErr := s.deps.Approvals.Submit(
-		ctx,
-		s.deps.AgentName,
-		approval.ActionKindBrowserProfile,
-		summary,
-		agent,
-		"", // externalID
-		"", // adapterName
-		"", // conversationID
-		applyFn,
-	)
-	if submitErr != nil {
-		return toolError(fmt.Sprintf("approval submit failed: %v", submitErr)), nil
-	}
-	return toolText("Submitted for approval: " + summary), nil
+	// forceApproval=true: delete always requires approval regardless of tier.
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindBrowserProfile, summary, agent, applyFn, true)
 }
 
 // resolveAgent extracts the "agent" field from the request arguments,

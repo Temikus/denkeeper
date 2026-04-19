@@ -80,7 +80,25 @@ func (m *Manager) Submit(
 	conversationID string,
 	action ActionFunc,
 ) (*Request, error) {
-	id := generateID()
+	return m.submit(generateID(), ctx, agentName, kind, summary, payload, externalID, adapterName, conversationID, action)
+}
+
+// submit is the internal implementation of Submit that accepts a pre-generated
+// ID. This allows SubmitAndWait to pre-register a waiter channel before the
+// request is persisted, eliminating the race between Submit and waiter
+// registration.
+func (m *Manager) submit(
+	id string,
+	ctx context.Context,
+	agentName string,
+	kind ActionKind,
+	summary string,
+	payload string,
+	externalID string,
+	adapterName string,
+	conversationID string,
+	action ActionFunc,
+) (*Request, error) {
 	expiresAt := time.Now().UTC().Add(DefaultTTL)
 	req := Request{
 		ID:             id,
@@ -280,11 +298,14 @@ func (m *Manager) notifyWaiter(id string, status Status) {
 	}
 }
 
-// SubmitAndWait submits an approval request and blocks until it is resolved.
-// The returned status is StatusApproved or StatusDenied. If the context is
-// cancelled before resolution, StatusExpired is returned.
-// Unlike Submit, the action closure is a no-op — the caller is expected to
-// take action based on the returned status.
+// SubmitAndWait creates an approval, blocks until it is resolved or the
+// context expires, and returns the outcome. The action func is registered
+// with the approval and fired automatically by Resolve on approval. Pass nil
+// for action if the caller handles the approved action itself.
+//
+// The waiter channel is pre-registered before the request is persisted,
+// eliminating the race between Submit and waiter registration that exists
+// when calling Submit + WaitForResolution separately.
 func (m *Manager) SubmitAndWait(
 	ctx context.Context,
 	agentName string,
@@ -294,6 +315,7 @@ func (m *Manager) SubmitAndWait(
 	externalID string,
 	adapterName string,
 	conversationID string,
+	action ActionFunc,
 ) (Status, *Request, error) {
 	ctx, span := approvalTracer.Start(ctx, "approval.wait", trace.WithAttributes(
 		attribute.String("approval.agent", agentName),
@@ -310,27 +332,31 @@ func (m *Manager) SubmitAndWait(
 		span.End()
 	}()
 
-	// No-op action — the caller acts on the returned status.
-	noOp := func(_ context.Context, _ string) error { return nil }
+	if action == nil {
+		action = func(_ context.Context, _ string) error { return nil }
+	}
 
-	req, err := m.Submit(ctx, agentName, kind, summary, payload, externalID, adapterName, conversationID, noOp)
+	// Pre-register the waiter channel BEFORE submitting, so that a
+	// near-instant Resolve never drops the notification.
+	id := generateID()
+	ch := make(chan Status, 1)
+	m.waiterMu.Lock()
+	m.waiters[id] = ch
+	m.waiterMu.Unlock()
+
+	defer func() {
+		m.waiterMu.Lock()
+		delete(m.waiters, id)
+		m.waiterMu.Unlock()
+	}()
+
+	req, err := m.submit(id, ctx, agentName, kind, summary, payload, externalID, adapterName, conversationID, action)
 	if err != nil {
 		span.SetAttributes(attribute.String("approval.resolution", "error"))
 		return StatusDenied, nil, err
 	}
 
 	span.SetAttributes(attribute.String("approval.id", req.ID))
-
-	ch := make(chan Status, 1)
-	m.waiterMu.Lock()
-	m.waiters[req.ID] = ch
-	m.waiterMu.Unlock()
-
-	defer func() {
-		m.waiterMu.Lock()
-		delete(m.waiters, req.ID)
-		m.waiterMu.Unlock()
-	}()
 
 	select {
 	case status := <-ch:

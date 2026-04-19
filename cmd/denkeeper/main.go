@@ -642,6 +642,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 			}
 			router.SetFallbacks(converted)
 		},
+		AdapterContext:     e.AdapterContext,
 		BrowserProfiles:    abc.browserProfiles,
 		GetPersonaSection:  e.PersonaSection,
 		SavePersonaSection: e.SavePersonaSection,

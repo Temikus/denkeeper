@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -97,6 +98,61 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args any) (
 		}
 	}
 	return text, result.IsError
+}
+
+// callToolCtx is like callTool but accepts a context and returns error rather
+// than calling t.Fatalf, so it can be used from goroutines.
+func callToolCtx(ctx context.Context, session *mcp.ClientSession, name string, args any) (string, bool, error) {
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", false, err
+	}
+	var argsMap map[string]any
+	if err := json.Unmarshal(argsJSON, &argsMap); err != nil {
+		return "", false, err
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      name,
+		Arguments: argsMap,
+	})
+	if err != nil {
+		return "", false, err
+	}
+
+	var text string
+	for _, c := range result.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text = tc.Text
+			break
+		}
+	}
+	return text, result.IsError, nil
+}
+
+// resolveAsync polls for a pending approval and resolves it (approve or deny)
+// in a background goroutine. The goroutine is cancelled via t.Cleanup to avoid
+// calling t.Error after the test has finished (which would panic).
+func resolveAsync(t *testing.T, mgr *approval.Manager, approve bool) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				reqs, _ := mgr.List(ctx, approval.StatusPending)
+				if len(reqs) > 0 {
+					_, _ = mgr.Resolve(ctx, reqs[0].ID, approve, "test")
+					return
+				}
+			}
+		}
+	}()
 }
 
 // --------------------------------------------------------------------------
@@ -233,7 +289,69 @@ func TestSkillCreate_NoSkillsDir(t *testing.T) {
 // Tests: skill_create (supervised)
 // --------------------------------------------------------------------------
 
-func TestSkillCreate_Supervised_SubmitsApproval(t *testing.T) {
+func TestSkillCreate_Supervised_BlocksUntilApproved(t *testing.T) {
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	approvalMgr := approval.NewManager(store, newTestLogger(t))
+
+	var skillsDir string
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		skillsDir = d.AgentSkillsDir
+		d.PermissionTier = func() string { return "supervised" }
+		d.Approvals = approvalMgr
+		d.AdapterContext = func() (string, string, string) {
+			return "telegram", "ext-42", "conv-1"
+		}
+	})
+
+	// Approve asynchronously once the approval appears.
+	resolveAsync(t, approvalMgr, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "skill_create", map[string]any{
+		"name": "supervised-skill",
+		"body": "# Supervised\n\nApproved.",
+	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
+	}
+
+	// The skill file should exist now (action executed after approval).
+	skillFile := filepath.Join(skillsDir, "supervised-skill.md")
+	if _, err := os.Stat(skillFile); err != nil {
+		t.Errorf("skill file should exist after approval: %v", err)
+	}
+
+	// Approval should carry adapter context.
+	resolved, _ := approvalMgr.List(context.Background(), approval.StatusApproved)
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 resolved approval, got %d", len(resolved))
+	}
+	if resolved[0].AdapterName != "telegram" {
+		t.Errorf("AdapterName = %q, want %q", resolved[0].AdapterName, "telegram")
+	}
+	if resolved[0].ExternalID != "ext-42" {
+		t.Errorf("ExternalID = %q, want %q", resolved[0].ExternalID, "ext-42")
+	}
+	if resolved[0].ConversationID != "conv-1" {
+		t.Errorf("ConversationID = %q, want %q", resolved[0].ConversationID, "conv-1")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: schedule_add
+
+func TestSkillCreate_Supervised_Denied(t *testing.T) {
 	store, err := approval.NewInMemoryStore()
 	if err != nil {
 		t.Fatalf("NewInMemoryStore: %v", err)
@@ -247,38 +365,98 @@ func TestSkillCreate_Supervised_SubmitsApproval(t *testing.T) {
 		d.Approvals = approvalMgr
 	})
 
-	text, isErr := callTool(t, session, "skill_create", map[string]any{
-		"name": "supervised-skill",
-		"body": "# Supervised\n\nPending approval.",
+	resolveAsync(t, approvalMgr, false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "skill_create", map[string]any{
+		"name": "denied-skill",
+		"body": "# Denied",
 	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
 	if isErr {
-		t.Fatalf("unexpected error: %s", text)
+		t.Fatalf("unexpected tool error: %s", text)
 	}
-	if !strings.Contains(text, "pproval") && !strings.Contains(text, "ubmit") {
-		t.Errorf("expected approval-related message, got: %s", text)
+	if !strings.Contains(text, "Denied") {
+		t.Errorf("expected denied message, got: %s", text)
 	}
 
-	// The skill file should NOT exist yet (approval pending).
-	skillFile := filepath.Join(skillsDir, "supervised-skill.md")
+	// The skill file should NOT exist.
+	skillFile := filepath.Join(skillsDir, "denied-skill.md")
 	if _, err := os.Stat(skillFile); err == nil {
-		t.Error("skill file should not exist before approval")
-	}
-
-	// A pending approval should be recorded.
-	requests, err := approvalMgr.List(context.Background(), approval.StatusPending)
-	if err != nil {
-		t.Fatalf("listing approvals: %v", err)
-	}
-	if len(requests) != 1 {
-		t.Fatalf("expected 1 pending approval, got %d", len(requests))
-	}
-	if requests[0].Kind != approval.ActionKindCreateSkill {
-		t.Errorf("unexpected approval kind: %v", requests[0].Kind)
+		t.Error("skill file should not exist after denial")
 	}
 }
 
-// --------------------------------------------------------------------------
-// Tests: schedule_add
+func TestSkillCreate_Supervised_TimesOut(t *testing.T) {
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	approvalMgr := approval.NewManager(store, newTestLogger(t))
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+		d.Approvals = approvalMgr
+		d.ApprovalTimeout = 100 * time.Millisecond // short timeout for test
+	})
+
+	// No resolveAsync — nobody approves. Outer context is longer than
+	// ApprovalTimeout so the MCP call completes normally.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "skill_create", map[string]any{
+		"name": "timeout-skill",
+		"body": "# Timeout",
+	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
+	if !isErr {
+		t.Fatalf("expected error for timed-out approval, got: %s", text)
+	}
+	if !strings.Contains(text, "timed out") {
+		t.Errorf("expected timeout message, got: %s", text)
+	}
+}
+
+func TestScheduleAdd_Supervised_BlocksUntilApproved(t *testing.T) {
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	approvalMgr := approval.NewManager(store, newTestLogger(t))
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+		d.Approvals = approvalMgr
+	})
+
+	resolveAsync(t, approvalMgr, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "schedule_add", map[string]any{
+		"name":     "supervised-sched",
+		"schedule": "@every 1h",
+		"channel":  "telegram:12345",
+	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
+	}
+}
+
 // --------------------------------------------------------------------------
 
 func TestScheduleAdd_Autonomous_Success(t *testing.T) {
@@ -1410,7 +1588,7 @@ func TestGetCostSummary_RestrictedTier(t *testing.T) {
 // Tests: supervised tier approvals for new tools
 // --------------------------------------------------------------------------
 
-func TestSetFallback_Supervised_SubmitsApproval(t *testing.T) {
+func TestSetFallback_Supervised_BlocksUntilApproved(t *testing.T) {
 	store, err := approval.NewInMemoryStore()
 	if err != nil {
 		t.Fatalf("NewInMemoryStore: %v", err)
@@ -1426,33 +1604,29 @@ func TestSetFallback_Supervised_SubmitsApproval(t *testing.T) {
 		}
 	})
 
-	text, isErr := callTool(t, session, "set_fallback", map[string]any{
+	resolveAsync(t, approvalMgr, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "set_fallback", map[string]any{
 		"rules": []map[string]any{
 			{"trigger": "error", "action": "switch_model", "model": "gpt-4"},
 		},
 	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
 	if isErr {
 		t.Fatalf("set_fallback error: %s", text)
 	}
-	if !strings.Contains(text, "pproval") && !strings.Contains(text, "ubmit") {
-		t.Errorf("expected approval submission message, got: %s", text)
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
 	}
 
-	// Should NOT have been applied yet.
-	if applied {
-		t.Error("fallback rules should not be applied before approval")
-	}
-
-	// A pending approval should exist.
-	requests, err := approvalMgr.List(context.Background(), approval.StatusPending)
-	if err != nil {
-		t.Fatalf("listing approvals: %v", err)
-	}
-	if len(requests) != 1 {
-		t.Fatalf("expected 1 pending approval, got %d", len(requests))
-	}
-	if requests[0].Kind != approval.ActionKindModifyConfig {
-		t.Errorf("approval kind = %q, want modify_config", requests[0].Kind)
+	// Should have been applied after approval.
+	if !applied {
+		t.Error("fallback rules should be applied after approval")
 	}
 }
 
@@ -1640,6 +1814,68 @@ func TestSkillUpdate_Restricted(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(text), "denied") && !strings.Contains(strings.ToLower(text), "restricted") {
 		t.Errorf("error should mention denied/restricted: %s", text)
+	}
+}
+
+func TestSkillUpdate_Supervised_BlocksUntilApproved(t *testing.T) {
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	approvalMgr := approval.NewManager(store, newTestLogger(t))
+
+	var updated bool
+	var skillsDir string
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		skillsDir = d.AgentSkillsDir
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "greet" {
+				return skill.Skill{Name: "greet", Body: "# Original"}, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(_ string, _ skill.Skill) bool { updated = true; return true }
+		d.PermissionTier = func() string { return "supervised" }
+		d.Approvals = approvalMgr
+	})
+
+	// Pre-create the skills dir and existing file so ApplySkillUpdate can write.
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "greet.md"), []byte("# Original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolveAsync(t, approvalMgr, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	text, isErr, callErr := callToolCtx(ctx, session, "skill_update", map[string]any{
+		"name": "greet",
+		"body": "# Updated",
+	})
+	if callErr != nil {
+		t.Fatalf("callToolCtx: %v", callErr)
+	}
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(text, "approved") {
+		t.Errorf("expected approved message, got: %s", text)
+	}
+	if !updated {
+		t.Error("skill should have been updated after approval")
+	}
+
+	// Verify the approval used ActionKindUpdateSkill, not CreateSkill.
+	resolved, _ := approvalMgr.List(context.Background(), approval.StatusApproved)
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 resolved approval, got %d", len(resolved))
+	}
+	if resolved[0].Kind != approval.ActionKindUpdateSkill {
+		t.Errorf("approval kind = %q, want %q", resolved[0].Kind, approval.ActionKindUpdateSkill)
 	}
 }
 
