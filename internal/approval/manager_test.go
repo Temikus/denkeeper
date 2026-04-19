@@ -452,22 +452,37 @@ func TestManager_SubmitAndWait_NilAction(t *testing.T) {
 // It retries every 10ms for up to 5s after the initial delay.
 func resolveAfter(t *testing.T, m *Manager, approve bool, delay time.Duration) {
 	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	go func() {
 		time.Sleep(delay)
 		deadline := time.After(5 * time.Second)
 		for {
-			reqs, err := m.List(context.Background(), StatusPending)
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			reqs, err := m.List(ctx, StatusPending)
 			if err != nil {
+				if ctx.Err() != nil {
+					return // test ended, DB closed — not an error
+				}
 				t.Errorf("resolveAfter List: %v", err)
 				return
 			}
 			if len(reqs) > 0 {
-				if _, err := m.Resolve(context.Background(), reqs[0].ID, approve, "operator"); err != nil {
+				if _, err := m.Resolve(ctx, reqs[0].ID, approve, "operator"); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					t.Errorf("resolveAfter Resolve: %v", err)
 				}
 				return
 			}
 			select {
+			case <-ctx.Done():
+				return
 			case <-deadline:
 				t.Errorf("resolveAfter: no pending request within timeout")
 				return

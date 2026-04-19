@@ -351,6 +351,42 @@ describe('Settings page', () => {
     })
   })
 
+  test('shows version info when server returns version', async () => {
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('v0.25.0')).toBeInTheDocument()
+      expect(screen.getByText('abc1234')).toBeInTheDocument()
+      expect(screen.getByText('go1.22.0')).toBeInTheDocument()
+    })
+  })
+
+  test('hides commit when commit is unknown', async () => {
+    server.use(
+      http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: 'v0.25.0',
+        commit: 'unknown',
+        go_version: 'go1.22.0',
+      }))
+    )
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('v0.25.0')).toBeInTheDocument()
+    })
+    // commit='unknown' should not be rendered
+    expect(screen.queryByText('unknown')).not.toBeInTheDocument()
+  })
+
+  test('hides version info when server config fails', async () => {
+    server.use(
+      http.get('/api/v1/server/config', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 }))
+    )
+    render(Settings)
+    await waitFor(() => {
+      expect(screen.getByText('Password Enabled')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Version')).not.toBeInTheDocument()
+  })
+
   test('collapsible sections toggle', async () => {
     render(Settings)
     await waitFor(() => {
