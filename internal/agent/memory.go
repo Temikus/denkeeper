@@ -127,8 +127,9 @@ type SQLiteMemoryStore struct {
 
 // Compile-time interface checks.
 var (
-	_ MemoryStore    = (*SQLiteMemoryStore)(nil)
-	_ TelemetryStore = (*SQLiteMemoryStore)(nil)
+	_ MemoryStore        = (*SQLiteMemoryStore)(nil)
+	_ TelemetryStore     = (*SQLiteMemoryStore)(nil)
+	_ ActiveChannelStore = (*SQLiteMemoryStore)(nil)
 )
 
 const schema = `
@@ -204,6 +205,14 @@ CREATE TABLE IF NOT EXISTS conversation_stats (
 );
 `
 
+const channelSchema = `
+CREATE TABLE IF NOT EXISTS active_channels (
+    adapter_key TEXT PRIMARY KEY,
+    channel_name TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 // initDB runs the base schema then applies telemetry migrations.
 func initDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
@@ -216,6 +225,9 @@ func initDB(db *sqlx.DB) error {
 	}
 	if _, err := db.Exec(telemetryTablesSchema); err != nil {
 		return fmt.Errorf("initializing telemetry schema: %w", err)
+	}
+	if _, err := db.Exec(channelSchema); err != nil {
+		return fmt.Errorf("initializing channel schema: %w", err)
 	}
 	return nil
 }
@@ -722,4 +734,60 @@ func buildTimeFilter(since, until *time.Time) (string, []any) {
 
 func (s *SQLiteMemoryStore) Close() error {
 	return s.db.Close()
+}
+
+// ---------------------------------------------------------------------------
+// ActiveChannelStore implementation
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteMemoryStore) GetActiveChannel(ctx context.Context, adapterKey string) (string, error) {
+	var name string
+	err := s.db.GetContext(ctx, &name,
+		`SELECT channel_name FROM active_channels WHERE adapter_key = ?`, adapterKey)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("getting active channel for %q: %w", adapterKey, err)
+	}
+	return name, nil
+}
+
+func (s *SQLiteMemoryStore) SetActiveChannel(ctx context.Context, adapterKey, channelName string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO active_channels (adapter_key, channel_name, updated_at)
+		 VALUES (?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(adapter_key) DO UPDATE SET channel_name = excluded.channel_name, updated_at = CURRENT_TIMESTAMP`,
+		adapterKey, channelName)
+	if err != nil {
+		return fmt.Errorf("setting active channel for %q: %w", adapterKey, err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) ClearActiveChannel(ctx context.Context, adapterKey string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM active_channels WHERE adapter_key = ?`, adapterKey)
+	if err != nil {
+		return fmt.Errorf("clearing active channel for %q: %w", adapterKey, err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) ListActiveChannels(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT adapter_key, channel_name FROM active_channels`)
+	if err != nil {
+		return nil, fmt.Errorf("listing active channels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var key, name string
+		if err := rows.Scan(&key, &name); err != nil {
+			return nil, fmt.Errorf("scanning active channel row: %w", err)
+		}
+		result[key] = name
+	}
+	return result, rows.Err()
 }

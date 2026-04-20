@@ -656,3 +656,378 @@ func TestActivityLog_Render_EscapesHTML(t *testing.T) {
 		t.Errorf("HTML not escaped: %s", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Channel routing tests
+// ---------------------------------------------------------------------------
+
+func TestDispatcher_ResolveChannel_SpecificBinding(t *testing.T) {
+	sentDefault := &sentMessages{}
+	sentWork := &sentMessages{}
+
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	workEngine := newTestEngine(t, "work", sentWork)
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+		{Name: "work", AgentName: "work", Adapters: []string{"telegram:99999"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine, "work": workEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	msg := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "99999",
+		Text:       "Hello work",
+		Timestamp:  time.Now(),
+	}
+
+	ch, e := d.resolveChannel(msg)
+	if ch == nil || ch.Name != "work" {
+		t.Fatalf("resolveChannel channel = %v, want work", ch)
+	}
+	if e.Name() != "work" {
+		t.Errorf("resolveChannel engine = %q, want work", e.Name())
+	}
+}
+
+func TestDispatcher_ResolveChannel_WildcardBinding(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	msg := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "11111",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	}
+
+	ch, e := d.resolveChannel(msg)
+	if ch == nil || ch.Name != "personal" {
+		t.Fatalf("resolveChannel channel = %v, want personal", ch)
+	}
+	if e.Name() != "default" {
+		t.Errorf("resolveChannel engine = %q, want default", e.Name())
+	}
+}
+
+func TestDispatcher_ResolveChannel_ActiveOverride(t *testing.T) {
+	sentDefault := &sentMessages{}
+	sentWork := &sentMessages{}
+
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	workEngine := newTestEngine(t, "work", sentWork)
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+		{Name: "work", AgentName: "work", Adapters: []string{}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine, "work": workEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	// Set active override to "work" for this chat.
+	d.activeChannelsMu.Lock()
+	d.activeChannels["telegram:11111"] = "work"
+	d.activeChannelsMu.Unlock()
+
+	msg := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "11111",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	}
+
+	ch, e := d.resolveChannel(msg)
+	if ch == nil || ch.Name != "work" {
+		t.Fatalf("resolveChannel channel = %v, want work (active override)", ch)
+	}
+	if e.Name() != "work" {
+		t.Errorf("resolveChannel engine = %q, want work", e.Name())
+	}
+}
+
+func TestDispatcher_ResolveChannel_FallbackToResolveAgent(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	// Channels configured but none match "discord" adapter.
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		[]Binding{{Pattern: "discord", AgentName: "default"}},
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	msg := adapter.IncomingMessage{
+		Adapter:    "discord",
+		ExternalID: "guild-123",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	}
+
+	// resolveChannel returns nil — no channel matches discord.
+	ch, e := d.resolveChannel(msg)
+	if ch != nil {
+		t.Fatalf("resolveChannel channel = %v, want nil for discord", ch)
+	}
+	if e != nil {
+		t.Fatalf("resolveChannel engine = %v, want nil", e)
+	}
+
+	// Legacy resolveAgent still works as fallback.
+	fallback := d.resolveAgent(msg)
+	if fallback == nil || fallback.Name() != "default" {
+		t.Errorf("resolveAgent fallback = %v, want default", fallback)
+	}
+}
+
+func TestDispatcher_ResolveChannel_NoChannels_ReturnsNil(t *testing.T) {
+	// Without WithChannels, resolveChannel always returns nil.
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		[]Binding{{Pattern: "telegram", AgentName: "default"}},
+		nil,
+		testLogger(),
+	)
+
+	msg := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "123", Text: "Hello"}
+	ch, e := d.resolveChannel(msg)
+	if ch != nil || e != nil {
+		t.Errorf("resolveChannel without channels = (%v, %v), want (nil, nil)", ch, e)
+	}
+}
+
+func TestChannel_ConversationID(t *testing.T) {
+	ch := &Channel{Name: "work"}
+	if got := ch.ConversationID(); got != "chan:work" {
+		t.Errorf("ConversationID() = %q, want chan:work", got)
+	}
+}
+
+func TestIsSessionCommand(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"/session", true},
+		{"/session work", true},
+		{"/session reset", true},
+		{"  /session  ", true},
+		{"/sessions", false},
+		{"hello /session", false},
+		{"/Session", false}, // case sensitive
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isSessionCommand(tt.text); got != tt.want {
+			t.Errorf("isSessionCommand(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestDispatcher_SessionCommand_Switch(t *testing.T) {
+	sentDefault := &sentMessages{}
+	sentWork := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	workEngine := newTestEngine(t, "work", sentWork)
+
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+		{Name: "work", AgentName: "work", Adapters: []string{}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine, "work": workEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	ctx := context.Background()
+
+	// Switch to "work" channel.
+	d.handleSessionCommand(ctx, adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/session work",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; got != `Switched to channel "work" (agent: work).` {
+		t.Errorf("switch response = %q", got)
+	}
+
+	// Verify active channel was set.
+	d.activeChannelsMu.RLock()
+	active := d.activeChannels["telegram:12345"]
+	d.activeChannelsMu.RUnlock()
+	if active != "work" {
+		t.Errorf("active channel = %q, want work", active)
+	}
+}
+
+func TestDispatcher_SessionCommand_Reset(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	// Pre-set an active channel.
+	d.activeChannelsMu.Lock()
+	d.activeChannels["telegram:12345"] = "personal"
+	d.activeChannelsMu.Unlock()
+
+	ctx := context.Background()
+	d.handleSessionCommand(ctx, adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/session reset",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; got != "Session reset to default routing." {
+		t.Errorf("reset response = %q", got)
+	}
+
+	// Verify active channel was cleared.
+	d.activeChannelsMu.RLock()
+	_, exists := d.activeChannels["telegram:12345"]
+	d.activeChannelsMu.RUnlock()
+	if exists {
+		t.Error("active channel should have been cleared after reset")
+	}
+}
+
+func TestDispatcher_SessionCommand_UnknownChannel(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	d.handleSessionCommand(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/session nonexistent",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; got != `Unknown channel "nonexistent". Use /session to list available channels.` {
+		t.Errorf("unknown channel response = %q", got)
+	}
+}
+
+func TestDispatcher_SessionCommand_List(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+		{Name: "work", AgentName: "default", Adapters: []string{}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	d.handleSessionCommand(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/session",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	// Just verify it contains key fragments — exact formatting may evolve.
+	if got := sent[0].Text; !contains(got, "personal") || !contains(got, "work") {
+		t.Errorf("session list should mention channel names, got: %q", got)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsSubstring(s, sub))
+}
+
+func containsSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

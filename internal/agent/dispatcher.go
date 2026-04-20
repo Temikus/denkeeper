@@ -26,15 +26,24 @@ type Binding struct {
 }
 
 // Dispatcher routes incoming messages to the correct agent Engine based on
-// adapter bindings. It owns the adapter lifecycle and the shared incoming channel.
+// channel bindings (or legacy adapter bindings). It owns the adapter lifecycle
+// and the shared incoming channel.
 type Dispatcher struct {
 	mu       sync.RWMutex
 	agents   map[string]*Engine         // agent name → engine
-	specific map[string]string          // "adapter:externalID" → agent name
-	wildcard map[string]string          // "adapter" → agent name
+	specific map[string]string          // "adapter:externalID" → agent name (legacy)
+	wildcard map[string]string          // "adapter" → agent name (legacy)
 	adapters map[string]adapter.Adapter // adapter name → adapter instance
 	incoming chan adapter.IncomingMessage
 	logger   *slog.Logger
+
+	// Channel routing (replaces legacy specific/wildcard when channels are set).
+	channels          map[string]*Channel // channel name → Channel
+	channelSpecific   map[string]string   // "adapter:externalID" → channel name
+	channelWildcard   map[string]string   // "adapter" → channel name
+	activeChannelsMu  sync.RWMutex
+	activeChannels    map[string]string   // "adapter:externalID" → channel name (runtime /session overrides)
+	activeStore       ActiveChannelStore  // persistence for /session selections
 
 	// OnBroadcast, when set, is called after an adapter message (Telegram,
 	// Discord, etc.) is successfully processed. The server uses this to
@@ -46,6 +55,34 @@ type Dispatcher struct {
 	mDispatch metric.Int64Counter
 }
 
+// DispatcherOption configures optional Dispatcher behavior.
+type DispatcherOption func(*Dispatcher)
+
+// WithChannels configures channel-based routing. When set, the dispatcher
+// routes messages through the channel registry instead of the legacy
+// specific/wildcard binding maps. The activeStore persists /session selections
+// across restarts.
+func WithChannels(channels []*Channel, activeStore ActiveChannelStore) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.channels = make(map[string]*Channel, len(channels))
+		d.channelSpecific = make(map[string]string)
+		d.channelWildcard = make(map[string]string)
+		d.activeChannels = make(map[string]string)
+		d.activeStore = activeStore
+
+		for _, ch := range channels {
+			d.channels[ch.Name] = ch
+			for _, binding := range ch.Adapters {
+				if strings.Contains(binding, ":") {
+					d.channelSpecific[binding] = ch.Name
+				} else {
+					d.channelWildcard[binding] = ch.Name
+				}
+			}
+		}
+	}
+}
+
 // NewDispatcher creates a Dispatcher from a set of named engines, bindings,
 // and adapters. Bindings are processed in order; specific bindings
 // ("telegram:12345") take priority over wildcard bindings ("telegram").
@@ -54,6 +91,7 @@ func NewDispatcher(
 	bindings []Binding,
 	adapters []adapter.Adapter,
 	logger *slog.Logger,
+	opts ...DispatcherOption,
 ) *Dispatcher {
 	specific := make(map[string]string)
 	wildcard := make(map[string]string)
@@ -76,7 +114,7 @@ func NewDispatcher(
 	dispatch, _ := meter.Int64Counter("denkeeper.dispatch",
 		metric.WithDescription("Messages dispatched to agents"))
 
-	return &Dispatcher{
+	d := &Dispatcher{
 		agents:    agents,
 		specific:  specific,
 		wildcard:  wildcard,
@@ -86,6 +124,10 @@ func NewDispatcher(
 		mDispatch: dispatch,
 		logger:    logger,
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // resolveAgent finds the Engine that should handle the given message.
@@ -106,6 +148,89 @@ func (d *Dispatcher) resolveAgent(msg adapter.IncomingMessage) *Engine {
 		}
 	}
 	return d.agents["default"]
+}
+
+// hasChannels returns true when channel-based routing is configured.
+func (d *Dispatcher) hasChannels() bool {
+	return d.channels != nil
+}
+
+// resolveChannel finds the Channel and Engine for the given message.
+// Priority: active override (/session) > specific binding > wildcard > nil.
+// Returns (nil, nil) when no channel matches; callers fall back to resolveAgent.
+func (d *Dispatcher) resolveChannel(msg adapter.IncomingMessage) (*Channel, *Engine) {
+	if !d.hasChannels() {
+		return nil, nil
+	}
+
+	key := msg.Adapter + ":" + msg.ExternalID
+
+	// 1. Runtime override from /session command.
+	d.activeChannelsMu.RLock()
+	if name, ok := d.activeChannels[key]; ok {
+		d.activeChannelsMu.RUnlock()
+		if ch, ok := d.channels[name]; ok {
+			if e, ok := d.agents[ch.AgentName]; ok {
+				return ch, e
+			}
+		}
+		// Override references a stale channel — clear it and continue.
+		d.activeChannelsMu.Lock()
+		delete(d.activeChannels, key)
+		d.activeChannelsMu.Unlock()
+	} else {
+		d.activeChannelsMu.RUnlock()
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	// 2. Config-specific binding.
+	if name, ok := d.channelSpecific[key]; ok {
+		if ch, ok := d.channels[name]; ok {
+			if e, ok := d.agents[ch.AgentName]; ok {
+				return ch, e
+			}
+		}
+	}
+
+	// 3. Config-wildcard binding.
+	if name, ok := d.channelWildcard[msg.Adapter]; ok {
+		if ch, ok := d.channels[name]; ok {
+			if e, ok := d.agents[ch.AgentName]; ok {
+				return ch, e
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+// LoadActiveChannels reads persisted /session selections from the store and
+// populates the in-memory cache. Call once at startup after WithChannels.
+func (d *Dispatcher) LoadActiveChannels(ctx context.Context) error {
+	if d.activeStore == nil {
+		return nil
+	}
+	all, err := d.activeStore.ListActiveChannels(ctx)
+	if err != nil {
+		return fmt.Errorf("loading active channels: %w", err)
+	}
+	d.activeChannelsMu.Lock()
+	defer d.activeChannelsMu.Unlock()
+	for key, name := range all {
+		// Only load if the channel still exists in config.
+		if _, ok := d.channels[name]; ok {
+			d.activeChannels[key] = name
+		}
+	}
+	d.logger.Info("loaded active channel selections", "count", len(d.activeChannels))
+	return nil
+}
+
+// Channels returns the channel registry. Returns nil when channels are not configured.
+func (d *Dispatcher) Channels() map[string]*Channel {
+	return d.channels
 }
 
 // SendFor returns a SendFunc that routes outgoing messages through the
@@ -247,11 +372,30 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 
 			return ctx.Err()
 		case msg := <-d.incoming:
-			e := d.resolveAgent(msg)
+			// Intercept /session commands before routing.
+			if d.hasChannels() && isSessionCommand(msg.Text) {
+				d.handleSessionCommand(ctx, msg)
+				continue
+			}
+
+			// Try channel-based routing first, fall back to legacy.
+			var e *Engine
+			var ch *Channel
+			ch, e = d.resolveChannel(msg)
+			if e == nil {
+				e = d.resolveAgent(msg)
+			}
 			if e == nil {
 				d.logger.Warn("no agent found for message, dropping", "adapter", msg.Adapter, "external_id", msg.ExternalID)
 				continue
 			}
+
+			// Set conversation ID from channel so the engine uses
+			// the channel's session instead of the default key.
+			if ch != nil && msg.ConversationID == "" {
+				msg.ConversationID = ch.ConversationID()
+			}
+
 			d.mDispatch.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("adapter", msg.Adapter),
 				attribute.String("agent", e.Name())))
@@ -289,8 +433,143 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 	// Notify WebSocket clients of adapter activity so the web UI can
 	// refresh its session list or reload the active conversation.
 	if d.OnBroadcast != nil && msg.Adapter != "ws" && msg.Adapter != "api" {
-		convID := e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
+		convID := msg.ConversationID
+		if convID == "" {
+			convID = e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
+		}
 		d.OnBroadcast(e.Name(), convID, msg.Adapter, "New message processed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /session command handling
+// ---------------------------------------------------------------------------
+
+// isSessionCommand returns true when the message text is a /session command.
+func isSessionCommand(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return trimmed == "/session" || strings.HasPrefix(trimmed, "/session ")
+}
+
+// handleSessionCommand processes /session commands directly in the dispatcher,
+// bypassing the engine/LLM entirely. Responses go straight to the adapter.
+func (d *Dispatcher) handleSessionCommand(ctx context.Context, msg adapter.IncomingMessage) {
+	a, ok := d.adapters[msg.Adapter]
+	if !ok {
+		return
+	}
+
+	parts := strings.Fields(strings.TrimSpace(msg.Text))
+	// /session (no args) — list available channels.
+	if len(parts) == 1 {
+		d.sendSessionList(ctx, a, msg)
+		return
+	}
+
+	arg := parts[1]
+
+	// /session reset — clear override.
+	if arg == "reset" {
+		d.clearActiveChannel(ctx, msg)
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Adapter:    msg.Adapter,
+			ExternalID: msg.ExternalID,
+			Text:       "Session reset to default routing.",
+		})
+		return
+	}
+
+	// /session <name> — switch to named channel.
+	ch, ok := d.channels[arg]
+	if !ok {
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Adapter:    msg.Adapter,
+			ExternalID: msg.ExternalID,
+			Text:       fmt.Sprintf("Unknown channel %q. Use /session to list available channels.", arg),
+		})
+		return
+	}
+
+	// Verify the agent exists.
+	if _, ok := d.agents[ch.AgentName]; !ok {
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Adapter:    msg.Adapter,
+			ExternalID: msg.ExternalID,
+			Text:       fmt.Sprintf("Channel %q references unknown agent %q.", arg, ch.AgentName),
+		})
+		return
+	}
+
+	d.setActiveChannel(ctx, msg, ch.Name)
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Adapter:    msg.Adapter,
+		ExternalID: msg.ExternalID,
+		Text:       fmt.Sprintf("Switched to channel %q (agent: %s).", ch.Name, ch.AgentName),
+	})
+}
+
+// sendSessionList sends a list of available channels for the current adapter chat.
+func (d *Dispatcher) sendSessionList(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage) {
+	key := msg.Adapter + ":" + msg.ExternalID
+
+	d.activeChannelsMu.RLock()
+	activeName := d.activeChannels[key]
+	d.activeChannelsMu.RUnlock()
+
+	var b strings.Builder
+	b.WriteString("Available channels:\n")
+
+	for _, ch := range d.channels {
+		if ch.Implicit {
+			continue // hide auto-synthesized channels
+		}
+		marker := "  "
+		if ch.Name == activeName {
+			marker = "> "
+		}
+		fmt.Fprintf(&b, "%s%s (agent: %s)\n", marker, ch.Name, ch.AgentName)
+	}
+
+	if activeName == "" {
+		b.WriteString("\nNo active override — using default routing.")
+	} else {
+		fmt.Fprintf(&b, "\nActive: %s", activeName)
+	}
+
+	b.WriteString("\n\nUsage: /session <name> | /session reset")
+
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Adapter:    msg.Adapter,
+		ExternalID: msg.ExternalID,
+		Text:       b.String(),
+	})
+}
+
+// setActiveChannel persists a /session selection.
+func (d *Dispatcher) setActiveChannel(ctx context.Context, msg adapter.IncomingMessage, channelName string) {
+	key := msg.Adapter + ":" + msg.ExternalID
+	d.activeChannelsMu.Lock()
+	d.activeChannels[key] = channelName
+	d.activeChannelsMu.Unlock()
+
+	if d.activeStore != nil {
+		if err := d.activeStore.SetActiveChannel(ctx, key, channelName); err != nil {
+			d.logger.Error("persisting active channel", "error", err, "key", key, "channel", channelName)
+		}
+	}
+}
+
+// clearActiveChannel removes a /session override.
+func (d *Dispatcher) clearActiveChannel(ctx context.Context, msg adapter.IncomingMessage) {
+	key := msg.Adapter + ":" + msg.ExternalID
+	d.activeChannelsMu.Lock()
+	delete(d.activeChannels, key)
+	d.activeChannelsMu.Unlock()
+
+	if d.activeStore != nil {
+		if err := d.activeStore.ClearActiveChannel(ctx, key); err != nil {
+			d.logger.Error("clearing active channel", "error", err, "key", key)
+		}
 	}
 }
 

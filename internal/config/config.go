@@ -24,6 +24,7 @@ type Config struct {
 	Agent     AgentConfig             `toml:"agent"`
 	Session   SessionConfig           `toml:"session"`
 	Agents    []AgentInstanceConfig   `toml:"agents"`
+	Channels  []ChannelConfig         `toml:"channels"`
 	Schedules []ScheduleConfig        `toml:"schedules"`
 	Tools     map[string]ToolConfig   `toml:"tools"`
 	MaxTools  int                     `toml:"max_tools"` // combined limit for tools + plugins; 0 = default (50)
@@ -399,6 +400,31 @@ type AgentInstanceConfig struct {
 	Fallbacks []FallbackConfig `toml:"fallback"`
 }
 
+// ChannelConfig defines a named routing endpoint that binds adapter chats to an
+// agent with explicit session identity. Channels decouple conversations from the
+// rigid 1:1 agent-adapter binding, enabling session switching and cross-adapter
+// session sharing.
+type ChannelConfig struct {
+	// Name is a unique identifier for this channel.
+	Name string `toml:"name"`
+
+	// Agent is the name of the agent that handles messages on this channel.
+	Agent string `toml:"agent"`
+
+	// Adapters lists the adapter bindings for this channel, using the same
+	// format as AgentInstanceConfig.Adapters: "telegram" (wildcard) or
+	// "telegram:12345" (specific). Multiple bindings enable cross-adapter
+	// session sharing. An empty list means the channel is reachable only via
+	// /session command or the API.
+	Adapters []string `toml:"adapters"`
+
+	// Implicit is true when the channel was auto-synthesized from an agent's
+	// adapter bindings (backward compatibility). Not set via TOML — only
+	// populated by synthesizeChannels(). Implicit channels are hidden from
+	// /session listings.
+	Implicit bool `toml:"-"`
+}
+
 // VoiceConfig controls speech-to-text and text-to-speech.
 type VoiceConfig struct {
 	STTProvider    string            `toml:"stt_provider"`     // "openai" or "" (disabled)
@@ -767,6 +793,7 @@ func applyDefaults(cfg *Config) {
 	applyMiscDefaults(cfg)
 	synthesizeDefaultAgent(cfg)
 	applyAgentDefaults(cfg)
+	synthesizeChannels(cfg)
 	applyScheduleDefaults(cfg)
 }
 
@@ -1152,6 +1179,43 @@ func applyAgentDefaults(cfg *Config) {
 	}
 }
 
+// synthesizeChannels auto-generates channels from agent adapter bindings.
+// When no explicit [[channels]] section exists, all agent bindings are
+// synthesized. When explicit channels exist, any agent adapter bindings NOT
+// already covered by an explicit channel are still synthesized as implicit
+// channels, preventing silent loss of adapter routing.
+func synthesizeChannels(cfg *Config) {
+	// Collect adapter bindings and channel names already covered by explicit channels.
+	covered := make(map[string]bool)
+	usedNames := make(map[string]bool)
+	for _, ch := range cfg.Channels {
+		usedNames[ch.Name] = true
+		for _, binding := range ch.Adapters {
+			covered[binding] = true
+		}
+	}
+
+	// Synthesize implicit channels for uncovered agent adapter bindings.
+	for _, a := range cfg.Agents {
+		for _, binding := range a.Adapters {
+			if covered[binding] {
+				continue
+			}
+			name := a.Name + ":" + binding
+			if usedNames[name] {
+				continue // avoid name collision with explicit channel
+			}
+			usedNames[name] = true
+			cfg.Channels = append(cfg.Channels, ChannelConfig{
+				Name:     name,
+				Agent:    a.Name,
+				Adapters: []string{binding},
+				Implicit: true,
+			})
+		}
+	}
+}
+
 func applyScheduleDefaults(cfg *Config) {
 	trueVal := true
 	for i := range cfg.Schedules {
@@ -1302,12 +1366,8 @@ func validate(cfg *Config) error {
 	if err := validateFallbacks(cfg.LLM.Fallbacks); err != nil {
 		return fmt.Errorf("validate fallbacks: %w", err)
 	}
-	agentNames, err := validateAgents(cfg.Agents)
-	if err != nil {
-		return fmt.Errorf("validate agents: %w", err)
-	}
-	if err := validateSchedules(cfg.Schedules, agentNames); err != nil {
-		return fmt.Errorf("validate schedules: %w", err)
+	if err := validateAgentRouting(cfg); err != nil {
+		return err
 	}
 	if err := validateMCP(&cfg.MCP); err != nil {
 		return fmt.Errorf("validate mcp: %w", err)
@@ -1488,6 +1548,63 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 	}
 
 	return names, nil
+}
+
+// validateAgentRouting validates agents, channels, and schedules together,
+// since channels and schedules both reference agent names.
+func validateAgentRouting(cfg *Config) error {
+	agentNames, err := validateAgents(cfg.Agents)
+	if err != nil {
+		return fmt.Errorf("validate agents: %w", err)
+	}
+	if err := validateChannels(cfg.Channels, agentNames); err != nil {
+		return fmt.Errorf("validate channels: %w", err)
+	}
+	if err := validateSchedules(cfg.Schedules, agentNames); err != nil {
+		return fmt.Errorf("validate schedules: %w", err)
+	}
+	return nil
+}
+
+func validateChannels(channels []ChannelConfig, agentNames map[string]bool) error {
+	names := make(map[string]bool, len(channels))
+	specifics := make(map[string]string)  // "adapter:externalID" → channel name
+	wildcards := make(map[string]string)  // "adapter" → channel name
+
+	for i, ch := range channels {
+		if ch.Name == "" {
+			return fmt.Errorf("config: channels[%d]: name is required", i)
+		}
+		if names[ch.Name] {
+			return fmt.Errorf("config: channels[%d]: duplicate channel name %q", i, ch.Name)
+		}
+		names[ch.Name] = true
+
+		if ch.Agent == "" {
+			return fmt.Errorf("config: channel %q: agent is required", ch.Name)
+		}
+		if !agentNames[ch.Agent] {
+			return fmt.Errorf("config: channel %q: agent %q not found", ch.Name, ch.Agent)
+		}
+
+		for _, binding := range ch.Adapters {
+			if binding == "" {
+				return fmt.Errorf("config: channel %q: empty adapter binding", ch.Name)
+			}
+			if strings.Contains(binding, ":") {
+				if prev, ok := specifics[binding]; ok {
+					return fmt.Errorf("config: channel %q: adapter binding %q conflicts with channel %q", ch.Name, binding, prev)
+				}
+				specifics[binding] = ch.Name
+			} else {
+				if prev, ok := wildcards[binding]; ok {
+					return fmt.Errorf("config: channel %q: wildcard binding %q conflicts with channel %q", ch.Name, binding, prev)
+				}
+				wildcards[binding] = ch.Name
+			}
+		}
+	}
+	return nil
 }
 
 // validTTSVoices is the set of supported OpenAI TTS voice IDs.

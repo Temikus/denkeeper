@@ -795,6 +795,50 @@ func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
 	return router
 }
 
+// buildChannels converts config.ChannelConfig entries into agent.Channel pointers.
+// Channels are always present in cfg.Channels after applyDefaults runs —
+// either explicitly defined by the user or synthesized from agent adapter bindings.
+func buildChannels(cfg *config.Config) []*agent.Channel {
+	channels := make([]*agent.Channel, 0, len(cfg.Channels))
+	for _, cc := range cfg.Channels {
+		channels = append(channels, &agent.Channel{
+			Name:      cc.Name,
+			AgentName: cc.Agent,
+			Adapters:  cc.Adapters,
+			Implicit:  cc.Implicit,
+		})
+	}
+	return channels
+}
+
+// buildDispatcherWithChannels creates a Dispatcher wired with channel-based routing.
+// It synthesizes channels from config, sets up the active channel store, loads
+// persisted /session selections, and returns the ready-to-use dispatcher.
+func buildDispatcherWithChannels(
+	ctx context.Context,
+	cfg *config.Config,
+	engines map[string]*agent.Engine,
+	bindings []agent.Binding,
+	adapters []adapter.Adapter,
+	memory agent.MemoryStore,
+	logger *slog.Logger,
+) *agent.Dispatcher {
+	channels := buildChannels(cfg)
+	var opts []agent.DispatcherOption
+	if len(channels) > 0 {
+		var activeStore agent.ActiveChannelStore
+		if acs, ok := memory.(agent.ActiveChannelStore); ok {
+			activeStore = acs
+		}
+		opts = append(opts, agent.WithChannels(channels, activeStore))
+	}
+	d := agent.NewDispatcher(engines, bindings, adapters, logger, opts...)
+	if err := d.LoadActiveChannels(ctx); err != nil {
+		logger.Warn("failed to load active channel selections", "error", err)
+	}
+	return d
+}
+
 // buildAllAgents creates an Engine for each configured agent and collects their bindings.
 func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, abc agentBuildCtx) (map[string]*agent.Engine, []agent.Binding, error) {
 	engines := make(map[string]*agent.Engine, len(agents))
@@ -1203,8 +1247,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Re-create dispatcher with the fully wired engines and bindings.
-	dispatcher = agent.NewDispatcher(engines, bindings, adapters, logger)
+	// Re-create dispatcher with the fully wired engines, bindings, and channels.
+	dispatcher = buildDispatcherWithChannels(ctx, cfg, engines, bindings, adapters, st.memory, logger)
 
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 

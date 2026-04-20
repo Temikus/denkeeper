@@ -850,3 +850,120 @@ func TestGetTelemetrySummary(t *testing.T) {
 		t.Errorf("by_skill: %+v", summary.BySkill)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ActiveChannelStore tests
+// ---------------------------------------------------------------------------
+
+func TestActiveChannelStore_SetAndGet(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	// Initially no active channel.
+	name, err := store.GetActiveChannel(ctx, "telegram:12345")
+	if err != nil {
+		t.Fatalf("GetActiveChannel: %v", err)
+	}
+	if name != "" {
+		t.Errorf("expected empty, got %q", name)
+	}
+
+	// Set active channel.
+	if err := store.SetActiveChannel(ctx, "telegram:12345", "work"); err != nil {
+		t.Fatalf("SetActiveChannel: %v", err)
+	}
+
+	name, err = store.GetActiveChannel(ctx, "telegram:12345")
+	if err != nil {
+		t.Fatalf("GetActiveChannel: %v", err)
+	}
+	if name != "work" {
+		t.Errorf("expected work, got %q", name)
+	}
+}
+
+func TestActiveChannelStore_Upsert(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	if err := store.SetActiveChannel(ctx, "telegram:12345", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetActiveChannel(ctx, "telegram:12345", "personal"); err != nil {
+		t.Fatal(err)
+	}
+
+	name, err := store.GetActiveChannel(ctx, "telegram:12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "personal" {
+		t.Errorf("expected personal after upsert, got %q", name)
+	}
+}
+
+func TestActiveChannelStore_Clear(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	if err := store.SetActiveChannel(ctx, "telegram:12345", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearActiveChannel(ctx, "telegram:12345"); err != nil {
+		t.Fatal(err)
+	}
+
+	name, err := store.GetActiveChannel(ctx, "telegram:12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "" {
+		t.Errorf("expected empty after clear, got %q", name)
+	}
+}
+
+func TestActiveChannelStore_ListActiveChannels(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+
+	if err := store.SetActiveChannel(ctx, "telegram:111", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetActiveChannel(ctx, "discord:222", "personal"); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := store.ListActiveChannels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(all))
+	}
+	if all["telegram:111"] != "work" {
+		t.Errorf("telegram:111 = %q, want work", all["telegram:111"])
+	}
+	if all["discord:222"] != "personal" {
+		t.Errorf("discord:222 = %q, want personal", all["discord:222"])
+	}
+}

@@ -3300,3 +3300,243 @@ cleanup_interval = "not-a-duration"
 		t.Errorf("error should mention cleanup_interval: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Channel config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_Channels_Explicit(t *testing.T) {
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = ["telegram"]
+[[agents]]
+name = "work"
+adapters = []
+[[channels]]
+name = "personal"
+agent = "default"
+adapters = ["telegram"]
+[[channels]]
+name = "work"
+agent = "work"
+adapters = ["telegram:999"]
+`)
+	cfg, err := Parse(toml)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if len(cfg.Channels) != 2 {
+		t.Fatalf("expected 2 channels, got %d", len(cfg.Channels))
+	}
+	if cfg.Channels[0].Name != "personal" {
+		t.Errorf("channel[0].Name = %q", cfg.Channels[0].Name)
+	}
+	if cfg.Channels[1].Agent != "work" {
+		t.Errorf("channel[1].Agent = %q", cfg.Channels[1].Agent)
+	}
+	// Explicit channels must have Implicit=false.
+	if cfg.Channels[0].Implicit {
+		t.Error("channel[0].Implicit = true, want false for explicit channel")
+	}
+	if cfg.Channels[1].Implicit {
+		t.Error("channel[1].Implicit = true, want false for explicit channel")
+	}
+}
+
+func TestParse_Channels_SynthesizedFromAgents(t *testing.T) {
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = ["telegram"]
+[[agents]]
+name = "work"
+adapters = ["telegram:999"]
+`)
+	cfg, err := Parse(toml)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	// No explicit [[channels]], so they should be auto-synthesized.
+	if len(cfg.Channels) != 2 {
+		t.Fatalf("expected 2 synthesized channels, got %d", len(cfg.Channels))
+	}
+	// Synthesized names follow "agent:pattern" format.
+	if cfg.Channels[0].Name != "default:telegram" {
+		t.Errorf("channel[0].Name = %q, want default:telegram", cfg.Channels[0].Name)
+	}
+	if cfg.Channels[1].Name != "work:telegram:999" {
+		t.Errorf("channel[1].Name = %q, want work:telegram:999", cfg.Channels[1].Name)
+	}
+	// Synthesized channels must have Implicit=true.
+	if !cfg.Channels[0].Implicit {
+		t.Error("channel[0].Implicit = false, want true for synthesized channel")
+	}
+	if !cfg.Channels[1].Implicit {
+		t.Error("channel[1].Implicit = false, want true for synthesized channel")
+	}
+}
+
+func TestParse_Channels_DuplicateName(t *testing.T) {
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = []
+[[channels]]
+name = "work"
+agent = "default"
+[[channels]]
+name = "work"
+agent = "default"
+`)
+	_, err := Parse(toml)
+	if err == nil {
+		t.Fatal("expected error for duplicate channel name")
+	}
+	if !strings.Contains(err.Error(), "duplicate channel name") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestParse_Channels_UnknownAgent(t *testing.T) {
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = []
+[[channels]]
+name = "broken"
+agent = "nonexistent"
+`)
+	_, err := Parse(toml)
+	if err == nil {
+		t.Fatal("expected error for channel referencing unknown agent")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestParse_Channels_ConflictingWildcard(t *testing.T) {
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = []
+[[channels]]
+name = "a"
+agent = "default"
+adapters = ["telegram"]
+[[channels]]
+name = "b"
+agent = "default"
+adapters = ["telegram"]
+`)
+	_, err := Parse(toml)
+	if err == nil {
+		t.Fatal("expected error for conflicting wildcard binding")
+	}
+	if !strings.Contains(err.Error(), "conflicts with channel") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestParse_Channels_EmptyAdapters(t *testing.T) {
+	// Channels with empty adapters are valid — reachable only via /session.
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = ["telegram"]
+[[channels]]
+name = "research"
+agent = "default"
+adapters = []
+`)
+	cfg, err := Parse(toml)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	// 2 channels: 1 explicit (research, empty adapters) + 1 synthesized
+	// for the uncovered agent telegram binding.
+	if len(cfg.Channels) != 2 {
+		t.Fatalf("expected 2 channels, got %d: %+v", len(cfg.Channels), cfg.Channels)
+	}
+	if cfg.Channels[0].Name != "research" {
+		t.Errorf("channel[0].Name = %q, want research", cfg.Channels[0].Name)
+	}
+	if cfg.Channels[1].Name != "default:telegram" || !cfg.Channels[1].Implicit {
+		t.Errorf("channel[1] = %q implicit=%v, want default:telegram/true", cfg.Channels[1].Name, cfg.Channels[1].Implicit)
+	}
+}
+
+func TestParse_Channels_PartialExplicit_SynthesizesRemainder(t *testing.T) {
+	// When explicit [[channels]] exist but don't cover all agent adapter
+	// bindings, the uncovered bindings should be auto-synthesized as
+	// implicit channels so they aren't silently dropped.
+	toml := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111]
+[discord]
+token = "discord-test"
+allowed_users = ["user-1"]
+[llm.openrouter]
+api_key = "sk-test"
+[[agents]]
+name = "default"
+adapters = ["telegram", "discord"]
+[[channels]]
+name = "personal"
+agent = "default"
+adapters = ["telegram"]
+`)
+	cfg, err := Parse(toml)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	// Should have 2 channels: 1 explicit + 1 synthesized for uncovered discord.
+	if len(cfg.Channels) != 2 {
+		t.Fatalf("expected 2 channels, got %d: %+v", len(cfg.Channels), cfg.Channels)
+	}
+
+	// First should be the explicit channel.
+	if cfg.Channels[0].Name != "personal" || cfg.Channels[0].Implicit {
+		t.Errorf("channel[0] = %q implicit=%v, want personal/false", cfg.Channels[0].Name, cfg.Channels[0].Implicit)
+	}
+
+	// Second should be the synthesized channel for the uncovered discord binding.
+	if cfg.Channels[1].Name != "default:discord" || !cfg.Channels[1].Implicit {
+		t.Errorf("channel[1] = %q implicit=%v, want default:discord/true", cfg.Channels[1].Name, cfg.Channels[1].Implicit)
+	}
+}
