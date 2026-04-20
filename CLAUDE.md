@@ -143,8 +143,13 @@ Key endpoints (all require auth unless noted):
 - `POST /api/v1/auth/preferences` (scope `admin`) — set preferred login method (auto/password/apikey)
 - `GET /api/v1/onboarding` (scope `admin`) — checklist of 5 setup milestones; `show_onboarding` false when all done or dismissed
 - `POST /api/v1/onboarding/dismiss` (scope `admin`) — persist `onboarding_dismissed=true` to TOML, hide card
+- `GET/PATCH /api/v1/server/config` (scope `admin`) — server config (version, build info, CORS, WebSocket settings)
 - `POST /api/v1/server/reload` (scope `admin`) — reload config from disk
 - `POST /api/v1/server/restart` (scope `admin`) — restart the server process
+- `GET /api/v1/sessions/{id}/stats` (scope `sessions:read`) — session telemetry summary
+- `GET /api/v1/sessions/{id}/tool-calls` (scope `sessions:read`) — tool call records for a session
+- `GET /api/v1/sessions/{id}/skills` (scope `sessions:read`) — skill usage for a session
+- `GET /api/v1/telemetry/summary` (scope `costs:read`) — aggregate telemetry; `?since=&until=` filtering
 
 Chat streaming events (SSE and WebSocket): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
 

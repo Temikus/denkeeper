@@ -349,11 +349,25 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/llm/providers` | `admin` | List LLM providers with current config |
 | `PATCH` | `/api/v1/llm/providers/{name}` | `admin` | Update provider config (API key, base URL) |
 | `PATCH` | `/api/v1/llm/config` | `admin` | Update global LLM config (default provider, model) |
+| `GET` | `/api/v1/server/config` | `admin` | Server config (version, build info, CORS, WebSocket) |
+| `PATCH` | `/api/v1/server/config` | `admin` | Update server config (CORS origins, WebSocket settings) |
 | `POST` | `/api/v1/server/reload` | `admin` | Reload config from disk |
 | `POST` | `/api/v1/server/restart` | `admin` | Restart the server process |
+| `GET` | `/api/v1/auth/status` | `admin` | Auth config summary (password, OIDC, sessions) |
+| `GET` | `/api/v1/auth/sessions` | `admin` | List active sessions |
+| `DELETE` | `/api/v1/auth/sessions/{id}` | `admin` | Revoke a session |
+| `POST` | `/api/v1/auth/password` | `admin` | Change password |
+| `GET` | `/api/v1/auth/oidc/test` | `admin` | Test OIDC provider reachability |
+| `POST` | `/api/v1/auth/preferences` | `admin` | Set preferred login method |
+| `GET` | `/api/v1/onboarding` | `admin` | Setup checklist status |
+| `POST` | `/api/v1/onboarding/dismiss` | `admin` | Dismiss onboarding card |
 | `GET` | `/api/v1/sessions` | `sessions:read` | List all conversations |
 | `GET` | `/api/v1/sessions/{id}/messages` | `sessions:read` | Get messages for a session |
+| `GET` | `/api/v1/sessions/{id}/stats` | `sessions:read` | Session telemetry summary |
+| `GET` | `/api/v1/sessions/{id}/tool-calls` | `sessions:read` | Tool call records for a session |
+| `GET` | `/api/v1/sessions/{id}/skills` | `sessions:read` | Skill usage for a session |
 | `DELETE` | `/api/v1/sessions/{id}` | `sessions:read` | Delete a session and its history |
+| `GET` | `/api/v1/telemetry/summary` | `costs:read` | Aggregate telemetry (`?since=&until=`) |
 | `GET` | `/api/v1/agents` | `agents:read` | List agents with metadata |
 | `GET` | `/api/v1/agents/{name}` | `agents:read` | Agent details and skills |
 | `PATCH` | `/api/v1/agents/{name}` | `agents:write` | Mutate agent config |

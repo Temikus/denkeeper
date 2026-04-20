@@ -120,6 +120,18 @@ Update global LLM configuration (default provider, default model).
 
 ## Server Admin
 
+### `GET /api/v1/server/config`
+
+**Scope:** `admin`
+
+Server configuration including version, build info, CORS origins, and WebSocket settings.
+
+### `PATCH /api/v1/server/config`
+
+**Scope:** `admin`
+
+Update server config (CORS origins, WebSocket settings).
+
 ### `POST /api/v1/server/reload`
 
 **Scope:** `admin`
@@ -146,11 +158,37 @@ List all conversations.
 
 Get all messages for a session.
 
+### `GET /api/v1/sessions/{id}/stats`
+
+**Scope:** `sessions:read`
+
+Session telemetry summary (model, provider, cost, token breakdown per message).
+
+### `GET /api/v1/sessions/{id}/tool-calls`
+
+**Scope:** `sessions:read`
+
+Tool call records for a session (name, server, duration, success/error, round).
+
+### `GET /api/v1/sessions/{id}/skills`
+
+**Scope:** `sessions:read`
+
+Skill usage records for a session.
+
 ### `DELETE /api/v1/sessions/{id}`
 
 **Scope:** `sessions:read`
 
 Delete a conversation and all its messages. Returns `204 No Content`. Idempotent.
+
+## Telemetry
+
+### `GET /api/v1/telemetry/summary`
+
+**Scope:** `costs:read`
+
+Aggregate telemetry summary. Accepts `?since=` and `?until=` query parameters for date filtering.
 
 ## Agents
 
