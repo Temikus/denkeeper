@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw'
 import {
   agents, sessions, messages, approvals, costs, skills, schedules,
   tools, plugins, browserProfiles, browserSessions, kvEntries,
-  apiKeys, autoApproveRules, personaSections,
+  apiKeys, autoApproveRules, personaSections, auditEvents, auditStats,
 } from './fixtures/index.js'
 
 export const handlers = [
@@ -220,6 +220,10 @@ export const handlers = [
     dismissed: false,
   })),
   http.post('/api/v1/onboarding/dismiss', () => new HttpResponse(null, { status: 204 })),
+
+  // Audit
+  http.get('/api/v1/audit', () => HttpResponse.json({ events: auditEvents, total: auditEvents.length })),
+  http.get('/api/v1/audit/stats', () => HttpResponse.json(auditStats)),
 
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),
