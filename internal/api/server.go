@@ -1139,9 +1139,13 @@ const keyNameKey contextKey = "api_key_name"
 // required scope. Use this to wrap individual route handlers.
 func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		keyName, ok := s.authenticate(r.Context(), r, scope)
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		keyName, scopeOK, identified := s.authenticate(r.Context(), r, scope)
+		if !scopeOK {
+			if identified {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient scope"})
+			} else {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			}
 			return
 		}
 
@@ -1160,11 +1164,13 @@ func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerF
 
 // authenticate checks the Authorization header for a valid API key with the
 // given scope. SQLite-managed keys are checked first, then TOML keys.
-// Returns the key name and true if valid.
-func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string) (string, bool) {
+// Returns (keyName, scopeOK, identified). identified is true when valid
+// credentials were found (even if the scope doesn't match), allowing callers
+// to distinguish 401 (no credentials) from 403 (insufficient scope).
+func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string) (string, bool, bool) {
 	// 1. Try Bearer token authentication first.
-	if name, ok := s.authenticateBearer(ctx, r, scope); ok {
-		return name, true
+	if name, scopeOK, identified := s.authenticateBearer(ctx, r, scope); identified {
+		return name, scopeOK, true
 	}
 
 	// 2. Fall back to session cookie authentication.
@@ -1172,25 +1178,25 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string
 		if sess, err := s.sessions.Read(r); err == nil {
 			for _, sc := range sess.Scopes {
 				if sc == scope {
-					return sess.Email, true
+					return sess.Email, true, true
 				}
 			}
-			return "", false // session valid but scope missing
+			return sess.Email, false, true // session valid but scope missing
 		}
 	}
 
-	return "", false
+	return "", false, false
 }
 
-func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope string) (string, bool) {
+func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope string) (string, bool, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		return "", false
+		return "", false, false
 	}
 
 	token := strings.TrimPrefix(header, "Bearer ")
 	if token == header {
-		return "", false // no "Bearer " prefix
+		return "", false, false // no "Bearer " prefix
 	}
 
 	// Check SQLite-managed keys first (allows runtime key management without restart).
@@ -1202,10 +1208,10 @@ func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope 
 			for _, sc := range scopes {
 				if sc == scope {
 					go s.deps.KeyStore.TouchLastUsed(context.WithoutCancel(ctx), sk.ID)
-					return sk.Name, true
+					return sk.Name, true, true
 				}
 			}
-			return "", false // key valid but scope missing
+			return sk.Name, false, true // key valid but scope missing
 		}
 	}
 
@@ -1214,13 +1220,13 @@ func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope 
 		if subtle.ConstantTimeCompare([]byte(token), []byte(k.Key)) == 1 {
 			for _, s := range k.Scopes {
 				if s == scope {
-					return k.Name, true
+					return k.Name, true, true
 				}
 			}
-			return "", false // key valid but scope missing
+			return k.Name, false, true // key valid but scope missing
 		}
 	}
-	return "", false
+	return "", false, false // no matching key found
 }
 
 // ---------------------------------------------------------------------------

@@ -52,9 +52,8 @@ func TestAuth_ChatScopeCannotListAgents(t *testing.T) {
 
 	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/agents", nil))
 
-	// The API returns 401 for both missing auth and insufficient scope.
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
@@ -67,9 +66,8 @@ func TestAuth_ReadOnlyScopeCannotChat(t *testing.T) {
 		"message": "hello",
 	}))
 
-	// The API returns 401 for both missing auth and insufficient scope.
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 

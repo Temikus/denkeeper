@@ -303,8 +303,8 @@ func TestAuthenticate_SessionCookie(t *testing.T) {
 		req.AddCookie(c)
 	}
 
-	name, ok := s.authenticate(req.Context(), req, "admin")
-	if !ok {
+	name, scopeOK, _ := s.authenticate(req.Context(), req, "admin")
+	if !scopeOK {
 		t.Fatal("expected authentication to succeed")
 	}
 	if name != "admin" {

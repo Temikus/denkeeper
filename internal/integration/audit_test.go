@@ -200,9 +200,8 @@ func TestAudit_RequiresScope(t *testing.T) {
 	})
 
 	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit", nil))
-	// Scope enforcement returns 401 (insufficient scope on valid key).
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 (insufficient scope), got %d", rec.Code)
 	}
 }
 

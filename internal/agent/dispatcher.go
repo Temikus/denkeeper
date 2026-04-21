@@ -635,15 +635,6 @@ func (d *Dispatcher) executeResume() {
 
 // StopChat cancels the in-flight request for the given adapter and external ID.
 // Returns an error if no request is in progress. Used by REST API and WebSocket.
-// RegisterInFlight manually registers an in-flight request. This is intended
-// for use in integration tests that need to verify panic cancellation.
-func (d *Dispatcher) RegisterInFlight(adapterName, externalID string, cancel context.CancelFunc) {
-	key := adapterName + ":" + externalID
-	d.inFlightMu.Lock()
-	d.inFlight[key] = &inFlightRequest{cancel: cancel, agent: "test", start: time.Now()}
-	d.inFlightMu.Unlock()
-}
-
 func (d *Dispatcher) StopChat(adapterName, externalID string) error {
 	key := adapterName + ":" + externalID
 	d.inFlightMu.Lock()

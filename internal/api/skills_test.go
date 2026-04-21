@@ -364,7 +364,7 @@ func TestSkillEndpoints_RequiresScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for missing skills:write scope, got %d; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for missing skills:write scope, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 }

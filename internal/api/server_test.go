@@ -289,8 +289,8 @@ func TestRequireScope_ValidKeyWrongScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
@@ -1467,7 +1467,7 @@ func TestHandleApprovals_NilManager_Returns503(t *testing.T) {
 }
 
 func TestHandleApprovals_RequiresScope(t *testing.T) {
-	// Key with only approvals:read — write endpoints should be 401.
+	// Key with only approvals:read — write endpoints should be 403.
 	readOnlyKey := config.APIKeyConfig{
 		Name: "readonly", Key: "dk-readonly", Scopes: []string{"approvals:read"},
 	}
@@ -1479,8 +1479,8 @@ func TestHandleApprovals_RequiresScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
@@ -2088,8 +2088,8 @@ func TestToolsEndpoints_RequireScope(t *testing.T) {
 	// GET /api/v1/tools requires tools:read
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/tools"))
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("GET /tools without scope: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("GET /tools without scope: status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 
 	// POST /api/v1/tools requires tools:write
@@ -2098,8 +2098,8 @@ func TestToolsEndpoints_RequireScope(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("POST /tools without scope: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /tools without scope: status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 

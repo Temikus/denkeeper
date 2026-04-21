@@ -275,7 +275,7 @@ func TestScheduleEndpoints_RequiresScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.httpServer.Handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for missing schedules:write scope, got %d", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for missing schedules:write scope, got %d", rec.Code)
 	}
 }

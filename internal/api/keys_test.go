@@ -439,8 +439,8 @@ func TestAuthenticate_SQLiteKey(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	req.Header.Set("Authorization", "Bearer "+plaintext)
-	_, ok := srv.authenticate(req.Context(), req, "chat")
-	if !ok {
+	_, scopeOK, identified := srv.authenticate(req.Context(), req, "chat")
+	if !identified || !scopeOK {
 		t.Error("SQLite key should authenticate successfully")
 	}
 }
@@ -457,8 +457,8 @@ func TestAuthenticate_RevokedSQLiteKey(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	req.Header.Set("Authorization", "Bearer "+plaintext)
-	_, ok := srv.authenticate(req.Context(), req, "chat")
-	if ok {
+	_, scopeOK, identified := srv.authenticate(req.Context(), req, "chat")
+	if scopeOK || identified {
 		t.Error("revoked SQLite key should not authenticate")
 	}
 }
@@ -472,8 +472,8 @@ func TestAuthenticate_TOMLKeyFallback(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	req.Header.Set("Authorization", "Bearer toml-token")
-	_, ok := srv.authenticate(req.Context(), req, "admin")
-	if !ok {
+	_, scopeOK, identified := srv.authenticate(req.Context(), req, "admin")
+	if !identified || !scopeOK {
 		t.Error("TOML key should authenticate when SQLite key not found")
 	}
 }

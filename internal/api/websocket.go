@@ -612,7 +612,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		hasToken = true
 	}
 
-	name, ok := s.authenticate(r.Context(), r, scope)
+	name, scopeOK, _ := s.authenticate(r.Context(), r, scope)
 
 	// Redact the token from the URL to prevent it from appearing in logs.
 	if hasToken {
@@ -621,8 +621,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		r.URL.RawQuery = q.Encode()
 	}
 
-	if !ok {
+	if !scopeOK {
 		s.logger.Debug("ws: auth failed", "remote", r.RemoteAddr, "has_cookie", r.Header.Get("Cookie") != "", "has_token", hasToken)
+		// WebSocket clients cannot meaningfully distinguish 401 from 403 — both
+		// prevent the upgrade. Use 401 unconditionally so clients know to re-auth.
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
