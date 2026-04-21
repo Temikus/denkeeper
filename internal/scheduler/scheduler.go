@@ -119,6 +119,9 @@ type Scheduler struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	Auditor audit.Emitter
+
+	pausedMu sync.RWMutex
+	paused   bool
 }
 
 type internalEntry struct {
@@ -287,6 +290,73 @@ func (s *Scheduler) Stop() {
 	s.cancel()
 	s.wg.Wait()
 	s.logger.Info("scheduler stopped")
+}
+
+// Pause cancels all running entry goroutines and blocks until they finish,
+// but preserves the scheduler's root context and registered entries. New
+// entries registered while paused will not start until Resume is called.
+// Pause is idempotent — calling it while already paused is a no-op.
+func (s *Scheduler) Pause() {
+	s.pausedMu.Lock()
+	if s.paused {
+		s.pausedMu.Unlock()
+		return
+	}
+	s.paused = true
+	s.pausedMu.Unlock()
+
+	s.mu.RLock()
+	for _, e := range s.entries {
+		if e.cancel != nil {
+			e.cancel()
+		}
+	}
+	s.mu.RUnlock()
+
+	s.wg.Wait()
+	s.logger.Info("scheduler paused")
+}
+
+// Resume re-creates entry contexts and re-launches goroutines for all
+// enabled entries after a Pause. Resume is idempotent — calling it while
+// not paused is a no-op.
+func (s *Scheduler) Resume() {
+	s.pausedMu.Lock()
+	if !s.paused {
+		s.pausedMu.Unlock()
+		return
+	}
+	s.paused = false
+	s.pausedMu.Unlock()
+
+	s.mu.Lock()
+	active := 0
+	for _, e := range s.entries {
+		entryCtx, entryCancel := context.WithCancel(s.ctx) // #nosec G118
+		e.ctx = entryCtx
+		e.cancel = entryCancel
+		if e.Enabled {
+			now := time.Now().In(s.loc)
+			switch e.expr.kind {
+			case kindInterval:
+				e.NextRun = now.Add(e.expr.interval)
+			case kindCron:
+				e.NextRun = e.expr.cron.next(now, s.loc)
+			}
+			s.wg.Add(1)
+			go s.runEntry(e)
+			active++
+		}
+	}
+	s.mu.Unlock()
+	s.logger.Info("scheduler resumed", "active_entries", active)
+}
+
+// IsPaused returns true if the scheduler is currently paused.
+func (s *Scheduler) IsPaused() bool {
+	s.pausedMu.RLock()
+	defer s.pausedMu.RUnlock()
+	return s.paused
 }
 
 // Context returns the scheduler's lifecycle context. It is cancelled when

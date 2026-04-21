@@ -350,3 +350,20 @@ export async function resolveApprovalAction(appr, approve, autoApproveScope) {
     }
   }
 }
+
+/**
+ * Cancel the in-flight request for the current session.
+ * Uses WS cancel frame when connected, REST fallback otherwise.
+ */
+export async function cancelSession() {
+  const state = get(chatState)
+  if (!state.sending || !state.sessionId) return
+
+  const currentWSStatus = get(wsStatus)
+  if (currentWSStatus === 'connected') {
+    const client = getWSClient()
+    client.send({ type: 'cancel', session_id: state.sessionId })
+  } else {
+    await api.stopSession(state.sessionId).catch(() => {})
+  }
+}

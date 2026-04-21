@@ -173,7 +173,13 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-calls", s.RequireScope("sessions:read", s.handleSessionToolCalls))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/skills", s.RequireScope("sessions:read", s.handleSessionSkills))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/stop", s.RequireScope("chat", s.handleStopSession))
 	mux.HandleFunc("GET /api/v1/telemetry/summary", s.RequireScope("costs:read", s.handleTelemetrySummary))
+
+	// Safety endpoints — /stop per-session, /panic and /resume global.
+	mux.HandleFunc("POST /api/v1/panic", s.RequireScope("admin", s.handlePanic))
+	mux.HandleFunc("POST /api/v1/resume", s.RequireScope("admin", s.handleResume))
+	mux.HandleFunc("GET /api/v1/panic", s.RequireScope("admin", s.handlePanicStatus))
 
 	// Approval endpoints.
 	mux.HandleFunc("GET /api/v1/approvals", s.RequireScope("approvals:read", s.handleListApprovals))
@@ -766,6 +772,39 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleStopSession cancels an in-flight request for the given session.
+func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// Try WS adapter first, then API adapter.
+	if err := s.deps.Dispatcher.StopChat("ws", id); err != nil {
+		if err2 := s.deps.Dispatcher.StopChat("api", id); err2 != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no in-flight request for this session"})
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePanic triggers an emergency stop for all agents.
+func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
+	s.deps.Dispatcher.Panic()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResume clears the panic state and resumes processing.
+func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+	s.deps.Dispatcher.Resume()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePanicStatus returns the current panic state.
+func (s *Server) handlePanicStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"panicked":   s.deps.Dispatcher.IsPanicked(),
+		"panic_time": s.deps.Dispatcher.PanicTime(),
+	})
 }
 
 // handleSessionMessages returns messages for a specific conversation.

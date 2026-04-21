@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,8 +146,10 @@ func (a *Adapter) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		return
 	}
 
-	// Typing indicator — analogous to Telegram's sendChatAction.
-	_ = s.ChannelTyping(m.ChannelID)
+	// Skip typing indicator for control commands handled by the dispatcher.
+	if !isControlCommand(m.Content) {
+		_ = s.ChannelTyping(m.ChannelID)
+	}
 
 	a.mu.Lock()
 	ch := a.incoming
@@ -164,4 +167,11 @@ func (a *Adapter) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		Text:       m.Content,
 		Timestamp:  time.Now(),
 	}
+}
+
+// isControlCommand returns true for /stop, /panic, /resume — commands that
+// are intercepted by the Dispatcher and don't need a typing indicator.
+func isControlCommand(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return trimmed == "/stop" || trimmed == "/panic" || trimmed == "/resume"
 }

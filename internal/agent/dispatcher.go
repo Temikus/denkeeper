@@ -27,6 +27,14 @@ type Binding struct {
 	AgentName string
 }
 
+// inFlightRequest tracks a single in-flight message processing goroutine
+// so it can be cancelled via /stop.
+type inFlightRequest struct {
+	cancel context.CancelFunc
+	agent  string
+	start  time.Time
+}
+
 // Dispatcher routes incoming messages to the correct agent Engine based on
 // channel bindings (or legacy adapter bindings). It owns the adapter lifecycle
 // and the shared incoming channel.
@@ -47,10 +55,26 @@ type Dispatcher struct {
 	activeChannels   map[string]string  // "adapter:externalID" → channel name (runtime /session overrides)
 	activeStore      ActiveChannelStore // persistence for /session selections
 
+	// In-flight request tracking for /stop cancellation.
+	inFlightMu sync.Mutex
+	inFlight   map[string]*inFlightRequest // "adapter:externalID" → request
+
+	// Panic state — blocks all new messages until /resume.
+	panicMu   sync.RWMutex
+	panicked  bool
+	panicTime time.Time
+
 	// OnBroadcast, when set, is called after an adapter message (Telegram,
 	// Discord, etc.) is successfully processed. The server uses this to
 	// notify WebSocket clients of conversation activity from other adapters.
 	OnBroadcast func(agentName, convID, adapterName, summary string)
+
+	// OnPanic is called when a /panic command is processed. The server uses
+	// this to pause the scheduler and broadcast a panic status frame.
+	OnPanic func()
+
+	// OnResume is called when a /resume command is processed.
+	OnResume func()
 
 	// Auditor emits audit events for routing/session decisions.
 	Auditor audit.Emitter
@@ -125,6 +149,7 @@ func NewDispatcher(
 		wildcard:  wildcard,
 		adapters:  adapterMap,
 		incoming:  make(chan adapter.IncomingMessage, 64),
+		inFlight:  make(map[string]*inFlightRequest),
 		tracer:    tracer,
 		mDispatch: dispatch,
 		logger:    logger,
@@ -377,40 +402,58 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 
 			return ctx.Err()
 		case msg := <-d.incoming:
-			// Intercept /session commands before routing.
-			if d.hasChannels() && isSessionCommand(msg.Text) {
-				d.handleSessionCommand(ctx, msg)
-				continue
-			}
-
-			// Try channel-based routing first, fall back to legacy.
-			var e *Engine
-			var ch *Channel
-			ch, e = d.resolveChannel(msg)
-			if e == nil {
-				e = d.resolveAgent(msg)
-			}
-			if e == nil {
-				d.logger.Warn("no agent found for message, dropping", "adapter", msg.Adapter, "external_id", msg.ExternalID)
-				continue
-			}
-
-			// Set conversation ID from channel so the engine uses
-			// the channel's session instead of the default key.
-			if ch != nil && msg.ConversationID == "" {
-				msg.ConversationID = ch.ConversationID()
-			}
-
-			d.mDispatch.Add(ctx, 1, metric.WithAttributes(
-				attribute.String("adapter", msg.Adapter),
-				attribute.String("agent", e.Name())))
-
-			d.emitRouteAudit(ctx, msg, ch, e)
-
-			wg.Add(1)
-			go d.handleMessage(ctx, &wg, e, msg)
+			d.dispatchMessage(ctx, &wg, msg)
 		}
 	}
+}
+
+// dispatchMessage handles a single incoming message: intercepts control and
+// session commands, resolves the target engine, and spawns a goroutine.
+func (d *Dispatcher) dispatchMessage(ctx context.Context, wg *sync.WaitGroup, msg adapter.IncomingMessage) {
+	// Intercept control commands (/stop, /panic, /resume) before routing.
+	if cmd := controlCommand(msg.Text); cmd != "" {
+		d.handleControlCommand(ctx, cmd, msg)
+		return
+	}
+
+	// Block new messages while panicked.
+	if d.IsPanicked() {
+		d.sendPanicBlocked(ctx, msg)
+		return
+	}
+
+	// Intercept /session commands before routing.
+	if d.hasChannels() && isSessionCommand(msg.Text) {
+		d.handleSessionCommand(ctx, msg)
+		return
+	}
+
+	// Try channel-based routing first, fall back to legacy.
+	var e *Engine
+	var ch *Channel
+	ch, e = d.resolveChannel(msg)
+	if e == nil {
+		e = d.resolveAgent(msg)
+	}
+	if e == nil {
+		d.logger.Warn("no agent found for message, dropping", "adapter", msg.Adapter, "external_id", msg.ExternalID)
+		return
+	}
+
+	// Set conversation ID from channel so the engine uses
+	// the channel's session instead of the default key.
+	if ch != nil && msg.ConversationID == "" {
+		msg.ConversationID = ch.ConversationID()
+	}
+
+	d.mDispatch.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("adapter", msg.Adapter),
+		attribute.String("agent", e.Name())))
+
+	d.emitRouteAudit(ctx, msg, ch, e)
+
+	wg.Add(1)
+	go d.handleMessage(ctx, wg, e, msg)
 }
 
 // emitRouteAudit emits an audit event for message routing.
@@ -436,10 +479,25 @@ func (d *Dispatcher) emitRouteAudit(ctx context.Context, msg adapter.IncomingMes
 
 // handleMessage processes a single incoming message. It runs the engine
 // pipeline and sends an error message back to the user if the pipeline fails.
+// The context is wrapped with a cancel function so /stop can abort it.
 func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *Engine, msg adapter.IncomingMessage) {
 	defer wg.Done()
 
-	msgCtx, span := d.tracer.Start(ctx, "dispatcher.route",
+	// Derive a cancellable context so /stop can abort this request.
+	msgCtx, msgCancel := context.WithCancel(ctx)
+	defer msgCancel()
+
+	key := msg.Adapter + ":" + msg.ExternalID
+	d.inFlightMu.Lock()
+	d.inFlight[key] = &inFlightRequest{cancel: msgCancel, agent: e.Name(), start: time.Now()}
+	d.inFlightMu.Unlock()
+	defer func() {
+		d.inFlightMu.Lock()
+		delete(d.inFlight, key)
+		d.inFlightMu.Unlock()
+	}()
+
+	msgCtx, span := d.tracer.Start(msgCtx, "dispatcher.route",
 		trace.WithAttributes(
 			attribute.String("adapter", msg.Adapter),
 			attribute.String("agent", e.Name())))
@@ -452,6 +510,12 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 
 	onEvent := d.buildEventHandler(msgCtx, msg)
 	if err := e.HandleMessageWithEvents(msgCtx, msg, onEvent); err != nil {
+		// Don't log or send error feedback if the context was cancelled
+		// by a /stop command — that's intentional, not an error.
+		if msgCtx.Err() != nil {
+			d.logger.Info("message cancelled", "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
+			return
+		}
 		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
 		span.RecordError(err)
 		d.sendErrorFeedback(msgCtx, msg)
@@ -467,6 +531,197 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 		}
 		d.OnBroadcast(e.Name(), convID, msg.Adapter, "New message processed")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// /stop, /panic, /resume control commands
+// ---------------------------------------------------------------------------
+
+// controlCommand returns the control command name ("stop", "panic", "resume")
+// if the message text is a recognised control command, or "" otherwise.
+func controlCommand(text string) string {
+	switch strings.TrimSpace(text) {
+	case "/stop":
+		return "stop"
+	case "/panic":
+		return "panic"
+	case "/resume":
+		return "resume"
+	default:
+		return ""
+	}
+}
+
+// handleControlCommand dispatches a control command to the appropriate handler.
+func (d *Dispatcher) handleControlCommand(ctx context.Context, cmd string, msg adapter.IncomingMessage) {
+	switch cmd {
+	case "stop":
+		d.handleStopCommand(ctx, msg)
+	case "panic":
+		d.handlePanicCommand(ctx, msg)
+	case "resume":
+		d.handleResumeCommand(ctx, msg)
+	}
+}
+
+// handleStopCommand cancels the in-flight request for the sender's chat.
+func (d *Dispatcher) handleStopCommand(ctx context.Context, msg adapter.IncomingMessage) {
+	key := msg.Adapter + ":" + msg.ExternalID
+	d.inFlightMu.Lock()
+	req, ok := d.inFlight[key]
+	if ok {
+		req.cancel()
+		delete(d.inFlight, key)
+	}
+	d.inFlightMu.Unlock()
+
+	text := "No request in progress."
+	if ok {
+		text = "Request cancelled."
+		d.logger.Info("stop command: cancelled in-flight request", "adapter", msg.Adapter, "external_id", msg.ExternalID, "agent", req.agent)
+	}
+
+	d.emitSafetyAudit(ctx, "stop", msg, text)
+	d.sendControlResponse(ctx, msg, text)
+}
+
+// handlePanicCommand triggers an emergency stop: cancels all in-flight
+// requests and calls the OnPanic hook (which pauses the scheduler and
+// broadcasts to WebSocket clients).
+func (d *Dispatcher) handlePanicCommand(ctx context.Context, msg adapter.IncomingMessage) {
+	d.executePanic()
+	d.logger.Warn("panic command: all processing stopped", "source", msg.Adapter, "user", msg.UserName)
+	d.emitSafetyAudit(ctx, "panic", msg, "Emergency stop triggered")
+	d.sendControlResponse(ctx, msg, "All processing stopped. Use /resume to restart.")
+}
+
+// handleResumeCommand clears the panic state and calls the OnResume hook.
+func (d *Dispatcher) handleResumeCommand(ctx context.Context, msg adapter.IncomingMessage) {
+	d.executeResume()
+	d.logger.Info("resume command: processing resumed", "source", msg.Adapter, "user", msg.UserName)
+	d.emitSafetyAudit(ctx, "resume", msg, "Processing resumed")
+	d.sendControlResponse(ctx, msg, "Processing resumed.")
+}
+
+// executePanic performs the panic: sets state, cancels all in-flight, calls hook.
+func (d *Dispatcher) executePanic() {
+	d.panicMu.Lock()
+	d.panicked = true
+	d.panicTime = time.Now()
+	d.panicMu.Unlock()
+
+	d.inFlightMu.Lock()
+	for key, req := range d.inFlight {
+		req.cancel()
+		delete(d.inFlight, key)
+	}
+	d.inFlightMu.Unlock()
+
+	if d.OnPanic != nil {
+		d.OnPanic()
+	}
+}
+
+// executeResume clears the panic state and calls the resume hook.
+func (d *Dispatcher) executeResume() {
+	d.panicMu.Lock()
+	d.panicked = false
+	d.panicMu.Unlock()
+
+	if d.OnResume != nil {
+		d.OnResume()
+	}
+}
+
+// StopChat cancels the in-flight request for the given adapter and external ID.
+// Returns an error if no request is in progress. Used by REST API and WebSocket.
+// RegisterInFlight manually registers an in-flight request. This is intended
+// for use in integration tests that need to verify panic cancellation.
+func (d *Dispatcher) RegisterInFlight(adapterName, externalID string, cancel context.CancelFunc) {
+	key := adapterName + ":" + externalID
+	d.inFlightMu.Lock()
+	d.inFlight[key] = &inFlightRequest{cancel: cancel, agent: "test", start: time.Now()}
+	d.inFlightMu.Unlock()
+}
+
+func (d *Dispatcher) StopChat(adapterName, externalID string) error {
+	key := adapterName + ":" + externalID
+	d.inFlightMu.Lock()
+	req, ok := d.inFlight[key]
+	if ok {
+		req.cancel()
+		delete(d.inFlight, key)
+	}
+	d.inFlightMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("no in-flight request for %s", key)
+	}
+	d.logger.Info("stop: cancelled in-flight request via API", "key", key, "agent", req.agent)
+	return nil
+}
+
+// Panic triggers an emergency stop via the API. Cancels all in-flight
+// requests and calls the OnPanic hook.
+func (d *Dispatcher) Panic() {
+	d.executePanic()
+	d.logger.Warn("panic triggered via API")
+}
+
+// Resume clears the panic state and calls the OnResume hook.
+func (d *Dispatcher) Resume() {
+	d.executeResume()
+	d.logger.Info("resume triggered via API")
+}
+
+// IsPanicked returns true if the dispatcher is in panic mode.
+func (d *Dispatcher) IsPanicked() bool {
+	d.panicMu.RLock()
+	defer d.panicMu.RUnlock()
+	return d.panicked
+}
+
+// PanicTime returns the time when panic was triggered. Returns zero time
+// if not panicked.
+func (d *Dispatcher) PanicTime() time.Time {
+	d.panicMu.RLock()
+	defer d.panicMu.RUnlock()
+	return d.panicTime
+}
+
+// sendPanicBlocked notifies the user that their message was blocked because
+// the system is in panic mode.
+func (d *Dispatcher) sendPanicBlocked(ctx context.Context, msg adapter.IncomingMessage) {
+	d.sendControlResponse(ctx, msg, "System is paused. Use /resume to restart processing.")
+}
+
+// sendControlResponse sends a short text reply for control commands.
+func (d *Dispatcher) sendControlResponse(ctx context.Context, msg adapter.IncomingMessage, text string) {
+	a, ok := d.adapters[msg.Adapter]
+	if !ok {
+		return
+	}
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Adapter:    msg.Adapter,
+		ExternalID: msg.ExternalID,
+		Text:       text,
+	})
+}
+
+// emitSafetyAudit emits an audit event for a safety control command.
+func (d *Dispatcher) emitSafetyAudit(ctx context.Context, action string, msg adapter.IncomingMessage, summary string) {
+	if d.Auditor == nil {
+		return
+	}
+	detail, _ := json.Marshal(map[string]string{"adapter": msg.Adapter, "external_id": msg.ExternalID, "user": msg.UserName})
+	d.Auditor.Emit(ctx, audit.Event{
+		Category: audit.CategorySafety,
+		Action:   action,
+		Summary:  summary,
+		Detail:   string(detail),
+		Status:   audit.StatusOK,
+		Source:   msg.Adapter,
+	})
 }
 
 // ---------------------------------------------------------------------------

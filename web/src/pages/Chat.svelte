@@ -1,8 +1,8 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction } from '../chatStore.js'
-  import { wsStatus, onActivity } from '../wsStore.js'
+  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction, cancelSession } from '../chatStore.js'
+  import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
 
   let agents = $state([])
   let sessions = $state([])
@@ -76,6 +76,23 @@
     input = ''
     autoResizeTextarea()
     await sendMessage(text)
+  }
+
+  async function triggerPanic() {
+    if (!confirm('Emergency stop: cancel ALL in-flight requests and pause the scheduler?')) return
+    try {
+      await api.panic()
+    } catch (e) {
+      chatState.update(s => ({ ...s, error: 'Panic failed: ' + e.message }))
+    }
+  }
+
+  async function triggerResume() {
+    try {
+      await api.resume()
+    } catch (e) {
+      chatState.update(s => ({ ...s, error: 'Resume failed: ' + e.message }))
+    }
   }
 
   function handleKeydown(e) {
@@ -227,6 +244,7 @@
     </label>
     <button class="btn-ghost" onclick={() => { newSession(); }} disabled={!$chatState.sessionId}>New Session</button>
     <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh Sessions</button>
+    <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="chat-panic">Panic</button>
     <span
       class="ws-status"
       class:ws-connected={$wsStatus === 'connected'}
@@ -243,6 +261,14 @@
       {/if}
     </span>
   </div>
+
+  <!-- Panic banner -->
+  {#if $panicStatus.active}
+    <div class="panic-banner" role="alert">
+      <span>All processing paused</span>
+      <button class="btn-resume" onclick={triggerResume}>Resume</button>
+    </div>
+  {/if}
 
   <!-- Pending approvals banner (polled, cross-adapter) -->
   {#if pendingApprovals.length > 0}
@@ -380,9 +406,11 @@
         aria-label="Chat message input"
         data-testid="chat-input"
       ></textarea>
-      <button class="btn-send" onclick={send} disabled={$chatState.sending || !input.trim()} aria-label={$chatState.sending ? 'Sending message' : 'Send message'} data-testid="chat-send">
-        {$chatState.sending ? '...' : 'Send'}
-      </button>
+      {#if $chatState.sending}
+        <button class="btn-stop" onclick={cancelSession} aria-label="Stop current request" data-testid="chat-stop">Stop</button>
+      {:else}
+        <button class="btn-send" onclick={send} disabled={!input.trim()} aria-label="Send message" data-testid="chat-send">Send</button>
+      {/if}
     </div>
   </div>
 </div>
@@ -782,6 +810,56 @@
   }
   .btn-send:hover:not(:disabled) { background: var(--accent-hover); }
   .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-stop {
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 14px;
+    height: 42px;
+    white-space: nowrap;
+  }
+  .btn-stop:hover { opacity: 0.85; }
+
+  .btn-panic {
+    background: none;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    margin-left: auto;
+  }
+  .btn-panic:hover { background: var(--danger); color: #fff; }
+
+  .panic-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--danger);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .btn-resume {
+    background: #fff;
+    color: var(--danger);
+    border: none;
+    padding: 4px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .btn-resume:hover { opacity: 0.85; }
 
   .btn-ghost {
     background: none;

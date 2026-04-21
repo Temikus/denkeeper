@@ -3,6 +3,7 @@ package scheduler
 import (
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -594,4 +595,126 @@ func containsSubstring(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Pause / Resume tests
+// ---------------------------------------------------------------------------
+
+func TestScheduler_Pause_StopsExecution(t *testing.T) {
+	s := New(discardLogger(), nil)
+
+	var count int32
+	err := s.RegisterAndStart(Config{
+		Name:     "tick",
+		Type:     "agent",
+		Schedule: "@every 50ms",
+		Enabled:  true,
+	}, func(Entry) {
+		atomic.AddInt32(&count, 1)
+	})
+	if err != nil {
+		t.Fatalf("RegisterAndStart: %v", err)
+	}
+
+	// Let it fire at least once.
+	time.Sleep(120 * time.Millisecond)
+	if atomic.LoadInt32(&count) == 0 {
+		t.Fatal("expected at least one fire before pause")
+	}
+
+	s.Pause()
+
+	if !s.IsPaused() {
+		t.Error("expected IsPaused() to be true")
+	}
+
+	// Record count after pause, wait, and verify no new fires.
+	afterPause := atomic.LoadInt32(&count)
+	time.Sleep(120 * time.Millisecond)
+	if got := atomic.LoadInt32(&count); got != afterPause {
+		t.Errorf("expected no fires after pause, got %d more", got-afterPause)
+	}
+
+	s.Stop()
+}
+
+func TestScheduler_Resume_RestartsExecution(t *testing.T) {
+	s := New(discardLogger(), nil)
+
+	var count int32
+	err := s.RegisterAndStart(Config{
+		Name:     "tick",
+		Type:     "agent",
+		Schedule: "@every 50ms",
+		Enabled:  true,
+	}, func(Entry) {
+		atomic.AddInt32(&count, 1)
+	})
+	if err != nil {
+		t.Fatalf("RegisterAndStart: %v", err)
+	}
+
+	// Let it fire, then pause.
+	time.Sleep(120 * time.Millisecond)
+	s.Pause()
+	afterPause := atomic.LoadInt32(&count)
+
+	// Resume and verify fires continue.
+	s.Resume()
+	if s.IsPaused() {
+		t.Error("expected IsPaused() to be false after Resume")
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := atomic.LoadInt32(&count); got <= afterPause {
+		t.Errorf("expected fires after resume, count stayed at %d", afterPause)
+	}
+
+	s.Stop()
+}
+
+func TestScheduler_PauseResume_PreservesEntries(t *testing.T) {
+	s := New(discardLogger(), nil)
+
+	err := s.RegisterAndStart(Config{
+		Name:     "persist",
+		Type:     "agent",
+		Schedule: "@every 1h",
+		Enabled:  true,
+	}, func(Entry) {})
+	if err != nil {
+		t.Fatalf("RegisterAndStart: %v", err)
+	}
+
+	s.Pause()
+	s.Resume()
+
+	entries := s.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry after pause+resume, got %d", len(entries))
+	}
+	if entries[0].Name != "persist" {
+		t.Errorf("entry name = %q, want persist", entries[0].Name)
+	}
+
+	s.Stop()
+}
+
+func TestScheduler_Pause_Idempotent(t *testing.T) {
+	s := New(discardLogger(), nil)
+	s.Pause()
+	s.Pause() // should not panic or deadlock
+	if !s.IsPaused() {
+		t.Error("expected IsPaused() after double pause")
+	}
+	s.Stop()
+}
+
+func TestScheduler_Resume_Idempotent(t *testing.T) {
+	s := New(discardLogger(), nil)
+	s.Resume() // should not panic or deadlock when not paused
+	if s.IsPaused() {
+		t.Error("should not be paused after resume without prior pause")
+	}
+	s.Stop()
 }

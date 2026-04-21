@@ -17,6 +17,7 @@ const (
 	CategoryConfig   = "config"
 	CategorySession  = "session"
 	CategoryMCP      = "mcp"
+	CategorySafety   = "safety"
 )
 
 // Event statuses.

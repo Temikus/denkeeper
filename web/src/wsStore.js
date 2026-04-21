@@ -8,6 +8,11 @@ import { DenkeeperWS } from './ws.js'
  */
 export const wsStatus = writable('disconnected')
 
+/**
+ * Panic status store — updated when the server broadcasts a panic_status frame.
+ */
+export const panicStatus = writable({ active: false, message: '' })
+
 /** Stores for per-session event routing. sessionID -> callback */
 const sessionHandlers = new Map()
 
@@ -60,6 +65,11 @@ export function getWSClient() {
       // Handle cross-adapter activity broadcasts.
       if (frame.type === 'activity') {
         activityCallbacks.forEach(cb => cb(frame))
+        return
+      }
+      // Handle panic status broadcasts.
+      if (frame.type === 'panic_status') {
+        panicStatus.set({ active: frame.active, message: frame.message || '' })
         return
       }
       // Frames without a registered session are silently dropped.

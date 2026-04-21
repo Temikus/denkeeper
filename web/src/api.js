@@ -312,4 +312,10 @@ export const api = {
     return apiFetch(`/api/v1/audit?${new URLSearchParams(filtered)}`)
   },
   auditStats: (since) => apiFetch(`/api/v1/audit/stats${since ? `?since=${encodeURIComponent(since)}` : ''}`),
+
+  // Safety — stop/panic/resume.
+  stopSession: (id) => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+  panic: () => apiFetch('/api/v1/panic', { method: 'POST' }),
+  resume: () => apiFetch('/api/v1/resume', { method: 'POST' }),
+  panicStatus: () => apiFetch('/api/v1/panic'),
 }

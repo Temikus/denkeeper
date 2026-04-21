@@ -1031,3 +1031,242 @@ func containsSubstring(s, sub string) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Control command tests (/stop, /panic, /resume)
+// ---------------------------------------------------------------------------
+
+func TestControlCommand(t *testing.T) {
+	tests := []struct {
+		text string
+		want string
+	}{
+		{"/stop", "stop"},
+		{"/panic", "panic"},
+		{"/resume", "resume"},
+		{"  /stop  ", "stop"},
+		{"/stopping", ""},
+		{"hello /stop", ""},
+		{"/session", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := controlCommand(tt.text); got != tt.want {
+			t.Errorf("controlCommand(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestDispatcher_StopChat_CancelsInFlight(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	cancelled := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Manually register an in-flight request.
+	d.inFlightMu.Lock()
+	d.inFlight["telegram:12345"] = &inFlightRequest{
+		cancel: func() {
+			cancel()
+			close(cancelled)
+		},
+		agent: "default",
+		start: time.Now(),
+	}
+	d.inFlightMu.Unlock()
+
+	err := d.StopChat("telegram", "12345")
+	if err != nil {
+		t.Fatalf("StopChat returned error: %v", err)
+	}
+
+	select {
+	case <-cancelled:
+		// success
+	case <-time.After(time.Second):
+		t.Fatal("cancel was not called")
+	}
+
+	_ = ctx // consume ctx to avoid vet warning
+
+	// Verify entry was removed.
+	d.inFlightMu.Lock()
+	_, exists := d.inFlight["telegram:12345"]
+	d.inFlightMu.Unlock()
+	if exists {
+		t.Error("in-flight entry should have been removed")
+	}
+}
+
+func TestDispatcher_StopChat_NoInFlight(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	err := d.StopChat("telegram", "99999")
+	if err == nil {
+		t.Fatal("expected error for missing in-flight request")
+	}
+}
+
+func TestDispatcher_Panic_CancelsAll(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	var cancelCount atomic.Int32
+	for i := 0; i < 3; i++ {
+		key := fmt.Sprintf("adapter:%d", i)
+		d.inFlightMu.Lock()
+		d.inFlight[key] = &inFlightRequest{
+			cancel: func() { cancelCount.Add(1) },
+			agent:  "default",
+			start:  time.Now(),
+		}
+		d.inFlightMu.Unlock()
+	}
+
+	d.Panic()
+
+	if got := cancelCount.Load(); got != 3 {
+		t.Errorf("expected 3 cancels, got %d", got)
+	}
+
+	if !d.IsPanicked() {
+		t.Error("expected IsPanicked() to be true")
+	}
+
+	d.inFlightMu.Lock()
+	remaining := len(d.inFlight)
+	d.inFlightMu.Unlock()
+	if remaining != 0 {
+		t.Errorf("expected empty in-flight map, got %d entries", remaining)
+	}
+}
+
+func TestDispatcher_Resume_ClearsPanic(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	d.Panic()
+	if !d.IsPanicked() {
+		t.Fatal("should be panicked after Panic()")
+	}
+
+	d.Resume()
+	if d.IsPanicked() {
+		t.Error("should not be panicked after Resume()")
+	}
+}
+
+func TestDispatcher_Panic_CallsHook(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	var hookCalled atomic.Bool
+	d.OnPanic = func() { hookCalled.Store(true) }
+
+	d.Panic()
+	if !hookCalled.Load() {
+		t.Error("OnPanic hook was not called")
+	}
+}
+
+func TestDispatcher_Resume_CallsHook(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+
+	var hookCalled atomic.Bool
+	d.OnResume = func() { hookCalled.Store(true) }
+
+	d.Panic()
+	d.Resume()
+	if !hookCalled.Load() {
+		t.Error("OnResume hook was not called")
+	}
+}
+
+func TestDispatcher_StopCommand_SendsResponse(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+	)
+
+	// /stop with no in-flight request.
+	d.handleStopCommand(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/stop",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; got != "No request in progress." {
+		t.Errorf("stop response = %q", got)
+	}
+}
+
+func TestDispatcher_PanicCommand_SendsResponse(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+	)
+
+	d.handlePanicCommand(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/panic",
+	})
+
+	if !d.IsPanicked() {
+		t.Error("should be panicked after /panic")
+	}
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; !contains(got, "stopped") {
+		t.Errorf("panic response should mention stopped, got: %q", got)
+	}
+}
+
+func TestDispatcher_ResumeCommand_SendsResponse(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+	)
+
+	d.Panic()
+	d.handleResumeCommand(context.Background(), adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "/resume",
+	})
+
+	if d.IsPanicked() {
+		t.Error("should not be panicked after /resume")
+	}
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(sent))
+	}
+	if got := sent[0].Text; got != "Processing resumed." {
+		t.Errorf("resume response = %q", got)
+	}
+}

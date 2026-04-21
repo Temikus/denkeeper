@@ -1105,7 +1105,8 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 		return err
 	}
 
-	if hub := apiServer.WSHub(); hub != nil {
+	hub := apiServer.WSHub()
+	if hub != nil {
 		dispatcher.OnBroadcast = func(agentName, convID, adapterName, summary string) {
 			hub.Broadcast(api.ActivityFrame{
 				Type:           api.FrameTypeActivity,
@@ -1116,6 +1117,34 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 			})
 		}
 	}
+
+	// Wire panic/resume hooks — pause scheduler and broadcast status.
+	sched := deps.Scheduler
+	dispatcher.OnPanic = func() {
+		if sched != nil {
+			sched.Pause()
+		}
+		if hub != nil {
+			hub.Broadcast(api.PanicStatusFrame{
+				Type:    api.FrameTypePanicStatus,
+				Active:  true,
+				Message: "Emergency stop triggered — all processing paused",
+			})
+		}
+	}
+	dispatcher.OnResume = func() {
+		if sched != nil {
+			sched.Resume()
+		}
+		if hub != nil {
+			hub.Broadcast(api.PanicStatusFrame{
+				Type:    api.FrameTypePanicStatus,
+				Active:  false,
+				Message: "Processing resumed",
+			})
+		}
+	}
+
 	return nil
 }
 

@@ -56,6 +56,9 @@ func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *Voi
 		{Command: "start", Description: "Start a conversation"},
 		{Command: "help", Description: "Show help and available commands"},
 		{Command: "debug", Description: "Toggle verbose approval messages"},
+		{Command: "stop", Description: "Cancel the current request"},
+		{Command: "panic", Description: "Emergency stop all processing"},
+		{Command: "resume", Description: "Resume after emergency stop"},
 	}
 	if _, err := bot.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
 		logger.Warn("failed to register bot commands", "error", err)
@@ -153,8 +156,10 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 				continue
 			}
 
-			// Show typing indicator while processing.
-			_, _ = a.bot.Send(tgbotapi.NewChatAction(update.Message.Chat.ID, tgbotapi.ChatTyping))
+			// Skip typing indicator for control commands handled by the dispatcher.
+			if !isControlCommand(update.Message.Text) {
+				_, _ = a.bot.Send(tgbotapi.NewChatAction(update.Message.Chat.ID, tgbotapi.ChatTyping))
+			}
 
 			msg, ok := a.buildIncomingMessage(ctx, update.Message)
 			if !ok {
@@ -460,6 +465,13 @@ func (a *Adapter) downloadVoiceFile(ctx context.Context, fileID string) ([]byte,
 func (a *Adapter) Stop() error {
 	a.bot.StopReceivingUpdates()
 	return nil
+}
+
+// isControlCommand returns true for /stop, /panic, /resume — commands that
+// are intercepted by the Dispatcher and don't need a typing indicator.
+func isControlCommand(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return trimmed == "/stop" || trimmed == "/panic" || trimmed == "/resume"
 }
 
 // SendAndGetID sends a message and returns the Telegram message ID as a string.

@@ -7,9 +7,11 @@ import { token, authMode } from '../../store.js'
 // Mock wsStore before importing Chat (it imports wsStore via chatStore).
 const { writable } = await import('svelte/store')
 const mockWsStatus = writable('disconnected')
+const mockPanicStatus = writable({ active: false, message: '' })
 
 vi.mock('../../wsStore.js', () => ({
   wsStatus: mockWsStatus,
+  panicStatus: mockPanicStatus,
   initWS: vi.fn(),
   destroyWS: vi.fn(),
   getWSClient: vi.fn(() => ({ send: vi.fn(() => true) })),
@@ -187,7 +189,7 @@ describe('Chat page', () => {
     })
   })
 
-  test('textarea stays enabled while sending but send button is disabled', async () => {
+  test('textarea stays enabled while sending and stop button appears', async () => {
     let resolveStream
     server.use(
       http.post('/api/v1/chat', () => {
@@ -220,18 +222,17 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(textarea).not.toBeDisabled()
     })
-    // Send button is disabled while sending.
-    expect(document.querySelector('.btn-send')).toBeDisabled()
+    // Stop button replaces send button while sending.
+    expect(document.querySelector('.btn-stop')).toBeInTheDocument()
+    expect(document.querySelector('.btn-send')).not.toBeInTheDocument()
 
     resolveStream()
 
-    // After stream completes, sending state clears.
-    // Send button stays disabled because input is empty (cleared on send),
-    // but the textarea is enabled so user can type a new message.
+    // After stream completes, sending state clears — send button returns.
     await waitFor(() => {
       expect(textarea).not.toBeDisabled()
     })
-    // Typing new text re-enables the button.
+    // Typing new text shows the send button again.
     await fireEvent.input(textarea, { target: { value: 'next' } })
     await waitFor(() => {
       expect(document.querySelector('.btn-send')).not.toBeDisabled()

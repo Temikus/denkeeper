@@ -348,6 +348,8 @@ func (c *WSConn) readPump() {
 			c.handleApprovalResponse(f)
 		case CancelFrame:
 			c.handleCancel(f)
+		case PanicFrame:
+			c.handlePanic()
 		case PongFrame:
 			// Already handled by the pong handler; this is the JSON-level pong.
 		}
@@ -572,11 +574,21 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 }
 
 func (c *WSConn) handleCancel(f CancelFrame) {
+	// Cancel the WS-originated session goroutine.
 	if val, ok := c.sessions.Load(f.SessionID); ok {
 		if cancel, ok := val.(context.CancelFunc); ok {
 			cancel()
 		}
 	}
+	// Also try to cancel via the Dispatcher's in-flight map, which covers
+	// sessions that were started from adapters (Telegram, Discord, etc.).
+	_ = c.server.deps.Dispatcher.StopChat("ws", f.SessionID)
+}
+
+// handlePanic triggers an emergency stop via the Dispatcher.
+func (c *WSConn) handlePanic() {
+	c.server.deps.Dispatcher.Panic()
+	c.hub.logger.Warn("ws: panic triggered", "key", c.keyName)
 }
 
 // ---------------------------------------------------------------------------

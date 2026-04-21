@@ -147,3 +147,15 @@ func TestParseClientFrame_InvalidJSON(t *testing.T) {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
+
+func TestParseClientFrame_Panic(t *testing.T) {
+	data := []byte(`{"type":"panic"}`)
+	frame, err := ParseClientFrame(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, ok := frame.(PanicFrame)
+	if !ok {
+		t.Fatalf("expected PanicFrame, got %T", frame)
+	}
+}

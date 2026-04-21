@@ -78,6 +78,18 @@ type ActivityFrame struct {
 	Summary        string `json:"summary"`         // brief description
 }
 
+// PanicFrame is sent by the client to trigger an emergency stop.
+type PanicFrame struct {
+	Type string `json:"type"` // "panic"
+}
+
+// PanicStatusFrame is broadcast by the server to notify clients of panic state.
+type PanicStatusFrame struct {
+	Type    string `json:"type"`    // "panic_status"
+	Active  bool   `json:"active"`  // true = panicked, false = resumed
+	Message string `json:"message"` // human-readable description
+}
+
 // --- Frame type constants ---
 
 const (
@@ -88,6 +100,8 @@ const (
 	FrameTypePing             = "ping"
 	FrameTypeError            = "error"
 	FrameTypeActivity         = "activity"
+	FrameTypePanic            = "panic"
+	FrameTypePanicStatus      = "panic_status"
 )
 
 // validateApprovalResponseFrame checks required fields and action validity.
@@ -148,6 +162,9 @@ func ParseClientFrame(data []byte) (any, error) {
 
 	case FrameTypePong:
 		return PongFrame{Type: FrameTypePong}, nil
+
+	case FrameTypePanic:
+		return PanicFrame{Type: FrameTypePanic}, nil
 
 	case "":
 		return nil, fmt.Errorf("wsframes: missing type field")
