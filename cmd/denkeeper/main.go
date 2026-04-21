@@ -938,6 +938,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		abc.logger,
 	)
 	e.SetMaxContextMessages(ac.MaxContextMessages)
+	e.SetMaxToolRounds(ac.MaxToolRounds)
 	e.SetSkillDirs(sr.agentSkillsDir, sr.globalSkillsDir)
 	e.SetScheduler(abc.sched)
 	e.SetAuditor(abc.auditor)

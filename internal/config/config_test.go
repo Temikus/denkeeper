@@ -946,6 +946,24 @@ session_tier = "root"
 	}
 }
 
+func TestParse_Agents_NegativeMaxToolRounds(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+max_tool_rounds = -1
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative max_tool_rounds")
+	}
+	if !strings.Contains(err.Error(), "max_tool_rounds must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestParse_Agents_ConflictingWildcard(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[agents]]

@@ -2378,3 +2378,242 @@ func TestEngine_HandleMessage_NoTruncationNotice_WhenUnderLimit(t *testing.T) {
 		t.Errorf("got %d system messages, want 1 (no truncation notice expected)", systemCount)
 	}
 }
+
+// --- repeatDetector unit tests ---
+
+func TestRepeatDetector_TriggersOnThreshold(t *testing.T) {
+	d := newRepeatDetector(3)
+	if d.observe("skill_update", `{"name":"test"}`) {
+		t.Fatal("should not trigger on 1st call")
+	}
+	if d.observe("skill_update", `{"name":"test"}`) {
+		t.Fatal("should not trigger on 2nd call")
+	}
+	if !d.observe("skill_update", `{"name":"test"}`) {
+		t.Fatal("should trigger on 3rd consecutive identical call")
+	}
+}
+
+func TestRepeatDetector_ResetOnDifferentCall(t *testing.T) {
+	d := newRepeatDetector(3)
+	d.observe("skill_update", `{"name":"test"}`)
+	d.observe("skill_update", `{"name":"test"}`)
+	// Different tool breaks the streak.
+	if d.observe("skill_get", `{"name":"test"}`) {
+		t.Fatal("different tool name should reset counter")
+	}
+	// Same tool but different args also resets.
+	d.observe("skill_update", `{"name":"a"}`)
+	d.observe("skill_update", `{"name":"a"}`)
+	if d.observe("skill_update", `{"name":"b"}`) {
+		t.Fatal("different arguments should reset counter")
+	}
+}
+
+func TestRepeatDetector_AlternatingNeverTriggers(t *testing.T) {
+	d := newRepeatDetector(3)
+	for i := 0; i < 20; i++ {
+		name := "tool_a"
+		if i%2 == 1 {
+			name = "tool_b"
+		}
+		if d.observe(name, `{}`) {
+			t.Fatalf("alternating calls should never trigger (iteration %d)", i)
+		}
+	}
+}
+
+// --- Engine integration tests for tool loop improvements ---
+
+func TestEngine_ConfigurableMaxToolRounds(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// 4 different tool_calls responses + 1 stop (should never be reached with limit=3).
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "tool_a", Arguments: `{"v":1}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "tool_b", Arguments: `{"v":2}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "tool_c", Arguments: `{"v":3}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c4", Type: "function", Function: llm.FunctionCall{Name: "tool_d", Arguments: `{"v":4}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Final.",
+				TokensUsed:   llm.TokenUsage{Total: 5},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+	engine.SetMaxToolRounds(3)
+
+	_, err = engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-maxrounds",
+		UserID:     "user-1",
+		Text:       "Do things",
+		Timestamp:  time.Now(),
+	}, nil)
+
+	if err == nil {
+		t.Fatal("expected error for exceeding max tool rounds")
+	}
+	if !strings.Contains(err.Error(), "exceeded maximum tool call rounds (3)") {
+		t.Errorf("error = %q, want contains 'exceeded maximum tool call rounds (3)'", err.Error())
+	}
+
+	// Initial call + 3 tool rounds = 4 provider calls. The 4th response triggers round 3
+	// which exceeds the limit check (round >= 3).
+	if provider.callIndex != 4 {
+		t.Errorf("provider called %d times, want 4", provider.callIndex)
+	}
+}
+
+func TestEngine_RepeatDetection_IdenticalToolCalls(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// All responses return the same tool call — should trigger repeat detection.
+	sameCall := llm.ToolCall{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_update", Arguments: `{"name":"test","content":"x"}`}}
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{Content: "Done.", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+
+	_, err = engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-repeat",
+		UserID:     "user-1",
+		Text:       "Update skill",
+		Timestamp:  time.Now(),
+	}, nil)
+
+	if err == nil {
+		t.Fatal("expected error for repetitive tool calls")
+	}
+	if !strings.Contains(err.Error(), "identical arguments 3 consecutive times") {
+		t.Errorf("error = %q, want contains 'identical arguments 3 consecutive times'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "skill_update") {
+		t.Errorf("error should mention tool name, got: %q", err.Error())
+	}
+
+	// Round 0: executes call #1 (consecutiveN=1). Round 1: executes call #2 (consecutiveN=2).
+	// Round 2: detects call #3 (consecutiveN=3) before execution → abort.
+	// Provider: initial + round 0 completion + round 1 completion = 3 calls.
+	if provider.callIndex != 3 {
+		t.Errorf("provider called %d times, want 3 (abort before 3rd tool execution)", provider.callIndex)
+	}
+}
+
+func TestEngine_RepeatDetection_VariedCalls_NoFalsePositive(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "skill_update", Arguments: `{"name":"a","content":"new"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"b"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "All done.",
+				TokensUsed:   llm.TokenUsage{Total: 5},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-varied",
+		UserID:     "user-1",
+		Text:       "Process skills",
+		Timestamp:  time.Now(),
+	}, nil)
+
+	if err != nil {
+		t.Fatalf("varied tool calls should not trigger repeat detection: %v", err)
+	}
+	if text != "All done." {
+		t.Errorf("response = %q, want %q", text, "All done.")
+	}
+	if provider.callIndex != 4 {
+		t.Errorf("provider called %d times, want 4 (all rounds completed)", provider.callIndex)
+	}
+}

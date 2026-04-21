@@ -27,10 +27,41 @@ import (
 )
 
 const defaultMaxContextMessages = 50
-const maxToolRounds = 10
+const defaultMaxToolRounds = 10
+const defaultRepeatDetectionThreshold = 3 // consecutive identical tool calls before abort
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
 const maxConversationIDLen = 256
+
+// toolCallKey identifies a unique tool invocation by name and arguments.
+type toolCallKey struct {
+	name string
+	args string
+}
+
+// repeatDetector tracks consecutive identical tool calls and detects loops.
+type repeatDetector struct {
+	threshold    int
+	lastKey      toolCallKey
+	consecutiveN int
+}
+
+func newRepeatDetector(threshold int) *repeatDetector {
+	return &repeatDetector{threshold: threshold}
+}
+
+// observe records a tool call and returns true if the same (name, args) pair
+// has been seen threshold consecutive times.
+func (d *repeatDetector) observe(name, args string) bool {
+	key := toolCallKey{name: name, args: args}
+	if key == d.lastKey {
+		d.consecutiveN++
+	} else {
+		d.lastKey = key
+		d.consecutiveN = 1
+	}
+	return d.consecutiveN >= d.threshold
+}
 
 // SendFunc is a callback for sending a response back to the originating adapter.
 // The Dispatcher sets this when constructing each Engine.
@@ -53,6 +84,9 @@ type Engine struct {
 
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
+
+	// maxToolRounds limits the number of tool-call rounds per message.
+	maxToolRounds int
 
 	// Approval configuration (set via SetApprovalConfig after construction).
 	approvalTimeout time.Duration // default 5m
@@ -120,6 +154,7 @@ func NewEngine(
 		tools:              tools,
 		approvals:          approvals,
 		maxContextMessages: defaultMaxContextMessages,
+		maxToolRounds:      defaultMaxToolRounds,
 		approvalTimeout:    defaultApprovalTimeout,
 		logger:             logger.With("agent", name),
 		tracer:             tracer,
@@ -135,6 +170,14 @@ func NewEngine(
 func (e *Engine) SetMaxContextMessages(n int) {
 	if n > 0 {
 		e.maxContextMessages = n
+	}
+}
+
+// SetMaxToolRounds overrides the default tool round limit.
+// Call this after NewEngine, before the engine starts handling messages.
+func (e *Engine) SetMaxToolRounds(n int) {
+	if n > 0 {
+		e.maxToolRounds = n
 	}
 }
 
@@ -919,10 +962,11 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	var toolRounds int
 	var toolRecords []ToolCallRecord
 	var accumulatedContent strings.Builder
+	detector := newRepeatDetector(defaultRepeatDetectionThreshold)
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		toolRounds++
-		if round >= maxToolRounds {
-			return nil, llmMessages, toolRecords, fmt.Errorf("exceeded maximum tool call rounds (%d)", maxToolRounds)
+		if round >= e.maxToolRounds {
+			return nil, llmMessages, toolRecords, fmt.Errorf("exceeded maximum tool call rounds (%d)", e.maxToolRounds)
 		}
 
 		recordToolRoundEvent(parentSpan, round+1, resp.ToolCalls)
@@ -934,6 +978,17 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 
 		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
+			if detector.observe(tc.Function.Name, tc.Function.Arguments) {
+				e.logger.Warn("repetitive tool call detected, aborting tool loop",
+					"tool", tc.Function.Name,
+					"consecutive_count", defaultRepeatDetectionThreshold,
+					"round", round+1,
+					"conversation", convID,
+				)
+				return nil, llmMessages, toolRecords, fmt.Errorf(
+					"tool %q called with identical arguments %d consecutive times",
+					tc.Function.Name, defaultRepeatDetectionThreshold)
+			}
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
 				attribute.String("tool_name", tc.Function.Name)))
@@ -967,14 +1022,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			"tokens_total", resp.TokensUsed.Total,
 		)
 
-		// Check soft cost limit between tool rounds — allows the model to
-		// produce a final response but prevents further tool calls.
-		// Hard limits are enforced by the router before each LLM call.
-		if e.router.CostTracker().ExceedsSoftLimit(convID) {
-			if onEvent != nil {
-				onEvent(ChatEvent{Type: "cost_limit", Text: "Session approaching cost limit — pausing tool use."})
-			}
-			e.logger.Warn("soft cost limit reached, breaking tool loop", "conversation", convID)
+		if e.softCostLimitReached(convID, onEvent) {
 			break
 		}
 	}
@@ -1000,6 +1048,19 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
 	return resp, llmMessages, toolRecords, nil
+}
+
+// softCostLimitReached checks the soft cost limit between tool rounds.
+// Returns true when the limit is exceeded, emitting a cost_limit event and log.
+func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool {
+	if !e.router.CostTracker().ExceedsSoftLimit(convID) {
+		return false
+	}
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "cost_limit", Text: "Session approaching cost limit — pausing tool use."})
+	}
+	e.logger.Warn("soft cost limit reached, breaking tool loop", "conversation", convID)
+	return true
 }
 
 // recordToolRoundEvent adds a span event for a tool-call round.

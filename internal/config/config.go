@@ -416,6 +416,10 @@ type AgentInstanceConfig struct {
 	// most recent N messages are sent. 0 means use the default (50).
 	MaxContextMessages int `toml:"max_context_messages"`
 
+	// MaxToolRounds limits the number of tool-call rounds per message.
+	// 0 means use the default (10).
+	MaxToolRounds int `toml:"max_tool_rounds"`
+
 	// Fallbacks overrides the global [[llm.fallback]] rules for this agent.
 	// When non-empty, these rules replace (not merge with) the global fallbacks.
 	Fallbacks []FallbackConfig `toml:"fallback"`
@@ -1569,6 +1573,10 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 
 		if a.MaxContextMessages < 0 {
 			return nil, fmt.Errorf("config: agent %q: max_context_messages must be >= 0 (0 = default)", a.Name)
+		}
+
+		if a.MaxToolRounds < 0 {
+			return nil, fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
 		}
 
 		for _, binding := range a.Adapters {
