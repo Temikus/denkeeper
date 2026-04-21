@@ -39,6 +39,7 @@ type Config struct {
 	OTel      OTelConfig              `toml:"otel"`
 	MCP       MCPConfig               `toml:"mcp"`
 	Costs     CostsConfig             `toml:"costs"`
+	Audit     AuditConfig             `toml:"audit"`
 }
 
 // CostsConfig controls the pricing registry and cost calculation.
@@ -69,6 +70,26 @@ type OTelConfig struct {
 	TracesEndpoint string `toml:"traces_endpoint"`
 	// ServiceName is the OTel service name. Default: "denkeeper".
 	ServiceName string `toml:"service_name"`
+}
+
+// AuditConfig controls the audit log subsystem.
+type AuditConfig struct {
+	// Enabled controls whether audit logging is active. Default: true.
+	Enabled *bool `toml:"enabled"`
+	// RetentionDays is how long audit events are kept. 0 = unlimited. Default: 30.
+	RetentionDays int `toml:"retention_days"`
+	// CleanupInterval is how often retention is enforced (e.g. "1h"). Default: "1h".
+	CleanupInterval string `toml:"cleanup_interval"`
+	// BufferSize is the capacity of the in-memory event buffer. Default: 1000.
+	BufferSize int `toml:"buffer_size"`
+}
+
+// AuditEnabled returns whether audit logging is enabled (default: true).
+func (c *AuditConfig) AuditEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -903,6 +924,7 @@ func applyScalarDefaults(cfg *Config) {
 	if cfg.API.Timezone == "" {
 		cfg.API.Timezone = "UTC"
 	}
+	applyAuditDefaults(cfg)
 }
 
 func applyMCPDefaults(mcp *MCPConfig) {
@@ -927,6 +949,25 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.InitRetryBackoff == "" {
 		mcp.InitRetryBackoff = "2s"
+	}
+}
+
+func applyAuditDefaults(cfg *Config) {
+	if cfg.Audit.RetentionDays == 0 {
+		cfg.Audit.RetentionDays = 30
+	}
+	if cfg.Audit.CleanupInterval == "" {
+		cfg.Audit.CleanupInterval = "1h"
+	}
+	if cfg.Audit.BufferSize == 0 {
+		cfg.Audit.BufferSize = 1000
+	}
+	if v := os.Getenv("DENKEEPER_AUDIT_ENABLED"); v == "true" || v == "1" {
+		t := true
+		cfg.Audit.Enabled = &t
+	} else if v == "false" || v == "0" {
+		f := false
+		cfg.Audit.Enabled = &f
 	}
 }
 
@@ -1032,6 +1073,7 @@ func applyEnvOverrides(cfg *Config) {
 		f := false
 		cfg.API.WebSocketEnabled = &f
 	}
+
 }
 
 func expandEnvVars(cfg *Config) {

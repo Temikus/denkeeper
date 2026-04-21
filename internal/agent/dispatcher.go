@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
 
 	"go.opentelemetry.io/otel"
@@ -49,6 +51,9 @@ type Dispatcher struct {
 	// Discord, etc.) is successfully processed. The server uses this to
 	// notify WebSocket clients of conversation activity from other adapters.
 	OnBroadcast func(agentName, convID, adapterName, summary string)
+
+	// Auditor emits audit events for routing/session decisions.
+	Auditor audit.Emitter
 
 	// OTel instrumentation.
 	tracer    trace.Tracer
@@ -400,10 +405,33 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 				attribute.String("adapter", msg.Adapter),
 				attribute.String("agent", e.Name())))
 
+			d.emitRouteAudit(ctx, msg, ch, e)
+
 			wg.Add(1)
 			go d.handleMessage(ctx, &wg, e, msg)
 		}
 	}
+}
+
+// emitRouteAudit emits an audit event for message routing.
+func (d *Dispatcher) emitRouteAudit(ctx context.Context, msg adapter.IncomingMessage, ch *Channel, e *Engine) {
+	if d.Auditor == nil {
+		return
+	}
+	chName := ""
+	if ch != nil {
+		chName = ch.Name
+	}
+	detail, _ := json.Marshal(map[string]string{"adapter": msg.Adapter, "channel": chName, "external_id": msg.ExternalID})
+	d.Auditor.Emit(ctx, audit.Event{
+		Category: audit.CategoryChannel,
+		Action:   "route",
+		Agent:    e.Name(),
+		Summary:  fmt.Sprintf("Routed via %s to agent %s", msg.Adapter, e.Name()),
+		Detail:   string(detail),
+		Status:   audit.StatusOK,
+		Source:   msg.Adapter,
+	})
 }
 
 // handleMessage processes a single incoming message. It runs the engine
@@ -501,6 +529,21 @@ func (d *Dispatcher) handleSessionCommand(ctx context.Context, msg adapter.Incom
 	}
 
 	d.setActiveChannel(ctx, msg, ch.Name)
+
+	// Audit: session switch.
+	if d.Auditor != nil {
+		switchDetail, _ := json.Marshal(map[string]string{"channel": ch.Name, "adapter": msg.Adapter, "agent": ch.AgentName})
+		d.Auditor.Emit(ctx, audit.Event{
+			Category: audit.CategorySession,
+			Action:   "switch",
+			Agent:    ch.AgentName,
+			Summary:  fmt.Sprintf("Session switched to channel %q", ch.Name),
+			Detail:   string(switchDetail),
+			Status:   audit.StatusOK,
+			Source:   msg.Adapter,
+		})
+	}
+
 	_ = a.Send(ctx, adapter.OutgoingMessage{
 		Adapter:    msg.Adapter,
 		ExternalID: msg.ExternalID,

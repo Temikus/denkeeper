@@ -21,6 +21,7 @@
   import ServerConfig from './pages/ServerConfig.svelte'
   import Providers from './pages/Providers.svelte'
   import Settings from './pages/Settings.svelte'
+  import AuditLog from './pages/AuditLog.svelte'
   import './shared.css'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -76,6 +77,8 @@
         <Costs />
       {:else if route === 'keys'}
         <ApiKeys />
+      {:else if route === 'audit'}
+        <AuditLog />
       {:else if route === 'settings'}
         <Settings />
       {:else}

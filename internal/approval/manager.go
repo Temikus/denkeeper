@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Temikus/denkeeper/internal/audit"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -43,6 +45,7 @@ type Manager struct {
 	autoStore AutoApproveStore
 	registry  *Registry
 	logger    *slog.Logger
+	Auditor   audit.Emitter
 
 	waiterMu sync.Mutex
 	waiters  map[string]chan waiterResult // notified when an approval is resolved
@@ -141,6 +144,23 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 
 	if err := m.store.Resolve(ctx, id, status, resolvedBy); err != nil {
 		return nil, err
+	}
+
+	// Audit: approval resolved.
+	if m.Auditor != nil {
+		action := "deny"
+		auditStatus := audit.StatusDenied
+		if approved {
+			action = "approve"
+			auditStatus = audit.StatusOK
+		}
+		m.Auditor.Emit(ctx, audit.Event{
+			Category: audit.CategoryApproval,
+			Action:   action,
+			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, action+"d", resolvedBy),
+			Status:   auditStatus,
+			Source:   resolvedBy,
+		})
 	}
 
 	if approved {

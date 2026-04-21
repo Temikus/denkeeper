@@ -25,6 +25,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
@@ -111,6 +112,7 @@ type stores struct {
 	approvalStore   *approval.SQLiteStore
 	approvalManager *approval.Manager
 	kvStore         *kv.SQLiteStore
+	auditStore      *audit.SQLiteStore
 }
 
 // initStores creates the memory, approval, and KV stores that share a single
@@ -144,16 +146,33 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 		return stores{}, fmt.Errorf("initializing kv store: %w", err)
 	}
 
+	// Audit store uses a separate DB file to avoid contention with the main store.
+	var auditStore *audit.SQLiteStore
+	if cfg.Audit.AuditEnabled() {
+		auditDBPath := filepath.Join(filepath.Dir(cfg.Memory.DBPath), "audit.db")
+		auditStore, err = audit.NewSQLiteStore(auditDBPath)
+		if err != nil {
+			_ = kvStore.Close()
+			_ = approvalStore.Close()
+			_ = memory.Close()
+			return stores{}, fmt.Errorf("initializing audit store: %w", err)
+		}
+	}
+
 	return stores{
 		memory:          memory,
 		approvalStore:   approvalStore,
 		approvalManager: approval.NewManager(approvalStore, logger),
 		kvStore:         kvStore,
+		auditStore:      auditStore,
 	}, nil
 }
 
 // closeStores closes all persistence stores in reverse order.
 func (s stores) Close() {
+	if s.auditStore != nil {
+		_ = s.auditStore.Close()
+	}
 	_ = s.kvStore.Close()
 	_ = s.approvalStore.Close()
 	_ = s.memory.Close()
@@ -599,6 +618,7 @@ type agentBuildCtx struct {
 	sched           *scheduler.Scheduler
 	adapters        []adapter.Adapter
 	dispatcher      *agent.Dispatcher
+	auditor         audit.Emitter
 	logger          *slog.Logger
 }
 
@@ -920,6 +940,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	e.SetMaxContextMessages(ac.MaxContextMessages)
 	e.SetSkillDirs(sr.agentSkillsDir, sr.globalSkillsDir)
 	e.SetScheduler(abc.sched)
+	e.SetAuditor(abc.auditor)
 	approvalTimeout, _ := time.ParseDuration(abc.cfg.Session.ApprovalTimeout) // validated by config.Parse
 	e.SetApprovalConfig(approvalTimeout, abc.cfg.Session.ApprovalRetries)
 
@@ -1188,6 +1209,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
 	startMemoryCleanupWorker(ctx, st.memory, &cfg.Memory, logger)
 
+	// Audit emitter — wired into engines, dispatcher, scheduler, and tool manager.
+	auditor, auditCloser := initAuditor(ctx, st.auditStore, cfg, logger)
+	defer auditCloser()
+
 	sharedToolMgr, browserProfileDir, cleanups, err := initSharedTools(ctx, cfg, logger)
 	for _, fn := range cleanups {
 		defer fn()
@@ -1225,6 +1250,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 	browserProfiles := newBrowserProfiles(cfg, browserProfileDir, logger)
 
 	dispatcher := agent.NewDispatcher(nil, nil, adapters, logger)
+	dispatcher.Auditor = auditor
+	sched.Auditor = auditor
+	sharedToolMgr.Auditor = auditor
+	st.approvalManager.Auditor = auditor
+
 	abc := agentBuildCtx{
 		cfg:             cfg,
 		configPath:      path,
@@ -1239,6 +1269,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		sched:           sched,
 		adapters:        adapters,
 		dispatcher:      dispatcher,
+		auditor:         auditor,
 		logger:          logger,
 	}
 
@@ -1273,6 +1304,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			WebHandler:        web.Handler(),
 			MetricsHandler:    otelMetricsHandler(cfg),
 			KVStore:           st.kvStore,
+			AuditStore:        st.auditStore,
 			ConfigPath:        path,
 			ModelLister:       dispatcher.ListModels,
 			ModelDetailLister: dispatcher.ListModelDetails,
@@ -1497,4 +1529,45 @@ func runMemoryCleanup(ctx context.Context, store *agent.SQLiteMemoryStore, cfg *
 			logger.Info("pruned excess conversations", "count", n, "max", cfg.MaxConversations)
 		}
 	}
+}
+
+// initAuditor creates the audit emitter and returns it along with a cleanup function.
+func initAuditor(ctx context.Context, store *audit.SQLiteStore, cfg *config.Config, logger *slog.Logger) (audit.Emitter, func()) {
+	if store == nil {
+		return audit.NopEmitter{}, func() {}
+	}
+	be := audit.NewBufferedEmitter(store, cfg.Audit.BufferSize, logger)
+	be.Start(ctx)
+	startAuditCleanupWorker(ctx, store, cfg.Audit.RetentionDays, cfg.Audit.CleanupInterval, logger)
+	return be, be.Close
+}
+
+// startAuditCleanupWorker runs periodic retention enforcement on the audit store.
+func startAuditCleanupWorker(ctx context.Context, store *audit.SQLiteStore, retentionDays int, interval string, logger *slog.Logger) {
+	if retentionDays <= 0 {
+		return // unlimited retention
+	}
+	dur, err := time.ParseDuration(interval)
+	if err != nil {
+		dur = time.Hour
+	}
+
+	go func() {
+		ticker := time.NewTicker(dur)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+				n, pruneErr := store.PruneBefore(ctx, cutoff)
+				if pruneErr != nil {
+					logger.Warn("audit retention prune failed", "error", pruneErr)
+				} else if n > 0 {
+					logger.Info("pruned audit events", "count", n, "retention_days", retentionDays)
+				}
+			}
+		}
+	}()
 }

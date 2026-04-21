@@ -18,6 +18,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -99,6 +100,7 @@ type Harness struct {
 	Dispatcher  *agent.Dispatcher
 	Scheduler   *scheduler.Scheduler
 	KVStore     kv.Store
+	AuditStore  audit.Store
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
 	APIKey      string
@@ -154,6 +156,7 @@ func allScopes() []string {
 		"tools:read", "tools:write",
 		"browser:read", "browser:write",
 		"kv:read", "kv:write",
+		"audit:read",
 	}
 }
 
@@ -184,6 +187,12 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	if err != nil {
 		t.Fatalf("creating kv store: %v", err)
 	}
+
+	auditStore, err := audit.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating audit store: %v", err)
+	}
+	t.Cleanup(func() { _ = auditStore.Close() })
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 
@@ -284,6 +293,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Memory:       mem,
 		Approvals:    approvalMgr,
 		KVStore:      kvStore,
+		AuditStore:   auditStore,
 		ConfigPath:   opts.ConfigPath,
 		LifecycleMgr: lifecycleMgr,
 		Config: &config.Config{
@@ -301,6 +311,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Dispatcher:  dispatcher,
 		Scheduler:   sched,
 		KVStore:     kvStore,
+		AuditStore:  auditStore,
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
 		APIKey:      apiKey,

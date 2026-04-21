@@ -305,4 +305,11 @@ export const api = {
   }),
   logout: () => fetch('/auth/logout', { method: 'POST' }).then(r => r.json()),
   sessionCheck: () => fetch('/auth/session').then(r => r.json()),
+
+  // Audit Log
+  auditEvents: (params = {}) => {
+    const filtered = Object.fromEntries(Object.entries(params).filter(([, v]) => v))
+    return apiFetch(`/api/v1/audit?${new URLSearchParams(filtered)}`)
+  },
+  auditStats: (since) => apiFetch(`/api/v1/audit/stats${since ? `?since=${encodeURIComponent(since)}` : ''}`),
 }

@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -111,7 +112,8 @@ type Manager struct {
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
 	mcpCfg   config.MCPConfig       // global MCP settings
 	logger   *slog.Logger
-	oauth    *OAuthSupport // nil if OAuth not configured
+	oauth    *OAuthSupport  // nil if OAuth not configured
+	Auditor  audit.Emitter  // nil = no audit events
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.
@@ -974,6 +976,16 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 			probeSpan.RecordError(err)
 			probeSpan.SetStatus(codes.Error, err.Error())
 			m.logger.Warn("MCP server health check failed", "server", name, "error", err)
+			if m.Auditor != nil {
+				m.Auditor.Emit(probeCtx, audit.Event{
+					Category: audit.CategoryMCP,
+					Action:   "health_fail",
+					Summary:  fmt.Sprintf("MCP server %s health check failed", name),
+					Detail:   fmt.Sprintf(`{"server":"%s"}`, name),
+					Status:   audit.StatusError,
+					Source:   "health_checker",
+				})
+			}
 			m.handleServerFailure(probeCtx, sc, maxAttempts, cooldown, err.Error())
 			probeSpan.End()
 		} else {

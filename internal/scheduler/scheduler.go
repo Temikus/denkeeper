@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Temikus/denkeeper/internal/audit"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -107,6 +109,7 @@ type JobFunc func(entry Entry)
 // Scheduler runs registered schedules concurrently.
 // System and agent schedules are tracked separately to allow priority
 // enforcement and selective querying.
+// Scheduler manages named, typed scheduled jobs.
 type Scheduler struct {
 	mu      sync.RWMutex
 	entries map[string]*internalEntry
@@ -115,6 +118,7 @@ type Scheduler struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+	Auditor audit.Emitter
 }
 
 type internalEntry struct {
@@ -478,4 +482,16 @@ func (s *Scheduler) logFire(e Entry) {
 		"skill", e.Skill,
 		"tags", e.Tags,
 	)
+
+	// Audit: schedule fired.
+	if s.Auditor != nil {
+		s.Auditor.Emit(context.Background(), audit.Event{
+			Category: audit.CategorySchedule,
+			Action:   "fire",
+			Summary:  fmt.Sprintf("Schedule %s fired (skill: %s)", e.Name, e.Skill),
+			Detail:   fmt.Sprintf(`{"name":"%s","type":"%s","skill":"%s"}`, e.Name, e.Type, e.Skill),
+			Status:   audit.StatusOK,
+			Source:   "scheduler",
+		})
+	}
 }

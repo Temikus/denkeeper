@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agentctx"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -69,6 +71,9 @@ type Engine struct {
 	adapterCtx   adapterRouting
 
 	logger *slog.Logger
+
+	// Audit emitter (nil-safe: NopEmitter used when nil).
+	auditor audit.Emitter
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
 	tracer     trace.Tracer
@@ -156,6 +161,35 @@ func (e *Engine) SetSkillDirs(agentSkillsDir, globalSkillsDir string) {
 // Scheduler is initialized.
 func (e *Engine) SetScheduler(sched *scheduler.Scheduler) {
 	e.sched = sched
+}
+
+// SetAuditor sets the audit emitter for this engine.
+func (e *Engine) SetAuditor(a audit.Emitter) {
+	e.auditor = a
+}
+
+// truncateSummary returns the first line of s, capped at 80 chars, or fallback if empty.
+func truncateSummary(s, fallback string) string {
+	if i := strings.IndexByte(s, '\n'); i > 0 {
+		s = s[:i]
+	}
+	if len(s) > 80 {
+		s = s[:77] + "..."
+	}
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+func (e *Engine) emitAudit(ctx context.Context, ev audit.Event) {
+	if e.auditor == nil {
+		return
+	}
+	if ev.Agent == "" {
+		ev.Agent = e.name
+	}
+	e.auditor.Emit(ctx, ev)
 }
 
 // Name returns the agent's name.
@@ -431,6 +465,18 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 		if err := store.AddSkillUsages(ctx, convID, userMsgID, records); err != nil {
 			e.logger.Warn("failed to persist skill usages", "error", err, "conversation", convID)
 		}
+
+		// Audit: skill matches.
+		for _, s := range matched {
+			e.emitAudit(ctx, audit.Event{
+				Category:       audit.CategorySkill,
+				Action:         "match",
+				Summary:        fmt.Sprintf("Skill %s matched (%s)", s.Name, classifySkillMatch(s, msg)),
+				Status:         audit.StatusOK,
+				Source:         "engine",
+				ConversationID: convID,
+			})
+		}
 	}
 
 	// Update conversation stats.
@@ -594,6 +640,23 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		"tokens_completion", resp.TokensUsed.Completion,
 		"tokens_total", resp.TokensUsed.Total,
 	)
+
+	// Audit: LLM completion.
+	llmDetail, _ := json.Marshal(map[string]any{
+		"model": resp.Model, "provider": e.router.DefaultProvider(),
+		"tokens": resp.TokensUsed.Total, "cost": resp.CostUSD,
+		"tokens_prompt": resp.TokensUsed.Prompt, "tokens_completion": resp.TokensUsed.Completion,
+		"finish_reason": resp.FinishReason,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryLLM,
+		Action:         "complete",
+		Summary:        truncateSummary(resp.Content, "complete"),
+		Detail:         string(llmDetail),
+		Status:         audit.StatusOK,
+		Source:         "engine",
+		ConversationID: convID,
+	})
 
 	responseText := sanitizeStaleDirectives(resp.Content, e.logger)
 	var pendingApproval *approval.Request
@@ -970,6 +1033,25 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round,
 			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
 	}
+
+	// Audit: tool execution.
+	toolStatus := audit.StatusOK
+	toolDetail := map[string]any{"tool": tc.Function.Name, "server": record.ServerName, "round": round}
+	if execErr != nil {
+		toolStatus = audit.StatusError
+		toolDetail["error"] = execErr.Error()
+	}
+	toolDetailJSON, _ := json.Marshal(toolDetail)
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryToolCall,
+		Action:         "execute",
+		Summary:        tc.Function.Name,
+		Detail:         string(toolDetailJSON),
+		Status:         toolStatus,
+		DurationMs:     toolDur.Milliseconds(),
+		Source:         "engine",
+		ConversationID: convID,
+	})
 
 	if onEvent != nil {
 		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Duration: toolDur.Milliseconds()}

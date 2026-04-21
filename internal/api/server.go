@@ -18,6 +18,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/kv"
@@ -62,6 +63,7 @@ type Deps struct {
 	SetupPIN          string                                                           // one-time PIN for account setup (empty = disabled)
 	ModelLister       func(ctx context.Context) []string                               // returns available LLM models; nil = endpoint returns 503
 	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo // returns enriched model metadata; nil = endpoint returns 503
+	AuditStore        audit.Store                                                      // nil = audit endpoints return 503
 	OAuthDeps         *OAuthDeps                                                       // nil = OAuth tool endpoints return 503
 	ReloadFunc        func() error                                                     // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                     // nil = restart endpoint returns 503
@@ -183,6 +185,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/auto-approve", s.RequireScope("approvals:read", s.handleListAutoApprove))
 	mux.HandleFunc("POST /api/v1/auto-approve", s.RequireScope("approvals:write", s.handleCreateAutoApprove))
 	mux.HandleFunc("DELETE /api/v1/auto-approve/{id}", s.RequireScope("approvals:write", s.handleDeleteAutoApprove))
+
+	// Audit log endpoints.
+	mux.HandleFunc("GET /api/v1/audit", s.RequireScope("audit:read", s.handleListAudit))
+	mux.HandleFunc("GET /api/v1/audit/stats", s.RequireScope("audit:read", s.handleAuditStats))
 
 	// Tool & plugin management endpoints.
 	mux.HandleFunc("GET /api/v1/tools", s.RequireScope("tools:read", s.handleListTools))

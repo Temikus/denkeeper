@@ -27,6 +27,7 @@ var Valid = map[string]struct{}{
 	"browser:write":   {},
 	"kv:read":         {},
 	"kv:write":        {},
+	"audit:read":      {},
 	"health":          {},
 }
 

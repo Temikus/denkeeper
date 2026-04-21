@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte'
+  import { currentRoute } from '../router.js'
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
@@ -14,6 +15,12 @@
   onMount(async () => {
     try {
       sessions = (await api.sessions()) || []
+      // Auto-select session from URL (e.g. #/sessions/abc123)
+      const parts = $currentRoute.split('/')
+      if (parts.length > 1 && parts[1]) {
+        const target = sessions.find(s => s.id === parts[1])
+        if (target) selectSession(target)
+      }
     } catch(e) { error = e.message }
   })
 

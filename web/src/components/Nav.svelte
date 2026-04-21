@@ -18,6 +18,7 @@
         { id: 'sessions',  label: 'Sessions' },
         { id: 'schedules', label: 'Schedules' },
         { id: 'approvals', label: 'Approvals' },
+        { id: 'audit',     label: 'Audit Log' },
       ],
     },
     {
