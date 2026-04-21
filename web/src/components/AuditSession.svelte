@@ -17,19 +17,30 @@
     return `${(ms / 1000).toFixed(1)}s`
   }
 
+  function parseDetail(d) { if (!d) return {}; try { return JSON.parse(d) } catch { return {} } }
+
   function handleHeaderKeydown(e) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleSession?.(session.conversation_id) }
   }
 
   let events = $derived(session.events)
-  let stepCount = $derived(events.length)
-  let errorCount = $derived(events.filter(e => e.status === 'error').length)
+
+  // Separate trigger event from step events
+  let triggerEvent = $derived.by(() => {
+    const ev = events.find(e => e.category === 'session' && e.action === 'trigger')
+    return ev ? { ...ev, detail: parseDetail(ev.detail) } : null
+  })
+
+  let stepEvents = $derived(events.filter(e => !(e.category === 'session' && e.action === 'trigger')))
+
+  let errorCount = $derived(stepEvents.filter(e => e.status === 'error').length)
   let hasErrors = $derived(errorCount > 0)
-  let allFailed = $derived(events.every(e => e.status === 'error'))
+  let allFailed = $derived(stepEvents.length > 0 && stepEvents.every(e => e.status === 'error'))
   let isExpanded = $derived(session.expanded)
 
-  let title = $derived(() => {
-    const first = events[0]
+  let title = $derived.by(() => {
+    // Use first non-trigger event's summary for title
+    const first = stepEvents[0]
     if (first?.summary) {
       const text = first.summary.replace(/\n/g, ' ').trim()
       if (text.length > 60) return text.slice(0, 57) + '...'
@@ -39,20 +50,40 @@
     return cid.replace(/^chan:/, '').replace(/^default:/, '') || 'Session'
   })
 
-  let totalDuration = $derived(() => {
+  let totalDuration = $derived.by(() => {
     if (events.length < 2) return events[0]?.duration_ms || 0
     const first = new Date(events[0].timestamp).getTime()
     const last = new Date(events[events.length - 1].timestamp).getTime()
     return last - first + (events[events.length - 1].duration_ms || 0)
   })
 
-  let statusChip = $derived(() => {
+  let statusChip = $derived.by(() => {
     if (!hasErrors) return null
     if (allFailed) return { text: `${errorCount} error${errorCount > 1 ? 's' : ''}`, cls: 'chip-error' }
     return { text: `recovered \u00b7 ${errorCount} error${errorCount > 1 ? 's' : ''}`, cls: 'chip-warn' }
   })
 
+  // Composition chip excludes trigger events
+  let compositionChip = $derived.by(() => {
+    const counts = {}
+    for (const e of stepEvents) {
+      const cat = e.category === 'tool_call' ? 'tool' : e.category
+      counts[cat] = (counts[cat] || 0) + 1
+    }
+    return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(' \u00b7 ')
+  })
+
   let dotClass = $derived(allFailed ? 'dot-error' : 'dot-ok')
+
+  // Trigger display helpers
+  let triggerType = $derived(triggerEvent?.detail?.trigger_type || null)
+  let triggerPrompt = $derived(triggerEvent?.detail?.prompt || '')
+  let triggerUserName = $derived(triggerEvent?.detail?.user_name || '')
+  let triggerAdapter = $derived(triggerEvent?.detail?.adapter || triggerEvent?.source || '')
+  let triggerScheduleName = $derived(triggerEvent?.detail?.schedule_name || '')
+  let triggerScheduleCron = $derived(triggerEvent?.detail?.schedule_cron || '')
+  let triggerSkillName = $derived(triggerEvent?.detail?.skill_name || '')
+  let triggerUserInitial = $derived(triggerUserName ? triggerUserName.charAt(0).toUpperCase() : '?')
 </script>
 
 <div class="session-card">
@@ -64,13 +95,15 @@
   >
     <span class="session-dot {dotClass}"></span>
     <span class="session-type">SESSION</span>
-    <span class="session-title">{title()}</span>
-    <span class="session-steps">{stepCount} step{stepCount !== 1 ? 's' : ''}</span>
-    {#if statusChip()}
-      <span class="session-chip {statusChip().cls}">{statusChip().text}</span>
+    <span class="session-title">{title}</span>
+    {#if compositionChip}
+      <span class="session-steps">{compositionChip}</span>
+    {/if}
+    {#if statusChip}
+      <span class="session-chip {statusChip.cls}">{statusChip.text}</span>
     {/if}
     <span class="spacer"></span>
-    <span class="session-duration">{formatDuration(totalDuration())}</span>
+    <span class="session-duration">{formatDuration(totalDuration)}</span>
     <span class="session-time">{relativeTime(session.latest)}</span>
     <span class="session-chevron" class:open={isExpanded}>{isExpanded ? '\u25be' : '\u25b8'}</span>
   </div>
@@ -78,9 +111,45 @@
   {#if isExpanded}
     <div class="session-children">
       <div class="tree-line"></div>
-      {#each events as event, i (event.id)}
+
+      <!-- Trigger block: sits above the tree -->
+      {#if triggerType === 'user'}
+        <div class="trigger-block trigger-user">
+          <div class="trigger-header">
+            <span class="trigger-avatar">{triggerUserInitial}</span>
+            <span class="trigger-label trigger-label-user">USER{#if triggerUserName} &middot; {triggerUserName}{/if}</span>
+            {#if triggerAdapter}
+              <span class="trigger-meta">{triggerAdapter}</span>
+            {/if}
+            {#if triggerEvent?.timestamp}
+              <span class="trigger-meta">{relativeTime(triggerEvent.timestamp)}</span>
+            {/if}
+          </div>
+          {#if triggerPrompt}
+            <div class="trigger-prompt">{triggerPrompt}</div>
+          {/if}
+        </div>
+      {:else if triggerType === 'schedule'}
+        <div class="trigger-block trigger-schedule">
+          <div class="trigger-header">
+            <span class="trigger-icon trigger-icon-schedule">{'\u23F1'}</span>
+            <span class="trigger-label trigger-label-schedule">SCHEDULE</span>
+            {#if triggerScheduleCron}
+              <span class="trigger-cron">{triggerScheduleCron}</span>
+            {/if}
+            <span class="trigger-schedule-name">{triggerScheduleName || triggerSkillName || 'scheduled task'}</span>
+            {#if triggerEvent?.timestamp}
+              <span class="spacer"></span>
+              <span class="trigger-meta">triggered {new Date(triggerEvent.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Step rows -->
+      {#each stepEvents as event, i (event.id)}
         <div class="child-row">
-          <span class="tree-branch">{i === events.length - 1 ? '\u2514' : '\u251c'}</span>
+          <span class="tree-branch">{i === stepEvents.length - 1 ? '\u2514' : '\u251c'}</span>
           <div class="child-content">
             <AuditRow
               {event}
@@ -151,6 +220,87 @@
     background: rgba(44,24,16,0.12);
   }
 
+  /* ─── Trigger blocks ─── */
+  .trigger-block {
+    margin: 0 -6px 8px -22px;
+    padding: 10px 12px 10px 22px;
+    border-radius: 0 4px 4px 0;
+  }
+  .trigger-user {
+    background: rgba(127,119,221,0.05);
+    border-left: 2px solid #7F77DD;
+  }
+  .trigger-schedule {
+    background: rgba(55,138,221,0.04);
+    border-left: 2px solid rgba(55,138,221,0.5);
+  }
+
+  .trigger-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .trigger-avatar {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #7F77DD;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .trigger-icon {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .trigger-icon-schedule {
+    background: rgba(55,138,221,0.15);
+    color: #185FA5;
+  }
+
+  .trigger-label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    flex-shrink: 0;
+  }
+  .trigger-label-user { color: #3C3489; }
+  .trigger-label-schedule { color: #185FA5; }
+
+  .trigger-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .trigger-cron {
+    font-family: monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(44,24,16,0.05);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .trigger-schedule-name {
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  .trigger-prompt {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.55;
+    padding-left: 26px;
+    margin-top: 4px;
+  }
+
+  /* ─── Step rows ─── */
   .child-row {
     display: flex;
     align-items: flex-start;

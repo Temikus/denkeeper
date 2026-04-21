@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_events(category, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_events(agent, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_conversation ON audit_events(conversation_id, timestamp DESC);
 `
 
 // SQLiteStore implements Store using SQLite.

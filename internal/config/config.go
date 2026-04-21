@@ -1610,8 +1610,8 @@ func validateAgentRouting(cfg *Config) error {
 
 func validateChannels(channels []ChannelConfig, agentNames map[string]bool) error {
 	names := make(map[string]bool, len(channels))
-	specifics := make(map[string]string)  // "adapter:externalID" → channel name
-	wildcards := make(map[string]string)  // "adapter" → channel name
+	specifics := make(map[string]string) // "adapter:externalID" → channel name
+	wildcards := make(map[string]string) // "adapter" → channel name
 
 	for i, ch := range channels {
 		if ch.Name == "" {

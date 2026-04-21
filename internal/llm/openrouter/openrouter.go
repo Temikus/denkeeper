@@ -233,10 +233,11 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	}
 
 	chatResp := &llm.ChatResponse{
-		Content:      result.Content,
-		ToolCalls:    result.ToolCalls,
-		Model:        result.Model,
-		FinishReason: result.FinishReason,
+		Content:         result.Content,
+		ThinkingContent: result.ReasoningContent,
+		ToolCalls:       result.ToolCalls,
+		Model:           result.Model,
+		FinishReason:    result.FinishReason,
 	}
 	if result.Usage != nil {
 		chatResp.TokensUsed = llm.TokenUsage{
@@ -271,10 +272,11 @@ func buildChatResponse(apiResp *apiResponse) *llm.ChatResponse {
 	}
 
 	return &llm.ChatResponse{
-		Content:      content,
-		ToolCalls:    choice.Message.ToolCalls,
-		Model:        apiResp.Model,
-		FinishReason: choice.FinishReason,
+		Content:         content,
+		ThinkingContent: choice.Message.ReasoningContent,
+		ToolCalls:       choice.Message.ToolCalls,
+		Model:           apiResp.Model,
+		FinishReason:    choice.FinishReason,
 		TokensUsed: llm.TokenUsage{
 			Prompt:     apiResp.Usage.PromptTokens,
 			Completion: apiResp.Usage.CompletionTokens,

@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -202,5 +203,110 @@ func TestAudit_RequiresScope(t *testing.T) {
 	// Scope enforcement returns 401 (insufficient scope on valid key).
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestAudit_ToolCallDetailContainsArgumentsAndResult(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	detail := map[string]any{
+		"tool":      "list-active-tasks",
+		"server":    "todoist",
+		"round":     1,
+		"arguments": `{"filter":"today | overdue","limit":20}`,
+		"result":    `[{"id":"1","content":"Review PR"},{"id":"2","content":"Water plants"}]`,
+	}
+	detailJSON, _ := json.Marshal(detail)
+
+	ev := audit.Event{
+		Timestamp:      time.Now().UTC(),
+		Category:       audit.CategoryToolCall,
+		Action:         "execute",
+		Agent:          "default",
+		Summary:        "list-active-tasks",
+		Detail:         string(detailJSON),
+		Status:         audit.StatusOK,
+		DurationMs:     380,
+		Source:         "engine",
+		ConversationID: "conv-2",
+	}
+	if err := h.AuditStore.Insert(ctx, ev); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?category=tool_call", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp audit.ListResult
+	DecodeJSON(t, rec, &resp)
+	if resp.Total != 1 {
+		t.Fatalf("expected total=1, got %d", resp.Total)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(resp.Events[0].Detail), &got); err != nil {
+		t.Fatalf("failed to parse detail JSON: %v", err)
+	}
+	if _, ok := got["arguments"]; !ok {
+		t.Error("detail missing 'arguments' field")
+	}
+	if _, ok := got["result"]; !ok {
+		t.Error("detail missing 'result' field")
+	}
+	if got["tool"] != "list-active-tasks" {
+		t.Errorf("expected tool 'list-active-tasks', got %q", got["tool"])
+	}
+	if got["server"] != "todoist" {
+		t.Errorf("expected server 'todoist', got %q", got["server"])
+	}
+}
+
+func TestAudit_ToolCallDetailTruncatedResult(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	detail := map[string]any{
+		"tool":             "big-search",
+		"server":           "search-mcp",
+		"round":            1,
+		"arguments":        `{"query":"test"}`,
+		"result":           "truncated content here...",
+		"result_truncated": true,
+	}
+	detailJSON, _ := json.Marshal(detail)
+
+	ev := audit.Event{
+		Timestamp: time.Now().UTC(),
+		Category:  audit.CategoryToolCall,
+		Action:    "execute",
+		Summary:   "big-search",
+		Detail:    string(detailJSON),
+		Status:    audit.StatusOK,
+		Source:    "engine",
+	}
+	if err := h.AuditStore.Insert(ctx, ev); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?category=tool_call", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var resp audit.ListResult
+	DecodeJSON(t, rec, &resp)
+	if resp.Total != 1 {
+		t.Fatalf("expected total=1, got %d", resp.Total)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(resp.Events[0].Detail), &got); err != nil {
+		t.Fatalf("failed to parse detail JSON: %v", err)
+	}
+	if got["result_truncated"] != true {
+		t.Error("expected result_truncated=true in detail")
 	}
 }

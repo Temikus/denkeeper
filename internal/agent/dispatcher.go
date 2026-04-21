@@ -40,12 +40,12 @@ type Dispatcher struct {
 	logger   *slog.Logger
 
 	// Channel routing (replaces legacy specific/wildcard when channels are set).
-	channels          map[string]*Channel // channel name → Channel
-	channelSpecific   map[string]string   // "adapter:externalID" → channel name
-	channelWildcard   map[string]string   // "adapter" → channel name
-	activeChannelsMu  sync.RWMutex
-	activeChannels    map[string]string   // "adapter:externalID" → channel name (runtime /session overrides)
-	activeStore       ActiveChannelStore  // persistence for /session selections
+	channels         map[string]*Channel // channel name → Channel
+	channelSpecific  map[string]string   // "adapter:externalID" → channel name
+	channelWildcard  map[string]string   // "adapter" → channel name
+	activeChannelsMu sync.RWMutex
+	activeChannels   map[string]string  // "adapter:externalID" → channel name (runtime /session overrides)
+	activeStore      ActiveChannelStore // persistence for /session selections
 
 	// OnBroadcast, when set, is called after an adapter message (Telegram,
 	// Discord, etc.) is successfully processed. The server uses this to

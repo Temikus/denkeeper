@@ -22,6 +22,10 @@ type IncomingMessage struct {
 	// SkillName, when non-empty, indicates this message targets a specific skill.
 	// Used by the scheduler to activate schedule-triggered skills.
 	SkillName string
+	// ScheduleName is the name of the schedule that triggered this message.
+	ScheduleName string
+	// ScheduleCron is the cron expression of the triggering schedule (for audit display).
+	ScheduleCron string
 	// IsVoice is true when the original message was a voice note.
 	// The adapter sets this after transcribing the audio via STT.
 	IsVoice bool

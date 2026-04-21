@@ -34,6 +34,42 @@
     : '')
   // Tool: server . duration
   let toolMeta = $derived(event.category === 'tool_call' && detail.server ? detail.server : '')
+
+  // Tier 1 shape chip for tool_call results (collapsed row)
+  let resultChip = $derived.by(() => {
+    if (event.category !== 'tool_call' || event.status === 'error' || !detail.result) return ''
+    const raw = detail.result
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return `${parsed.length} item${parsed.length !== 1 ? 's' : ''}`
+      if (parsed && typeof parsed === 'object') {
+        const keys = Object.keys(parsed)
+        return `object \u00b7 ${keys.length} key${keys.length !== 1 ? 's' : ''}`
+      }
+      if (typeof parsed === 'boolean') return String(parsed)
+      if (typeof parsed === 'number') return String(parsed)
+      if (parsed === null) return 'null'
+      return ''
+    } catch {
+      // Non-JSON string result — show byte size
+      const kb = raw.length / 1024
+      return kb >= 1 ? `${kb.toFixed(1)} kb` : `${raw.length} B`
+    }
+  })
+  // Tier 1 shape chip for LLM responses (collapsed row)
+  let llmChip = $derived.by(() => {
+    if (event.category !== 'llm' || event.status === 'error') return ''
+    if (detail.response_text) {
+      const len = detail.response_text.length
+      const kb = len / 1024
+      return kb >= 1 ? `${kb.toFixed(1)} kb` : `${len} chars`
+    }
+    return ''
+  })
+
+  // LLM thinking badge
+  let hasThinking = $derived(event.category === 'llm' && !!detail.thinking_content)
+
   // Standalone dot class
   let dotClass = $derived(isError ? 'dot-error' : isDenied ? 'dot-muted' : 'dot-ok')
 </script>
@@ -61,6 +97,16 @@
         {/if}
       {:else}
         <span class="row-summary">{event.summary || event.action}</span>
+      {/if}
+
+      {#if resultChip}
+        <span class="pill-shape">{resultChip}</span>
+      {/if}
+      {#if hasThinking}
+        <span class="pill-thinking">+ thinking</span>
+      {/if}
+      {#if llmChip}
+        <span class="pill-shape">{llmChip}</span>
       {/if}
 
       {#if isError}
@@ -98,7 +144,7 @@
     {/if}
   </div>
 
-  <div class="detail-panel" class:open={expanded}>
+  <div class="detail-panel" class:open={expanded} aria-hidden={!expanded}>
     <div class="detail-panel-inner">
       {#if expanded}
         <AuditDetail {event} />
@@ -156,6 +202,21 @@
     color: #5F4A35; font-size: 11px; white-space: nowrap;
   }
   .mono { font-family: monospace; font-size: 11px; }
+
+  .pill-thinking {
+    font-size: 9px; font-weight: 500; padding: 1px 5px;
+    border-radius: 3px; color: #534AB7;
+    background: rgba(127,119,221,0.12);
+    letter-spacing: 0.3px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+
+  .pill-shape {
+    font-size: 10px; padding: 1px 6px;
+    border-radius: 999px; color: var(--text-muted);
+    background: var(--hover-overlay);
+    white-space: nowrap; flex-shrink: 0;
+  }
 
   .pill-failed {
     font-size: 9px; font-weight: 700; padding: 1px 5px;

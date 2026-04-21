@@ -108,12 +108,13 @@ type Message struct {
 }
 
 type ChatResponse struct {
-	Content      string
-	ToolCalls    []ToolCall
-	TokensUsed   TokenUsage
-	Model        string
-	FinishReason string
-	CostUSD      float64 // provider-reported or estimated cost in USD
+	Content         string
+	ThinkingContent string // accumulated thinking/reasoning content (if model supports it)
+	ToolCalls       []ToolCall
+	TokensUsed      TokenUsage
+	Model           string
+	FinishReason    string
+	CostUSD         float64 // provider-reported or estimated cost in USD
 }
 
 // ToolCall represents a tool invocation requested by the LLM (OpenAI format).

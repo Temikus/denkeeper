@@ -169,6 +169,67 @@ func (e *Engine) SetAuditor(a audit.Emitter) {
 }
 
 // truncateSummary returns the first line of s, capped at 80 chars, or fallback if empty.
+// buildTriggerAuditDetail constructs the audit detail map for a session trigger
+// event from an incoming message. It is a standalone function to keep
+// chatWithApproval within the cyclomatic complexity limit.
+func buildTriggerAuditDetail(msg adapter.IncomingMessage) map[string]any {
+	const maxPromptLen = 64 * 1024
+	d := map[string]any{
+		"trigger_type": "user",
+		"adapter":      msg.Adapter,
+		"user_name":    msg.UserName,
+	}
+	if msg.UserID != "" {
+		d["user_id"] = msg.UserID
+	}
+	prompt := msg.Text
+	if len(prompt) > maxPromptLen {
+		d["prompt_truncated"] = true
+		prompt = prompt[:maxPromptLen]
+	}
+	d["prompt"] = prompt
+	if msg.SkillName != "" {
+		d["trigger_type"] = "schedule"
+		d["skill_name"] = msg.SkillName
+	}
+	if msg.ScheduleName != "" {
+		d["schedule_name"] = msg.ScheduleName
+		d["schedule_cron"] = msg.ScheduleCron
+	}
+	return d
+}
+
+// buildLLMAuditDetail constructs the audit detail map for an LLM completion
+// event. It is a standalone function to keep chatWithApproval within the
+// cyclomatic complexity limit.
+func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any {
+	const maxLen = 64 * 1024
+	d := map[string]any{
+		"model": resp.Model, "provider": provider,
+		"tokens": resp.TokensUsed.Total, "cost": resp.CostUSD,
+		"tokens_prompt": resp.TokensUsed.Prompt, "tokens_completion": resp.TokensUsed.Completion,
+		"tokens_cached": resp.TokensUsed.CachedPrompt,
+		"finish_reason": resp.FinishReason,
+	}
+	if resp.Content != "" {
+		text := resp.Content
+		if len(text) > maxLen {
+			d["response_truncated"] = true
+			text = text[:maxLen]
+		}
+		d["response_text"] = text
+	}
+	if resp.ThinkingContent != "" {
+		text := resp.ThinkingContent
+		if len(text) > maxLen {
+			d["thinking_truncated"] = true
+			text = text[:maxLen]
+		}
+		d["thinking_content"] = text
+	}
+	return d
+}
+
 func truncateSummary(s, fallback string) string {
 	if i := strings.IndexByte(s, '\n'); i > 0 {
 		s = s[:i]
@@ -578,6 +639,18 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		return "", nil, fmt.Errorf("storing user message: %w", err)
 	}
 
+	// Audit: session trigger (user prompt or scheduled invocation).
+	triggerJSON, _ := json.Marshal(buildTriggerAuditDetail(msg))
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySession,
+		Action:         "trigger",
+		Summary:        truncateSummary(msg.Text, "trigger"),
+		Detail:         string(triggerJSON),
+		Status:         audit.StatusOK,
+		Source:         msg.Adapter,
+		ConversationID: convID,
+	})
+
 	history, err := e.memory.GetMessages(ctx, convID, e.maxContextMessages)
 	if err != nil {
 		return "", nil, fmt.Errorf("loading history: %w", err)
@@ -642,12 +715,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	)
 
 	// Audit: LLM completion.
-	llmDetail, _ := json.Marshal(map[string]any{
-		"model": resp.Model, "provider": e.router.DefaultProvider(),
-		"tokens": resp.TokensUsed.Total, "cost": resp.CostUSD,
-		"tokens_prompt": resp.TokensUsed.Prompt, "tokens_completion": resp.TokensUsed.Completion,
-		"finish_reason": resp.FinishReason,
-	})
+	llmDetail, _ := json.Marshal(buildLLMAuditDetail(resp, e.router.DefaultProvider()))
 	e.emitAudit(ctx, audit.Event{
 		Category:       audit.CategoryLLM,
 		Action:         "complete",
@@ -1036,10 +1104,24 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 
 	// Audit: tool execution.
 	toolStatus := audit.StatusOK
-	toolDetail := map[string]any{"tool": tc.Function.Name, "server": record.ServerName, "round": round}
+	toolDetail := map[string]any{
+		"tool":      tc.Function.Name,
+		"server":    record.ServerName,
+		"round":     round,
+		"arguments": tc.Function.Arguments,
+	}
 	if execErr != nil {
 		toolStatus = audit.StatusError
 		toolDetail["error"] = execErr.Error()
+	} else {
+		// Cap stored result at 64 KB to keep audit DB manageable.
+		const maxResultLen = 64 * 1024
+		if len(result) <= maxResultLen {
+			toolDetail["result"] = result
+		} else {
+			toolDetail["result"] = result[:maxResultLen]
+			toolDetail["result_truncated"] = true
+		}
 	}
 	toolDetailJSON, _ := json.Marshal(toolDetail)
 	e.emitAudit(ctx, audit.Event{

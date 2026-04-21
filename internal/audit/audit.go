@@ -57,10 +57,10 @@ type ListOpts struct {
 
 // Stats holds aggregate counts for the audit log dashboard.
 type Stats struct {
-	Total         int            `json:"total"`
-	ByCategory    map[string]int `json:"by_category"`
-	ByStatus      map[string]int `json:"by_status"`
-	EventsLastHour int           `json:"events_last_hour"`
+	Total          int            `json:"total"`
+	ByCategory     map[string]int `json:"by_category"`
+	ByStatus       map[string]int `json:"by_status"`
+	EventsLastHour int            `json:"events_last_hour"`
 }
 
 // ListResult wraps a paginated list response.

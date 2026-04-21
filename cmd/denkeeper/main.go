@@ -996,11 +996,13 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 		}
 
 		jobMsg := adapter.IncomingMessage{
-			Adapter:    adapterName,
-			ExternalID: externalID,
-			UserName:   "scheduler",
-			Text:       text,
-			SkillName:  sc.Skill,
+			Adapter:      adapterName,
+			ExternalID:   externalID,
+			UserName:     "scheduler",
+			Text:         text,
+			SkillName:    sc.Skill,
+			ScheduleName: sc.Name,
+			ScheduleCron: sc.Schedule,
 		}
 
 		targetAgent := sc.Agent // defaults to "default" from applyDefaults

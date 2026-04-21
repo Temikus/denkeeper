@@ -254,10 +254,11 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	}
 
 	chatResp := &llm.ChatResponse{
-		Content:      result.Content,
-		ToolCalls:    result.ToolCalls,
-		Model:        result.Model,
-		FinishReason: result.FinishReason,
+		Content:         result.Content,
+		ThinkingContent: result.ReasoningContent,
+		ToolCalls:       result.ToolCalls,
+		Model:           result.Model,
+		FinishReason:    result.FinishReason,
 	}
 	if result.Usage != nil {
 		var cachedPrompt int

@@ -248,11 +248,12 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 
 // anthropicStreamAccumulator tracks state while reading an Anthropic SSE stream.
 type anthropicStreamAccumulator struct {
-	out        llm.ChatResponse
-	contentBuf strings.Builder
-	usage      apiUsage
-	tools      map[int]*anthropicToolAccum
-	onStream   llm.StreamCallback
+	out         llm.ChatResponse
+	contentBuf  strings.Builder
+	thinkingBuf strings.Builder
+	usage       apiUsage
+	tools       map[int]*anthropicToolAccum
+	onStream    llm.StreamCallback
 }
 
 type anthropicToolAccum struct {
@@ -279,6 +280,7 @@ func (a *anthropicStreamAccumulator) handleBlockDelta(data string) {
 		a.contentBuf.WriteString(delta.Delta.Text)
 		a.onStream(llm.StreamChunk{ContentDelta: delta.Delta.Text})
 	case "thinking_delta":
+		a.thinkingBuf.WriteString(delta.Delta.Thinking)
 		a.onStream(llm.StreamChunk{ThinkingDelta: delta.Delta.Thinking})
 	case "input_json_delta":
 		if acc, ok := a.tools[delta.Index]; ok {
@@ -289,6 +291,7 @@ func (a *anthropicStreamAccumulator) handleBlockDelta(data string) {
 
 func (a *anthropicStreamAccumulator) finish() *llm.ChatResponse {
 	a.out.Content = a.contentBuf.String()
+	a.out.ThinkingContent = a.thinkingBuf.String()
 	a.out.TokensUsed = llm.TokenUsage{
 		Prompt:       a.usage.InputTokens,
 		Completion:   a.usage.OutputTokens,
@@ -522,6 +525,8 @@ func (c *Client) parseResponse(r *apiResponse) (*llm.ChatResponse, error) {
 		switch block.Type {
 		case "text":
 			out.Content += block.Text
+		case "thinking":
+			out.ThinkingContent += block.Thinking
 		case "tool_use":
 			argsJSON, err := json.Marshal(block.Input)
 			if err != nil {
@@ -564,6 +569,9 @@ type contentBlock struct {
 
 	// text
 	Text string `json:"text,omitempty"`
+
+	// thinking
+	Thinking string `json:"thinking,omitempty"`
 
 	// tool_use
 	ID    string         `json:"id,omitempty"`

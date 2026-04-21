@@ -112,8 +112,8 @@ type Manager struct {
 	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
 	mcpCfg   config.MCPConfig       // global MCP settings
 	logger   *slog.Logger
-	oauth    *OAuthSupport  // nil if OAuth not configured
-	Auditor  audit.Emitter  // nil = no audit events
+	oauth    *OAuthSupport // nil if OAuth not configured
+	Auditor  audit.Emitter // nil = no audit events
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.
