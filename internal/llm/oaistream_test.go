@@ -170,6 +170,50 @@ func TestReadOAIStream_SSEErrorEvent_Unparseable(t *testing.T) {
 	}
 }
 
+func TestReadOAIStream_ReasoningField(t *testing.T) {
+	// OpenRouter uses "reasoning" (not "reasoning_content") in streaming deltas.
+	body := sseBody(
+		`{"id":"1","model":"kimi-k2.5","choices":[{"delta":{"reasoning":"Let me think"},"finish_reason":null}]}`,
+		`{"id":"1","model":"kimi-k2.5","choices":[{"delta":{"reasoning":" about this"},"finish_reason":null}]}`,
+		`{"id":"1","model":"kimi-k2.5","choices":[{"delta":{"content":"The answer is 4"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}`,
+	)
+
+	var thinkingChunks []string
+	result, err := ReadOAIStream(strings.NewReader(body), func(c StreamChunk) {
+		if c.ThinkingDelta != "" {
+			thinkingChunks = append(thinkingChunks, c.ThinkingDelta)
+		}
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ReasoningContent != "Let me think about this" {
+		t.Errorf("reasoning = %q, want %q", result.ReasoningContent, "Let me think about this")
+	}
+	if result.Content != "The answer is 4" {
+		t.Errorf("content = %q, want %q", result.Content, "The answer is 4")
+	}
+	if len(thinkingChunks) != 2 {
+		t.Errorf("got %d thinking chunks, want 2", len(thinkingChunks))
+	}
+}
+
+func TestReadOAIStream_ReasoningContentField(t *testing.T) {
+	// Some models use "reasoning_content" instead of "reasoning".
+	body := sseBody(
+		`{"id":"1","model":"test","choices":[{"delta":{"reasoning_content":"thinking..."},"finish_reason":null}]}`,
+		`{"id":"1","model":"test","choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`,
+	)
+
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ReasoningContent != "thinking..." {
+		t.Errorf("reasoning = %q, want %q", result.ReasoningContent, "thinking...")
+	}
+}
+
 func TestReadOAIStream_MalformedChunksSkipped(t *testing.T) {
 	body := "data: not-json\n\ndata: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
 	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)

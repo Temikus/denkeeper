@@ -107,6 +107,8 @@
       api_key: '',
       base_url: p?.base_url || '',
       organization: p?.organization || '',
+      reasoning_enabled: !!(p?.reasoning?.enabled),
+      reasoning_effort: p?.reasoning?.effort || '',
     }
     editingProvider = name
   }
@@ -132,6 +134,18 @@
         patch.organization = providerDraft.organization
       }
 
+      // Build reasoning patch for OpenRouter.
+      if (p?.type === 'openrouter') {
+        const oldEnabled = !!(p?.reasoning?.enabled)
+        const oldEffort = p?.reasoning?.effort || ''
+        if (providerDraft.reasoning_enabled !== oldEnabled || providerDraft.reasoning_effort !== oldEffort) {
+          patch.reasoning = {
+            enabled: providerDraft.reasoning_enabled || undefined,
+            effort: providerDraft.reasoning_effort || undefined,
+          }
+        }
+      }
+
       if (Object.keys(patch).length > 0) {
         await api.updateLLMProvider(editingProvider, patch)
         // Update local state
@@ -140,6 +154,7 @@
           if (patch.api_key) p.enabled = true
           if (patch.base_url !== undefined) p.base_url = patch.base_url
           if (patch.organization !== undefined) p.organization = patch.organization
+          if (patch.reasoning) p.reasoning = patch.reasoning
         }
       }
 
@@ -154,7 +169,7 @@
     }
   }
 
-  function hasEditableFields(p) {
+  function hasEditableBaseURL(p) {
     return p.type !== 'openrouter'
   }
 
@@ -262,6 +277,18 @@
               <span class="field-value mono">{p.organization || '(none)'}</span>
             </div>
           {/if}
+          {#if p.type === 'openrouter'}
+            <div class="field-row">
+              <span class="field-label">Reasoning</span>
+              <span class="field-value">
+                {#if p.reasoning?.enabled}
+                  Enabled{#if p.reasoning.effort} · {p.reasoning.effort} effort{/if}
+                {:else}
+                  Off
+                {/if}
+              </span>
+            </div>
+          {/if}
         </div>
         <div class="card-actions">
           <button class="btn btn-sm" onclick={() => startEditProvider(p.name)}>Edit</button>
@@ -280,7 +307,7 @@
               />
             </div>
           {/if}
-          {#if hasEditableFields(p)}
+          {#if hasEditableBaseURL(p)}
             <div class="form-row">
               <label class="form-label" for="base-url-{p.name}">Base URL</label>
               <input
@@ -302,6 +329,30 @@
                 bind:value={providerDraft.organization}
                 placeholder="org-..."
               />
+            </div>
+          {/if}
+          {#if p.type === 'openrouter'}
+            <div class="form-row">
+              <label class="form-label">Reasoning</label>
+              <div class="reasoning-controls">
+                <label class="toggle-label">
+                  <input type="checkbox" bind:checked={providerDraft.reasoning_enabled} />
+                  Enable reasoning
+                </label>
+                {#if providerDraft.reasoning_enabled}
+                  <div class="reasoning-effort">
+                    <label class="form-label-sm" for="reasoning-effort-{p.name}">Effort</label>
+                    <select id="reasoning-effort-{p.name}" class="input input-sm" bind:value={providerDraft.reasoning_effort}>
+                      <option value="">Default</option>
+                      <option value="xhigh">Extra high</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                      <option value="minimal">Minimal</option>
+                    </select>
+                  </div>
+                {/if}
+              </div>
             </div>
           {/if}
           <div class="restart-note">Changes to provider settings require a restart to take effect.</div>
@@ -460,6 +511,39 @@
   }
   select.input {
     cursor: pointer;
+  }
+
+  .reasoning-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .toggle-label input[type="checkbox"] {
+    cursor: pointer;
+  }
+  .reasoning-effort {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 22px;
+  }
+  .form-label-sm {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .input-sm {
+    width: auto;
+    padding: 4px 8px;
+    font-size: 12px;
   }
 
   .config-actions {

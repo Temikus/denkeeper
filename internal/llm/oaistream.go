@@ -76,10 +76,15 @@ func (a *oaiStreamAccumulator) processChoice(choice *oaiStreamChoice) {
 		}
 	}
 
-	if delta.ReasoningContent != "" {
-		a.reasoningBuf.WriteString(delta.ReasoningContent)
+	// OpenRouter sends reasoning in either `reasoning` or `reasoning_content`.
+	reasoning := delta.ReasoningContent
+	if reasoning == "" {
+		reasoning = delta.Reasoning
+	}
+	if reasoning != "" {
+		a.reasoningBuf.WriteString(reasoning)
 		if a.onStream != nil {
-			a.onStream(StreamChunk{ThinkingDelta: delta.ReasoningContent})
+			a.onStream(StreamChunk{ThinkingDelta: reasoning})
 		}
 	}
 
@@ -200,7 +205,8 @@ type oaiStreamChoice struct {
 
 type oaiStreamDelta struct {
 	Content          string              `json:"content,omitempty"`
-	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	Reasoning        string              `json:"reasoning,omitempty"`         // OpenRouter reasoning field
+	ReasoningContent string              `json:"reasoning_content,omitempty"` // alias used by some models
 	ToolCalls        []oaiStreamToolCall `json:"tool_calls,omitempty"`
 }
 

@@ -641,7 +641,23 @@ type FallbackConfig struct {
 }
 
 type OpenRouterConfig struct {
-	APIKey string `toml:"api_key"`
+	APIKey    string                 `toml:"api_key"`
+	Reasoning OpenRouterReasoningCfg `toml:"reasoning"`
+}
+
+// OpenRouterReasoningCfg controls the reasoning parameter sent to OpenRouter.
+// See https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+type OpenRouterReasoningCfg struct {
+	// Enabled activates reasoning with model defaults. Inferred true when
+	// Effort or MaxTokens is set.
+	Enabled *bool `toml:"enabled" json:"enabled,omitempty"`
+	// Effort sets the reasoning effort level: "xhigh", "high", "medium",
+	// "low", "minimal", "none". Mutually exclusive with MaxTokens.
+	Effort string `toml:"effort" json:"effort,omitempty"`
+	// MaxTokens sets the reasoning token budget. Mutually exclusive with Effort.
+	MaxTokens int `toml:"max_tokens" json:"max_tokens,omitempty"`
+	// Exclude omits reasoning from the response (tokens are still billed).
+	Exclude *bool `toml:"exclude" json:"exclude,omitempty"`
 }
 
 // OllamaConfig configures the local Ollama LLM provider.
@@ -1028,12 +1044,25 @@ func envOverrideInt(name string, target *int) {
 	}
 }
 
+func envOverrideBoolPtr(name string, target **bool) {
+	if v := os.Getenv(name); v == "true" || v == "1" {
+		t := true
+		*target = &t
+	} else if v == "false" || v == "0" {
+		f := false
+		*target = &f
+	}
+}
+
 func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_TELEGRAM_TOKEN", &cfg.Telegram.Token)
 	envOverride("DENKEEPER_DISCORD_TOKEN", &cfg.Discord.Token)
 	envOverride("DENKEEPER_LLM_PROVIDER", &cfg.LLM.DefaultProvider)
 	envOverride("DENKEEPER_LLM_MODEL", &cfg.LLM.DefaultModel)
 	envOverride("DENKEEPER_LLM_OPENROUTER_API_KEY", &cfg.LLM.OpenRouter.APIKey)
+	envOverrideBoolPtr("DENKEEPER_LLM_OPENROUTER_REASONING_ENABLED", &cfg.LLM.OpenRouter.Reasoning.Enabled)
+	envOverride("DENKEEPER_LLM_OPENROUTER_REASONING_EFFORT", &cfg.LLM.OpenRouter.Reasoning.Effort)
+	envOverrideInt("DENKEEPER_LLM_OPENROUTER_REASONING_MAX_TOKENS", &cfg.LLM.OpenRouter.Reasoning.MaxTokens)
 	envOverride("DENKEEPER_LLM_ANTHROPIC_API_KEY", &cfg.LLM.Anthropic.APIKey)
 	envOverride("DENKEEPER_LLM_ANTHROPIC_BASE_URL", &cfg.LLM.Anthropic.BaseURL)
 	envOverride("DENKEEPER_LLM_OLLAMA_BASE_URL", &cfg.LLM.Ollama.BaseURL)
@@ -1441,6 +1470,29 @@ func validate(cfg *Config) error {
 	}
 	if err := validateMemory(&cfg.Memory); err != nil {
 		return fmt.Errorf("validate memory: %w", err)
+	}
+	if err := ValidateOpenRouterReasoning(&cfg.LLM.OpenRouter.Reasoning); err != nil {
+		return fmt.Errorf("validate openrouter reasoning: %w", err)
+	}
+	return nil
+}
+
+// ValidateOpenRouterReasoning validates the OpenRouter reasoning config fields.
+func ValidateOpenRouterReasoning(r *OpenRouterReasoningCfg) error {
+	if r.Effort != "" && r.MaxTokens > 0 {
+		return fmt.Errorf("effort and max_tokens are mutually exclusive")
+	}
+	if r.Effort != "" {
+		valid := map[string]bool{
+			"xhigh": true, "high": true, "medium": true,
+			"low": true, "minimal": true, "none": true,
+		}
+		if !valid[r.Effort] {
+			return fmt.Errorf("invalid effort %q, must be one of: xhigh, high, medium, low, minimal, none", r.Effort)
+		}
+	}
+	if r.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must be >= 0, got %d", r.MaxTokens)
 	}
 	return nil
 }

@@ -31,7 +31,18 @@
     return ev ? { ...ev, detail: parseDetail(ev.detail) } : null
   })
 
-  let stepEvents = $derived(events.filter(e => !(e.category === 'session' && e.action === 'trigger')))
+  // Step events: everything except the first trigger (shown as session header).
+  // Subsequent triggers stay inline so follow-up user messages remain visible.
+  let stepEvents = $derived.by(() => {
+    let firstTriggerSkipped = false
+    return events.filter(e => {
+      if (e.category === 'session' && e.action === 'trigger' && !firstTriggerSkipped) {
+        firstTriggerSkipped = true
+        return false
+      }
+      return true
+    })
+  })
 
   let errorCount = $derived(stepEvents.filter(e => e.status === 'error').length)
   let hasErrors = $derived(errorCount > 0)
@@ -148,17 +159,36 @@
 
       <!-- Step rows -->
       {#each stepEvents as event, i (event.id)}
-        <div class="child-row">
-          <span class="tree-branch">{i === stepEvents.length - 1 ? '\u2514' : '\u251c'}</span>
-          <div class="child-content">
-            <AuditRow
-              {event}
-              expanded={expandedId === event.id}
-              ontoggle={() => onToggleRow?.(event.id)}
-              compact={true}
-            />
+        {#if event.category === 'session' && event.action === 'trigger'}
+          {@const d = parseDetail(event.detail) || {}}
+          <div
+            class="inline-trigger"
+            role="button" tabindex="0"
+            aria-expanded={expandedId === event.id}
+            onclick={() => onToggleRow?.(event.id)}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleRow?.(event.id) } }}
+          >
+            <span class="trigger-avatar">{(d.user_name || '?').charAt(0).toUpperCase()}</span>
+            <span class="trigger-label trigger-label-user">USER</span>
+            {#if d.prompt}
+              <span class="inline-trigger-text" class:truncated={expandedId !== event.id}>{d.prompt}</span>
+            {/if}
+            <span class="spacer"></span>
+            <span class="trigger-meta">{relativeTime(event.timestamp)}</span>
           </div>
-        </div>
+        {:else}
+          <div class="child-row">
+            <span class="tree-branch">{i === stepEvents.length - 1 ? '\u2514' : '\u251c'}</span>
+            <div class="child-content">
+              <AuditRow
+                {event}
+                expanded={expandedId === event.id}
+                ontoggle={() => onToggleRow?.(event.id)}
+                compact={true}
+              />
+            </div>
+          </div>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -298,6 +328,33 @@
     line-height: 1.55;
     padding-left: 26px;
     margin-top: 4px;
+  }
+
+  /* ─── Inline follow-up trigger ─── */
+  .inline-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px -6px 6px -22px;
+    padding: 8px 12px 8px 22px;
+    background: rgba(127,119,221,0.05);
+    border-left: 2px solid #7F77DD;
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .inline-trigger:hover { background: rgba(127,119,221,0.09); }
+  .inline-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .inline-trigger-text {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.45;
+    min-width: 0;
+  }
+  .inline-trigger-text.truncated {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ─── Step rows ─── */

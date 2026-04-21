@@ -612,7 +612,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		hasToken = true
 	}
 
-	name, scopeOK, _ := s.authenticate(r.Context(), r, scope)
+	name, scopeOK, _ := s.authenticate(r.Context(), r, scope) //nolint:dogsled // identified intentionally ignored: WS always returns 401
 
 	// Redact the token from the URL to prevent it from appearing in logs.
 	if hasToken {

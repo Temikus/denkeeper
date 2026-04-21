@@ -20,6 +20,7 @@ type StoredMessage struct {
 	ConversationID   string    `db:"conversation_id"`
 	Role             string    `db:"role"`
 	Content          string    `db:"content"`
+	ReasoningContent string    `db:"reasoning_content"`
 	TokensUsed       int       `db:"tokens_used"`
 	Cost             float64   `db:"cost"`
 	Model            string    `db:"model"`
@@ -161,6 +162,7 @@ var telemetryMigrations = []string{
 	`ALTER TABLE messages ADD COLUMN tokens_prompt INTEGER DEFAULT 0`,
 	`ALTER TABLE messages ADD COLUMN tokens_completion INTEGER DEFAULT 0`,
 	`ALTER TABLE messages ADD COLUMN tokens_cached INTEGER DEFAULT 0`,
+	`ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''`,
 }
 
 const telemetryTablesSchema = `
@@ -299,9 +301,9 @@ func (s *SQLiteMemoryStore) GetOrCreateConversationByID(ctx context.Context, con
 
 func (s *SQLiteMemoryStore) AddMessage(ctx context.Context, convID string, msg StoredMessage) (int64, error) {
 	result, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages (conversation_id, role, content, tokens_used, cost, model, provider, tokens_prompt, tokens_completion, tokens_cached)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		convID, msg.Role, msg.Content, msg.TokensUsed, msg.Cost,
+		`INSERT INTO messages (conversation_id, role, content, reasoning_content, tokens_used, cost, model, provider, tokens_prompt, tokens_completion, tokens_cached)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		convID, msg.Role, msg.Content, msg.ReasoningContent, msg.TokensUsed, msg.Cost,
 		msg.Model, msg.Provider, msg.TokensPrompt, msg.TokensCompletion, msg.TokensCached,
 	)
 	if err != nil {
@@ -314,7 +316,7 @@ func (s *SQLiteMemoryStore) AddMessage(ctx context.Context, convID string, msg S
 func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error) {
 	var messages []StoredMessage
 	err := s.db.SelectContext(ctx, &messages,
-		`SELECT id, conversation_id, role, content, tokens_used, cost,
+		`SELECT id, conversation_id, role, content, reasoning_content, tokens_used, cost,
 		        model, provider, tokens_prompt, tokens_completion, tokens_cached, created_at
 		 FROM messages WHERE conversation_id = ?
 		 ORDER BY created_at DESC LIMIT ?`,

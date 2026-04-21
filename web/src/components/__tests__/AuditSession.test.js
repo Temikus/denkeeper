@@ -227,4 +227,100 @@ describe('AuditSession', () => {
     // Should be truncated to 57 chars + '...'
     expect(screen.getByText(/A{57}\.\.\./)).toBeInTheDocument()
   })
+
+  test('shows follow-up user messages inline in timeline', () => {
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'First message',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'First message', user_name: 'Alice', adapter: 'telegram' }),
+        },
+        {
+          id: 'evt-1',
+          category: 'tool_call', action: 'skill_get', summary: 'skill_get',
+          status: 'ok', agent: 'default', duration_ms: 100,
+          timestamp: ts(70000), conversation_id: 'chan:general',
+          detail: null,
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'Follow-up message',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'Yes please fix it', user_name: 'Alice', adapter: 'telegram' }),
+        },
+        {
+          id: 'evt-2',
+          category: 'tool_call', action: 'skill_update', summary: 'skill_update',
+          status: 'ok', agent: 'default', duration_ms: 200,
+          timestamp: ts(50000), conversation_id: 'chan:general',
+          detail: null,
+        },
+      ],
+    })
+    render(AuditSession, { props: { session } })
+    // First trigger shown as header block
+    expect(screen.getByText('First message')).toBeInTheDocument()
+    // Follow-up trigger shown inline
+    expect(screen.getByText('Yes please fix it')).toBeInTheDocument()
+  })
+
+  test('follow-up trigger handles malformed detail gracefully', () => {
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'First',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'First', user_name: 'Bob' }),
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'Second',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: 'invalid json {{{',
+        },
+      ],
+    })
+    // Should not throw — null detail falls back to empty object
+    const { container } = render(AuditSession, { props: { session } })
+    const inlineTriggers = container.querySelectorAll('.inline-trigger')
+    expect(inlineTriggers.length).toBe(1)
+    // Avatar should show '?' for missing user_name
+    expect(inlineTriggers[0].querySelector('.trigger-avatar').textContent).toBe('?')
+  })
+
+  test('follow-up trigger is clickable to expand', async () => {
+    const onToggleRow = vi.fn()
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'First',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'First', user_name: 'Alice' }),
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'Second',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'A follow-up question', user_name: 'Alice' }),
+        },
+      ],
+    })
+    render(AuditSession, { props: { session, onToggleRow } })
+    const inlineTrigger = screen.getByText('A follow-up question').closest('[role="button"]')
+    await fireEvent.click(inlineTrigger)
+    expect(onToggleRow).toHaveBeenCalledWith('trg-2')
+  })
 })

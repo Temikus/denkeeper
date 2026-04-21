@@ -203,7 +203,7 @@ func initLogger(cfg *config.Config) *slog.Logger {
 func initLLMClients(cfg *config.Config) llmClients {
 	providers := make(map[string]llm.Provider, len(cfg.LLM.Providers))
 	for _, pc := range cfg.LLM.Providers {
-		p := createProvider(pc)
+		p := createProvider(pc, cfg)
 		if p != nil {
 			providers[pc.Name] = p
 		}
@@ -234,14 +234,17 @@ func initLLMClients(cfg *config.Config) llmClients {
 }
 
 // createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
-func createProvider(pc config.ProviderInstanceConfig) llm.Provider {
+func createProvider(pc config.ProviderInstanceConfig, cfg *config.Config) llm.Provider {
 	switch pc.Type {
 	case "anthropic":
 		return anthropicllm.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
 	case "openai":
 		return openaillm.NewFull(pc.Name, pc.APIKey, pc.BaseURL, pc.Organization)
 	case "openrouter":
-		return openrouter.NewFull(pc.Name, pc.APIKey)
+		client := openrouter.NewFull(pc.Name, pc.APIKey)
+		r := &cfg.LLM.OpenRouter.Reasoning
+		client.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
+		return client
 	case "ollama":
 		return ollama.NewFull(pc.Name, pc.BaseURL)
 	default:

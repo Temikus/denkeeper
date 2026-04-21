@@ -967,3 +967,33 @@ func TestActiveChannelStore_ListActiveChannels(t *testing.T) {
 		t.Errorf("discord:222 = %q, want personal", all["discord:222"])
 	}
 }
+
+func TestAddMessage_WithReasoningContent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("NewInMemoryStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_, err = store.AddMessage(ctx, convID, StoredMessage{
+		Role:             "assistant",
+		Content:          "Hello!",
+		ReasoningContent: "The user said hi, I should greet them.",
+	})
+	if err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	msgs, err := store.GetMessages(ctx, convID, 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if msgs[0].ReasoningContent != "The user said hi, I should greet them." {
+		t.Errorf("reasoning_content = %q, want %q", msgs[0].ReasoningContent, "The user said hi, I should greet them.")
+	}
+}

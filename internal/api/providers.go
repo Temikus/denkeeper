@@ -11,12 +11,13 @@ import (
 
 // providerInfo is the JSON shape returned by GET /api/v1/llm/providers.
 type providerInfo struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	Enabled      bool   `json:"enabled"`
-	APIKeySet    bool   `json:"api_key_set"`
-	BaseURL      string `json:"base_url,omitempty"`
-	Organization string `json:"organization,omitempty"`
+	Name         string                         `json:"name"`
+	Type         string                         `json:"type"`
+	Enabled      bool                           `json:"enabled"`
+	APIKeySet    bool                           `json:"api_key_set"`
+	BaseURL      string                         `json:"base_url,omitempty"`
+	Organization string                         `json:"organization,omitempty"`
+	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
 }
 
 type llmProvidersResponse struct {
@@ -32,14 +33,19 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 	providers := make([]providerInfo, 0, len(cfg.Providers))
 	for _, pc := range cfg.Providers {
-		providers = append(providers, providerInfo{
+		pi := providerInfo{
 			Name:         pc.Name,
 			Type:         pc.Type,
 			Enabled:      pc.APIKey != "" || pc.Type == "ollama",
 			APIKeySet:    pc.APIKey != "",
 			BaseURL:      pc.BaseURL,
 			Organization: pc.Organization,
-		})
+		}
+		if pc.Type == "openrouter" {
+			r := cfg.OpenRouter.Reasoning
+			pi.Reasoning = &r
+		}
+		providers = append(providers, pi)
 	}
 
 	writeJSON(w, http.StatusOK, llmProvidersResponse{
@@ -53,9 +59,10 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 // providerUpdateInput holds the mutable fields for PATCH /api/v1/llm/providers/{name}.
 type providerUpdateInput struct {
-	APIKey       *string `json:"api_key,omitempty"`
-	BaseURL      *string `json:"base_url,omitempty"`
-	Organization *string `json:"organization,omitempty"`
+	APIKey       *string                        `json:"api_key,omitempty"`
+	BaseURL      *string                        `json:"base_url,omitempty"`
+	Organization *string                        `json:"organization,omitempty"`
+	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
 }
 
 func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +100,22 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Reasoning is only valid for OpenRouter-type providers.
+	if input.Reasoning != nil {
+		if pc.Type != "openrouter" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "reasoning is only supported for openrouter-type providers",
+			})
+			return
+		}
+		if err := config.ValidateOpenRouterReasoning(input.Reasoning); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid reasoning config: " + err.Error(),
+			})
+			return
+		}
+	}
+
 	// Apply to in-memory config and persist.
 	s.applyLLMProviderUpdate(name, &input)
 	s.persistLLMProvider(name, &input)
@@ -123,6 +146,10 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput)
 	}
 	if input.Organization != nil {
 		pc.Organization = *input.Organization
+	}
+
+	if input.Reasoning != nil && pc.Type == "openrouter" {
+		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
 	}
 
 	// Keep legacy structs in sync for backward compat.
@@ -166,6 +193,26 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput) {
 	if len(changes) > 0 {
 		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist LLM provider config", "provider", name, "error", err)
+		}
+	}
+
+	// Reasoning config lives in [llm.openrouter.reasoning], not in [[llm.providers]].
+	if input.Reasoning != nil {
+		r := make(map[string]any)
+		if input.Reasoning.Enabled != nil {
+			r["enabled"] = *input.Reasoning.Enabled
+		}
+		if input.Reasoning.Effort != "" {
+			r["effort"] = input.Reasoning.Effort
+		}
+		if input.Reasoning.MaxTokens > 0 {
+			r["max_tokens"] = input.Reasoning.MaxTokens
+		}
+		if input.Reasoning.Exclude != nil {
+			r["exclude"] = *input.Reasoning.Exclude
+		}
+		if err := tool.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
+			s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
 		}
 	}
 }

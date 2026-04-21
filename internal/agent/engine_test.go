@@ -13,6 +13,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
@@ -46,6 +47,15 @@ func (m *mockProvider) HealthCheck(_ context.Context) error { return nil }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// collectingAuditor collects emitted audit events for test assertions.
+type collectingAuditor struct {
+	events []audit.Event
+}
+
+func (a *collectingAuditor) Emit(_ context.Context, ev audit.Event) {
+	a.events = append(a.events, ev)
 }
 
 func TestEngine_HandleMessage(t *testing.T) {
@@ -2615,5 +2625,58 @@ func TestEngine_RepeatDetection_VariedCalls_NoFalsePositive(t *testing.T) {
 	}
 	if provider.callIndex != 4 {
 		t.Errorf("provider called %d times, want 4 (all rounds completed)", provider.callIndex)
+	}
+}
+
+func TestEngine_HandleMessage_EmitsAuditOnLLMError(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		err: fmt.Errorf("LLM unavailable"),
+	})
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	auditor := &collectingAuditor{}
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-1",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "Hello",
+		Timestamp:  time.Now(),
+	})
+	if err == nil {
+		t.Fatal("expected error when LLM fails")
+	}
+
+	// Should have at least a session trigger and an LLM error audit event.
+	var llmEvents []audit.Event
+	for _, ev := range auditor.events {
+		if ev.Category == audit.CategoryLLM {
+			llmEvents = append(llmEvents, ev)
+		}
+	}
+	if len(llmEvents) == 0 {
+		t.Fatal("expected an LLM audit event on error path, got none")
+	}
+	if llmEvents[0].Status != audit.StatusError {
+		t.Errorf("LLM audit status = %q, want %q", llmEvents[0].Status, audit.StatusError)
+	}
+	if !strings.Contains(llmEvents[0].Detail, "LLM unavailable") {
+		t.Errorf("LLM audit detail should contain the error message, got %q", llmEvents[0].Detail)
 	}
 }

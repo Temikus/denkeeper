@@ -39,6 +39,11 @@ type Client struct {
 	baseURL string
 	http    *http.Client
 
+	reasoningEnabled   *bool
+	reasoningEffort    string
+	reasoningMaxTokens int
+	reasoningExclude   *bool
+
 	detailsMu    sync.Mutex
 	detailsCache *modelDetailsCache
 }
@@ -75,6 +80,41 @@ func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client 
 	}
 }
 
+// SetReasoning configures the reasoning parameter for OpenRouter requests.
+func (c *Client) SetReasoning(enabled *bool, effort string, maxTokens int, exclude *bool) {
+	c.reasoningEnabled = enabled
+	c.reasoningEffort = effort
+	c.reasoningMaxTokens = maxTokens
+	c.reasoningExclude = exclude
+}
+
+// buildReasoningParam constructs the reasoning parameter for the request
+// based on client config. Returns nil when reasoning is not configured.
+func (c *Client) buildReasoningParam() *reasoningParam {
+	// Nothing configured — don't send the parameter.
+	if c.reasoningEnabled == nil && c.reasoningEffort == "" && c.reasoningMaxTokens == 0 {
+		return nil
+	}
+	// Explicitly disabled.
+	if c.reasoningEnabled != nil && !*c.reasoningEnabled {
+		return nil
+	}
+	p := &reasoningParam{}
+	if c.reasoningEffort != "" {
+		p.Effort = c.reasoningEffort
+	} else if c.reasoningMaxTokens > 0 {
+		p.MaxTokens = c.reasoningMaxTokens
+	} else {
+		// Enabled without effort/max_tokens — send enabled: true.
+		enabled := true
+		p.Enabled = &enabled
+	}
+	if c.reasoningExclude != nil && *c.reasoningExclude {
+		p.Exclude = c.reasoningExclude
+	}
+	return p
+}
+
 func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
@@ -107,9 +147,10 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 	}
 
 	body := apiRequest{
-		Model:    req.Model,
-		Messages: make([]apiMessage, len(req.Messages)),
-		Tools:    req.Tools,
+		Model:     req.Model,
+		Messages:  make([]apiMessage, len(req.Messages)),
+		Tools:     req.Tools,
+		Reasoning: c.buildReasoningParam(),
 	}
 	if req.MaxTokens > 0 {
 		body.MaxTokens = &req.MaxTokens
@@ -120,10 +161,11 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 
 	for i, m := range req.Messages {
 		body.Messages[i] = apiMessage{
-			Role:       m.Role,
-			Content:    m.Content,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
+			Role:             m.Role,
+			Content:          m.Content,
+			ReasoningContent: m.ReasoningContent,
+			ToolCalls:        m.ToolCalls,
+			ToolCallID:       m.ToolCallID,
 		}
 	}
 
@@ -177,6 +219,7 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		Model:         req.Model,
 		Messages:      make([]apiMessage, len(req.Messages)),
 		Tools:         req.Tools,
+		Reasoning:     c.buildReasoningParam(),
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
@@ -188,8 +231,11 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	}
 	for i, m := range req.Messages {
 		body.Messages[i] = apiMessage{
-			Role: m.Role, Content: m.Content,
-			ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID,
+			Role:             m.Role,
+			Content:          m.Content,
+			ReasoningContent: m.ReasoningContent,
+			ToolCalls:        m.ToolCalls,
+			ToolCallID:       m.ToolCallID,
 		}
 	}
 
@@ -579,11 +625,19 @@ func (c *Client) FundsRemaining(ctx context.Context) (float64, error) {
 // API types (OpenAI-compatible format)
 
 type apiRequest struct {
-	Model       string        `json:"model"`
-	Messages    []apiMessage  `json:"messages"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	Tools       []llm.ToolDef `json:"tools,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []apiMessage    `json:"messages"`
+	MaxTokens   *int            `json:"max_tokens,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	Tools       []llm.ToolDef   `json:"tools,omitempty"`
+	Reasoning   *reasoningParam `json:"reasoning,omitempty"`
+}
+
+type reasoningParam struct {
+	Enabled   *bool  `json:"enabled,omitempty"`
+	Effort    string `json:"effort,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+	Exclude   *bool  `json:"exclude,omitempty"`
 }
 
 // apiMessage handles both outgoing requests (content as string) and incoming
@@ -612,6 +666,7 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	type wire struct {
 		Role             string          `json:"role"`
 		RawContent       json.RawMessage `json:"content"`
+		Reasoning        string          `json:"reasoning,omitempty"`
 		ReasoningContent string          `json:"reasoning_content,omitempty"`
 		ToolCalls        []llm.ToolCall  `json:"tool_calls,omitempty"`
 		ToolCallID       string          `json:"tool_call_id,omitempty"`
@@ -623,7 +678,11 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 	m.Role = w.Role
 	m.ToolCalls = w.ToolCalls
 	m.ToolCallID = w.ToolCallID
+	// OpenRouter returns reasoning in either `reasoning_content` or `reasoning`.
 	m.ReasoningContent = w.ReasoningContent
+	if m.ReasoningContent == "" {
+		m.ReasoningContent = w.Reasoning
+	}
 	if len(w.RawContent) == 0 || string(w.RawContent) == "null" {
 		return nil
 	}
@@ -691,13 +750,14 @@ type keyResponse struct {
 
 // Streaming request type.
 type apiStreamRequest struct {
-	Model         string         `json:"model"`
-	Messages      []apiMessage   `json:"messages"`
-	MaxTokens     *int           `json:"max_tokens,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	Tools         []llm.ToolDef  `json:"tools,omitempty"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Model         string          `json:"model"`
+	Messages      []apiMessage    `json:"messages"`
+	MaxTokens     *int            `json:"max_tokens,omitempty"`
+	Temperature   *float64        `json:"temperature,omitempty"`
+	Tools         []llm.ToolDef   `json:"tools,omitempty"`
+	Reasoning     *reasoningParam `json:"reasoning,omitempty"`
+	Stream        bool            `json:"stream"`
+	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
 
 type streamOptions struct {

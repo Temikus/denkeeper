@@ -104,6 +104,27 @@ func TestWebSocket_AuthRequired(t *testing.T) {
 	}
 }
 
+func TestWebSocket_InsufficientScope_Returns401(t *testing.T) {
+	// WebSocket upgrade always returns 401 (not 403) even when the key is valid
+	// but lacks the required scope. WS clients cannot act on a 403 differently.
+	h := NewHarness(t, &HarnessOpts{
+		Scopes: []string{"skills:read"}, // valid key, but no "chat" scope needed for WS
+	})
+
+	ts := httptest.NewServer(h.Handler)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/v1/ws?token=" + h.APIKey
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected ws dial to fail with insufficient scope")
+	}
+	if resp != nil && resp.StatusCode != 401 {
+		t.Errorf("status = %d, want 401 (not 403 — WS always uses 401)", resp.StatusCode)
+	}
+}
+
 func TestWebSocket_SessionPersistence(t *testing.T) {
 	h := NewHarness(t, nil)
 

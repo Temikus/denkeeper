@@ -715,7 +715,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		})
 	}
 	for _, h := range history {
-		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content})
+		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content, ReasoningContent: h.ReasoningContent})
 	}
 
 	// Store adapter routing info in context for tool approval submissions,
@@ -734,6 +734,21 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
+		// Audit: LLM completion error — ensures the audit trail has no
+		// silent gaps when the completion or tool loop fails.
+		errDetail, _ := json.Marshal(map[string]any{
+			"error":    err.Error(),
+			"provider": e.router.DefaultProvider(),
+		})
+		e.emitAudit(ctx, audit.Event{
+			Category:       audit.CategoryLLM,
+			Action:         "complete",
+			Summary:        truncateSummary("", "error"),
+			Detail:         string(errDetail),
+			Status:         audit.StatusError,
+			Source:         "engine",
+			ConversationID: convID,
+		})
 		e.savePartialResponse(ctx, convID, streamedContent.String())
 		return "", nil, err
 	}
@@ -792,6 +807,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	assistMsg := StoredMessage{
 		Role:             "assistant",
 		Content:          responseText,
+		ReasoningContent: resp.ThinkingContent,
 		TokensUsed:       resp.TokensUsed.Total,
 		Cost:             resp.CostUSD,
 		Model:            resp.Model,
@@ -976,7 +992,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			accumulatedContent.WriteString(resp.Content)
 		}
 
-		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
 			if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 				e.logger.Warn("repetitive tool call detected, aborting tool loop",

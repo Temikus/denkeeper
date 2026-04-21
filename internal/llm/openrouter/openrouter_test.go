@@ -564,3 +564,158 @@ func TestChatCompletion_ThinkingBlockContent(t *testing.T) {
 		t.Errorf("content = %q, want %q", resp.Content, "visible answer")
 	}
 }
+
+func TestBuildReasoningParam_EnabledOnly(t *testing.T) {
+	c := &Client{}
+	enabled := true
+	c.SetReasoning(&enabled, "", 0, nil)
+
+	p := c.buildReasoningParam()
+	if p == nil {
+		t.Fatal("expected reasoning param, got nil")
+	}
+	if p.Enabled == nil || !*p.Enabled {
+		t.Error("expected enabled=true")
+	}
+	if p.Effort != "" {
+		t.Errorf("effort = %q, want empty", p.Effort)
+	}
+	if p.MaxTokens != 0 {
+		t.Errorf("max_tokens = %d, want 0", p.MaxTokens)
+	}
+}
+
+func TestBuildReasoningParam_Effort(t *testing.T) {
+	c := &Client{}
+	enabled := true
+	c.SetReasoning(&enabled, "high", 0, nil)
+
+	p := c.buildReasoningParam()
+	if p == nil {
+		t.Fatal("expected reasoning param, got nil")
+	}
+	if p.Effort != "high" {
+		t.Errorf("effort = %q, want %q", p.Effort, "high")
+	}
+	if p.Enabled != nil {
+		t.Error("enabled should be nil when effort is set")
+	}
+}
+
+func TestBuildReasoningParam_MaxTokens(t *testing.T) {
+	c := &Client{}
+	enabled := true
+	c.SetReasoning(&enabled, "", 4096, nil)
+
+	p := c.buildReasoningParam()
+	if p == nil {
+		t.Fatal("expected reasoning param, got nil")
+	}
+	if p.MaxTokens != 4096 {
+		t.Errorf("max_tokens = %d, want 4096", p.MaxTokens)
+	}
+	if p.Enabled != nil {
+		t.Error("enabled should be nil when max_tokens is set")
+	}
+}
+
+func TestBuildReasoningParam_Disabled(t *testing.T) {
+	c := &Client{}
+	disabled := false
+	c.SetReasoning(&disabled, "", 0, nil)
+
+	p := c.buildReasoningParam()
+	if p != nil {
+		t.Errorf("expected nil reasoning param when disabled, got %+v", p)
+	}
+}
+
+func TestBuildReasoningParam_NotConfigured(t *testing.T) {
+	c := &Client{}
+	p := c.buildReasoningParam()
+	if p != nil {
+		t.Errorf("expected nil reasoning param when not configured, got %+v", p)
+	}
+}
+
+func TestBuildReasoningParam_WithExclude(t *testing.T) {
+	c := &Client{}
+	enabled := true
+	exclude := true
+	c.SetReasoning(&enabled, "high", 0, &exclude)
+
+	p := c.buildReasoningParam()
+	if p == nil {
+		t.Fatal("expected reasoning param, got nil")
+	}
+	if p.Exclude == nil || !*p.Exclude {
+		t.Error("expected exclude=true")
+	}
+	if p.Effort != "high" {
+		t.Errorf("effort = %q, want %q", p.Effort, "high")
+	}
+}
+
+func TestChatCompletion_ReasoningInRequest(t *testing.T) {
+	var capturedReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedReq)
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Choices: []apiChoice{{Message: apiMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Usage:   apiUsage{TotalTokens: 10},
+		})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	enabled := true
+	client.SetReasoning(&enabled, "high", 0, nil)
+
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "test-model",
+		Messages: []llm.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedReq.Reasoning == nil {
+		t.Fatal("expected reasoning in request, got nil")
+	}
+	if capturedReq.Reasoning.Effort != "high" {
+		t.Errorf("reasoning effort = %q, want %q", capturedReq.Reasoning.Effort, "high")
+	}
+}
+
+func TestChatCompletion_ReasoningContentInHistory(t *testing.T) {
+	var capturedReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&capturedReq)
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Choices: []apiChoice{{Message: apiMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Usage:   apiUsage{TotalTokens: 10},
+		})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "test-model",
+		Messages: []llm.Message{
+			{Role: "user", Content: "Hi"},
+			{Role: "assistant", Content: "Hello!", ReasoningContent: "I should greet the user."},
+			{Role: "user", Content: "How are you?"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the assistant message in the request includes reasoning_content.
+	if len(capturedReq.Messages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d", len(capturedReq.Messages))
+	}
+	assistMsg := capturedReq.Messages[1]
+	if assistMsg.ReasoningContent != "I should greet the user." {
+		t.Errorf("reasoning_content = %q, want %q", assistMsg.ReasoningContent, "I should greet the user.")
+	}
+}
