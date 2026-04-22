@@ -97,4 +97,57 @@ describe('Skills page', () => {
     const modal = document.querySelector('.confirm-modal')
     expect(modal.textContent).toContain('greeting')
   })
+
+  test('test button disabled when skill has no command trigger', async () => {
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('greeting')).toBeInTheDocument()
+    })
+
+    const testBtn = screen.getByText('Test')
+    expect(testBtn).toBeDisabled()
+    expect(testBtn.title).toBe('No command trigger')
+  })
+
+  test('test button enabled when skill has command trigger', async () => {
+    server.use(
+      http.get('/api/v1/skills', () => HttpResponse.json([
+        { name: 'briefing', agent: 'default', triggers: ['command:briefing'], description: 'Daily brief' },
+      ]))
+    )
+
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('briefing')).toBeInTheDocument()
+    })
+
+    const testBtn = screen.getByText('Test')
+    expect(testBtn).not.toBeDisabled()
+    expect(testBtn.title).toBe('Send /briefing in chat')
+  })
+
+  test('test button navigates to chat with pending skill test', async () => {
+    const { pendingSkillTest } = await import('../../chatStore.js')
+    const { get } = await import('svelte/store')
+
+    server.use(
+      http.get('/api/v1/skills', () => HttpResponse.json([
+        { name: 'report', agent: 'helper', triggers: ['command:report'], description: 'Generate report' },
+      ]))
+    )
+
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('report')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Test'))
+
+    const pending = get(pendingSkillTest)
+    expect(pending).toEqual({ agent: 'helper', command: '/report' })
+    expect(window.location.hash).toBe('#/chat')
+
+    // Cleanup
+    pendingSkillTest.set(null)
+  })
 })

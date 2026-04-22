@@ -33,7 +33,7 @@ vi.mock('../api.js', () => ({
   },
 }))
 
-const { chatState, sendMessage, loadSession, newSession, setAgent, initChat, resolveApprovalAction } = await import('../chatStore.js')
+const { chatState, sendMessage, loadSession, newSession, setAgent, initChat, resolveApprovalAction, pendingSkillTest } = await import('../chatStore.js')
 
 beforeEach(() => {
   newSession()
@@ -587,5 +587,19 @@ describe('handleToolEvent: tool_id-based matching', () => {
     const agentMsg = get(chatState).messages[1]
     expect(agentMsg.toolCalls[0].status).toBe('done')
     expect(agentMsg.toolCalls[0].duration).toBe(200)
+  })
+})
+
+describe('pendingSkillTest', () => {
+  test('starts as null', () => {
+    expect(get(pendingSkillTest)).toBeNull()
+  })
+
+  test('can be set and cleared', () => {
+    pendingSkillTest.set({ agent: 'helper', command: '/briefing' })
+    expect(get(pendingSkillTest)).toEqual({ agent: 'helper', command: '/briefing' })
+
+    pendingSkillTest.set(null)
+    expect(get(pendingSkillTest)).toBeNull()
   })
 })

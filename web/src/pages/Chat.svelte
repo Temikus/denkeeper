@@ -1,7 +1,8 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte'
+  import { get } from 'svelte/store'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction, cancelSession } from '../chatStore.js'
+  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction, cancelSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
 
   let agents = $state([])
@@ -26,6 +27,15 @@
       const res = await api.agents()
       agents = res || []
       await initChat(agents)
+      // If the Skills page queued a test, consume it after successful init.
+      const pending = get(pendingSkillTest)
+      if (pending) {
+        pendingSkillTest.set(null)
+        setAgent(pending.agent)
+        newSession()
+        await tick()
+        await sendMessage(pending.command)
+      }
     } catch (e) {
       // non-fatal — default will still work
     }

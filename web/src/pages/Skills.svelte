@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { pendingSkillTest } from '../chatStore.js'
+  import { navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
   let skills = $state([])
@@ -125,6 +127,18 @@
     }
   }
 
+  function getCommandTrigger(s) {
+    for (const t of (s.triggers || [])) {
+      if (t.startsWith('command:')) return t.slice('command:'.length)
+    }
+    return null
+  }
+
+  function testSkill(s, cmd) {
+    pendingSkillTest.set({ agent: s.agent, command: `/${cmd}` })
+    navigate('chat')
+  }
+
   let filtered = $derived(filter.trim()
     ? skills.filter(s =>
         s.name.includes(filter) ||
@@ -224,6 +238,7 @@
       </thead>
       <tbody>
         {#each filtered as s}
+          {@const cmd = getCommandTrigger(s)}
           <tr>
             <td class="name">{s.name}</td>
             <td>{s.agent}</td>
@@ -231,6 +246,7 @@
             <td class="muted">{(s.triggers || []).join(', ') || '—'}</td>
             <td class="muted desc">{s.description || '—'}</td>
             <td class="actions">
+              <button class="btn-sm" onclick={() => testSkill(s, cmd)} disabled={!cmd} title={cmd ? `Send /${cmd} in chat` : 'No command trigger'}>Test</button>
               <button class="btn-sm" onclick={() => openEdit(s)}>Edit</button>
               <button class="btn-sm danger" onclick={() => { confirmDelete = { agent: s.agent, name: s.name } }}>Delete</button>
             </td>

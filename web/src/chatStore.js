@@ -4,6 +4,9 @@ import { wsStatus, getWSClient, onSessionEvent, offSessionEvent } from './wsStor
 
 const STORAGE_KEY = 'dk_chat_session'
 
+// Set by Skills page to queue a test run, consumed by Chat on mount.
+export const pendingSkillTest = writable(null) // { agent: string, command: string }
+
 export const chatState = writable({
   messages: [],
   sessionId: '',
