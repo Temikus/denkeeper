@@ -51,15 +51,8 @@ func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *Voi
 
 	logger.Info("telegram bot authorized", "username", bot.Self.UserName)
 
-	// Register slash commands so they appear in the Telegram command menu.
-	cmds := []tgbotapi.BotCommand{
-		{Command: "start", Description: "Start a conversation"},
-		{Command: "help", Description: "Show help and available commands"},
-		{Command: "debug", Description: "Toggle verbose approval messages"},
-		{Command: "stop", Description: "Cancel the current request"},
-		{Command: "panic", Description: "Emergency stop all processing"},
-		{Command: "resume", Description: "Resume after emergency stop"},
-	}
+	// Register built-in slash commands so they appear in the Telegram command menu.
+	cmds := builtinCommands()
 	if _, err := bot.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
 		logger.Warn("failed to register bot commands", "error", err)
 	}
@@ -107,6 +100,69 @@ func (a *Adapter) Name() string { return "telegram" }
 // clicks (callback queries). Call this after adapter construction, before Start.
 func (a *Adapter) SetCallbackResolver(r adapter.CallbackResolver) {
 	a.callbackResolver = r
+}
+
+// SkillCommand represents a skill's command trigger for registration.
+type SkillCommand struct {
+	Command     string
+	Description string
+}
+
+// RegisterSkillCommands updates the Telegram bot's command menu to include
+// both the built-in commands and the provided skill command triggers.
+// Call this after adapter construction and skill loading, before Start.
+func (a *Adapter) RegisterSkillCommands(skillCmds []SkillCommand) {
+	var tgCmds []tgbotapi.BotCommand
+	for _, sc := range skillCmds {
+		tgCmds = append(tgCmds, tgbotapi.BotCommand{
+			Command:     sc.Command,
+			Description: sc.Description,
+		})
+	}
+	cmds := buildBotCommands(tgCmds)
+	if _, err := a.bot.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
+		a.logger.Warn("failed to register bot commands with skills", "error", err)
+	} else {
+		a.logger.Info("registered bot commands", "builtin", len(builtinCommands()), "skill", len(skillCmds), "total", len(cmds))
+	}
+}
+
+// builtinCommands returns the hardcoded set of built-in bot commands.
+func builtinCommands() []tgbotapi.BotCommand {
+	return []tgbotapi.BotCommand{
+		{Command: "start", Description: "Start a conversation"},
+		{Command: "help", Description: "Show help and available commands"},
+		{Command: "debug", Description: "Toggle verbose approval messages"},
+		{Command: "stop", Description: "Cancel the current request"},
+		{Command: "panic", Description: "Emergency stop all processing"},
+		{Command: "resume", Description: "Resume after emergency stop"},
+	}
+}
+
+// buildBotCommands merges built-in commands with skill commands, skipping
+// duplicates and truncating descriptions to Telegram's 256-char limit.
+func buildBotCommands(skillCmds []tgbotapi.BotCommand) []tgbotapi.BotCommand {
+	builtin := builtinCommands()
+	seen := make(map[string]bool, len(builtin))
+	for _, c := range builtin {
+		seen[c.Command] = true
+	}
+
+	for _, sc := range skillCmds {
+		if seen[sc.Command] {
+			continue
+		}
+		seen[sc.Command] = true
+		desc := sc.Description
+		if len(desc) > 256 {
+			desc = desc[:253] + "..."
+		}
+		builtin = append(builtin, tgbotapi.BotCommand{
+			Command:     sc.Command,
+			Description: desc,
+		})
+	}
+	return builtin
 }
 
 // clearStalePollSession forces Telegram to drop any lingering getUpdates

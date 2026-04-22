@@ -402,6 +402,23 @@ func (c *WSConn) writePump() {
 // Frame handlers
 // ---------------------------------------------------------------------------
 
+// resolveChannelRouting resolves agentName and conversationID from a channel
+// name. Returns (agentName, conversationID, ok). On error, sends an error
+// frame to the client and returns ok=false.
+func (c *WSConn) resolveChannelRouting(sessionID, channelName, agentName string) (string, string, bool) {
+	channels := c.server.deps.Dispatcher.Channels()
+	if channels == nil {
+		c.sendError(sessionID, "invalid_frame", "channels not configured")
+		return "", "", false
+	}
+	ch, ok := channels[channelName]
+	if !ok {
+		c.sendError(sessionID, "invalid_frame", fmt.Sprintf("channel %q not found", channelName))
+		return "", "", false
+	}
+	return ch.AgentName, ch.ConversationID(), true
+}
+
 func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 	agentName := f.Agent
 	if agentName == "" {
@@ -412,6 +429,18 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 			fmt.Sprintf("message exceeds maximum length of %d bytes", maxChatMessageLen))
 		return
 	}
+
+	// Channel routing: if a channel is specified, resolve the agent and
+	// conversation ID from the channel.
+	var conversationID string
+	if f.Channel != "" {
+		var ok bool
+		agentName, conversationID, ok = c.resolveChannelRouting(f.SessionID, f.Channel, agentName)
+		if !ok {
+			return
+		}
+	}
+
 	eng := c.server.deps.Dispatcher.Agent(agentName)
 	if eng == nil {
 		c.sendError(f.SessionID, "agent_not_found", fmt.Sprintf("agent %q not found", agentName))
@@ -437,6 +466,10 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 		return
 	}
 
+	if conversationID == "" {
+		conversationID = sessionID
+	}
+
 	msg := adapter.IncomingMessage{
 		Adapter:        "ws",
 		ExternalID:     sessionID,
@@ -444,7 +477,7 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 		UserName:       f.UserName,
 		Text:           f.Message,
 		Timestamp:      time.Now(),
-		ConversationID: sessionID,
+		ConversationID: conversationID,
 	}
 
 	// Limit concurrent chat goroutines per connection.

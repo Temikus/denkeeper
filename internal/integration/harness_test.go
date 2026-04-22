@@ -125,6 +125,14 @@ type HarnessOpts struct {
 	// empty tool.Manager so that tool CRUD endpoints are available.
 	// Requires ConfigPath to be set for persistence.
 	WithLifecycleMgr bool
+
+	// Channels configures channel-based routing. When set, the dispatcher
+	// uses channel resolution instead of legacy agent bindings.
+	Channels []*agent.Channel
+
+	// ToolManager, when set, is passed to all engines so tools are available
+	// during chat (required for tool-call loop integration tests).
+	ToolManager *tool.Manager
 }
 
 type agentSetup struct {
@@ -157,6 +165,7 @@ func allScopes() []string {
 		"browser:read", "browser:write",
 		"kv:read", "kv:write",
 		"audit:read",
+		"channels:read", "channels:write",
 	}
 }
 
@@ -245,7 +254,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		e := agent.NewEngine(
 			a.Name, router, mem, nil, perms, nil,
 			"You are "+a.Name+" test agent.",
-			a.Skills, nil, approvalMgr, logger,
+			a.Skills, opts.ToolManager, approvalMgr, logger,
 		)
 		engines[a.Name] = e
 
@@ -262,7 +271,11 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		})
 	}
 
-	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger)
+	var dispatcherOpts []agent.DispatcherOption
+	if len(opts.Channels) > 0 {
+		dispatcherOpts = append(dispatcherOpts, agent.WithChannels(opts.Channels, mem))
+	}
+	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger, dispatcherOpts...)
 	sched := scheduler.New(logger, nil)
 
 	// API key.

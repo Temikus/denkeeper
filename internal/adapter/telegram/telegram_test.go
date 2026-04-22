@@ -4,7 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 )
@@ -257,4 +260,82 @@ func TestCallbackResolver_NotSetByDefault(t *testing.T) {
 	if a.callbackResolver != nil {
 		t.Error("fresh adapter must have nil callbackResolver")
 	}
+}
+
+func TestBuildBotCommands_BuiltinAlwaysFirst(t *testing.T) {
+	cmds := buildBotCommands(nil)
+	builtin := builtinCommands()
+
+	if len(cmds) != len(builtin) {
+		t.Fatalf("expected %d commands with no skills, got %d", len(builtin), len(cmds))
+	}
+	for i, b := range builtin {
+		if cmds[i].Command != b.Command {
+			t.Errorf("command[%d] = %q, want %q", i, cmds[i].Command, b.Command)
+		}
+	}
+}
+
+func TestBuildBotCommands_SkillsAppended(t *testing.T) {
+	skills := []tgbotapi.BotCommand{
+		{Command: "briefing", Description: "Daily briefing"},
+		{Command: "weather", Description: "Weather report"},
+	}
+	cmds := buildBotCommands(skills)
+
+	expected := len(builtinCommands()) + 2
+	if len(cmds) != expected {
+		t.Fatalf("expected %d commands, got %d", expected, len(cmds))
+	}
+
+	// Last two should be the skill commands.
+	if cmds[len(cmds)-2].Command != "briefing" {
+		t.Errorf("expected briefing, got %q", cmds[len(cmds)-2].Command)
+	}
+	if cmds[len(cmds)-1].Command != "weather" {
+		t.Errorf("expected weather, got %q", cmds[len(cmds)-1].Command)
+	}
+}
+
+func TestBuildBotCommands_SkipsDuplicateBuiltin(t *testing.T) {
+	// "help" is a built-in command — the skill version should be skipped.
+	skills := []tgbotapi.BotCommand{
+		{Command: "help", Description: "Custom help"},
+		{Command: "custom", Description: "Custom command"},
+	}
+	cmds := buildBotCommands(skills)
+
+	expected := len(builtinCommands()) + 1 // only "custom" is new
+	if len(cmds) != expected {
+		t.Fatalf("expected %d commands (help deduped), got %d", expected, len(cmds))
+	}
+
+	// Verify the help command still has the built-in description.
+	for _, c := range cmds {
+		if c.Command == "help" && c.Description == "Custom help" {
+			t.Error("skill 'help' should have been skipped, not overwritten")
+		}
+	}
+}
+
+func TestBuildBotCommands_TruncatesLongDescription(t *testing.T) {
+	longDesc := strings.Repeat("x", 300)
+	skills := []tgbotapi.BotCommand{
+		{Command: "verbose", Description: longDesc},
+	}
+	cmds := buildBotCommands(skills)
+
+	// Find the verbose command.
+	for _, c := range cmds {
+		if c.Command == "verbose" {
+			if len(c.Description) > 256 {
+				t.Errorf("description length = %d, want <= 256", len(c.Description))
+			}
+			if !strings.HasSuffix(c.Description, "...") {
+				t.Error("truncated description should end with ...")
+			}
+			return
+		}
+	}
+	t.Error("verbose command not found")
 }

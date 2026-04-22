@@ -28,6 +28,8 @@ var Valid = map[string]struct{}{
 	"kv:read":         {},
 	"kv:write":        {},
 	"audit:read":      {},
+	"channels:read":   {},
+	"channels:write":  {},
 	"health":          {},
 }
 

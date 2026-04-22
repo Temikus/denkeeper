@@ -59,6 +59,8 @@
   const ALL_SCOPES = [
     { value: 'admin',            label: 'admin' },
     { value: 'audit:read',       label: 'audit:read' },
+    { value: 'channels:read',    label: 'channels:read' },
+    { value: 'channels:write',   label: 'channels:write' },
     { value: 'chat',             label: 'chat' },
     { value: 'health',           label: 'health' },
     { value: 'agents:read',      label: 'agents:read' },

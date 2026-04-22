@@ -22,7 +22,7 @@
   // All valid API scopes — must match the canonical list in internal/scope/scope.go.
   // The scope sync test (internal/scope/scope_test.go) will fail if any are missing.
   const ALL_SCOPES = [
-    'admin', 'audit:read', 'chat', 'health',
+    'admin', 'audit:read', 'channels:read', 'channels:write', 'chat', 'health',
     'agents:read', 'agents:write',
     'approvals:read', 'approvals:write',
     'browser:read', 'browser:write',
@@ -48,6 +48,7 @@
     { name: 'Tools', desc: 'Manage MCP tools and plugins', levels: ['none', 'read', 'readwrite'], scopes: { read: ['tools:read'], readwrite: ['tools:read', 'tools:write'] } },
     { name: 'Browser', desc: 'Manage browser profiles and sessions', levels: ['none', 'read', 'readwrite'], scopes: { read: ['browser:read'], readwrite: ['browser:read', 'browser:write'] } },
     { name: 'KV Store', desc: 'Agent key-value storage', levels: ['none', 'read', 'readwrite'], scopes: { read: ['kv:read'], readwrite: ['kv:read', 'kv:write'] } },
+    { name: 'Channels', desc: 'View and manage channels', levels: ['none', 'read', 'readwrite'], scopes: { read: ['channels:read'], readwrite: ['channels:read', 'channels:write'] } },
     { name: 'Audit Log', desc: 'View audit trail', levels: ['none', 'read'], scopes: { read: ['audit:read'] } },
   ]
 

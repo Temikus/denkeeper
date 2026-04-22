@@ -1110,12 +1110,13 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 
 	hub := apiServer.WSHub()
 	if hub != nil {
-		dispatcher.OnBroadcast = func(agentName, convID, adapterName, summary string) {
+		dispatcher.OnBroadcast = func(agentName, convID, adapterName, channelName, summary string) {
 			hub.Broadcast(api.ActivityFrame{
 				Type:           api.FrameTypeActivity,
 				ConversationID: convID,
 				Agent:          agentName,
 				Adapter:        adapterName,
+				Channel:        channelName,
 				Summary:        summary,
 			})
 		}
@@ -1317,6 +1318,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	dispatcher = buildDispatcherWithChannels(ctx, cfg, engines, bindings, adapters, st.memory, logger)
 
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
+	wireSkillCommands(tgAdapter, engines, logger)
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, logger); err != nil {
 		return err
@@ -1370,6 +1372,39 @@ func runServe(_ *cobra.Command, _ []string) error {
 func wireCallbackResolver(tgAdapter *telegram.Adapter, approvalMgr *approval.Manager, logger *slog.Logger) {
 	if tgAdapter != nil {
 		tgAdapter.SetCallbackResolver(approval.NewCallbackHandler(approvalMgr, logger))
+	}
+}
+
+// wireSkillCommands registers skill command triggers with the Telegram adapter
+// so they appear in the Telegram command picker alongside built-in commands.
+func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.Engine, logger *slog.Logger) {
+	if tgAdapter == nil {
+		return
+	}
+
+	seen := make(map[string]bool)
+	var cmds []telegram.SkillCommand
+	for _, e := range engines {
+		for _, s := range e.Skills() {
+			for _, t := range s.ParsedTriggers {
+				if t.Type == skill.TriggerCommand && !seen[t.Command] {
+					seen[t.Command] = true
+					desc := s.Description
+					if desc == "" {
+						desc = s.Name
+					}
+					cmds = append(cmds, telegram.SkillCommand{
+						Command:     t.Command,
+						Description: desc,
+					})
+				}
+			}
+		}
+	}
+
+	if len(cmds) > 0 {
+		tgAdapter.RegisterSkillCommands(cmds)
+		logger.Info("registered skill commands with telegram", "count", len(cmds))
 	}
 }
 

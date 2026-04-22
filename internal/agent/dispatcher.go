@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -67,7 +68,7 @@ type Dispatcher struct {
 	// OnBroadcast, when set, is called after an adapter message (Telegram,
 	// Discord, etc.) is successfully processed. The server uses this to
 	// notify WebSocket clients of conversation activity from other adapters.
-	OnBroadcast func(agentName, convID, adapterName, summary string)
+	OnBroadcast func(agentName, convID, adapterName, channelName, summary string)
 
 	// OnPanic is called when a /panic command is processed. The server uses
 	// this to pause the scheduler and broadcast a panic status frame.
@@ -261,6 +262,76 @@ func (d *Dispatcher) LoadActiveChannels(ctx context.Context) error {
 // Channels returns the channel registry. Returns nil when channels are not configured.
 func (d *Dispatcher) Channels() map[string]*Channel {
 	return d.channels
+}
+
+// ErrChannelsNotConfigured is returned when channel operations are attempted
+// but no channels are configured.
+var ErrChannelsNotConfigured = errors.New("channels not configured")
+
+// ErrChannelNotFound is returned when the specified channel does not exist.
+var ErrChannelNotFound = errors.New("channel not found")
+
+// ErrAdapterKeyNotActive is returned when attempting to deactivate an adapter
+// key that is not active on the specified channel.
+var ErrAdapterKeyNotActive = errors.New("adapter key not active on this channel")
+
+// SetActiveChannelByKey sets the active channel override for the given adapter
+// key (e.g. "telegram:12345"). Returns an error if the channel name is not in
+// the registry or channels are not configured.
+func (d *Dispatcher) SetActiveChannelByKey(ctx context.Context, adapterKey, channelName string) error {
+	if d.channels == nil {
+		return ErrChannelsNotConfigured
+	}
+	if _, ok := d.channels[channelName]; !ok {
+		return fmt.Errorf("%w: %q", ErrChannelNotFound, channelName)
+	}
+
+	d.activeChannelsMu.Lock()
+	d.activeChannels[adapterKey] = channelName
+	d.activeChannelsMu.Unlock()
+
+	if d.activeStore != nil {
+		if err := d.activeStore.SetActiveChannel(ctx, adapterKey, channelName); err != nil {
+			return fmt.Errorf("persisting active channel: %w", err)
+		}
+	}
+	return nil
+}
+
+// ClearActiveChannelByKey removes the active channel override for the given
+// adapter key, but only if the key is currently active on the specified channel.
+// Returns ErrAdapterKeyNotActive if the key is not active on channelName.
+func (d *Dispatcher) ClearActiveChannelByKey(ctx context.Context, adapterKey, channelName string) error {
+	d.activeChannelsMu.Lock()
+	current, ok := d.activeChannels[adapterKey]
+	if !ok || current != channelName {
+		d.activeChannelsMu.Unlock()
+		return ErrAdapterKeyNotActive
+	}
+	delete(d.activeChannels, adapterKey)
+	d.activeChannelsMu.Unlock()
+
+	if d.activeStore != nil {
+		if err := d.activeStore.ClearActiveChannel(ctx, adapterKey); err != nil {
+			return fmt.Errorf("clearing active channel: %w", err)
+		}
+	}
+	return nil
+}
+
+// ActiveChannelsForChannel returns all adapter keys that currently have the
+// given channel as their active override. Always returns a non-nil slice.
+func (d *Dispatcher) ActiveChannelsForChannel(channelName string) []string {
+	d.activeChannelsMu.RLock()
+	defer d.activeChannelsMu.RUnlock()
+
+	keys := make([]string, 0)
+	for k, v := range d.activeChannels {
+		if v == channelName {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // SendFor returns a SendFunc that routes outgoing messages through the
@@ -529,7 +600,11 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 		if convID == "" {
 			convID = e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
 		}
-		d.OnBroadcast(e.Name(), convID, msg.Adapter, "New message processed")
+		channelName := ""
+		if strings.HasPrefix(convID, "chan:") {
+			channelName = strings.TrimPrefix(convID, "chan:")
+		}
+		d.OnBroadcast(e.Name(), convID, msg.Adapter, channelName, "New message processed")
 	}
 }
 

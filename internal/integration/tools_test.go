@@ -4,6 +4,7 @@ package integration
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,5 +142,160 @@ func TestTools_DefsNotFound(t *testing.T) {
 	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/nonexistent/defs", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Happy-path CRUD tests (Phase 2 — require test MCP server)
+// ---------------------------------------------------------------------------
+
+// addTestTool adds the echo tool from the test MCP server. The tool connects
+// synchronously, so it's already in "connected" state when this returns.
+// Registers a cleanup to remove the tool and close the MCP connection before
+// the httptest.Server shuts down.
+func addTestTool(t *testing.T, h *Harness, ts *httptest.Server) {
+	t.Helper()
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools", map[string]any{
+		"name":           "echo-tool",
+		"transport":      "sse",
+		"url":            ts.URL,
+		"allow_loopback": true,
+	}))
+	if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+		t.Fatalf("add tool: status = %d, want 200/201; body: %s", rec.Code, rec.Body.String())
+	}
+	// Remove the tool before httptest.Server.Close() to avoid connection leaks.
+	t.Cleanup(func() {
+		h.Do(h.AuthedRequest(http.MethodDelete, "/api/v1/tools/echo-tool", nil))
+	})
+}
+
+func TestTools_AddSSEAndList(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+	tools := resp["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "echo-tool" {
+		t.Errorf("name = %v, want echo-tool", tool["name"])
+	}
+	if tool["status"] != "connected" {
+		t.Errorf("status = %v, want connected", tool["status"])
+	}
+}
+
+func TestTools_GetRegistered(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+	if resp["name"] != "echo-tool" {
+		t.Errorf("name = %v, want echo-tool", resp["name"])
+	}
+	if resp["transport"] != "sse" {
+		t.Errorf("transport = %v, want sse", resp["transport"])
+	}
+	if resp["url"] != ts.URL {
+		t.Errorf("url = %v, want %s", resp["url"], ts.URL)
+	}
+}
+
+func TestTools_DeleteRegistered(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodDelete, "/api/v1/tools/echo-tool", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify it's gone.
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestTools_HealthConnected(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+	if resp["status"] != "connected" {
+		t.Errorf("status = %v, want connected", resp["status"])
+	}
+}
+
+func TestTools_DefsRegistered(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool/defs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("defs: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+	tools, ok := resp["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatal("expected at least one tool definition")
+	}
+	// The echo tool should be present.
+	found := false
+	for _, d := range tools {
+		def := d.(map[string]any)
+		if def["name"] == "echo" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("echo tool not found in defs: %v", tools)
+	}
+}
+
+func TestTools_RestartRegistered(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools/echo-tool/restart", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Restart is synchronous — verify immediately.
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health after restart: status = %d", rec.Code)
+	}
+	var health map[string]any
+	DecodeJSON(t, rec, &health)
+	if health["status"] != "connected" {
+		t.Errorf("status after restart = %v, want connected", health["status"])
 	}
 }

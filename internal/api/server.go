@@ -176,6 +176,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/stop", s.RequireScope("chat", s.handleStopSession))
 	mux.HandleFunc("GET /api/v1/telemetry/summary", s.RequireScope("costs:read", s.handleTelemetrySummary))
 
+	// Channel endpoints.
+	mux.HandleFunc("GET /api/v1/channels", s.RequireScope("channels:read", s.handleListChannels))
+	mux.HandleFunc("GET /api/v1/channels/{name}", s.RequireScope("channels:read", s.handleGetChannel))
+	mux.HandleFunc("POST /api/v1/channels/{name}/activate", s.RequireScope("channels:write", s.handleActivateChannel))
+	mux.HandleFunc("DELETE /api/v1/channels/{name}/activate", s.RequireScope("channels:write", s.handleDeactivateChannel))
+
 	// Safety endpoints — /stop per-session, /panic and /resume global.
 	mux.HandleFunc("POST /api/v1/panic", s.RequireScope("admin", s.handlePanic))
 	mux.HandleFunc("POST /api/v1/resume", s.RequireScope("admin", s.handleResume))
@@ -643,6 +649,15 @@ func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// channelForConversation extracts the channel name from a conversation ID
+// if it uses the "chan:{name}" format.
+func channelForConversation(id string) string {
+	if strings.HasPrefix(id, "chan:") {
+		return strings.TrimPrefix(id, "chan:")
+	}
+	return ""
+}
+
 // handleSessions lists all conversations from the memory store.
 // When backed by a TelemetryStore, includes telemetry stats.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -656,7 +671,19 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if convos == nil {
 			convos = []agent.ConversationInfoWithStats{}
 		}
-		writeJSON(w, http.StatusOK, convos)
+		// Enrich with channel names for channel-based conversations.
+		type withChannel struct {
+			agent.ConversationInfoWithStats
+			Channel string `json:"channel,omitempty"`
+		}
+		enriched := make([]withChannel, len(convos))
+		for i, c := range convos {
+			enriched[i] = withChannel{
+				ConversationInfoWithStats: c,
+				Channel:                   channelForConversation(c.ID),
+			}
+		}
+		writeJSON(w, http.StatusOK, enriched)
 		return
 	}
 	convos, err := s.deps.Memory.ListConversations(r.Context())
@@ -668,12 +695,25 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if convos == nil {
 		convos = []agent.ConversationInfo{}
 	}
-	writeJSON(w, http.StatusOK, convos)
+	// Enrich with channel names for channel-based conversations.
+	type withChannel struct {
+		agent.ConversationInfo
+		Channel string `json:"channel,omitempty"`
+	}
+	enriched := make([]withChannel, len(convos))
+	for i, c := range convos {
+		enriched[i] = withChannel{
+			ConversationInfo: c,
+			Channel:          channelForConversation(c.ID),
+		}
+	}
+	writeJSON(w, http.StatusOK, enriched)
 }
 
 // chatRequest is the JSON body for POST /api/v1/chat.
 type chatRequest struct {
 	Agent     string `json:"agent"`      // optional; defaults to "default"
+	Channel   string `json:"channel"`    // optional; routes through named channel
 	SessionID string `json:"session_id"` // optional; generated if blank
 	Message   string `json:"message"`    // required
 	UserID    string `json:"user_id"`    // optional
@@ -710,6 +750,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if agentName == "" {
 		agentName = "default"
 	}
+
+	// Channel routing: if a channel is specified, resolve the agent and
+	// conversation ID from the channel instead of the request fields.
+	var conversationID string
+	if req.Channel != "" {
+		channels := s.deps.Dispatcher.Channels()
+		if channels == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "channels not configured"})
+			return
+		}
+		ch, ok := channels[req.Channel]
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "channel not found"})
+			return
+		}
+		agentName = ch.AgentName
+		conversationID = ch.ConversationID()
+	}
+
 	eng := s.deps.Dispatcher.Agent(agentName)
 	if eng == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
@@ -721,6 +780,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		sessionID = generateID()
 	}
 
+	if conversationID == "" {
+		conversationID = sessionID
+	}
+
 	msg := adapter.IncomingMessage{
 		Adapter:        "api",
 		ExternalID:     sessionID,
@@ -728,7 +791,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		UserName:       req.UserName,
 		Text:           req.Message,
 		Timestamp:      time.Now(),
-		ConversationID: sessionID,
+		ConversationID: conversationID,
 	}
 
 	if r.Header.Get("Accept") == "text/event-stream" {

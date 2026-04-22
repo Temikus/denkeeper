@@ -19,6 +19,7 @@ type ChatRequestFrame struct {
 	Type           string `json:"type"`                       // "chat_request"
 	SessionID      string `json:"session_id,omitempty"`       // omit to create new session
 	Agent          string `json:"agent,omitempty"`            // agent name; defaults to "default"
+	Channel        string `json:"channel,omitempty"`          // channel name; routes through named channel
 	Message        string `json:"message"`                    // user message text
 	UserID         string `json:"user_id,omitempty"`          // optional user identifier
 	UserName       string `json:"user_name,omitempty"`        // optional display name
@@ -71,11 +72,12 @@ type WSErrorFrame struct {
 // to all connected clients so the web UI can refresh its session list or
 // reload the active conversation.
 type ActivityFrame struct {
-	Type           string `json:"type"`            // "activity"
-	ConversationID string `json:"conversation_id"` // e.g. "default:telegram:12345"
-	Agent          string `json:"agent"`           // agent name
-	Adapter        string `json:"adapter"`         // source adapter name
-	Summary        string `json:"summary"`         // brief description
+	Type           string `json:"type"`              // "activity"
+	ConversationID string `json:"conversation_id"`   // e.g. "default:telegram:12345"
+	Agent          string `json:"agent"`             // agent name
+	Adapter        string `json:"adapter"`           // source adapter name
+	Channel        string `json:"channel,omitempty"` // channel name (if routed via channel)
+	Summary        string `json:"summary"`           // brief description
 }
 
 // PanicFrame is sent by the client to trigger an emergency stop.
