@@ -79,7 +79,7 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
       # cosign for keyless signing of the checksums file
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4.1.1
       # syft for SBOM generation (goreleaser sboms: section shells out to syft)
       - uses: anchore/sbom-action/download-syft@v0
       - uses: goreleaser/goreleaser-action@v7
@@ -140,7 +140,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4.1.1
       - uses: docker/build-push-action@v7
         id: build
         with:
