@@ -341,7 +341,7 @@ func TestRegisterSchedules_MissingSkillSkips(t *testing.T) {
 		},
 	}
 
-	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	err := registerSchedules(context.Background(), cfg, sched, disp, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("expected no error for missing skill, got: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestRegisterSchedules_UnknownAgentErrors(t *testing.T) {
 		},
 	}
 
-	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	err := registerSchedules(context.Background(), cfg, sched, disp, nil, slog.Default())
 	if err == nil {
 		t.Fatal("expected error for unknown agent, got nil")
 	}
@@ -396,7 +396,7 @@ func TestRegisterSchedules_ValidSkillRegisters(t *testing.T) {
 		},
 	}
 
-	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	err := registerSchedules(context.Background(), cfg, sched, disp, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestRegisterSchedules_MixedValidAndInvalid(t *testing.T) {
 		},
 	}
 
-	err := registerSchedules(context.Background(), cfg, sched, disp, slog.Default())
+	err := registerSchedules(context.Background(), cfg, sched, disp, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

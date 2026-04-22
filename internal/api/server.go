@@ -64,6 +64,7 @@ type Deps struct {
 	ModelLister       func(ctx context.Context) []string                               // returns available LLM models; nil = endpoint returns 503
 	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo // returns enriched model metadata; nil = endpoint returns 503
 	AuditStore        audit.Store                                                      // nil = audit endpoints return 503
+	Auditor           audit.Emitter                                                    // nil = no audit events from schedule delivery
 	OAuthDeps         *OAuthDeps                                                       // nil = OAuth tool endpoints return 503
 	ReloadFunc        func() error                                                     // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                     // nil = restart endpoint returns 503

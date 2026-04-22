@@ -3,6 +3,7 @@ import {
   agents, sessions, messages, approvals, costs, skills, schedules,
   tools, plugins, browserProfiles, browserSessions, kvEntries,
   apiKeys, autoApproveRules, personaSections, auditEvents, auditStats,
+  channels,
 } from './fixtures/index.js'
 
 export const handlers = [
@@ -47,6 +48,15 @@ export const handlers = [
   http.post('/api/v1/schedules', () => HttpResponse.json({ ok: true })),
   http.patch('/api/v1/schedules/:name', () => HttpResponse.json({ ok: true })),
   http.delete('/api/v1/schedules/:name', () => new HttpResponse(null, { status: 204 })),
+
+  // Channels
+  http.get('/api/v1/channels', () => HttpResponse.json(channels)),
+  http.get('/api/v1/channels/:name', ({ params }) => {
+    const ch = channels.find(c => c.name === params.name)
+    return ch ? HttpResponse.json(ch) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post('/api/v1/channels/:name/activate', () => HttpResponse.json({ status: 'activated', channel: 'work', adapter_key: 'api:web-dashboard' })),
+  http.delete('/api/v1/channels/:name/activate', () => HttpResponse.json({ status: 'deactivated' })),
 
   // Sessions
   http.get('/api/v1/sessions', () => HttpResponse.json(sessions)),

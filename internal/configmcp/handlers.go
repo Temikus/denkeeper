@@ -13,7 +13,9 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -516,8 +518,12 @@ func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return input, "invalid schedule expression: " + err.Error()
 	}
-	if _, _, ok := config.ParseChannel(input.Channel); !ok {
-		return input, fmt.Sprintf("channel %q is not in adapter:externalID format", input.Channel)
+	if config.IsChannelRef(input.Channel) {
+		if _, ok := config.ParseChannelRef(input.Channel); !ok {
+			return input, fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", input.Channel)
+		}
+	} else if _, _, ok := config.ParseChannel(input.Channel); !ok {
+		return input, fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
 	}
 	return input, ""
 }
@@ -577,12 +583,13 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	schedRef := s.deps.Sched
 	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
+	chResolver := s.deps.ChannelResolver
 
 	configPath := s.deps.ConfigPath
 	agentName := s.deps.AgentName
 
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger)); err != nil {
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor})); err != nil {
 			return err
 		}
 		if configPath != "" {
@@ -668,8 +675,12 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 	if input.Channel != nil {
 		channel = *input.Channel
 	}
-	if _, _, ok := config.ParseChannel(channel); !ok {
-		return scheduler.Config{}, fmt.Sprintf("channel %q is not in adapter:externalID format", channel)
+	if config.IsChannelRef(channel) {
+		if _, ok := config.ParseChannelRef(channel); !ok {
+			return scheduler.Config{}, fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", channel)
+		}
+	} else if _, _, ok := config.ParseChannel(channel); !ok {
+		return scheduler.Config{}, fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", channel)
 	}
 	sessionMode := existing.SessionMode
 	if input.SessionMode != nil {
@@ -746,6 +757,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	schedRef := s.deps.Sched
 	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
+	chResolver := s.deps.ChannelResolver
 	configPath := s.deps.ConfigPath
 	agentName := s.deps.AgentName
 
@@ -753,7 +765,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		if err := schedRef.Unregister(input.Name); err != nil {
 			return fmt.Errorf("unregistering old schedule: %w", err)
 		}
-		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger)); err != nil {
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor})); err != nil {
 			return err
 		}
 		if configPath != "" {
@@ -1326,34 +1338,99 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 	return strings.TrimSpace(string(data)), nil
 }
 
+// ChannelResolveResult holds the result of resolving a named channel reference.
+type ChannelResolveResult struct {
+	ConversationID string
+	Bindings       []agent.AdapterBinding
+	Broadcast      bool
+}
+
+// ChannelResolver looks up a channel by name and returns the resolution result.
+// Returns nil if the channel is not found or has no usable bindings.
+type ChannelResolver func(name string) *ChannelResolveResult
+
+// BuildScheduleJobOpts holds parameters for BuildScheduleJob.
+type BuildScheduleJobOpts struct {
+	// Auditor emits audit events for broadcast delivery outcomes. May be nil.
+	Auditor audit.Emitter
+}
+
 // BuildScheduleJob returns a JobFunc that dispatches a message when the
 // schedule fires. Used by both schedule_add and schedule_update.
-func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger) scheduler.JobFunc {
-	adapterName, externalID, _ := config.ParseChannel(cfg.Channel)
+func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger, resolve ChannelResolver, opts BuildScheduleJobOpts) scheduler.JobFunc {
+	var conversationID string
+	var targets []agent.AdapterBinding
+	var broadcast bool
+
+	if channelName, isRef := config.ParseChannelRef(cfg.Channel); isRef {
+		if resolve == nil {
+			logger.Error("schedule references channel but no resolver configured", "name", cfg.Name, "channel", cfg.Channel)
+		} else if result := resolve(channelName); result == nil {
+			logger.Error("schedule references unknown channel", "name", cfg.Name, "channel", cfg.Channel)
+		} else {
+			conversationID = result.ConversationID
+			targets = result.Bindings
+			broadcast = result.Broadcast
+		}
+	} else {
+		a, eid, _ := config.ParseChannel(cfg.Channel)
+		if a != "" {
+			targets = []agent.AdapterBinding{{Adapter: a, ExternalID: eid}}
+		}
+	}
 
 	text := "[Scheduled trigger: " + cfg.Name + "]"
 	if cfg.Skill != "" {
 		text = "[Scheduled: " + cfg.Skill + "]"
 	}
 
-	baseMsg := adapter.IncomingMessage{
-		Adapter:     adapterName,
-		ExternalID:  externalID,
-		UserName:    "scheduler",
-		Text:        text,
-		SkillName:   cfg.Skill,
-		SessionTier: cfg.SessionTier,
-	}
-
 	return func(entry scheduler.Entry) {
-		msg := baseMsg
-		if entry.SessionMode == "isolated" {
-			msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
+		var failed, succeeded int
+		var lastErr string
+		for _, target := range targets {
+			msg := adapter.IncomingMessage{
+				Adapter:        target.Adapter,
+				ExternalID:     target.ExternalID,
+				ConversationID: conversationID,
+				UserName:       "scheduler",
+				Text:           text,
+				SkillName:      cfg.Skill,
+				SessionTier:    cfg.SessionTier,
+			}
+			if entry.SessionMode == "isolated" {
+				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
+			}
+			if err := handleMsg(context.Background(), msg); err != nil {
+				failed++
+				lastErr = err.Error()
+				logger.Error("scheduled job failed", "name", entry.Name, "target", target.Adapter+":"+target.ExternalID, "error", err)
+			} else {
+				succeeded++
+			}
 		}
-		if err := handleMsg(context.Background(), msg); err != nil {
-			logger.Error("scheduled job failed", "name", entry.Name, "error", err)
-		}
+		EmitBroadcastFailure(context.Background(), opts.Auditor, broadcast, entry.Name, cfg.Channel, conversationID, succeeded, failed, lastErr)
 	}
+}
+
+// EmitBroadcastFailure emits an audit event when broadcast delivery has
+// failures. Safe to call with nil auditor or broadcast=false (no-op).
+func EmitBroadcastFailure(ctx context.Context, auditor audit.Emitter, broadcast bool, scheduleName, channel, conversationID string, succeeded, failed int, lastErr string) {
+	if !broadcast || failed == 0 || auditor == nil {
+		return
+	}
+	summary := fmt.Sprintf("Schedule %s broadcast: %d/%d targets failed", scheduleName, failed, failed+succeeded)
+	if succeeded > 0 {
+		summary = fmt.Sprintf("Schedule %s broadcast: %d/%d delivered, %d failed", scheduleName, succeeded, failed+succeeded, failed)
+	}
+	auditor.Emit(ctx, audit.Event{
+		Category:       audit.CategorySchedule,
+		Action:         "broadcast_partial_failure",
+		Summary:        summary,
+		Detail:         fmt.Sprintf(`{"name":%q,"channel":%q,"succeeded":%d,"failed":%d,"last_error":%q}`, scheduleName, channel, succeeded, failed, lastErr),
+		Status:         audit.StatusError,
+		Source:         "scheduler",
+		ConversationID: conversationID,
+	})
 }
 
 func toolText(text string) *mcp.CallToolResult {

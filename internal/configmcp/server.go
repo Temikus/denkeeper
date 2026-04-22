@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -101,6 +102,13 @@ type Deps struct {
 	// ConfigPath is the path to the TOML config file. When non-empty,
 	// schedule mutations are persisted to disk so they survive restarts.
 	ConfigPath string
+
+	// ChannelResolver resolves @channelname references in schedule channels.
+	// If nil, @channelname is not supported for schedules created via Config MCP.
+	ChannelResolver ChannelResolver
+
+	// Auditor emits audit events. If nil, broadcast delivery audit is disabled.
+	Auditor audit.Emitter
 
 	Logger *slog.Logger
 }

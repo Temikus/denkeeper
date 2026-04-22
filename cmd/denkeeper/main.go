@@ -97,6 +97,88 @@ func parseChannel(channel string) (adapterName, externalID string, ok bool) {
 	return config.ParseChannel(channel)
 }
 
+// scheduleChannelResult holds the resolved delivery targets for a schedule.
+type scheduleChannelResult struct {
+	conversationID string
+	targets        []agent.AdapterBinding
+}
+
+// resolveScheduleChannel resolves a schedule's channel string into delivery
+// targets. Supports both "adapter:externalID" and "@channelname" formats.
+// For broadcast channels, all specific bindings are returned.
+func resolveScheduleChannel(channel string, d *agent.Dispatcher) (*scheduleChannelResult, error) {
+	if channel == "" {
+		return &scheduleChannelResult{}, nil
+	}
+	if channelName, isRef := config.ParseChannelRef(channel); isRef {
+		channels := d.Channels()
+		if channels == nil {
+			return nil, fmt.Errorf("channel @%s not found: channels not configured", channelName)
+		}
+		ch, found := channels[channelName]
+		if !found {
+			return nil, fmt.Errorf("channel @%s not found", channelName)
+		}
+		convID := ch.ConversationID()
+		if ch.IsBroadcast() {
+			bindings := ch.ResolveAllBindings()
+			if len(bindings) == 0 {
+				return nil, fmt.Errorf("channel @%s has no specific adapter bindings for broadcast delivery", channelName)
+			}
+			return &scheduleChannelResult{conversationID: convID, targets: bindings}, nil
+		}
+		adapter, eid, wildcard, ok := ch.ResolveBinding()
+		if !ok || wildcard {
+			return nil, fmt.Errorf("channel @%s has only wildcard adapter bindings — schedules require a specific adapter:externalID binding", channelName)
+		}
+		return &scheduleChannelResult{
+			conversationID: convID,
+			targets:        []agent.AdapterBinding{{Adapter: adapter, ExternalID: eid}},
+		}, nil
+	}
+	a, eid, ok := parseChannel(channel)
+	if !ok {
+		return nil, fmt.Errorf("invalid channel format %q", channel)
+	}
+	return &scheduleChannelResult{targets: []agent.AdapterBinding{{Adapter: a, ExternalID: eid}}}, nil
+}
+
+// buildChannelResolver returns a ChannelResolver that looks up channels from
+// the dispatcher. For broadcast channels, all specific bindings are returned.
+// For single-delivery channels (or unset), only the first specific binding is
+// returned. Returns nil for channels that cannot be resolved.
+func buildChannelResolver(d *agent.Dispatcher) configmcp.ChannelResolver {
+	return func(name string) *configmcp.ChannelResolveResult {
+		channels := d.Channels()
+		if channels == nil {
+			return nil
+		}
+		ch, found := channels[name]
+		if !found {
+			return nil
+		}
+		if ch.IsBroadcast() {
+			bindings := ch.ResolveAllBindings()
+			if len(bindings) == 0 {
+				return nil
+			}
+			return &configmcp.ChannelResolveResult{
+				ConversationID: ch.ConversationID(),
+				Bindings:       bindings,
+				Broadcast:      true,
+			}
+		}
+		adapter, eid, wildcard, ok := ch.ResolveBinding()
+		if !ok || wildcard {
+			return nil
+		}
+		return &configmcp.ChannelResolveResult{
+			ConversationID: ch.ConversationID(),
+			Bindings:       []agent.AdapterBinding{{Adapter: adapter, ExternalID: eid}},
+		}
+	}
+}
+
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
 	providers         map[string]llm.Provider // keyed by instance name
@@ -670,6 +752,8 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		AppendMemoryEntry:  e.AppendMemoryEntry,
 		RemoveMemoryEntry:  e.RemoveMemoryEntry,
 		ConfigPath:         abc.configPath,
+		ChannelResolver:    buildChannelResolver(abc.dispatcher),
+		Auditor:            abc.auditor,
 		Logger:             abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
@@ -828,6 +912,7 @@ func buildChannels(cfg *config.Config) []*agent.Channel {
 			Name:      cc.Name,
 			AgentName: cc.Agent,
 			Adapters:  cc.Adapters,
+			Delivery:  cc.Delivery,
 			Implicit:  cc.Implicit,
 		})
 	}
@@ -972,7 +1057,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	return e, bindings, nil
 }
 
-func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler.Scheduler, dispatcher *agent.Dispatcher, logger *slog.Logger) error {
+func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler.Scheduler, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) error {
 	for _, sc := range cfg.Schedules {
 		sc := sc // capture loop variable
 		text := "[Scheduled trigger: " + sc.Name + "]"
@@ -980,9 +1065,9 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			text = "[Scheduled: " + sc.Skill + "]"
 		}
 
-		adapterName, externalID, ok := parseChannel(sc.Channel)
-		if !ok && sc.Channel != "" {
-			logger.Warn("schedule has invalid channel format, skipping", "name", sc.Name, "channel", sc.Channel)
+		resolved, chanErr := resolveScheduleChannel(sc.Channel, dispatcher)
+		if chanErr != nil {
+			logger.Warn("schedule has invalid channel, skipping", "name", sc.Name, "channel", sc.Channel, "error", chanErr)
 			continue
 		}
 
@@ -999,16 +1084,9 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			}
 		}
 
-		jobMsg := adapter.IncomingMessage{
-			Adapter:      adapterName,
-			ExternalID:   externalID,
-			UserName:     "scheduler",
-			Text:         text,
-			SkillName:    sc.Skill,
-			ScheduleName: sc.Name,
-			ScheduleCron: sc.Schedule,
-		}
-
+		targets := resolved.targets
+		conversationID := resolved.conversationID
+		broadcast := len(targets) > 1
 		targetAgent := sc.Agent // defaults to "default" from applyDefaults
 
 		if err := sched.Register(scheduler.Config{
@@ -1027,17 +1105,36 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 				logger.Debug("schedule fired, no channel configured", "name", entry.Name)
 				return
 			}
-			msg := jobMsg
-			msg.Timestamp = time.Now()
-			if entry.SessionMode == "isolated" {
-				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, time.Now().UnixNano())
+			var failed, succeeded int
+			var lastErr string
+			for _, target := range targets {
+				msg := adapter.IncomingMessage{
+					Adapter:        target.Adapter,
+					ExternalID:     target.ExternalID,
+					ConversationID: conversationID,
+					UserName:       "scheduler",
+					Text:           text,
+					SkillName:      sc.Skill,
+					ScheduleName:   sc.Name,
+					ScheduleCron:   sc.Schedule,
+					Timestamp:      time.Now(),
+				}
+				if entry.SessionMode == "isolated" {
+					msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, time.Now().UnixNano())
+				}
+				if entry.SessionTier != "" {
+					msg.SessionTier = entry.SessionTier
+				}
+				if err := dispatcher.Dispatch(ctx, targetAgent, msg); err != nil {
+					failed++
+					lastErr = err.Error()
+					logger.Error("dispatching scheduled message", "name", entry.Name, "agent", targetAgent,
+						"target", target.Adapter+":"+target.ExternalID, "error", err)
+				} else {
+					succeeded++
+				}
 			}
-			if entry.SessionTier != "" {
-				msg.SessionTier = entry.SessionTier
-			}
-			if err := dispatcher.Dispatch(ctx, targetAgent, msg); err != nil {
-				logger.Error("dispatching scheduled message", "name", entry.Name, "agent", targetAgent, "error", err)
-			}
+			configmcp.EmitBroadcastFailure(ctx, auditor, broadcast, entry.Name, sc.Channel, conversationID, succeeded, failed, lastErr)
 		}); err != nil {
 			return fmt.Errorf("registering schedule %q: %w", sc.Name, err)
 		}
@@ -1320,7 +1417,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 	wireSkillCommands(tgAdapter, engines, logger)
 
-	if err := registerSchedules(ctx, cfg, sched, dispatcher, logger); err != nil {
+	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
 		return err
 	}
 	sched.Start()
@@ -1342,6 +1439,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			MetricsHandler:    otelMetricsHandler(cfg),
 			KVStore:           st.kvStore,
 			AuditStore:        st.auditStore,
+			Auditor:           auditor,
 			ConfigPath:        path,
 			ModelLister:       dispatcher.ListModels,
 			ModelDetailLister: dispatcher.ListModelDetails,

@@ -1395,6 +1395,138 @@ channel = "telegram:387956986"
 	}
 }
 
+func TestParse_Channels_DeliveryValid(t *testing.T) {
+	for _, mode := range []string{"single", "broadcast", ""} {
+		deliveryLine := ""
+		if mode != "" {
+			deliveryLine = `delivery = "` + mode + `"`
+		}
+		tomlData := []byte(baseConfig + `
+[[channels]]
+name = "work"
+agent = "default"
+adapters = ["telegram:12345"]
+` + deliveryLine + `
+`)
+		if _, err := Parse(tomlData); err != nil {
+			t.Errorf("delivery=%q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestParse_Channels_DeliveryInvalid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "work"
+agent = "default"
+adapters = ["telegram:12345"]
+delivery = "fanout"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid delivery mode")
+	}
+	if !strings.Contains(err.Error(), "delivery must be") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParse_Schedules_ValidChannelRef(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "work"
+agent = "default"
+adapters = ["telegram:12345"]
+
+[[schedules]]
+name = "chan-ref"
+type = "agent"
+schedule = "@daily"
+channel = "@work"
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Fatalf("unexpected error for valid channel ref: %v", err)
+	}
+}
+
+func TestParse_Schedules_InvalidChannelRef_EmptyName(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "bad-ref"
+type = "agent"
+schedule = "@daily"
+channel = "@"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for empty channel ref @")
+	}
+}
+
+func TestParse_Schedules_ChannelRef_NotFound(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "ghost"
+type = "agent"
+schedule = "@daily"
+channel = "@nonexistent"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for channel ref to nonexistent channel")
+	}
+	if !strings.Contains(err.Error(), "does not match any configured") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParse_Schedules_ChannelRef_BackwardCompat(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[schedules]]
+name = "raw"
+type = "agent"
+schedule = "@daily"
+channel = "telegram:123456"
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Fatalf("raw channel format should still work: %v", err)
+	}
+}
+
+func TestIsChannelRef(t *testing.T) {
+	if !IsChannelRef("@work") {
+		t.Error("expected @work to be a channel ref")
+	}
+	if IsChannelRef("telegram:12345") {
+		t.Error("expected telegram:12345 to not be a channel ref")
+	}
+	if IsChannelRef("") {
+		t.Error("expected empty string to not be a channel ref")
+	}
+}
+
+func TestParseChannelRef(t *testing.T) {
+	name, ok := ParseChannelRef("@work")
+	if !ok || name != "work" {
+		t.Errorf("ParseChannelRef(@work) = (%q, %v), want (work, true)", name, ok)
+	}
+
+	_, ok = ParseChannelRef("@")
+	if ok {
+		t.Error("ParseChannelRef(@) should return false")
+	}
+
+	_, ok = ParseChannelRef("telegram:12345")
+	if ok {
+		t.Error("ParseChannelRef(telegram:12345) should return false")
+	}
+
+	_, ok = ParseChannelRef("")
+	if ok {
+		t.Error("ParseChannelRef('') should return false")
+	}
+}
+
 func TestParse_Session_ApprovalTimeout_Valid(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [session]

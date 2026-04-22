@@ -16,6 +16,7 @@
       items: [
         { id: 'agents',    label: 'Agents' },
         { id: 'sessions',  label: 'Sessions' },
+        { id: 'channels',  label: 'Channels' },
         { id: 'schedules', label: 'Schedules' },
         { id: 'approvals', label: 'Approvals' },
         { id: 'audit',     label: 'Audit Log' },

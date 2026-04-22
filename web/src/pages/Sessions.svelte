@@ -72,6 +72,9 @@
       >
         <div class="sid">{s.id.slice(0, 14)}</div>
         <div class="smeta">{fmtDate(s.updated_at || s.created_at)}</div>
+        {#if s.channel}
+          <div class="schannel">{s.channel}</div>
+        {/if}
         <button class="del" onclick={(e) => { e.stopPropagation(); confirmDeleteId = s.id }} title="Delete session">✕</button>
       </div>
     {/each}
@@ -84,6 +87,9 @@
     {#if loadingMsgs}
       <p class="loading">Loading messages…</p>
     {:else if selected}
+      {#if selected.channel}
+        <div class="channel-badge">Channel: {selected.channel}</div>
+      {/if}
       {#each messages as m}
         <div class="msg" class:user={m.role === 'user'} class:assistant={m.role === 'assistant'}>
           <div class="role">{m.role}{m.tokens_used ? ` · ${m.tokens_used} tokens` : ''}</div>
@@ -135,6 +141,7 @@
   .item:hover, .item.active { border-color: var(--accent); }
   .sid { font-family: monospace; font-size: 12px; }
   .smeta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .schannel { font-size: 11px; color: var(--accent); margin-top: 2px; font-family: monospace; }
   .del {
     position: absolute; top: 8px; right: 8px;
     background: none; border: none; color: var(--text-muted);
@@ -155,5 +162,6 @@
   .role { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
   .body { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; }
   .ts   { font-size: 10px; color: var(--text-muted); margin-top: 6px; }
+  .channel-badge { font-size: 12px; color: var(--text-muted); padding: 4px 0 8px; font-family: monospace; }
   .empty, .loading { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 </style>

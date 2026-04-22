@@ -306,6 +306,35 @@ describe('Chat page', () => {
     })
   })
 
+  test('channel selector appears when channels are available', async () => {
+    render(Chat)
+    await waitFor(() => {
+      // Channels endpoint returns 3 channels, but only 2 are non-implicit
+      const channelLabel = screen.getByText('Channel')
+      const channelSelect = channelLabel.closest('label').querySelector('select')
+      const options = channelSelect.querySelectorAll('option')
+      // "None" + 2 non-implicit channels
+      expect(options.length).toBe(3)
+      expect(Array.from(options).map(o => o.textContent)).toContain('work')
+      expect(Array.from(options).map(o => o.textContent)).toContain('personal')
+    })
+  })
+
+  test('channel selector hidden when no channels', async () => {
+    server.use(
+      http.get('/api/v1/channels', () => HttpResponse.json([]))
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Agent')).toBeInTheDocument()
+    })
+    // Wait a tick for channels to load (empty)
+    await waitFor(() => {
+      expect(screen.queryByText('Channel')).not.toBeInTheDocument()
+    })
+  })
+
   test('pending approvals banner appears from polled data', async () => {
     server.use(
       http.get('/api/v1/approvals', ({ request }) => {

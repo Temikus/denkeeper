@@ -77,6 +77,18 @@ export const api = {
   }),
   deleteSchedule: name => apiFetch(`/api/v1/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
+  // Channels
+  channels: () => apiFetch('/api/v1/channels'),
+  channel: (name) => apiFetch(`/api/v1/channels/${encodeURIComponent(name)}`),
+  activateChannel: (name, adapterKey) => apiFetch(`/api/v1/channels/${encodeURIComponent(name)}/activate`, {
+    method: 'POST',
+    body: JSON.stringify({ adapter_key: adapterKey }),
+  }),
+  deactivateChannel: (name, adapterKey) => apiFetch(`/api/v1/channels/${encodeURIComponent(name)}/activate`, {
+    method: 'DELETE',
+    body: JSON.stringify({ adapter_key: adapterKey }),
+  }),
+
   // Sessions
   sessions: () => apiFetch('/api/v1/sessions'),
   sessionMessages: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/messages`),
@@ -213,14 +225,14 @@ export const api = {
   // onChunk(text) is called for each content chunk.
   // onDone(sessionId) is called when the stream ends.
   // onToolEvent(evt) is called for tool_start/tool_end events.
-  streamChat: async (agent, sessionId, message, onChunk, onDone, onToolEvent) => {
+  streamChat: async (agent, sessionId, message, onChunk, onDone, onToolEvent, channel) => {
     const res = await fetch('/api/v1/chat', {
       method: 'POST',
       headers: {
         ...authHeaders(),
         'Accept': 'text/event-stream',
       },
-      body: JSON.stringify({ agent, session_id: sessionId || undefined, message }),
+      body: JSON.stringify({ agent, session_id: sessionId || undefined, channel: channel || undefined, message }),
     })
     if (res.status === 401) {
       token.clear()

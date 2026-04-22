@@ -258,6 +258,47 @@ func TestDeleteSchedule_NotFound(t *testing.T) {
 	}
 }
 
+func TestCreateSchedule_ChannelRef(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body := `{
+		"name":"chan-ref-sched",
+		"schedule":"@every 5m",
+		"channel":"@work",
+		"enabled":true
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestCreateSchedule_InvalidChannelRef(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body := `{"name":"bad","schedule":"@daily","channel":"@"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	// "@" alone is not a valid channel ref, but it's also not a valid
+	// adapter:externalID — should return 400.
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 func TestScheduleEndpoints_RequiresScope(t *testing.T) {
 	readOnlyKey := config.APIKeyConfig{
 		Name:   "read-only",

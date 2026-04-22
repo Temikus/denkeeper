@@ -4,8 +4,8 @@ export const agents = [
 ]
 
 export const sessions = [
-  { id: 'sess-1', agent: 'default', created_at: '2026-01-01T00:00:00Z', message_count: 2 },
-  { id: 'sess-2', agent: 'helper', created_at: '2026-01-02T00:00:00Z', message_count: 5 },
+  { id: 'sess-1', agent: 'default', created_at: '2026-01-01T00:00:00Z', message_count: 2, channel: 'work' },
+  { id: 'sess-2', agent: 'helper', created_at: '2026-01-02T00:00:00Z', message_count: 5, channel: '' },
 ]
 
 export const messages = [
@@ -67,6 +67,33 @@ export const personaSections = {
   identity: '---\nname: TestBot\nemoji: "🤖"\ntheme: helpful and concise\n---\n\nAdditional notes.',
   style: 'Be concise and clear.',
 }
+
+export const channels = [
+  {
+    name: 'work',
+    agent: 'default',
+    adapters: ['telegram'],
+    implicit: false,
+    conversation_id: 'chan:work',
+    active_adapter_keys: ['telegram:387956986'],
+  },
+  {
+    name: 'personal',
+    agent: 'helper',
+    adapters: ['discord:123456'],
+    implicit: false,
+    conversation_id: 'chan:personal',
+    active_adapter_keys: [],
+  },
+  {
+    name: 'default-telegram',
+    agent: 'default',
+    adapters: ['telegram'],
+    implicit: true,
+    conversation_id: 'chan:default-telegram',
+    active_adapter_keys: [],
+  },
+]
 
 export const auditEvents = [
   {

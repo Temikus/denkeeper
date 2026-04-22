@@ -11,6 +11,7 @@ export const chatState = writable({
   messages: [],
   sessionId: '',
   agent: 'default',
+  channel: '',
   sending: false,
   error: '',
   restoring: false,
@@ -60,6 +61,10 @@ export function newSession() {
 
 export function setAgent(name) {
   chatState.update(s => ({ ...s, agent: name }))
+}
+
+export function setChannel(name) {
+  chatState.update(s => ({ ...s, channel: name }))
 }
 
 export async function loadSession(sessionId, agent) {
@@ -251,6 +256,7 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
       type: 'chat_request',
       session_id: reqSessionId || undefined,
       agent: agentName,
+      channel: get(chatState).channel || undefined,
       message: text,
     })
 
@@ -301,7 +307,8 @@ export async function sendMessage(text) {
           saveSession()
           touchMessages()
         },
-        (evt) => handleToolEvent(agentMsg, evt)
+        (evt) => handleToolEvent(agentMsg, evt),
+        state.channel
       )
     }
   } catch (e) {

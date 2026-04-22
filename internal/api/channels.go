@@ -14,6 +14,7 @@ type channelResponse struct {
 	Name              string   `json:"name"`
 	Agent             string   `json:"agent"`
 	Adapters          []string `json:"adapters"`
+	Delivery          string   `json:"delivery,omitempty"`
 	Implicit          bool     `json:"implicit"`
 	ConversationID    string   `json:"conversation_id"`
 	ActiveAdapterKeys []string `json:"active_adapter_keys"`
@@ -33,6 +34,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			Name:              ch.Name,
 			Agent:             ch.AgentName,
 			Adapters:          ch.Adapters,
+			Delivery:          ch.Delivery,
 			Implicit:          ch.Implicit,
 			ConversationID:    ch.ConversationID(),
 			ActiveAdapterKeys: s.deps.Dispatcher.ActiveChannelsForChannel(ch.Name),
@@ -61,6 +63,7 @@ func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 		Name:              ch.Name,
 		Agent:             ch.AgentName,
 		Adapters:          ch.Adapters,
+		Delivery:          ch.Delivery,
 		Implicit:          ch.Implicit,
 		ConversationID:    ch.ConversationID(),
 		ActiveAdapterKeys: s.deps.Dispatcher.ActiveChannelsForChannel(ch.Name),

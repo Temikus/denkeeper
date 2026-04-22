@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -27,6 +29,40 @@ type scheduleCreateInput struct {
 	Enabled     *bool    `json:"enabled"`
 }
 
+// channelResolver returns a ChannelResolver that looks up channels from the
+// dispatcher. For broadcast channels, all specific bindings are returned.
+func (s *Server) channelResolver() configmcp.ChannelResolver {
+	return func(name string) *configmcp.ChannelResolveResult {
+		channels := s.deps.Dispatcher.Channels()
+		if channels == nil {
+			return nil
+		}
+		ch, found := channels[name]
+		if !found {
+			return nil
+		}
+		if ch.IsBroadcast() {
+			bindings := ch.ResolveAllBindings()
+			if len(bindings) == 0 {
+				return nil
+			}
+			return &configmcp.ChannelResolveResult{
+				ConversationID: ch.ConversationID(),
+				Bindings:       bindings,
+				Broadcast:      true,
+			}
+		}
+		adapter, eid, wildcard, ok := ch.ResolveBinding()
+		if !ok || wildcard {
+			return nil
+		}
+		return &configmcp.ChannelResolveResult{
+			ConversationID: ch.ConversationID(),
+			Bindings:       []agent.AdapterBinding{{Adapter: adapter, ExternalID: eid}},
+		}
+	}
+}
+
 // validateScheduleInput checks required fields and format of a schedule create request.
 func validateScheduleInput(input scheduleCreateInput) string {
 	if strings.TrimSpace(input.Name) == "" {
@@ -41,9 +77,15 @@ func validateScheduleInput(input scheduleCreateInput) string {
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return "invalid schedule expression: " + err.Error()
 	}
-	colonIdx := strings.IndexByte(input.Channel, ':')
-	if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
-		return fmt.Sprintf("channel %q is not in adapter:externalID format", input.Channel)
+	if config.IsChannelRef(input.Channel) {
+		if _, ok := config.ParseChannelRef(input.Channel); !ok {
+			return fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", input.Channel)
+		}
+	} else {
+		colonIdx := strings.IndexByte(input.Channel, ':')
+		if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
+			return fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
+		}
 	}
 	return ""
 }
@@ -110,7 +152,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		Enabled:     enabled,
 	}
 
-	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger)
+	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
 	if err := s.deps.Scheduler.RegisterAndStart(cfg, job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -182,7 +224,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger)
+	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
 	if err := s.deps.Scheduler.RegisterAndStart(cfg, job); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("re-registering schedule: %v", err)})
 		return

@@ -443,6 +443,11 @@ type ChannelConfig struct {
 	// /session command or the API.
 	Adapters []string `toml:"adapters"`
 
+	// Delivery controls how scheduled messages are delivered through this
+	// channel's adapter bindings. "single" (default) picks the first specific
+	// binding; "broadcast" delivers through all specific bindings.
+	Delivery string `toml:"delivery"`
+
 	// Implicit is true when the channel was auto-synthesized from an agent's
 	// adapter bindings (backward compatibility). Not set via TOML — only
 	// populated by synthesizeChannels(). Implicit channels are hidden from
@@ -1662,7 +1667,11 @@ func validateAgentRouting(cfg *Config) error {
 	if err := validateChannels(cfg.Channels, agentNames); err != nil {
 		return fmt.Errorf("validate channels: %w", err)
 	}
-	if err := validateSchedules(cfg.Schedules, agentNames); err != nil {
+	channelNames := make(map[string]bool, len(cfg.Channels))
+	for _, ch := range cfg.Channels {
+		channelNames[ch.Name] = true
+	}
+	if err := validateSchedules(cfg.Schedules, agentNames, channelNames); err != nil {
 		return fmt.Errorf("validate schedules: %w", err)
 	}
 	return nil
@@ -1687,6 +1696,10 @@ func validateChannels(channels []ChannelConfig, agentNames map[string]bool) erro
 		}
 		if !agentNames[ch.Agent] {
 			return fmt.Errorf("config: channel %q: agent %q not found", ch.Name, ch.Agent)
+		}
+
+		if ch.Delivery != "" && ch.Delivery != "single" && ch.Delivery != "broadcast" {
+			return fmt.Errorf("config: channel %q: delivery must be \"single\" or \"broadcast\"", ch.Name)
 		}
 
 		for _, binding := range ch.Adapters {
@@ -1772,7 +1785,7 @@ func validateFallbacks(fallbacks []FallbackConfig) error {
 // Expression format validation (cron syntax, duration strings) is intentionally
 // deferred to the scheduler at startup, keeping the config and scheduler packages
 // independent.
-func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool) error {
+func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool, channelNames map[string]bool) error {
 	names := make(map[string]bool, len(schedules))
 	for i, s := range schedules {
 		if s.Name == "" {
@@ -1819,7 +1832,7 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool) e
 			return fmt.Errorf("config: schedule %q: agent %q does not exist", s.Name, s.Agent)
 		}
 
-		if err := validateChannel(s.Name, s.Channel); err != nil {
+		if err := validateScheduleChannel(s.Name, s.Channel, channelNames); err != nil {
 			return err
 		}
 	}
@@ -1836,13 +1849,59 @@ func ParseChannel(channel string) (adapterName, externalID string, ok bool) {
 	return channel[:idx], channel[idx+1:], true
 }
 
+// IsChannelRef returns true when the channel string uses the @-prefix
+// named channel syntax (e.g. "@work").
+func IsChannelRef(channel string) bool {
+	return strings.HasPrefix(channel, "@")
+}
+
+// ParseChannelRef extracts the channel name from an @-prefixed reference.
+// Returns the name and true, or ("", false) if the string is not a channel ref.
+func ParseChannelRef(channel string) (name string, ok bool) {
+	if !IsChannelRef(channel) {
+		return "", false
+	}
+	name = channel[1:]
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// validateScheduleChannel validates the channel format and cross-validates
+// @channelname references against configured channels.
+func validateScheduleChannel(scheduleName, channel string, channelNames map[string]bool) error {
+	if err := validateChannel(scheduleName, channel); err != nil {
+		return err
+	}
+	if name, ok := ParseChannelRef(channel); ok {
+		if !channelNames[name] {
+			return fmt.Errorf(
+				"config: schedule %q: channel reference @%s does not match any configured [[channels]]",
+				scheduleName, name,
+			)
+		}
+	}
+	return nil
+}
+
 func validateChannel(scheduleName, channel string) error {
 	if channel == "" {
 		return nil
 	}
+	// Accept @channelname references — cross-validation happens in validateSchedules.
+	if IsChannelRef(channel) {
+		if _, ok := ParseChannelRef(channel); !ok {
+			return fmt.Errorf(
+				"config: schedule %q: channel %q is an invalid channel reference (use \"@channelname\")",
+				scheduleName, channel,
+			)
+		}
+		return nil
+	}
 	if _, _, ok := ParseChannel(channel); !ok {
 		return fmt.Errorf(
-			"config: schedule %q: channel %q is not in adapter:externalID format (e.g. \"telegram:123456\")",
+			"config: schedule %q: channel %q is not in adapter:externalID or @channelname format",
 			scheduleName, channel,
 		)
 	}

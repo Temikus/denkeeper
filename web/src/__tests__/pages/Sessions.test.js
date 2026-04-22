@@ -97,6 +97,26 @@ describe('Sessions page', () => {
     })
   })
 
+  test('shows channel indicator for sessions with channel', async () => {
+    render(Sessions)
+    await waitFor(() => {
+      expect(screen.getByText('sess-1')).toBeInTheDocument()
+    })
+    // sess-1 has channel: 'work'
+    expect(screen.getByText('work')).toBeInTheDocument()
+  })
+
+  test('shows channel badge in detail when session has channel', async () => {
+    render(Sessions)
+    await waitFor(() => {
+      expect(screen.getByText('sess-1')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByText('sess-1').closest('.item'))
+    await waitFor(() => {
+      expect(screen.getByText('Channel: work')).toBeInTheDocument()
+    })
+  })
+
   test('error state shows ErrorBanner', async () => {
     server.use(
       http.get('/api/v1/sessions', () =>

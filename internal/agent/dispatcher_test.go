@@ -836,6 +836,146 @@ func TestChannel_ConversationID(t *testing.T) {
 	}
 }
 
+func TestChannel_ResolveBinding_Specific(t *testing.T) {
+	ch := &Channel{Name: "work", Adapters: []string{"telegram:12345"}}
+	adapter, eid, wildcard, ok := ch.ResolveBinding()
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if wildcard {
+		t.Error("expected wildcard=false for specific binding")
+	}
+	if adapter != "telegram" || eid != "12345" {
+		t.Errorf("got adapter=%q eid=%q, want telegram/12345", adapter, eid)
+	}
+}
+
+func TestChannel_ResolveBinding_WildcardOnly(t *testing.T) {
+	ch := &Channel{Name: "work", Adapters: []string{"telegram"}}
+	adapter, eid, wildcard, ok := ch.ResolveBinding()
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if !wildcard {
+		t.Error("expected wildcard=true for wildcard-only binding")
+	}
+	if adapter != "telegram" {
+		t.Errorf("adapter = %q, want telegram", adapter)
+	}
+	if eid != "" {
+		t.Errorf("eid = %q, want empty", eid)
+	}
+}
+
+func TestChannel_ResolveBinding_NoAdapters(t *testing.T) {
+	ch := &Channel{Name: "work", Adapters: nil}
+	_, _, _, ok := ch.ResolveBinding()
+	if ok {
+		t.Error("expected ok=false for channel with no adapters")
+	}
+}
+
+func TestChannel_ResolveBinding_PrefersSpecific(t *testing.T) {
+	ch := &Channel{Name: "work", Adapters: []string{"telegram", "discord:99"}}
+	adapter, eid, wildcard, ok := ch.ResolveBinding()
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if wildcard {
+		t.Error("expected wildcard=false — should pick the specific binding")
+	}
+	if adapter != "discord" || eid != "99" {
+		t.Errorf("got adapter=%q eid=%q, want discord/99", adapter, eid)
+	}
+}
+
+func TestResolveChannelByName_Found(t *testing.T) {
+	channels := map[string]*Channel{
+		"work": {Name: "work", AgentName: "default", Adapters: []string{"telegram:12345"}},
+	}
+	convID, adapter, eid, wildcard, err := ResolveChannelByName(channels, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if convID != "chan:work" {
+		t.Errorf("convID = %q, want chan:work", convID)
+	}
+	if adapter != "telegram" || eid != "12345" {
+		t.Errorf("got adapter=%q eid=%q, want telegram/12345", adapter, eid)
+	}
+	if wildcard {
+		t.Error("expected wildcard=false")
+	}
+}
+
+func TestResolveChannelByName_NotFound(t *testing.T) {
+	channels := map[string]*Channel{}
+	_, _, _, _, err := ResolveChannelByName(channels, "ghost")
+	if err == nil {
+		t.Fatal("expected error for missing channel")
+	}
+}
+
+func TestResolveChannelByName_NilMap(t *testing.T) {
+	_, _, _, _, err := ResolveChannelByName(nil, "work")
+	if err == nil {
+		t.Fatal("expected error for nil channel map")
+	}
+}
+
+func TestChannel_IsBroadcast(t *testing.T) {
+	ch := &Channel{Delivery: "broadcast"}
+	if !ch.IsBroadcast() {
+		t.Error("expected IsBroadcast()=true for broadcast delivery")
+	}
+	ch2 := &Channel{Delivery: "single"}
+	if ch2.IsBroadcast() {
+		t.Error("expected IsBroadcast()=false for single delivery")
+	}
+	ch3 := &Channel{}
+	if ch3.IsBroadcast() {
+		t.Error("expected IsBroadcast()=false for empty delivery")
+	}
+}
+
+func TestChannel_ResolveAllBindings(t *testing.T) {
+	ch := &Channel{
+		Name:     "work",
+		Adapters: []string{"telegram:123", "discord:456", "slack"},
+	}
+	bindings := ch.ResolveAllBindings()
+	if len(bindings) != 2 {
+		t.Fatalf("expected 2 specific bindings, got %d", len(bindings))
+	}
+	if bindings[0].Adapter != "telegram" || bindings[0].ExternalID != "123" {
+		t.Errorf("binding[0] = %+v, want telegram:123", bindings[0])
+	}
+	if bindings[1].Adapter != "discord" || bindings[1].ExternalID != "456" {
+		t.Errorf("binding[1] = %+v, want discord:456", bindings[1])
+	}
+}
+
+func TestChannel_ResolveAllBindings_NoSpecific(t *testing.T) {
+	ch := &Channel{Name: "work", Adapters: []string{"telegram"}}
+	bindings := ch.ResolveAllBindings()
+	if len(bindings) != 0 {
+		t.Errorf("expected 0 bindings for wildcard-only, got %d", len(bindings))
+	}
+}
+
+func TestResolveChannelByName_WildcardOnly(t *testing.T) {
+	channels := map[string]*Channel{
+		"work": {Name: "work", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+	_, _, _, wildcard, err := ResolveChannelByName(channels, "work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !wildcard {
+		t.Error("expected wildcard=true for wildcard-only binding")
+	}
+}
+
 func TestIsSessionCommand(t *testing.T) {
 	tests := []struct {
 		text string

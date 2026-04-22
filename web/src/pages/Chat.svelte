@@ -2,7 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { get } from 'svelte/store'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, loadSession, initChat, resolveApprovalAction, cancelSession, pendingSkillTest } from '../chatStore.js'
+  import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
 
   let agents = $state([])
@@ -11,6 +11,7 @@
   let messagesEl
   let textareaEl
   let userAtBottom = $state(true)
+  let channels = $state([])
 
   function agentLabel() {
     const a = agents.find(x => x.name === $chatState.agent)
@@ -48,6 +49,43 @@
         new Date(b.created_at) - new Date(a.created_at)
       )
     } catch (_) {}
+  }
+
+  async function loadChannels() {
+    try {
+      const res = await api.channels()
+      channels = (res || []).filter(ch => !ch.implicit)
+    } catch (_) {
+      channels = []
+    }
+  }
+
+  async function switchChannel(e) {
+    const name = e.target.value
+    if (name === $chatState.channel) return
+
+    const adapterKey = 'api:web-dashboard'
+    try {
+      if ($chatState.channel) {
+        await api.deactivateChannel($chatState.channel, adapterKey).catch(() => {})
+      }
+      if (name) {
+        await api.activateChannel(name, adapterKey)
+        setChannel(name)
+        const ch = channels.find(c => c.name === name)
+        if (ch && ch.agent !== $chatState.agent) {
+          setAgent(ch.agent)
+        }
+        if (ch) {
+          await loadSession(ch.conversation_id, ch.agent)
+        }
+      } else {
+        setChannel('')
+        newSession()
+      }
+    } catch (err) {
+      chatState.update(s => ({ ...s, error: 'Channel switch failed: ' + err.message }))
+    }
   }
 
   async function selectSession(e) {
@@ -212,6 +250,7 @@
   onMount(() => {
     loadAgents()
     loadSessions()
+    loadChannels()
     loadPendingApprovals()
 
     // Refresh session list (and active conversation) when another adapter
@@ -243,6 +282,17 @@
         {/if}
       </select>
     </label>
+    {#if channels.length > 0}
+      <label>
+        Channel
+        <select value={$chatState.channel} onchange={switchChannel} disabled={$chatState.sending} aria-label="Select channel" data-testid="channel-selector">
+          <option value="">None</option>
+          {#each channels as ch}
+            <option value={ch.name}>{ch.name}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     <label>
       Session
       <select value={$chatState.sessionId} onchange={selectSession} disabled={$chatState.sending || $chatState.restoring} aria-label="Select session" data-testid="session-selector">
