@@ -3,10 +3,20 @@
 package integration
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/audit"
+	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/scheduler"
 )
 
 // scheduleHarness returns a harness with ConfigPath set to a temp TOML file,
@@ -195,5 +205,94 @@ func TestScheduleAPI_UpdateNotFound(t *testing.T) {
 	}))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestScheduleAPI_ChannelRefAccepted(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	h := NewHarness(t, &HarnessOpts{
+		ConfigPath: cfgPath,
+		Channels: []*agent.Channel{
+			{Name: "work", AgentName: "default", Adapters: []string{"telegram:12345"}},
+		},
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name":     "chan-ref-sched",
+		"schedule": "@daily",
+		"channel":  "@work",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestScheduleAPI_BroadcastAuditOnPartialFailure(t *testing.T) {
+	h := NewHarness(t, nil)
+
+	// Build a channel resolver that returns a broadcast channel with two bindings.
+	resolver := func(name string) *configmcp.ChannelResolveResult {
+		if name != "bcast" {
+			return nil
+		}
+		return &configmcp.ChannelResolveResult{
+			ConversationID: "chan:bcast",
+			Bindings: []agent.AdapterBinding{
+				{Adapter: "telegram", ExternalID: "12345"},
+				{Adapter: "ghost", ExternalID: "99999"},
+			},
+			Broadcast: true,
+		}
+	}
+
+	// handleMsg succeeds for telegram, fails for ghost — partial failure.
+	handleMsg := func(_ context.Context, msg adapter.IncomingMessage) error {
+		if msg.Adapter == "ghost" {
+			return errors.New("adapter not found")
+		}
+		return nil
+	}
+
+	logger := slog.Default()
+	job := configmcp.BuildScheduleJob(
+		scheduler.Config{Name: "bcast-sched", Channel: "@bcast"},
+		handleMsg, logger, resolver,
+		configmcp.BuildScheduleJobOpts{Auditor: h.Auditor},
+	)
+
+	// Fire the job directly.
+	job(scheduler.Entry{Name: "bcast-sched", Channel: "@bcast"})
+
+	// Flush audit buffer and query the store.
+	h.FlushAudit(t)
+	time.Sleep(100 * time.Millisecond)
+
+	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{
+		Category: audit.CategorySchedule,
+	})
+	if err != nil {
+		t.Fatalf("listing audit events: %v", err)
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Action == "broadcast_partial_failure" {
+			found = true
+			if ev.Status != audit.StatusError {
+				t.Errorf("audit event status = %q, want %q", ev.Status, audit.StatusError)
+			}
+			if ev.ConversationID != "chan:bcast" {
+				t.Errorf("conversation_id = %q, want chan:bcast", ev.ConversationID)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected broadcast_partial_failure audit event, got %d schedule events", len(events))
 	}
 }

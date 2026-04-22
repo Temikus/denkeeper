@@ -101,6 +101,7 @@ type Harness struct {
 	Scheduler   *scheduler.Scheduler
 	KVStore     kv.Store
 	AuditStore  audit.Store
+	Auditor     *audit.BufferedEmitter
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
 	APIKey      string
@@ -202,6 +203,9 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		t.Fatalf("creating audit store: %v", err)
 	}
 	t.Cleanup(func() { _ = auditStore.Close() })
+
+	auditor := audit.NewBufferedEmitter(auditStore, 100, logger)
+	auditor.Start(context.Background())
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 
@@ -307,6 +311,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Approvals:    approvalMgr,
 		KVStore:      kvStore,
 		AuditStore:   auditStore,
+		Auditor:      auditor,
 		ConfigPath:   opts.ConfigPath,
 		LifecycleMgr: lifecycleMgr,
 		Config: &config.Config{
@@ -325,6 +330,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Scheduler:   sched,
 		KVStore:     kvStore,
 		AuditStore:  auditStore,
+		Auditor:     auditor,
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
 		APIKey:      apiKey,
@@ -359,6 +365,16 @@ func DecodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 	if err := json.NewDecoder(rec.Body).Decode(target); err != nil {
 		t.Fatalf("decode JSON response: %v", err)
 	}
+}
+
+// FlushAudit closes and re-creates the auditor so all buffered events are
+// flushed to the store. Call before querying AuditStore in tests.
+func (h *Harness) FlushAudit(t *testing.T) {
+	t.Helper()
+	h.Auditor.Close()
+	// Re-create so subsequent emissions don't panic on closed channel.
+	h.Auditor = audit.NewBufferedEmitter(h.AuditStore, 100, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.Auditor.Start(context.Background())
 }
 
 func boolPtr(b bool) *bool { return &b }

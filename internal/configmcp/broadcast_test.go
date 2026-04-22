@@ -9,26 +9,26 @@ import (
 	"github.com/Temikus/denkeeper/internal/configmcp"
 )
 
-// mockEmitter collects emitted audit events for test assertions.
-type mockEmitter struct {
+// broadcastMockEmitter collects emitted audit events for test assertions.
+type broadcastMockEmitter struct {
 	mu     sync.Mutex
 	events []audit.Event
 }
 
-func (m *mockEmitter) Emit(_ context.Context, event audit.Event) {
+func (m *broadcastMockEmitter) Emit(_ context.Context, event audit.Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, event)
 }
 
-func (m *mockEmitter) Events() []audit.Event {
+func (m *broadcastMockEmitter) Events() []audit.Event {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]audit.Event(nil), m.events...)
 }
 
 func TestEmitBroadcastFailure_PartialFailure(t *testing.T) {
-	em := &mockEmitter{}
+	em := &broadcastMockEmitter{}
 	configmcp.EmitBroadcastFailure(context.Background(), em, true, "daily-check", "@work", "chan:work", 1, 1, "connection refused")
 
 	events := em.Events()
@@ -55,7 +55,7 @@ func TestEmitBroadcastFailure_PartialFailure(t *testing.T) {
 }
 
 func TestEmitBroadcastFailure_AllFailed(t *testing.T) {
-	em := &mockEmitter{}
+	em := &broadcastMockEmitter{}
 	configmcp.EmitBroadcastFailure(context.Background(), em, true, "daily-check", "@work", "chan:work", 0, 2, "timeout")
 
 	events := em.Events()
@@ -68,7 +68,7 @@ func TestEmitBroadcastFailure_AllFailed(t *testing.T) {
 }
 
 func TestEmitBroadcastFailure_NoBroadcast(t *testing.T) {
-	em := &mockEmitter{}
+	em := &broadcastMockEmitter{}
 	configmcp.EmitBroadcastFailure(context.Background(), em, false, "x", "@y", "chan:y", 0, 1, "err")
 
 	if len(em.Events()) != 0 {
@@ -77,7 +77,7 @@ func TestEmitBroadcastFailure_NoBroadcast(t *testing.T) {
 }
 
 func TestEmitBroadcastFailure_NoFailures(t *testing.T) {
-	em := &mockEmitter{}
+	em := &broadcastMockEmitter{}
 	configmcp.EmitBroadcastFailure(context.Background(), em, true, "x", "@y", "chan:y", 2, 0, "")
 
 	if len(em.Events()) != 0 {
