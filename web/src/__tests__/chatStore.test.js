@@ -168,7 +168,37 @@ describe('handleToolEvent via SSE path', () => {
     const agentMsg = get(chatState).messages[1]
     expect(agentMsg.toolCalls).toHaveLength(1)
     expect(agentMsg.toolCalls[0].name).toBe('web_search')
-    expect(agentMsg.toolCalls[0].status).toBe('running')
+    // After done, stale running tool calls are finalized to 'done'
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+  })
+
+  test('duplicate tool_start with same tool_id is suppressed', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      // Replayed event (e.g. WebSocket reconnect)
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 200 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+  })
+
+  test('tool_start without tool_end is finalized to done on stream end', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })
+      // No tool_end before done
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBeUndefined()
   })
 
   test('tool_end marks tool done with duration', async () => {

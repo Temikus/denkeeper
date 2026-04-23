@@ -179,7 +179,13 @@ function handleToolEvent(agentMsg, evt) {
       pendingAppr.status = 'approved'
       agentMsg.approvals = [...agentMsg.approvals]
     }
-    agentMsg.toolCalls = [...agentMsg.toolCalls, { id: evt.tool_id, name: evt.tool, round: evt.round, status: 'running' }]
+    // Deduplicate only when tool_id is present (replay protection).
+    // Without tool_id, name+round can't distinguish replays from legitimate
+    // second invocations of the same tool, so always append.
+    const isDupe = evt.tool_id && agentMsg.toolCalls.some(t => t.id === evt.tool_id)
+    if (!isDupe) {
+      agentMsg.toolCalls = [...agentMsg.toolCalls, { id: evt.tool_id, name: evt.tool, round: evt.round, status: 'running' }]
+    }
   }
   if (evt.type === 'tool_end') {
     const tc = evt.tool_id
@@ -218,6 +224,10 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
       } else if (frame.type === 'done') {
         agentMsg.streaming = false
         agentMsg.status = ''
+        // Finalize any tool calls still stuck in "running" (e.g. missed tool_end)
+        for (const tc of agentMsg.toolCalls) {
+          if (tc.status === 'running') tc.status = 'done'
+        }
         flushThrottledTouch()
         const doneSessionId = frame.session_id || reqSessionId
         chatState.update(s => ({ ...s, sessionId: doneSessionId }))
@@ -302,6 +312,9 @@ export async function sendMessage(text) {
         (doneSessionId) => {
           agentMsg.streaming = false
           agentMsg.status = ''
+          for (const tc of agentMsg.toolCalls) {
+            if (tc.status === 'running') tc.status = 'done'
+          }
           flushThrottledTouch()
           chatState.update(s => ({ ...s, sessionId: doneSessionId }))
           saveSession()

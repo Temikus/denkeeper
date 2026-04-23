@@ -428,7 +428,7 @@
         {/if}
         {#if msg.thinking}
           <details class="thinking-section">
-            <summary>Thinking{#if msg.streaming && !msg.text}<span class="cursor">&#9647;</span>{/if}</summary>
+            <summary>Thinking{#if msg.streaming && !msg.text}<span class="cursor"></span>{/if}</summary>
             <p class="thinking-text">{msg.thinking}</p>
           </details>
         {/if}
@@ -754,6 +754,16 @@
     user-select: none;
   }
   .thinking-section summary:hover { color: var(--text); }
+  .thinking-section .cursor {
+    display: inline-block;
+    width: 6px;
+    height: 1em;
+    margin-left: 2px;
+    background: var(--text-muted);
+    vertical-align: text-bottom;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
   .thinking-text {
     padding: 6px 8px;
     margin: 0;
