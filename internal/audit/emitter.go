@@ -126,6 +126,9 @@ func (e *BufferedEmitter) flush(ctx context.Context, batch []Event) {
 
 // Flush synchronously drains all buffered events and writes them to the store.
 // The emitter remains usable after Flush returns. Safe for concurrent use.
+// Guarantees: all events emitted before Flush is called will be persisted
+// when Flush returns. Events emitted concurrently during Flush may or may
+// not be included.
 func (e *BufferedEmitter) Flush() {
 	ack := make(chan struct{})
 	e.flushReq <- ack

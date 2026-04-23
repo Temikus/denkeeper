@@ -101,7 +101,8 @@ type Harness struct {
 	Scheduler   *scheduler.Scheduler
 	KVStore     kv.Store
 	AuditStore  audit.Store
-	Auditor     *audit.BufferedEmitter
+	Auditor     audit.Emitter
+	auditorBE   *audit.BufferedEmitter // concrete type for Flush/Close
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
 	APIKey      string
@@ -332,6 +333,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		KVStore:     kvStore,
 		AuditStore:  auditStore,
 		Auditor:     auditor,
+		auditorBE:   auditor,
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
 		APIKey:      apiKey,
@@ -372,7 +374,7 @@ func DecodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 // Call before querying AuditStore in tests. The emitter remains usable.
 func (h *Harness) FlushAudit(t *testing.T) {
 	t.Helper()
-	h.Auditor.Flush()
+	h.auditorBE.Flush()
 }
 
 func boolPtr(b bool) *bool { return &b }
