@@ -29,7 +29,7 @@
     'costs:read',
     'kv:read', 'kv:write',
     'schedules:read', 'schedules:write',
-    'sessions:read',
+    'sessions:read', 'sessions:write',
     'skills:read', 'skills:write',
     'tools:read', 'tools:write',
   ]
@@ -39,7 +39,7 @@
     { name: 'Chat', desc: 'Send messages to agents', levels: ['none', 'full'], scopes: { full: ['chat'] } },
     { name: 'Admin', desc: 'Administrative operations', levels: ['none', 'full'], scopes: { full: ['admin'] } },
     { name: 'Health', desc: 'Health check endpoint', levels: ['none', 'full'], scopes: { full: ['health'] } },
-    { name: 'Sessions', desc: 'View conversation history', levels: ['none', 'read'], scopes: { read: ['sessions:read'] } },
+    { name: 'Sessions', desc: 'View and manage conversation history', levels: ['none', 'read', 'readwrite'], scopes: { read: ['sessions:read'], readwrite: ['sessions:read', 'sessions:write'] } },
     { name: 'Costs', desc: 'View usage and cost data', levels: ['none', 'read'], scopes: { read: ['costs:read'] } },
     { name: 'Agents', desc: 'View and manage agents', levels: ['none', 'read', 'readwrite'], scopes: { read: ['agents:read'], readwrite: ['agents:read', 'agents:write'] } },
     { name: 'Skills', desc: 'View and manage agent skills', levels: ['none', 'read', 'readwrite'], scopes: { read: ['skills:read'], readwrite: ['skills:read', 'skills:write'] } },

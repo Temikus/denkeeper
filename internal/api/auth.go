@@ -205,7 +205,7 @@ func (s *Server) handleSessionCheck(w http.ResponseWriter, r *http.Request) {
 // adminScopes returns the full set of scopes for a dashboard password/OIDC login.
 func adminScopes() []string {
 	return []string{
-		"admin", "chat", "sessions:read", "costs:read",
+		"admin", "chat", "sessions:read", "sessions:write", "costs:read",
 		"skills:read", "skills:write", "schedules:read", "schedules:write",
 		"approvals:read", "approvals:write", "tools:read", "tools:write",
 		"browser:read", "browser:write", "kv:read", "kv:write",

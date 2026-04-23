@@ -2,7 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { get } from 'svelte/store'
   import { api } from '../api.js'
-  import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, pendingSkillTest } from '../chatStore.js'
+  import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, clearCurrentSession, compactCurrentSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
 
   let agents = $state([])
@@ -140,6 +140,35 @@
       await api.resume()
     } catch (e) {
       chatState.update(s => ({ ...s, error: 'Resume failed: ' + e.message }))
+    }
+  }
+
+  let clearing = $state(false)
+  let compacting = $state(false)
+
+  async function triggerClear() {
+    if (!confirm('Clear all messages in this session? This cannot be undone.')) return
+    clearing = true
+    try {
+      await clearCurrentSession()
+      await loadSessions()
+    } catch (e) {
+      chatState.update(s => ({ ...s, error: 'Clear failed: ' + e.message }))
+    } finally {
+      clearing = false
+    }
+  }
+
+  async function triggerCompact() {
+    if (!confirm('Compact this session? All messages will be replaced with an LLM-generated summary.')) return
+    compacting = true
+    try {
+      await compactCurrentSession()
+      await loadSessions()
+    } catch (e) {
+      chatState.update(s => ({ ...s, error: 'Compact failed: ' + e.message }))
+    } finally {
+      compacting = false
     }
   }
 
@@ -303,7 +332,9 @@
       </select>
     </label>
     <button class="btn-ghost" onclick={() => { newSession(); }} disabled={!$chatState.sessionId}>New Session</button>
-    <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh Sessions</button>
+    <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh</button>
+    <button class="btn-ghost" onclick={triggerClear} disabled={!$chatState.sessionId || $chatState.sending || clearing} title="Clear all messages in this session">{clearing ? 'Clearing...' : 'Clear'}</button>
+    <button class="btn-ghost" onclick={triggerCompact} disabled={!$chatState.sessionId || $chatState.sending || compacting || $chatState.messages.length < 2} title="Compact session into LLM summary">{compacting ? 'Compacting...' : 'Compact'}</button>
     <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="chat-panic">Panic</button>
     <span
       class="ws-status"

@@ -12,6 +12,7 @@ var Valid = map[string]struct{}{
 	"admin":           {},
 	"chat":            {},
 	"sessions:read":   {},
+	"sessions:write":  {},
 	"costs:read":      {},
 	"agents:read":     {},
 	"agents:write":    {},

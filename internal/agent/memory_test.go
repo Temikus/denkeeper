@@ -997,3 +997,61 @@ func TestAddMessage_WithReasoningContent(t *testing.T) {
 		t.Errorf("reasoning_content = %q, want %q", msgs[0].ReasoningContent, "The user said hi, I should greet them.")
 	}
 }
+
+func TestClearMessages_KeepsConversation(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "hello"})
+	_, _ = store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "hi"})
+	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{{ToolName: "t1", Success: true}})
+	_ = store.AddSkillUsages(ctx, "test:1", msgID, []SkillUsageRecord{{SkillName: "s1", MatchType: "always"}})
+	_ = store.UpdateConversationStats(ctx, "test:1", StoredMessage{Cost: 0.01}, 1, 0)
+
+	if err := store.ClearMessages(ctx, "test:1"); err != nil {
+		t.Fatalf("ClearMessages: %v", err)
+	}
+
+	// Messages should be gone.
+	msgs, err := store.GetMessages(ctx, "test:1", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("messages remain: %d", len(msgs))
+	}
+
+	// Telemetry should be gone.
+	tc, _ := store.GetToolCalls(ctx, "test:1")
+	if len(tc) != 0 {
+		t.Errorf("tool calls remain: %d", len(tc))
+	}
+	su, _ := store.GetSkillUsages(ctx, "test:1")
+	if len(su) != 0 {
+		t.Errorf("skill usages remain: %d", len(su))
+	}
+	stats, _ := store.GetConversationStats(ctx, "test:1")
+	if stats != nil {
+		t.Errorf("conversation stats remain: %+v", stats)
+	}
+
+	// Conversation row should still exist.
+	convos, err := store.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("ListConversations: %v", err)
+	}
+	if len(convos) != 1 {
+		t.Fatalf("expected 1 conversation, got %d", len(convos))
+	}
+	if convos[0].ID != "test:1" {
+		t.Errorf("conversation ID = %q, want %q", convos[0].ID, "test:1")
+	}
+	if convos[0].MessageCount != 0 {
+		t.Errorf("message count = %d, want 0", convos[0].MessageCount)
+	}
+}

@@ -136,6 +136,8 @@ func builtinCommands() []tgbotapi.BotCommand {
 		{Command: "stop", Description: "Cancel the current request"},
 		{Command: "panic", Description: "Emergency stop all processing"},
 		{Command: "resume", Description: "Resume after emergency stop"},
+		{Command: "clear", Description: "Clear session history"},
+		{Command: "compact", Description: "Compact session into summary"},
 	}
 }
 
