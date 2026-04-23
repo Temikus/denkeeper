@@ -228,6 +228,7 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
         for (const tc of agentMsg.toolCalls) {
           if (tc.status === 'running') tc.status = 'done'
         }
+        agentMsg.toolCalls = [...agentMsg.toolCalls]
         flushThrottledTouch()
         const doneSessionId = frame.session_id || reqSessionId
         chatState.update(s => ({ ...s, sessionId: doneSessionId }))
@@ -315,6 +316,7 @@ export async function sendMessage(text) {
           for (const tc of agentMsg.toolCalls) {
             if (tc.status === 'running') tc.status = 'done'
           }
+          agentMsg.toolCalls = [...agentMsg.toolCalls]
           flushThrottledTouch()
           chatState.update(s => ({ ...s, sessionId: doneSessionId }))
           saveSession()

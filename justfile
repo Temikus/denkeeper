@@ -89,7 +89,7 @@ fmt:
 
 # Check formatting (CI-friendly, exits non-zero if unformatted)
 fmt-check:
-    @test -z "$(gofmt -l .)" || (echo "Unformatted files:" && gofmt -l . && exit 1)
+    @test -z "$(gofmt -l . | grep -v '^\.claude/')" || (echo "Unformatted files:" && gofmt -l . | grep -v '^\.claude/' && exit 1)
 
 # Vet the codebase
 vet:

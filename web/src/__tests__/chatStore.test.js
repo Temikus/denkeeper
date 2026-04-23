@@ -556,6 +556,24 @@ describe('sendViaWS edge cases', () => {
     expect(agentMsg.toolCalls[0].status).toBe('done')
     expect(agentMsg.toolCalls[0].duration).toBe(200)
   })
+
+  test('WS done finalizes stuck running tool calls', async () => {
+    mockWsStatus.set('connected')
+
+    mockOnSessionEvent.mockImplementation((id, handler) => {
+      setTimeout(() => {
+        handler({ type: 'tool_start', tool: 'fetch', round: 1, session_id: id })
+        // No tool_end before done
+        handler({ type: 'done', session_id: id })
+      }, 0)
+    })
+
+    await sendMessage('fetch data')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBeUndefined()
+  })
 })
 
 describe('handleToolEvent: tool_start marks pending approvals as approved', () => {
