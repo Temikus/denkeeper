@@ -77,7 +77,11 @@
           setAgent(ch.agent)
         }
         if (ch) {
-          await loadSession(ch.conversation_id, ch.agent)
+          if (ch.session_mode === 'ephemeral') {
+            newSession()
+          } else {
+            await loadSession(ch.conversation_id, ch.agent)
+          }
         }
       } else {
         setChannel('')
@@ -317,10 +321,13 @@
         <select value={$chatState.channel} onchange={switchChannel} disabled={$chatState.sending} aria-label="Select channel" data-testid="channel-selector">
           <option value="">None</option>
           {#each channels as ch}
-            <option value={ch.name}>{ch.name}</option>
+            <option value={ch.name}>{ch.name}{#if ch.session_mode === 'ephemeral'} (ephemeral){/if}</option>
           {/each}
         </select>
       </label>
+      {#if channels.find(c => c.name === $chatState.channel && c.session_mode === 'ephemeral')}
+        <span class="ephemeral-hint">Each message starts a new session</span>
+      {/if}
     {/if}
     <label>
       Session
@@ -544,6 +551,12 @@
   .toolbar select { min-width: 0; max-width: 260px; text-overflow: ellipsis; }
   .toolbar label { flex-shrink: 0; }
   .toolbar label:nth-child(2) { flex: 1; min-width: 0; }
+
+  .ephemeral-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
 
   .ws-status {
     display: flex;

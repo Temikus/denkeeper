@@ -56,8 +56,12 @@
           <span class="field-value">{selected.agent}</span>
         </div>
         <div class="field">
+          <span class="field-label">Session Mode</span>
+          <span class="field-value">{selected.session_mode || 'persistent'}</span>
+        </div>
+        <div class="field">
           <span class="field-label">Conversation ID</span>
-          <span class="field-value mono">{selected.conversation_id}</span>
+          <span class="field-value mono">{selected.conversation_id}{#if selected.session_mode === 'ephemeral'}<span class="muted"> (generated per interaction)</span>{/if}</span>
         </div>
         <div class="field">
           <span class="field-label">Adapters</span>

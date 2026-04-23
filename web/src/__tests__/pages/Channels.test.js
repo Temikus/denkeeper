@@ -80,6 +80,32 @@ describe('Channels page', () => {
     })
   })
 
+  test('shows session mode in detail', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Session Mode')).toBeInTheDocument()
+      expect(screen.getByText('persistent')).toBeInTheDocument()
+    })
+  })
+
+  test('ephemeral channel shows ephemeral session mode', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('scratch')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('scratch').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('ephemeral')).toBeInTheDocument()
+      expect(screen.getByText('(generated per interaction)')).toBeInTheDocument()
+    })
+  })
+
   test('error state shows ErrorBanner', async () => {
     server.use(
       http.get('/api/v1/channels', () =>

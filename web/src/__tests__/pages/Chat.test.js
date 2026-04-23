@@ -309,14 +309,26 @@ describe('Chat page', () => {
   test('channel selector appears when channels are available', async () => {
     render(Chat)
     await waitFor(() => {
-      // Channels endpoint returns 3 channels, but only 2 are non-implicit
+      // Channels endpoint returns 4 channels, but only 3 are non-implicit
       const channelLabel = screen.getByText('Channel')
       const channelSelect = channelLabel.closest('label').querySelector('select')
       const options = channelSelect.querySelectorAll('option')
-      // "None" + 2 non-implicit channels
-      expect(options.length).toBe(3)
+      // "None" + 3 non-implicit channels (work, personal, scratch)
+      expect(options.length).toBe(4)
       expect(Array.from(options).map(o => o.textContent)).toContain('work')
       expect(Array.from(options).map(o => o.textContent)).toContain('personal')
+    })
+  })
+
+  test('ephemeral channel shows indicator in selector', async () => {
+    render(Chat)
+    await waitFor(() => {
+      const channelLabel = screen.getByText('Channel')
+      const channelSelect = channelLabel.closest('label').querySelector('select')
+      const options = Array.from(channelSelect.querySelectorAll('option'))
+      const scratchOption = options.find(o => o.value === 'scratch')
+      expect(scratchOption).toBeTruthy()
+      expect(scratchOption.textContent).toContain('(ephemeral)')
     })
   })
 

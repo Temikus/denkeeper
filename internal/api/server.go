@@ -770,7 +770,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		agentName = ch.AgentName
-		conversationID = ch.ConversationID()
+		if ch.IsEphemeral() {
+			conversationID = ch.EphemeralConversationID()
+		} else {
+			conversationID = ch.ConversationID()
+		}
 	}
 
 	eng := s.deps.Dispatcher.Agent(agentName)

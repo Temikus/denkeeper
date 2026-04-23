@@ -416,7 +416,11 @@ func (c *WSConn) resolveChannelRouting(sessionID, channelName, agentName string)
 		c.sendError(sessionID, "invalid_frame", fmt.Sprintf("channel %q not found", channelName))
 		return "", "", false
 	}
-	return ch.AgentName, ch.ConversationID(), true
+	convID := ch.ConversationID()
+	if ch.IsEphemeral() {
+		convID = ch.EphemeralConversationID()
+	}
+	return ch.AgentName, convID, true
 }
 
 func (c *WSConn) handleChatRequest(f ChatRequestFrame) {

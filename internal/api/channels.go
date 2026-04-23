@@ -16,6 +16,7 @@ type channelResponse struct {
 	Adapters          []string `json:"adapters"`
 	Delivery          string   `json:"delivery,omitempty"`
 	Implicit          bool     `json:"implicit"`
+	SessionMode       string   `json:"session_mode,omitempty"`
 	ConversationID    string   `json:"conversation_id"`
 	ActiveAdapterKeys []string `json:"active_adapter_keys"`
 }
@@ -36,6 +37,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			Adapters:          ch.Adapters,
 			Delivery:          ch.Delivery,
 			Implicit:          ch.Implicit,
+			SessionMode:       ch.SessionMode,
 			ConversationID:    ch.ConversationID(),
 			ActiveAdapterKeys: s.deps.Dispatcher.ActiveChannelsForChannel(ch.Name),
 		})
@@ -65,6 +67,7 @@ func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 		Adapters:          ch.Adapters,
 		Delivery:          ch.Delivery,
 		Implicit:          ch.Implicit,
+		SessionMode:       ch.SessionMode,
 		ConversationID:    ch.ConversationID(),
 		ActiveAdapterKeys: s.deps.Dispatcher.ActiveChannelsForChannel(ch.Name),
 	})

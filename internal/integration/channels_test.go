@@ -4,10 +4,18 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 func channelHarness(t *testing.T, channels []*agent.Channel) *Harness {
@@ -238,6 +246,98 @@ func TestChannels_ChatWithChannel(t *testing.T) {
 	}
 }
 
+func TestChannels_ChatEphemeralChannel(t *testing.T) {
+	h := channelHarness(t, []*agent.Channel{
+		{Name: "scratch", AgentName: "work-agent", Adapters: []string{"telegram"}, SessionMode: "ephemeral"},
+	})
+
+	// Send two chat messages through the ephemeral channel.
+	chatBody := map[string]string{
+		"message": "first ephemeral message",
+		"channel": "scratch",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", chatBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first chat: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	chatBody["message"] = "second ephemeral message"
+	rec = h.Do(h.AuthedRequest("POST", "/api/v1/chat", chatBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second chat: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify two distinct conversations were created, neither equal to the
+	// persistent "chan:scratch".
+	ctx := context.Background()
+	convos, err := h.Memory.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	if len(convos) != 2 {
+		ids := make([]string, len(convos))
+		for i, c := range convos {
+			ids[i] = c.ID
+		}
+		t.Fatalf("expected 2 ephemeral conversations, got %d: %v", len(convos), ids)
+	}
+
+	for _, c := range convos {
+		if c.ID == "chan:scratch" {
+			t.Fatal("ephemeral channel should not create persistent conversation ID 'chan:scratch'")
+		}
+		if !strings.HasPrefix(c.ID, "chan:scratch:") {
+			t.Fatalf("expected ephemeral conversation ID starting with 'chan:scratch:', got %q", c.ID)
+		}
+	}
+
+	if convos[0].ID == convos[1].ID {
+		t.Fatalf("expected two distinct conversation IDs, both are %q", convos[0].ID)
+	}
+}
+
+func TestChannels_SessionModeInResponse(t *testing.T) {
+	h := channelHarness(t, []*agent.Channel{
+		{Name: "persistent-ch", AgentName: "work-agent", Adapters: []string{"telegram"}},
+		{Name: "ephemeral-ch", AgentName: "work-agent", Adapters: []string{"telegram"}, SessionMode: "ephemeral"},
+	})
+
+	// List: verify session_mode appears on ephemeral channel.
+	rec := h.Do(h.AuthedRequest("GET", "/api/v1/channels", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var list []map[string]any
+	DecodeJSON(t, rec, &list)
+
+	for _, ch := range list {
+		name := ch["name"].(string)
+		if name == "ephemeral-ch" {
+			if ch["session_mode"] != "ephemeral" {
+				t.Fatalf("expected session_mode=ephemeral for ephemeral-ch, got %v", ch["session_mode"])
+			}
+		}
+		if name == "persistent-ch" {
+			// Persistent channels with empty SessionMode should omit the field (omitempty).
+			if mode, ok := ch["session_mode"]; ok && mode != "" {
+				t.Fatalf("expected no session_mode for persistent-ch, got %v", mode)
+			}
+		}
+	}
+
+	// Get by name: verify session_mode on ephemeral channel.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/channels/ephemeral-ch", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var detail map[string]any
+	DecodeJSON(t, rec, &detail)
+	if detail["session_mode"] != "ephemeral" {
+		t.Fatalf("expected session_mode=ephemeral, got %v", detail["session_mode"])
+	}
+}
+
 func TestChannels_ScopeEnforcement(t *testing.T) {
 	h := NewHarness(t, &HarnessOpts{
 		Scopes: []string{"chat"}, // no channels:read scope
@@ -246,5 +346,225 @@ func TestChannels_ScopeEnforcement(t *testing.T) {
 	rec := h.Do(h.AuthedRequest("GET", "/api/v1/channels", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 without channels:read scope, got %d", rec.Code)
+	}
+}
+
+// supervisedChannelHarness creates a harness with a supervised agent, channel
+// routing, and the test MCP echo tool wired into the engine.
+func supervisedChannelHarness(t *testing.T, responses []*llm.ChatResponse) *Harness {
+	t.Helper()
+
+	ts := startTestMCPServer(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	toolMgr := tool.NewManager(logger)
+	err := toolMgr.RegisterServer(context.Background(), "echo-tool", config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	})
+	if err != nil {
+		t.Fatalf("registering test MCP server: %v", err)
+	}
+	t.Cleanup(func() { _ = toolMgr.Close() })
+
+	return NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "supervised-agent", Tier: "supervised", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "review", AgentName: "supervised-agent", Adapters: []string{"telegram"}},
+		},
+		ToolManager: toolMgr,
+		Responses:   responses,
+	})
+}
+
+func TestChannels_SupervisedApprovalFlow(t *testing.T) {
+	h := supervisedChannelHarness(t, []*llm.ChatResponse{
+		{
+			Content:      "",
+			FinishReason: "tool_calls",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "echo",
+						Arguments: `{"input":"supervised-test"}`,
+					},
+				},
+			},
+			TokensUsed: llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:      "test-model",
+		},
+		{
+			Content:      "Tool returned: supervised-test",
+			FinishReason: "stop",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+		},
+	})
+
+	// Launch goroutine that polls for pending approvals and approves them.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			rec := h.Do(h.AuthedRequest("GET", "/api/v1/approvals?status=pending", nil))
+			if rec.Code != http.StatusOK {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			var pending []map[string]any
+			_ = json.NewDecoder(rec.Body).Decode(&pending)
+			for _, appr := range pending {
+				id, _ := appr["id"].(string)
+				if id != "" {
+					h.Do(h.AuthedRequest("POST", "/api/v1/approvals/"+id+"/approve", nil))
+				}
+			}
+			if len(pending) > 0 {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	// Send chat through the channel — blocks until approval + tool execution.
+	chatBody := map[string]string{
+		"message": "please call echo",
+		"channel": "review",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", chatBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var chatResp map[string]string
+	DecodeJSON(t, rec, &chatResp)
+	if !strings.Contains(chatResp["response"], "supervised-test") {
+		t.Fatalf("expected response to contain 'supervised-test', got: %s", chatResp["response"])
+	}
+
+	// Verify conversation stored under channel's conversation ID.
+	convos, err := h.Memory.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	found := false
+	for _, c := range convos {
+		if c.ID == "chan:review" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected conversation with ID 'chan:review'")
+	}
+
+	// Verify the mock LLM was called twice (initial + after tool result).
+	if h.MockLLM.CallCount() != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", h.MockLLM.CallCount())
+	}
+}
+
+func TestChannels_SupervisedDenialFlow(t *testing.T) {
+	h := supervisedChannelHarness(t, []*llm.ChatResponse{
+		{
+			Content:      "",
+			FinishReason: "tool_calls",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "echo",
+						Arguments: `{"input":"denied-test"}`,
+					},
+				},
+			},
+			TokensUsed: llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:      "test-model",
+		},
+		{
+			Content:      "The tool call was denied by the operator.",
+			FinishReason: "stop",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+		},
+	})
+
+	// Launch goroutine that polls for pending approvals and denies them.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			rec := h.Do(h.AuthedRequest("GET", "/api/v1/approvals?status=pending", nil))
+			if rec.Code != http.StatusOK {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			var pending []map[string]any
+			_ = json.NewDecoder(rec.Body).Decode(&pending)
+			for _, appr := range pending {
+				id, _ := appr["id"].(string)
+				if id != "" {
+					h.Do(h.AuthedRequest("POST", "/api/v1/approvals/"+id+"/deny", nil))
+				}
+			}
+			if len(pending) > 0 {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	// Send chat through the channel — blocks until denial + LLM fallback.
+	chatBody := map[string]string{
+		"message": "please call echo",
+		"channel": "review",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", chatBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var chatResp map[string]string
+	DecodeJSON(t, rec, &chatResp)
+	if chatResp["response"] == "" {
+		t.Fatal("expected non-empty response after tool denial")
+	}
+
+	// Verify conversation stored under channel's conversation ID.
+	convos, err := h.Memory.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	found := false
+	for _, c := range convos {
+		if c.ID == "chan:review" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected conversation with ID 'chan:review'")
+	}
+
+	// Verify the mock LLM was called twice (initial + after denial message).
+	if h.MockLLM.CallCount() != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", h.MockLLM.CallCount())
 	}
 }
