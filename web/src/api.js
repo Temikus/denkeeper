@@ -93,6 +93,8 @@ export const api = {
   sessions: () => apiFetch('/api/v1/sessions'),
   sessionMessages: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/messages`),
   deleteSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  clearSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/clear`, { method: 'POST' }),
+  compactSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/compact`, { method: 'POST' }),
 
   // Approvals
   approvals: (status = '') => apiFetch(`/api/v1/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),

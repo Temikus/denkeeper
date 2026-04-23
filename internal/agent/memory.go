@@ -104,6 +104,13 @@ type MemoryStore interface {
 	// DeleteConversation removes a conversation and all its messages by ID.
 	// Returns nil if the conversation does not exist (idempotent).
 	DeleteConversation(ctx context.Context, convID string) error
+	// ClearMessages removes all messages, tool calls, skill usages, and stats
+	// for a conversation but keeps the conversation row itself. This allows
+	// the session identity to be preserved while starting fresh.
+	ClearMessages(ctx context.Context, convID string) error
+	// ReplaceMessages atomically clears all messages and telemetry for a
+	// conversation and inserts a single replacement message in one transaction.
+	ReplaceMessages(ctx context.Context, convID string, replacement StoredMessage) error
 	Close() error
 }
 
@@ -361,6 +368,63 @@ func (s *SQLiteMemoryStore) DeleteConversation(ctx context.Context, convID strin
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE id = ?`, convID); err != nil {
 		return fmt.Errorf("deleting conversation: %w", err)
+	}
+	return nil
+}
+
+// ClearMessages removes all messages, tool calls, skill usages, and stats
+// for a conversation but keeps the conversation row itself.
+func (s *SQLiteMemoryStore) ClearMessages(ctx context.Context, convID string) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting clear transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := clearMessagesTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ReplaceMessages atomically clears all messages and telemetry for a
+// conversation and inserts a single replacement message in one transaction.
+func (s *SQLiteMemoryStore) ReplaceMessages(ctx context.Context, convID string, replacement StoredMessage) error {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting replace transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := clearMessagesTx(ctx, tx, convID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO messages (conversation_id, role, content, reasoning_content, tokens_used, cost, model, provider, tokens_prompt, tokens_completion, tokens_cached)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		convID, replacement.Role, replacement.Content, replacement.ReasoningContent,
+		replacement.TokensUsed, replacement.Cost, replacement.Model, replacement.Provider,
+		replacement.TokensPrompt, replacement.TokensCompletion, replacement.TokensCached,
+	); err != nil {
+		return fmt.Errorf("inserting replacement message: %w", err)
+	}
+	return tx.Commit()
+}
+
+// clearMessagesTx deletes all messages and telemetry for a conversation
+// within an existing transaction. Shared by ClearMessages and ReplaceMessages.
+func clearMessagesTx(ctx context.Context, tx *sqlx.Tx, convID string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tool_calls WHERE conversation_id = ?`, convID); err != nil {
+		return fmt.Errorf("clearing tool calls: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM message_skills WHERE conversation_id = ?`, convID); err != nil {
+		return fmt.Errorf("clearing skill usages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_stats WHERE conversation_id = ?`, convID); err != nil {
+		return fmt.Errorf("clearing conversation stats: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?`, convID); err != nil {
+		return fmt.Errorf("clearing messages: %w", err)
 	}
 	return nil
 }

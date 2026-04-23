@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"errors"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -174,6 +175,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-calls", s.RequireScope("sessions:read", s.handleSessionToolCalls))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/skills", s.RequireScope("sessions:read", s.handleSessionSkills))
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/clear", s.RequireScope("sessions:write", s.handleClearSession))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", s.RequireScope("sessions:write", s.handleCompactSession))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/stop", s.RequireScope("chat", s.handleStopSession))
 	mux.HandleFunc("GET /api/v1/telemetry/summary", s.RequireScope("costs:read", s.handleTelemetrySummary))
 
@@ -836,6 +839,84 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleClearSession handles POST /api/v1/sessions/{id}/clear.
+func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	eng := s.resolveEngineForSession(id, r.URL.Query().Get("agent"))
+	if eng != nil {
+		// Route through Engine so audit events are emitted.
+		if err := eng.ClearSession(r.Context(), id); err != nil {
+			s.logger.Error("clearing session", "error", err, "session", id)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			return
+		}
+	} else {
+		// No engine resolved — fall back to direct store clear (no audit).
+		if err := s.deps.Memory.ClearMessages(r.Context(), id); err != nil {
+			s.logger.Error("clearing session", "error", err, "session", id)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCompactSession handles POST /api/v1/sessions/{id}/compact.
+func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	eng := s.resolveEngineForSession(id, r.URL.Query().Get("agent"))
+	if eng == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "could not determine agent for session"})
+		return
+	}
+
+	summary, err := eng.CompactSession(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, agent.ErrNotEnoughMessages) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.logger.Error("compacting session", "error", err, "session", id)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to compact session"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"summary": summary})
+}
+
+// resolveEngineForSession finds the Engine responsible for a session.
+// If agentHint is provided it is used directly; otherwise the agent is
+// inferred from the session ID prefix (e.g. "myagent:tg:123" → "myagent",
+// "chan:work" → channel lookup → agent).
+func (s *Server) resolveEngineForSession(sessionID, agentHint string) *agent.Engine {
+	if agentHint != "" {
+		return s.deps.Dispatcher.Agent(agentHint)
+	}
+
+	// Channel-based session: "chan:<name>"
+	if strings.HasPrefix(sessionID, "chan:") {
+		chName := strings.TrimPrefix(sessionID, "chan:")
+		channels := s.deps.Dispatcher.Channels()
+		if channels != nil {
+			if ch, ok := channels[chName]; ok {
+				return s.deps.Dispatcher.Agent(ch.AgentName)
+			}
+		}
+	}
+
+	// Legacy format: "agentName:adapter:externalID"
+	if idx := strings.Index(sessionID, ":"); idx > 0 {
+		agentName := sessionID[:idx]
+		if eng := s.deps.Dispatcher.Agent(agentName); eng != nil {
+			return eng
+		}
+	}
+
+	return nil
 }
 
 // handleStopSession cancels an in-flight request for the given session.

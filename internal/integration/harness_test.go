@@ -157,7 +157,7 @@ func defaultResponse() *llm.ChatResponse {
 func allScopes() []string {
 	return []string{
 		"health", "admin", "chat",
-		"sessions:read", "costs:read",
+		"sessions:read", "sessions:write", "costs:read",
 		"agents:read", "agents:write",
 		"skills:read", "skills:write",
 		"schedules:read", "schedules:write",

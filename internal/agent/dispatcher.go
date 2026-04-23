@@ -275,6 +275,10 @@ var ErrChannelNotFound = errors.New("channel not found")
 // key that is not active on the specified channel.
 var ErrAdapterKeyNotActive = errors.New("adapter key not active on this channel")
 
+// ErrNotEnoughMessages is returned when a compact operation is attempted on a
+// session with fewer than 2 messages.
+var ErrNotEnoughMessages = errors.New("not enough messages to compact")
+
 // SetActiveChannelByKey sets the active channel override for the given adapter
 // key (e.g. "telegram:12345"). Returns an error if the channel name is not in
 // the registry or channels are not configured.
@@ -515,6 +519,13 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, wg *sync.WaitGroup, ms
 	// the channel's session instead of the default key.
 	if ch != nil && msg.ConversationID == "" {
 		msg.ConversationID = ch.ConversationID()
+	}
+
+	// Intercept /clear and /compact after routing so we have the engine
+	// and conversation ID.
+	if cmd := historyCommand(msg.Text); cmd != "" {
+		d.handleHistoryCommand(ctx, wg, cmd, e, msg)
+		return
 	}
 
 	d.mDispatch.Add(ctx, 1, metric.WithAttributes(
@@ -935,6 +946,81 @@ func (d *Dispatcher) clearActiveChannel(ctx context.Context, msg adapter.Incomin
 			d.logger.Error("clearing active channel", "error", err, "key", key)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// /clear and /compact history commands
+// ---------------------------------------------------------------------------
+
+// historyCommand returns "clear" or "compact" if the message text is a
+// recognised history command, or "" otherwise.
+func historyCommand(text string) string {
+	switch strings.TrimSpace(text) {
+	case "/clear":
+		return "clear"
+	case "/compact":
+		return "compact"
+	default:
+		return ""
+	}
+}
+
+// handleHistoryCommand dispatches /clear and /compact. Clear is synchronous;
+// compact spawns a goroutine because it involves an LLM call.
+func (d *Dispatcher) handleHistoryCommand(ctx context.Context, wg *sync.WaitGroup, cmd string, e *Engine, msg adapter.IncomingMessage) {
+	convID := d.resolveConversationID(e, msg)
+
+	switch cmd {
+	case "clear":
+		d.handleClearCommand(ctx, e, msg, convID)
+	case "compact":
+		wg.Add(1)
+		go d.handleCompactCommand(ctx, wg, e, msg, convID)
+	}
+}
+
+// resolveConversationID determines the conversation ID for a message without
+// creating it. Used by history commands to identify the target session.
+func (d *Dispatcher) resolveConversationID(e *Engine, msg adapter.IncomingMessage) string {
+	if msg.ConversationID != "" {
+		return msg.ConversationID
+	}
+	return e.Name() + ":" + msg.Adapter + ":" + msg.ExternalID
+}
+
+// handleClearCommand processes the /clear command synchronously.
+func (d *Dispatcher) handleClearCommand(ctx context.Context, e *Engine, msg adapter.IncomingMessage, convID string) {
+	if err := e.ClearSession(ctx, convID); err != nil {
+		d.logger.Error("clear command failed", "error", err, "conversation", convID)
+		d.sendControlResponse(ctx, msg, "Failed to clear session history.")
+		return
+	}
+	d.sendControlResponse(ctx, msg, "Session history cleared.")
+}
+
+// handleCompactCommand processes the /compact command in a goroutine.
+func (d *Dispatcher) handleCompactCommand(ctx context.Context, wg *sync.WaitGroup, e *Engine, msg adapter.IncomingMessage, convID string) {
+	defer wg.Done()
+
+	// Show typing indicator while the LLM works.
+	stopTyping := d.startTypingTicker(ctx, msg)
+	defer stopTyping()
+
+	summary, err := e.CompactSession(ctx, convID)
+	if err != nil {
+		d.logger.Error("compact command failed", "error", err, "conversation", convID)
+		d.sendControlResponse(ctx, msg, fmt.Sprintf("Failed to compact session: %v", err))
+		return
+	}
+
+	// Send a rune-safe truncated preview of the summary.
+	preview := summary
+	const maxPreviewRunes = 500
+	runes := []rune(preview)
+	if len(runes) > maxPreviewRunes {
+		preview = string(runes[:maxPreviewRunes]) + "..."
+	}
+	d.sendControlResponse(ctx, msg, fmt.Sprintf("Session compacted.\n\n%s", preview))
 }
 
 // typingInterval is the interval at which the typing indicator is refreshed.

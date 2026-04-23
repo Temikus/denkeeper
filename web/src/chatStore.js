@@ -362,6 +362,29 @@ export async function resolveApprovalAction(appr, approve, autoApproveScope) {
 }
 
 /**
+ * Clear all messages from the current session (keeps session identity).
+ */
+export async function clearCurrentSession() {
+  const state = get(chatState)
+  if (!state.sessionId) return
+  await api.clearSession(state.sessionId)
+  chatState.update(s => ({ ...s, messages: [] }))
+}
+
+/**
+ * Compact the current session into an LLM-generated summary.
+ * Returns the summary text on success.
+ */
+export async function compactCurrentSession() {
+  const state = get(chatState)
+  if (!state.sessionId) return
+  const result = await api.compactSession(state.sessionId)
+  // Reload the session to show the single compacted message.
+  await loadSession(state.sessionId, state.agent)
+  return result?.summary
+}
+
+/**
  * Cancel the in-flight request for the current session.
  * Uses WS cancel frame when connected, REST fallback otherwise.
  */

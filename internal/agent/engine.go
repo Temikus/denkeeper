@@ -1429,3 +1429,73 @@ func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.Incomi
 	e.logger.Info("response sent", "adapter", msg.Adapter)
 	return nil
 }
+
+// ClearSession removes all messages from the session but keeps the
+// conversation row so the session identity is preserved.
+func (e *Engine) ClearSession(ctx context.Context, convID string) error {
+	if err := e.memory.ClearMessages(ctx, convID); err != nil {
+		return fmt.Errorf("clearing session: %w", err)
+	}
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySession,
+		Action:         "clear",
+		Summary:        "Session history cleared",
+		Status:         audit.StatusOK,
+		Source:         "engine",
+		ConversationID: convID,
+	})
+	e.logger.Info("session cleared", "conversation", convID)
+	return nil
+}
+
+// CompactSession summarises the conversation into a single message,
+// replacing the full history. Returns the summary text.
+func (e *Engine) CompactSession(ctx context.Context, convID string) (string, error) {
+	msgs, err := e.memory.GetMessages(ctx, convID, 1000)
+	if err != nil {
+		return "", fmt.Errorf("loading messages for compact: %w", err)
+	}
+	if len(msgs) < 2 {
+		return "", fmt.Errorf("%w (have %d, need at least 2)", ErrNotEnoughMessages, len(msgs))
+	}
+
+	// Build a transcript for summarisation.
+	var transcript strings.Builder
+	for _, m := range msgs {
+		fmt.Fprintf(&transcript, "%s: %s\n\n", m.Role, m.Content)
+	}
+
+	llmMessages := []llm.Message{
+		{Role: "system", Content: "Summarize the following conversation. Preserve all key facts, decisions, user preferences, and important context. Be concise but thorough. Output only the summary, nothing else."},
+		{Role: "user", Content: transcript.String()},
+	}
+
+	resp, err := e.router.Complete(ctx, convID, llmMessages)
+	if err != nil {
+		return "", fmt.Errorf("LLM summarisation: %w", err)
+	}
+
+	summary := strings.TrimSpace(resp.Content)
+	if summary == "" {
+		return "", fmt.Errorf("LLM returned empty summary")
+	}
+
+	// Atomically replace all messages with the summary.
+	if err := e.memory.ReplaceMessages(ctx, convID, StoredMessage{
+		Role:    "assistant",
+		Content: "[Session compacted]\n\n" + summary,
+	}); err != nil {
+		return "", fmt.Errorf("replacing messages with compact summary: %w", err)
+	}
+
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySession,
+		Action:         "compact",
+		Summary:        truncateSummary(summary, "compact"),
+		Status:         audit.StatusOK,
+		Source:         "engine",
+		ConversationID: convID,
+	})
+	e.logger.Info("session compacted", "conversation", convID, "original_messages", len(msgs), "summary_len", len(summary))
+	return summary, nil
+}

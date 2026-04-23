@@ -75,6 +75,7 @@
     { value: 'schedules:read',   label: 'schedules:read' },
     { value: 'schedules:write',  label: 'schedules:write' },
     { value: 'sessions:read',    label: 'sessions:read' },
+    { value: 'sessions:write',   label: 'sessions:write' },
     { value: 'skills:read',      label: 'skills:read' },
     { value: 'skills:write',     label: 'skills:write' },
     { value: 'tools:read',       label: 'tools:read' },
