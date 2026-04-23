@@ -130,15 +130,6 @@
     await sendMessage(text)
   }
 
-  async function triggerPanic() {
-    if (!confirm('Emergency stop: cancel ALL in-flight requests and pause the scheduler?')) return
-    try {
-      await api.panic()
-    } catch (e) {
-      chatState.update(s => ({ ...s, error: 'Panic failed: ' + e.message }))
-    }
-  }
-
   async function triggerResume() {
     try {
       await api.resume()
@@ -342,7 +333,6 @@
     <button class="btn-ghost" onclick={loadSessions} title="Refresh session list">Refresh</button>
     <button class="btn-ghost" onclick={triggerClear} disabled={!$chatState.sessionId || $chatState.sending || clearing} title="Clear all messages in this session">{clearing ? 'Clearing...' : 'Clear'}</button>
     <button class="btn-ghost" onclick={triggerCompact} disabled={!$chatState.sessionId || $chatState.sending || compacting || $chatState.messages.length < 2} title="Compact session into LLM summary">{compacting ? 'Compacting...' : 'Compact'}</button>
-    <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="chat-panic">Panic</button>
     <span
       class="ws-status"
       class:ws-connected={$wsStatus === 'connected'}
@@ -937,18 +927,6 @@
     white-space: nowrap;
   }
   .btn-stop:hover { opacity: 0.85; }
-
-  .btn-panic {
-    background: none;
-    border: 1px solid var(--danger);
-    color: var(--danger);
-    padding: 5px 12px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-    margin-left: auto;
-  }
-  .btn-panic:hover { background: var(--danger); color: #fff; }
 
   .panic-banner {
     display: flex;

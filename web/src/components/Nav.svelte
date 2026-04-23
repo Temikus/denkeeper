@@ -3,6 +3,35 @@
   import { navigate } from '../router.js'
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
+  import { panicStatus } from '../wsStore.js'
+
+  let error = $state('')
+  let errorTimer
+
+  function setError(msg) {
+    clearTimeout(errorTimer)
+    error = msg
+    errorTimer = setTimeout(() => { error = '' }, 5000)
+  }
+
+  async function triggerPanic() {
+    if (!confirm('Emergency stop: cancel ALL in-flight requests and pause the scheduler?')) return
+    try {
+      await api.panic()
+      error = ''
+    } catch (e) {
+      setError('Panic failed: ' + e.message)
+    }
+  }
+
+  async function triggerResume() {
+    try {
+      await api.resume()
+      error = ''
+    } catch (e) {
+      setError('Resume failed: ' + e.message)
+    }
+  }
 
   const topLinks = [
     { id: 'overview',  label: 'Overview' },
@@ -136,6 +165,14 @@
   </div>
 
   <div class="footer">
+    {#if $panicStatus.active}
+      <button class="btn-panic active" onclick={triggerResume} data-testid="nav-resume">Resume</button>
+    {:else}
+      <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="nav-panic">Panic</button>
+    {/if}
+    {#if error}
+      <span class="panic-error" role="alert">{error}</span>
+    {/if}
     <button class="logout" onclick={logout} data-testid="logout-btn">Logout</button>
   </div>
 </nav>
@@ -257,6 +294,38 @@
   .footer {
     padding: 12px 16px;
     border-top: 1px solid var(--sidebar-divider);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .btn-panic {
+    width: 100%;
+    padding: 8px;
+    background: var(--danger);
+    border: 1px solid var(--danger);
+    color: #fff;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: opacity 0.3s;
+  }
+  .btn-panic:hover { opacity: 0.85; }
+  .btn-panic.active {
+    background: none;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+  }
+  .btn-panic.active:hover {
+    background: var(--danger);
+    color: #fff;
+  }
+
+  .panic-error {
+    font-size: 12px;
+    color: var(--danger);
+    text-align: center;
   }
 
   .logout {
