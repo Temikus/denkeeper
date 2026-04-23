@@ -295,6 +295,110 @@ session_tier = "supervised"
 	}
 }
 
+func TestUpdateAgentInConfig_SynthesizedAgent(t *testing.T) {
+	// No [[agents]] section — the "default" agent is synthesized at runtime.
+	// UpdateAgentInConfig should create the entry with legacy fields so a
+	// reload doesn't lose adapters or session tier.
+	path := writeTestConfig(t, `[api]
+enabled = true
+
+[telegram]
+token = "keep-me"
+
+[session]
+tier = "supervised"
+
+[agent]
+persona_dir = "/data/agents/default"
+`)
+
+	changes := map[string]any{
+		"llm_model": "claude-4-sonnet",
+	}
+	if err := UpdateAgentInConfig(path, "default", changes); err != nil {
+		t.Fatalf("UpdateAgentInConfig on synthesized agent: %v", err)
+	}
+
+	content := readConfig(t, path)
+	// Changed field must be present.
+	if !strings.Contains(content, "claude-4-sonnet") {
+		t.Errorf("config missing llm_model; content:\n%s", content)
+	}
+	// Legacy fields must be carried into the new [[agents]] entry.
+	if !strings.Contains(content, `name = "default"`) && !strings.Contains(content, "name = 'default'") {
+		t.Errorf("config missing agent name; content:\n%s", content)
+	}
+	if !strings.Contains(content, "supervised") {
+		t.Errorf("config missing session_tier from [session]; content:\n%s", content)
+	}
+	if !strings.Contains(content, "telegram") {
+		t.Errorf("config missing telegram adapter; content:\n%s", content)
+	}
+	if !strings.Contains(content, "/data/agents/default") {
+		t.Errorf("config missing persona_dir from [agent]; content:\n%s", content)
+	}
+	// Existing config should be preserved.
+	if !strings.Contains(content, "keep-me") {
+		t.Errorf("telegram token was lost; content:\n%s", content)
+	}
+}
+
+func TestUpdateAgentInConfig_SynthesizedAgentReload(t *testing.T) {
+	// Verify the created [[agents]] entry round-trips through config.Parse
+	// and produces the same agent that synthesizeDefaultAgent would have.
+	path := writeTestConfig(t, `[telegram]
+token = "tok"
+allowed_users = [12345]
+
+[discord]
+token = "disc-tok"
+allowed_users = ["67890"]
+
+[session]
+tier = "autonomous"
+
+[agent]
+persona_dir = "/custom/persona"
+skills_dir = "/custom/skills"
+
+[llm]
+default_provider = "anthropic"
+default_model = "claude-3-opus"
+
+[llm.anthropic]
+api_key = "sk-test"
+`)
+
+	if err := UpdateAgentInConfig(path, "default", map[string]any{"description": "updated"}); err != nil {
+		t.Fatalf("UpdateAgentInConfig: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+	}
+	a := cfg.Agents[0]
+	if a.Name != "default" {
+		t.Errorf("name = %q, want default", a.Name)
+	}
+	if a.Description != "updated" {
+		t.Errorf("description = %q, want updated", a.Description)
+	}
+	if a.SessionTier != "autonomous" {
+		t.Errorf("session_tier = %q, want autonomous", a.SessionTier)
+	}
+	if a.PersonaDir != "/custom/persona" {
+		t.Errorf("persona_dir = %q, want /custom/persona", a.PersonaDir)
+	}
+	// Both telegram and discord should be inferred.
+	if len(a.Adapters) != 2 {
+		t.Errorf("adapters = %v, want [telegram discord]", a.Adapters)
+	}
+}
+
 func TestUpdateAgentInConfig_PartialUpdate(t *testing.T) {
 	path := writeTestConfig(t, `[[agents]]
 name = "myagent"

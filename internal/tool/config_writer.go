@@ -290,6 +290,8 @@ func RemoveScheduleFromConfig(path, name string) error {
 
 // UpdateAgentInConfig updates fields of an [[agents]] entry matched by name.
 // Only keys present in changes are applied (partial update).
+// If no [[agents]] section exists (synthesized default agent), a new entry is
+// created with the given name and changes applied.
 func UpdateAgentInConfig(path, name string, changes map[string]any) error {
 	raw, err := readRawConfig(path)
 	if err != nil {
@@ -311,7 +313,17 @@ func UpdateAgentInConfig(path, name string, changes map[string]any) error {
 		break
 	}
 	if !found {
-		return fmt.Errorf("agent %q not found in config", name)
+		if agents != nil {
+			// [[agents]] exists but this name isn't in it — real error.
+			return fmt.Errorf("agent %q not found in config", name)
+		}
+		// No [[agents]] section — the agent was synthesized. Create the
+		// entry with legacy fields so a reload doesn't lose adapters/tier.
+		entry := synthesizeLegacyAgentEntry(raw, name)
+		for k, v := range changes {
+			entry[k] = v
+		}
+		agents = []any{entry}
 	}
 	raw["agents"] = agents
 	return writeRawConfig(path, raw)
@@ -361,6 +373,44 @@ func rawAgents(raw map[string]any) []any {
 	default:
 		return nil
 	}
+}
+
+// synthesizeLegacyAgentEntry builds an [[agents]] entry from legacy
+// [agent]/[session]/[telegram]/[discord] sections, mirroring
+// config.synthesizeDefaultAgent so that a reload produces the same result.
+func synthesizeLegacyAgentEntry(raw map[string]any, name string) map[string]any {
+	entry := map[string]any{"name": name}
+
+	// Adapters — infer from which adapter tokens are configured.
+	var adapters []any
+	if tg, ok := raw["telegram"].(map[string]any); ok && tg["token"] != nil && tg["token"] != "" {
+		adapters = append(adapters, "telegram")
+	}
+	if dc, ok := raw["discord"].(map[string]any); ok && dc["token"] != nil && dc["token"] != "" {
+		adapters = append(adapters, "discord")
+	}
+	if len(adapters) > 0 {
+		entry["adapters"] = adapters
+	}
+
+	// Session tier from [session].
+	if sess, ok := raw["session"].(map[string]any); ok {
+		if tier, ok := sess["tier"].(string); ok && tier != "" {
+			entry["session_tier"] = tier
+		}
+	}
+
+	// Persona/skills dirs from [agent].
+	if ag, ok := raw["agent"].(map[string]any); ok {
+		if pd, ok := ag["persona_dir"].(string); ok && pd != "" {
+			entry["persona_dir"] = pd
+		}
+		if sd, ok := ag["skills_dir"].(string); ok && sd != "" {
+			entry["skills_dir"] = sd
+		}
+	}
+
+	return entry
 }
 
 // rawSchedules extracts the schedules array from the raw config map.

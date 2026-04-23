@@ -901,9 +901,14 @@ func (s *Server) resolveEngineForSession(sessionID, agentHint string) *agent.Eng
 		return s.deps.Dispatcher.Agent(agentHint)
 	}
 
-	// Channel-based session: "chan:<name>"
+	// Channel-based session: "chan:<name>" (persistent) or
+	// "chan:<name>:<nano>_<seq>" (ephemeral).
 	if strings.HasPrefix(sessionID, "chan:") {
 		chName := strings.TrimPrefix(sessionID, "chan:")
+		// Ephemeral IDs have an extra :<nano>_<seq> suffix — strip it.
+		if idx := strings.IndexByte(chName, ':'); idx > 0 {
+			chName = chName[:idx]
+		}
 		channels := s.deps.Dispatcher.Channels()
 		if channels != nil {
 			if ch, ok := channels[chName]; ok {

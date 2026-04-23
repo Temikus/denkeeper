@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -72,6 +73,58 @@ func TestClearSession_Idempotent(t *testing.T) {
 	rec := h.Do(req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestClearSession_EphemeralChannel(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "work-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "scratch", AgentName: "work-agent", Adapters: []string{"telegram"}, SessionMode: "ephemeral"},
+		},
+	})
+	ctx := context.Background()
+
+	// Chat through the ephemeral channel.
+	chatRec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/chat", map[string]string{
+		"message": "hello ephemeral",
+		"channel": "scratch",
+	}))
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("chat: status = %d; body: %s", chatRec.Code, chatRec.Body.String())
+	}
+
+	// Find the ephemeral session ID.
+	convos, err := h.Memory.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	var ephID string
+	for _, c := range convos {
+		if strings.HasPrefix(c.ID, "chan:scratch:") {
+			ephID = c.ID
+			break
+		}
+	}
+	if ephID == "" {
+		t.Fatal("no ephemeral session found")
+	}
+
+	// Clear the ephemeral session — should resolve agent via channel.
+	clearReq := h.AuthedRequest(http.MethodPost, "/api/v1/sessions/"+ephID+"/clear", nil)
+	clearRec := h.Do(clearReq)
+	if clearRec.Code != http.StatusNoContent {
+		t.Fatalf("clear: status = %d, want 204; body: %s", clearRec.Code, clearRec.Body.String())
+	}
+
+	msgs, err := h.Memory.GetMessages(ctx, ephID, 100)
+	if err != nil {
+		t.Fatalf("GetMessages after clear: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 messages after clear, got %d", len(msgs))
 	}
 }
 
@@ -170,5 +223,55 @@ func TestCompactSession_UnresolvableAgent(t *testing.T) {
 	rec := h.Do(req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestCompactSession_EphemeralChannel(t *testing.T) {
+	// Ephemeral channel session IDs have the format "chan:<name>:<nano>_<seq>".
+	// resolveEngineForSession must strip the ephemeral suffix to find the channel.
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "work-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "scratch", AgentName: "work-agent", Adapters: []string{"telegram"}, SessionMode: "ephemeral"},
+		},
+		Responses: []*llm.ChatResponse{
+			{Content: "first reply"},
+			{Content: "Summary: ephemeral session."},
+		},
+	})
+	ctx := context.Background()
+
+	// Chat through the ephemeral channel to create a session.
+	chatRec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/chat", map[string]string{
+		"message": "hello ephemeral",
+		"channel": "scratch",
+	}))
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("chat: status = %d; body: %s", chatRec.Code, chatRec.Body.String())
+	}
+
+	// Find the ephemeral session ID.
+	convos, err := h.Memory.ListConversations(ctx)
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	var ephID string
+	for _, c := range convos {
+		if strings.HasPrefix(c.ID, "chan:scratch:") {
+			ephID = c.ID
+			break
+		}
+	}
+	if ephID == "" {
+		t.Fatal("no ephemeral session found")
+	}
+
+	// Compact the ephemeral session — this should resolve the agent via channel.
+	compactReq := h.AuthedRequest(http.MethodPost, "/api/v1/sessions/"+ephID+"/compact", nil)
+	compactRec := h.Do(compactReq)
+	if compactRec.Code != http.StatusOK {
+		t.Fatalf("compact: status = %d, want 200; body: %s", compactRec.Code, compactRec.Body.String())
 	}
 }
