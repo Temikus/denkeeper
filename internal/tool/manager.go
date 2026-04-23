@@ -52,6 +52,7 @@ type serverConn struct {
 	restartCount int       // consecutive restart attempts
 	lastError    string    // most recent failure message
 	disabled     bool      // true when restarts exhausted
+	connecting   bool      // true while background init retries are in progress
 
 	// OAuth state (nil for non-OAuth tools).
 	oauthHandler oauthHandler
@@ -132,6 +133,42 @@ func NewManager(logger *slog.Logger, mcpCfg ...config.MCPConfig) *Manager {
 		m.mcpCfg = mcpCfg[0]
 	}
 	return m
+}
+
+// RegisterPending creates a placeholder entry for a remote MCP server that is
+// not yet connected. This makes the tool visible in the UI with "connecting"
+// status while background retries are in progress. The placeholder is replaced
+// by RegisterServer once the connection succeeds.
+func (m *Manager) RegisterPending(name string, cfg config.ToolConfig, lastErr string) {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "sse"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.servers[name] = &serverConn{
+		name:       name,
+		command:    cfg.Command,
+		args:       cfg.Args,
+		transport:  transport,
+		url:        cfg.URL,
+		cfg:        cfg,
+		lastError:  lastErr,
+		connecting: true,
+		// session is nil — health checker skips this entry,
+		// background retries handle reconnection instead.
+	}
+}
+
+// MarkDisabled transitions a pending/connecting server to disabled state.
+// Called when background init retries are exhausted.
+func (m *Manager) MarkDisabled(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sc, ok := m.servers[name]; ok {
+		sc.connecting = false
+		sc.disabled = true
+	}
 }
 
 // RegisterServer connects to an MCP server (stdio subprocess or remote SSE)
@@ -849,6 +886,9 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	} else if sc.session == nil && sc.cfg.Auth == "oauth" {
 		// Registered but not yet connected — waiting for OAuth authorization.
 		status = "pending_auth"
+	} else if sc.connecting {
+		// Placeholder entry — background init retries are in progress.
+		status = "connecting"
 	} else if sc.lastError != "" {
 		status = "error"
 	}

@@ -50,6 +50,28 @@ func TestServerStatus_Error(t *testing.T) {
 	}
 }
 
+func TestServerStatus_Connecting(t *testing.T) {
+	m := NewManager(testLogger())
+	m.RegisterPending("test-remote", config.ToolConfig{
+		Transport: "sse",
+		URL:       "http://localhost:9999/sse",
+	}, "connection refused")
+
+	status, ok := m.ServerInfo("test-remote")
+	if !ok {
+		t.Fatal("expected server to be found")
+	}
+	if status.Status != "connecting" {
+		t.Errorf("Status = %q, want %q", status.Status, "connecting")
+	}
+	if status.LastError != "connection refused" {
+		t.Errorf("LastError = %q, want %q", status.LastError, "connection refused")
+	}
+	if status.Transport != "sse" {
+		t.Errorf("Transport = %q, want %q", status.Transport, "sse")
+	}
+}
+
 func TestServerStatus_Disabled(t *testing.T) {
 	m := NewManager(testLogger())
 	m.servers["test"] = &serverConn{

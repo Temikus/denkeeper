@@ -422,51 +422,70 @@ func initOAuthAndRegisterTools(ctx context.Context, cfg *config.Config, mgr *too
 // retry for remote (sse/http) transports. Stdio transports register once —
 // their lifecycle is owned by the subprocess we spawn, so retry makes no sense.
 //
-// Motivation: when the MCP server runs in a sibling container (common for
-// mcp-proxy) it may not be ready when denkeeper boots, and a permanent disable
-// on first connection-refused would strand the tool for the lifetime of the
-// pod.
-func registerWithInitRetry(ctx context.Context, mgr *tool.Manager, mcpCfg config.MCPConfig, name string, tc config.ToolConfig, logger *slog.Logger) error {
+// registerWithInitRetry tries to connect to an MCP server. For remote
+// transports (SSE/HTTP), the first attempt is synchronous (fast fail on
+// connection-refused). If it fails and retries are configured, the tool is
+// registered as "connecting" and remaining retries happen in a background
+// goroutine so that startup is not blocked.
+//
+// Returns (true, nil) when background retries were launched, (false, nil)
+// on immediate success, or (false, err) for a non-retryable failure.
+func registerWithInitRetry(ctx context.Context, mgr *tool.Manager, mcpCfg config.MCPConfig, name string, tc config.ToolConfig, logger *slog.Logger) (backgroundRetry bool, err error) {
 	isRemote := tc.Transport == "sse" || tc.Transport == "sse-legacy" || tc.Transport == "http"
-	attempts := 1
-	if isRemote && mcpCfg.InitRetryAttempts > 0 {
-		attempts = mcpCfg.InitRetryAttempts
-	}
 
-	baseBackoff := 2 * time.Second
-	if d, err := time.ParseDuration(mcpCfg.InitRetryBackoff); err == nil && d > 0 {
-		baseBackoff = d
-	}
-	const maxBackoff = 30 * time.Second
+	// First attempt — always synchronous.
+	if err := mgr.RegisterServer(ctx, name, tc); err == nil {
+		return false, nil
+	} else if !isRemote || mcpCfg.InitRetryAttempts <= 1 {
+		// Local (stdio) servers or no retries configured — fail immediately.
+		return false, err
+	} else {
+		// Remote server failed; register placeholder and retry in background.
+		mgr.RegisterPending(name, tc, err.Error())
 
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		err := mgr.RegisterServer(ctx, name, tc)
-		if err == nil {
-			return nil
+		attempts := mcpCfg.InitRetryAttempts
+		baseBackoff := 2 * time.Second
+		if d, parseErr := time.ParseDuration(mcpCfg.InitRetryBackoff); parseErr == nil && d > 0 {
+			baseBackoff = d
 		}
-		lastErr = err
-		if attempt == attempts {
-			break
-		}
-		// Exponential backoff: base * 2^(attempt-1), capped at maxBackoff.
-		shift := attempt - 1
-		if shift >= 63 {
-			shift = 63
-		}
-		delay := baseBackoff << shift
-		if delay > maxBackoff || delay <= 0 {
-			delay = maxBackoff
-		}
-		logger.Warn("tool server initial connection failed, will retry",
-			"name", name, "attempt", attempt, "next_backoff", delay.String(), "error", err)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
+		const maxBackoff = 30 * time.Second
+
+		logger.Warn("tool server initial connection failed, retrying in background",
+			"name", name, "remaining_attempts", attempts-1, "error", err)
+
+		go func() {
+			for attempt := 2; attempt <= attempts; attempt++ {
+				shift := attempt - 1
+				if shift >= 63 {
+					shift = 63
+				}
+				delay := baseBackoff << shift
+				if delay > maxBackoff || delay <= 0 {
+					delay = maxBackoff
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
+
+				if err := mgr.RegisterServer(ctx, name, tc); err == nil {
+					logger.Info("tool server connected (background retry)",
+						"name", name, "attempt", attempt, "transport", tc.Transport)
+					return
+				} else {
+					logger.Warn("tool server background retry failed",
+						"name", name, "attempt", attempt, "max_attempts", attempts, "error", err)
+				}
+			}
+			mgr.MarkDisabled(name)
+			logger.Error("tool server disabled after background retries exhausted — fix the configuration and restart",
+				"name", name, "attempts", attempts)
+		}()
+
+		return true, nil
 	}
-	return lastErr
 }
 
 // registerNonOAuthTools registers tools that don't require OAuth at startup.
@@ -477,12 +496,15 @@ func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConf
 			logger.Info("tool server deferred (needs OAuth)", "name", name)
 			continue
 		}
-		if err := registerWithInitRetry(ctx, mgr, mcpCfg, name, tc, logger); err != nil {
+		bg, err := registerWithInitRetry(ctx, mgr, mcpCfg, name, tc, logger)
+		if err != nil {
 			logger.Error("tool server disabled due to initialization error — fix the configuration and restart",
 				"name", name, "error", err)
 			continue
 		}
-		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
+		if !bg {
+			logger.Info("tool server registered", "name", name, "transport", tc.Transport, "command", tc.Command)
+		}
 	}
 	return nil
 }
@@ -495,12 +517,15 @@ func registerDeferredOAuthTools(ctx context.Context, cfg *config.Config, mgr *to
 		if tc.Auth != "oauth" {
 			continue
 		}
-		if err := registerWithInitRetry(ctx, mgr, cfg.MCP, name, tc, logger); err != nil {
+		bg, err := registerWithInitRetry(ctx, mgr, cfg.MCP, name, tc, logger)
+		if err != nil {
 			logger.Error("OAuth tool server disabled due to initialization error — fix the configuration and restart",
 				"name", name, "error", err)
 			continue
 		}
-		logger.Info("tool server registered", "name", name, "transport", tc.Transport, "auth", tc.Auth)
+		if !bg {
+			logger.Info("tool server registered", "name", name, "transport", tc.Transport, "auth", tc.Auth)
+		}
 	}
 	return nil
 }
