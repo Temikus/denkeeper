@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -270,7 +269,6 @@ func TestScheduleAPI_BroadcastAuditOnPartialFailure(t *testing.T) {
 
 	// Flush audit buffer and query the store.
 	h.FlushAudit(t)
-	time.Sleep(100 * time.Millisecond)
 
 	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{
 		Category: audit.CategorySchedule,

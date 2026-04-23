@@ -206,6 +206,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 
 	auditor := audit.NewBufferedEmitter(auditStore, 100, logger)
 	auditor.Start(context.Background())
+	t.Cleanup(func() { auditor.Close() })
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 
@@ -367,14 +368,11 @@ func DecodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 	}
 }
 
-// FlushAudit closes and re-creates the auditor so all buffered events are
-// flushed to the store. Call before querying AuditStore in tests.
+// FlushAudit synchronously drains all buffered audit events to the store.
+// Call before querying AuditStore in tests. The emitter remains usable.
 func (h *Harness) FlushAudit(t *testing.T) {
 	t.Helper()
-	h.Auditor.Close()
-	// Re-create so subsequent emissions don't panic on closed channel.
-	h.Auditor = audit.NewBufferedEmitter(h.AuditStore, 100, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	h.Auditor.Start(context.Background())
+	h.Auditor.Flush()
 }
 
 func boolPtr(b bool) *bool { return &b }

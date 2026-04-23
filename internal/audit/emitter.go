@@ -9,11 +9,12 @@ import (
 
 // BufferedEmitter accepts events via a channel and writes them in batches.
 type BufferedEmitter struct {
-	store  Store
-	ch     chan Event
-	logger *slog.Logger
-	wg     sync.WaitGroup
-	done   chan struct{}
+	store    Store
+	ch       chan Event
+	logger   *slog.Logger
+	wg       sync.WaitGroup
+	done     chan struct{}
+	flushReq chan chan struct{} // Flush() sends a signal; flushLoop acks when done
 }
 
 // NewBufferedEmitter creates a buffered emitter with the given buffer capacity.
@@ -22,10 +23,11 @@ func NewBufferedEmitter(store Store, bufSize int, logger *slog.Logger) *Buffered
 		bufSize = 1000
 	}
 	return &BufferedEmitter{
-		store:  store,
-		ch:     make(chan Event, bufSize),
-		logger: logger,
-		done:   make(chan struct{}),
+		store:    store,
+		ch:       make(chan Event, bufSize),
+		logger:   logger,
+		done:     make(chan struct{}),
+		flushReq: make(chan chan struct{}),
 	}
 }
 
@@ -82,20 +84,16 @@ func (e *BufferedEmitter) flushLoop(ctx context.Context) {
 				batch = batch[:0]
 			}
 
-		case <-ctx.Done():
-			// Drain remaining events from the channel.
-		drain:
-			for {
-				select {
-				case ev, ok := <-e.ch:
-					if !ok {
-						break drain
-					}
-					batch = append(batch, ev)
-				default:
-					break drain
-				}
+		case ack := <-e.flushReq:
+			batch = e.drainChannel(batch)
+			if len(batch) > 0 {
+				e.flush(ctx, batch)
+				batch = batch[:0]
 			}
+			close(ack)
+
+		case <-ctx.Done():
+			batch = e.drainChannel(batch)
 			if len(batch) > 0 {
 				e.flush(context.Background(), batch)
 			}
@@ -104,10 +102,34 @@ func (e *BufferedEmitter) flushLoop(ctx context.Context) {
 	}
 }
 
+// drainChannel reads all immediately available events from the channel
+// into batch without blocking.
+func (e *BufferedEmitter) drainChannel(batch []Event) []Event {
+	for {
+		select {
+		case ev, ok := <-e.ch:
+			if !ok {
+				return batch
+			}
+			batch = append(batch, ev)
+		default:
+			return batch
+		}
+	}
+}
+
 func (e *BufferedEmitter) flush(ctx context.Context, batch []Event) {
 	if err := e.store.InsertBatch(ctx, batch); err != nil {
 		e.logger.Error("failed to flush audit events", "count", len(batch), "error", err)
 	}
+}
+
+// Flush synchronously drains all buffered events and writes them to the store.
+// The emitter remains usable after Flush returns. Safe for concurrent use.
+func (e *BufferedEmitter) Flush() {
+	ack := make(chan struct{})
+	e.flushReq <- ack
+	<-ack
 }
 
 // Close stops the flush loop and drains remaining events.
