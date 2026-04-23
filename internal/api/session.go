@@ -147,11 +147,22 @@ func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 		if json.Unmarshal(plaintext, &payload) == nil && payload.ID != "" {
 			rec, lookupErr := sm.Store.Get(r.Context(), payload.ID)
 			if lookupErr == nil {
-				// Touch asynchronously to avoid blocking reads.
-				go func() { _ = sm.Store.Touch(r.Context(), payload.ID) }()
+				scopes := ScopesFromRecord(rec)
+				refreshed := refreshAdminScopes(scopes)
+				if refreshed != nil {
+					// Stale admin session: refresh scopes and touch in a
+					// single write to avoid two competing SQLite transactions.
+					// This path is rare so synchronous is fine.
+					_ = sm.Store.TouchAndUpdateScopes(r.Context(), payload.ID, refreshed)
+					scopes = refreshed
+				} else {
+					// Common path: touch asynchronously to avoid blocking reads.
+					go func() { _ = sm.Store.Touch(r.Context(), payload.ID) }()
+				}
+
 				return &Session{
 					Email:     rec.Email,
-					Scopes:    ScopesFromRecord(rec),
+					Scopes:    scopes,
 					ExpiresAt: rec.ExpiresAt.Unix(),
 				}, nil
 			}
@@ -169,7 +180,42 @@ func (sm *SessionManager) Read(r *http.Request) (*Session, error) {
 		return nil, fmt.Errorf("session: expired")
 	}
 
+	// Refresh admin scopes for legacy cookies too (in-memory only;
+	// the cookie itself isn't rewritten but the request succeeds).
+	if refreshed := refreshAdminScopes(s.Scopes); refreshed != nil {
+		s.Scopes = refreshed
+	}
+
 	return &s, nil
+}
+
+// refreshAdminScopes returns the current adminScopes() set when the given
+// scopes include "admin" but are missing any expected entries. Returns nil
+// if no refresh is needed.
+func refreshAdminScopes(current []string) []string {
+	hasAdmin := false
+	for _, s := range current {
+		if s == "admin" {
+			hasAdmin = true
+			break
+		}
+	}
+	if !hasAdmin {
+		return nil
+	}
+
+	expected := adminScopes()
+	have := make(map[string]struct{}, len(current))
+	for _, s := range current {
+		have[s] = struct{}{}
+	}
+
+	for _, s := range expected {
+		if _, ok := have[s]; !ok {
+			return expected
+		}
+	}
+	return nil
 }
 
 // ReadID extracts the session ID from the encrypted cookie without a full

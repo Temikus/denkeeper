@@ -204,6 +204,36 @@ func (ss *SessionStore) StartCleanup(ctx context.Context, interval time.Duration
 	}()
 }
 
+// UpdateScopes persists a new scope set for an existing session.
+func (ss *SessionStore) UpdateScopes(ctx context.Context, id string, scopes []string) error {
+	scopesJSON, err := json.Marshal(scopes)
+	if err != nil {
+		return fmt.Errorf("marshaling scopes: %w", err)
+	}
+	_, err = ss.db.ExecContext(ctx, `UPDATE sessions SET scopes = ? WHERE id = ?`, string(scopesJSON), id)
+	if err != nil {
+		return fmt.Errorf("updating session scopes: %w", err)
+	}
+	return nil
+}
+
+// TouchAndUpdateScopes updates last_seen_at and replaces the scope set in a
+// single write. Used when scope refresh and touch both need to happen together
+// to avoid two separate write transactions competing for the SQLite lock.
+func (ss *SessionStore) TouchAndUpdateScopes(ctx context.Context, id string, scopes []string) error {
+	scopesJSON, err := json.Marshal(scopes)
+	if err != nil {
+		return fmt.Errorf("marshaling scopes: %w", err)
+	}
+	_, err = ss.db.ExecContext(ctx,
+		`UPDATE sessions SET last_seen_at = ?, scopes = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339), string(scopesJSON), id)
+	if err != nil {
+		return fmt.Errorf("touch and update session scopes: %w", err)
+	}
+	return nil
+}
+
 // ScopesFromRecord parses the JSON scopes string into a string slice.
 func ScopesFromRecord(rec *SessionRecord) []string {
 	var scopes []string

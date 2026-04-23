@@ -20,7 +20,7 @@ func TestSessionManager_RoundTrip(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	sess := Session{Email: "alice@example.com", Scopes: []string{"admin", "chat"}}
+	sess := Session{Email: "alice@example.com", Scopes: []string{"chat", "costs:read"}}
 	if err := sm.Create(w, sess); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -41,8 +41,8 @@ func TestSessionManager_RoundTrip(t *testing.T) {
 	if got.Email != "alice@example.com" {
 		t.Errorf("email = %q, want alice@example.com", got.Email)
 	}
-	if len(got.Scopes) != 2 || got.Scopes[0] != "admin" {
-		t.Errorf("scopes = %v, want [admin chat]", got.Scopes)
+	if len(got.Scopes) != 2 || got.Scopes[0] != "chat" {
+		t.Errorf("scopes = %v, want [chat costs:read]", got.Scopes)
 	}
 }
 
@@ -254,5 +254,99 @@ func TestSessionManager_LegacyCookie(t *testing.T) {
 	id := sm.ReadID(req)
 	if id != "" {
 		t.Errorf("expected empty ReadID for legacy cookie, got %q", id)
+	}
+}
+
+func TestRefreshAdminScopes_StaleAdminSession(t *testing.T) {
+	// A session with "admin" but missing some current scopes should be refreshed.
+	stale := []string{"admin", "chat", "sessions:read"}
+	refreshed := refreshAdminScopes(stale)
+	if refreshed == nil {
+		t.Fatal("expected refresh for stale admin scopes")
+	}
+	expected := adminScopes()
+	if len(refreshed) != len(expected) {
+		t.Errorf("refreshed length = %d, want %d", len(refreshed), len(expected))
+	}
+}
+
+func TestRefreshAdminScopes_CurrentAdminSession(t *testing.T) {
+	// A session with the full current admin scopes should not be refreshed.
+	current := adminScopes()
+	refreshed := refreshAdminScopes(current)
+	if refreshed != nil {
+		t.Errorf("expected nil for up-to-date admin scopes, got %v", refreshed)
+	}
+}
+
+func TestRefreshAdminScopes_NonAdminSession(t *testing.T) {
+	// A session without "admin" should never be refreshed.
+	limited := []string{"chat", "costs:read"}
+	refreshed := refreshAdminScopes(limited)
+	if refreshed != nil {
+		t.Errorf("expected nil for non-admin session, got %v", refreshed)
+	}
+}
+
+func TestSessionManager_RefreshScopesLegacyCookie(t *testing.T) {
+	sm, err := NewSessionManager(testSessionKey(), 24*time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a legacy cookie with stale admin scopes.
+	w := httptest.NewRecorder()
+	sess := Session{Email: "admin@example.com", Scopes: []string{"admin", "chat"}}
+	if err := sm.Create(w, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(w.Result().Cookies()[0])
+
+	got, err := sm.Read(req)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Should return full admin scopes despite the cookie only having two.
+	expected := adminScopes()
+	if len(got.Scopes) != len(expected) {
+		t.Errorf("scopes length = %d, want %d", len(got.Scopes), len(expected))
+	}
+}
+
+func TestSessionManager_RefreshScopesServerTracked(t *testing.T) {
+	sm, err := NewSessionManager(testSessionKey(), 24*time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	sm.Store = store
+
+	// Create a server-tracked session with stale admin scopes.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	sess := Session{Email: "admin@example.com", Scopes: []string{"admin", "chat"}}
+	if err := sm.CreateWithRequest(w, req, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the session back.
+	readReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	readReq.AddCookie(w.Result().Cookies()[0])
+
+	got, err := sm.Read(readReq)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	expected := adminScopes()
+	if len(got.Scopes) != len(expected) {
+		t.Errorf("scopes length = %d, want %d", len(got.Scopes), len(expected))
 	}
 }
