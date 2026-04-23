@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -135,6 +136,11 @@ type HarnessOpts struct {
 	// ToolManager, when set, is passed to all engines so tools are available
 	// during chat (required for tool-call loop integration tests).
 	ToolManager *tool.Manager
+
+	// WithConfigMCP, when true, creates and registers a Config MCP server
+	// for the first agent with channel tools wired from the dispatcher.
+	// Requires Channels to be set.
+	WithConfigMCP bool
 }
 
 type agentSetup struct {
@@ -235,6 +241,11 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		}
 	}
 
+	// Pre-create ToolManager when Config MCP is requested so engines get it.
+	if opts.WithConfigMCP && opts.ToolManager == nil {
+		opts.ToolManager = tool.NewManager(logger)
+	}
+
 	engines := make(map[string]*agent.Engine, len(agents))
 	var bindings []agent.Binding
 	var agentConfigs []config.AgentInstanceConfig
@@ -282,6 +293,30 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		dispatcherOpts = append(dispatcherOpts, agent.WithChannels(opts.Channels, mem))
 	}
 	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger, dispatcherOpts...)
+
+	// Wire Config MCP channel tools into the ToolManager after dispatcher creation.
+	if opts.WithConfigMCP && len(opts.Channels) > 0 {
+		cmcpDeps := configmcp.Deps{
+			AgentName:      agents[0].Name,
+			PermissionTier: func() string { return "autonomous" },
+			GetChannels: func() map[string]*agent.Channel {
+				return dispatcher.Channels()
+			},
+			SetActiveChannel:         dispatcher.SetActiveChannelByKey,
+			ActiveChannelsForChannel: dispatcher.ActiveChannelsForChannel,
+			Logger:                   logger,
+		}
+		cmcpSrv := configmcp.New(cmcpDeps)
+		session, err := cmcpSrv.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("config MCP connect: %v", err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		if err := opts.ToolManager.RegisterSession(context.Background(), "config-test", session); err != nil {
+			t.Fatalf("registering config MCP: %v", err)
+		}
+	}
+
 	sched := scheduler.New(logger, nil)
 
 	// API key.

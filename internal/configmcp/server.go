@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/kv"
@@ -106,6 +107,16 @@ type Deps struct {
 	// ChannelResolver resolves @channelname references in schedule channels.
 	// If nil, @channelname is not supported for schedules created via Config MCP.
 	ChannelResolver ChannelResolver
+
+	// GetChannels returns all configured channels. Nil → channel tools not registered.
+	GetChannels func() map[string]*agent.Channel
+
+	// SetActiveChannel switches active channel for an adapter key.
+	// Nil → channel_switch not registered.
+	SetActiveChannel func(ctx context.Context, adapterKey, channelName string) error
+
+	// ActiveChannelsForChannel returns adapter keys currently active on a channel.
+	ActiveChannelsForChannel func(channelName string) []string
 
 	// Auditor emits audit events. If nil, broadcast delivery audit is disabled.
 	Auditor audit.Emitter

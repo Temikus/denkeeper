@@ -518,7 +518,11 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, wg *sync.WaitGroup, ms
 	// Set conversation ID from channel so the engine uses
 	// the channel's session instead of the default key.
 	if ch != nil && msg.ConversationID == "" {
-		msg.ConversationID = ch.ConversationID()
+		if ch.IsEphemeral() {
+			msg.ConversationID = ch.EphemeralConversationID()
+		} else {
+			msg.ConversationID = ch.ConversationID()
+		}
 	}
 
 	// Intercept /clear and /compact after routing so we have the engine

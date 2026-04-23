@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1408,5 +1409,135 @@ func TestDispatcher_ResumeCommand_SendsResponse(t *testing.T) {
 	}
 	if got := sent[0].Text; got != "Processing resumed." {
 		t.Errorf("resume response = %q", got)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Ephemeral channel tests
+// --------------------------------------------------------------------------
+
+func TestChannel_IsEphemeral(t *testing.T) {
+	if ch := (&Channel{SessionMode: "ephemeral"}); !ch.IsEphemeral() {
+		t.Error("expected IsEphemeral() = true for ephemeral mode")
+	}
+	if ch := (&Channel{SessionMode: "persistent"}); ch.IsEphemeral() {
+		t.Error("expected IsEphemeral() = false for persistent mode")
+	}
+	if ch := (&Channel{}); ch.IsEphemeral() {
+		t.Error("expected IsEphemeral() = false for empty mode")
+	}
+}
+
+func TestChannel_EphemeralConversationID_Format(t *testing.T) {
+	ch := &Channel{Name: "scratch", SessionMode: "ephemeral"}
+	id := ch.EphemeralConversationID()
+
+	if !strings.HasPrefix(id, "chan:scratch:") {
+		t.Errorf("EphemeralConversationID() = %q, want prefix chan:scratch:", id)
+	}
+}
+
+func TestChannel_EphemeralConversationID_Unique(t *testing.T) {
+	ch := &Channel{Name: "scratch", SessionMode: "ephemeral"}
+	id1 := ch.EphemeralConversationID()
+	id2 := ch.EphemeralConversationID()
+
+	if id1 == id2 {
+		t.Errorf("expected unique IDs, got %q twice", id1)
+	}
+}
+
+func TestDispatcher_EphemeralChannel_UniqueConversationIDs(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	channels := []*Channel{
+		{Name: "scratch", AgentName: "default", Adapters: []string{"telegram"}, SessionMode: "ephemeral"},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	msg1 := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "First message",
+		Timestamp:  time.Now(),
+	}
+	msg2 := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "Second message",
+		Timestamp:  time.Now(),
+	}
+
+	ch1, _ := d.resolveChannel(msg1)
+	ch2, _ := d.resolveChannel(msg2)
+
+	if ch1 == nil || ch2 == nil {
+		t.Fatal("resolveChannel returned nil for ephemeral channel")
+	}
+
+	// Simulate what dispatchMessage does: assign conversation IDs.
+	if ch1.IsEphemeral() {
+		msg1.ConversationID = ch1.EphemeralConversationID()
+	}
+	if ch2.IsEphemeral() {
+		msg2.ConversationID = ch2.EphemeralConversationID()
+	}
+
+	if msg1.ConversationID == msg2.ConversationID {
+		t.Errorf("expected unique conversation IDs for ephemeral channel, got %q twice", msg1.ConversationID)
+	}
+	if !strings.HasPrefix(msg1.ConversationID, "chan:scratch:") {
+		t.Errorf("conversation ID %q does not have expected prefix", msg1.ConversationID)
+	}
+}
+
+func TestDispatcher_PersistentChannel_SameConversationID(t *testing.T) {
+	sentDefault := &sentMessages{}
+	defaultEngine := newTestEngine(t, "default", sentDefault)
+
+	channels := []*Channel{
+		{Name: "work", AgentName: "default", Adapters: []string{"telegram"}},
+	}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	msg1 := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "First message",
+		Timestamp:  time.Now(),
+	}
+	msg2 := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		Text:       "Second message",
+		Timestamp:  time.Now(),
+	}
+
+	ch1, _ := d.resolveChannel(msg1)
+	ch2, _ := d.resolveChannel(msg2)
+
+	id1 := ch1.ConversationID()
+	id2 := ch2.ConversationID()
+
+	if id1 != id2 {
+		t.Errorf("expected same conversation ID for persistent channel, got %q and %q", id1, id2)
+	}
+	if id1 != "chan:work" {
+		t.Errorf("expected conversation ID chan:work, got %q", id1)
 	}
 }

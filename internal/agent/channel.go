@@ -4,7 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 )
+
+// ephemeralSeq is a monotonic counter appended to ephemeral conversation IDs
+// to guarantee uniqueness even when two goroutines call time.Now() within the
+// same nanosecond.
+var ephemeralSeq atomic.Uint64
 
 // Channel is a named routing endpoint that binds adapter chats to an agent
 // with explicit session identity. Channels decouple conversations from the
@@ -31,6 +38,10 @@ type Channel struct {
 	// adapter bindings (backward compatibility). Implicit channels are not
 	// shown in /session listings unless the user explicitly opts in.
 	Implicit bool
+
+	// SessionMode is "persistent" (default) or "ephemeral". Ephemeral
+	// channels create a unique conversation for each interaction.
+	SessionMode string
 }
 
 // AdapterBinding is a parsed adapter:externalID pair.
@@ -39,10 +50,22 @@ type AdapterBinding struct {
 	ExternalID string
 }
 
-// ChannelConversationID returns the conversation ID used for this channel.
+// ConversationID returns the persistent conversation ID for this channel.
 // Channel-based conversations use the format "chan:{name}".
 func (ch *Channel) ConversationID() string {
 	return "chan:" + ch.Name
+}
+
+// IsEphemeral returns true when the channel uses ephemeral session mode.
+func (ch *Channel) IsEphemeral() bool {
+	return ch.SessionMode == "ephemeral"
+}
+
+// EphemeralConversationID returns a unique conversation ID for a single
+// ephemeral interaction. Format: "chan:{name}:{unix_nano}_{seq}".
+func (ch *Channel) EphemeralConversationID() string {
+	seq := ephemeralSeq.Add(1)
+	return fmt.Sprintf("chan:%s:%d_%d", ch.Name, time.Now().UnixNano(), seq)
 }
 
 // ResolveBinding returns the first specific adapter binding (adapter:externalID)

@@ -448,6 +448,11 @@ type ChannelConfig struct {
 	// binding; "broadcast" delivers through all specific bindings.
 	Delivery string `toml:"delivery"`
 
+	// SessionMode controls conversation persistence: "persistent" (default)
+	// maintains a single conversation per channel; "ephemeral" creates a
+	// fresh conversation for each interaction.
+	SessionMode string `toml:"session_mode"`
+
 	// Implicit is true when the channel was auto-synthesized from an agent's
 	// adapter bindings (backward compatibility). Not set via TOML — only
 	// populated by synthesizeChannels(). Implicit channels are hidden from
@@ -1702,22 +1707,39 @@ func validateChannels(channels []ChannelConfig, agentNames map[string]bool) erro
 			return fmt.Errorf("config: channel %q: delivery must be \"single\" or \"broadcast\"", ch.Name)
 		}
 
-		for _, binding := range ch.Adapters {
-			if binding == "" {
-				return fmt.Errorf("config: channel %q: empty adapter binding", ch.Name)
-			}
-			if strings.Contains(binding, ":") {
-				if prev, ok := specifics[binding]; ok {
-					return fmt.Errorf("config: channel %q: adapter binding %q conflicts with channel %q", ch.Name, binding, prev)
-				}
-				specifics[binding] = ch.Name
-			} else {
-				if prev, ok := wildcards[binding]; ok {
-					return fmt.Errorf("config: channel %q: wildcard binding %q conflicts with channel %q", ch.Name, binding, prev)
-				}
-				wildcards[binding] = ch.Name
-			}
+		if ch.SessionMode != "" && ch.SessionMode != "persistent" && ch.SessionMode != "ephemeral" {
+			return fmt.Errorf("config: channel %q: session_mode must be \"persistent\" or \"ephemeral\"", ch.Name)
 		}
+
+		if err := validateChannelBindings(ch, specifics, wildcards); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateChannelBindings(ch ChannelConfig, specifics, wildcards map[string]string) error {
+	var specificCount int
+	for _, binding := range ch.Adapters {
+		if binding == "" {
+			return fmt.Errorf("config: channel %q: empty adapter binding", ch.Name)
+		}
+		if strings.Contains(binding, ":") {
+			specificCount++
+			if prev, ok := specifics[binding]; ok {
+				return fmt.Errorf("config: channel %q: adapter binding %q conflicts with channel %q", ch.Name, binding, prev)
+			}
+			specifics[binding] = ch.Name
+		} else {
+			if prev, ok := wildcards[binding]; ok {
+				return fmt.Errorf("config: channel %q: wildcard binding %q conflicts with channel %q", ch.Name, binding, prev)
+			}
+			wildcards[binding] = ch.Name
+		}
+	}
+
+	if ch.SessionMode == "ephemeral" && specificCount > 1 {
+		return fmt.Errorf("config: channel %q: ephemeral channels cannot have multiple specific adapter bindings", ch.Name)
 	}
 	return nil
 }

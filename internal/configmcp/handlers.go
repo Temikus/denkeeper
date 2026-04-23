@@ -291,6 +291,11 @@ func (s *Server) registerTools() {
 	if s.deps.GetPersonaSection != nil && s.deps.SavePersonaSection != nil {
 		s.registerPersonaTools()
 	}
+
+	// Channel tools (registered only when channel access is available).
+	if s.deps.GetChannels != nil {
+		s.registerChannelTools()
+	}
 }
 
 // --------------------------------------------------------------------------

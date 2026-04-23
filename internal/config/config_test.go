@@ -1431,6 +1431,85 @@ delivery = "fanout"
 	}
 }
 
+func TestParse_Channels_SessionModeValid(t *testing.T) {
+	for _, mode := range []string{"persistent", "ephemeral", ""} {
+		modeLine := ""
+		if mode != "" {
+			modeLine = `session_mode = "` + mode + `"`
+		}
+		tomlData := []byte(baseConfig + `
+[[channels]]
+name = "work"
+agent = "default"
+adapters = ["telegram:12345"]
+` + modeLine + `
+`)
+		if _, err := Parse(tomlData); err != nil {
+			t.Errorf("session_mode=%q: unexpected error: %v", mode, err)
+		}
+	}
+}
+
+func TestParse_Channels_SessionModeInvalid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "work"
+agent = "default"
+adapters = ["telegram:12345"]
+session_mode = "transient"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid session_mode")
+	}
+	if !strings.Contains(err.Error(), "session_mode must be") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParse_Channels_EphemeralMultipleSpecific(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "ephemeral-ch"
+agent = "default"
+adapters = ["telegram:111", "telegram:222"]
+session_mode = "ephemeral"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for ephemeral channel with multiple specific bindings")
+	}
+	if !strings.Contains(err.Error(), "ephemeral channels cannot have multiple specific") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestParse_Channels_EphemeralSingleSpecific(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "ephemeral-ch"
+agent = "default"
+adapters = ["telegram:12345"]
+session_mode = "ephemeral"
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Channels_EphemeralWildcard(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[channels]]
+name = "ephemeral-ch"
+agent = "default"
+adapters = ["telegram"]
+session_mode = "ephemeral"
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestParse_Schedules_ValidChannelRef(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[channels]]

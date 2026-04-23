@@ -778,8 +778,13 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		RemoveMemoryEntry:  e.RemoveMemoryEntry,
 		ConfigPath:         abc.configPath,
 		ChannelResolver:    buildChannelResolver(abc.dispatcher),
-		Auditor:            abc.auditor,
-		Logger:             abc.logger,
+		GetChannels: func() map[string]*agent.Channel {
+			return abc.dispatcher.Channels()
+		},
+		SetActiveChannel:         abc.dispatcher.SetActiveChannelByKey,
+		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
+		Auditor:                  abc.auditor,
+		Logger:                   abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
 	if err != nil {
@@ -934,11 +939,12 @@ func buildChannels(cfg *config.Config) []*agent.Channel {
 	channels := make([]*agent.Channel, 0, len(cfg.Channels))
 	for _, cc := range cfg.Channels {
 		channels = append(channels, &agent.Channel{
-			Name:      cc.Name,
-			AgentName: cc.Agent,
-			Adapters:  cc.Adapters,
-			Delivery:  cc.Delivery,
-			Implicit:  cc.Implicit,
+			Name:        cc.Name,
+			AgentName:   cc.Agent,
+			Adapters:    cc.Adapters,
+			Delivery:    cc.Delivery,
+			Implicit:    cc.Implicit,
+			SessionMode: cc.SessionMode,
 		})
 	}
 	return channels
