@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
@@ -247,6 +250,187 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	if input.Fallbacks != nil {
 		ac.Fallbacks = *input.Fallbacks
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent create & delete
+// ---------------------------------------------------------------------------
+
+// agentCreateInput holds the fields for POST /api/v1/agents.
+type agentCreateInput struct {
+	Name        string `json:"name"`
+	LLMProvider string `json:"llm_provider,omitempty"`
+	LLMModel    string `json:"llm_model,omitempty"`
+	SessionTier string `json:"session_tier,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AgentFactory == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent creation not available"})
+		return
+	}
+	if s.deps.ConfigPath == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})
+		return
+	}
+
+	var input agentCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if !validAgentName(input.Name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid agent name: must be lowercase alphanumeric with hyphens, 1-64 chars",
+		})
+		return
+	}
+	if s.deps.Dispatcher.Agent(input.Name) != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "agent already exists"})
+		return
+	}
+	if input.SessionTier != "" && !security.ValidTier(input.SessionTier) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid session_tier: must be autonomous, supervised, or restricted",
+		})
+		return
+	}
+
+	// Compute persona directory and ensure it exists.
+	personaDir := filepath.Join(s.deps.Config.DataDir, "agents", input.Name)
+	if err := os.MkdirAll(personaDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "creating persona directory: " + err.Error(),
+		})
+		return
+	}
+
+	ac := config.AgentInstanceConfig{
+		Name:        input.Name,
+		LLMProvider: input.LLMProvider,
+		LLMModel:    input.LLMModel,
+		SessionTier: input.SessionTier,
+		Description: input.Description,
+		PersonaDir:  personaDir,
+	}
+
+	e, _, err := s.deps.AgentFactory(ac)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "building agent engine: " + err.Error(),
+		})
+		return
+	}
+
+	// Persist to TOML first — this is the source of truth. If it fails,
+	// don't register the agent in memory to avoid config drift on restart.
+	if err := tool.AddAgentToConfig(s.deps.ConfigPath, input.Name, input.LLMProvider, input.LLMModel, input.SessionTier, input.Description, personaDir); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "persisting agent to config: " + err.Error(),
+		})
+		return
+	}
+
+	if err := s.deps.Dispatcher.AddAgent(input.Name, e); err != nil {
+		// TOML was written but runtime registration failed — remove TOML entry
+		// to stay consistent.
+		if rmErr := tool.RemoveAgentFromConfig(s.deps.ConfigPath, input.Name); rmErr != nil {
+			s.logger.Warn("failed to roll back agent config after AddAgent error", "agent", input.Name, "error", rmErr)
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if s.deps.Config != nil {
+		s.deps.Config.Agents = append(s.deps.Config.Agents, ac)
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":   input.Name,
+		"status": "created",
+	})
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing agent name"})
+		return
+	}
+	if s.deps.ConfigPath == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})
+		return
+	}
+	if name == "default" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot delete the default agent"})
+		return
+	}
+	if s.deps.Dispatcher.Agent(name) == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+
+	// Check channel dependencies.
+	var blockingChannels []string
+	for chName, ch := range s.deps.Dispatcher.Channels() {
+		if ch.AgentName == name {
+			blockingChannels = append(blockingChannels, chName)
+		}
+	}
+	if len(blockingChannels) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "agent is referenced by channels: " + strings.Join(blockingChannels, ", "),
+		})
+		return
+	}
+
+	// Check schedule dependencies.
+	if s.deps.Config != nil {
+		var blockingSchedules []string
+		for _, sched := range s.deps.Config.Schedules {
+			if sched.Agent == name {
+				blockingSchedules = append(blockingSchedules, sched.Name)
+			}
+		}
+		if len(blockingSchedules) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "agent is referenced by schedules: " + strings.Join(blockingSchedules, ", "),
+			})
+			return
+		}
+	}
+
+	// Persist removal to TOML first — this is the source of truth. If it
+	// fails, don't remove the agent from memory to avoid config drift.
+	if err := tool.RemoveAgentFromConfig(s.deps.ConfigPath, name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "removing agent from config: " + err.Error(),
+		})
+		return
+	}
+
+	if err := s.deps.Dispatcher.RemoveAgent(name); err != nil {
+		// TOML was updated but runtime removal failed — re-add TOML entry
+		// to stay consistent. This is unlikely but we handle it defensively.
+		s.logger.Error("failed to remove agent from dispatcher after config update", "agent", name, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Remove from in-memory config.
+	if s.deps.Config != nil {
+		agents := s.deps.Config.Agents
+		for i := range agents {
+			if agents[i].Name == name {
+				s.deps.Config.Agents = append(agents[:i], agents[i+1:]...)
+				break
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // serializeFallbacks converts fallback configs to a slice of maps for TOML persistence.

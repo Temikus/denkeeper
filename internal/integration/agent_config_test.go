@@ -4,7 +4,13 @@ package integration
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	toml "github.com/pelletier/go-toml/v2"
+	"github.com/Temikus/denkeeper/internal/agent"
 )
 
 func TestAgentConfig_UpdateSessionTier(t *testing.T) {
@@ -178,5 +184,280 @@ func TestAgentConfig_NotFound(t *testing.T) {
 	}))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent create & delete (Phase 14c)
+// ---------------------------------------------------------------------------
+
+// agentCrudHarness creates a harness with ConfigPath, AgentFactory, and a
+// DataDir so agent CRUD endpoints can build engines and persist to TOML.
+func agentCrudHarness(t *testing.T) *Harness {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "default", Tier: "supervised", Adapters: []string{"telegram"}},
+		},
+		ConfigPath:       cfgPath,
+		WithAgentFactory: true,
+	})
+	// Set DataDir on the config so persona directories are created correctly.
+	h.Config().DataDir = dir
+	return h
+}
+
+func TestAgentCreate_Basic(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "helper",
+		"llm_provider": "mock",
+		"llm_model":    "test-model",
+		"session_tier": "autonomous",
+		"description":  "A helper agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	DecodeJSON(t, rec, &result)
+	if result["name"] != "helper" {
+		t.Fatalf("expected name=helper, got %v", result["name"])
+	}
+
+	// Verify the agent appears in the list.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/helper", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get after create: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentCreate_DuplicateName(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{"name": "default"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentCreate_InvalidName(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{"name": "INVALID NAME"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid name, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentCreate_InvalidTier(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "bad-tier",
+		"session_tier": "invalid",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid tier, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentCreate_MissingName(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{"description": "no name"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing name, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentCreate_PersistsToTOML(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "toml-agent",
+		"session_tier": "autonomous",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !strings.Contains(string(content), "toml-agent") {
+		t.Errorf("config file missing new agent; content:\n%s", content)
+	}
+}
+
+func TestAgentDelete_Basic(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	// Create an agent first.
+	body := map[string]any{"name": "delete-me"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete it.
+	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/delete-me", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify it's gone.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/delete-me", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestAgentDelete_Default(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/default", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for default agent, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentDelete_NotFound(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/nonexistent", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentDelete_ChannelReference(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "default", Tier: "supervised", Adapters: []string{"telegram"}},
+			{Name: "helper", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "work", AgentName: "helper", Adapters: []string{"telegram"}},
+		},
+		ConfigPath:       filepath.Join(t.TempDir(), "denkeeper.toml"),
+		WithAgentFactory: true,
+	})
+	// Create the config file so endpoints don't 503.
+	_ = os.WriteFile(h.ConfigPath(), []byte(""), 0o644)
+
+	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/helper", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for channel reference, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]string
+	DecodeJSON(t, rec, &resp)
+	if !strings.Contains(resp["error"], "work") {
+		t.Errorf("error should mention blocking channel 'work': %s", resp["error"])
+	}
+}
+
+func TestAgentDelete_PersonaPreserved(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	// Create an agent (which creates persona dir).
+	body := map[string]any{"name": "persona-test"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify persona dir was created.
+	personaDir := filepath.Join(h.Config().DataDir, "agents", "persona-test")
+	if _, err := os.Stat(personaDir); os.IsNotExist(err) {
+		t.Fatalf("persona directory should exist after create")
+	}
+
+	// Delete the agent.
+	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/persona-test", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Persona dir should still exist (per PRD: does NOT delete persona files).
+	if _, err := os.Stat(personaDir); os.IsNotExist(err) {
+		t.Fatal("persona directory should be preserved after agent delete")
+	}
+}
+
+func TestAgentCreate_SurvivesConfigReload(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "reload-test",
+		"llm_model":    "test-model",
+		"session_tier": "autonomous",
+		"description":  "Survives reload",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Read and parse the TOML file independently to verify the agent entry
+	// would survive a restart (config.Parse finds it with correct fields).
+	data, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+
+	// Unmarshal just the [[agents]] array from the TOML to verify the entry
+	// would survive a restart. We use raw TOML unmarshal (not config.Parse)
+	// because the test config has no provider credentials for full validation.
+	type agentEntry struct {
+		Name        string `toml:"name"`
+		LLMModel    string `toml:"llm_model"`
+		SessionTier string `toml:"session_tier"`
+		Description string `toml:"description"`
+		PersonaDir  string `toml:"persona_dir"`
+	}
+	var raw struct {
+		Agents []agentEntry `toml:"agents"`
+	}
+	if err = toml.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshaling TOML: %v", err)
+	}
+
+	var found *agentEntry
+	for i := range raw.Agents {
+		if raw.Agents[i].Name == "reload-test" {
+			found = &raw.Agents[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("agent 'reload-test' not found in parsed config; TOML content:\n%s", data)
+	}
+	if found.LLMModel != "test-model" {
+		t.Errorf("model = %q, want 'test-model'", found.LLMModel)
+	}
+	if found.SessionTier != "autonomous" {
+		t.Errorf("tier = %q, want 'autonomous'", found.SessionTier)
+	}
+	if found.Description != "Survives reload" {
+		t.Errorf("description = %q, want 'Survives reload'", found.Description)
+	}
+	if found.PersonaDir == "" {
+		t.Error("persona_dir should be set in persisted config")
 	}
 }

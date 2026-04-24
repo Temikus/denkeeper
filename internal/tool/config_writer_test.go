@@ -943,6 +943,101 @@ func TestRemoveChannelFromConfig_LastEntry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Agent create / delete persistence
+// ---------------------------------------------------------------------------
+
+func TestAddAgentToConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddAgentToConfig(path, "helper", "openrouter", "claude-3", "supervised", "A helper agent", "/data/agents/helper")
+	if err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	for _, want := range []string{"helper", "openrouter", "claude-3", "supervised", "A helper agent", "/data/agents/helper"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("config missing %q; content:\n%s", want, content)
+		}
+	}
+}
+
+func TestAddAgentToConfig_MinimalFields(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddAgentToConfig(path, "minimal", "", "", "", "", "")
+	if err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "minimal") {
+		t.Errorf("config missing agent name; content:\n%s", content)
+	}
+	// Optional fields should not appear.
+	if strings.Contains(content, "llm_provider") {
+		t.Errorf("config should not contain llm_provider when empty; content:\n%s", content)
+	}
+}
+
+func TestAddAgentToConfig_AppendsToExisting(t *testing.T) {
+	path := writeTestConfig(t, "[[agents]]\nname = \"default\"\n")
+
+	err := AddAgentToConfig(path, "second", "ollama", "llama3", "autonomous", "", "")
+	if err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "default") {
+		t.Errorf("config missing original agent; content:\n%s", content)
+	}
+	if !strings.Contains(content, "second") {
+		t.Errorf("config missing new agent; content:\n%s", content)
+	}
+}
+
+func TestRemoveAgentFromConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddAgentToConfig(path, "keep", "openai", "", "", "", ""); err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+	if err := AddAgentToConfig(path, "remove-me", "ollama", "", "", "", ""); err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+
+	if err := RemoveAgentFromConfig(path, "remove-me"); err != nil {
+		t.Fatalf("RemoveAgentFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "remove-me") {
+		t.Errorf("config still contains removed agent; content:\n%s", content)
+	}
+	if !strings.Contains(content, "keep") {
+		t.Errorf("config missing kept agent; content:\n%s", content)
+	}
+}
+
+func TestRemoveAgentFromConfig_LastEntry(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddAgentToConfig(path, "only-one", "", "", "", "", ""); err != nil {
+		t.Fatalf("AddAgentToConfig: %v", err)
+	}
+
+	if err := RemoveAgentFromConfig(path, "only-one"); err != nil {
+		t.Fatalf("RemoveAgentFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "agents") {
+		t.Errorf("config should not contain agents key after removing last entry; content:\n%s", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Config writer hardening (backup + concurrency)
 // ---------------------------------------------------------------------------
 

@@ -535,6 +535,50 @@ func (d *Dispatcher) RenameAgent(oldName, newName string) error {
 	return nil
 }
 
+// AddAgent registers a new engine in the dispatcher's runtime map.
+// Returns an error if the name is already taken.
+func (d *Dispatcher) AddAgent(name string, engine *Engine) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if _, exists := d.agents[name]; exists {
+		return fmt.Errorf("agent %q already exists", name)
+	}
+	d.agents[name] = engine
+	return nil
+}
+
+// RemoveAgent removes an engine from the dispatcher's runtime map.
+// Returns an error if the agent does not exist or is "default".
+// Callers must check for channel/schedule references before calling.
+func (d *Dispatcher) RemoveAgent(name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if name == "default" {
+		return fmt.Errorf("cannot remove the default agent")
+	}
+	if _, ok := d.agents[name]; !ok {
+		return fmt.Errorf("agent %q not found", name)
+	}
+
+	delete(d.agents, name)
+
+	// Clean up legacy binding maps that reference this agent.
+	for k, v := range d.specific {
+		if v == name {
+			delete(d.specific, k)
+		}
+	}
+	for k, v := range d.wildcard {
+		if v == name {
+			delete(d.wildcard, k)
+		}
+	}
+
+	return nil
+}
+
 // ListModels returns available LLM models by querying the default agent's router.
 func (d *Dispatcher) ListModels(ctx context.Context) []string {
 	if e := d.agents["default"]; e != nil {

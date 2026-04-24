@@ -465,4 +465,15 @@
   .btn-link:hover { opacity: 0.8; }
   .btn-danger-text { color: var(--danger); }
   .btn-danger-text:hover { background: rgba(224,92,110,0.1); }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .layout { flex-direction: column; }
+    .list { width: 100%; flex-direction: row; overflow-x: auto; }
+    .field { flex-direction: column; gap: 4px; }
+    .field-label { width: auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .item { transition: none; }
+  }
 </style>

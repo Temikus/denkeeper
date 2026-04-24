@@ -333,3 +333,116 @@ describe('Agents persona sections', () => {
     })
   })
 })
+
+describe('Agents create', () => {
+  test('add button opens inline form', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByTestId('add-agent-btn'))
+
+    await fireEvent.click(screen.getByTestId('add-agent-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-form')).toBeInTheDocument()
+      expect(screen.getByText('Add Agent')).toBeInTheDocument()
+    })
+  })
+
+  test('create form submits to API', async () => {
+    let createCalled = false
+    server.use(
+      http.post('/api/v1/agents', async ({ request }) => {
+        const body = await request.json()
+        createCalled = true
+        expect(body.name).toBe('new-agent')
+        return HttpResponse.json({ name: 'new-agent', status: 'created' }, { status: 201 })
+      })
+    )
+
+    render(Agents)
+    await waitFor(() => screen.getByTestId('add-agent-btn'))
+
+    await fireEvent.click(screen.getByTestId('add-agent-btn'))
+    await waitFor(() => screen.getByTestId('agent-name-input'))
+
+    const input = screen.getByTestId('agent-name-input')
+    await fireEvent.input(input, { target: { value: 'new-agent' } })
+    await fireEvent.click(screen.getByTestId('agent-save-btn'))
+
+    await waitFor(() => expect(createCalled).toBe(true))
+  })
+
+  test('form shows validation error for invalid name', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByTestId('add-agent-btn'))
+
+    await fireEvent.click(screen.getByTestId('add-agent-btn'))
+    await waitFor(() => screen.getByTestId('agent-name-input'))
+
+    const input = screen.getByTestId('agent-name-input')
+    await fireEvent.input(input, { target: { value: 'INVALID NAME' } })
+    await fireEvent.click(screen.getByTestId('agent-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+  })
+})
+
+describe('Agents delete', () => {
+  test('delete button hidden for default agent', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByText('default'))
+
+    // Select default agent (first one).
+    await fireEvent.click(screen.getByText('default'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('delete-agent-btn')).toBeNull()
+    })
+  })
+
+  test('delete button shows for non-default agent', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByText('helper'))
+
+    await fireEvent.click(screen.getByText('helper'))
+    await waitFor(() => {
+      expect(screen.getByTestId('delete-agent-btn')).toBeInTheDocument()
+    })
+  })
+
+  test('delete button shows confirmation', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByText('helper'))
+
+    await fireEvent.click(screen.getByText('helper'))
+    await waitFor(() => screen.getByTestId('delete-agent-btn'))
+
+    await fireEvent.click(screen.getByTestId('delete-agent-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('delete-confirm')).toBeInTheDocument()
+      expect(screen.getByTestId('delete-confirm-btn')).toBeInTheDocument()
+    })
+  })
+
+  test('confirming delete calls API', async () => {
+    let deleteCalled = false
+    server.use(
+      http.delete('/api/v1/agents/:name', ({ params }) => {
+        deleteCalled = true
+        expect(params.name).toBe('helper')
+        return new HttpResponse(null, { status: 204 })
+      })
+    )
+
+    render(Agents)
+    await waitFor(() => screen.getByText('helper'))
+
+    await fireEvent.click(screen.getByText('helper'))
+    await waitFor(() => screen.getByTestId('delete-agent-btn'))
+
+    await fireEvent.click(screen.getByTestId('delete-agent-btn'))
+    await waitFor(() => screen.getByTestId('delete-confirm-btn'))
+
+    await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
+    await waitFor(() => expect(deleteCalled).toBe(true))
+  })
+})

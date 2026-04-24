@@ -107,7 +107,15 @@ type Harness struct {
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
 	APIKey      string
+	configPath  string
+	config      *config.Config
 }
+
+// ConfigPath returns the TOML config path used by this harness (empty if none).
+func (h *Harness) ConfigPath() string { return h.configPath }
+
+// Config returns the in-memory Config struct used by this harness.
+func (h *Harness) Config() *config.Config { return h.config }
 
 // HarnessOpts allows customizing the harness setup.
 type HarnessOpts struct {
@@ -141,6 +149,10 @@ type HarnessOpts struct {
 	// for the first agent with channel tools wired from the dispatcher.
 	// Requires Channels to be set.
 	WithConfigMCP bool
+
+	// WithAgentFactory, when true, populates deps.AgentFactory so that
+	// agent CRUD endpoints can build engines at runtime.
+	WithAgentFactory bool
 }
 
 type agentSetup struct {
@@ -356,6 +368,35 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		},
 	}
 
+	if opts.WithAgentFactory {
+		deps.AgentFactory = func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
+			tier := ac.SessionTier
+			if tier == "" {
+				tier = "supervised"
+			}
+			model := ac.LLMModel
+			if model == "" {
+				model = "test-model"
+			}
+			perms, err := security.NewPermissionEngine(tier)
+			if err != nil {
+				return nil, nil, err
+			}
+			router := llm.NewRouter("mock", model, costTracker)
+			router.RegisterProvider(mock)
+			e := agent.NewEngine(
+				ac.Name, router, mem, nil, perms, nil,
+				"You are "+ac.Name+" test agent.",
+				nil, opts.ToolManager, approvalMgr, logger,
+			)
+			var bindings []agent.Binding
+			for _, adapter := range ac.Adapters {
+				bindings = append(bindings, agent.Binding{Pattern: adapter, AgentName: ac.Name})
+			}
+			return e, bindings, nil
+		}
+	}
+
 	srv := api.New(cfg, deps, logger)
 
 	return &Harness{
@@ -372,6 +413,8 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
 		APIKey:      apiKey,
+		configPath:  opts.ConfigPath,
+		config:      deps.Config,
 	}
 }
 

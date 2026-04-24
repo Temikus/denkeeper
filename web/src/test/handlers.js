@@ -17,6 +17,19 @@ export const handlers = [
     return agent ? HttpResponse.json(agent) : new HttpResponse(null, { status: 404 })
   }),
   http.patch('/api/v1/agents/:name', () => HttpResponse.json({ ok: true })),
+  http.post('/api/v1/agents', async ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({
+      name: body.name,
+      status: 'created',
+    }, { status: 201 })
+  }),
+  http.delete('/api/v1/agents/:name', ({ params }) => {
+    if (params.name === 'default') {
+      return HttpResponse.json({ error: 'cannot delete the default agent' }, { status: 400 })
+    }
+    return new HttpResponse(null, { status: 204 })
+  }),
 
   // Models
   http.get('/api/v1/models', () => HttpResponse.json({ models: ['claude-3-opus', 'gpt-4o'] })),

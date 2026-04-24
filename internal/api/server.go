@@ -70,6 +70,7 @@ type Deps struct {
 	OAuthDeps         *OAuthDeps                                                       // nil = OAuth tool endpoints return 503
 	ReloadFunc        func() error                                                     // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                     // nil = restart endpoint returns 503
+	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
 	Version           string                                                           // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                           // git commit hash
 	BuildDate         string                                                           // build timestamp
@@ -154,7 +155,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Data endpoints — require auth with appropriate scopes.
 	mux.HandleFunc("GET /api/v1/agents", s.RequireScope("admin", s.handleAgents))
 	mux.HandleFunc("GET /api/v1/agents/{name}", s.RequireScope("admin", s.handleAgent))
+	mux.HandleFunc("POST /api/v1/agents", s.RequireScope("admin", s.handleCreateAgent))
 	mux.HandleFunc("PATCH /api/v1/agents/{name}", s.RequireScope("agents:write", s.handleAgentConfigUpdate))
+	mux.HandleFunc("DELETE /api/v1/agents/{name}", s.RequireScope("admin", s.handleDeleteAgent))
 	mux.HandleFunc("GET /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:read", s.handleGetPersona))
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))

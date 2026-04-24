@@ -507,6 +507,72 @@ func RenameAgentInConfig(path, oldName, newName string) error {
 	return writeRawConfig(path, raw)
 }
 
+// agentToMap converts agent creation fields to a generic map for TOML serialization.
+// Zero-value fields are omitted.
+func agentToMap(name, provider, model, tier, description, personaDir string) map[string]any {
+	m := map[string]any{"name": name}
+	if provider != "" {
+		m["llm_provider"] = provider
+	}
+	if model != "" {
+		m["llm_model"] = model
+	}
+	if tier != "" {
+		m["session_tier"] = tier
+	}
+	if description != "" {
+		m["description"] = description
+	}
+	if personaDir != "" {
+		m["persona_dir"] = personaDir
+	}
+	return m
+}
+
+// AddAgentToConfig appends an [[agents]] entry to the TOML config.
+func AddAgentToConfig(path, name, provider, model, tier, description, personaDir string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := agentToMap(name, provider, model, tier, description, personaDir)
+
+	agents := rawAgents(raw)
+	agents = append(agents, entry)
+	raw["agents"] = agents
+	return writeRawConfig(path, raw)
+}
+
+// RemoveAgentFromConfig removes an [[agents]] entry matched by name.
+func RemoveAgentFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	agents := rawAgents(raw)
+	filtered := make([]any, 0, len(agents))
+	for _, a := range agents {
+		if m, ok := a.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	if len(filtered) == 0 {
+		delete(raw, "agents")
+	} else {
+		raw["agents"] = filtered
+	}
+	return writeRawConfig(path, raw)
+}
+
 // rawAgents extracts the agents array from the raw config map.
 func rawAgents(raw map[string]any) []any {
 	switch v := raw["agents"].(type) {

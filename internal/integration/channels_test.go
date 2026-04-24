@@ -780,3 +780,95 @@ func TestChannels_SupervisedDenialFlow(t *testing.T) {
 		t.Errorf("expected 2 LLM calls, got %d", h.MockLLM.CallCount())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Channel CRUD — TOML persistence round-trip tests
+// ---------------------------------------------------------------------------
+
+func TestChannels_CreatePersistsToTOML(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	body := map[string]any{
+		"name":  "persisted-ch",
+		"agent": "work-agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Read the TOML file and verify the channel entry exists.
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config file: %v", err)
+	}
+	if !strings.Contains(string(content), "persisted-ch") {
+		t.Errorf("config file missing channel name; content:\n%s", content)
+	}
+	if !strings.Contains(string(content), "work-agent") {
+		t.Errorf("config file missing agent name; content:\n%s", content)
+	}
+}
+
+func TestChannels_UpdatePersistsToTOML(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	// Create a channel first.
+	body := map[string]any{
+		"name":  "update-me",
+		"agent": "work-agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Update it.
+	patch := map[string]any{
+		"agent":    "personal-agent",
+		"delivery": "broadcast",
+	}
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/channels/update-me", patch))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config file: %v", err)
+	}
+	if !strings.Contains(string(content), "personal-agent") {
+		t.Errorf("config file missing updated agent; content:\n%s", content)
+	}
+	if !strings.Contains(string(content), "broadcast") {
+		t.Errorf("config file missing updated delivery; content:\n%s", content)
+	}
+}
+
+func TestChannels_DeletePersistsToTOML(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	// Create a channel.
+	body := map[string]any{
+		"name":  "delete-me",
+		"agent": "work-agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete it.
+	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/channels/delete-me", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config file: %v", err)
+	}
+	if strings.Contains(string(content), "delete-me") {
+		t.Errorf("config file still contains deleted channel; content:\n%s", content)
+	}
+}

@@ -47,6 +47,11 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify(data),
   }),
+  createAgent: (data) => apiFetch('/api/v1/agents', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  deleteAgent: (name) => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Costs
   costs: (agent) => apiFetch(`/api/v1/costs${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),

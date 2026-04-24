@@ -353,9 +353,144 @@
     if (!tier) return '—'
     return tier.charAt(0).toUpperCase() + tier.slice(1)
   }
+
+  // ---------------------------------------------------------------------------
+  // Agent create
+  // ---------------------------------------------------------------------------
+  let showAddForm = $state(false)
+  let formName = $state('')
+  let formProvider = $state('')
+  let formModel = $state('')
+  let formTier = $state('supervised')
+  let formDescription = $state('')
+  let formSaving = $state(false)
+  let formError = $state('')
+
+  function openAddForm() {
+    formName = ''
+    formProvider = enabledProviders.length ? enabledProviders[0] : ''
+    formModel = ''
+    formTier = 'supervised'
+    formDescription = ''
+    formError = ''
+    showAddForm = true
+  }
+
+  function closeAddForm() {
+    showAddForm = false
+    formError = ''
+  }
+
+  async function saveNewAgent() {
+    formError = ''
+    const name = formName.trim()
+    if (!name) { formError = 'Name is required'; return }
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+      formError = 'Name must be lowercase alphanumeric with hyphens only'
+      return
+    }
+    formSaving = true
+    try {
+      const data = { name }
+      if (formProvider) data.llm_provider = formProvider
+      if (formModel) data.llm_model = formModel
+      if (formTier) data.session_tier = formTier
+      if (formDescription.trim()) data.description = formDescription.trim()
+      await api.createAgent(data)
+      agents = (await api.agents()) || []
+      showAddForm = false
+      const created = agents.find(a => a.name === name)
+      if (created) selectAgent(created)
+    } catch (e) {
+      formError = e.message
+    } finally {
+      formSaving = false
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Agent delete
+  // ---------------------------------------------------------------------------
+  let confirmDelete = $state(null) // agent name to confirm delete
+  let deleting = $state(false)
+  let deleteError = $state('')
+
+  async function performDelete(name) {
+    deleting = true
+    deleteError = ''
+    try {
+      await api.deleteAgent(name)
+      agents = (await api.agents()) || []
+      confirmDelete = null
+      if (selected?.name === name) {
+        if (agents.length) selectAgent(agents[0])
+        else { selected = null; detail = null }
+      }
+    } catch (e) {
+      deleteError = e.message
+    } finally {
+      deleting = false
+    }
+  }
 </script>
 
+<div class="page-header">
+  <h1 class="page-title">Agents</h1>
+  <button class="btn-primary btn-sm" onclick={openAddForm} data-testid="add-agent-btn">+ Add Agent</button>
+</div>
 <ErrorBanner message={error} />
+
+{#if showAddForm}
+<div class="inline-panel open">
+  <div class="inline-panel-inner">
+    <div class="inline-form" data-testid="agent-form">
+      <h2 class="form-title">Add Agent</h2>
+      {#if formError}
+        <div class="inline-error" role="alert">{formError}</div>
+      {/if}
+      <div class="row">
+        <label>
+          Name
+          <input type="text" bind:value={formName} disabled={formSaving} placeholder="e.g. helper" data-testid="agent-name-input" />
+        </label>
+        <label>
+          Provider
+          <select bind:value={formProvider} disabled={formSaving}>
+            <option value="">Default</option>
+            {#each enabledProviders as p}
+              <option value={p}>{p}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>
+          Model
+          <input type="text" bind:value={formModel} disabled={formSaving} placeholder="e.g. claude-sonnet-4-20250514" />
+        </label>
+        <label>
+          Permission Tier
+          <select bind:value={formTier} disabled={formSaving}>
+            <option value="autonomous">Autonomous</option>
+            <option value="supervised">Supervised</option>
+            <option value="restricted">Restricted</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        Description
+        <input type="text" bind:value={formDescription} disabled={formSaving} placeholder="Optional description" />
+      </label>
+      <div class="form-actions">
+        <button class="btn-primary" onclick={saveNewAgent} disabled={formSaving || !formName.trim()} data-testid="agent-save-btn">
+          {formSaving ? 'Creating\u2026' : 'Create'}
+        </button>
+        <button class="btn-ghost" onclick={closeAddForm} disabled={formSaving}>Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{/if}
 
 <div class="layout">
   <aside class="list">
@@ -424,10 +559,29 @@
             {#if detail.model}· {detail.model}{/if}
           </p>
         </div>
-        {#if configSaveOk}
-          <span class="save-ok">Saved</span>
-        {/if}
+        <div class="header-actions">
+          {#if configSaveOk}
+            <span class="save-ok">Saved</span>
+          {/if}
+          {#if detail.name !== 'default'}
+            <button class="btn-ghost btn-sm btn-danger-text" onclick={() => { confirmDelete = detail.name; deleteError = '' }} data-testid="delete-agent-btn">Delete</button>
+          {/if}
+        </div>
       </div>
+      {#if confirmDelete === detail.name}
+        <div class="delete-confirm" data-testid="delete-confirm">
+          <span>Delete agent <strong>{detail.name}</strong>?</span>
+          {#if deleteError}
+            <div class="inline-error" role="alert">{deleteError}</div>
+          {/if}
+          <div class="delete-actions">
+            <button class="btn-primary btn-danger" onclick={() => performDelete(detail.name)} disabled={deleting} data-testid="delete-confirm-btn">
+              {deleting ? 'Deleting\u2026' : 'Delete'}
+            </button>
+            <button class="btn-ghost" onclick={() => { confirmDelete = null; deleteError = '' }} disabled={deleting}>Cancel</button>
+          </div>
+        </div>
+      {/if}
 
       <!-- Stats cards — summary row -->
       <div class="stat-cards">
@@ -791,6 +945,24 @@
   .agent-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
   .agent-name { font-size: 28px; font-weight: 700; margin: 0; line-height: 1.2; }
   .agent-subtitle { font-size: 14px; color: var(--text-muted); margin: 4px 0 0; }
+  .header-actions { display: flex; align-items: center; gap: 8px; }
+  .btn-danger-text { color: var(--danger); }
+  .btn-danger-text:hover { background: rgba(224,92,110,0.1); }
+  .delete-confirm {
+    background: var(--surface);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .delete-confirm .inline-error { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
+  .delete-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-danger { background: var(--danger); color: #fff; border: none; padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+  .btn-danger:hover:not(:disabled) { opacity: 0.85; }
+  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+  .form-title { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 8px; }
 
   /* Stat cards */
   .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }

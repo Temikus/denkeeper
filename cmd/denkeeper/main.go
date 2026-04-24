@@ -1447,6 +1447,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// Re-create dispatcher with the fully wired engines, bindings, and channels.
 	dispatcher = buildDispatcherWithChannels(ctx, cfg, engines, bindings, adapters, st.memory, logger)
 
+	// Update abc.dispatcher so the AgentFactory closure captures the final
+	// dispatcher (with channels and engines wired up).
+	abc.dispatcher = dispatcher
+
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 	wireSkillCommands(tgAdapter, engines, logger)
 
@@ -1479,7 +1483,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 			OAuthDeps:         oauthDeps,
 			ReloadFunc:        buildReloadFunc(path, cfg, logger),
 			RestartFunc:       selfRestartFunc,
-			Version:           version,
+			AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
+				return buildAgentEngine(ctx, ac, abc)
+			},
+			Version: version,
 			Commit:            commit,
 			BuildDate:         date,
 		}, logger); err != nil {
