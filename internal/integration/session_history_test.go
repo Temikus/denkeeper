@@ -52,7 +52,7 @@ func TestClearSession_RemovesMessages(t *testing.T) {
 	}
 
 	// Conversation row should still exist.
-	convos, _ := h.Memory.ListConversations(ctx)
+	convos, _, _ := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	found := false
 	for _, c := range convos {
 		if c.ID == "clear-test" {
@@ -97,7 +97,7 @@ func TestClearSession_EphemeralChannel(t *testing.T) {
 	}
 
 	// Find the ephemeral session ID.
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestCompactSession_EphemeralChannel(t *testing.T) {
 	}
 
 	// Find the ephemeral session ID.
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
@@ -273,5 +273,19 @@ func TestCompactSession_EphemeralChannel(t *testing.T) {
 	compactRec := h.Do(compactReq)
 	if compactRec.Code != http.StatusOK {
 		t.Fatalf("compact: status = %d, want 200; body: %s", compactRec.Code, compactRec.Body.String())
+	}
+}
+
+func TestDeleteSession_RequiresWriteScope(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Scopes: []string{"sessions:read"}, // no sessions:write
+	})
+	ctx := context.Background()
+	_ = h.Memory.GetOrCreateConversationByID(ctx, "default:api:del-scope", "api", "del-scope")
+
+	req := h.AuthedRequest(http.MethodDelete, "/api/v1/sessions/default:api:del-scope", nil)
+	rec := h.Do(req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }

@@ -284,7 +284,7 @@ func TestMemoryStore_DeleteConversation(t *testing.T) {
 	}
 
 	// Conversations list should not include it.
-	convos, err := store.ListConversations(ctx)
+	convos, _, err := store.ListConversations(ctx, SessionListOpts{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestPruneConversations_RemovesOld(t *testing.T) {
 	}
 
 	// Verify old is gone, new remains.
-	convos, _ := store.ListConversations(ctx)
+	convos, _, _ := store.ListConversations(ctx, SessionListOpts{})
 	if len(convos) != 1 {
 		t.Fatalf("remaining conversations = %d, want 1", len(convos))
 	}
@@ -750,7 +750,7 @@ func TestPruneByCount_RemovesOldest(t *testing.T) {
 		t.Errorf("pruned %d, want 2", n)
 	}
 
-	convos, _ := store.ListConversations(ctx)
+	convos, _, _ := store.ListConversations(ctx, SessionListOpts{})
 	if len(convos) != 3 {
 		t.Errorf("remaining conversations: %d, want 3", len(convos))
 	}
@@ -803,7 +803,7 @@ func TestListConversationsWithStats(t *testing.T) {
 		TokensPrompt: 100, TokensCompletion: 50,
 	}, 0, 0)
 
-	convos, err := store.ListConversationsWithStats(ctx)
+	convos, _, err := store.ListConversationsWithStats(ctx, SessionListOpts{})
 	if err != nil {
 		t.Fatalf("ListConversationsWithStats: %v", err)
 	}
@@ -812,6 +812,144 @@ func TestListConversationsWithStats(t *testing.T) {
 	}
 	if convos[0].TotalCost != 0.05 || convos[0].LastModel != "gpt-4" {
 		t.Errorf("stats mismatch: cost=%f model=%s", convos[0].TotalCost, convos[0].LastModel)
+	}
+	if convos[0].UpdatedAt == nil {
+		t.Error("expected UpdatedAt to be populated after UpdateConversationStats")
+	}
+}
+
+func TestListConversationsWithStats_SortsByLastActivity(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	// Create two conversations. "old" is created first but will have newer activity.
+	_, _ = store.GetOrCreateConversation(ctx, "test", "old")
+	_, _ = store.GetOrCreateConversation(ctx, "test", "new")
+
+	// Add stats to "new" first, then "old" — so "old" has the more recent updated_at.
+	_ = store.UpdateConversationStats(ctx, "test:new", StoredMessage{
+		Cost: 0.01, Model: "m1", Provider: "p1",
+	}, 0, 0)
+	_ = store.UpdateConversationStats(ctx, "test:old", StoredMessage{
+		Cost: 0.02, Model: "m2", Provider: "p2",
+	}, 0, 0)
+
+	convos, _, err := store.ListConversationsWithStats(ctx, SessionListOpts{})
+	if err != nil {
+		t.Fatalf("ListConversationsWithStats: %v", err)
+	}
+	if len(convos) != 2 {
+		t.Fatalf("expected 2, got %d", len(convos))
+	}
+	// "old" had the more recent UpdateConversationStats call, so it should sort first.
+	if convos[0].ID != "test:old" {
+		t.Errorf("expected test:old first (most recent activity), got %s", convos[0].ID)
+	}
+	if convos[1].ID != "test:new" {
+		t.Errorf("expected test:new second, got %s", convos[1].ID)
+	}
+}
+
+func TestListConversations_Pagination(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	// Create 5 conversations.
+	for i := 0; i < 5; i++ {
+		_, _ = store.GetOrCreateConversation(ctx, "test", fmt.Sprintf("user%d", i))
+	}
+
+	// List all — no limit.
+	all, total, err := store.ListConversations(ctx, SessionListOpts{})
+	if err != nil {
+		t.Fatalf("listing all: %v", err)
+	}
+	if total != 5 {
+		t.Errorf("total = %d, want 5", total)
+	}
+	if len(all) != 5 {
+		t.Errorf("len = %d, want 5", len(all))
+	}
+
+	// Page 1: limit 2, offset 0.
+	page1, total1, err := store.ListConversations(ctx, SessionListOpts{Limit: 2, Offset: 0})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if total1 != 5 {
+		t.Errorf("page1 total = %d, want 5", total1)
+	}
+	if len(page1) != 2 {
+		t.Errorf("page1 len = %d, want 2", len(page1))
+	}
+
+	// Page 2: limit 2, offset 2.
+	page2, _, err := store.ListConversations(ctx, SessionListOpts{Limit: 2, Offset: 2})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2) != 2 {
+		t.Errorf("page2 len = %d, want 2", len(page2))
+	}
+
+	// Page 3: limit 2, offset 4 — only 1 remaining.
+	page3, _, err := store.ListConversations(ctx, SessionListOpts{Limit: 2, Offset: 4})
+	if err != nil {
+		t.Fatalf("page3: %v", err)
+	}
+	if len(page3) != 1 {
+		t.Errorf("page3 len = %d, want 1", len(page3))
+	}
+}
+
+func TestListConversations_AgentFilter(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	// Create conversations with different agent prefixes.
+	_ = store.GetOrCreateConversationByID(ctx, "alpha:tg:1", "tg", "alpha-1")
+	_ = store.GetOrCreateConversationByID(ctx, "alpha:tg:2", "tg", "alpha-2")
+	_ = store.GetOrCreateConversationByID(ctx, "beta:tg:1", "tg", "beta-1")
+
+	// Filter by agent "alpha".
+	filtered, total, err := store.ListConversations(ctx, SessionListOpts{Agent: "alpha"})
+	if err != nil {
+		t.Fatalf("filtering: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
+	}
+	if len(filtered) != 2 {
+		t.Errorf("len = %d, want 2", len(filtered))
+	}
+	for _, c := range filtered {
+		if !strings.HasPrefix(c.ID, "alpha:") {
+			t.Errorf("unexpected conversation ID: %s", c.ID)
+		}
+	}
+
+	// Filter by agent "beta".
+	beta, betaTotal, err := store.ListConversations(ctx, SessionListOpts{Agent: "beta"})
+	if err != nil {
+		t.Fatalf("beta filter: %v", err)
+	}
+	if betaTotal != 1 {
+		t.Errorf("beta total = %d, want 1", betaTotal)
+	}
+	if len(beta) != 1 {
+		t.Errorf("beta len = %d, want 1", len(beta))
 	}
 }
 
@@ -1041,7 +1179,7 @@ func TestClearMessages_KeepsConversation(t *testing.T) {
 	}
 
 	// Conversation row should still exist.
-	convos, err := store.ListConversations(ctx)
+	convos, _, err := store.ListConversations(ctx, SessionListOpts{})
 	if err != nil {
 		t.Fatalf("ListConversations: %v", err)
 	}

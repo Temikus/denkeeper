@@ -90,11 +90,21 @@ export const api = {
   }),
 
   // Sessions
-  sessions: () => apiFetch('/api/v1/sessions'),
+  sessions: (opts = {}) => {
+    const params = new URLSearchParams()
+    if (opts.limit) params.set('limit', String(opts.limit))
+    if (opts.offset) params.set('offset', String(opts.offset))
+    if (opts.agent) params.set('agent', opts.agent)
+    const qs = params.toString()
+    return apiFetch(`/api/v1/sessions${qs ? '?' + qs : ''}`)
+  },
   sessionMessages: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/messages`),
   deleteSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/clear`, { method: 'POST' }),
   compactSession: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/compact`, { method: 'POST' }),
+  sessionStats: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/stats`),
+  sessionToolCalls: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/tool-calls`),
+  sessionSkills: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/skills`),
 
   // Approvals
   approvals: (status = '') => apiFetch(`/api/v1/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),

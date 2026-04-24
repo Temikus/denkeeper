@@ -3,7 +3,7 @@ import {
   agents, sessions, messages, approvals, costs, skills, schedules,
   tools, plugins, browserProfiles, browserSessions, kvEntries,
   apiKeys, autoApproveRules, personaSections, auditEvents, auditStats,
-  channels,
+  channels, sessionStats, sessionToolCalls, sessionSkillUsages,
 } from './fixtures/index.js'
 
 export const handlers = [
@@ -59,9 +59,14 @@ export const handlers = [
   http.delete('/api/v1/channels/:name/activate', () => HttpResponse.json({ status: 'deactivated' })),
 
   // Sessions
-  http.get('/api/v1/sessions', () => HttpResponse.json(sessions)),
+  http.get('/api/v1/sessions', () => HttpResponse.json({ sessions, total: sessions.length, limit: 50, offset: 0 })),
   http.get('/api/v1/sessions/:id/messages', () => HttpResponse.json(messages)),
+  http.get('/api/v1/sessions/:id/stats', () => HttpResponse.json(sessionStats)),
+  http.get('/api/v1/sessions/:id/tool-calls', () => HttpResponse.json(sessionToolCalls)),
+  http.get('/api/v1/sessions/:id/skills', () => HttpResponse.json(sessionSkillUsages)),
   http.delete('/api/v1/sessions/:id', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/sessions/:id/clear', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/sessions/:id/compact', () => HttpResponse.json({ summary: 'Session compacted.' })),
 
   // Approvals
   http.get('/api/v1/approvals', () => HttpResponse.json(approvals)),

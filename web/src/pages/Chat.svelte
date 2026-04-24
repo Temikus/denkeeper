@@ -45,8 +45,9 @@
   async function loadSessions() {
     try {
       const res = await api.sessions()
-      sessions = (res || []).sort((a, b) =>
-        new Date(b.created_at) - new Date(a.created_at)
+      const list = res.sessions || []
+      sessions = list.sort((a, b) =>
+        new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
       )
     } catch (_) {}
   }

@@ -507,10 +507,11 @@ describe('API method smoke tests', () => {
     expect(result[0].name).toBe('daily-check')
   })
 
-  test('sessions() returns session list', async () => {
+  test('sessions() returns paginated session list', async () => {
     token.set('key')
     const result = await api.sessions()
-    expect(result).toHaveLength(2)
+    expect(result.sessions).toHaveLength(2)
+    expect(result.total).toBe(2)
   })
 
   test('listTools() returns tool list', async () => {

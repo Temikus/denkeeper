@@ -721,16 +721,22 @@ func TestSessions_ListsConversations(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	var sessions []map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&sessions); err != nil {
+	var result struct {
+		Sessions []map[string]any `json:"sessions"`
+		Total    int              `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(sessions) != 1 {
-		t.Fatalf("sessions count = %d, want 1", len(sessions))
+	if len(result.Sessions) != 1 {
+		t.Fatalf("sessions count = %d, want 1", len(result.Sessions))
 	}
-	msgCount, _ := sessions[0]["message_count"].(float64)
+	if result.Total != 1 {
+		t.Errorf("total = %d, want 1", result.Total)
+	}
+	msgCount, _ := result.Sessions[0]["message_count"].(float64)
 	if int(msgCount) != 1 {
-		t.Errorf("message_count = %v, want 1", sessions[0]["message_count"])
+		t.Errorf("message_count = %v, want 1", result.Sessions[0]["message_count"])
 	}
 }
 
@@ -1704,15 +1710,18 @@ func TestSessions_EmptyListReturnsArray(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := strings.TrimSpace(rec.Body.String())
-	if body == "null" {
-		t.Error("sessions response is JSON null; want [] for empty list (Svelte #each crashes on null)")
+	var result struct {
+		Sessions []map[string]any `json:"sessions"`
+		Total    int              `json:"total"`
 	}
-	var list []map[string]any
-	if err := json.NewDecoder(strings.NewReader(body)).Decode(&list); err != nil {
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if list == nil {
+	if result.Sessions == nil {
 		t.Error("sessions decoded to nil slice, want non-nil empty slice")
+	}
+	if result.Total != 0 {
+		t.Errorf("total = %d, want 0", result.Total)
 	}
 }
 

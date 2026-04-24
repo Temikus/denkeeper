@@ -4,8 +4,31 @@ export const agents = [
 ]
 
 export const sessions = [
-  { id: 'sess-1', agent: 'default', created_at: '2026-01-01T00:00:00Z', message_count: 2, channel: 'work' },
-  { id: 'sess-2', agent: 'helper', created_at: '2026-01-02T00:00:00Z', message_count: 5, channel: '' },
+  { id: 'sess-1', agent: 'default', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T12:00:00Z', message_count: 12, channel: 'work', total_cost: 0.0284, last_model: 'claude-3-opus', last_provider: 'anthropic', total_tokens_prompt: 4200, total_tokens_completion: 1800 },
+  { id: 'sess-2', agent: 'helper', created_at: '2026-01-02T00:00:00Z', message_count: 5, channel: '', total_cost: 0, last_model: '', last_provider: '', total_tokens_prompt: 0, total_tokens_completion: 0 },
+]
+
+export const sessionStats = {
+  conversation_id: 'sess-1',
+  total_messages: 12,
+  total_cost: 0.0284,
+  total_tokens_prompt: 4200,
+  total_tokens_completion: 1800,
+  total_tokens_cached: 500,
+  total_tool_calls: 3,
+  total_tool_errors: 0,
+  last_model: 'claude-3-opus',
+  last_provider: 'anthropic',
+  updated_at: '2026-01-01T12:00:00Z',
+}
+
+export const sessionToolCalls = [
+  { id: 1, tool_name: 'web_search', server_name: 'search-mcp', round: 1, duration_ms: 1200, success: true, error_msg: '', created_at: '2026-01-01T10:00:00Z' },
+  { id: 2, tool_name: 'read_file', server_name: 'fs-mcp', round: 2, duration_ms: 45, success: true, error_msg: '', created_at: '2026-01-01T10:01:00Z' },
+]
+
+export const sessionSkillUsages = [
+  { id: 1, skill_name: 'greeting', match_type: 'trigger', created_at: '2026-01-01T10:00:00Z' },
 ]
 
 export const messages = [

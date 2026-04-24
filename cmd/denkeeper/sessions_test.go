@@ -28,7 +28,7 @@ func TestSessionsList_Empty(t *testing.T) {
 	// Since we can't easily do that, we'll test the underlying logic directly
 	// by calling the store methods and verifying output format.
 	ctx := context.Background()
-	convos, err := store.ListConversations(ctx)
+	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSessionsList_WithData(t *testing.T) {
 	id2, _ := store.GetOrCreateConversation(ctx, "discord", "user2")
 	_, _ = store.AddMessage(ctx, id2, agent.StoredMessage{Role: "user", Content: "hey"})
 
-	convos, err := store.ListConversations(ctx)
+	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestSessionsDelete_WithYes(t *testing.T) {
 		t.Fatalf("deleting: %v", err)
 	}
 
-	convos, _ := store.ListConversations(ctx)
+	convos, _, _ := store.ListConversations(ctx, agent.SessionListOpts{})
 	if len(convos) != 0 {
 		t.Errorf("expected 0 conversations after delete, got %d", len(convos))
 	}
@@ -234,7 +234,7 @@ func TestSessionsPrune_RemovesOld(t *testing.T) {
 	newID, _ := store.GetOrCreateConversation(ctx, "telegram", "new")
 	_, _ = store.AddMessage(ctx, newID, agent.StoredMessage{Role: "user", Content: "new msg"})
 
-	convos, _ := store.ListConversations(ctx)
+	convos, _, _ := store.ListConversations(ctx, agent.SessionListOpts{})
 	if len(convos) != 2 {
 		t.Fatalf("expected 2 conversations, got %d", len(convos))
 	}

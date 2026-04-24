@@ -96,7 +96,7 @@ func runSessionsList(w *os.File) error {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	convos, err := store.ListConversations(ctx)
+	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}

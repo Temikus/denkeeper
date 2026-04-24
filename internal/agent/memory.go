@@ -82,11 +82,26 @@ type ConversationStatsRow struct {
 // ConversationInfoWithStats combines conversation metadata with telemetry stats.
 type ConversationInfoWithStats struct {
 	ConversationInfo
-	TotalCost    float64 `db:"total_cost"    json:"total_cost"`
-	TotalPrompt  int     `db:"total_tokens_prompt"  json:"total_tokens_prompt"`
-	TotalCompl   int     `db:"total_tokens_completion" json:"total_tokens_completion"`
-	LastModel    string  `db:"last_model"    json:"last_model"`
-	LastProvider string  `db:"last_provider" json:"last_provider"`
+	TotalCost    float64    `db:"total_cost"    json:"total_cost"`
+	TotalPrompt  int        `db:"total_tokens_prompt"  json:"total_tokens_prompt"`
+	TotalCompl   int        `db:"total_tokens_completion" json:"total_tokens_completion"`
+	LastModel    string     `db:"last_model"    json:"last_model"`
+	LastProvider string     `db:"last_provider" json:"last_provider"`
+	UpdatedAt    *time.Time `db:"updated_at"    json:"updated_at,omitempty"`
+}
+
+// SessionListOpts controls pagination and filtering for session listing.
+type SessionListOpts struct {
+	Limit  int    // 0 = no limit (return all)
+	Offset int
+	Agent  string // filter by agent prefix in conversation ID
+}
+
+// escapeLike escapes SQL LIKE wildcards (% and _) so the value is treated
+// as a literal prefix. The caller must add ESCAPE '\' to the query.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // MemoryStore defines the interface for conversation persistence.
@@ -100,7 +115,7 @@ type MemoryStore interface {
 	GetOrCreateConversationByID(ctx context.Context, convID, adapter, externalID string) error
 	AddMessage(ctx context.Context, convID string, msg StoredMessage) (int64, error)
 	GetMessages(ctx context.Context, convID string, limit int) ([]StoredMessage, error)
-	ListConversations(ctx context.Context) ([]ConversationInfo, error)
+	ListConversations(ctx context.Context, opts SessionListOpts) ([]ConversationInfo, int, error)
 	// DeleteConversation removes a conversation and all its messages by ID.
 	// Returns nil if the conversation does not exist (idempotent).
 	DeleteConversation(ctx context.Context, convID string) error
@@ -121,7 +136,7 @@ type TelemetryStore interface {
 	AddSkillUsages(ctx context.Context, convID string, messageID int64, skills []SkillUsageRecord) error
 	UpdateConversationStats(ctx context.Context, convID string, msg StoredMessage, toolCallCount, toolErrorCount int) error
 	GetConversationStats(ctx context.Context, convID string) (*ConversationStatsRow, error)
-	ListConversationsWithStats(ctx context.Context) ([]ConversationInfoWithStats, error)
+	ListConversationsWithStats(ctx context.Context, opts SessionListOpts) ([]ConversationInfoWithStats, int, error)
 	GetToolCalls(ctx context.Context, convID string) ([]ToolCallRecord, error)
 	GetSkillUsages(ctx context.Context, convID string) ([]SkillUsageRecord, error)
 	GetTelemetrySummary(ctx context.Context, since, until *time.Time) (*TelemetrySummary, error)
@@ -336,20 +351,38 @@ func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limi
 	return messages, nil
 }
 
-func (s *SQLiteMemoryStore) ListConversations(ctx context.Context) ([]ConversationInfo, error) {
-	var convos []ConversationInfo
-	err := s.db.SelectContext(ctx, &convos,
-		`SELECT c.id, c.adapter, c.external_id, c.created_at,
-		        COALESCE(m.cnt, 0) AS message_count
-		 FROM conversations c
-		 LEFT JOIN (SELECT conversation_id, COUNT(*) AS cnt FROM messages GROUP BY conversation_id) m
-		   ON m.conversation_id = c.id
-		 ORDER BY c.created_at DESC`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing conversations: %w", err)
+func (s *SQLiteMemoryStore) ListConversations(ctx context.Context, opts SessionListOpts) ([]ConversationInfo, int, error) {
+	var args []any
+	where := ""
+	if opts.Agent != "" {
+		where = ` WHERE c.id LIKE ? ESCAPE '\'`
+		args = append(args, escapeLike(opts.Agent)+":%")
 	}
-	return convos, nil
+
+	// Count total matching rows.
+	var total int
+	countQ := `SELECT COUNT(*) FROM conversations c` + where
+	if err := s.db.GetContext(ctx, &total, countQ, args...); err != nil {
+		return nil, 0, fmt.Errorf("counting conversations: %w", err)
+	}
+
+	q := `SELECT c.id, c.adapter, c.external_id, c.created_at,
+	             COALESCE(m.cnt, 0) AS message_count
+	      FROM conversations c
+	      LEFT JOIN (SELECT conversation_id, COUNT(*) AS cnt FROM messages GROUP BY conversation_id) m
+	        ON m.conversation_id = c.id
+	      LEFT JOIN conversation_stats cs ON cs.conversation_id = c.id` + where + `
+	      ORDER BY COALESCE(cs.updated_at, c.created_at) DESC`
+	if opts.Limit > 0 {
+		q += ` LIMIT ? OFFSET ?`
+		args = append(args, opts.Limit, opts.Offset)
+	}
+
+	var convos []ConversationInfo
+	if err := s.db.SelectContext(ctx, &convos, q, args...); err != nil {
+		return nil, 0, fmt.Errorf("listing conversations: %w", err)
+	}
+	return convos, total, nil
 }
 
 func (s *SQLiteMemoryStore) DeleteConversation(ctx context.Context, convID string) error {
@@ -591,26 +624,44 @@ func (s *SQLiteMemoryStore) GetConversationStats(ctx context.Context, convID str
 }
 
 // ListConversationsWithStats returns conversations joined with their telemetry stats.
-func (s *SQLiteMemoryStore) ListConversationsWithStats(ctx context.Context) ([]ConversationInfoWithStats, error) {
-	var results []ConversationInfoWithStats
-	err := s.db.SelectContext(ctx, &results,
-		`SELECT c.id, c.adapter, c.external_id, c.created_at,
-		        COALESCE(m.cnt, 0) AS message_count,
-		        COALESCE(cs.total_cost, 0) AS total_cost,
-		        COALESCE(cs.total_tokens_prompt, 0) AS total_tokens_prompt,
-		        COALESCE(cs.total_tokens_completion, 0) AS total_tokens_completion,
-		        COALESCE(cs.last_model, '') AS last_model,
-		        COALESCE(cs.last_provider, '') AS last_provider
-		 FROM conversations c
-		 LEFT JOIN (SELECT conversation_id, COUNT(*) AS cnt FROM messages GROUP BY conversation_id) m
-		   ON m.conversation_id = c.id
-		 LEFT JOIN conversation_stats cs ON cs.conversation_id = c.id
-		 ORDER BY c.created_at DESC`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing conversations with stats: %w", err)
+func (s *SQLiteMemoryStore) ListConversationsWithStats(ctx context.Context, opts SessionListOpts) ([]ConversationInfoWithStats, int, error) {
+	var args []any
+	where := ""
+	if opts.Agent != "" {
+		where = ` WHERE c.id LIKE ? ESCAPE '\'`
+		args = append(args, escapeLike(opts.Agent)+":%")
 	}
-	return results, nil
+
+	// Count total matching rows.
+	var total int
+	countQ := `SELECT COUNT(*) FROM conversations c` + where
+	if err := s.db.GetContext(ctx, &total, countQ, args...); err != nil {
+		return nil, 0, fmt.Errorf("counting conversations: %w", err)
+	}
+
+	q := `SELECT c.id, c.adapter, c.external_id, c.created_at,
+	             COALESCE(m.cnt, 0) AS message_count,
+	             COALESCE(cs.total_cost, 0) AS total_cost,
+	             COALESCE(cs.total_tokens_prompt, 0) AS total_tokens_prompt,
+	             COALESCE(cs.total_tokens_completion, 0) AS total_tokens_completion,
+	             COALESCE(cs.last_model, '') AS last_model,
+	             COALESCE(cs.last_provider, '') AS last_provider,
+	             cs.updated_at
+	      FROM conversations c
+	      LEFT JOIN (SELECT conversation_id, COUNT(*) AS cnt FROM messages GROUP BY conversation_id) m
+	        ON m.conversation_id = c.id
+	      LEFT JOIN conversation_stats cs ON cs.conversation_id = c.id` + where + `
+	      ORDER BY COALESCE(cs.updated_at, c.created_at) DESC`
+	if opts.Limit > 0 {
+		q += ` LIMIT ? OFFSET ?`
+		args = append(args, opts.Limit, opts.Offset)
+	}
+
+	var results []ConversationInfoWithStats
+	if err := s.db.SelectContext(ctx, &results, q, args...); err != nil {
+		return nil, 0, fmt.Errorf("listing conversations with stats: %w", err)
+	}
+	return results, total, nil
 }
 
 // toolCallRow is the raw DB scan target for tool_calls rows.

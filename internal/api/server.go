@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +175,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/stats", s.RequireScope("sessions:read", s.handleSessionStats))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-calls", s.RequireScope("sessions:read", s.handleSessionToolCalls))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/skills", s.RequireScope("sessions:read", s.handleSessionSkills))
-	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:read", s.handleDeleteSession))
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.RequireScope("sessions:write", s.handleDeleteSession))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/clear", s.RequireScope("sessions:write", s.handleClearSession))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", s.RequireScope("sessions:write", s.handleCompactSession))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/stop", s.RequireScope("chat", s.handleStopSession))
@@ -665,9 +666,45 @@ func channelForConversation(id string) string {
 
 // handleSessions lists all conversations from the memory store.
 // When backed by a TelemetryStore, includes telemetry stats.
+// Supports ?limit=, ?offset=, ?agent= query parameters for pagination and filtering.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	opts := agent.SessionListOpts{
+		Agent: q.Get("agent"),
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+			return
+		}
+		if n > 500 {
+			n = 500
+		}
+		opts.Limit = n
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid offset"})
+			return
+		}
+		opts.Offset = n
+	}
+
+	type withChannel struct {
+		agent.ConversationInfoWithStats
+		Channel string `json:"channel,omitempty"`
+	}
+	type sessionListResult struct {
+		Sessions []withChannel `json:"sessions"`
+		Total    int           `json:"total"`
+		Limit    int           `json:"limit"`
+		Offset   int           `json:"offset"`
+	}
+
 	if store, ok := s.deps.Memory.(agent.TelemetryStore); ok {
-		convos, err := store.ListConversationsWithStats(r.Context())
+		convos, total, err := store.ListConversationsWithStats(r.Context(), opts)
 		if err != nil {
 			s.logger.Error("listing conversations with stats", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
@@ -676,11 +713,6 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if convos == nil {
 			convos = []agent.ConversationInfoWithStats{}
 		}
-		// Enrich with channel names for channel-based conversations.
-		type withChannel struct {
-			agent.ConversationInfoWithStats
-			Channel string `json:"channel,omitempty"`
-		}
 		enriched := make([]withChannel, len(convos))
 		for i, c := range convos {
 			enriched[i] = withChannel{
@@ -688,10 +720,16 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 				Channel:                   channelForConversation(c.ID),
 			}
 		}
-		writeJSON(w, http.StatusOK, enriched)
+		writeJSON(w, http.StatusOK, sessionListResult{
+			Sessions: enriched,
+			Total:    total,
+			Limit:    opts.Limit,
+			Offset:   opts.Offset,
+		})
 		return
 	}
-	convos, err := s.deps.Memory.ListConversations(r.Context())
+
+	convos, total, err := s.deps.Memory.ListConversations(r.Context(), opts)
 	if err != nil {
 		s.logger.Error("listing conversations", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
@@ -700,19 +738,20 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if convos == nil {
 		convos = []agent.ConversationInfo{}
 	}
-	// Enrich with channel names for channel-based conversations.
-	type withChannel struct {
-		agent.ConversationInfo
-		Channel string `json:"channel,omitempty"`
-	}
+	// Convert to withChannel using zero-value stats for consistency.
 	enriched := make([]withChannel, len(convos))
 	for i, c := range convos {
 		enriched[i] = withChannel{
-			ConversationInfo: c,
-			Channel:          channelForConversation(c.ID),
+			ConversationInfoWithStats: agent.ConversationInfoWithStats{ConversationInfo: c},
+			Channel:                   channelForConversation(c.ID),
 		}
 	}
-	writeJSON(w, http.StatusOK, enriched)
+	writeJSON(w, http.StatusOK, sessionListResult{
+		Sessions: enriched,
+		Total:    total,
+		Limit:    opts.Limit,
+		Offset:   opts.Offset,
+	})
 }
 
 // chatRequest is the JSON body for POST /api/v1/chat.

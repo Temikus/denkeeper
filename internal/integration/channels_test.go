@@ -226,7 +226,7 @@ func TestChannels_ChatWithChannel(t *testing.T) {
 
 	// Verify the conversation was stored under the channel's conversation ID.
 	ctx := context.Background()
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestChannels_ChatEphemeralChannel(t *testing.T) {
 	// Verify two distinct conversations were created, neither equal to the
 	// persistent "chan:scratch".
 	ctx := context.Background()
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestChannels_SupervisedApprovalFlow(t *testing.T) {
 	}
 
 	// Verify conversation stored under channel's conversation ID.
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestChannels_SupervisedDenialFlow(t *testing.T) {
 	}
 
 	// Verify conversation stored under channel's conversation ID.
-	convos, err := h.Memory.ListConversations(ctx)
+	convos, _, err := h.Memory.ListConversations(ctx, agent.SessionListOpts{})
 	if err != nil {
 		t.Fatalf("listing conversations: %v", err)
 	}
