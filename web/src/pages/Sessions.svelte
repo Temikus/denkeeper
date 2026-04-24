@@ -295,8 +295,7 @@
 </div>
 
 {#if confirmDeleteId}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDeleteId = null }} role="dialog" aria-modal="true">
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDeleteId = null }} onkeydown={(e) => { if (e.key === 'Escape') confirmDeleteId = null }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="confirm-modal">
       <h2>Delete Session</h2>
       <p>Delete session <strong>{confirmDeleteId.slice(0, 12)}</strong>? This cannot be undone.</p>
@@ -311,8 +310,7 @@
 {/if}
 
 {#if confirmClearId}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmClearId = null }} role="dialog" aria-modal="true">
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmClearId = null }} onkeydown={(e) => { if (e.key === 'Escape') confirmClearId = null }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="confirm-modal">
       <h2>Clear Session</h2>
       <p>Remove all messages from session <strong>{confirmClearId.slice(0, 12)}</strong>? The session will remain but its history will be lost.</p>

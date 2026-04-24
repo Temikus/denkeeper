@@ -20,7 +20,7 @@ vi.mock('../../wsStore.js', () => ({
   onActivity: vi.fn(() => vi.fn()),
 }))
 
-const { chatState, newSession } = await import('../../chatStore.js')
+const { chatState, newSession, setChannel } = await import('../../chatStore.js')
 const Chat = (await import('../../pages/Chat.svelte')).default
 
 beforeEach(() => {
@@ -364,6 +364,126 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(screen.getByText('Pending approvals (1)')).toBeInTheDocument()
       expect(screen.getByText('Run tool: fetch_data')).toBeInTheDocument()
+    })
+  })
+
+  // --- Channel selector interaction tests ---
+
+  test('switching channel calls activate API', async () => {
+    let activateCalled = { name: null, key: null }
+    server.use(
+      http.post('/api/v1/channels/:name/activate', async ({ params, request }) => {
+        const body = await request.json()
+        activateCalled = { name: params.name, key: body.adapter_key }
+        return HttpResponse.json({ status: 'activated', channel: params.name, adapter_key: body.adapter_key })
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      const channelLabel = screen.getByText('Channel')
+      expect(channelLabel).toBeInTheDocument()
+    })
+
+    const channelSelect = screen.getByText('Channel').closest('label').querySelector('select')
+    await fireEvent.change(channelSelect, { target: { value: 'work' } })
+
+    await waitFor(() => {
+      expect(activateCalled.name).toBe('work')
+      expect(activateCalled.key).toBe('api:web-dashboard')
+    })
+  })
+
+  test('switching away from channel calls deactivate then activate', async () => {
+    let deactivateCalled = null
+    let activateName = null
+    server.use(
+      http.post('/api/v1/channels/:name/activate', async ({ params, request }) => {
+        const body = await request.json()
+        activateName = params.name
+        return HttpResponse.json({ status: 'activated', channel: params.name, adapter_key: body.adapter_key })
+      }),
+      http.delete('/api/v1/channels/:name/activate', async ({ params }) => {
+        deactivateCalled = params.name
+        return HttpResponse.json({ status: 'deactivated' })
+      }),
+    )
+
+    // Pre-set channel state to "work" so the switch triggers deactivation
+    setChannel('work')
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Channel')).toBeInTheDocument()
+    })
+
+    const channelSelect = screen.getByText('Channel').closest('label').querySelector('select')
+    await fireEvent.change(channelSelect, { target: { value: 'personal' } })
+
+    await waitFor(() => {
+      expect(deactivateCalled).toBe('work')
+      expect(activateName).toBe('personal')
+    })
+  })
+
+  test('switching to channel with different agent updates agent', async () => {
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Channel')).toBeInTheDocument()
+    })
+
+    const channelSelect = screen.getByText('Channel').closest('label').querySelector('select')
+    // "personal" channel has agent "helper", different from default
+    await fireEvent.change(channelSelect, { target: { value: 'personal' } })
+
+    await waitFor(() => {
+      const agentSelect = screen.getByText('Agent').closest('label').querySelector('select')
+      expect(agentSelect.value).toBe('helper')
+    })
+  })
+
+  test('selecting None deactivates current channel', async () => {
+    let deactivateCalled = null
+    server.use(
+      http.delete('/api/v1/channels/:name/activate', async ({ params }) => {
+        deactivateCalled = params.name
+        return HttpResponse.json({ status: 'deactivated' })
+      }),
+    )
+
+    // Pre-set channel state to "work"
+    setChannel('work')
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Channel')).toBeInTheDocument()
+    })
+
+    const channelSelect = screen.getByText('Channel').closest('label').querySelector('select')
+    await fireEvent.change(channelSelect, { target: { value: '' } })
+
+    await waitFor(() => {
+      expect(deactivateCalled).toBe('work')
+    })
+  })
+
+  test('channel switch error shows error', async () => {
+    server.use(
+      http.post('/api/v1/channels/:name/activate', () =>
+        HttpResponse.json({ error: 'activation failed' }, { status: 500 })
+      ),
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByText('Channel')).toBeInTheDocument()
+    })
+
+    const channelSelect = screen.getByText('Channel').closest('label').querySelector('select')
+    await fireEvent.change(channelSelect, { target: { value: 'work' } })
+
+    await waitFor(() => {
+      expect(document.querySelector('.error-bar')).toBeInTheDocument()
     })
   })
 })
