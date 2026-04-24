@@ -209,6 +209,7 @@
   let configModel = $state('')
   let configProvider = $state('')
   let configDescription = $state('')
+  let configMaxToolRounds = $state(0)
   let configAllowlist = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
@@ -222,6 +223,7 @@
     configModel = d.model || ''
     configProvider = d.provider || ''
     configDescription = ''
+    configMaxToolRounds = d.max_tool_rounds ?? 50
     configAllowlist = ''
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
@@ -256,6 +258,8 @@
         if (configDescription !== undefined) data.description = configDescription
       } else if (expandedCard === 'permission') {
         if (configTier !== detail.permission_tier) data.session_tier = configTier
+        const rounds = parseInt(configMaxToolRounds, 10)
+        if (!isNaN(rounds) && rounds !== detail.max_tool_rounds) data.max_tool_rounds = rounds
       }
       if (Object.keys(data).length) {
         await api.updateAgentConfig(detail.name, data)
@@ -519,6 +523,9 @@
                 <option value="supervised">Supervised</option>
                 <option value="restricted">Restricted</option>
               </select>
+              <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
+              <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />
+              <span class="hint">Maximum tool-call rounds per message before the agent stops. Default: 50.</span>
             </div>
           {/if}
           <div class="config-panel-actions">

@@ -140,6 +140,36 @@ func TestAgentConfig_RenameToDuplicate(t *testing.T) {
 	}
 }
 
+func TestAgentConfig_UpdateMaxToolRounds(t *testing.T) {
+	h := NewHarness(t, nil)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default", map[string]any{
+		"max_tool_rounds": 25,
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Verify via agent detail endpoint.
+	detailRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/agents/default", nil))
+	var detail map[string]any
+	DecodeJSON(t, detailRec, &detail)
+	if int(detail["max_tool_rounds"].(float64)) != 25 {
+		t.Errorf("max_tool_rounds = %v, want 25", detail["max_tool_rounds"])
+	}
+}
+
+func TestAgentConfig_UpdateMaxToolRounds_Invalid(t *testing.T) {
+	h := NewHarness(t, nil)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default", map[string]any{
+		"max_tool_rounds": 0,
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 func TestAgentConfig_NotFound(t *testing.T) {
 	h := NewHarness(t, nil)
 

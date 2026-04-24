@@ -516,6 +516,105 @@ func TestAgentDetail_IncludesFallbacks(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUpdate_MaxToolRounds(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"max_tool_rounds": 25})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Verify runtime value changed on the engine.
+	e := deps.Dispatcher.Agent("default")
+	if e.MaxToolRounds() != 25 {
+		t.Errorf("max_tool_rounds = %d, want 25", e.MaxToolRounds())
+	}
+
+	// Verify in-memory config updated.
+	var found bool
+	for _, ac := range deps.Config.Agents {
+		if ac.Name == "default" {
+			found = true
+			if ac.MaxToolRounds != 25 {
+				t.Errorf("config max_tool_rounds = %d, want 25", ac.MaxToolRounds)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("agent 'default' not found in config")
+	}
+}
+
+func TestAgentConfigUpdate_MaxToolRounds_Zero(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body, _ := json.Marshal(map[string]any{"max_tool_rounds": 0})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAgentConfigUpdate_MaxToolRounds_Negative(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body, _ := json.Marshal(map[string]any{"max_tool_rounds": -1})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAgentDetail_IncludesMaxToolRounds(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	mtr, ok := resp["max_tool_rounds"].(float64)
+	if !ok {
+		t.Fatalf("max_tool_rounds field missing or wrong type: %v", resp["max_tool_rounds"])
+	}
+	if int(mtr) != 50 {
+		t.Errorf("max_tool_rounds = %d, want 50 (default)", int(mtr))
+	}
+}
+
 func TestAgentDetail_FallbacksEmptyNotNull(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()

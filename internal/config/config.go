@@ -417,7 +417,8 @@ type AgentInstanceConfig struct {
 	MaxContextMessages int `toml:"max_context_messages"`
 
 	// MaxToolRounds limits the number of tool-call rounds per message.
-	// 0 means use the default (10).
+	// 0 means use the default (50). The REST API requires >= 1; the zero
+	// default sentinel is only valid in TOML config (at startup).
 	MaxToolRounds int `toml:"max_tool_rounds"`
 
 	// Fallbacks overrides the global [[llm.fallback]] rules for this agent.

@@ -27,7 +27,7 @@ import (
 )
 
 const defaultMaxContextMessages = 50
-const defaultMaxToolRounds = 10
+const defaultMaxToolRounds = 50
 const defaultRepeatDetectionThreshold = 3 // consecutive identical tool calls before abort
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
@@ -171,6 +171,11 @@ func (e *Engine) SetMaxContextMessages(n int) {
 	if n > 0 {
 		e.maxContextMessages = n
 	}
+}
+
+// MaxToolRounds returns the current tool round limit.
+func (e *Engine) MaxToolRounds() int {
+	return e.maxToolRounds
 }
 
 // SetMaxToolRounds overrides the default tool round limit.

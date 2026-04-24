@@ -25,6 +25,7 @@ type agentConfigUpdateInput struct {
 	LLMProvider         *string                  `json:"llm_provider,omitempty"`
 	LLMModel            *string                  `json:"llm_model,omitempty"`
 	Description         *string                  `json:"description,omitempty"`
+	MaxToolRounds       *int                     `json:"max_tool_rounds,omitempty"`
 	BrowserURLAllowlist *[]string                `json:"browser_url_allowlist,omitempty"`
 	Fallbacks           *[]config.FallbackConfig `json:"fallbacks,omitempty"`
 }
@@ -105,6 +106,12 @@ func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (i
 	if input.LLMModel != nil {
 		e.SetModel(*input.LLMModel)
 	}
+	if input.MaxToolRounds != nil {
+		if *input.MaxToolRounds <= 0 {
+			return http.StatusBadRequest, "max_tool_rounds must be >= 1"
+		}
+		e.SetMaxToolRounds(*input.MaxToolRounds)
+	}
 	if input.Fallbacks != nil {
 		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
 	}
@@ -171,6 +178,9 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 	if input.Description != nil {
 		changes["description"] = *input.Description
 	}
+	if input.MaxToolRounds != nil {
+		changes["max_tool_rounds"] = *input.MaxToolRounds
+	}
 	if input.BrowserURLAllowlist != nil {
 		allowlist := make([]any, len(*input.BrowserURLAllowlist))
 		for i, d := range *input.BrowserURLAllowlist {
@@ -227,6 +237,9 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	}
 	if input.Description != nil {
 		ac.Description = *input.Description
+	}
+	if input.MaxToolRounds != nil {
+		ac.MaxToolRounds = *input.MaxToolRounds
 	}
 	if input.BrowserURLAllowlist != nil {
 		ac.BrowserURLAllowlist = *input.BrowserURLAllowlist
