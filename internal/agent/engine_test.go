@@ -2680,3 +2680,154 @@ func TestEngine_HandleMessage_EmitsAuditOnLLMError(t *testing.T) {
 		t.Errorf("LLM audit detail should contain the error message, got %q", llmEvents[0].Detail)
 	}
 }
+
+func TestBuildTriggerAuditDetail_UserMessage(t *testing.T) {
+	msg := adapter.IncomingMessage{
+		Adapter:  "telegram",
+		UserID:   "u123",
+		UserName: "alice",
+		Text:     "hello",
+	}
+	d := buildTriggerAuditDetail(msg)
+	if d["trigger_type"] != "user" {
+		t.Errorf("trigger_type = %q, want user", d["trigger_type"])
+	}
+	if d["adapter"] != "telegram" {
+		t.Errorf("adapter = %q, want telegram", d["adapter"])
+	}
+	if _, ok := d["skill_name"]; ok {
+		t.Error("skill_name should be absent for user messages")
+	}
+	if _, ok := d["schedule_name"]; ok {
+		t.Error("schedule_name should be absent for user messages")
+	}
+}
+
+func TestBuildTriggerAuditDetail_ScheduledMessage(t *testing.T) {
+	msg := adapter.IncomingMessage{
+		Adapter:      "telegram",
+		UserName:     "scheduler",
+		Text:         "[Scheduled: heartbeat]",
+		IsScheduled:  true,
+		SkillName:    "heartbeat",
+		ScheduleName: "heartbeat-hourly",
+		ScheduleCron: "0 * * * *",
+	}
+	d := buildTriggerAuditDetail(msg)
+	if d["trigger_type"] != "schedule" {
+		t.Errorf("trigger_type = %q, want schedule", d["trigger_type"])
+	}
+	if d["skill_name"] != "heartbeat" {
+		t.Errorf("skill_name = %q, want heartbeat", d["skill_name"])
+	}
+	if d["schedule_name"] != "heartbeat-hourly" {
+		t.Errorf("schedule_name = %q, want heartbeat-hourly", d["schedule_name"])
+	}
+	if d["schedule_cron"] != "0 * * * *" {
+		t.Errorf("schedule_cron = %q, want 0 * * * *", d["schedule_cron"])
+	}
+}
+
+func TestEngine_AuditSource_UserMessage(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Hi!",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+
+	sent := &sentMessages{}
+	perms, _ := security.NewPermissionEngine("autonomous")
+	auditor := &collectingAuditor{}
+	engine := NewEngine("default", router, store, sent.send, perms, nil, "Test.", nil, nil, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	msg := adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "chat-1",
+		UserName:   "alice",
+		Text:       "hello",
+		Timestamp:  time.Now(),
+	}
+	if err := engine.HandleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var triggerEv *audit.Event
+	for i := range auditor.events {
+		if auditor.events[i].Category == audit.CategorySession && auditor.events[i].Action == "trigger" {
+			triggerEv = &auditor.events[i]
+			break
+		}
+	}
+	if triggerEv == nil {
+		t.Fatal("no session trigger audit event emitted")
+	}
+	if triggerEv.Source != "telegram" {
+		t.Errorf("Source = %q, want telegram", triggerEv.Source)
+	}
+}
+
+func TestEngine_AuditSource_ScheduledMessage(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Heartbeat OK",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+
+	sent := &sentMessages{}
+	perms, _ := security.NewPermissionEngine("autonomous")
+	auditor := &collectingAuditor{}
+	engine := NewEngine("default", router, store, sent.send, perms, nil, "Test.", nil, nil, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	msg := adapter.IncomingMessage{
+		Adapter:      "telegram",
+		ExternalID:   "chat-1",
+		UserName:     "scheduler",
+		Text:         "[Scheduled: heartbeat]",
+		IsScheduled:  true,
+		SkillName:    "heartbeat",
+		ScheduleName: "heartbeat-hourly",
+		ScheduleCron: "0 * * * *",
+		Timestamp:    time.Now(),
+	}
+	if err := engine.HandleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	var triggerEv *audit.Event
+	for i := range auditor.events {
+		if auditor.events[i].Category == audit.CategorySession && auditor.events[i].Action == "trigger" {
+			triggerEv = &auditor.events[i]
+			break
+		}
+	}
+	if triggerEv == nil {
+		t.Fatal("no session trigger audit event emitted")
+	}
+	if triggerEv.Source != "scheduler" {
+		t.Errorf("Source = %q, want scheduler", triggerEv.Source)
+	}
+}

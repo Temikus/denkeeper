@@ -1149,6 +1149,7 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 					SkillName:      sc.Skill,
 					ScheduleName:   sc.Name,
 					ScheduleCron:   sc.Schedule,
+					IsScheduled:    true,
 					Timestamp:      time.Now(),
 				}
 				if entry.SessionMode == "isolated" {

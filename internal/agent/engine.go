@@ -236,8 +236,10 @@ func buildTriggerAuditDetail(msg adapter.IncomingMessage) map[string]any {
 		prompt = prompt[:maxPromptLen]
 	}
 	d["prompt"] = prompt
-	if msg.SkillName != "" {
+	if msg.IsScheduled {
 		d["trigger_type"] = "schedule"
+	}
+	if msg.SkillName != "" {
 		d["skill_name"] = msg.SkillName
 	}
 	if msg.ScheduleName != "" {
@@ -689,13 +691,17 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	// Audit: session trigger (user prompt or scheduled invocation).
 	triggerJSON, _ := json.Marshal(buildTriggerAuditDetail(msg))
+	triggerSource := msg.Adapter
+	if msg.IsScheduled {
+		triggerSource = "scheduler"
+	}
 	e.emitAudit(ctx, audit.Event{
 		Category:       audit.CategorySession,
 		Action:         "trigger",
 		Summary:        truncateSummary(msg.Text, "trigger"),
 		Detail:         string(triggerJSON),
 		Status:         audit.StatusOK,
-		Source:         msg.Adapter,
+		Source:         triggerSource,
 		ConversationID: convID,
 	})
 

@@ -26,6 +26,10 @@ type IncomingMessage struct {
 	ScheduleName string
 	// ScheduleCron is the cron expression of the triggering schedule (for audit display).
 	ScheduleCron string
+	// IsScheduled is true when this message was dispatched by the scheduler.
+	// Used to correctly attribute audit events and distinguish scheduled
+	// invocations from user-initiated ones.
+	IsScheduled bool
 	// IsVoice is true when the original message was a voice note.
 	// The adapter sets this after transcribing the audio via STT.
 	IsVoice bool
