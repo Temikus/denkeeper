@@ -227,6 +227,29 @@ describe('handleToolEvent via SSE path', () => {
     expect(agentMsg.toolCalls[0].error).toBe('timeout')
   })
 
+  test('autonomous tier: tool_start/tool_end use toolCalls with no approvals', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 250 })
+      onToolEvent({ type: 'tool_start', tool: 'web_fetch', tool_id: 'tc-2', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_fetch', tool_id: 'tc-2', round: 1, error: 'connection refused' })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search and fetch')
+    const agentMsg = get(chatState).messages[1]
+    // No approvals at all — autonomous tier
+    expect(agentMsg.approvals).toHaveLength(0)
+    // Both tools tracked in toolCalls
+    expect(agentMsg.toolCalls).toHaveLength(2)
+    expect(agentMsg.toolCalls[0].id).toBe('tc-1')
+    expect(agentMsg.toolCalls[0].status).toBe('done')
+    expect(agentMsg.toolCalls[0].duration).toBe(250)
+    expect(agentMsg.toolCalls[1].id).toBe('tc-2')
+    expect(agentMsg.toolCalls[1].status).toBe('error')
+    expect(agentMsg.toolCalls[1].error).toBe('connection refused')
+  })
+
   test('tool_approval pending adds to approvals and sets status', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'pending' })
