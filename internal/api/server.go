@@ -452,6 +452,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		"permission_tier":  e.PermissionTier(),
 		"provider":         e.ProviderName(),
 		"model":            e.ModelName(),
+		"max_tool_rounds":  e.MaxToolRounds(),
 		"has_tools":        e.HasTools(),
 		"adapters":         adapters,
 		"skills":           skillList,
