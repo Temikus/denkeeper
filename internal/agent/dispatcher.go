@@ -338,6 +338,125 @@ func (d *Dispatcher) ActiveChannelsForChannel(channelName string) []string {
 	return keys
 }
 
+// AddChannel registers a new channel in the dispatcher's runtime registry and
+// updates binding maps. Returns an error if channels are not configured, the
+// name is already taken, or the referenced agent does not exist.
+func (d *Dispatcher) AddChannel(ch *Channel) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.channels == nil {
+		return ErrChannelsNotConfigured
+	}
+	if _, exists := d.channels[ch.Name]; exists {
+		return fmt.Errorf("channel %q already exists", ch.Name)
+	}
+	if _, ok := d.agents[ch.AgentName]; !ok {
+		return fmt.Errorf("agent %q not found", ch.AgentName)
+	}
+
+	d.channels[ch.Name] = ch
+	for _, binding := range ch.Adapters {
+		if strings.Contains(binding, ":") {
+			d.channelSpecific[binding] = ch.Name
+		} else {
+			d.channelWildcard[binding] = ch.Name
+		}
+	}
+	return nil
+}
+
+// UpdateChannel replaces an existing channel in the dispatcher's runtime
+// registry, re-indexing its adapter bindings. Returns an error if the channel
+// does not exist or is implicit.
+func (d *Dispatcher) UpdateChannel(name string, ch *Channel) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	old, ok := d.channels[name]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrChannelNotFound, name)
+	}
+	if old.Implicit {
+		return fmt.Errorf("cannot update implicit channel %q", name)
+	}
+	if ch.AgentName != "" {
+		if _, ok := d.agents[ch.AgentName]; !ok {
+			return fmt.Errorf("agent %q not found", ch.AgentName)
+		}
+	}
+
+	// Remove old bindings.
+	for _, binding := range old.Adapters {
+		if strings.Contains(binding, ":") {
+			delete(d.channelSpecific, binding)
+		} else {
+			delete(d.channelWildcard, binding)
+		}
+	}
+
+	// Replace channel and re-index.
+	d.channels[name] = ch
+	for _, binding := range ch.Adapters {
+		if strings.Contains(binding, ":") {
+			d.channelSpecific[binding] = ch.Name
+		} else {
+			d.channelWildcard[binding] = ch.Name
+		}
+	}
+	return nil
+}
+
+// RemoveChannel removes a channel from the dispatcher's runtime registry,
+// clears its adapter bindings, and removes any active channel overrides that
+// reference it. Returns an error if the channel does not exist or is implicit.
+func (d *Dispatcher) RemoveChannel(ctx context.Context, name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	ch, ok := d.channels[name]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrChannelNotFound, name)
+	}
+	if ch.Implicit {
+		return fmt.Errorf("cannot remove implicit channel %q", name)
+	}
+
+	// Remove bindings.
+	for _, binding := range ch.Adapters {
+		if strings.Contains(binding, ":") {
+			delete(d.channelSpecific, binding)
+		} else {
+			delete(d.channelWildcard, binding)
+		}
+	}
+	delete(d.channels, name)
+
+	// Clear active overrides referencing this channel.
+	d.activeChannelsMu.Lock()
+	var keysToRemove []string
+	for k, v := range d.activeChannels {
+		if v == name {
+			keysToRemove = append(keysToRemove, k)
+		}
+	}
+	for _, k := range keysToRemove {
+		delete(d.activeChannels, k)
+	}
+	d.activeChannelsMu.Unlock()
+
+	// Persist removal of active overrides.
+	if d.activeStore != nil {
+		for _, k := range keysToRemove {
+			if err := d.activeStore.ClearActiveChannel(ctx, k); err != nil {
+				d.logger.Warn("clearing active channel on delete",
+					"channel", name, "adapter_key", k, "error", err)
+			}
+		}
+	}
+	return nil
+}
+
 // SendFor returns a SendFunc that routes outgoing messages through the
 // adapter matching the incoming message's adapter name.
 func (d *Dispatcher) SendFor(adapterName string) SendFunc {

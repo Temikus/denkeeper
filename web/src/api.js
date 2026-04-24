@@ -88,6 +88,15 @@ export const api = {
     method: 'DELETE',
     body: JSON.stringify({ adapter_key: adapterKey }),
   }),
+  createChannel: (data) => apiFetch('/api/v1/channels', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateChannel: (name, data) => apiFetch(`/api/v1/channels/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  deleteChannel: (name) => apiFetch(`/api/v1/channels/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Sessions
   sessions: (opts = {}) => {

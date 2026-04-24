@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -817,5 +819,183 @@ preferred_login_method = "apikey"
 	}
 	if !strings.Contains(content, "ccdd") {
 		t.Error("should preserve session_secret")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Channel config persistence
+// ---------------------------------------------------------------------------
+
+func TestAddChannelToConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddChannelToConfig(path, "work", "default", "", "", nil)
+	if err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, `name = "work"`) && !strings.Contains(content, "name = 'work'") {
+		t.Errorf("config missing channel name; content:\n%s", content)
+	}
+	if !strings.Contains(content, `agent = "default"`) && !strings.Contains(content, "agent = 'default'") {
+		t.Errorf("config missing channel agent; content:\n%s", content)
+	}
+}
+
+func TestAddChannelToConfig_WithAdapters(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := AddChannelToConfig(path, "personal", "my-agent", "broadcast", "ephemeral", []string{"telegram:123", "discord"})
+	if err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if !strings.Contains(content, "telegram:123") {
+		t.Errorf("config missing adapter telegram:123; content:\n%s", content)
+	}
+	if !strings.Contains(content, "discord") {
+		t.Errorf("config missing adapter discord; content:\n%s", content)
+	}
+	if !strings.Contains(content, "broadcast") {
+		t.Errorf("config missing delivery; content:\n%s", content)
+	}
+	if !strings.Contains(content, "ephemeral") {
+		t.Errorf("config missing session_mode; content:\n%s", content)
+	}
+}
+
+func TestUpdateChannelInConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddChannelToConfig(path, "work", "old-agent", "", "", nil); err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+
+	err := UpdateChannelInConfig(path, "work", "new-agent", "single", "persistent", []string{"telegram"})
+	if err != nil {
+		t.Fatalf("UpdateChannelInConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "old-agent") {
+		t.Errorf("config still contains old agent; content:\n%s", content)
+	}
+	if !strings.Contains(content, "new-agent") {
+		t.Errorf("config missing updated agent; content:\n%s", content)
+	}
+	if !strings.Contains(content, "single") {
+		t.Errorf("config missing delivery; content:\n%s", content)
+	}
+}
+
+func TestUpdateChannelInConfig_NotFound(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	err := UpdateChannelInConfig(path, "nonexistent", "agent", "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent channel, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %q, want 'not found'", err.Error())
+	}
+}
+
+func TestRemoveChannelFromConfig(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddChannelToConfig(path, "keep", "agent-a", "", "", nil); err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+	if err := AddChannelToConfig(path, "remove-me", "agent-b", "", "", nil); err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+
+	if err := RemoveChannelFromConfig(path, "remove-me"); err != nil {
+		t.Fatalf("RemoveChannelFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "remove-me") {
+		t.Errorf("config still contains removed channel; content:\n%s", content)
+	}
+	if !strings.Contains(content, "keep") {
+		t.Errorf("config missing kept channel; content:\n%s", content)
+	}
+}
+
+func TestRemoveChannelFromConfig_LastEntry(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	if err := AddChannelToConfig(path, "only-one", "default", "", "", nil); err != nil {
+		t.Fatalf("AddChannelToConfig: %v", err)
+	}
+
+	if err := RemoveChannelFromConfig(path, "only-one"); err != nil {
+		t.Fatalf("RemoveChannelFromConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "channels") {
+		t.Errorf("config should not contain channels key after removing last entry; content:\n%s", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Config writer hardening (backup + concurrency)
+// ---------------------------------------------------------------------------
+
+func TestWriteRawConfig_CreatesBackup(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	// Trigger a write that creates a backup.
+	if err := AddScheduleToConfig(path, "test", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+		t.Fatalf("AddScheduleToConfig: %v", err)
+	}
+
+	bakPath := path + ".bak"
+	bakData, err := os.ReadFile(bakPath)
+	if err != nil {
+		t.Fatalf("backup file not created: %v", err)
+	}
+	if !strings.Contains(string(bakData), "enabled = true") {
+		t.Errorf("backup should contain original config; got:\n%s", bakData)
+	}
+	// The current config should have the new schedule (not the backup content).
+	current := readConfig(t, path)
+	if !strings.Contains(current, "test") {
+		t.Errorf("current config should contain new schedule; got:\n%s", current)
+	}
+}
+
+func TestConcurrentConfigWrites(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nenabled = true\n")
+
+	const N = 10
+	var wg sync.WaitGroup
+	errs := make([]error, N)
+	for i := range N {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = AddScheduleToConfig(path, fmt.Sprintf("sched-%d", i),
+				"@daily", "", "telegram:1", "", "", "", nil, true)
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d failed: %v", i, err)
+		}
+	}
+
+	content := readConfig(t, path)
+	for i := range N {
+		name := fmt.Sprintf("sched-%d", i)
+		if !strings.Contains(content, name) {
+			t.Errorf("config missing schedule %q", name)
+		}
 	}
 }

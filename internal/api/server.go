@@ -184,6 +184,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Channel endpoints.
 	mux.HandleFunc("GET /api/v1/channels", s.RequireScope("channels:read", s.handleListChannels))
 	mux.HandleFunc("GET /api/v1/channels/{name}", s.RequireScope("channels:read", s.handleGetChannel))
+	mux.HandleFunc("POST /api/v1/channels", s.RequireScope("channels:write", s.handleCreateChannel))
+	mux.HandleFunc("PATCH /api/v1/channels/{name}", s.RequireScope("channels:write", s.handleUpdateChannel))
+	mux.HandleFunc("DELETE /api/v1/channels/{name}", s.RequireScope("channels:write", s.handleDeleteChannel))
 	mux.HandleFunc("POST /api/v1/channels/{name}/activate", s.RequireScope("channels:write", s.handleActivateChannel))
 	mux.HandleFunc("DELETE /api/v1/channels/{name}/activate", s.RequireScope("channels:write", s.handleDeactivateChannel))
 

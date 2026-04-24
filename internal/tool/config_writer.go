@@ -4,11 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Temikus/denkeeper/internal/config"
 )
+
+// configMu serializes all config read-modify-write operations to prevent
+// concurrent writes from losing updates. Each public config write function
+// acquires this lock before reading and releases it after writing.
+var configMu sync.Mutex
 
 type pluginEntry struct {
 	Type         string            `toml:"type"`
@@ -26,6 +32,9 @@ type pluginEntry struct {
 // addToolToConfig reads the TOML config at path, adds a [tools.<name>] section,
 // and writes it back atomically.
 func addToolToConfig(path, name string, cfg config.ToolConfig) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -94,6 +103,9 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 // removeToolFromConfig reads the TOML config at path, removes [tools.<name>],
 // and writes it back atomically.
 func removeToolFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -116,6 +128,9 @@ func removeToolFromConfig(path, name string) error {
 // addPluginToConfig reads the TOML config at path, adds a [plugins.<name>] section,
 // and writes it back atomically.
 func addPluginToConfig(path, name string, pe pluginEntry) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -166,6 +181,9 @@ func addPluginToConfig(path, name string, pe pluginEntry) error {
 // removePluginFromConfig reads the TOML config at path, removes [plugins.<name>],
 // and writes it back atomically.
 func removePluginFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -223,6 +241,9 @@ func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier
 
 // AddScheduleToConfig appends a [[schedules]] entry to the TOML config.
 func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -238,6 +259,9 @@ func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode,
 
 // UpdateScheduleInConfig replaces a [[schedules]] entry matched by name.
 func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -263,6 +287,9 @@ func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMo
 
 // RemoveScheduleFromConfig removes a [[schedules]] entry matched by name.
 func RemoveScheduleFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -285,6 +312,117 @@ func RemoveScheduleFromConfig(path, name string) error {
 }
 
 // ---------------------------------------------------------------------------
+// Channel config persistence
+// ---------------------------------------------------------------------------
+
+// rawChannels extracts the channels array from the raw config map.
+func rawChannels(raw map[string]any) []any {
+	switch v := raw["channels"].(type) {
+	case []any:
+		return v
+	case nil:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// channelToMap converts channel fields to a generic map for TOML serialization.
+// Zero-value fields are omitted.
+func channelToMap(name, agentName, delivery, sessionMode string, adapters []string) map[string]any {
+	m := map[string]any{
+		"name":  name,
+		"agent": agentName,
+	}
+	if delivery != "" {
+		m["delivery"] = delivery
+	}
+	if sessionMode != "" {
+		m["session_mode"] = sessionMode
+	}
+	if len(adapters) > 0 {
+		a := make([]any, len(adapters))
+		for i, v := range adapters {
+			a[i] = v
+		}
+		m["adapters"] = a
+	}
+	return m
+}
+
+// AddChannelToConfig appends a [[channels]] entry to the TOML config.
+func AddChannelToConfig(path, name, agentName, delivery, sessionMode string, adapters []string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := channelToMap(name, agentName, delivery, sessionMode, adapters)
+
+	channels := rawChannels(raw)
+	channels = append(channels, entry)
+	raw["channels"] = channels
+	return writeRawConfig(path, raw)
+}
+
+// UpdateChannelInConfig replaces a [[channels]] entry matched by name.
+func UpdateChannelInConfig(path, name, agentName, delivery, sessionMode string, adapters []string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := channelToMap(name, agentName, delivery, sessionMode, adapters)
+
+	channels := rawChannels(raw)
+	found := false
+	for i, c := range channels {
+		if m, ok := c.(map[string]any); ok && m["name"] == name {
+			channels[i] = entry
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("channel %q not found in config", name)
+	}
+	raw["channels"] = channels
+	return writeRawConfig(path, raw)
+}
+
+// RemoveChannelFromConfig removes a [[channels]] entry matched by name.
+func RemoveChannelFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	channels := rawChannels(raw)
+	filtered := make([]any, 0, len(channels))
+	for _, c := range channels {
+		if m, ok := c.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if len(filtered) == 0 {
+		delete(raw, "channels")
+	} else {
+		raw["channels"] = filtered
+	}
+	return writeRawConfig(path, raw)
+}
+
+// ---------------------------------------------------------------------------
 // Agent config persistence
 // ---------------------------------------------------------------------------
 
@@ -293,6 +431,9 @@ func RemoveScheduleFromConfig(path, name string) error {
 // If no [[agents]] section exists (synthesized default agent), a new entry is
 // created with the given name and changes applied.
 func UpdateAgentInConfig(path, name string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -332,6 +473,9 @@ func UpdateAgentInConfig(path, name string, changes map[string]any) error {
 // RenameAgentInConfig changes an agent's name in the TOML config and updates
 // any [[schedules]] entries that reference the old name.
 func RenameAgentInConfig(path, oldName, newName string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -439,6 +583,9 @@ func rawSchedules(raw map[string]any) []any {
 // default_model, cost_limit_soft, cost_limit_hard). Only keys present in
 // changes are applied (partial update).
 func UpdateLLMConfig(path string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -459,6 +606,14 @@ func UpdateLLMConfig(path string, changes map[string]any) error {
 // UpdateLLMProviderConfig persists changes to [llm.<provider>] in the TOML
 // config. Only keys present in changes are applied (partial update).
 func UpdateLLMProviderConfig(path, provider string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	return updateLLMProviderConfigLocked(path, provider, changes)
+}
+
+// updateLLMProviderConfigLocked is the inner implementation called with configMu held.
+func updateLLMProviderConfigLocked(path, provider string, changes map[string]any) error {
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -486,6 +641,9 @@ func UpdateLLMProviderConfig(path, provider string, changes map[string]any) erro
 // [llm.<type>] rather than [[llm.providers]]), it falls back to the old-style
 // persistence path.
 func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -520,7 +678,7 @@ func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) 
 	}
 
 	// Fall back to legacy [llm.<name>] section (for configs not yet migrated).
-	return UpdateLLMProviderConfig(path, name, changes)
+	return updateLLMProviderConfigLocked(path, name, changes)
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +688,9 @@ func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) 
 // UpdateAPIConfig persists changes to the [api] section of the TOML config.
 // Only keys present in changes are applied (partial update).
 func UpdateAPIConfig(path string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -554,6 +715,9 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 // SetSessionSecret persists only the session_secret into [api.auth] without
 // touching other auth fields. Used at startup to auto-generate a stable secret.
 func SetSessionSecret(path, sessionSecret string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -578,6 +742,9 @@ func SetSessionSecret(path, sessionSecret string) error {
 // SetAuthConfig persists password_hash and session_secret to [api.auth] in the
 // TOML config file. Used by the PIN-protected account setup flow.
 func SetAuthConfig(path, passwordHash, sessionSecret string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -604,6 +771,9 @@ func SetAuthConfig(path, passwordHash, sessionSecret string) error {
 // TOML config. Only keys present in changes are written; other fields are
 // preserved. Used for password changes and preference updates.
 func UpdateAuthConfig(path string, changes map[string]any) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
 	raw, err := readRawConfig(path)
 	if err != nil {
 		return err
@@ -647,6 +817,13 @@ func writeRawConfig(path string, raw map[string]any) error {
 	data, err := toml.Marshal(raw)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	// Best-effort .bak of current config before overwriting.
+	if _, statErr := os.Stat(path); statErr == nil {
+		if existing, readErr := os.ReadFile(path); readErr == nil { // #nosec G304
+			_ = os.WriteFile(path+".bak", existing, 0o600) //nolint:gosec // path is the startup config path, not user input
+		}
 	}
 
 	dir := filepath.Dir(path)

@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -346,6 +348,216 @@ func TestChannels_ScopeEnforcement(t *testing.T) {
 	rec := h.Do(h.AuthedRequest("GET", "/api/v1/channels", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 without channels:read scope, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Channel CRUD tests
+// ---------------------------------------------------------------------------
+
+// channelCrudHarness creates a harness with ConfigPath for channel CRUD
+// persistence and two agents for testing agent validation.
+func channelCrudHarness(t *testing.T) *Harness {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	return NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "work-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+			{Name: "personal-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "existing", AgentName: "work-agent", Adapters: []string{"telegram"}},
+		},
+		ConfigPath: cfgPath,
+	})
+}
+
+func TestChannels_Create(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	body := map[string]any{
+		"name":    "new-channel",
+		"agent":   "personal-agent",
+		"adapters": []string{"discord"},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]any
+	DecodeJSON(t, rec, &result)
+	if result["name"] != "new-channel" {
+		t.Fatalf("expected name=new-channel, got %v", result["name"])
+	}
+	if result["agent"] != "personal-agent" {
+		t.Fatalf("expected agent=personal-agent, got %v", result["agent"])
+	}
+
+	// Verify it appears in the list.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/channels/new-channel", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get after create: expected 200, got %d", rec.Code)
+	}
+}
+
+func TestChannels_CreateDuplicate(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	body := map[string]any{
+		"name":  "existing",
+		"agent": "work-agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for duplicate, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannels_CreateBadAgent(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	body := map[string]any{
+		"name":  "bad-agent-ch",
+		"agent": "nonexistent-agent",
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for bad agent, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannels_CreateValidation(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	// Missing name.
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", map[string]any{
+		"agent": "work-agent",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing name, got %d", rec.Code)
+	}
+
+	// Bad delivery.
+	rec = h.Do(h.AuthedRequest("POST", "/api/v1/channels", map[string]any{
+		"name": "bad-delivery", "agent": "work-agent", "delivery": "invalid",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad delivery, got %d", rec.Code)
+	}
+
+	// Bad session_mode.
+	rec = h.Do(h.AuthedRequest("POST", "/api/v1/channels", map[string]any{
+		"name": "bad-mode", "agent": "work-agent", "session_mode": "invalid",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad session_mode, got %d", rec.Code)
+	}
+}
+
+func TestChannels_Update(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	body := map[string]any{
+		"agent":        "personal-agent",
+		"session_mode": "ephemeral",
+	}
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/channels/existing", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]any
+	DecodeJSON(t, rec, &result)
+	if result["agent"] != "personal-agent" {
+		t.Fatalf("expected agent=personal-agent, got %v", result["agent"])
+	}
+	if result["session_mode"] != "ephemeral" {
+		t.Fatalf("expected session_mode=ephemeral, got %v", result["session_mode"])
+	}
+}
+
+func TestChannels_UpdateImplicit(t *testing.T) {
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "denkeeper.toml")
+	_ = os.WriteFile(cfgPath, []byte(""), 0o644)
+
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "work-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "implicit-ch", AgentName: "work-agent", Adapters: []string{"telegram"}, Implicit: true},
+		},
+		ConfigPath: cfgPath,
+	})
+
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/channels/implicit-ch", map[string]any{"agent": "work-agent"}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for implicit channel update, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannels_Delete(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/channels/existing", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify it's gone.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/channels/existing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
+	}
+}
+
+func TestChannels_DeleteImplicit(t *testing.T) {
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "denkeeper.toml")
+	_ = os.WriteFile(cfgPath, []byte(""), 0o644)
+
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "work-agent", Tier: "autonomous", Adapters: []string{"telegram"}},
+		},
+		Channels: []*agent.Channel{
+			{Name: "implicit-ch", AgentName: "work-agent", Adapters: []string{"telegram"}, Implicit: true},
+		},
+		ConfigPath: cfgPath,
+	})
+
+	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/channels/implicit-ch", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for implicit channel delete, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannels_DeleteWithActiveKeys(t *testing.T) {
+	h := channelCrudHarness(t)
+
+	// Activate a key on the channel.
+	activateBody := map[string]string{"adapter_key": "telegram:99999"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels/existing/activate", activateBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("activate: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete the channel — active keys should be cleared.
+	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/channels/existing", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify channel is gone.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/channels/existing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after delete, got %d", rec.Code)
 	}
 }
 

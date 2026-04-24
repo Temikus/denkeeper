@@ -88,7 +88,10 @@ describe('Channels page', () => {
 
     await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
     await waitFor(() => {
-      expect(screen.getByText('Session Mode')).toBeInTheDocument()
+      // "Session Mode" appears in both the form (collapsed) and detail panel;
+      // verify the detail panel's field label is present.
+      const labels = screen.getAllByText('Session Mode')
+      expect(labels.length).toBeGreaterThanOrEqual(1)
       expect(screen.getByText('persistent')).toBeInTheDocument()
     })
   })
@@ -244,25 +247,7 @@ describe('Channels page', () => {
     expect(screen.getByLabelText('Deactivate telegram:387956986')).toBeInTheDocument()
   })
 
-  test('clicking deactivate shows confirmation modal', async () => {
-    render(Channels)
-    await waitFor(() => {
-      expect(screen.getByText('work')).toBeInTheDocument()
-    })
-
-    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
-    await waitFor(() => {
-      expect(screen.getByLabelText('Deactivate telegram:387956986')).toBeInTheDocument()
-    })
-
-    await fireEvent.click(screen.getByLabelText('Deactivate telegram:387956986'))
-    await waitFor(() => {
-      expect(screen.getByText('Deactivate Adapter')).toBeInTheDocument()
-      expect(screen.getByText('Cancel')).toBeInTheDocument()
-    })
-  })
-
-  test('confirming deactivation calls API', async () => {
+  test('clicking deactivate pill calls API directly', async () => {
     let deactivateCalled = false
     server.use(
       http.delete('/api/v1/channels/:name/activate', () => {
@@ -282,14 +267,6 @@ describe('Channels page', () => {
     })
 
     await fireEvent.click(screen.getByLabelText('Deactivate telegram:387956986'))
-    await waitFor(() => {
-      expect(screen.getByText('Deactivate Adapter')).toBeInTheDocument()
-    })
-
-    // Click the Deactivate button in the modal (not the pill X)
-    const modal = screen.getByRole('dialog')
-    await fireEvent.click(within(modal).getByRole('button', { name: 'Deactivate' }))
-
     await waitFor(() => {
       expect(deactivateCalled).toBe(true)
     })
@@ -347,5 +324,237 @@ describe('Channels page', () => {
       expect(screen.getByText('telegram:12345')).toBeInTheDocument()
     })
     expect(screen.queryByLabelText(/Deactivate/)).not.toBeInTheDocument()
+  })
+
+  // --- CRUD tests ---
+
+  test('add button renders in header', () => {
+    render(Channels)
+    expect(screen.getByText('+ Add Channel')).toBeInTheDocument()
+  })
+
+  test('add button opens inline form', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '+ Add Channel' })).toBeInTheDocument()
+    })
+    const addBtn = screen.getByRole('button', { name: '+ Add Channel' })
+    await fireEvent.click(addBtn)
+    await waitFor(() => {
+      expect(screen.getByText('Add Channel', { selector: '.form-title' })).toBeInTheDocument()
+    })
+  })
+
+  test('create form submits to API', async () => {
+    let createCalled = false
+    server.use(
+      http.post('/api/v1/channels', async ({ request }) => {
+        createCalled = true
+        const body = await request.json()
+        return HttpResponse.json({ name: body.name, agent: body.agent, adapters: [], implicit: false, conversation_id: `chan:${body.name}`, active_adapter_keys: [] }, { status: 201 })
+      }),
+    )
+
+    render(Channels)
+    // Wait for agents to load
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('+ Add Channel'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Name')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'test-ch' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(createCalled).toBe(true)
+    })
+  })
+
+  test('create form closes after successful save', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('+ Add Channel'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Name')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'new-ch' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      // The inline-panel collapses (loses .open class) rather than unmounting.
+      const panel = document.querySelector('.inline-panel')
+      expect(panel).not.toHaveClass('open')
+    })
+  })
+
+  test('create shows error on API failure', async () => {
+    server.use(
+      http.post('/api/v1/channels', () =>
+        HttpResponse.json({ error: 'channel already exists' }, { status: 409 })
+      ),
+    )
+
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('+ Add Channel'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Name')).toBeInTheDocument()
+    })
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'dup' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(screen.getByText('channel already exists')).toBeInTheDocument()
+    })
+  })
+
+  test('edit button opens pre-filled form for explicit channel', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => {
+      expect(screen.getByText('Edit Channel')).toBeInTheDocument()
+      // Name field should be disabled in edit mode
+      expect(screen.getByLabelText('Name')).toBeDisabled()
+    })
+  })
+
+  test('edit/delete buttons hidden for implicit channels', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('default-telegram')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('default-telegram').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Implicit')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument()
+  })
+
+  test('edit submits PATCH', async () => {
+    let patchCalled = false
+    server.use(
+      http.patch('/api/v1/channels/:name', () => {
+        patchCalled = true
+        return HttpResponse.json({ name: 'work', agent: 'helper', adapters: ['telegram'], implicit: false, conversation_id: 'chan:work', active_adapter_keys: [] })
+      }),
+    )
+
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => {
+      expect(screen.getByText('Edit Channel')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => {
+      expect(patchCalled).toBe(true)
+    })
+  })
+
+  test('delete button shows confirmation modal', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Delete'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete Channel')).toBeInTheDocument()
+      expect(screen.getByText(/Active adapter keys will be cleared/)).toBeInTheDocument()
+    })
+  })
+
+  test('confirming delete calls API', async () => {
+    let deleteCalled = false
+    server.use(
+      http.delete('/api/v1/channels/:name', () => {
+        deleteCalled = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Delete'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete Channel')).toBeInTheDocument()
+    })
+
+    // Click the Delete button in the modal
+    const modal = screen.getByRole('dialog')
+    await fireEvent.click(within(modal).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(deleteCalled).toBe(true)
+    })
+  })
+
+  test('cancel in delete modal closes it', async () => {
+    render(Channels)
+    await waitFor(() => {
+      expect(screen.getByText('work')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('work').closest('[role="button"]'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Delete'))
+    await waitFor(() => {
+      expect(screen.getByText('Delete Channel')).toBeInTheDocument()
+    })
+
+    // Click Cancel within the modal (not the form's Cancel)
+    const modal = screen.getByRole('dialog')
+    await fireEvent.click(within(modal).getByText('Cancel'))
+    await waitFor(() => {
+      expect(screen.queryByText('Delete Channel')).not.toBeInTheDocument()
+    })
   })
 })

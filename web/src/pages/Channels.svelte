@@ -11,7 +11,20 @@
   let activating = $state(false)
   let deactivating = $state(null)
   let activateError = $state('')
-  let confirmDeactivate = $state(null)
+
+  // CRUD state
+  let showForm = $state(false)
+  let editingName = $state(null)
+  let formName = $state('')
+  let formAgent = $state('default')
+  let formAdapters = $state('')
+  let formDelivery = $state('')
+  let formSessionMode = $state('')
+  let saving = $state(false)
+  let formError = $state('')
+  let confirmDelete = $state(null)
+  let deleting = $state(false)
+  let agents = $state([])
 
   async function loadChannels() {
     try {
@@ -20,7 +33,73 @@
     } catch (e) { error = e.message }
   }
 
-  onMount(() => loadChannels())
+  onMount(async () => {
+    await loadChannels()
+    try { agents = await api.agents() } catch {}
+  })
+
+  function openAdd() {
+    editingName = null
+    formName = ''
+    formAgent = 'default'
+    formAdapters = ''
+    formDelivery = ''
+    formSessionMode = ''
+    formError = ''
+    showForm = true
+  }
+
+  function openEdit(ch) {
+    editingName = ch.name
+    formName = ch.name
+    formAgent = ch.agent
+    formAdapters = (ch.adapters || []).join(', ')
+    formDelivery = ch.delivery || ''
+    formSessionMode = ch.session_mode || ''
+    formError = ''
+    showForm = true
+  }
+
+  function closeForm() {
+    showForm = false
+    formError = ''
+  }
+
+  async function saveChannel() {
+    saving = true
+    formError = ''
+    try {
+      const adapters = formAdapters.split(',').map(s => s.trim()).filter(Boolean)
+      const data = {
+        agent: formAgent,
+        adapters: adapters.length > 0 ? adapters : undefined,
+        delivery: formDelivery || undefined,
+        session_mode: formSessionMode || undefined,
+      }
+      if (editingName) {
+        await api.updateChannel(editingName, data)
+      } else {
+        data.name = formName.trim()
+        await api.createChannel(data)
+      }
+      showForm = false
+      await loadChannels()
+      if (editingName) selected = channels.find(ch => ch.name === editingName) || null
+    } catch (e) { formError = e.message }
+    finally { saving = false }
+  }
+
+  async function doDelete() {
+    deleting = true
+    try {
+      const deletedName = confirmDelete
+      await api.deleteChannel(deletedName)
+      confirmDelete = null
+      if (selected?.name === deletedName) selected = null
+      await loadChannels()
+    } catch (e) { error = e.message }
+    finally { deleting = false }
+  }
 
   async function activateAdapter() {
     const key = activateKey.trim()
@@ -36,19 +115,80 @@
     finally { activating = false }
   }
 
+  function focusOnMount(node) {
+    node.focus()
+  }
+
   async function doDeactivate(key) {
     deactivating = key
     try {
       await api.deactivateChannel(selected.name, key)
-      confirmDeactivate = null
       await loadChannels()
     } catch (e) { error = e.message }
     finally { deactivating = null }
   }
 </script>
 
-<h1 class="page-title">Channels</h1>
+<div class="page-header">
+  <h1 class="page-title">Channels</h1>
+  <button class="btn-primary btn-sm" onclick={openAdd} data-testid="add-channel-btn">+ Add Channel</button>
+</div>
 <ErrorBanner message={error} />
+
+<div class="inline-panel" class:open={showForm}>
+  <div class="inline-panel-inner">
+    <div class="inline-form" data-testid="channel-form">
+      <h2 class="form-title">{editingName ? 'Edit Channel' : 'Add Channel'}</h2>
+      {#if formError}
+        <div class="inline-error" role="alert">{formError}</div>
+      {/if}
+      <div class="row">
+        <label>
+          Name
+          <input type="text" bind:value={formName} disabled={!!editingName || saving} placeholder="e.g. work" />
+        </label>
+        <label>
+          Agent
+          <select bind:value={formAgent} disabled={saving}>
+            {#each agents as a}
+              <option value={a.name}>{a.name}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      <label>
+        Adapters
+        <input type="text" bind:value={formAdapters} disabled={saving} placeholder="telegram, discord:123" />
+        <span class="hint">Comma-separated</span>
+      </label>
+      <div class="row">
+        <label>
+          Delivery
+          <select bind:value={formDelivery} disabled={saving}>
+            <option value="">Default</option>
+            <option value="single">Single</option>
+            <option value="broadcast">Broadcast</option>
+          </select>
+        </label>
+        <label>
+          Session Mode
+          <select bind:value={formSessionMode} disabled={saving}>
+            <option value="">Persistent</option>
+            <option value="persistent">Persistent</option>
+            <option value="ephemeral">Ephemeral</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="btn-primary" onclick={saveChannel}
+          disabled={saving || (!editingName && !formName.trim())}>
+          {saving ? 'Saving\u2026' : 'Save'}
+        </button>
+        <button class="btn-ghost" onclick={closeForm} disabled={saving}>Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="layout">
   <aside class="list">
@@ -60,13 +200,14 @@
         onclick={() => selected = ch}
         role="button"
         tabindex="0"
+        data-testid="channel-item-{ch.name}"
       >
         <div class="cname">{ch.name}</div>
         <div class="cmeta">{ch.agent}{#if ch.implicit} · implicit{/if}</div>
       </div>
     {/each}
     {#if channels.length === 0 && !error}
-      <p class="empty">No channels configured. Add <code>[[channels]]</code> to your TOML config.</p>
+      <p class="empty">No channels configured. <button class="btn-link" onclick={openAdd}>Add one</button> or add <code>[[channels]]</code> to your TOML config.</p>
     {/if}
   </aside>
 
@@ -78,6 +219,8 @@
           <span class="badge badge-implicit">Implicit</span>
         {:else}
           <span class="badge badge-explicit">Explicit</span>
+          <button class="btn-ghost btn-sm" onclick={() => openEdit(selected)}>Edit</button>
+          <button class="btn-ghost btn-sm btn-danger-text" onclick={() => confirmDelete = selected.name}>Delete</button>
         {/if}
       </div>
 
@@ -117,7 +260,7 @@
                   {#if !selected.implicit}
                     <span class="pill">
                       {key}
-                      <button class="pill-remove" onclick={() => confirmDeactivate = key}
+                      <button class="pill-remove" onclick={() => doDeactivate(key)}
                         disabled={deactivating === key} title="Deactivate {key}"
                         aria-label="Deactivate {key}">
                         {deactivating === key ? '\u2026' : '\u00d7'}
@@ -163,24 +306,30 @@
   </section>
 </div>
 
-{#if confirmDeactivate}
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDeactivate = null }} onkeydown={(e) => { if (e.key === 'Escape') confirmDeactivate = null }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="confirm-modal">
-      <h2>Deactivate Adapter</h2>
-      <p>Deactivate <strong>{confirmDeactivate}</strong> from channel <strong>{selected?.name}</strong>?</p>
+{#if confirmDelete}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDelete = null }} onkeydown={(e) => { if (e.key === 'Escape') confirmDelete = null }} role="dialog" aria-modal="true" tabindex="-1" use:focusOnMount>
+    <div class="confirm-modal" data-testid="delete-confirm">
+      <h2>Delete Channel</h2>
+      <p>Delete channel <strong>{confirmDelete}</strong>? Active adapter keys will be cleared.</p>
       <div class="modal-actions">
-        <button class="btn-danger" onclick={() => doDeactivate(confirmDeactivate)}
-          disabled={deactivating}>
-          {deactivating ? 'Deactivating\u2026' : 'Deactivate'}
+        <button class="btn-danger" onclick={doDelete} disabled={deleting}>
+          {deleting ? 'Deleting\u2026' : 'Delete'}
         </button>
-        <button class="btn-ghost" onclick={() => confirmDeactivate = null}>Cancel</button>
+        <button class="btn-ghost" onclick={() => confirmDelete = null}>Cancel</button>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .page-title { font-size: 20px; font-weight: 700; margin: 0; }
   .layout { display: flex; gap: 20px; height: calc(100vh - 110px); }
   .list {
     width: 220px; flex-shrink: 0;
@@ -299,9 +448,21 @@
   }
   .activate-form input:focus { border-color: var(--accent); outline: none; }
   .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 8px; }
-  .hint { font-size: 11px; color: var(--text-muted); margin-top: 6px; display: block; }
 
   .muted { color: var(--text-muted); }
   .empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
   code { font-family: monospace; font-size: 12px; background: var(--hover-overlay); padding: 1px 5px; border-radius: 3px; }
+
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    padding: 0;
+    font-size: inherit;
+    text-decoration: underline;
+  }
+  .btn-link:hover { opacity: 0.8; }
+  .btn-danger-text { color: var(--danger); }
+  .btn-danger-text:hover { background: rgba(224,92,110,0.1); }
 </style>

@@ -4,29 +4,29 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
-  let sessions = []
-  let selected = null
-  let messages = []
-  let error = ''
-  let loadingMsgs = false
-  let confirmDeleteId = null
-  let deletingSession = false
+  let sessions = $state([])
+  let selected = $state(null)
+  let messages = $state([])
+  let error = $state('')
+  let loadingMsgs = $state(false)
+  let confirmDeleteId = $state(null)
+  let deletingSession = $state(false)
 
   // Pagination state
-  let total = 0
-  let offset = 0
+  let total = $state(0)
+  let offset = $state(0)
   const limit = 50
-  let loadingMore = false
+  let loadingMore = $state(false)
 
   // Telemetry state
-  let stats = null
-  let toolCalls = []
-  let skillUsages = []
+  let stats = $state(null)
+  let toolCalls = $state([])
+  let skillUsages = $state([])
 
   // Clear/Compact state
-  let confirmClearId = null
-  let clearingSession = false
-  let compactingSession = null
+  let confirmClearId = $state(null)
+  let clearingSession = $state(false)
+  let compactingSession = $state(null)
 
   onMount(async () => {
     try {

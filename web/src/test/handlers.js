@@ -55,6 +55,15 @@ export const handlers = [
     const ch = channels.find(c => c.name === params.name)
     return ch ? HttpResponse.json(ch) : new HttpResponse(null, { status: 404 })
   }),
+  http.post('/api/v1/channels', async ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ name: body.name, agent: body.agent, adapters: body.adapters || [], implicit: false, session_mode: body.session_mode || '', conversation_id: `chan:${body.name}`, active_adapter_keys: [] }, { status: 201 })
+  }),
+  http.patch('/api/v1/channels/:name', async ({ params, request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ name: params.name, agent: body.agent || 'default', adapters: body.adapters || [], implicit: false, session_mode: body.session_mode || '', conversation_id: `chan:${params.name}`, active_adapter_keys: [] })
+  }),
+  http.delete('/api/v1/channels/:name', () => new HttpResponse(null, { status: 204 })),
   http.post('/api/v1/channels/:name/activate', () => HttpResponse.json({ status: 'activated', channel: 'work', adapter_key: 'api:web-dashboard' })),
   http.delete('/api/v1/channels/:name/activate', () => HttpResponse.json({ status: 'deactivated' })),
 
