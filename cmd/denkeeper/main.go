@@ -1083,6 +1083,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		"model", model,
 		"tier", tier,
 		"skills", len(sr.skills),
+		"max_tool_rounds", e.MaxToolRounds(),
 	)
 
 	return e, bindings, nil
