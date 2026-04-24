@@ -381,7 +381,24 @@ func rawAgents(raw map[string]any) []any {
 func synthesizeLegacyAgentEntry(raw map[string]any, name string) map[string]any {
 	entry := map[string]any{"name": name}
 
-	// Adapters — infer from which adapter tokens are configured.
+	if adapters := legacyAdapters(raw); len(adapters) > 0 {
+		entry["adapters"] = adapters
+	}
+	if tier := legacyStringField(raw, "session", "tier"); tier != "" {
+		entry["session_tier"] = tier
+	}
+	if pd := legacyStringField(raw, "agent", "persona_dir"); pd != "" {
+		entry["persona_dir"] = pd
+	}
+	if sd := legacyStringField(raw, "agent", "skills_dir"); sd != "" {
+		entry["skills_dir"] = sd
+	}
+
+	return entry
+}
+
+// legacyAdapters infers the adapters list from legacy top-level adapter sections.
+func legacyAdapters(raw map[string]any) []any {
 	var adapters []any
 	if tg, ok := raw["telegram"].(map[string]any); ok && tg["token"] != nil && tg["token"] != "" {
 		adapters = append(adapters, "telegram")
@@ -389,28 +406,17 @@ func synthesizeLegacyAgentEntry(raw map[string]any, name string) map[string]any 
 	if dc, ok := raw["discord"].(map[string]any); ok && dc["token"] != nil && dc["token"] != "" {
 		adapters = append(adapters, "discord")
 	}
-	if len(adapters) > 0 {
-		entry["adapters"] = adapters
-	}
+	return adapters
+}
 
-	// Session tier from [session].
-	if sess, ok := raw["session"].(map[string]any); ok {
-		if tier, ok := sess["tier"].(string); ok && tier != "" {
-			entry["session_tier"] = tier
+// legacyStringField returns a string value from a nested section of the raw config.
+func legacyStringField(raw map[string]any, section, key string) string {
+	if sec, ok := raw[section].(map[string]any); ok {
+		if v, ok := sec[key].(string); ok {
+			return v
 		}
 	}
-
-	// Persona/skills dirs from [agent].
-	if ag, ok := raw["agent"].(map[string]any); ok {
-		if pd, ok := ag["persona_dir"].(string); ok && pd != "" {
-			entry["persona_dir"] = pd
-		}
-		if sd, ok := ag["skills_dir"].(string); ok && sd != "" {
-			entry["skills_dir"] = sd
-		}
-	}
-
-	return entry
+	return ""
 }
 
 // rawSchedules extracts the schedules array from the raw config map.

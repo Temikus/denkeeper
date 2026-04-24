@@ -174,29 +174,44 @@ function handleToolEvent(agentMsg, evt) {
   }
   if (evt.type === 'tool_start') {
     agentMsg.status = ''
-    const pendingAppr = agentMsg.approvals.find(a => a.tool === evt.tool && a.status === 'pending')
-    if (pendingAppr) {
-      pendingAppr.status = 'approved'
+    // Link execution to the matching approval entry so we don't render
+    // a duplicate tool-call card for the same invocation.
+    const matchAppr = agentMsg.approvals.find(a => a.tool === evt.tool && !a.execStatus)
+    if (matchAppr) {
+      if (matchAppr.status === 'pending') matchAppr.status = 'approved'
+      matchAppr.execStatus = 'running'
+      matchAppr.tool_id = evt.tool_id
+      matchAppr.round = evt.round
       agentMsg.approvals = [...agentMsg.approvals]
-    }
-    // Deduplicate only when tool_id is present (replay protection).
-    // Without tool_id, name+round can't distinguish replays from legitimate
-    // second invocations of the same tool, so always append.
-    const isDupe = evt.tool_id && agentMsg.toolCalls.some(t => t.id === evt.tool_id)
-    if (!isDupe) {
-      agentMsg.toolCalls = [...agentMsg.toolCalls, { id: evt.tool_id, name: evt.tool, round: evt.round, status: 'running' }]
+    } else {
+      // No matching approval (autonomous tier) — track in toolCalls.
+      const isDupe = evt.tool_id && agentMsg.toolCalls.some(t => t.id === evt.tool_id)
+      if (!isDupe) {
+        agentMsg.toolCalls = [...agentMsg.toolCalls, { id: evt.tool_id, name: evt.tool, round: evt.round, status: 'running' }]
+      }
     }
   }
   if (evt.type === 'tool_end') {
-    const tc = evt.tool_id
-      ? agentMsg.toolCalls.find(t => t.id === evt.tool_id)
-      : agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
-    if (tc) {
-      tc.status = evt.error ? 'error' : 'done'
-      tc.duration = evt.duration_ms
-      tc.error = evt.error
+    // Check approval-linked execution first, then fall back to toolCalls.
+    const appr = evt.tool_id
+      ? agentMsg.approvals.find(a => a.tool_id === evt.tool_id)
+      : agentMsg.approvals.find(a => a.tool === evt.tool && a.round === evt.round && a.execStatus)
+    if (appr) {
+      appr.execStatus = evt.error ? 'error' : 'done'
+      appr.duration = evt.duration_ms
+      appr.execError = evt.error
+      agentMsg.approvals = [...agentMsg.approvals]
+    } else {
+      const tc = evt.tool_id
+        ? agentMsg.toolCalls.find(t => t.id === evt.tool_id)
+        : agentMsg.toolCalls.find(t => t.name === evt.tool && t.round === evt.round)
+      if (tc) {
+        tc.status = evt.error ? 'error' : 'done'
+        tc.duration = evt.duration_ms
+        tc.error = evt.error
+      }
+      agentMsg.toolCalls = [...agentMsg.toolCalls]
     }
-    agentMsg.toolCalls = [...agentMsg.toolCalls]
   }
   touchMessages()
 }
@@ -229,6 +244,10 @@ function sendViaWS(agentMsg, agentName, sessionId, text) {
           if (tc.status === 'running') tc.status = 'done'
         }
         agentMsg.toolCalls = [...agentMsg.toolCalls]
+        for (const a of agentMsg.approvals) {
+          if (a.execStatus === 'running') a.execStatus = 'done'
+        }
+        agentMsg.approvals = [...agentMsg.approvals]
         flushThrottledTouch()
         const doneSessionId = frame.session_id || reqSessionId
         chatState.update(s => ({ ...s, sessionId: doneSessionId }))
@@ -317,6 +336,10 @@ export async function sendMessage(text) {
             if (tc.status === 'running') tc.status = 'done'
           }
           agentMsg.toolCalls = [...agentMsg.toolCalls]
+          for (const a of agentMsg.approvals) {
+            if (a.execStatus === 'running') a.execStatus = 'done'
+          }
+          agentMsg.approvals = [...agentMsg.approvals]
           flushThrottledTouch()
           chatState.update(s => ({ ...s, sessionId: doneSessionId }))
           saveSession()

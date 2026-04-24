@@ -576,8 +576,8 @@ describe('sendViaWS edge cases', () => {
   })
 })
 
-describe('handleToolEvent: tool_start marks pending approvals as approved', () => {
-  test('pending approval for same tool is marked approved on tool_start', async () => {
+describe('handleToolEvent: tool_start links execution to matching approval', () => {
+  test('pending approval for same tool is marked approved and execution linked', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'pending' })
       onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })
@@ -587,7 +587,85 @@ describe('handleToolEvent: tool_start marks pending approvals as approved', () =
     await sendMessage('search')
     const agentMsg = get(chatState).messages[1]
     expect(agentMsg.approvals[0].status).toBe('approved')
-    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.approvals[0].execStatus).toBe('done') // finalized by onDone
+    // No separate toolCalls entry — execution linked to approval
+    expect(agentMsg.toolCalls).toHaveLength(0)
+  })
+
+  test('auto_approved approval links execution on tool_start', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'auto', approval_status: 'auto_approved' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 300 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals[0].execStatus).toBe('done')
+    expect(agentMsg.approvals[0].duration).toBe(300)
+    expect(agentMsg.toolCalls).toHaveLength(0)
+  })
+
+  test('tool_end updates error on linked approval', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'auto', approval_status: 'auto_approved' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, error: 'timeout' })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals[0].execStatus).toBe('error')
+    expect(agentMsg.approvals[0].execError).toBe('timeout')
+  })
+
+  test('manually approved (resolved) approval links execution on tool_start', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'search', approval_status: 'pending' })
+      // Simulate external approval resolving the pending status to 'approved'
+      const agentMsg = get(chatState).messages[1]
+      agentMsg.approvals[0].status = 'approved'
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 450 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals[0].status).toBe('approved')
+    expect(agentMsg.approvals[0].execStatus).toBe('done')
+    expect(agentMsg.approvals[0].duration).toBe(450)
+    expect(agentMsg.toolCalls).toHaveLength(0)
+  })
+
+  test('same tool called in multiple rounds links each to its own approval', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      // Round 1: first call auto-approved
+      onToolEvent({ type: 'tool_approval', approval_id: 'a1', tool: 'web_search', text: 'auto', approval_status: 'auto_approved' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 200 })
+      // Round 2: same tool auto-approved again
+      onToolEvent({ type: 'tool_approval', approval_id: 'a2', tool: 'web_search', text: 'auto', approval_status: 'auto_approved' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-2', round: 2 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-2', round: 2, duration_ms: 150 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search twice')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.approvals).toHaveLength(2)
+    // First approval linked to round 1
+    expect(agentMsg.approvals[0].execStatus).toBe('done')
+    expect(agentMsg.approvals[0].duration).toBe(200)
+    expect(agentMsg.approvals[0].tool_id).toBe('tc-1')
+    // Second approval linked to round 2
+    expect(agentMsg.approvals[1].execStatus).toBe('done')
+    expect(agentMsg.approvals[1].duration).toBe(150)
+    expect(agentMsg.approvals[1].tool_id).toBe('tc-2')
+    // No orphan toolCalls
+    expect(agentMsg.toolCalls).toHaveLength(0)
   })
 
   test('pending approval for different tool is not affected by tool_start', async () => {
@@ -600,6 +678,9 @@ describe('handleToolEvent: tool_start marks pending approvals as approved', () =
     await sendMessage('search')
     const agentMsg = get(chatState).messages[1]
     expect(agentMsg.approvals[0].status).toBe('pending')
+    // different_tool has no approval, goes to toolCalls
+    expect(agentMsg.toolCalls).toHaveLength(1)
+    expect(agentMsg.toolCalls[0].name).toBe('different_tool')
   })
 })
 

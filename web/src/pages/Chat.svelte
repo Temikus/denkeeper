@@ -404,10 +404,11 @@
           </button>
         </div>
         {#if (msg.approvals?.length > 0) || (msg.toolCalls?.length > 0)}
+          {@const orphanToolCalls = (msg.toolCalls || []).filter(tc => !(msg.approvals || []).some(a => a.tool_id === tc.id))}
           {@const pendingCount = (msg.approvals || []).filter(a => a.status === 'pending').length}
-          {@const totalCalls = Math.max((msg.toolCalls || []).length, (msg.approvals || []).length)}
-          {@const runningCount = (msg.toolCalls || []).filter(t => t.status === 'running').length}
-          {@const errorCount = (msg.toolCalls || []).filter(t => t.status === 'error').length}
+          {@const totalCalls = (msg.approvals || []).length + orphanToolCalls.length}
+          {@const runningCount = (msg.approvals || []).filter(a => a.execStatus === 'running').length + orphanToolCalls.filter(t => t.status === 'running').length}
+          {@const errorCount = (msg.approvals || []).filter(a => a.execStatus === 'error').length + orphanToolCalls.filter(t => t.status === 'error').length}
           <details class="tool-activity" open={pendingCount > 0 || runningCount > 0}>
             <summary class="tool-activity-summary">
               Tools: {totalCalls} {totalCalls === 1 ? 'call' : 'calls'}{#if pendingCount > 0} <span class="pending-count">({pendingCount} pending)</span>{/if}{#if runningCount > 0} <span class="running-count">({runningCount} running)</span>{/if}{#if errorCount > 0} <span class="error-count">({errorCount} failed)</span>{/if}
@@ -415,9 +416,9 @@
             {#if msg.approvals?.length > 0}
               <div class="approval-cards">
                 {#each msg.approvals as appr}
-                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'}>
-                    <span class="approval-icon" aria-hidden="true">{approvalStatusIcon(appr.status)}</span>
-                    <span class="sr-only">{approvalStatusLabel(appr.status)}</span>
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
+                    <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
+                    <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status)}</span>
                     <span class="tool-name">{appr.tool}</span>
                     {#if appr.status === 'pending'}
                       <div class="approval-actions">
@@ -428,14 +429,22 @@
                       </div>
                     {:else}
                       <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
+                      {#if appr.execStatus === 'running'}
+                        <span class="tool-dur">running</span>
+                      {:else if appr.duration != null}
+                        <span class="tool-dur">{appr.duration}ms</span>
+                      {/if}
+                    {/if}
+                    {#if appr.execError}
+                      <span class="tool-error">{appr.execError}</span>
                     {/if}
                   </div>
                 {/each}
               </div>
             {/if}
-            {#if msg.toolCalls?.length > 0}
+            {#if orphanToolCalls.length > 0}
               <div class="tool-calls">
-                {#each msg.toolCalls as tc}
+                {#each orphanToolCalls as tc}
                   <div class="tool-call" class:running={tc.status === 'running'} class:error={tc.status === 'error'} title={tc.error || ''}>
                     <span class="tool-icon" aria-hidden="true">{toolStatusIcon(tc.status)}</span>
                     <span class="sr-only">{tc.status}</span>
