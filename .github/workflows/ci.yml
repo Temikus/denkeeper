@@ -67,7 +67,7 @@ jobs:
       - uses: jdx/mise-action@v4
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.3
+          version: v2.11.4
           args: ""
 
   test:
