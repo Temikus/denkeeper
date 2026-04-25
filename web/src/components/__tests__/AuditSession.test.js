@@ -269,6 +269,119 @@ describe('AuditSession', () => {
     expect(screen.getByText('Yes please fix it')).toBeInTheDocument()
   })
 
+  test('follow-up schedule trigger renders as SCHEDULE, not USER', () => {
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'First scheduled',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'heartbeat-hourly', schedule_cron: '0 8-22 * * *', skill_name: 'heartbeat' }),
+        },
+        {
+          id: 'evt-1',
+          category: 'tool_call', action: 'find-tasks', summary: 'find-tasks',
+          status: 'ok', agent: 'default', duration_ms: 200,
+          timestamp: ts(70000), conversation_id: 'chan:general',
+          detail: null,
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'Second scheduled',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'heartbeat-hourly', schedule_cron: '0 8-22 * * *', skill_name: 'heartbeat' }),
+        },
+      ],
+    })
+    const { container } = render(AuditSession, { props: { session } })
+    // The inline (follow-up) trigger should have schedule styling
+    const inlineTriggers = container.querySelectorAll('.inline-trigger')
+    expect(inlineTriggers.length).toBe(1)
+    expect(inlineTriggers[0].classList.contains('inline-trigger-schedule')).toBe(true)
+    // Should show SCHEDULE label, not USER
+    expect(inlineTriggers[0].querySelector('.trigger-label-schedule')).toBeInTheDocument()
+    expect(inlineTriggers[0].querySelector('.trigger-label-user')).not.toBeInTheDocument()
+    // Should show schedule metadata
+    expect(inlineTriggers[0].querySelector('.trigger-schedule-name').textContent).toBe('heartbeat-hourly')
+    expect(inlineTriggers[0].querySelector('.trigger-cron').textContent).toBe('0 8-22 * * *')
+  })
+
+  test('follow-up schedule trigger is clickable', async () => {
+    const onToggleRow = vi.fn()
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'First',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'daily-check', schedule_cron: '0 9 * * *' }),
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'Second',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'daily-check', schedule_cron: '0 9 * * *' }),
+        },
+      ],
+    })
+    render(AuditSession, { props: { session, onToggleRow } })
+    const inlineTrigger = document.querySelector('.inline-trigger-schedule')
+    await fireEvent.click(inlineTrigger)
+    expect(onToggleRow).toHaveBeenCalledWith('trg-2')
+  })
+
+  test('mixed session: schedule triggers render as SCHEDULE, user triggers as USER', () => {
+    const session = makeSession({
+      expanded: true,
+      events: [
+        {
+          id: 'trg-1',
+          category: 'session', action: 'trigger', summary: 'Scheduled',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(80000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'heartbeat', schedule_cron: '0 * * * *' }),
+        },
+        {
+          id: 'evt-1',
+          category: 'llm', action: 'complete', summary: 'response',
+          status: 'ok', agent: 'default', duration_ms: 500,
+          timestamp: ts(70000), conversation_id: 'chan:general',
+          detail: null,
+        },
+        {
+          id: 'trg-2',
+          category: 'session', action: 'trigger', summary: 'User question',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(60000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'user', prompt: 'What happened?', user_name: 'Alice' }),
+        },
+        {
+          id: 'trg-3',
+          category: 'session', action: 'trigger', summary: 'Another schedule',
+          status: 'ok', agent: 'default', duration_ms: 0,
+          timestamp: ts(50000), conversation_id: 'chan:general',
+          detail: JSON.stringify({ trigger_type: 'schedule', schedule_name: 'heartbeat', schedule_cron: '0 * * * *' }),
+        },
+      ],
+    })
+    const { container } = render(AuditSession, { props: { session } })
+    const inlineTriggers = container.querySelectorAll('.inline-trigger')
+    // trg-2 (user) and trg-3 (schedule) are inline; trg-1 is the header
+    expect(inlineTriggers.length).toBe(2)
+    // First inline trigger: user
+    expect(inlineTriggers[0].querySelector('.trigger-label-user')).toBeInTheDocument()
+    expect(inlineTriggers[0].classList.contains('inline-trigger-schedule')).toBe(false)
+    // Second inline trigger: schedule
+    expect(inlineTriggers[1].querySelector('.trigger-label-schedule')).toBeInTheDocument()
+    expect(inlineTriggers[1].classList.contains('inline-trigger-schedule')).toBe(true)
+  })
+
   test('follow-up trigger handles malformed detail gracefully', () => {
     const session = makeSession({
       expanded: true,
