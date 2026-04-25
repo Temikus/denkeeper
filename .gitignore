@@ -73,3 +73,4 @@ hugo_stats.json
 .hugo_build.lock
 web/coverage
 node_modules/.vite/vitest
+web/dist
