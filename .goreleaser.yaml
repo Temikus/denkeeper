@@ -48,17 +48,16 @@ sboms:
 # Keyless cosign OIDC signing — no stored keys.
 # Requires id-token:write permission in release.yml and cosign-installer to be run first.
 # Signs the checksums file; every archive hash is listed there.
+# Uses cosign v3 bundle format (signature + certificate in a single .bundle file).
 signs:
   - id: cosign
     cmd: cosign
     artifacts: checksum
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
       - --yes
-      - --output-signature=${signature}
-      - --output-certificate=${certificate}
+      - --bundle=${signature}
       - ${artifact}
 
 # ── Linux packages (.deb / .rpm) ──────────────────────────────────────────────
