@@ -445,4 +445,15 @@ describe('Agents delete', () => {
     await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
     await waitFor(() => expect(deleteCalled).toBe(true))
   })
+
+  test('cost limit fields render in permission panel', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByText('PERMISSION'))
+
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => {
+      expect(screen.getByLabelText('Cost Limit Soft ($)')).toBeInTheDocument()
+      expect(screen.getByLabelText('Cost Limit Hard ($)')).toBeInTheDocument()
+    })
+  })
 })

@@ -444,10 +444,14 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	var adapters []string
 	var fallbacks []config.FallbackConfig
+	var costLimitSoft *float64
+	var costLimitHard *float64
 	for _, ac := range s.deps.Config.Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
 			fallbacks = ac.Fallbacks
+			costLimitSoft = ac.CostLimitSoft
+			costLimitHard = ac.CostLimitHard
 			break
 		}
 	}
@@ -455,7 +459,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		fallbacks = []config.FallbackConfig{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"name":             e.Name(),
 		"display_name":     e.DisplayName(),
 		"permission_tier":  e.PermissionTier(),
@@ -469,7 +473,14 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		"persona_dir":      e.PersonaDir(),
 		"persona_sections": e.PersonaSections(),
 		"fallbacks":        fallbacks,
-	})
+	}
+	if costLimitSoft != nil {
+		resp["cost_limit_soft"] = *costLimitSoft
+	}
+	if costLimitHard != nil {
+		resp["cost_limit_hard"] = *costLimitHard
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleCosts returns cost tracking data with per-agent breakdown.

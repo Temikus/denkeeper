@@ -210,6 +210,8 @@
   let configProvider = $state('')
   let configDescription = $state('')
   let configMaxToolRounds = $state(0)
+  let configCostSoft = $state('')
+  let configCostHard = $state('')
   let configAllowlist = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
@@ -224,6 +226,8 @@
     configProvider = d.provider || ''
     configDescription = ''
     configMaxToolRounds = d.max_tool_rounds ?? 50
+    configCostSoft = d.cost_limit_soft ?? ''
+    configCostHard = d.cost_limit_hard ?? ''
     configAllowlist = ''
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
@@ -260,6 +264,10 @@
         if (configTier !== detail.permission_tier) data.session_tier = configTier
         const rounds = parseInt(configMaxToolRounds, 10)
         if (!isNaN(rounds) && rounds !== detail.max_tool_rounds) data.max_tool_rounds = rounds
+        const soft = configCostSoft === '' ? null : parseFloat(configCostSoft)
+        const hard = configCostHard === '' ? null : parseFloat(configCostHard)
+        if (soft !== (detail.cost_limit_soft ?? null)) data.cost_limit_soft = soft
+        if (hard !== (detail.cost_limit_hard ?? null)) data.cost_limit_hard = hard
       }
       if (Object.keys(data).length) {
         await api.updateAgentConfig(detail.name, data)
@@ -680,6 +688,12 @@
               <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
               <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />
               <span class="hint">Maximum tool-call rounds per message before the agent stops. Default: 50.</span>
+              <label class="config-label" for="cfg-cost-soft">Cost Limit Soft ($)</label>
+              <input id="cfg-cost-soft" class="config-input" type="number" min="0" step="0.01" bind:value={configCostSoft} placeholder="Inherit global" />
+              <span class="hint">Soft cost limit per session. Empty = inherit global. 0 = disabled.</span>
+              <label class="config-label" for="cfg-cost-hard">Cost Limit Hard ($)</label>
+              <input id="cfg-cost-hard" class="config-input" type="number" min="0" step="0.01" bind:value={configCostHard} placeholder="Inherit global" />
+              <span class="hint">Hard cost limit per session. Stops the session immediately. Empty = inherit global.</span>
             </div>
           {/if}
           <div class="config-panel-actions">

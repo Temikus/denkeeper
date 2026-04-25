@@ -461,3 +461,77 @@ func TestAgentCreate_SurvivesConfigReload(t *testing.T) {
 		t.Error("persona_dir should be set in persisted config")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-agent cost limits (Phase 14e)
+// ---------------------------------------------------------------------------
+
+func TestAgentConfig_UpdateCostLimits(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{{Name: "default", Tier: "supervised"}},
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default",
+		map[string]any{"cost_limit_soft": 2.5, "cost_limit_hard": 5.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify via agent detail endpoint.
+	detailRec := h.Do(h.AuthedRequest("GET", "/api/v1/agents/default", nil))
+	var detail map[string]any
+	DecodeJSON(t, detailRec, &detail)
+	if detail["cost_limit_soft"] != 2.5 {
+		t.Errorf("cost_limit_soft = %v, want 2.5", detail["cost_limit_soft"])
+	}
+	if detail["cost_limit_hard"] != 5.0 {
+		t.Errorf("cost_limit_hard = %v, want 5.0", detail["cost_limit_hard"])
+	}
+}
+
+func TestAgentConfig_UpdateCostLimits_Negative(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{{Name: "default", Tier: "supervised"}},
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default",
+		map[string]any{"cost_limit_soft": -1.0}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentConfig_UpdateCostLimits_PersistsToTOML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	initialConfig := `
+[[agents]]
+name = "default"
+session_tier = "supervised"
+`
+	if err := os.WriteFile(cfgPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	h := NewHarness(t, &HarnessOpts{
+		Agents:     []agentSetup{{Name: "default", Tier: "supervised"}},
+		ConfigPath: cfgPath,
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default",
+		map[string]any{"cost_limit_soft": 1.5, "cost_limit_hard": 3.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !strings.Contains(string(content), "cost_limit_soft") {
+		t.Errorf("cost_limit_soft not found in TOML:\n%s", content)
+	}
+	if !strings.Contains(string(content), "cost_limit_hard") {
+		t.Errorf("cost_limit_hard not found in TOML:\n%s", content)
+	}
+}

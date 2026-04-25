@@ -24,6 +24,8 @@ type agentConfigUpdateInput struct {
 	MaxToolRounds       *int                     `json:"max_tool_rounds,omitempty"`
 	BrowserURLAllowlist *[]string                `json:"browser_url_allowlist,omitempty"`
 	Fallbacks           *[]config.FallbackConfig `json:"fallbacks,omitempty"`
+	CostLimitSoft       *float64                 `json:"cost_limit_soft,omitempty"`
+	CostLimitHard       *float64                 `json:"cost_limit_hard,omitempty"`
 }
 
 func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request) {
@@ -71,10 +73,25 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Validate cost limits.
+	if input.CostLimitSoft != nil && *input.CostLimitSoft < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cost_limit_soft must be >= 0"})
+		return
+	}
+	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cost_limit_hard must be >= 0"})
+		return
+	}
+
 	// Apply runtime changes to the engine.
 	if httpStatus, errMsg := applyAgentRuntimeChanges(e, &input); httpStatus != 0 {
 		writeJSON(w, httpStatus, map[string]string{"error": errMsg})
 		return
+	}
+
+	// Sync per-agent cost limits to the live CostTracker.
+	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
+		s.syncAgentCostLimits(name, &input)
 	}
 
 	s.persistAgentConfig(name, &input)
@@ -112,6 +129,30 @@ func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (i
 		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
 	}
 	return 0, ""
+}
+
+// syncAgentCostLimits propagates cost limit changes to the live CostTracker.
+func (s *Server) syncAgentCostLimits(name string, input *agentConfigUpdateInput) {
+	defaults := s.deps.CostTracker.DefaultLimits()
+	limits := defaults
+	for _, ac := range s.deps.Config.Agents {
+		if ac.Name == name {
+			if ac.CostLimitSoft != nil {
+				limits.Soft = *ac.CostLimitSoft
+			}
+			if ac.CostLimitHard != nil {
+				limits.Hard = *ac.CostLimitHard
+			}
+			break
+		}
+	}
+	if input.CostLimitSoft != nil {
+		limits.Soft = *input.CostLimitSoft
+	}
+	if input.CostLimitHard != nil {
+		limits.Hard = *input.CostLimitHard
+	}
+	s.deps.CostTracker.SetAgentLimits(name, limits)
 }
 
 // handleAgentRename validates and executes an agent rename.
@@ -187,6 +228,12 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 	if input.Fallbacks != nil {
 		changes["fallback"] = serializeFallbacks(*input.Fallbacks)
 	}
+	if input.CostLimitSoft != nil {
+		changes["cost_limit_soft"] = *input.CostLimitSoft
+	}
+	if input.CostLimitHard != nil {
+		changes["cost_limit_hard"] = *input.CostLimitHard
+	}
 	if len(changes) > 0 {
 		if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist agent config", "agent", name, "error", err)
@@ -242,6 +289,12 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	}
 	if input.Fallbacks != nil {
 		ac.Fallbacks = *input.Fallbacks
+	}
+	if input.CostLimitSoft != nil {
+		ac.CostLimitSoft = input.CostLimitSoft
+	}
+	if input.CostLimitHard != nil {
+		ac.CostLimitHard = input.CostLimitHard
 	}
 }
 
