@@ -173,11 +173,132 @@
     return p.type !== 'openrouter'
   }
 
+  // ---------------------------------------------------------------------------
+  // Provider create
+  // ---------------------------------------------------------------------------
+  let showAddForm = $state(false)
+  let formName = $state('')
+  let formType = $state('openai')
+  let formAPIKey = $state('')
+  let formBaseURL = $state('')
+  let formOrganization = $state('')
+  let formSaving = $state(false)
+  let formError = $state('')
+
+  function openAddForm() {
+    formName = ''
+    formType = 'openai'
+    formAPIKey = ''
+    formBaseURL = ''
+    formOrganization = ''
+    formError = ''
+    showAddForm = true
+  }
+
+  function closeAddForm() {
+    showAddForm = false
+    formError = ''
+  }
+
+  async function saveNewProvider() {
+    formError = ''
+    const name = formName.trim()
+    if (!name) { formError = 'Name is required'; return }
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+      formError = 'Name must be lowercase alphanumeric with hyphens only'
+      return
+    }
+    formSaving = true
+    try {
+      const body = { name, type: formType }
+      if (formAPIKey) body.api_key = formAPIKey
+      if (formBaseURL) body.base_url = formBaseURL
+      if (formOrganization && formType === 'openai') body.organization = formOrganization
+      await api.createLLMProvider(body)
+      data = await api.llmProviders()
+      showAddForm = false
+    } catch (e) {
+      formError = e.message
+    } finally {
+      formSaving = false
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Provider delete
+  // ---------------------------------------------------------------------------
+  let confirmDelete = $state(null)
+  let deleting = $state(false)
+  let deleteError = $state('')
+
+  async function performDelete(name) {
+    deleting = true
+    deleteError = ''
+    try {
+      await api.deleteLLMProvider(name)
+      data = await api.llmProviders()
+      confirmDelete = null
+    } catch (e) {
+      deleteError = e.message
+    } finally {
+      deleting = false
+    }
+  }
+
   onMount(fetchData)
 </script>
 
-<h1 class="page-title">Providers</h1>
+<div class="page-header">
+  <h1 class="page-title">Providers</h1>
+  <button class="btn btn-sm btn-primary" onclick={openAddForm} data-testid="add-provider-btn">+ Add Provider</button>
+</div>
 <ErrorBanner message={error} />
+
+{#if showAddForm}
+<div class="inline-panel" data-testid="provider-form">
+  <h3 class="form-title">Add Provider</h3>
+  {#if formError}
+    <div class="inline-error" role="alert">{formError}</div>
+  {/if}
+  <div class="form-row">
+    <label class="form-label" for="new-provider-name">Name</label>
+    <input id="new-provider-name" type="text" class="input" bind:value={formName} disabled={formSaving} placeholder="e.g. my-openai" data-testid="provider-name-input" />
+  </div>
+  <div class="form-row">
+    <label class="form-label" for="new-provider-type">Type</label>
+    <select id="new-provider-type" class="input" bind:value={formType} disabled={formSaving} data-testid="provider-type-select">
+      {#each Object.entries(typeLabels) as [value, label]}
+        <option {value}>{label}</option>
+      {/each}
+    </select>
+  </div>
+  {#if formType !== 'ollama'}
+    <div class="form-row">
+      <label class="form-label" for="new-provider-apikey">API Key</label>
+      <input id="new-provider-apikey" type="password" class="input" bind:value={formAPIKey} disabled={formSaving} placeholder="Enter API key" />
+    </div>
+  {/if}
+  {#if formType !== 'openrouter'}
+    <div class="form-row">
+      <label class="form-label" for="new-provider-baseurl">Base URL</label>
+      <input id="new-provider-baseurl" type="url" class="input" bind:value={formBaseURL} disabled={formSaving} placeholder={formType === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com'} />
+    </div>
+  {/if}
+  {#if formType === 'openai'}
+    <div class="form-row">
+      <label class="form-label" for="new-provider-org">Organization</label>
+      <input id="new-provider-org" type="text" class="input" bind:value={formOrganization} disabled={formSaving} placeholder="org-..." />
+    </div>
+  {/if}
+  <div class="restart-note">New providers require a restart to take effect.</div>
+  <div class="config-actions">
+    <button class="btn btn-primary" onclick={saveNewProvider} disabled={formSaving || !formName.trim()} data-testid="provider-save-btn">
+      {formSaving ? 'Creating\u2026' : 'Create'}
+    </button>
+    <button class="btn" onclick={closeAddForm} disabled={formSaving}>Cancel</button>
+  </div>
+</div>
+{/if}
 
 {#if loading && !data}
   <p class="loading">Loading...</p>
@@ -292,7 +413,22 @@
         </div>
         <div class="card-actions">
           <button class="btn btn-sm" onclick={() => startEditProvider(p.name)}>Edit</button>
+          <button class="btn btn-sm btn-danger-text" onclick={() => { confirmDelete = p.name; deleteError = '' }} data-testid="delete-provider-btn">Delete</button>
         </div>
+        {#if confirmDelete === p.name}
+          <div class="delete-confirm" data-testid="delete-confirm">
+            <span>Delete provider <strong>{p.name}</strong>?</span>
+            {#if deleteError}
+              <div class="inline-error" role="alert">{deleteError}</div>
+            {/if}
+            <div class="delete-actions">
+              <button class="btn btn-primary btn-danger" onclick={() => performDelete(p.name)} disabled={deleting} data-testid="delete-confirm-btn">
+                {deleting ? 'Deleting\u2026' : 'Delete'}
+              </button>
+              <button class="btn" onclick={() => { confirmDelete = null; deleteError = '' }} disabled={deleting}>Cancel</button>
+            </div>
+          </div>
+        {/if}
       {:else}
         <div class="edit-form">
           {#if p.type !== 'ollama'}
@@ -372,6 +508,13 @@
 {/if}
 
 <style>
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .page-header .page-title { margin-bottom: 0; }
   .page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
   .section-title { font-size: 16px; font-weight: 600; margin: 28px 0 12px; }
   .section-title:first-of-type { margin-top: 0; }
@@ -584,5 +727,54 @@
     font-size: 12px;
     color: var(--success);
     font-weight: 500;
+  }
+
+  /* Inline add form */
+  .inline-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+  .form-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .inline-error {
+    color: var(--danger, #d32f2f);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+
+  /* Delete */
+  .btn-danger-text {
+    color: var(--danger, #d32f2f);
+    border-color: transparent;
+  }
+  .btn-danger-text:hover {
+    border-color: var(--danger, #d32f2f);
+  }
+  .btn-danger {
+    background: var(--danger, #d32f2f);
+    border-color: var(--danger, #d32f2f);
+    color: #fff;
+  }
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+  .delete-confirm {
+    margin-top: 10px;
+    padding: 10px;
+    background: color-mix(in srgb, var(--danger, #d32f2f) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger, #d32f2f) 20%, transparent);
+    border-radius: var(--radius);
+    font-size: 13px;
+  }
+  .delete-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
   }
 </style>

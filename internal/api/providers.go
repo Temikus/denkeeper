@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
@@ -293,4 +294,165 @@ func (s *Server) persistLLMConfig(input *llmConfigUpdateInput) {
 			s.logger.Warn("failed to persist LLM config", "error", err)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Provider create & delete
+// ---------------------------------------------------------------------------
+
+// providerCreateInput holds the fields for POST /api/v1/llm/providers.
+type providerCreateInput struct {
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	APIKey       string `json:"api_key,omitempty"`
+	BaseURL      string `json:"base_url,omitempty"`
+	Organization string `json:"organization,omitempty"`
+}
+
+func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ConfigPath == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "config persistence not available",
+		})
+		return
+	}
+
+	var input providerCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid JSON: " + err.Error(),
+		})
+		return
+	}
+
+	if !config.ValidResourceName(input.Name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid provider name: must be lowercase alphanumeric with hyphens, 1-64 chars",
+		})
+		return
+	}
+
+	if !config.ValidProviderType(input.Type) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid provider type: must be one of: anthropic, openai, openrouter, ollama",
+		})
+		return
+	}
+
+	if s.deps.Config.LLM.HasProvider(input.Name) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "provider already exists: " + input.Name,
+		})
+		return
+	}
+
+	if input.BaseURL != "" {
+		u, err := url.Parse(input.BaseURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid base_url: must be a valid URL with scheme and host",
+			})
+			return
+		}
+	}
+
+	if input.Organization != "" && input.Type != "openai" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "organization is only supported for openai-type providers",
+		})
+		return
+	}
+
+	// Persist to TOML — source of truth.
+	if err := tool.AddLLMProviderToConfig(
+		s.deps.ConfigPath, input.Name, input.Type,
+		input.APIKey, input.BaseURL, input.Organization,
+	); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "persisting provider to config: " + err.Error(),
+		})
+		return
+	}
+
+	// Update in-memory config.
+	s.deps.Config.LLM.Providers = append(s.deps.Config.LLM.Providers, config.ProviderInstanceConfig{
+		Name:         input.Name,
+		Type:         input.Type,
+		APIKey:       input.APIKey,
+		BaseURL:      input.BaseURL,
+		Organization: input.Organization,
+	})
+
+	if s.deps.Auditor != nil {
+		s.deps.Auditor.Emit(r.Context(), audit.Event{
+			Category: audit.CategoryConfig,
+			Action:   "create_provider",
+			Summary:  "Created LLM provider " + input.Name + " (type: " + input.Type + ")",
+			Status:   audit.StatusOK,
+			Source:   "api",
+		})
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":   input.Name,
+		"status": "created",
+	})
+}
+
+func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing provider name"})
+		return
+	}
+	if s.deps.ConfigPath == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "config persistence not available",
+		})
+		return
+	}
+
+	if !s.deps.Config.LLM.HasProvider(name) {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "provider not found: " + name,
+		})
+		return
+	}
+
+	// Check dependencies (default_provider, agent llm_provider, fallbacks).
+	if config.IsProviderReferenced(s.deps.Config, name) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "provider is in use: referenced as default_provider, by an agent, or by a fallback rule",
+		})
+		return
+	}
+
+	// Persist removal to TOML — source of truth.
+	if err := tool.RemoveLLMProviderFromConfig(s.deps.ConfigPath, name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "removing provider from config: " + err.Error(),
+		})
+		return
+	}
+
+	// Remove from in-memory config.
+	providers := s.deps.Config.LLM.Providers
+	for i := range providers {
+		if providers[i].Name == name {
+			s.deps.Config.LLM.Providers = append(providers[:i], providers[i+1:]...)
+			break
+		}
+	}
+
+	if s.deps.Auditor != nil {
+		s.deps.Auditor.Emit(r.Context(), audit.Event{
+			Category: audit.CategoryConfig,
+			Action:   "delete_provider",
+			Summary:  "Deleted LLM provider " + name,
+			Status:   audit.StatusOK,
+			Source:   "api",
+		})
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

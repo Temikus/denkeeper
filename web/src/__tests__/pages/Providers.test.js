@@ -185,4 +185,94 @@ describe('Providers page', () => {
       expect(screen.getByText('Saved — restart to apply')).toBeInTheDocument()
     })
   })
+
+  test('renders Add Provider button', async () => {
+    render(Providers)
+    await waitFor(() => {
+      expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument()
+    })
+  })
+
+  test('clicking Add Provider shows inline form', async () => {
+    render(Providers)
+    await waitFor(() => {
+      expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument()
+    })
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-form')).toBeInTheDocument()
+      expect(screen.getByTestId('provider-name-input')).toBeInTheDocument()
+      expect(screen.getByTestId('provider-type-select')).toBeInTheDocument()
+    })
+  })
+
+  test('create provider submits POST and closes form', async () => {
+    let postCalled = false
+    server.use(
+      http.post('/api/v1/llm/providers', () => {
+        postCalled = true
+        return HttpResponse.json({ name: 'my-openai', status: 'created' }, { status: 201 })
+      })
+    )
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-name-input')).toBeInTheDocument())
+
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => {
+      expect(postCalled).toBe(true)
+      expect(screen.queryByTestId('provider-form')).not.toBeInTheDocument()
+    })
+  })
+
+  test('create provider shows error for invalid name', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-name-input')).toBeInTheDocument())
+
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'INVALID' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('lowercase alphanumeric')
+    })
+  })
+
+  test('delete button shows confirmation panel', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+
+    const deleteButtons = screen.getAllByTestId('delete-provider-btn')
+    await fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByTestId('delete-confirm')).toBeInTheDocument()
+    })
+  })
+
+  test('confirm delete calls DELETE and refreshes list', async () => {
+    let deleteCalled = false
+    server.use(
+      http.delete('/api/v1/llm/providers/:name', () => {
+        deleteCalled = true
+        return new HttpResponse(null, { status: 204 })
+      })
+    )
+    render(Providers)
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+
+    const deleteButtons = screen.getAllByTestId('delete-provider-btn')
+    await fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => expect(screen.getByTestId('delete-confirm-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
+
+    await waitFor(() => {
+      expect(deleteCalled).toBe(true)
+    })
+  })
 })

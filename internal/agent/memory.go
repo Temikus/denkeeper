@@ -92,7 +92,7 @@ type ConversationInfoWithStats struct {
 
 // SessionListOpts controls pagination and filtering for session listing.
 type SessionListOpts struct {
-	Limit  int    // 0 = no limit (return all)
+	Limit  int // 0 = no limit (return all)
 	Offset int
 	Agent  string // filter by agent prefix in conversation ID
 }

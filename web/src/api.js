@@ -219,10 +219,15 @@ export const api = {
 
   // LLM providers
   llmProviders: () => apiFetch('/api/v1/llm/providers'),
+  createLLMProvider: (data) => apiFetch('/api/v1/llm/providers', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   updateLLMProvider: (name, data) => apiFetch(`/api/v1/llm/providers/${encodeURIComponent(name)}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   }),
+  deleteLLMProvider: (name) => apiFetch(`/api/v1/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   updateLLMConfig: (data) => apiFetch('/api/v1/llm/config', {
     method: 'PATCH',
     body: JSON.stringify(data),

@@ -280,6 +280,8 @@ export const handlers = [
       { name: 'ollama', type: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
     ],
   })),
+  http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'new-provider', status: 'created' }, { status: 201 })),
+  http.delete('/api/v1/llm/providers/:name', () => new HttpResponse(null, { status: 204 })),
 
   // Server config
   http.get('/api/v1/server/config', () => HttpResponse.json({

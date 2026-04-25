@@ -380,8 +380,8 @@ func TestChannels_Create(t *testing.T) {
 	h := channelCrudHarness(t)
 
 	body := map[string]any{
-		"name":    "new-channel",
-		"agent":   "personal-agent",
+		"name":     "new-channel",
+		"agent":    "personal-agent",
 		"adapters": []string{"discord"},
 	}
 	rec := h.Do(h.AuthedRequest("POST", "/api/v1/channels", body))

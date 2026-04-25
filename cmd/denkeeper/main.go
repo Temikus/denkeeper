@@ -1486,9 +1486,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 			AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 				return buildAgentEngine(ctx, ac, abc)
 			},
-			Version: version,
-			Commit:            commit,
-			BuildDate:         date,
+			Version:   version,
+			Commit:    commit,
+			BuildDate: date,
 		}, logger); err != nil {
 			return err
 		}

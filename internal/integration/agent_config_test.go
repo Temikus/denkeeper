@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	toml "github.com/pelletier/go-toml/v2"
 	"github.com/Temikus/denkeeper/internal/agent"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 func TestAgentConfig_UpdateSessionTier(t *testing.T) {

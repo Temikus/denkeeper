@@ -747,6 +747,95 @@ func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) 
 	return updateLLMProviderConfigLocked(path, name, changes)
 }
 
+// rawProviders extracts the providers array from the raw config map.
+// Providers live under raw["llm"]["providers"] (nested), unlike top-level arrays.
+func rawProviders(raw map[string]any) []any {
+	llm, ok := raw["llm"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	switch v := llm["providers"].(type) {
+	case []any:
+		return v
+	default:
+		return nil
+	}
+}
+
+// providerToMap converts provider instance fields to a generic map for TOML
+// serialization. Zero-value fields are omitted.
+func providerToMap(name, typ, apiKey, baseURL, organization string) map[string]any {
+	m := map[string]any{
+		"name": name,
+		"type": typ,
+	}
+	if apiKey != "" {
+		m["api_key"] = apiKey
+	}
+	if baseURL != "" {
+		m["base_url"] = baseURL
+	}
+	if organization != "" {
+		m["organization"] = organization
+	}
+	return m
+}
+
+// AddLLMProviderToConfig appends a [[llm.providers]] entry to the TOML config.
+func AddLLMProviderToConfig(path, name, typ, apiKey, baseURL, organization string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	entry := providerToMap(name, typ, apiKey, baseURL, organization)
+
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		llmSection = map[string]any{}
+	}
+	providers := rawProviders(raw)
+	providers = append(providers, entry)
+	llmSection["providers"] = providers
+	raw["llm"] = llmSection
+	return writeRawConfig(path, raw)
+}
+
+// RemoveLLMProviderFromConfig removes a [[llm.providers]] entry matched by name.
+func RemoveLLMProviderFromConfig(path, name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		return nil // no llm section, nothing to remove
+	}
+
+	providers := rawProviders(raw)
+	filtered := make([]any, 0, len(providers))
+	for _, p := range providers {
+		if m, ok := p.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	if len(filtered) == 0 {
+		delete(llmSection, "providers")
+	} else {
+		llmSection["providers"] = filtered
+	}
+	raw["llm"] = llmSection
+	return writeRawConfig(path, raw)
+}
+
 // ---------------------------------------------------------------------------
 // API config persistence
 // ---------------------------------------------------------------------------

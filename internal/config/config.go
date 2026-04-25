@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -871,23 +872,23 @@ func synthesizeLegacyProviders(cfg *Config) {
 	// is missing, we need the entry so validation can produce a clear "requires
 	// api_key" error rather than "provider not found". The key check happens in
 	// validateProviderAPIKeys.
-	if cfg.LLM.Anthropic.APIKey != "" || isLegacyProviderReferenced(cfg, "anthropic") {
+	if cfg.LLM.Anthropic.APIKey != "" || IsProviderReferenced(cfg, "anthropic") {
 		add("anthropic", "anthropic", cfg.LLM.Anthropic.APIKey, cfg.LLM.Anthropic.BaseURL, "")
 	}
-	if cfg.LLM.OpenRouter.APIKey != "" || isLegacyProviderReferenced(cfg, "openrouter") {
+	if cfg.LLM.OpenRouter.APIKey != "" || IsProviderReferenced(cfg, "openrouter") {
 		add("openrouter", "openrouter", cfg.LLM.OpenRouter.APIKey, "", "")
 	}
-	if cfg.LLM.OpenAI.APIKey != "" || isLegacyProviderReferenced(cfg, "openai") {
+	if cfg.LLM.OpenAI.APIKey != "" || IsProviderReferenced(cfg, "openai") {
 		add("openai", "openai", cfg.LLM.OpenAI.APIKey, cfg.LLM.OpenAI.BaseURL, cfg.LLM.OpenAI.Organization)
 	}
-	if cfg.LLM.Ollama.BaseURL != "" || isLegacyProviderReferenced(cfg, "ollama") {
+	if cfg.LLM.Ollama.BaseURL != "" || IsProviderReferenced(cfg, "ollama") {
 		add("ollama", "ollama", "", cfg.LLM.Ollama.BaseURL, "")
 	}
 }
 
-// isLegacyProviderReferenced returns true if the named provider type is referenced
-// as the default provider, by any agent's llm_provider, or by any fallback rule.
-func isLegacyProviderReferenced(cfg *Config, name string) bool {
+// IsProviderReferenced returns true if the named provider is referenced as the
+// default provider, by any agent's llm_provider, or by any fallback rule.
+func IsProviderReferenced(cfg *Config, name string) bool {
 	if cfg.LLM.DefaultProvider == name {
 		return true
 	}
@@ -1360,6 +1361,22 @@ func validateTier(tier, context string) error {
 // validProviderTypes is the set of recognized LLM provider types.
 var validProviderTypes = map[string]bool{
 	"anthropic": true, "openai": true, "openrouter": true, "ollama": true,
+}
+
+// ValidProviderType reports whether typ is a recognized LLM provider type.
+func ValidProviderType(typ string) bool {
+	return validProviderTypes[typ]
+}
+
+// resourceNameRe is the shared pattern for agent, provider, and channel names:
+// lowercase alphanumeric with hyphens, 1-64 chars.
+var resourceNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// ValidResourceName reports whether name is a valid resource identifier
+// (agent, provider, channel). Must be lowercase alphanumeric with hyphens,
+// 1-64 characters.
+func ValidResourceName(name string) bool {
+	return len(name) > 0 && len(name) <= 64 && resourceNameRe.MatchString(name)
 }
 
 // providerNeedsAPIKey reports whether the given provider type requires an API key.

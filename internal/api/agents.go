@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -14,12 +13,6 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
-
-var agentNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-
-func validAgentName(name string) bool {
-	return len(name) > 0 && len(name) <= 64 && agentNameRe.MatchString(name)
-}
 
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
 type agentConfigUpdateInput struct {
@@ -127,7 +120,7 @@ func (s *Server) handleAgentRename(oldName, newName string) (int, string) {
 	if oldName == "default" {
 		return http.StatusBadRequest, "cannot rename the default agent"
 	}
-	if !validAgentName(newName) {
+	if !config.ValidResourceName(newName) {
 		return http.StatusBadRequest, "invalid agent name: must be lowercase alphanumeric with hyphens, max 64 chars"
 	}
 	if s.deps.Dispatcher.Agent(newName) != nil {
@@ -281,7 +274,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !validAgentName(input.Name) {
+	if !config.ValidResourceName(input.Name) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid agent name: must be lowercase alphanumeric with hyphens, 1-64 chars",
 		})
@@ -300,7 +293,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Compute persona directory and ensure it exists.
 	personaDir := filepath.Join(s.deps.Config.DataDir, "agents", input.Name)
-	if err := os.MkdirAll(personaDir, 0o755); err != nil {
+	if err := os.MkdirAll(personaDir, 0o750); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "creating persona directory: " + err.Error(),
 		})
@@ -353,6 +346,33 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// agentDependencyError checks whether the named agent is referenced by any
+// channels or schedules and returns a descriptive error if so.
+func (s *Server) agentDependencyError(name string) string {
+	var blockingChannels []string
+	for chName, ch := range s.deps.Dispatcher.Channels() {
+		if ch.AgentName == name {
+			blockingChannels = append(blockingChannels, chName)
+		}
+	}
+	if len(blockingChannels) > 0 {
+		return "agent is referenced by channels: " + strings.Join(blockingChannels, ", ")
+	}
+
+	if s.deps.Config != nil {
+		var blockingSchedules []string
+		for _, sched := range s.deps.Config.Schedules {
+			if sched.Agent == name {
+				blockingSchedules = append(blockingSchedules, sched.Name)
+			}
+		}
+		if len(blockingSchedules) > 0 {
+			return "agent is referenced by schedules: " + strings.Join(blockingSchedules, ", ")
+		}
+	}
+	return ""
+}
+
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -372,34 +392,9 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check channel dependencies.
-	var blockingChannels []string
-	for chName, ch := range s.deps.Dispatcher.Channels() {
-		if ch.AgentName == name {
-			blockingChannels = append(blockingChannels, chName)
-		}
-	}
-	if len(blockingChannels) > 0 {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "agent is referenced by channels: " + strings.Join(blockingChannels, ", "),
-		})
+	if depErr := s.agentDependencyError(name); depErr != "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": depErr})
 		return
-	}
-
-	// Check schedule dependencies.
-	if s.deps.Config != nil {
-		var blockingSchedules []string
-		for _, sched := range s.deps.Config.Schedules {
-			if sched.Agent == name {
-				blockingSchedules = append(blockingSchedules, sched.Name)
-			}
-		}
-		if len(blockingSchedules) > 0 {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": "agent is referenced by schedules: " + strings.Join(blockingSchedules, ", "),
-			})
-			return
-		}
 	}
 
 	// Persist removal to TOML first — this is the source of truth. If it
