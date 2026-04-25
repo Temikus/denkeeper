@@ -155,6 +155,11 @@ build-ui:
 # Full build: web dashboard then Go binary
 build-full: build-ui build
 
+# Generate OpenAPI spec from Go annotations (requires swag CLI)
+openapi:
+    swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
+    rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
+
 # Run the Vite dev server (proxies /api to localhost:8080)
 dev-ui:
     #!/usr/bin/env sh

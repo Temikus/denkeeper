@@ -109,6 +109,24 @@ type Server struct {
 	bcryptCost int
 }
 
+// @title Denkeeper API
+// @version 1.0
+// @description Personal AI agent management API — multi-agent routing, LLM providers, tools, approvals, and more.
+//
+// @contact.name Denkeeper
+// @contact.url https://github.com/Temikus/denkeeper
+//
+// @license.name Apache 2.0
+// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+//
+// @host localhost:8080
+// @BasePath /api/v1
+//
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description API key prefixed with "Bearer "
+
 // New creates a new API server. The server is not started until Run is called.
 func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	s := &Server{
@@ -128,6 +146,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 
 	// Health endpoint — no auth required.
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+
+	// OpenAPI spec — no auth required.
+	mux.HandleFunc("GET /api/v1/openapi.json", s.handleOpenAPISpec)
 
 	// Prometheus metrics endpoint — no auth required.
 	if deps.MetricsHandler != nil {
@@ -369,6 +390,13 @@ func (s *Server) Run(ctx context.Context) error {
 // Handlers
 // ---------------------------------------------------------------------------
 
+// handleHealth godoc
+// @Summary Health check
+// @Description Returns server health status
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /health [get]
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
@@ -376,7 +404,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// handleAgents lists all registered agents with metadata.
+// handleAgents godoc
+// @Summary List agents
+// @Description Returns all registered agents with metadata
+// @Tags agents
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} map[string]any
+// @Failure 401 {object} map[string]string
+// @Router /agents [get]
 func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	type agentInfo struct {
 		Name           string   `json:"name"`
@@ -415,7 +451,16 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, agents)
 }
 
-// handleAgent returns details for a single agent.
+// handleAgent godoc
+// @Summary Get agent details
+// @Description Returns detailed configuration for a single agent
+// @Tags agents
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Agent name"
+// @Success 200 {object} map[string]any
+// @Failure 404 {object} map[string]string
+// @Router /agents/{name} [get]
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	e := s.deps.Dispatcher.Agent(name)
@@ -483,7 +528,15 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleCosts returns cost tracking data with per-agent breakdown.
+// handleCosts godoc
+// @Summary Get cost tracking data
+// @Description Returns cost tracking data with per-agent and per-session breakdown
+// @Tags costs
+// @Produce json
+// @Security BearerAuth
+// @Param agent query string false "Filter by agent name"
+// @Success 200 {object} map[string]any
+// @Router /costs [get]
 func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	sessions := s.deps.CostTracker.AllSessionStats()
 	agentFilter := r.URL.Query().Get("agent")
@@ -789,9 +842,18 @@ type chatResponse struct {
 	Response  string `json:"response"`
 }
 
-// handleChat handles POST /api/v1/chat. It accepts a JSON body describing the
-// message and returns the agent's response. When the request includes
-// Accept: text/event-stream, the response is streamed as Server-Sent Events.
+// handleChat godoc
+// @Summary Send chat message
+// @Description Sends a message to an agent. Returns JSON or SSE stream depending on Accept header.
+// @Tags chat
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body chatRequest true "Chat message"
+// @Success 200 {object} chatResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /chat [post]
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

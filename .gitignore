@@ -54,6 +54,10 @@ Thumbs.db
 # design
 design/
 
+# Generated OpenAPI files (swagger.json is committed for embedding)
+internal/api/docs/docs.go
+internal/api/docs/swagger.yaml
+
 # Frontend build output (rebuilt by just build-ui)
 internal/web/dist/
 # Keep the stub so the binary compiles without running npm

@@ -30,6 +30,14 @@ type llmProvidersResponse struct {
 	Providers       []providerInfo `json:"providers"`
 }
 
+// handleGetLLMProviders godoc
+// @Summary List LLM providers
+// @Description Returns all configured LLM providers with their settings
+// @Tags providers
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} llmProvidersResponse
+// @Router /llm/providers [get]
 func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.deps.Config.LLM
 
@@ -67,6 +75,19 @@ type providerUpdateInput struct {
 	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
 }
 
+// handlePatchLLMProvider godoc
+// @Summary Update LLM provider
+// @Description Updates a provider instance's configuration (API key, base URL, etc.)
+// @Tags providers
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Provider name"
+// @Param body body providerUpdateInput true "Fields to update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /llm/providers/{name} [patch]
 func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	pc := s.findProviderInstance(name)
@@ -227,6 +248,17 @@ type llmConfigUpdateInput struct {
 	CostLimitHard   *float64 `json:"cost_limit_hard,omitempty"`
 }
 
+// handlePatchLLMConfig godoc
+// @Summary Update global LLM configuration
+// @Description Updates default provider, model, and cost limits. Syncs limits to live CostTracker.
+// @Tags providers
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body llmConfigUpdateInput true "Fields to update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /llm/config [patch]
 func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	var input llmConfigUpdateInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -318,6 +350,18 @@ type providerCreateInput struct {
 	Organization string `json:"organization,omitempty"`
 }
 
+// handleCreateLLMProvider godoc
+// @Summary Create LLM provider
+// @Description Creates a new named provider instance and persists to TOML
+// @Tags providers
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body providerCreateInput true "Provider configuration"
+// @Success 201 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /llm/providers [post]
 func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -408,6 +452,17 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleDeleteLLMProvider godoc
+// @Summary Delete LLM provider
+// @Description Removes a provider instance. Rejects if referenced by agents or default_provider.
+// @Tags providers
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Provider name"
+// @Success 204 "No Content"
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /llm/providers/{name} [delete]
 func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {

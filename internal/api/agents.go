@@ -28,6 +28,19 @@ type agentConfigUpdateInput struct {
 	CostLimitHard       *float64                 `json:"cost_limit_hard,omitempty"`
 }
 
+// handleAgentConfigUpdate godoc
+// @Summary Update agent configuration
+// @Description Mutates agent settings: tier, provider, model, cost limits, fallbacks, etc.
+// @Tags agents
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Agent name"
+// @Param body body agentConfigUpdateInput true "Fields to update"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /agents/{name} [patch]
 func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -47,10 +60,8 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if input.SessionTier != nil && !security.ValidTier(*input.SessionTier) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid session_tier: must be autonomous, supervised, or restricted",
-		})
+	if errMsg := validateAgentInput(&input); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
 	}
 
@@ -63,24 +74,6 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		}
 		name = *input.Name
 		e = s.deps.Dispatcher.Agent(name)
-	}
-
-	// Validate fallback rules before applying any changes.
-	if input.Fallbacks != nil {
-		if err := config.ValidateFallbacks(*input.Fallbacks); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-	}
-
-	// Validate cost limits.
-	if input.CostLimitSoft != nil && *input.CostLimitSoft < 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cost_limit_soft must be >= 0"})
-		return
-	}
-	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cost_limit_hard must be >= 0"})
-		return
 	}
 
 	// Apply runtime changes to the engine.
@@ -101,6 +94,26 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		"name":   name,
 		"status": "updated",
 	})
+}
+
+// validateAgentInput checks all input fields for validity.
+// Returns an error message or empty string on success.
+func validateAgentInput(input *agentConfigUpdateInput) string {
+	if input.SessionTier != nil && !security.ValidTier(*input.SessionTier) {
+		return "invalid session_tier: must be autonomous, supervised, or restricted"
+	}
+	if input.Fallbacks != nil {
+		if err := config.ValidateFallbacks(*input.Fallbacks); err != nil {
+			return err.Error()
+		}
+	}
+	if input.CostLimitSoft != nil && *input.CostLimitSoft < 0 {
+		return "cost_limit_soft must be >= 0"
+	}
+	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
+		return "cost_limit_hard must be >= 0"
+	}
+	return ""
 }
 
 // applyAgentRuntimeChanges mutates the engine for the fields present in input.
@@ -311,6 +324,18 @@ type agentCreateInput struct {
 	Description string `json:"description,omitempty"`
 }
 
+// handleCreateAgent godoc
+// @Summary Create agent
+// @Description Creates a new agent at runtime with persona directory and TOML persistence
+// @Tags agents
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body agentCreateInput true "Agent configuration"
+// @Success 201 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /agents [post]
 func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AgentFactory == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent creation not available"})
@@ -426,6 +451,18 @@ func (s *Server) agentDependencyError(name string) string {
 	return ""
 }
 
+// handleDeleteAgent godoc
+// @Summary Delete agent
+// @Description Removes an agent. Rejects if referenced by channels or schedules.
+// @Tags agents
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Agent name"
+// @Success 204 "No Content"
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /agents/{name} [delete]
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
