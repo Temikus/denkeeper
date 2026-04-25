@@ -6,7 +6,20 @@ import (
 	"net/http"
 )
 
-// handleGetPersona returns the content and editability of a persona section.
+// handleGetPersona godoc
+// @Summary      Get persona section
+// @Description  Returns the content, editability, and agent-mutability of a persona section (identity, soul, user, or memory) for the specified agent.
+// @Tags         persona
+// @Produce      json
+// @Security     BearerAuth
+// @Param        name     path      string  true  "Agent name"
+// @Param        section  path      string  true  "Persona section name (identity, soul, user, memory)"
+// @Success      200  {object}  map[string]interface{}  "section, content, editable, agent_mutable"
+// @Failure      400  {object}  map[string]string       "Unknown section"
+// @Failure      401  {object}  map[string]string       "Unauthorized"
+// @Failure      403  {object}  map[string]string       "Forbidden — requires agents:read scope"
+// @Failure      404  {object}  map[string]string       "Agent not found"
+// @Router       /agents/{name}/persona/{section} [get]
 func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("name")
 	section := r.PathValue("section")
@@ -33,7 +46,23 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUpdatePersona writes new content to a persona section.
+// handleUpdatePersona godoc
+// @Summary      Update persona section
+// @Description  Writes new content to a persona section (identity, soul, user, or memory) for the specified agent. The section must be editable.
+// @Tags         persona
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        name     path      string             true  "Agent name"
+// @Param        section  path      string             true  "Persona section name (identity, soul, user, memory)"
+// @Param        body     body      object{content=string}  true  "New section content"
+// @Success      200  {object}  map[string]string  "agent, section, status"
+// @Failure      400  {object}  map[string]string  "Unknown section or invalid JSON"
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires agents:write scope"
+// @Failure      404  {object}  map[string]string  "Agent not found"
+// @Failure      500  {object}  map[string]string  "Save failed"
+// @Router       /agents/{name}/persona/{section} [put]
 func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("name")
 	section := r.PathValue("section")

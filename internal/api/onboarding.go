@@ -21,6 +21,16 @@ type onboardingResponse struct {
 	Dismissed      bool             `json:"dismissed"`
 }
 
+// handleOnboarding godoc
+// @Summary      Get onboarding status
+// @Description  Returns the onboarding checklist with five setup milestones (auth, agent, adapter, provider, skill) and whether the onboarding card should be displayed.
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  onboardingResponse
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Router       /onboarding [get]
 func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 	cfg := s.deps.Config
 	dismissed := cfg.API.OnboardingDismissed
@@ -106,6 +116,17 @@ func hasSkillFiles(cfg *config.Config) bool {
 	return false
 }
 
+// handleOnboardingDismiss godoc
+// @Summary      Dismiss onboarding
+// @Description  Persists onboarding_dismissed=true to the TOML config so the onboarding card is permanently hidden.
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Success      204  "Onboarding dismissed"
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Failure      500  {object}  map[string]string  "Failed to persist"
+// @Router       /onboarding/dismiss [post]
 func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request) {
 	if err := tool.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
 		"onboarding_dismissed": true,

@@ -16,7 +16,19 @@ func (s *Server) kvRequired(w http.ResponseWriter) bool {
 	return true
 }
 
-// handleListKV returns all keys for an agent, optionally filtered by prefix.
+// handleListKV godoc
+// @Summary List KV entries for an agent
+// @Description Returns all key-value entries for the specified agent, optionally filtered by a key prefix.
+// @Tags kv
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param prefix query string false "Filter keys by prefix"
+// @Success 200 {object} object "Object with entries array containing key, value, created_at, updated_at, and optional expires_at"
+// @Failure 404 {object} map[string]string "Agent not found"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Failure 503 {object} map[string]string "KV store not configured"
+// @Router /kv/{agent} [get]
 func (s *Server) handleListKV(w http.ResponseWriter, r *http.Request) {
 	if !s.kvRequired(w) {
 		return
@@ -57,7 +69,19 @@ func (s *Server) handleListKV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"entries": result})
 }
 
-// handleGetKV returns the value of a single key.
+// handleGetKV godoc
+// @Summary Get a KV entry
+// @Description Returns the value of a single key for the specified agent.
+// @Tags kv
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param key path string true "Key name"
+// @Success 200 {object} object "Object with key and value fields"
+// @Failure 404 {object} map[string]string "Agent or key not found"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Failure 503 {object} map[string]string "KV store not configured"
+// @Router /kv/{agent}/{key} [get]
 func (s *Server) handleGetKV(w http.ResponseWriter, r *http.Request) {
 	if !s.kvRequired(w) {
 		return
@@ -87,7 +111,22 @@ func (s *Server) handleGetKV(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSetKV creates or updates a key-value pair.
+// handleSetKV godoc
+// @Summary Set a KV entry
+// @Description Creates or updates a key-value pair for the specified agent. Optionally accepts a TTL duration string (e.g. "1h", "30m").
+// @Tags kv
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param key path string true "Key name"
+// @Param body body object true "Value and optional TTL" Example({"value": "hello", "ttl": "1h"})
+// @Success 200 {object} object "Object with key and value fields"
+// @Failure 400 {object} map[string]string "Invalid JSON body or TTL"
+// @Failure 404 {object} map[string]string "Agent not found"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Failure 503 {object} map[string]string "KV store not configured"
+// @Router /kv/{agent}/{key} [put]
 func (s *Server) handleSetKV(w http.ResponseWriter, r *http.Request) {
 	if !s.kvRequired(w) {
 		return
@@ -136,7 +175,18 @@ func (s *Server) handleSetKV(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeleteKV removes a single key.
+// handleDeleteKV godoc
+// @Summary Delete a KV entry
+// @Description Removes a single key-value pair for the specified agent.
+// @Tags kv
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param key path string true "Key name"
+// @Success 204 "Key deleted"
+// @Failure 404 {object} map[string]string "Agent not found"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Failure 503 {object} map[string]string "KV store not configured"
+// @Router /kv/{agent}/{key} [delete]
 func (s *Server) handleDeleteKV(w http.ResponseWriter, r *http.Request) {
 	if !s.kvRequired(w) {
 		return

@@ -587,7 +587,15 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleModels returns available LLM models from all configured providers.
+// handleModels godoc
+// @Summary List available LLM models
+// @Description Returns a list of available LLM model identifiers from all configured providers.
+// @Tags models
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Failure 503 {object} map[string]string
+// @Router /models [get]
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ModelLister == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "model listing not available"})
@@ -597,8 +605,16 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
-// handleModelDetails returns enriched LLM model metadata from all configured providers.
-// Accepts optional ?provider= query parameter to fetch only that provider's models.
+// handleModelDetails godoc
+// @Summary List LLM models with details
+// @Description Returns enriched LLM model metadata from all configured providers, including pricing information. Optionally filtered by provider.
+// @Tags models
+// @Produce json
+// @Security BearerAuth
+// @Param provider query string false "Filter by provider name"
+// @Success 200 {object} map[string]any
+// @Failure 503 {object} map[string]string
+// @Router /models/details [get]
 func (s *Server) handleModelDetails(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ModelDetailLister == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "model details not available"})
@@ -619,7 +635,14 @@ func agentFromSession(id string) string {
 	return id
 }
 
-// handleSkills lists all skills across all agents (deduplicated by name).
+// handleSkills godoc
+// @Summary List all skills
+// @Description Returns all skills across all agents, deduplicated by agent+name. Each entry includes the owning agent name.
+// @Tags skills
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} object "List of skills with agent field"
+// @Router /skills [get]
 func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 	type skillInfo struct {
 		Name        string   `json:"name"`
@@ -654,7 +677,16 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, all)
 }
 
-// handleSkillsByAgent lists skills for a specific agent.
+// handleSkillsByAgent godoc
+// @Summary List skills for an agent
+// @Description Returns all skills registered for the specified agent.
+// @Tags skills
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Success 200 {array} object "List of skills"
+// @Failure 404 {object} map[string]string "Agent not found"
+// @Router /skills/{agent} [get]
 func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")
 	e := s.deps.Dispatcher.Agent(agentName)
@@ -683,7 +715,14 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleSchedules lists all registered schedule entries.
+// handleSchedules godoc
+// @Summary List all schedules
+// @Description Returns all registered schedule entries with their configuration, last run time, and next run time.
+// @Tags schedules
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} object "Array of schedule entries"
+// @Router /schedules [get]
 func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
 	entries := s.deps.Scheduler.Entries()
 
@@ -736,9 +775,19 @@ func channelForConversation(id string) string {
 	return ""
 }
 
-// handleSessions lists all conversations from the memory store.
-// When backed by a TelemetryStore, includes telemetry stats.
-// Supports ?limit=, ?offset=, ?agent= query parameters for pagination and filtering.
+// handleSessions godoc
+// @Summary List sessions
+// @Description Returns all conversations from the memory store with pagination. When backed by a TelemetryStore, includes telemetry stats per session.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param limit query int false "Maximum number of sessions to return (max 500)"
+// @Param offset query int false "Number of sessions to skip"
+// @Param agent query string false "Filter by agent name"
+// @Success 200 {object} object "Paginated session list with total count"
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /sessions [get]
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := agent.SessionListOpts{
@@ -955,7 +1004,15 @@ func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agen
 	s.runChatStream(r.Context(), stream, eng, msg, sessionID)
 }
 
-// handleDeleteSession handles DELETE /api/v1/sessions/{id}.
+// handleDeleteSession godoc
+// @Summary Delete a session
+// @Description Permanently deletes a conversation and all its messages.
+// @Tags sessions
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 204 "Session deleted"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id} [delete]
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.deps.Memory.DeleteConversation(r.Context(), id); err != nil {
@@ -966,7 +1023,16 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleClearSession handles POST /api/v1/sessions/{id}/clear.
+// handleClearSession godoc
+// @Summary Clear session messages
+// @Description Removes all messages from a session while keeping the conversation row for session identity.
+// @Tags sessions
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Param agent query string false "Agent name hint for engine resolution"
+// @Success 204 "Messages cleared"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/clear [post]
 func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -989,7 +1055,19 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCompactSession handles POST /api/v1/sessions/{id}/compact.
+// handleCompactSession godoc
+// @Summary Compact a session
+// @Description Summarises the conversation via LLM and replaces all messages with a single summary message.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Param agent query string false "Agent name hint for engine resolution"
+// @Success 200 {object} map[string]string "Compacted summary"
+// @Failure 400 {object} map[string]string "Not enough messages to compact"
+// @Failure 404 {object} map[string]string "Agent not found for session"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/compact [post]
 func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -1049,7 +1127,15 @@ func (s *Server) resolveEngineForSession(sessionID, agentHint string) *agent.Eng
 	return nil
 }
 
-// handleStopSession cancels an in-flight request for the given session.
+// handleStopSession godoc
+// @Summary Stop in-flight request
+// @Description Cancels an in-flight LLM request for the given session.
+// @Tags sessions
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 204 "Request cancelled"
+// @Failure 404 {object} map[string]string "No in-flight request"
+// @Router /sessions/{id}/stop [post]
 func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Try WS adapter first, then API adapter.
@@ -1062,19 +1148,38 @@ func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePanic triggers an emergency stop for all agents.
+// handlePanic godoc
+// @Summary Emergency stop
+// @Description Triggers an emergency stop — cancels all in-flight requests and pauses the scheduler.
+// @Tags safety
+// @Security BearerAuth
+// @Success 204 "Panic triggered"
+// @Router /panic [post]
 func (s *Server) handlePanic(w http.ResponseWriter, r *http.Request) {
 	s.deps.Dispatcher.Panic()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleResume clears the panic state and resumes processing.
+// handleResume godoc
+// @Summary Resume after panic
+// @Description Clears the panic state and resumes the scheduler.
+// @Tags safety
+// @Security BearerAuth
+// @Success 204 "Resumed"
+// @Router /resume [post]
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	s.deps.Dispatcher.Resume()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePanicStatus returns the current panic state.
+// handlePanicStatus godoc
+// @Summary Get panic status
+// @Description Returns whether the system is in panic mode and when panic was triggered.
+// @Tags safety
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Router /panic [get]
 func (s *Server) handlePanicStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"panicked":   s.deps.Dispatcher.IsPanicked(),
@@ -1082,7 +1187,16 @@ func (s *Server) handlePanicStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSessionMessages returns messages for a specific conversation.
+// handleSessionMessages godoc
+// @Summary Get session messages
+// @Description Returns the message history for a specific conversation, including per-message telemetry.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 200 {array} object "List of messages"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/messages [get]
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	messages, err := s.deps.Memory.GetMessages(r.Context(), id, 200)
@@ -1123,7 +1237,18 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleSessionStats returns aggregated telemetry for a conversation.
+// handleSessionStats godoc
+// @Summary Get session telemetry stats
+// @Description Returns aggregated telemetry statistics for a conversation including token counts, costs, and model breakdown.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 200 {object} object "Session stats"
+// @Failure 404 {object} map[string]string "No stats for session"
+// @Failure 501 {object} map[string]string "Telemetry not available"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/stats [get]
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.deps.Memory.(agent.TelemetryStore)
 	if !ok {
@@ -1144,7 +1269,17 @@ func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// handleSessionToolCalls returns tool call records for a conversation.
+// handleSessionToolCalls godoc
+// @Summary Get session tool calls
+// @Description Returns tool call records for a conversation including tool name, server, duration, and success/error status.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 200 {array} agent.ToolCallRecord
+// @Failure 501 {object} map[string]string "Telemetry not available"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/tool-calls [get]
 func (s *Server) handleSessionToolCalls(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.deps.Memory.(agent.TelemetryStore)
 	if !ok {
@@ -1164,7 +1299,17 @@ func (s *Server) handleSessionToolCalls(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, records)
 }
 
-// handleSessionSkills returns skill usage records for a conversation.
+// handleSessionSkills godoc
+// @Summary Get session skill usage
+// @Description Returns skill usage records for a conversation.
+// @Tags sessions
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 200 {array} agent.SkillUsageRecord
+// @Failure 501 {object} map[string]string "Telemetry not available"
+// @Failure 500 {object} map[string]string
+// @Router /sessions/{id}/skills [get]
 func (s *Server) handleSessionSkills(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.deps.Memory.(agent.TelemetryStore)
 	if !ok {
@@ -1184,7 +1329,18 @@ func (s *Server) handleSessionSkills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, records)
 }
 
-// handleTelemetrySummary returns aggregated telemetry for A/B comparison.
+// handleTelemetrySummary godoc
+// @Summary Get telemetry summary
+// @Description Returns aggregated telemetry across all sessions for A/B comparison, with optional time-range filtering.
+// @Tags telemetry
+// @Produce json
+// @Security BearerAuth
+// @Param since query string false "Start time in RFC3339 format"
+// @Param until query string false "End time in RFC3339 format"
+// @Success 200 {object} object "Telemetry summary"
+// @Failure 501 {object} map[string]string "Telemetry not available"
+// @Failure 500 {object} map[string]string
+// @Router /telemetry/summary [get]
 func (s *Server) handleTelemetrySummary(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.deps.Memory.(agent.TelemetryStore)
 	if !ok {
@@ -1222,7 +1378,18 @@ func (s *Server) approvalNotConfigured(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approvals not configured"})
 }
 
-// handleListApprovals handles GET /api/v1/approvals?status=<status>.
+// handleListApprovals godoc
+// @Summary List approval requests
+// @Description Returns approval requests optionally filtered by status (pending, approved, denied, expired).
+// @Tags approvals
+// @Produce json
+// @Security BearerAuth
+// @Param status query string false "Filter by status: pending, approved, denied, expired"
+// @Success 200 {array} approval.Request
+// @Failure 400 {object} map[string]string "Invalid status"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /approvals [get]
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Approvals == nil {
 		s.approvalNotConfigured(w)
@@ -1247,7 +1414,18 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, reqs)
 }
 
-// handleGetApproval handles GET /api/v1/approvals/{id}.
+// handleGetApproval godoc
+// @Summary Get an approval request
+// @Description Returns a single approval request by ID.
+// @Tags approvals
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Approval request ID"
+// @Success 200 {object} approval.Request
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /approvals/{id} [get]
 func (s *Server) handleGetApproval(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Approvals == nil {
 		s.approvalNotConfigured(w)
@@ -1267,7 +1445,21 @@ func (s *Server) handleGetApproval(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, req)
 }
 
-// handleResolveApproval returns a handler for POST /api/v1/approvals/{id}/approve|deny.
+// handleResolveApproval godoc
+// @Summary Approve or deny an approval request
+// @Description Resolves a pending approval request. Used for both /approve and /deny endpoints. Optionally creates an auto-approve rule when auto_approve query param is set.
+// @Tags approvals
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Approval request ID"
+// @Param auto_approve query string false "Create auto-approve rule: 'session' or 'permanent'"
+// @Success 200 {object} approval.Request "Resolved request"
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string "Already resolved"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /approvals/{id}/approve [post]
+// @Router /approvals/{id}/deny [post]
 func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.deps.Approvals == nil {
@@ -1324,7 +1516,17 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 	}
 }
 
-// handleListAutoApprove handles GET /api/v1/auto-approve?agent={name}.
+// handleListAutoApprove godoc
+// @Summary List auto-approve rules
+// @Description Returns all auto-approve rules, optionally filtered by agent name.
+// @Tags approvals
+// @Produce json
+// @Security BearerAuth
+// @Param agent query string false "Filter by agent name"
+// @Success 200 {array} object "List of auto-approve rules"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /auto-approve [get]
 func (s *Server) handleListAutoApprove(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Approvals == nil {
 		s.approvalNotConfigured(w)
@@ -1340,7 +1542,19 @@ func (s *Server) handleListAutoApprove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rules)
 }
 
-// handleCreateAutoApprove handles POST /api/v1/auto-approve.
+// handleCreateAutoApprove godoc
+// @Summary Create auto-approve rule
+// @Description Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'.
+// @Tags approvals
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Rule definition: agent, tool, scope, conversation_id"
+// @Success 201 {object} object "Created rule"
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /auto-approve [post]
 func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Approvals == nil {
 		s.approvalNotConfigured(w)
@@ -1382,7 +1596,18 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleDeleteAutoApprove handles DELETE /api/v1/auto-approve/{id}.
+// handleDeleteAutoApprove godoc
+// @Summary Delete auto-approve rule
+// @Description Removes an auto-approve rule by ID.
+// @Tags approvals
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Auto-approve rule ID"
+// @Success 200 {object} map[string]string "Deleted"
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Approvals not configured"
+// @Router /auto-approve/{id} [delete]
 func (s *Server) handleDeleteAutoApprove(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Approvals == nil {
 		s.approvalNotConfigured(w)
@@ -1517,6 +1742,15 @@ func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
 	return true
 }
 
+// handleListTools godoc
+// @Summary List MCP tool servers
+// @Description Returns all registered MCP tool servers with their connection status.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any "List of tool servers"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools [get]
 func (s *Server) handleListTools(w http.ResponseWriter, _ *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1528,6 +1762,17 @@ func (s *Server) handleListTools(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
 
+// handleGetTool godoc
+// @Summary Get tool server details
+// @Description Returns detailed information about a specific MCP tool server including config, status, and OAuth state.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} map[string]any
+// @Failure 404 {object} map[string]string "Tool not found"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name} [get]
 func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1580,6 +1825,17 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handleToolDefs godoc
+// @Summary Get tool definitions
+// @Description Returns the MCP tool definitions (name, description, parameters) for a specific tool server.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} map[string]any "Tool definitions"
+// @Failure 404 {object} map[string]string "Tool server not found"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/defs [get]
 func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1607,6 +1863,18 @@ func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": result})
 }
 
+// handleAddTool godoc
+// @Summary Add a tool server
+// @Description Registers a new MCP tool server (stdio or SSE transport) and persists its config to TOML.
+// @Tags tools
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Tool server configuration"
+// @Success 201 {object} tool.ServerStatus "Created tool server"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools [post]
 func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1662,6 +1930,19 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// handleUpdateTool godoc
+// @Summary Update a tool server
+// @Description Updates the configuration of an existing MCP tool server and reconnects it.
+// @Tags tools
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Param body body object true "Updated tool server configuration"
+// @Success 200 {object} tool.ServerStatus "Updated tool server"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name} [put]
 func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1713,6 +1994,16 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleRemoveTool godoc
+// @Summary Remove a tool server
+// @Description Unregisters an MCP tool server and removes its config from TOML.
+// @Tags tools
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 204 "Tool removed"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name} [delete]
 func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1725,6 +2016,17 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleToolHealth godoc
+// @Summary Get tool server health
+// @Description Returns the health status of a specific MCP tool server including uptime and restart count.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} map[string]any "Health status"
+// @Failure 404 {object} map[string]string "Tool not found"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/health [get]
 func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1745,6 +2047,17 @@ func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRestartTool godoc
+// @Summary Restart a tool server
+// @Description Manually restarts an MCP tool server, reconnecting the subprocess or SSE connection.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} tool.ServerStatus "Restarted tool server"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/restart [post]
 func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1759,6 +2072,15 @@ func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleListPlugins godoc
+// @Summary List plugins
+// @Description Returns all registered plugins with their type, status, and capabilities.
+// @Tags plugins
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any "List of plugins"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /plugins [get]
 func (s *Server) handleListPlugins(w http.ResponseWriter, _ *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1770,6 +2092,17 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"plugins": plugins})
 }
 
+// handleGetPlugin godoc
+// @Summary Get plugin details
+// @Description Returns detailed information about a specific plugin.
+// @Tags plugins
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Plugin name"
+// @Success 200 {object} tool.PluginStatus
+// @Failure 404 {object} map[string]string "Plugin not found"
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /plugins/{name} [get]
 func (s *Server) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1785,6 +2118,18 @@ func (s *Server) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "plugin not found"})
 }
 
+// handleAddPlugin godoc
+// @Summary Add a plugin
+// @Description Registers a new plugin (subprocess or docker) and persists its config to TOML.
+// @Tags plugins
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Plugin configuration (name, type, command/image, etc.)"
+// @Success 201 {object} tool.PluginStatus "Created plugin"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /plugins [post]
 func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1843,6 +2188,16 @@ func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"name": body.Name, "status": "connected"})
 }
 
+// handleRemovePlugin godoc
+// @Summary Remove a plugin
+// @Description Unregisters a plugin and removes its config from TOML.
+// @Tags plugins
+// @Security BearerAuth
+// @Param name path string true "Plugin name"
+// @Success 204 "Plugin removed"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /plugins/{name} [delete]
 func (s *Server) handleRemovePlugin(w http.ResponseWriter, r *http.Request) {
 	if !s.lifecycleRequired(w) {
 		return
@@ -1893,6 +2248,16 @@ func (s *Server) browserRequired(w http.ResponseWriter) bool {
 	return true
 }
 
+// handleListBrowserProfiles godoc
+// @Summary List browser profiles
+// @Description Returns all stored browser automation profiles.
+// @Tags browser
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any "List of profiles"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Browser automation not configured"
+// @Router /browser/profiles [get]
 func (s *Server) handleListBrowserProfiles(w http.ResponseWriter, r *http.Request) {
 	if !s.browserRequired(w) {
 		return
@@ -1905,6 +2270,18 @@ func (s *Server) handleListBrowserProfiles(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
 }
 
+// handleGetBrowserProfile godoc
+// @Summary Get a browser profile
+// @Description Returns detailed information about a specific browser profile.
+// @Tags browser
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Profile name"
+// @Success 200 {object} object "Profile details"
+// @Failure 404 {object} map[string]string "Profile not found"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Browser automation not configured"
+// @Router /browser/profiles/{name} [get]
 func (s *Server) handleGetBrowserProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.browserRequired(w) {
 		return
@@ -1922,6 +2299,17 @@ func (s *Server) handleGetBrowserProfile(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleDeleteBrowserProfile godoc
+// @Summary Delete a browser profile
+// @Description Removes a browser automation profile by name.
+// @Tags browser
+// @Security BearerAuth
+// @Param name path string true "Profile name"
+// @Success 204 "Profile deleted"
+// @Failure 404 {object} map[string]string "Profile not found"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Browser automation not configured"
+// @Router /browser/profiles/{name} [delete]
 func (s *Server) handleDeleteBrowserProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.browserRequired(w) {
 		return
@@ -1944,6 +2332,15 @@ type browserSessionInfo struct {
 	ToolCount int    `json:"tool_count"`
 }
 
+// handleListBrowserSessions godoc
+// @Summary List browser sessions
+// @Description Returns active browser automation sessions.
+// @Tags browser
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any "List of browser sessions"
+// @Failure 503 {object} map[string]string "Browser automation not configured"
+// @Router /browser/sessions [get]
 func (s *Server) handleListBrowserSessions(w http.ResponseWriter, r *http.Request) {
 	if !s.browserRequired(w) {
 		return
@@ -1965,6 +2362,15 @@ func (s *Server) handleListBrowserSessions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
+// handleBrowserConfig godoc
+// @Summary Get browser configuration
+// @Description Returns the current browser automation configuration.
+// @Tags browser
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} object "Browser config"
+// @Failure 503 {object} map[string]string "Browser automation not configured"
+// @Router /browser/config [get]
 func (s *Server) handleBrowserConfig(w http.ResponseWriter, _ *http.Request) {
 	if !s.browserRequired(w) {
 		return
@@ -1981,7 +2387,16 @@ func (s *Server) keyStoreRequired(w http.ResponseWriter) bool {
 	return true
 }
 
-// handleListKeys handles GET /api/v1/keys.
+// handleListKeys godoc
+// @Summary List API keys
+// @Description Returns all API keys (without the secret token). Includes revoked keys.
+// @Tags keys
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} APIKeyRecord
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /keys [get]
 func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -1998,7 +2413,19 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, recs)
 }
 
-// handleCreateKey handles POST /api/v1/keys.
+// handleCreateKey godoc
+// @Summary Create an API key
+// @Description Creates a new API key with the specified name and scopes. The plaintext key is returned only once.
+// @Tags keys
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Key name and scopes"
+// @Success 201 {object} map[string]any "Created key with plaintext token"
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /keys [post]
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2038,7 +2465,16 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRevokeKey handles DELETE /api/v1/keys/{id}.
+// handleRevokeKey godoc
+// @Summary Revoke an API key
+// @Description Soft-deletes an API key, marking it as revoked. The key can no longer be used for authentication.
+// @Tags keys
+// @Security BearerAuth
+// @Param id path string true "API key ID"
+// @Success 204 "Key revoked"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /keys/{id} [delete]
 func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2051,7 +2487,16 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeleteKey handles DELETE /api/v1/keys/{id}/permanent.
+// handleDeleteKey godoc
+// @Summary Permanently delete an API key
+// @Description Permanently removes an API key record from the database.
+// @Tags keys
+// @Security BearerAuth
+// @Param id path string true "API key ID"
+// @Success 204 "Key deleted"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /keys/{id}/permanent [delete]
 func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2064,7 +2509,17 @@ func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRotateKey handles POST /api/v1/keys/{id}/rotate.
+// handleRotateKey godoc
+// @Summary Rotate an API key
+// @Description Generates a new secret for an existing API key. The new plaintext key is returned only once.
+// @Tags keys
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "API key ID"
+// @Success 200 {object} map[string]any "Rotated key with new plaintext token"
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /keys/{id}/rotate [post]
 func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2106,10 +2561,15 @@ func (s *Server) setupRequired(ctx context.Context) (bool, error) {
 	return !has, nil
 }
 
-// handleSetupStatus handles GET /api/v1/setup.
-// Returns {"setup_required": true} when no active API keys or password exist.
-// Also reports whether the PIN-protected account setup flow is available.
-// No authentication required.
+// handleSetupStatus godoc
+// @Summary Get setup status
+// @Description Returns whether initial setup is required (no active API keys or password exist) and whether PIN-based account setup is available. No authentication required.
+// @Tags setup
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /setup [get]
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2126,9 +2586,19 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSetupInit handles POST /api/v1/setup.
-// Creates the first API key. Returns 409 Conflict once any active key exists.
-// No authentication required — the endpoint locks itself after first use.
+// handleSetupInit godoc
+// @Summary Create initial API key
+// @Description Creates the first API key during initial setup. Returns 409 once any active key exists. No authentication required — the endpoint locks itself after first use.
+// @Tags setup
+// @Accept json
+// @Produce json
+// @Param body body object true "Key name and scopes (defaults to admin if empty)"
+// @Success 201 {object} map[string]any "Created key with plaintext token"
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string "Setup already complete"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string "Key management not configured"
+// @Router /setup [post]
 func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	if !s.keyStoreRequired(w) {
 		return
@@ -2187,10 +2657,20 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSetupAccount handles POST /api/v1/setup/account.
-// Creates an admin account (password login) verified by a one-time setup PIN.
-// The PIN is displayed in server logs at startup. No authentication required —
-// the endpoint self-disables after successful use.
+// handleSetupAccount godoc
+// @Summary Create admin account via PIN
+// @Description Creates an admin account (password login) verified by a one-time setup PIN displayed in server logs at startup. No authentication required — the endpoint self-disables after successful use.
+// @Tags setup
+// @Accept json
+// @Produce json
+// @Param body body object true "PIN and new password (min 8 chars)"
+// @Success 200 {object} map[string]any "Account created, session cookie set"
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string "Invalid PIN"
+// @Failure 409 {object} map[string]string "Account setup no longer available"
+// @Failure 429 {object} map[string]string "Too many attempts"
+// @Failure 500 {object} map[string]string
+// @Router /setup/account [post]
 func (s *Server) handleSetupAccount(w http.ResponseWriter, r *http.Request) {
 	// Rate-limit PIN attempts (reuse login rate limiter).
 	ip := clientIP(r)

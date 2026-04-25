@@ -155,8 +155,9 @@ build-ui:
 # Full build: web dashboard then Go binary
 build-full: build-ui build
 
-# Generate OpenAPI spec from Go annotations (requires swag CLI)
+# Generate OpenAPI spec from Go annotations
 openapi:
+    @which swag > /dev/null 2>&1 || { echo "Installing swag CLI..."; go install github.com/swaggo/swag/cmd/swag@latest; }
     swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
     rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
 

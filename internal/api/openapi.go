@@ -25,6 +25,5 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_, _ = w.Write(data)
 }

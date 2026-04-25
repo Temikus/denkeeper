@@ -33,6 +33,16 @@ type serverConfigUpdateInput struct {
 	Timezone    *string `json:"timezone,omitempty"`
 }
 
+// handleGetServerConfig godoc
+// @Summary      Get server configuration
+// @Description  Returns the current server configuration including listen address, TLS, CORS, WebSocket settings, and build info.
+// @Tags         server
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  serverConfigResponse
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Router       /server/config [get]
 func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.deps.Config.API
 	resp := serverConfigResponse{
@@ -56,6 +66,19 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// handlePatchServerConfig godoc
+// @Summary      Update server configuration
+// @Description  Partially updates server configuration (external_url, timezone). Changes are applied in-memory and persisted to the TOML config file.
+// @Tags         server
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      serverConfigUpdateInput  true  "Fields to update"
+// @Success      200   {object}  map[string]string        "status: updated"
+// @Failure      400   {object}  map[string]string        "Invalid JSON or validation error"
+// @Failure      401   {object}  map[string]string        "Unauthorized"
+// @Failure      403   {object}  map[string]string        "Forbidden — requires admin scope"
+// @Router       /server/config [patch]
 func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request) {
 	var input serverConfigUpdateInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -96,6 +119,18 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// handleReloadConfig godoc
+// @Summary      Reload configuration from disk
+// @Description  Re-reads the TOML configuration file and applies changes. Returns an error if no reload function is configured or the reload fails.
+// @Tags         server
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]string  "status: reloaded"
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Failure      500  {object}  map[string]string  "Reload failed"
+// @Failure      503  {object}  map[string]string  "Config reload not available"
+// @Router       /server/reload [post]
 func (s *Server) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 	if s.deps.ReloadFunc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config reload not available"})
@@ -110,6 +145,17 @@ func (s *Server) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
+// handleRestartProcess godoc
+// @Summary      Restart the server process
+// @Description  Triggers a graceful server process restart. The response is sent before the restart occurs. Returns an error if no restart function is configured.
+// @Tags         server
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]string  "status: restarting"
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Failure      503  {object}  map[string]string  "Process restart not available"
+// @Router       /server/restart [post]
 func (s *Server) handleRestartProcess(w http.ResponseWriter, _ *http.Request) {
 	if s.deps.RestartFunc == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "process restart not available"})

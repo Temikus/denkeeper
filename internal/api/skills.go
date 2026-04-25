@@ -15,6 +15,17 @@ import (
 // Skill CRUD handlers
 // ---------------------------------------------------------------------------
 
+// handleGetSkill godoc
+// @Summary Get a skill by name
+// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent.
+// @Tags skills
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param name path string true "Skill name"
+// @Success 200 {object} map[string]any "Skill details"
+// @Failure 404 {object} map[string]string "Agent or skill not found"
+// @Router /skills/{agent}/{name} [get]
 func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")
 	skillName := r.PathValue("name")
@@ -49,6 +60,21 @@ type skillCreateInput struct {
 	Body        string   `json:"body"`
 }
 
+// handleCreateSkill godoc
+// @Summary Create a new skill
+// @Description Creates a skill for the specified agent. Writes the skill file to the agent's persona directory and registers it in memory.
+// @Tags skills
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param body body skillCreateInput true "Skill definition"
+// @Success 201 {object} map[string]string "Skill created"
+// @Failure 400 {object} map[string]string "Invalid input"
+// @Failure 404 {object} map[string]string "Agent not found"
+// @Failure 500 {object} map[string]string "Creation failed"
+// @Failure 503 {object} map[string]string "Skill management unavailable"
+// @Router /skills/{agent} [post]
 func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")
 
@@ -108,6 +134,23 @@ type skillUpdateInput struct {
 	Body        *string  `json:"body"`
 }
 
+// handleUpdateSkill godoc
+// @Summary Update or rename a skill
+// @Description Updates a skill's fields for the specified agent. If the name field differs from the path parameter, the skill is renamed (old file removed, new file created). Returns 409 if the new name conflicts with an existing skill.
+// @Tags skills
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param name path string true "Current skill name"
+// @Param body body skillUpdateInput true "Fields to update (all optional; omit to keep current value)"
+// @Success 200 {object} map[string]string "Skill updated"
+// @Failure 400 {object} map[string]string "Invalid input"
+// @Failure 404 {object} map[string]string "Agent or skill not found"
+// @Failure 409 {object} map[string]string "New name conflicts with existing skill"
+// @Failure 500 {object} map[string]string "Update failed"
+// @Failure 503 {object} map[string]string "Skill management unavailable"
+// @Router /skills/{agent}/{name} [put]
 func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")
 	skillName := r.PathValue("name")
@@ -174,6 +217,17 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDeleteSkill godoc
+// @Summary Delete a skill
+// @Description Removes a skill from the specified agent. Deletes both the in-memory registration and the skill file on disk.
+// @Tags skills
+// @Security BearerAuth
+// @Param agent path string true "Agent name"
+// @Param name path string true "Skill name"
+// @Success 204 "Skill deleted"
+// @Failure 404 {object} map[string]string "Agent or skill not found"
+// @Failure 503 {object} map[string]string "Skill management unavailable"
+// @Router /skills/{agent}/{name} [delete]
 func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")
 	skillName := r.PathValue("name")

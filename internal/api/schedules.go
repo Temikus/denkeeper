@@ -90,6 +90,20 @@ func validateScheduleInput(input scheduleCreateInput) string {
 	return ""
 }
 
+// handleCreateSchedule godoc
+// @Summary Create a new schedule
+// @Description Creates a scheduled job bound to a channel and optionally a skill. Validates the cron expression, channel reference, and agent/skill existence. Persists the schedule to the TOML config file.
+// @Tags schedules
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body scheduleCreateInput true "Schedule configuration"
+// @Success 201 {object} map[string]string "Created schedule with name, schedule expression, and status"
+// @Failure 400 {object} map[string]string "Validation error (missing fields, invalid cron, unknown skill)"
+// @Failure 404 {object} map[string]string "Referenced agent not found"
+// @Failure 409 {object} map[string]string "Schedule name already exists"
+// @Failure 503 {object} map[string]string "Schedule management not available"
+// @Router /schedules [post]
 func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scheduler == nil || s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -172,6 +186,21 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleUpdateSchedule godoc
+// @Summary Update an existing schedule
+// @Description Partially updates a schedule's configuration. Only provided fields are applied; omitted fields retain their current values. Re-registers the schedule with the scheduler and persists changes to the TOML config file.
+// @Tags schedules
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Schedule name"
+// @Param body body configmcp.ScheduleUpdateInput true "Fields to update (all optional)"
+// @Success 200 {object} map[string]string "Updated schedule with name, schedule expression, and status"
+// @Failure 400 {object} map[string]string "Invalid JSON, invalid cron expression, or unknown skill"
+// @Failure 404 {object} map[string]string "Schedule or agent not found"
+// @Failure 500 {object} map[string]string "Internal error during re-registration"
+// @Failure 503 {object} map[string]string "Schedule management not available"
+// @Router /schedules/{name} [patch]
 func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scheduler == nil || s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -244,6 +273,16 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDeleteSchedule godoc
+// @Summary Delete a schedule
+// @Description Unregisters a schedule from the scheduler and removes it from the TOML config file.
+// @Tags schedules
+// @Security BearerAuth
+// @Param name path string true "Schedule name"
+// @Success 204 "Schedule deleted"
+// @Failure 404 {object} map[string]string "Schedule not found"
+// @Failure 503 {object} map[string]string "Schedule management not available"
+// @Router /schedules/{name} [delete]
 func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scheduler == nil || s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{

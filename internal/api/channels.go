@@ -22,7 +22,14 @@ type channelResponse struct {
 	ActiveAdapterKeys []string `json:"active_adapter_keys"`
 }
 
-// handleListChannels handles GET /api/v1/channels.
+// handleListChannels godoc
+// @Summary List all channels
+// @Description Returns all configured channels with their agent bindings, adapter associations, and active adapter keys.
+// @Tags channels
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} channelResponse
+// @Router /channels [get]
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	channels := s.deps.Dispatcher.Channels()
 	if channels == nil {
@@ -47,7 +54,16 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// handleGetChannel handles GET /api/v1/channels/{name}.
+// handleGetChannel godoc
+// @Summary Get a channel by name
+// @Description Returns a single channel's configuration including agent binding, adapters, delivery/session mode, conversation ID, and active adapter keys.
+// @Tags channels
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Channel name"
+// @Success 200 {object} channelResponse
+// @Failure 404 {object} map[string]string "Channel not found"
+// @Router /channels/{name} [get]
 func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	channels := s.deps.Dispatcher.Channels()
@@ -79,7 +95,20 @@ type activateRequest struct {
 	AdapterKey string `json:"adapter_key"` // e.g. "telegram:12345"
 }
 
-// handleActivateChannel handles POST /api/v1/channels/{name}/activate.
+// handleActivateChannel godoc
+// @Summary Activate a channel for an adapter key
+// @Description Sets the active channel for a given adapter key, routing that adapter's messages through the specified channel.
+// @Tags channels
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Channel name"
+// @Param body body activateRequest true "Adapter key to activate"
+// @Success 200 {object} map[string]string "Activation confirmation with channel and adapter_key"
+// @Failure 400 {object} map[string]string "Invalid JSON or malformed adapter_key"
+// @Failure 404 {object} map[string]string "Channel not found or channels not configured"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /channels/{name}/activate [post]
 func (s *Server) handleActivateChannel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -110,7 +139,21 @@ func (s *Server) handleActivateChannel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeactivateChannel handles DELETE /api/v1/channels/{name}/activate.
+// handleDeactivateChannel godoc
+// @Summary Deactivate a channel for an adapter key
+// @Description Clears the active channel override for a given adapter key. Returns 409 if the adapter key is not currently active on this channel.
+// @Tags channels
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Channel name"
+// @Param body body activateRequest true "Adapter key to deactivate"
+// @Success 200 {object} map[string]string "Deactivation confirmation"
+// @Failure 400 {object} map[string]string "Invalid JSON or malformed adapter_key"
+// @Failure 404 {object} map[string]string "Channel not found"
+// @Failure 409 {object} map[string]string "Adapter key is not active on this channel"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /channels/{name}/activate [delete]
 func (s *Server) handleDeactivateChannel(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -187,7 +230,21 @@ func (s *Server) channelToResponse(ch *agent.Channel) channelResponse {
 	}
 }
 
-// handleCreateChannel handles POST /api/v1/channels.
+// handleCreateChannel godoc
+// @Summary Create a new channel
+// @Description Creates a named channel bound to an agent with optional adapter bindings, delivery mode, and session mode. Persists the channel to the TOML config file.
+// @Tags channels
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body channelCreateInput true "Channel configuration"
+// @Success 201 {object} channelResponse
+// @Failure 400 {object} map[string]string "Validation error (missing name/agent, invalid delivery or session_mode)"
+// @Failure 404 {object} map[string]string "Referenced agent not found"
+// @Failure 409 {object} map[string]string "Channel already exists or channels not configured"
+// @Failure 503 {object} map[string]string "Config persistence not available"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /channels [post]
 func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})
@@ -266,7 +323,21 @@ func (s *Server) validateChannelCreate(input channelCreateInput) string {
 	return ""
 }
 
-// handleUpdateChannel handles PATCH /api/v1/channels/{name}.
+// handleUpdateChannel godoc
+// @Summary Update an existing channel
+// @Description Partially updates a channel's configuration (agent, adapters, delivery, session_mode). Only provided fields are applied; omitted fields retain their current values. Implicit channels cannot be modified. Persists changes to the TOML config file.
+// @Tags channels
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Channel name"
+// @Param body body channelCreateInput true "Fields to update (all optional except at least one)"
+// @Success 200 {object} channelResponse
+// @Failure 400 {object} map[string]string "Invalid JSON, invalid delivery/session_mode, or channel is implicit"
+// @Failure 404 {object} map[string]string "Channel or referenced agent not found"
+// @Failure 503 {object} map[string]string "Config persistence not available"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /channels/{name} [patch]
 func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})
@@ -365,7 +436,19 @@ func (s *Server) validateChannelMerged(ch *agent.Channel) (string, int) {
 	return "", 0
 }
 
-// handleDeleteChannel handles DELETE /api/v1/channels/{name}.
+// handleDeleteChannel godoc
+// @Summary Delete a channel
+// @Description Removes a channel from the dispatcher and the TOML config file. Implicit channels cannot be deleted.
+// @Tags channels
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Channel name"
+// @Success 204 "Channel deleted"
+// @Failure 400 {object} map[string]string "Channel is implicit"
+// @Failure 404 {object} map[string]string "Channel not found"
+// @Failure 503 {object} map[string]string "Config persistence not available"
+// @Failure 500 {object} map[string]string "Internal error"
+// @Router /channels/{name} [delete]
 func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	if s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})

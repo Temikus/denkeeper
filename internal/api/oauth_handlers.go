@@ -18,8 +18,18 @@ type OAuthDeps struct {
 	PendingMgr *oauth.PendingManager
 }
 
-// handleOAuthCallback handles the OAuth provider redirect after user authorization.
-// This endpoint requires NO authentication (browser redirect from external provider).
+// handleOAuthCallback godoc
+// @Summary OAuth callback
+// @Description Handles the OAuth provider redirect after user authorization. Returns an HTML page indicating success or failure. This endpoint requires no authentication as it is a browser redirect from the external OAuth provider.
+// @Tags oauth
+// @Produce html
+// @Param code query string false "Authorization code from the OAuth provider"
+// @Param state query string false "State parameter for CSRF protection"
+// @Param error query string false "Error code if authorization was denied"
+// @Param error_description query string false "Human-readable error description"
+// @Success 200 {string} string "HTML success page"
+// @Failure 400 {string} string "HTML error page"
+// @Router /tools/oauth/callback [get]
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OAuthDeps == nil || s.deps.OAuthDeps.PendingMgr == nil {
 		s.serveCallbackHTML(w, false, "OAuth support is not configured")
@@ -51,7 +61,17 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	s.serveCallbackHTML(w, true, "")
 }
 
-// handleToolOAuthStatus returns the OAuth token status for a tool.
+// handleToolOAuthStatus godoc
+// @Summary Get OAuth token status for a tool
+// @Description Returns the current OAuth token status for the specified tool, including whether a token exists, its expiry, scopes, and whether re-authorization is needed.
+// @Tags oauth
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool name"
+// @Success 200 {object} oauth.TokenSummary "Token status"
+// @Failure 500 {object} map[string]string "Token store error"
+// @Failure 503 {object} map[string]string "OAuth support not configured"
+// @Router /tools/{name}/oauth [get]
 func (s *Server) handleToolOAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OAuthDeps == nil || s.deps.OAuthDeps.TokenStore == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OAuth support is not configured"})
@@ -76,9 +96,19 @@ func (s *Server) handleToolOAuthStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stored.Summary())
 }
 
-// handleToolOAuthConnect initiates an OAuth flow for a tool.
-// It triggers tool reconnection which creates a pending auth, then returns
-// the auth URL for the UI to open in a popup.
+// handleToolOAuthConnect godoc
+// @Summary Initiate OAuth connection for a tool
+// @Description Starts an OAuth authorization flow for the specified tool. Triggers a tool reconnection that creates a pending authorization, then returns the auth URL for the UI to open in a browser popup. Polls up to 30 seconds for the pending auth to appear.
+// @Tags oauth
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool name"
+// @Success 200 {object} map[string]any "Pending auth with auth_url"
+// @Failure 400 {object} map[string]string "Tool does not use OAuth"
+// @Failure 404 {object} map[string]string "Tool not found"
+// @Failure 503 {object} map[string]string "OAuth support not configured or lifecycle manager unavailable"
+// @Failure 504 {object} map[string]string "Timed out waiting for OAuth flow to start"
+// @Router /tools/{name}/oauth/connect [post]
 func (s *Server) handleToolOAuthConnect(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OAuthDeps == nil || s.deps.OAuthDeps.PendingMgr == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OAuth support is not configured"})
@@ -195,7 +225,17 @@ func (s *Server) startOAuthReconnect(name string, mgr *tool.Manager) {
 	}()
 }
 
-// handleToolOAuthRevoke deletes the stored OAuth token for a tool.
+// handleToolOAuthRevoke godoc
+// @Summary Revoke OAuth token for a tool
+// @Description Deletes the stored OAuth token for the specified tool, clearing both the handler's cached token and the persisted token store entry.
+// @Tags oauth
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool name"
+// @Success 200 {object} map[string]string "Token revoked"
+// @Failure 500 {object} map[string]string "Token deletion failed"
+// @Failure 503 {object} map[string]string "OAuth support not configured or lifecycle manager unavailable"
+// @Router /tools/{name}/oauth/token [delete]
 func (s *Server) handleToolOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OAuthDeps == nil || s.deps.OAuthDeps.TokenStore == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OAuth support is not configured"})
@@ -226,7 +266,15 @@ func (s *Server) handleToolOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
-// handleListPendingOAuth returns all active pending OAuth authorizations.
+// handleListPendingOAuth godoc
+// @Summary List pending OAuth authorizations
+// @Description Returns all active pending OAuth authorization flows across all tools.
+// @Tags oauth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} oauth.PendingAuth "List of pending authorizations"
+// @Failure 503 {object} map[string]string "OAuth support not configured"
+// @Router /tools/oauth/pending [get]
 func (s *Server) handleListPendingOAuth(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OAuthDeps == nil || s.deps.OAuthDeps.PendingMgr == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OAuth support is not configured"})

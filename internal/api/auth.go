@@ -101,7 +101,13 @@ func (rl *loginRateLimiter) stop() {
 	rl.stopOnce.Do(func() { close(rl.stopCh) })
 }
 
-// handleAuthConfig returns which auth methods are available (no auth required).
+// handleAuthConfig godoc
+// @Summary Get auth configuration
+// @Description Return which authentication methods (password, OIDC) are enabled and the preferred login method.
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /auth/config [get]
 func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	pref := "auto"
 	if s.deps.Config != nil && s.deps.Config.API.Auth.PreferredLoginMethod != "" {
@@ -116,7 +122,19 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-// handlePasswordLogin authenticates with bcrypt password and creates a session cookie.
+// handlePasswordLogin godoc
+// @Summary Log in with password
+// @Description Authenticate with a bcrypt-hashed password and create a session cookie.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body object true "Login credentials" SchemaExample({"password": "string"})
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Router /auth/login [post]
 func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	if s.passwordHash == "" {
 		http.Error(w, `{"error":"password login not configured"}`, http.StatusNotFound)
@@ -175,7 +193,13 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "email": sess.Email}) //nolint:errcheck
 }
 
-// handleLogout clears the session cookie.
+// handleLogout godoc
+// @Summary Log out
+// @Description Clear the session cookie and end the current session.
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /auth/logout [post]
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 	if s.sessions != nil {
 		s.sessions.Clear(w)
@@ -184,7 +208,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 	w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
 }
 
-// handleSessionCheck verifies the current session cookie.
+// handleSessionCheck godoc
+// @Summary Check session validity
+// @Description Verify the current session cookie and return authentication status.
+// @Tags auth
+// @Produce json
+// @Success 200 {object} map[string]any
+// @Router /auth/session [get]
 func (s *Server) handleSessionCheck(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
 		json.NewEncoder(w).Encode(map[string]any{"authenticated": false}) //nolint:errcheck
@@ -233,7 +263,17 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
-// handleListSessions returns all active sessions for the authenticated user.
+// handleListSessions godoc
+// @Summary List active sessions
+// @Description Return all active sessions for the authenticated user, including the current session ID.
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/sessions [get]
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil || s.sessions.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
@@ -260,7 +300,17 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRevokeSession revokes a single session by ID.
+// handleRevokeSession godoc
+// @Summary Revoke a session
+// @Description Revoke a single active session by its ID.
+// @Tags auth
+// @Security BearerAuth
+// @Param id path string true "Session ID"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/sessions/{id} [delete]
 func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil || s.sessions.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
@@ -282,7 +332,17 @@ func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRevokeAllSessions revokes all sessions for the authenticated user.
+// handleRevokeAllSessions godoc
+// @Summary Revoke all sessions
+// @Description Revoke all active sessions for the authenticated user.
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/sessions [delete]
 func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil || s.sessions.Store == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "server-tracked sessions not enabled"})
@@ -305,7 +365,14 @@ func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": count})
 }
 
-// handleAuthStatus returns a summary of auth configuration.
+// handleAuthStatus godoc
+// @Summary Get auth status
+// @Description Return a detailed summary of auth configuration including password, OIDC, session, and API key state.
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Router /auth/status [get]
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"password_enabled":   s.passwordHash != "",
@@ -343,7 +410,21 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handlePasswordChange allows an authenticated admin to change the dashboard password.
+// handlePasswordChange godoc
+// @Summary Change dashboard password
+// @Description Verify the current password and replace it with a new one (minimum 8 characters).
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Password change payload" SchemaExample({"current_password": "string", "new_password": "string"})
+// @Success 200 {object} map[string]bool
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 429 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/password [post]
 func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	if s.passwordHash == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "password login not configured"})
@@ -397,7 +478,16 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// handleOIDCTest performs a fresh OIDC discovery against the configured issuer.
+// handleOIDCTest godoc
+// @Summary Test OIDC provider
+// @Description Perform a fresh OIDC discovery against the configured issuer and return endpoint details.
+// @Tags auth
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} map[string]any
+// @Failure 404 {object} map[string]string
+// @Failure 502 {object} map[string]any
+// @Router /auth/oidc/test [get]
 func (s *Server) handleOIDCTest(w http.ResponseWriter, r *http.Request) {
 	if s.oidcProvider == nil || s.deps.Config == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "OIDC not configured"})
@@ -441,7 +531,18 @@ func (s *Server) handleOIDCTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAuthPreferences updates the preferred login method.
+// handleAuthPreferences godoc
+// @Summary Set auth preferences
+// @Description Update the preferred login method (auto, password, or apikey) and persist to config.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body object true "Preferences payload" SchemaExample({"preferred_login_method": "auto"})
+// @Success 200 {object} map[string]bool
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /auth/preferences [post]
 func (s *Server) handleAuthPreferences(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		PreferredLoginMethod string `json:"preferred_login_method"`
