@@ -162,16 +162,25 @@
         {#if event.category === 'session' && event.action === 'trigger'}
           {@const d = parseDetail(event.detail) || {}}
           <div
-            class="inline-trigger"
+            class="inline-trigger {d.trigger_type === 'schedule' ? 'inline-trigger-schedule' : ''}"
             role="button" tabindex="0"
             aria-expanded={expandedId === event.id}
             onclick={() => onToggleRow?.(event.id)}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggleRow?.(event.id) } }}
           >
-            <span class="trigger-avatar">{(d.user_name || '?').charAt(0).toUpperCase()}</span>
-            <span class="trigger-label trigger-label-user">USER</span>
-            {#if d.prompt}
-              <span class="inline-trigger-text" class:truncated={expandedId !== event.id}>{d.prompt}</span>
+            {#if d.trigger_type === 'schedule'}
+              <span class="trigger-icon trigger-icon-schedule">{'\u23F1'}</span>
+              <span class="trigger-label trigger-label-schedule">SCHEDULE</span>
+              {#if d.schedule_cron}
+                <span class="trigger-cron">{d.schedule_cron}</span>
+              {/if}
+              <span class="trigger-schedule-name">{d.schedule_name || d.skill_name || 'scheduled task'}</span>
+            {:else}
+              <span class="trigger-avatar">{(d.user_name || '?').charAt(0).toUpperCase()}</span>
+              <span class="trigger-label trigger-label-user">USER</span>
+              {#if d.prompt}
+                <span class="inline-trigger-text" class:truncated={expandedId !== event.id}>{d.prompt}</span>
+              {/if}
             {/if}
             <span class="spacer"></span>
             <span class="trigger-meta">{relativeTime(event.timestamp)}</span>
@@ -344,6 +353,11 @@
     transition: background 0.1s;
   }
   .inline-trigger:hover { background: rgba(127,119,221,0.09); }
+  .inline-trigger-schedule {
+    background: rgba(55,138,221,0.04);
+    border-left-color: rgba(55,138,221,0.5);
+  }
+  .inline-trigger-schedule:hover { background: rgba(55,138,221,0.08); }
   .inline-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .inline-trigger-text {
     font-size: 12px;
