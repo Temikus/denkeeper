@@ -1239,6 +1239,16 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 // e.approvalRetries times before giving up. Returns the result string and
 // whether the tool was approved.
 func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, bool) {
+	// If no event handler is wired, there is no way to surface the approval
+	// dialog to a human operator. Deny immediately rather than waiting for
+	// a timeout that can never be resolved.
+	if onEvent == nil {
+		e.logger.Warn("tool approval denied: no event handler wired — approval cannot be surfaced to an operator",
+			"tool", tc.Function.Name, "round", round, "conversation", convID)
+		return "Tool call denied — no adapter is connected to surface the approval dialog. " +
+			"Ensure the session is routed through an adapter (Telegram, Discord, web) or use autonomous permission tier for unattended sessions.", false
+	}
+
 	adapterName := agentctx.Adapter(ctx)
 	externalID := agentctx.ExternalID(ctx)
 	noOp := func(_ context.Context, _ string) error { return nil }
@@ -1271,16 +1281,14 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 			return fmt.Sprintf("Tool call approval failed: %v", err), false
 		}
 
-		if onEvent != nil {
-			onEvent(ChatEvent{
-				Type:             "tool_approval",
-				Tool:             tc.Function.Name,
-				Round:            round,
-				Text:             summary,
-				ApprovalID:       req.ID,
-				ApprovalCallback: req.CallbackData,
-			})
-		}
+		onEvent(ChatEvent{
+			Type:             "tool_approval",
+			Tool:             tc.Function.Name,
+			Round:            round,
+			Text:             summary,
+			ApprovalID:       req.ID,
+			ApprovalCallback: req.CallbackData,
+		})
 
 		approvalCtx, approvalCancel := context.WithTimeout(ctx, e.approvalTimeout)
 		status := e.approvals.WaitForResolution(approvalCtx, req.ID)

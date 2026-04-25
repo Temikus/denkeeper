@@ -707,17 +707,21 @@ func TestEngine_SupervisedToolCallApproval_Approved(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Must use HandleMessageWithEvents with a non-nil handler — nil onEvent
+	// now correctly denies immediately (no operator to surface the dialog to).
+	noopEvent := func(ChatEvent) {}
+
 	// Start the message handling in a goroutine since it will block on approval.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
 			Adapter:    "test",
 			ExternalID: "chat-supervised",
 			UserID:     "user-1",
 			UserName:   "testuser",
 			Text:       "search for test",
 			Timestamp:  time.Now(),
-		})
+		}, noopEvent)
 	}()
 
 	// Wait a bit for the approval to be submitted, then approve it.
@@ -806,16 +810,20 @@ func TestEngine_SupervisedToolCallApproval_Denied(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Must use HandleMessageWithEvents with a non-nil handler — nil onEvent
+	// now correctly denies immediately (no operator to surface the dialog to).
+	noopEvent := func(ChatEvent) {}
+
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
 			Adapter:    "test",
 			ExternalID: "chat-denied",
 			UserID:     "user-1",
 			UserName:   "testuser",
 			Text:       "search for test",
 			Timestamp:  time.Now(),
-		})
+		}, noopEvent)
 	}()
 
 	// Wait for approval, then deny it.
@@ -891,16 +899,20 @@ func TestEngine_ApprovalTimeout_RetryThenApproved(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Must use HandleMessageWithEvents with a non-nil handler — nil onEvent
+	// now correctly denies immediately (no operator to surface the dialog to).
+	noopEvent := func(ChatEvent) {}
+
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
 			Adapter:    "test",
 			ExternalID: "chat-retry",
 			UserID:     "user-1",
 			UserName:   "testuser",
 			Text:       "search for test",
 			Timestamp:  time.Now(),
-		})
+		}, noopEvent)
 	}()
 
 	// Let first attempt time out, then approve the retry.
@@ -975,14 +987,19 @@ func TestEngine_ApprovalTimeout_RetriesExhausted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = engine.HandleMessage(ctx, adapter.IncomingMessage{
+	// Must use HandleMessageWithEvents with a non-nil handler — nil onEvent
+	// now correctly denies immediately (no operator to surface the dialog to).
+	// This test verifies timeout behavior when an operator IS present but doesn't respond.
+	noopEvent := func(ChatEvent) {}
+
+	err = engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
 		Adapter:    "test",
 		ExternalID: "chat-exhausted",
 		UserID:     "user-1",
 		UserName:   "testuser",
 		Text:       "search for test",
 		Timestamp:  time.Now(),
-	})
+	}, noopEvent)
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
 	}
@@ -1042,16 +1059,20 @@ func TestEngine_ApprovalDenied_NoRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Must use HandleMessageWithEvents with a non-nil handler — nil onEvent
+	// now correctly denies immediately (no operator to surface the dialog to).
+	noopEvent := func(ChatEvent) {}
+
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- engine.HandleMessage(ctx, adapter.IncomingMessage{
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
 			Adapter:    "test",
 			ExternalID: "chat-deny-no-retry",
 			UserID:     "user-1",
 			UserName:   "testuser",
 			Text:       "search for test",
 			Timestamp:  time.Now(),
-		})
+		}, noopEvent)
 	}()
 
 	// Deny immediately.
@@ -1081,6 +1102,196 @@ func TestEngine_ApprovalDenied_NoRetry(t *testing.T) {
 	}
 	if pendingCount > 0 {
 		t.Errorf("expected 0 pending approvals after denial, got %d", pendingCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Approval surfacing tests — approvals must never silently time out
+// ---------------------------------------------------------------------------
+
+func TestEngine_ApprovalDenied_NilEventHandler(t *testing.T) {
+	// When onEvent is nil (no adapter wired), supervised tool calls must be
+	// denied immediately with a clear reason — not silently wait for a timeout.
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "I was unable to perform the search.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+	// Set a long timeout to prove we DON'T wait for it.
+	engine.SetApprovalConfig(10*time.Second, 0)
+
+	// HandleMessage uses nil onEvent — should deny immediately, not hang.
+	start := time.Now()
+	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-no-handler",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "search for test",
+		Timestamp:  time.Now(),
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	// Must complete much faster than the 10s approval timeout.
+	if elapsed > 3*time.Second {
+		t.Errorf("HandleMessage took %v — approval was not denied immediately (timeout is 10s)", elapsed)
+	}
+
+	// The LLM should have received a denial reason, not a timeout.
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
+	}
+
+	// No approvals should be left pending — none were submitted.
+	pending, _ := mgr.List(context.Background(), approval.StatusPending)
+	if len(pending) > 0 {
+		t.Errorf("expected 0 pending approvals, got %d", len(pending))
+	}
+}
+
+func TestEngine_ApprovalEmitted_WithEventHandler(t *testing.T) {
+	// When onEvent IS wired, supervised tool calls must emit a tool_approval
+	// event so the adapter can render inline buttons for the human operator.
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Here are the search results.",
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, err := security.NewPermissionEngine("supervised")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	// Collect events emitted by the engine.
+	var events []ChatEvent
+	onEvent := func(evt ChatEvent) {
+		events = append(events, evt)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-with-handler",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		}, onEvent)
+	}()
+
+	// Wait for the approval to be submitted, then approve it.
+	time.Sleep(100 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	_, _ = mgr.Resolve(ctx, approvals[0].ID, true, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessageWithEvents: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessageWithEvents")
+	}
+
+	// Verify a tool_approval event was emitted with the required fields.
+	var approvalEvent *ChatEvent
+	for i := range events {
+		if events[i].Type == "tool_approval" && events[i].ApprovalID != "" {
+			approvalEvent = &events[i]
+			break
+		}
+	}
+	if approvalEvent == nil {
+		t.Fatal("no tool_approval event was emitted — approval dialog would not reach the operator")
+	}
+	if approvalEvent.Tool != "web_search" {
+		t.Errorf("approval event tool = %q, want web_search", approvalEvent.Tool)
+	}
+	if approvalEvent.ApprovalCallback == "" {
+		t.Error("approval event missing callback data — inline buttons cannot be wired")
+	}
+	if approvalEvent.Text == "" {
+		t.Error("approval event missing summary text")
 	}
 }
 

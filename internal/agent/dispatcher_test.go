@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 func newTestEngine(t *testing.T, name string, sent *sentMessages) *Engine {
@@ -1539,5 +1541,200 @@ func TestDispatcher_PersistentChannel_SameConversationID(t *testing.T) {
 	}
 	if id1 != "chan:work" {
 		t.Errorf("expected conversation ID chan:work, got %q", id1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Approval surfacing tests — approvals must never be silently dropped
+// ---------------------------------------------------------------------------
+
+func TestDispatcher_Dispatch_WiresEventHandler_ApprovalsReachAdapter(t *testing.T) {
+	// Dispatch() must wire up an event handler so that tool approval dialogs
+	// are sent to the adapter. This tests the fix for the bug where scheduled
+	// messages used HandleMessage (nil onEvent) causing approvals to silently
+	// time out without surfacing to a human.
+
+	store, err := NewSQLiteMemoryStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Here are the results.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	t.Cleanup(func() { _ = approvalStore.Close() })
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, _ := security.NewPermissionEngine("supervised")
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Test assistant.", nil, toolMgr, mgr, testLogger())
+
+	// Register a mock adapter so buildEventHandler can find it.
+	ma := &threadSafeMockAdapter{name: "telegram"}
+
+	d := NewDispatcher(
+		map[string]*Engine{"default": engine},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- d.Dispatch(ctx, "default", adapter.IncomingMessage{
+			Adapter:    "telegram",
+			ExternalID: "12345",
+			UserID:     "user-1",
+			UserName:   "scheduler",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	// Wait for the approval to be submitted, then approve it.
+	time.Sleep(200 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	_, _ = mgr.Resolve(ctx, approvals[0].ID, true, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for Dispatch to complete")
+	}
+
+	// The adapter must have received the approval dialog as a message with buttons.
+	adapterSent := ma.Sent()
+	var approvalMsg *adapter.OutgoingMessage
+	for i := range adapterSent {
+		if len(adapterSent[i].Buttons) > 0 {
+			approvalMsg = &adapterSent[i]
+			break
+		}
+	}
+	if approvalMsg == nil {
+		t.Fatal("adapter did not receive an approval dialog with buttons — approvals would silently time out")
+	}
+	if approvalMsg.ExternalID != "12345" {
+		t.Errorf("approval dialog sent to wrong chat: got %q, want 12345", approvalMsg.ExternalID)
+	}
+	// Should have approve/deny buttons at minimum.
+	if len(approvalMsg.Buttons) < 2 {
+		t.Errorf("approval dialog has %d buttons, want at least 2 (approve/deny)", len(approvalMsg.Buttons))
+	}
+}
+
+func TestDispatcher_Dispatch_NoAdapter_ApprovalDeniedImmediately(t *testing.T) {
+	// When Dispatch() is called with an adapter that is NOT registered in
+	// the dispatcher, buildEventHandler returns a no-op. The engine should
+	// detect that onEvent cannot surface approvals and deny immediately.
+	// This test verifies the denial is fast (not a 5-minute timeout).
+
+	store, err := NewSQLiteMemoryStore(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Tool was denied.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	t.Cleanup(func() { _ = approvalStore.Close() })
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, _ := security.NewPermissionEngine("supervised")
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "Test assistant.", nil, toolMgr, mgr, testLogger())
+	// Long timeout to prove we DON'T wait for it.
+	engine.SetApprovalConfig(10*time.Second, 0)
+
+	// NO adapters registered — buildEventHandler returns a no-op.
+	d := NewDispatcher(
+		map[string]*Engine{"default": engine},
+		nil,
+		nil, // no adapters
+		testLogger(),
+	)
+
+	start := time.Now()
+	err = d.Dispatch(context.Background(), "default", adapter.IncomingMessage{
+		Adapter:    "telegram",
+		ExternalID: "12345",
+		UserID:     "user-1",
+		UserName:   "scheduler",
+		Text:       "search for test",
+		Timestamp:  time.Now(),
+	})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	// Must complete much faster than the 10s approval timeout.
+	if elapsed > 3*time.Second {
+		t.Errorf("Dispatch took %v — approval was not denied immediately (timeout is 10s)", elapsed)
+	}
+
+	// The LLM should have received a response (the denial fed back, then second LLM response).
+	if len(sent.msgs) < 1 {
+		t.Fatal("expected at least 1 sent message")
 	}
 }

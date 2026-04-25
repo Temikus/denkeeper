@@ -477,7 +477,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, agentName string, msg adapter
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentName)
 	}
-	return e.HandleMessage(ctx, msg)
+	onEvent := d.buildEventHandler(ctx, msg)
+	return e.HandleMessageWithEvents(ctx, msg, onEvent)
 }
 
 // SendVia sends a message through the adapter registered under adapterName.
@@ -1229,7 +1230,7 @@ func (d *Dispatcher) startTypingTicker(ctx context.Context, msg adapter.Incoming
 func (d *Dispatcher) buildEventHandler(ctx context.Context, msg adapter.IncomingMessage) ChatEventFunc {
 	a, aOK := d.adapters[msg.Adapter]
 	if !aOK {
-		return func(ChatEvent) {} // no adapter — no-op
+		return nil // no adapter — return nil so the engine can detect that approvals cannot be surfaced
 	}
 
 	debug := false
