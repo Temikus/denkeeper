@@ -293,3 +293,25 @@ func TestCostTracker_MaxBudgetPerSession_Deprecated(t *testing.T) {
 		t.Errorf("MaxBudgetPerSession = %f, want 3.14", ct.MaxBudgetPerSession())
 	}
 }
+
+func TestCostTracker_SetDefaultLimits(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 1.0, Hard: 5.0}, nil)
+
+	if got := ct.DefaultLimits(); got.Soft != 1.0 || got.Hard != 5.0 {
+		t.Fatalf("initial limits = %+v, want {1.0, 5.0}", got)
+	}
+
+	ct.SetDefaultLimits(SessionLimits{Soft: 2.0, Hard: 10.0})
+	if got := ct.DefaultLimits(); got.Soft != 2.0 || got.Hard != 10.0 {
+		t.Errorf("after update = %+v, want {2.0, 10.0}", got)
+	}
+
+	// New sessions should use the updated limits.
+	ct.Record("new-session:tg:1", 3.0)
+	if !ct.ExceedsSoftLimit("new-session:tg:1") {
+		t.Error("expected to exceed new soft limit of 2.0 at cost 3.0")
+	}
+	if ct.ExceedsHardLimit("new-session:tg:1") {
+		t.Error("expected NOT to exceed new hard limit of 10.0 at cost 3.0")
+	}
+}

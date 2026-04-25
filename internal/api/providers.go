@@ -7,6 +7,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -263,6 +264,14 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.CostLimitHard != nil {
 		s.deps.Config.LLM.CostLimitHard = *input.CostLimitHard
+	}
+
+	// Sync the live CostTracker so new sessions use updated limits.
+	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
+		s.deps.CostTracker.SetDefaultLimits(llm.SessionLimits{
+			Soft: s.deps.Config.LLM.CostLimitSoft,
+			Hard: s.deps.Config.LLM.CostLimitHard,
+		})
 	}
 
 	// Persist to TOML.

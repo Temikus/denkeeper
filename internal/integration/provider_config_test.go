@@ -263,3 +263,33 @@ func TestProviderDelete_RemovedFromTOML(t *testing.T) {
 		t.Errorf("provider should be removed from TOML after delete; content:\n%s", content)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CostTracker sync (bug fix)
+// ---------------------------------------------------------------------------
+
+func TestLLMConfig_PatchCostLimits_SyncsCostTracker(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	// Verify initial default limits (harness sets Hard: 10.0).
+	initial := h.CostTracker.DefaultLimits()
+	if initial.Hard != 10.0 {
+		t.Fatalf("initial hard limit = %f, want 10.0", initial.Hard)
+	}
+
+	// PATCH cost limits via API.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/config",
+		map[string]any{"cost_limit_soft": 3.0, "cost_limit_hard": 7.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify CostTracker default limits were updated.
+	updated := h.CostTracker.DefaultLimits()
+	if updated.Soft != 3.0 {
+		t.Errorf("soft limit = %f, want 3.0", updated.Soft)
+	}
+	if updated.Hard != 7.0 {
+		t.Errorf("hard limit = %f, want 7.0", updated.Hard)
+	}
+}

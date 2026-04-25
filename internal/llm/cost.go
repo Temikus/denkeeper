@@ -223,6 +223,14 @@ func (ct *CostTracker) SetAgentLimits(agent string, limits SessionLimits) {
 	ct.agentOverrides[agent] = limits
 }
 
+// SetDefaultLimits updates the default cost limits applied to sessions
+// without agent-specific overrides.
+func (ct *CostTracker) SetDefaultLimits(limits SessionLimits) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.defaultLimits = limits
+}
+
 // MaxBudgetPerSession returns the default hard cost cap.
 // Deprecated: use DefaultLimits().Hard.
 func (ct *CostTracker) MaxBudgetPerSession() float64 {
