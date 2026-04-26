@@ -1464,6 +1464,15 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		}
 
 		e.logger.Info("tool call denied", "tool", tc.Function.Name, "id", req.ID)
+		// Emit a follow-up tool_approval event with status="denied" so the
+		// adapter's activity log can transition the pending line to a denied
+		// state and remove the inline keyboard.
+		onEvent(ChatEvent{
+			Type:           "tool_approval",
+			Tool:           tc.Function.Name,
+			Round:          round,
+			ApprovalStatus: "denied",
+		})
 		return "Tool call was denied by the operator.", false
 	}
 	return "Tool approval timed out — no response from operator.", false

@@ -104,4 +104,8 @@ type MessageEditor interface {
 	// EditText replaces the text of an existing message identified by
 	// externalID (chat) and messageID (message within that chat).
 	EditText(ctx context.Context, externalID, messageID, text, parseMode string) error
+	// EditMessage replaces both the text and the inline keyboard of an
+	// existing message. When msg.Buttons is empty, any existing keyboard is
+	// removed. ParseMode and ButtonLayout fields on msg are honoured.
+	EditMessage(ctx context.Context, externalID, messageID string, msg OutgoingMessage) error
 }

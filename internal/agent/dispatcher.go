@@ -1271,9 +1271,30 @@ func (d *Dispatcher) buildEventHandler(ctx context.Context, msg adapter.Incoming
 }
 
 // handleToolApproval processes a tool_approval ChatEvent, choosing between
-// debug (verbose) and compact (activity log / expandable blockquote) rendering.
+// debug (verbose, separate messages) and compact (activity log) rendering.
 func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent, debug bool, alog *activityLog) {
-	if evt.ApprovalStatus == "auto_approved" {
+	// Resolved / informational statuses route through dedicated handlers.
+	if d.routeApprovalStatus(ctx, a, msg, evt, debug, alog) {
+		return
+	}
+
+	// No status set → this is a fresh approval awaiting human input.
+	if debug {
+		d.sendDebugApprovalPrompt(ctx, a, msg, evt)
+		return
+	}
+	if alog != nil {
+		alog.setPending(ctx, evt.Tool, evt.Text, evt.ApprovalCallback)
+		return
+	}
+	d.sendStandaloneApprovalPrompt(ctx, a, msg, evt)
+}
+
+// routeApprovalStatus handles non-pending approval statuses (auto_approved,
+// denied, supervisor_*). Returns true when the event was handled.
+func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent, debug bool, alog *activityLog) bool {
+	switch evt.ApprovalStatus {
+	case "auto_approved":
 		if debug {
 			_ = a.Send(ctx, adapter.OutgoingMessage{
 				Text:       fmt.Sprintf("Tool **%s** auto-approved", evt.Tool),
@@ -1283,11 +1304,12 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 		} else if alog != nil {
 			alog.autoApproved(ctx, evt.Tool)
 		}
-		return
-	}
-
-	// Supervisor decisions are informational — no buttons needed.
-	switch evt.ApprovalStatus {
+		return true
+	case "denied":
+		if alog != nil {
+			alog.toolDenied(ctx, evt.Tool)
+		}
+		return true
 	case "supervisor_approved":
 		if debug {
 			_ = a.Send(ctx, adapter.OutgoingMessage{
@@ -1296,17 +1318,20 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 				Adapter:    msg.Adapter,
 			})
 		} else if alog != nil {
-			alog.autoApproved(ctx, evt.Tool+" (supervisor)")
+			alog.supervisorLine(ctx, evt.Tool, "auto-approved")
 		}
-		return
+		return true
 	case "supervisor_denied":
-		text := fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text)
-		_ = a.Send(ctx, adapter.OutgoingMessage{
-			Text:       text,
-			ExternalID: msg.ExternalID,
-			Adapter:    msg.Adapter,
-		})
-		return
+		if debug {
+			_ = a.Send(ctx, adapter.OutgoingMessage{
+				Text:       fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text),
+				ExternalID: msg.ExternalID,
+				Adapter:    msg.Adapter,
+			})
+		} else if alog != nil {
+			alog.supervisorLine(ctx, evt.Tool, "❌ denied: "+evt.Text)
+		}
+		return true
 	case "supervisor_escalated":
 		if debug {
 			_ = a.Send(ctx, adapter.OutgoingMessage{
@@ -1315,33 +1340,37 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 				Adapter:    msg.Adapter,
 			})
 		}
-		// Don't return — the subsequent awaitToolApproval will emit another
-		// tool_approval event with buttons for the human to act on.
-		return
+		// The subsequent awaitToolApproval emits another tool_approval event
+		// with buttons for the human to act on.
+		return true
 	}
+	return false
+}
 
-	if debug {
-		_ = a.Send(ctx, adapter.OutgoingMessage{
-			Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
-			ExternalID: msg.ExternalID,
-			Adapter:    msg.Adapter,
-			Buttons: []adapter.KeyboardButton{
-				{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-				{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-				{Label: "🔄 Auto (15 min)", CallbackData: evt.ApprovalCallback + ":approve_session"},
-				{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
-			},
-		})
-		return
-	}
+func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
+	_ = a.Send(ctx, adapter.OutgoingMessage{
+		Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+		ExternalID: msg.ExternalID,
+		Adapter:    msg.Adapter,
+		Buttons: []adapter.KeyboardButton{
+			{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
+			{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
+			{Label: "🔄 Auto (15 min)", CallbackData: evt.ApprovalCallback + ":approve_session"},
+			{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
+		},
+	})
+}
 
-	compactText := fmt.Sprintf(
+// sendStandaloneApprovalPrompt is the fallback used when the adapter does not
+// implement MessageEditor (no activity log available).
+func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
+	text := fmt.Sprintf(
 		"🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
 		html.EscapeString(evt.Tool),
 		html.EscapeString(evt.Text),
 	)
 	_ = a.Send(ctx, adapter.OutgoingMessage{
-		Text:       compactText,
+		Text:       text,
 		ParseMode:  "HTML",
 		ExternalID: msg.ExternalID,
 		Adapter:    msg.Adapter,
@@ -1370,108 +1399,261 @@ func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.Incoming
 	})
 }
 
-// activityLog accumulates tool events into a single Telegram message that is
-// edited in-place as new events arrive. This replaces the pattern of sending
-// separate messages for each tool_start, tool_end, and auto_approved event.
+// activityLog accumulates tool events into a Telegram message that is edited
+// in-place as new events arrive. Pending tool approvals are appended to the
+// same message with inline keyboard buttons instead of being sent as separate
+// messages, keeping the chat clean.
 //
-// The message uses HTML formatting and looks like:
+// The activity log is rendered as a collapsible <blockquote expandable> so it
+// stays out of the way until the user expands it. Layout:
 //
-//	🔧 search_web — auto-approved
-//	🔧 fetch_url ✅ 340ms
-//	🔧 read_file ⏳
+//	📋 Activity log
+//	┌─ (collapsed by default; expand to see) ─────────┐
+//	│ 🔧 search_web — auto-approved                  │
+//	│ 🔧 fetch_url — ✅ 340ms                         │
+//	│ 🔧 read_file — ⏳                              │
+//	└──────────────────────────────────────────────────┘
+//	🔧 next_tool — approve?
+//	┌─ args (expandable) ─────────────────────────────┐
+//	│ {"path": "/etc/hosts"}                          │
+//	└──────────────────────────────────────────────────┘
+//	[Approve] [Deny] [15 min] [Always]
+//
+// When the rendered text approaches Telegram's 4096-char message cap, the
+// current chunk is finalised (no longer edited) and a new chunk message is
+// started. Pending approvals always render on the latest (active) chunk.
 type activityLog struct {
 	editor     adapter.MessageEditor
 	externalID string
 	adapter    string
 	logger     *slog.Logger
-	messageID  string         // platform message ID, empty until first send
-	lines      []activityLine // ordered entries
-	toolIndex  map[string]int // tool name → index in lines (for in-flight updates)
+	chunks     []*logChunk
+	pending    *pendingApproval
+}
+
+// logChunk is a single Telegram message holding part of the activity log.
+// Older chunks are frozen once a newer chunk is started — they remain in
+// place but are no longer edited.
+type logChunk struct {
+	messageID string         // platform message ID, empty until first send
+	lines     []activityLine // ordered entries
+	toolIndex map[string]int // tool name → index in lines (for in-flight updates)
 }
 
 type activityLine struct {
 	tool   string
-	status string // "⏳", "✅ 340ms", "❌ err", "auto-approved"
+	status string // "⏳", "✅ 340ms", "❌", "auto-approved", etc.
 }
 
-// render builds the HTML text for the current activity log.
-func (l *activityLog) render() string {
+// pendingApproval represents a tool call awaiting human approval, rendered
+// inline at the bottom of the active chunk with inline keyboard buttons.
+type pendingApproval struct {
+	tool     string
+	args     string
+	callback string
+}
+
+const (
+	// activityChunkMaxBytes leaves headroom under Telegram's 4096-char cap so
+	// the approval section can be appended without overflowing.
+	activityChunkMaxBytes = 3500
+	// approvalArgsMaxChars truncates oversized tool argument payloads so a
+	// single approval cannot blow past the message cap on its own. Counted in
+	// Unicode code points so multi-byte characters aren't split mid-sequence.
+	approvalArgsMaxChars = 2000
+)
+
+// renderChunk builds the HTML text for a single chunk. When isLast is true
+// and a pending approval is set, the approval section (header + args) is
+// appended below the activity blockquote. The approval buttons themselves
+// are attached separately via the OutgoingMessage when flushing.
+func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
 	var b strings.Builder
-	for i, line := range l.lines {
-		if i > 0 {
+
+	if len(c.lines) > 0 {
+		b.WriteString("📋 <b>Activity log</b>\n<blockquote expandable>")
+		for i, line := range c.lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			fmt.Fprintf(&b, "🔧 <b>%s</b> — %s",
+				html.EscapeString(line.tool), line.status)
+		}
+		b.WriteString("</blockquote>")
+	}
+
+	if isLast && l.pending != nil {
+		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "🔧 <b>%s</b> — %s",
-			html.EscapeString(line.tool), line.status)
+		fmt.Fprintf(&b, "🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
+			html.EscapeString(l.pending.tool),
+			html.EscapeString(l.pending.args))
 	}
+
 	return b.String()
 }
 
-// flush sends or edits the activity message with the current content.
+// flush sends or edits the active chunk's message with the current content.
+// When a pending approval is set, inline keyboard buttons are attached.
 func (l *activityLog) flush(ctx context.Context) {
-	text := l.render()
-	if l.messageID == "" {
-		// First event — send a new message and capture its ID.
-		id, err := l.editor.SendAndGetID(ctx, adapter.OutgoingMessage{
-			Text:       text,
-			ParseMode:  "HTML",
-			ExternalID: l.externalID,
-			Adapter:    l.adapter,
-		})
+	if len(l.chunks) == 0 {
+		return
+	}
+	last := l.chunks[len(l.chunks)-1]
+	text := l.renderChunk(last, true)
+	if text == "" {
+		return
+	}
+
+	msg := adapter.OutgoingMessage{
+		Text:       text,
+		ParseMode:  "HTML",
+		ExternalID: l.externalID,
+		Adapter:    l.adapter,
+	}
+	if l.pending != nil {
+		msg.Buttons = []adapter.KeyboardButton{
+			{Label: "✅ Approve", CallbackData: l.pending.callback + ":approve"},
+			{Label: "❌ Deny", CallbackData: l.pending.callback + ":deny"},
+			{Label: "🔄 15 min", CallbackData: l.pending.callback + ":approve_session"},
+			{Label: "♾️ Always", CallbackData: l.pending.callback + ":approve_always"},
+		}
+		msg.ButtonLayout = []int{2, 2}
+	}
+
+	if last.messageID == "" {
+		id, err := l.editor.SendAndGetID(ctx, msg)
 		if err != nil {
 			l.logger.Debug("activity log: failed to send initial message", "error", err)
 			return
 		}
-		l.messageID = id
-	} else {
-		// Subsequent events — edit in-place.
-		if err := l.editor.EditText(ctx, l.externalID, l.messageID, text, "HTML"); err != nil {
-			l.logger.Debug("activity log: failed to edit message", "error", err)
-		}
+		last.messageID = id
+		return
+	}
+	if err := l.editor.EditMessage(ctx, l.externalID, last.messageID, msg); err != nil {
+		l.logger.Debug("activity log: failed to edit message", "error", err)
 	}
 }
 
-func (l *activityLog) ensureIndex() {
-	if l.toolIndex == nil {
-		l.toolIndex = make(map[string]int)
+// ensureChunk returns the active chunk, allocating an empty one if needed.
+func (l *activityLog) ensureChunk() *logChunk {
+	if len(l.chunks) == 0 {
+		l.chunks = append(l.chunks, &logChunk{toolIndex: map[string]int{}})
 	}
+	return l.chunks[len(l.chunks)-1]
+}
+
+// addLine appends a line to the active chunk. If the chunk would overflow
+// Telegram's message cap, the chunk is frozen (will not be edited again) and
+// a fresh chunk is started; the line goes onto the new chunk.
+func (l *activityLog) addLine(line activityLine) {
+	c := l.ensureChunk()
+	c.lines = append(c.lines, line)
+	if len(l.renderChunk(c, true)) > activityChunkMaxBytes && len(c.lines) > 1 {
+		// Roll back the last line, start a new chunk, and place the line there.
+		c.lines = c.lines[:len(c.lines)-1]
+		fresh := &logChunk{toolIndex: map[string]int{}}
+		l.chunks = append(l.chunks, fresh)
+		fresh.lines = append(fresh.lines, line)
+		fresh.toolIndex[line.tool] = 0
+		return
+	}
+	c.toolIndex[line.tool] = len(c.lines) - 1
+}
+
+// updateActiveLine updates the status of an existing line for the given tool
+// in the active chunk. Returns true if a matching line was found.
+func (l *activityLog) updateActiveLine(tool, status string, removeFromIndex bool) bool {
+	if len(l.chunks) == 0 {
+		return false
+	}
+	c := l.chunks[len(l.chunks)-1]
+	idx, ok := c.toolIndex[tool]
+	if !ok {
+		return false
+	}
+	c.lines[idx].status = status
+	if removeFromIndex {
+		delete(c.toolIndex, tool)
+	}
+	return true
 }
 
 func (l *activityLog) autoApproved(ctx context.Context, tool string) {
-	l.ensureIndex()
-	l.lines = append(l.lines, activityLine{tool: tool, status: "auto-approved"})
-	l.toolIndex[tool] = len(l.lines) - 1
+	l.addLine(activityLine{tool: tool, status: "auto-approved"})
 	l.flush(ctx)
 }
 
 func (l *activityLog) toolStart(ctx context.Context, tool string) {
-	l.ensureIndex()
-	// Check if there's already a line for this tool (e.g. from auto-approved).
-	if idx, ok := l.toolIndex[tool]; ok {
-		l.lines[idx].status = "⏳"
+	// A tool_start for the pending approval's tool means the user approved
+	// it — clear the pending state so the buttons disappear.
+	if l.pending != nil && l.pending.tool == tool {
+		l.pending = nil
+	}
+	// If there's already a line for this tool (e.g. from auto-approved),
+	// convert it to in-flight rather than appending a duplicate.
+	if l.updateActiveLine(tool, "⏳", false) {
 		l.flush(ctx)
 		return
 	}
-	l.lines = append(l.lines, activityLine{tool: tool, status: "⏳"})
-	l.toolIndex[tool] = len(l.lines) - 1
+	l.addLine(activityLine{tool: tool, status: "⏳"})
 	l.flush(ctx)
 }
 
 func (l *activityLog) toolEnd(ctx context.Context, tool string, durationMS int64, errMsg string) {
-	l.ensureIndex()
-	idx, ok := l.toolIndex[tool]
-	if !ok {
-		// tool_end without a matching tool_start — add a new line.
-		l.lines = append(l.lines, activityLine{tool: tool})
-		idx = len(l.lines) - 1
-		l.toolIndex[tool] = idx
-	}
+	status := fmt.Sprintf("✅ %dms", durationMS)
 	if errMsg != "" {
-		l.lines[idx].status = "❌"
-	} else {
-		l.lines[idx].status = fmt.Sprintf("✅ %dms", durationMS)
+		status = "❌"
 	}
-	// Remove from index so a second call to the same tool gets a new line.
-	delete(l.toolIndex, tool)
+	if l.updateActiveLine(tool, status, true) {
+		l.flush(ctx)
+		return
+	}
+	// tool_end without a matching tool_start — add a new line.
+	l.addLine(activityLine{tool: tool, status: status})
+	// addLine doesn't remove from index; remove now since the call is complete.
+	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
+		delete(c.toolIndex, tool)
+	}
+	l.flush(ctx)
+}
+
+// toolDenied transitions a pending-approval to denied. Clears any matching
+// pending state so the buttons disappear, and prefers updating an existing
+// line for the tool in-place over appending a duplicate (mirrors toolEnd).
+func (l *activityLog) toolDenied(ctx context.Context, tool string) {
+	if l.pending != nil && l.pending.tool == tool {
+		l.pending = nil
+	}
+	if l.updateActiveLine(tool, "❌ denied", true) {
+		l.flush(ctx)
+		return
+	}
+	l.addLine(activityLine{tool: tool, status: "❌ denied"})
+	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
+		delete(c.toolIndex, tool)
+	}
+	l.flush(ctx)
+}
+
+// setPending records a pending approval and re-renders the active chunk so
+// the approval section + buttons appear at the bottom.
+func (l *activityLog) setPending(ctx context.Context, tool, args, callback string) {
+	if runes := []rune(args); len(runes) > approvalArgsMaxChars {
+		args = string(runes[:approvalArgsMaxChars]) + "…"
+	}
+	l.pending = &pendingApproval{tool: tool, args: args, callback: callback}
+	// Ensure there is an active chunk to render onto.
+	l.ensureChunk()
+	l.flush(ctx)
+}
+
+// supervisorLine appends a non-button line for supervisor decisions.
+func (l *activityLog) supervisorLine(ctx context.Context, tool, status string) {
+	l.addLine(activityLine{tool: tool + " (supervisor)", status: status})
+	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
+		delete(c.toolIndex, tool+" (supervisor)")
+	}
 	l.flush(ctx)
 }

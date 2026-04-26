@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/approval"
@@ -294,6 +296,60 @@ func (m *threadSafeMockAdapter) Sent() []adapter.OutgoingMessage {
 	return out
 }
 
+// editorMockAdapter is a thread-safe mock adapter that also implements
+// adapter.MessageEditor so the dispatcher's activity log path can be
+// exercised end-to-end (Dispatch → buildEventHandler → activityLog).
+type editorMockAdapter struct {
+	name      string
+	mu        sync.Mutex
+	sent      []adapter.OutgoingMessage
+	edits     []adapter.OutgoingMessage
+	nextMsgID int
+}
+
+func (m *editorMockAdapter) Name() string { return m.name }
+func (m *editorMockAdapter) Start(_ context.Context, _ chan<- adapter.IncomingMessage) error {
+	select {}
+}
+func (m *editorMockAdapter) Send(_ context.Context, msg adapter.OutgoingMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = append(m.sent, msg)
+	return nil
+}
+func (m *editorMockAdapter) SendTyping(_ context.Context, _ string) error { return nil }
+func (m *editorMockAdapter) Stop() error                                  { return nil }
+func (m *editorMockAdapter) SendAndGetID(_ context.Context, msg adapter.OutgoingMessage) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = append(m.sent, msg)
+	m.nextMsgID++
+	return fmt.Sprintf("msg-%d", m.nextMsgID), nil
+}
+func (m *editorMockAdapter) EditText(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
+func (m *editorMockAdapter) EditMessage(_ context.Context, _, _ string, msg adapter.OutgoingMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.edits = append(m.edits, msg)
+	return nil
+}
+func (m *editorMockAdapter) Sent() []adapter.OutgoingMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]adapter.OutgoingMessage, len(m.sent))
+	copy(out, m.sent)
+	return out
+}
+func (m *editorMockAdapter) Edits() []adapter.OutgoingMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]adapter.OutgoingMessage, len(m.edits))
+	copy(out, m.edits)
+	return out
+}
+
 func TestDispatcher_Run_ConcurrentMessages(t *testing.T) {
 	// Verify that the dispatcher processes multiple messages concurrently
 	// rather than sequentially. We submit N messages via a mock adapter
@@ -492,11 +548,13 @@ func TestStartTypingTicker_ContextCancel_Stops(t *testing.T) {
 
 // --- activityLog tests ---
 
-// mockMessageEditor records SendAndGetID / EditText calls for testing.
+// mockMessageEditor records SendAndGetID / EditText / EditMessage calls.
 type mockMessageEditor struct {
-	sends []adapter.OutgoingMessage
-	edits []editCall
-	msgID string // returned by SendAndGetID
+	sends    []adapter.OutgoingMessage
+	edits    []editCall
+	editMsgs []editMsgCall
+	msgID    string // returned by the next SendAndGetID call
+	msgIDs   []string
 }
 
 type editCall struct {
@@ -506,8 +564,19 @@ type editCall struct {
 	parseMode  string
 }
 
+type editMsgCall struct {
+	externalID string
+	messageID  string
+	msg        adapter.OutgoingMessage
+}
+
 func (m *mockMessageEditor) SendAndGetID(_ context.Context, msg adapter.OutgoingMessage) (string, error) {
 	m.sends = append(m.sends, msg)
+	if len(m.msgIDs) > 0 {
+		id := m.msgIDs[0]
+		m.msgIDs = m.msgIDs[1:]
+		return id, nil
+	}
 	return m.msgID, nil
 }
 
@@ -516,23 +585,81 @@ func (m *mockMessageEditor) EditText(_ context.Context, externalID, messageID, t
 	return nil
 }
 
-func TestActivityLog_Render_Empty(t *testing.T) {
-	l := &activityLog{}
-	if got := l.render(); got != "" {
-		t.Errorf("empty render = %q, want empty", got)
+func (m *mockMessageEditor) EditMessage(_ context.Context, externalID, messageID string, msg adapter.OutgoingMessage) error {
+	m.editMsgs = append(m.editMsgs, editMsgCall{externalID, messageID, msg})
+	return nil
+}
+
+// lastSent returns the most recent message text sent or edited via the editor.
+// This is the surface the user sees in the Telegram chat.
+func (m *mockMessageEditor) lastRendered() string {
+	if len(m.editMsgs) > 0 {
+		return m.editMsgs[len(m.editMsgs)-1].msg.Text
+	}
+	if len(m.sends) > 0 {
+		return m.sends[len(m.sends)-1].Text
+	}
+	return ""
+}
+
+func newTestActivityLog(me *mockMessageEditor) *activityLog {
+	return &activityLog{
+		editor:     me,
+		externalID: "chat-1",
+		adapter:    "telegram",
+		logger:     testLogger(),
 	}
 }
 
-func TestActivityLog_Render_MultipleLines(t *testing.T) {
-	l := &activityLog{
+func TestActivityLog_RenderChunk_Empty(t *testing.T) {
+	l := &activityLog{}
+	c := &logChunk{toolIndex: map[string]int{}}
+	if got := l.renderChunk(c, true); got != "" {
+		t.Errorf("empty chunk render = %q, want empty", got)
+	}
+}
+
+func TestActivityLog_RenderChunk_WrapsInBlockquote(t *testing.T) {
+	l := &activityLog{}
+	c := &logChunk{
 		lines: []activityLine{
 			{tool: "search", status: "auto-approved"},
 			{tool: "fetch", status: "⏳"},
-			{tool: "read", status: "✅ 42ms"},
 		},
+		toolIndex: map[string]int{},
 	}
-	got := l.render()
-	want := "🔧 <b>search</b> — auto-approved\n🔧 <b>fetch</b> — ⏳\n🔧 <b>read</b> — ✅ 42ms"
+	got := l.renderChunk(c, false)
+	want := "📋 <b>Activity log</b>\n<blockquote expandable>" +
+		"🔧 <b>search</b> — auto-approved\n🔧 <b>fetch</b> — ⏳" +
+		"</blockquote>"
+	if got != want {
+		t.Errorf("render =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestActivityLog_RenderChunk_AppendsPendingApproval(t *testing.T) {
+	l := &activityLog{
+		pending: &pendingApproval{tool: "read_file", args: `{"path":"/etc/hosts"}`, callback: "cb-1"},
+	}
+	c := &logChunk{
+		lines:     []activityLine{{tool: "search", status: "✅ 10ms"}},
+		toolIndex: map[string]int{},
+	}
+	got := l.renderChunk(c, true)
+	want := "📋 <b>Activity log</b>\n<blockquote expandable>🔧 <b>search</b> — ✅ 10ms</blockquote>\n" +
+		"🔧 <b>read_file</b> — approve?\n<blockquote expandable>{&#34;path&#34;:&#34;/etc/hosts&#34;}</blockquote>"
+	if got != want {
+		t.Errorf("render =\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestActivityLog_RenderChunk_PendingOnly_NoBlockquote(t *testing.T) {
+	l := &activityLog{
+		pending: &pendingApproval{tool: "first_tool", args: "args", callback: "cb-1"},
+	}
+	c := &logChunk{toolIndex: map[string]int{}}
+	got := l.renderChunk(c, true)
+	want := "🔧 <b>first_tool</b> — approve?\n<blockquote expandable>args</blockquote>"
 	if got != want {
 		t.Errorf("render =\n%s\nwant:\n%s", got, want)
 	}
@@ -540,7 +667,7 @@ func TestActivityLog_Render_MultipleLines(t *testing.T) {
 
 func TestActivityLog_AutoApproved_SendsNewMessage(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
-	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
+	l := newTestActivityLog(me)
 
 	l.autoApproved(context.Background(), "search_web")
 
@@ -550,43 +677,36 @@ func TestActivityLog_AutoApproved_SendsNewMessage(t *testing.T) {
 	if me.sends[0].ParseMode != "HTML" {
 		t.Errorf("expected HTML parse mode, got %q", me.sends[0].ParseMode)
 	}
-	if l.messageID != "msg-1" {
-		t.Errorf("messageID = %q, want msg-1", l.messageID)
+	if got := l.chunks[0].messageID; got != "msg-1" {
+		t.Errorf("chunk messageID = %q, want msg-1", got)
 	}
 }
 
 func TestActivityLog_ToolStartEnd_EditsInPlace(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
-	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
-
+	l := newTestActivityLog(me)
 	ctx := context.Background()
 
-	// First event: sends a new message.
 	l.toolStart(ctx, "search")
 	if len(me.sends) != 1 {
 		t.Fatalf("expected 1 send after first toolStart, got %d", len(me.sends))
 	}
 
-	// Second event: edits in place.
 	l.toolEnd(ctx, "search", 150, "")
-	if len(me.edits) != 1 {
-		t.Fatalf("expected 1 edit after toolEnd, got %d", len(me.edits))
+	if len(me.editMsgs) != 1 {
+		t.Fatalf("expected 1 edit after toolEnd, got %d", len(me.editMsgs))
 	}
-	if me.edits[0].messageID != "msg-1" {
-		t.Errorf("edit messageID = %q, want msg-1", me.edits[0].messageID)
+	if me.editMsgs[0].messageID != "msg-1" {
+		t.Errorf("edit messageID = %q, want msg-1", me.editMsgs[0].messageID)
 	}
-
-	// The rendered text should show the completed tool.
-	got := l.render()
-	if got != "🔧 <b>search</b> — ✅ 150ms" {
-		t.Errorf("unexpected render: %s", got)
+	if !strings.Contains(me.lastRendered(), "🔧 <b>search</b> — ✅ 150ms") {
+		t.Errorf("last rendered missing completion line: %s", me.lastRendered())
 	}
 }
 
 func TestActivityLog_MultipleTools_AccumulatesLines(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
-	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
-
+	l := newTestActivityLog(me)
 	ctx := context.Background()
 
 	l.autoApproved(ctx, "tool_a")
@@ -596,67 +716,204 @@ func TestActivityLog_MultipleTools_AccumulatesLines(t *testing.T) {
 	l.toolStart(ctx, "tool_b")
 	l.toolEnd(ctx, "tool_b", 200, "")
 
-	// 1 send + 5 edits.
 	if len(me.sends) != 1 {
 		t.Errorf("expected 1 send, got %d", len(me.sends))
 	}
-	if len(me.edits) != 5 {
-		t.Errorf("expected 5 edits, got %d", len(me.edits))
+	if len(me.editMsgs) != 5 {
+		t.Errorf("expected 5 edits, got %d", len(me.editMsgs))
 	}
-	if len(l.lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d", len(l.lines))
+	if got := len(l.chunks[0].lines); got != 2 {
+		t.Fatalf("expected 2 lines in active chunk, got %d", got)
 	}
 }
 
 func TestActivityLog_ToolEnd_WithError(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
-	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
-
+	l := newTestActivityLog(me)
 	ctx := context.Background()
 
 	l.toolStart(ctx, "fetch")
 	l.toolEnd(ctx, "fetch", 0, "connection refused")
 
-	got := l.render()
-	if got != "🔧 <b>fetch</b> — ❌" {
-		t.Errorf("unexpected render: %s", got)
+	if !strings.Contains(me.lastRendered(), "🔧 <b>fetch</b> — ❌") {
+		t.Errorf("rendered missing error line: %s", me.lastRendered())
 	}
 }
 
 func TestActivityLog_SameToolCalledTwice(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
-	l := &activityLog{editor: me, externalID: "chat-1", adapter: "telegram", logger: testLogger()}
-
+	l := newTestActivityLog(me)
 	ctx := context.Background()
 
-	// First call to "search".
 	l.toolStart(ctx, "search")
 	l.toolEnd(ctx, "search", 100, "")
-
-	// Second call to "search" — should get its own line.
 	l.toolStart(ctx, "search")
 	l.toolEnd(ctx, "search", 200, "")
 
-	if len(l.lines) != 2 {
-		t.Fatalf("expected 2 lines for repeated tool, got %d", len(l.lines))
+	c := l.chunks[0]
+	if len(c.lines) != 2 {
+		t.Fatalf("expected 2 lines for repeated tool, got %d", len(c.lines))
 	}
-	if l.lines[0].status != "✅ 100ms" {
-		t.Errorf("first call status = %q", l.lines[0].status)
+	if c.lines[0].status != "✅ 100ms" {
+		t.Errorf("first call status = %q", c.lines[0].status)
 	}
-	if l.lines[1].status != "✅ 200ms" {
-		t.Errorf("second call status = %q", l.lines[1].status)
+	if c.lines[1].status != "✅ 200ms" {
+		t.Errorf("second call status = %q", c.lines[1].status)
 	}
 }
 
-func TestActivityLog_Render_EscapesHTML(t *testing.T) {
-	l := &activityLog{
-		lines: []activityLine{
-			{tool: "<script>alert(1)</script>", status: "✅ 1ms"},
-		},
+func TestActivityLog_RenderChunk_EscapesHTML(t *testing.T) {
+	l := &activityLog{}
+	c := &logChunk{
+		lines:     []activityLine{{tool: "<script>alert(1)</script>", status: "✅ 1ms"}},
+		toolIndex: map[string]int{},
 	}
-	got := l.render()
-	if got != "🔧 <b>&lt;script&gt;alert(1)&lt;/script&gt;</b> — ✅ 1ms" {
+	got := l.renderChunk(c, false)
+	if !strings.Contains(got, "🔧 <b>&lt;script&gt;alert(1)&lt;/script&gt;</b> — ✅ 1ms") {
 		t.Errorf("HTML not escaped: %s", got)
+	}
+}
+
+func TestActivityLog_SetPending_AttachesButtons(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+
+	l.setPending(context.Background(), "read_file", `{"path":"/etc/hosts"}`, "cb-1")
+
+	if len(me.sends) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(me.sends))
+	}
+	sent := me.sends[0]
+	if len(sent.Buttons) != 4 {
+		t.Errorf("expected 4 approval buttons, got %d", len(sent.Buttons))
+	}
+	if sent.Buttons[0].CallbackData != "cb-1:approve" {
+		t.Errorf("button[0] callback = %q", sent.Buttons[0].CallbackData)
+	}
+	if !strings.Contains(sent.Text, "🔧 <b>read_file</b> — approve?") {
+		t.Errorf("missing approval header: %s", sent.Text)
+	}
+}
+
+func TestActivityLog_ToolStartAfterPending_RemovesButtons(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	l.setPending(ctx, "read_file", "{}", "cb-1")
+	if len(me.sends) != 1 || len(me.sends[0].Buttons) != 4 {
+		t.Fatal("setup: expected initial send with buttons")
+	}
+
+	// Simulate user clicking approve → engine fires tool_start.
+	l.toolStart(ctx, "read_file")
+
+	last := me.editMsgs[len(me.editMsgs)-1]
+	if len(last.msg.Buttons) != 0 {
+		t.Errorf("expected buttons removed after toolStart, got %d", len(last.msg.Buttons))
+	}
+	if l.pending != nil {
+		t.Errorf("expected pending cleared after toolStart, got %+v", l.pending)
+	}
+	if !strings.Contains(last.msg.Text, "🔧 <b>read_file</b> — ⏳") {
+		t.Errorf("expected in-flight line, got: %s", last.msg.Text)
+	}
+}
+
+func TestActivityLog_ToolDenied_TransitionsLine(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	l.setPending(ctx, "read_file", "{}", "cb-1")
+	l.toolDenied(ctx, "read_file")
+
+	if l.pending != nil {
+		t.Errorf("expected pending cleared after deny")
+	}
+	if !strings.Contains(me.lastRendered(), "🔧 <b>read_file</b> — ❌ denied") {
+		t.Errorf("expected denied line, got: %s", me.lastRendered())
+	}
+	last := me.editMsgs[len(me.editMsgs)-1]
+	if len(last.msg.Buttons) != 0 {
+		t.Errorf("expected buttons removed after deny")
+	}
+}
+
+func TestActivityLog_OverflowSpawnsNewChunk(t *testing.T) {
+	me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2"}}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	// 80-char tool name × ~40 lines ≈ 3200+ chars; pushing past 3500 forces a split.
+	longTool := strings.Repeat("toolname", 10) // 80 chars
+	for i := 0; i < 50; i++ {
+		l.toolStart(ctx, longTool+strconv.Itoa(i))
+		l.toolEnd(ctx, longTool+strconv.Itoa(i), 100, "")
+	}
+
+	if len(l.chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks after overflow, got %d", len(l.chunks))
+	}
+	if len(me.sends) < 2 {
+		t.Errorf("expected at least 2 SendAndGetID calls (one per chunk), got %d", len(me.sends))
+	}
+}
+
+func TestActivityLog_TruncatesOversizedApprovalArgs(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+
+	huge := strings.Repeat("a", 5000)
+	l.setPending(context.Background(), "tool", huge, "cb-1")
+
+	if l.pending == nil {
+		t.Fatal("pending nil")
+	}
+	// Truncation is rune-based: argsMaxChars runes plus a single "…" rune.
+	if got := utf8.RuneCountInString(l.pending.args); got != approvalArgsMaxChars+1 {
+		t.Errorf("rune count = %d, want %d", got, approvalArgsMaxChars+1)
+	}
+	if !strings.HasSuffix(l.pending.args, "…") {
+		t.Errorf("expected ellipsis suffix, got tail %q", l.pending.args[len(l.pending.args)-10:])
+	}
+}
+
+func TestActivityLog_TruncatesAtRuneBoundary(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+
+	// Build a payload of 3-byte UTF-8 runes that exceeds the rune cap.
+	// Byte-slice truncation would split a multi-byte sequence and produce
+	// invalid UTF-8; rune-based truncation must preserve every code point.
+	multibyte := strings.Repeat("☃", approvalArgsMaxChars+500)
+	l.setPending(context.Background(), "tool", multibyte, "cb-1")
+
+	if !utf8.ValidString(l.pending.args) {
+		t.Errorf("truncated args contain invalid UTF-8")
+	}
+	if got := utf8.RuneCountInString(l.pending.args); got != approvalArgsMaxChars+1 {
+		t.Errorf("rune count = %d, want %d", got, approvalArgsMaxChars+1)
+	}
+}
+
+func TestActivityLog_ToolDeniedUpdatesExistingLine(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	// Simulate auto-approval landing first, then a deny event for the same
+	// tool — the deny should transition the existing line in place rather
+	// than appending a duplicate row.
+	l.autoApproved(ctx, "search")
+	l.toolDenied(ctx, "search")
+
+	c := l.chunks[0]
+	if len(c.lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(c.lines))
+	}
+	if c.lines[0].status != "❌ denied" {
+		t.Errorf("status = %q, want ❌ denied", c.lines[0].status)
 	}
 }
 
@@ -1541,6 +1798,164 @@ func TestDispatcher_PersistentChannel_SameConversationID(t *testing.T) {
 	}
 	if id1 != "chan:work" {
 		t.Errorf("expected conversation ID chan:work, got %q", id1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end activity log pipeline tests — Dispatcher.buildEventHandler
+// drives the activity log via the MessageEditor-capable mock adapter.
+// ---------------------------------------------------------------------------
+
+// newPipelineDispatcher builds a minimal dispatcher with a single
+// editorMockAdapter wired up so buildEventHandler can be exercised.
+// Engine wiring is not needed because we drive ChatEvents directly.
+func newPipelineDispatcher(t *testing.T, ma *editorMockAdapter) *Dispatcher {
+	t.Helper()
+	return NewDispatcher(
+		map[string]*Engine{},
+		nil,
+		[]adapter.Adapter{ma},
+		testLogger(),
+	)
+}
+
+func TestDispatcher_Pipeline_ApprovalRendersInActivityLog(t *testing.T) {
+	// A pending tool_approval ChatEvent must be appended to the activity log
+	// message (with inline keyboard buttons) instead of producing a
+	// standalone approval message.
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+
+	incoming := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+	handle := d.buildEventHandler(context.Background(), incoming)
+	if handle == nil {
+		t.Fatal("buildEventHandler returned nil")
+	}
+
+	handle(ChatEvent{
+		Type:             "tool_approval",
+		Tool:             "web_search",
+		Text:             `{"query":"test"}`,
+		ApprovalCallback: "cb-1",
+	})
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(sent))
+	}
+	if sent[0].ParseMode != "HTML" {
+		t.Errorf("ParseMode = %q, want HTML", sent[0].ParseMode)
+	}
+	if len(sent[0].Buttons) != 4 {
+		t.Errorf("expected 4 approval buttons, got %d", len(sent[0].Buttons))
+	}
+	if !strings.Contains(sent[0].Text, "🔧 <b>web_search</b> — approve?") {
+		t.Errorf("missing approval header: %s", sent[0].Text)
+	}
+	// No standalone Send-with-buttons calls on the bare adapter — buttons
+	// must travel via the MessageEditor edit path so the message is editable.
+	standaloneApprovals := 0
+	for _, m := range sent {
+		if len(m.Buttons) > 0 && !strings.HasPrefix(m.Text, "🔧 <b>") {
+			standaloneApprovals++
+		}
+	}
+	if standaloneApprovals > 0 {
+		t.Errorf("expected approvals to flow through alog, got %d standalone", standaloneApprovals)
+	}
+}
+
+func TestDispatcher_Pipeline_ApproveFlow_EditsSameMessage(t *testing.T) {
+	// Approve flow: tool_approval (pending) → tool_start → tool_end. All
+	// three events must edit the same activity log message; only one
+	// SendAndGetID call should ever happen.
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+
+	incoming := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+	handle := d.buildEventHandler(context.Background(), incoming)
+
+	handle(ChatEvent{Type: "tool_approval", Tool: "web_search", Text: "{}", ApprovalCallback: "cb-1"})
+	handle(ChatEvent{Type: "tool_start", Tool: "web_search"})
+	handle(ChatEvent{Type: "tool_end", Tool: "web_search", Duration: 250})
+
+	if got := len(ma.Sent()); got != 1 {
+		t.Errorf("expected 1 SendAndGetID, got %d (the alog must edit, not spawn new messages)", got)
+	}
+	edits := ma.Edits()
+	if len(edits) != 2 {
+		t.Fatalf("expected 2 edits (start, end), got %d", len(edits))
+	}
+
+	last := edits[len(edits)-1]
+	if !strings.Contains(last.Text, "🔧 <b>web_search</b> — ✅ 250ms") {
+		t.Errorf("final edit missing completed line: %s", last.Text)
+	}
+	if len(last.Buttons) != 0 {
+		t.Errorf("buttons should be removed from completed message, got %d", len(last.Buttons))
+	}
+	if !strings.Contains(last.Text, "<blockquote expandable>") {
+		t.Errorf("completed activity log must wrap entries in blockquote: %s", last.Text)
+	}
+}
+
+func TestDispatcher_Pipeline_DenyFlow_TransitionsLineInPlace(t *testing.T) {
+	// Deny flow: tool_approval (pending) → tool_approval (denied). The
+	// second event must transition the activity log to a denied state in
+	// place, removing buttons.
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+
+	incoming := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+	handle := d.buildEventHandler(context.Background(), incoming)
+
+	handle(ChatEvent{Type: "tool_approval", Tool: "web_search", Text: "{}", ApprovalCallback: "cb-1"})
+	handle(ChatEvent{Type: "tool_approval", Tool: "web_search", ApprovalStatus: "denied"})
+
+	if got := len(ma.Sent()); got != 1 {
+		t.Errorf("expected 1 SendAndGetID, got %d", got)
+	}
+	edits := ma.Edits()
+	if len(edits) != 1 {
+		t.Fatalf("expected 1 edit (denial), got %d", len(edits))
+	}
+	last := edits[len(edits)-1]
+	if !strings.Contains(last.Text, "🔧 <b>web_search</b> — ❌ denied") {
+		t.Errorf("denial edit missing denied line: %s", last.Text)
+	}
+	if len(last.Buttons) != 0 {
+		t.Errorf("buttons should be removed after denial, got %d", len(last.Buttons))
+	}
+	if strings.Contains(last.Text, "approve?") {
+		t.Errorf("approval prompt should be cleared after denial: %s", last.Text)
+	}
+}
+
+func TestDispatcher_Pipeline_AutoApprovedAccumulatesInActivityLog(t *testing.T) {
+	// Several auto-approved tools should accumulate as lines in a single
+	// activity log message, not produce separate messages.
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+
+	incoming := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+	handle := d.buildEventHandler(context.Background(), incoming)
+
+	for _, tool := range []string{"tool_a", "tool_b", "tool_c"} {
+		handle(ChatEvent{Type: "tool_approval", Tool: tool, ApprovalStatus: "auto_approved"})
+	}
+
+	if got := len(ma.Sent()); got != 1 {
+		t.Errorf("expected 1 SendAndGetID across 3 events, got %d", got)
+	}
+	edits := ma.Edits()
+	if len(edits) != 2 {
+		t.Errorf("expected 2 edits (events 2 and 3), got %d", len(edits))
+	}
+	last := edits[len(edits)-1]
+	for _, tool := range []string{"tool_a", "tool_b", "tool_c"} {
+		if !strings.Contains(last.Text, "🔧 <b>"+tool+"</b> — auto-approved") {
+			t.Errorf("missing line for %s in: %s", tool, last.Text)
+		}
 	}
 }
 

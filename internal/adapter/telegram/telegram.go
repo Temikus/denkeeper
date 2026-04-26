@@ -393,31 +393,22 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 		return
 	}
 
-	// Compact mode: for approvals, silently delete the message since the tool
-	// execution result will follow shortly. For denials/errors, edit in-place.
-	isApprove := strings.HasSuffix(cq.Data, ":approve") ||
-		strings.HasSuffix(cq.Data, ":approve_session") ||
-		strings.HasSuffix(cq.Data, ":approve_always")
-
-	// Always answer the callback to clear the loading spinner.
+	// Compact mode: the activity log message holds tool history plus the
+	// pending approval section + buttons. Stripping the inline keyboard is
+	// enough — subsequent tool_start / tool_end / denied events from the
+	// engine will rewrite the message text via the activity log's edit path.
 	answer := tgbotapi.NewCallback(cq.ID, "")
 	if _, err := a.bot.Request(answer); err != nil {
 		a.logger.Warn("failed to answer callback query", "error", err)
 	}
 
-	if isApprove {
-		// Approval: just delete the prompt — no confirmation needed.
-		del := tgbotapi.NewDeleteMessage(chatID, cq.Message.MessageID)
-		if _, delErr := a.bot.Request(del); delErr != nil {
-			a.logger.Debug("failed to delete approval message", "error", delErr)
-		}
-		return
-	}
-
-	// Deny / error / timeout: replace the approval message with the response.
-	editText := tgbotapi.NewEditMessageText(chatID, cq.Message.MessageID, responseText)
-	if _, editErr := a.bot.Request(editText); editErr != nil {
-		a.logger.Debug("failed to edit approval message in-place", "error", editErr)
+	stripKeyboard := tgbotapi.NewEditMessageReplyMarkup(
+		chatID,
+		cq.Message.MessageID,
+		tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
+	)
+	if _, editErr := a.bot.Request(stripKeyboard); editErr != nil {
+		a.logger.Debug("failed to strip inline keyboard from approval message", "error", editErr)
 	}
 }
 
@@ -579,6 +570,38 @@ func (a *Adapter) EditText(_ context.Context, externalID, messageID, text, parse
 	edit := tgbotapi.NewEditMessageText(chatID, msgID, text)
 	if parseMode != "" {
 		edit.ParseMode = parseMode
+	}
+	if _, editErr := a.bot.Request(edit); editErr != nil {
+		return fmt.Errorf("editing telegram message: %w", editErr)
+	}
+	return nil
+}
+
+// EditMessage edits both the text and inline keyboard of an existing Telegram
+// message. Implements adapter.MessageEditor. When msg.Buttons is empty, the
+// existing keyboard is removed.
+func (a *Adapter) EditMessage(_ context.Context, externalID, messageID string, msg adapter.OutgoingMessage) error {
+	chatID, err := strconv.ParseInt(externalID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parsing chat ID: %w", err)
+	}
+	msgID, err := strconv.Atoi(messageID)
+	if err != nil {
+		return fmt.Errorf("parsing message ID: %w", err)
+	}
+
+	edit := tgbotapi.NewEditMessageText(chatID, msgID, msg.Text)
+	if msg.ParseMode != "" {
+		edit.ParseMode = msg.ParseMode
+	}
+	if len(msg.Buttons) > 0 {
+		rows := buildButtonRows(msg.Buttons, msg.ButtonLayout)
+		markup := tgbotapi.NewInlineKeyboardMarkup(rows...)
+		edit.ReplyMarkup = &markup
+	} else {
+		// Explicit empty keyboard removes any existing buttons.
+		empty := tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}}
+		edit.ReplyMarkup = &empty
 	}
 	if _, editErr := a.bot.Request(edit); editErr != nil {
 		return fmt.Errorf("editing telegram message: %w", editErr)
