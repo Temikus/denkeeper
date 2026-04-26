@@ -8,14 +8,14 @@ import (
 
 // Event categories.
 const (
-	CategoryToolCall = "tool_call"
-	CategorySkill    = "skill"
-	CategoryChannel  = "channel"
-	CategoryApproval = "approval"
-	CategorySchedule = "schedule"
-	CategoryLLM      = "llm"
-	CategoryConfig   = "config"
-	CategorySession  = "session"
+	CategoryToolCall   = "tool_call"
+	CategorySkill      = "skill"
+	CategoryChannel    = "channel"
+	CategoryApproval   = "approval"
+	CategorySchedule   = "schedule"
+	CategoryLLM        = "llm"
+	CategoryConfig     = "config"
+	CategorySession    = "session"
 	CategoryMCP        = "mcp"
 	CategorySafety     = "safety"
 	CategorySupervisor = "supervisor"

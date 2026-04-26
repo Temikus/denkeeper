@@ -67,6 +67,7 @@ type SkillUsageRecord struct {
 // ConversationStatsRow holds aggregated telemetry for a conversation.
 type ConversationStatsRow struct {
 	ConversationID  string    `db:"conversation_id"   json:"conversation_id"`
+	Agent           string    `db:"agent"             json:"agent"`
 	TotalMessages   int       `db:"total_messages"    json:"total_messages"`
 	TotalCost       float64   `db:"total_cost"        json:"total_cost"`
 	TotalPrompt     int       `db:"total_tokens_prompt"      json:"total_tokens_prompt"`
@@ -134,12 +135,13 @@ type MemoryStore interface {
 type TelemetryStore interface {
 	AddToolCalls(ctx context.Context, convID string, messageID int64, calls []ToolCallRecord) error
 	AddSkillUsages(ctx context.Context, convID string, messageID int64, skills []SkillUsageRecord) error
-	UpdateConversationStats(ctx context.Context, convID string, msg StoredMessage, toolCallCount, toolErrorCount int) error
+	UpdateConversationStats(ctx context.Context, convID, agent string, msg StoredMessage, toolCallCount, toolErrorCount int) error
 	GetConversationStats(ctx context.Context, convID string) (*ConversationStatsRow, error)
 	ListConversationsWithStats(ctx context.Context, opts SessionListOpts) ([]ConversationInfoWithStats, int, error)
 	GetToolCalls(ctx context.Context, convID string) ([]ToolCallRecord, error)
 	GetSkillUsages(ctx context.Context, convID string) ([]SkillUsageRecord, error)
 	GetTelemetrySummary(ctx context.Context, since, until *time.Time) (*TelemetrySummary, error)
+	GetCostsByAgent(ctx context.Context) ([]AgentCostSummary, error)
 	PruneByCount(ctx context.Context, maxConversations int) (int, error)
 }
 
@@ -185,6 +187,12 @@ var telemetryMigrations = []string{
 	`ALTER TABLE messages ADD COLUMN tokens_completion INTEGER DEFAULT 0`,
 	`ALTER TABLE messages ADD COLUMN tokens_cached INTEGER DEFAULT 0`,
 	`ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''`,
+}
+
+// statsMigrations adds columns to conversation_stats. These run after
+// telemetryTablesSchema creates the table.
+var statsMigrations = []string{
+	`ALTER TABLE conversation_stats ADD COLUMN agent TEXT NOT NULL DEFAULT ''`,
 }
 
 const telemetryTablesSchema = `
@@ -249,6 +257,11 @@ func initDB(db *sqlx.DB) error {
 	}
 	if _, err := db.Exec(telemetryTablesSchema); err != nil {
 		return fmt.Errorf("initializing telemetry schema: %w", err)
+	}
+	for _, m := range statsMigrations {
+		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			return fmt.Errorf("migrating schema: %w", err)
+		}
 	}
 	if _, err := db.Exec(channelSchema); err != nil {
 		return fmt.Errorf("initializing channel schema: %w", err)
@@ -582,11 +595,12 @@ func (s *SQLiteMemoryStore) AddSkillUsages(ctx context.Context, convID string, m
 }
 
 // UpdateConversationStats incrementally updates the conversation_stats row.
-func (s *SQLiteMemoryStore) UpdateConversationStats(ctx context.Context, convID string, msg StoredMessage, toolCallCount, toolErrorCount int) error {
+func (s *SQLiteMemoryStore) UpdateConversationStats(ctx context.Context, convID, agent string, msg StoredMessage, toolCallCount, toolErrorCount int) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO conversation_stats (conversation_id, total_messages, total_cost, total_tokens_prompt, total_tokens_completion, total_tokens_cached, total_tool_calls, total_tool_errors, last_model, last_provider, updated_at)
-		 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		`INSERT INTO conversation_stats (conversation_id, agent, total_messages, total_cost, total_tokens_prompt, total_tokens_completion, total_tokens_cached, total_tool_calls, total_tool_errors, last_model, last_provider, updated_at)
+		 VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(conversation_id) DO UPDATE SET
+		   agent = excluded.agent,
 		   total_messages = total_messages + 1,
 		   total_cost = total_cost + excluded.total_cost,
 		   total_tokens_prompt = total_tokens_prompt + excluded.total_tokens_prompt,
@@ -597,7 +611,7 @@ func (s *SQLiteMemoryStore) UpdateConversationStats(ctx context.Context, convID 
 		   last_model = excluded.last_model,
 		   last_provider = excluded.last_provider,
 		   updated_at = CURRENT_TIMESTAMP`,
-		convID, msg.Cost, msg.TokensPrompt, msg.TokensCompletion, msg.TokensCached,
+		convID, agent, msg.Cost, msg.TokensPrompt, msg.TokensCompletion, msg.TokensCached,
 		toolCallCount, toolErrorCount, msg.Model, msg.Provider,
 	)
 	if err != nil {
@@ -610,7 +624,7 @@ func (s *SQLiteMemoryStore) UpdateConversationStats(ctx context.Context, convID 
 func (s *SQLiteMemoryStore) GetConversationStats(ctx context.Context, convID string) (*ConversationStatsRow, error) {
 	var row ConversationStatsRow
 	err := s.db.GetContext(ctx, &row,
-		`SELECT conversation_id, total_messages, total_cost, total_tokens_prompt,
+		`SELECT conversation_id, agent, total_messages, total_cost, total_tokens_prompt,
 		        total_tokens_completion, total_tokens_cached, total_tool_calls,
 		        total_tool_errors, last_model, last_provider, updated_at
 		 FROM conversation_stats WHERE conversation_id = ?`, convID)
@@ -796,6 +810,16 @@ type SkillUsageSummary struct {
 	MatchTypes string `db:"match_types" json:"match_types"`
 }
 
+// AgentCostSummary aggregates cost/token data per agent from persistent storage.
+type AgentCostSummary struct {
+	Agent        string  `db:"agent"            json:"agent"`
+	Cost         float64 `db:"total_cost"       json:"cost"`
+	InputTokens  int     `db:"total_prompt"     json:"input_tokens"`
+	OutputTokens int     `db:"total_completion"  json:"output_tokens"`
+	Messages     int     `db:"total_messages"   json:"messages"`
+	Sessions     int     `db:"sessions"         json:"sessions"`
+}
+
 // GetTelemetrySummary returns aggregated telemetry data, optionally filtered by time range.
 func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, until *time.Time) (*TelemetrySummary, error) {
 	summary := &TelemetrySummary{}
@@ -832,6 +856,26 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	}
 
 	return summary, nil
+}
+
+// GetCostsByAgent returns per-agent aggregated cost data from persistent storage.
+func (s *SQLiteMemoryStore) GetCostsByAgent(ctx context.Context) ([]AgentCostSummary, error) {
+	var results []AgentCostSummary
+	err := s.db.SelectContext(ctx, &results,
+		`SELECT agent,
+		        SUM(total_cost) AS total_cost,
+		        SUM(total_tokens_prompt) AS total_prompt,
+		        SUM(total_tokens_completion) AS total_completion,
+		        SUM(total_messages) AS total_messages,
+		        COUNT(*) AS sessions
+		 FROM conversation_stats
+		 WHERE agent != ''
+		 GROUP BY agent
+		 ORDER BY total_cost DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying costs by agent: %w", err)
+	}
+	return results, nil
 }
 
 // buildTimeFilter creates a SQL time filter clause and args for since/until parameters.

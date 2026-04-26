@@ -586,9 +586,21 @@ func TestAgent_NotFound(t *testing.T) {
 func TestCosts_ReturnsData(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	// Record some costs.
-	deps.CostTracker.Record("session-1", 0.05)
-	deps.CostTracker.Record("session-2", 0.10)
+	ctx := context.Background()
+
+	// Persist costs via the telemetry store so they survive restarts.
+	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "default", "s1")
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "default", "s2")
+	_ = store.UpdateConversationStats(ctx, "default:tg:s1", "default", agent.StoredMessage{
+		Cost: 0.05, Model: "test-model", Provider: "mock",
+		TokensPrompt: 50, TokensCompletion: 25,
+	}, 0, 0)
+	_ = store.UpdateConversationStats(ctx, "default:tg:s2", "default", agent.StoredMessage{
+		Cost: 0.10, Model: "test-model", Provider: "mock",
+		TokensPrompt: 100, TokensCompletion: 50,
+	}, 0, 0)
+
 	srv := New(cfg, deps, testLogger())
 
 	rec := httptest.NewRecorder()
@@ -613,6 +625,20 @@ func TestCosts_ReturnsData(t *testing.T) {
 	maxPerSession, _ := costs["max_per_session"].(float64)
 	if maxPerSession != 1.0 {
 		t.Errorf("max_per_session = %v, want 1.0", costs["max_per_session"])
+	}
+
+	// Verify per-agent breakdown is populated.
+	byAgent, ok := costs["by_agent"].([]any)
+	if !ok || len(byAgent) == 0 {
+		t.Fatal("by_agent should contain at least one agent entry")
+	}
+	agentEntry, _ := byAgent[0].(map[string]any)
+	if agentEntry["agent"] != "default" {
+		t.Errorf("by_agent[0].agent = %v, want default", agentEntry["agent"])
+	}
+	agentCost, _ := agentEntry["cost"].(float64)
+	if agentCost < 0.14 {
+		t.Errorf("by_agent[0].cost = %v, want >= 0.15", agentCost)
 	}
 }
 
@@ -1062,7 +1088,7 @@ func TestSessionStats_ReturnsStats(t *testing.T) {
 	})
 
 	store, _ := deps.Memory.(agent.TelemetryStore) //nolint:errcheck // test helper; always SQLiteMemoryStore
-	_ = store.UpdateConversationStats(ctx, "api:s1", agent.StoredMessage{
+	_ = store.UpdateConversationStats(ctx, "api:s1", "api", agent.StoredMessage{
 		Cost: 0.01, Model: "gpt-4", Provider: "openai",
 		TokensPrompt: 100, TokensCompletion: 50,
 	}, 1, 0)

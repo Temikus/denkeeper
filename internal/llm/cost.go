@@ -43,6 +43,7 @@ type CostTracker struct {
 	mu             sync.Mutex
 	sessionCosts   map[string]float64
 	sessionStats   map[string]*SessionStats
+	sessionAgents  map[string]string // session ID → agent name
 	globalCost     float64
 	defaultLimits  SessionLimits
 	agentOverrides map[string]SessionLimits
@@ -56,9 +57,20 @@ func NewCostTracker(defaults SessionLimits, agentOverrides map[string]SessionLim
 	return &CostTracker{
 		sessionCosts:   make(map[string]float64),
 		sessionStats:   make(map[string]*SessionStats),
+		sessionAgents:  make(map[string]string),
 		defaultLimits:  defaults,
 		agentOverrides: agentOverrides,
 	}
+}
+
+// RegisterSessionAgent associates a session ID with an agent name for accurate
+// per-agent cost attribution and limit enforcement. This is needed for
+// channel-based session IDs (e.g. "chan:channelname") where the agent name
+// cannot be parsed from the ID format.
+func (ct *CostTracker) RegisterSessionAgent(sessionID, agent string) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.sessionAgents[sessionID] = agent
 }
 
 // Record adds cost for a session. Returns true if within hard budget.
@@ -107,7 +119,7 @@ func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTok
 // per-agent overrides first, then falling back to defaults.
 // Must be called with ct.mu held.
 func (ct *CostTracker) limitsForSession(sessionID string) SessionLimits {
-	agent := agentFromSessionID(sessionID)
+	agent := ct.agentForSession(sessionID)
 	if override, ok := ct.agentOverrides[agent]; ok {
 		return override
 	}
@@ -183,15 +195,14 @@ func (ct *CostTracker) AllSessionStats() map[string]SessionStats {
 	return out
 }
 
-// AgentCosts returns per-agent aggregated stats. Agent name is extracted
-// from session IDs which have the format "agentname:adapter:externalid".
+// AgentCosts returns per-agent aggregated stats from the in-memory tracker.
 func (ct *CostTracker) AgentCosts() []AgentStats {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
 	agents := make(map[string]*AgentStats)
 	for id, s := range ct.sessionStats {
-		name := agentFromSessionID(id)
+		name := ct.agentForSession(id)
 		a, ok := agents[name]
 		if !ok {
 			a = &AgentStats{Agent: name}
@@ -235,6 +246,17 @@ func (ct *CostTracker) SetDefaultLimits(limits SessionLimits) {
 // Deprecated: use DefaultLimits().Hard.
 func (ct *CostTracker) MaxBudgetPerSession() float64 {
 	return ct.defaultLimits.Hard
+}
+
+// agentForSession returns the agent name for a session ID, preferring the
+// explicitly registered mapping (needed for channel-based IDs like "chan:name")
+// and falling back to parsing the session ID prefix.
+// Must be called with ct.mu held.
+func (ct *CostTracker) agentForSession(sessionID string) string {
+	if name, ok := ct.sessionAgents[sessionID]; ok {
+		return name
+	}
+	return agentFromSessionID(sessionID)
 }
 
 // agentFromSessionID extracts the agent name from a session ID.

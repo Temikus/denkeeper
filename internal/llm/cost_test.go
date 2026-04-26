@@ -172,6 +172,59 @@ func TestCostTracker_AgentFromSessionID(t *testing.T) {
 	}
 }
 
+func TestCostTracker_RegisterSessionAgent(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+
+	// Register agent name for a channel-based session ID.
+	ct.RegisterSessionAgent("chan:work", "assistant")
+	ct.RecordWithTokens("chan:work", 1.0, 100, 50)
+
+	// Also record with a standard session ID.
+	ct.RecordWithTokens("helper:tg:1", 0.5, 50, 25)
+
+	agents := ct.AgentCosts()
+	byName := make(map[string]AgentStats)
+	for _, a := range agents {
+		byName[a.Agent] = a
+	}
+
+	// Channel session should be attributed to "assistant", not "chan".
+	if _, ok := byName["chan"]; ok {
+		t.Error("should not have agent named 'chan'")
+	}
+	assistant, ok := byName["assistant"]
+	if !ok {
+		t.Fatal("assistant not found in agent costs")
+	}
+	if assistant.Cost != 1.0 {
+		t.Errorf("assistant cost = %f, want 1.0", assistant.Cost)
+	}
+
+	// Standard session should still work via ID parsing.
+	helper, ok := byName["helper"]
+	if !ok {
+		t.Fatal("helper not found in agent costs")
+	}
+	if helper.Cost != 0.5 {
+		t.Errorf("helper cost = %f, want 0.5", helper.Cost)
+	}
+}
+
+func TestCostTracker_RegisterSessionAgent_LimitsEnforcement(t *testing.T) {
+	overrides := map[string]SessionLimits{
+		"premium": {Hard: 100.0},
+	}
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, overrides)
+
+	// Channel session mapped to "premium" agent should use premium limits.
+	ct.RegisterSessionAgent("chan:vip", "premium")
+	ct.Record("chan:vip", 50.0)
+
+	if ct.ExceedsHardLimit("chan:vip") {
+		t.Error("chan:vip should use premium limits (100.0), not default (1.0)")
+	}
+}
+
 func TestCostTracker_RecordAlsoPopulatesStats(t *testing.T) {
 	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 

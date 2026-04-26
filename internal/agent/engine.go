@@ -158,27 +158,27 @@ func NewEngine(
 		metric.WithDescription("Tool calls executed"))
 
 	return &Engine{
-		name:               name,
-		router:             router,
-		memory:             memory,
-		sendFunc:           sendFunc,
-		permissions:        permissions,
-		persona:            p,
-		fallbackPrompt:     fallbackPrompt,
-		skills:             skills,
-		tools:              tools,
-		approvals:          approvals,
+		name:                      name,
+		router:                    router,
+		memory:                    memory,
+		sendFunc:                  sendFunc,
+		permissions:               permissions,
+		persona:                   p,
+		fallbackPrompt:            fallbackPrompt,
+		skills:                    skills,
+		tools:                     tools,
+		approvals:                 approvals,
 		maxContextMessages:        defaultMaxContextMessages,
 		maxToolRounds:             defaultMaxToolRounds,
 		approvalTimeout:           defaultApprovalTimeout,
 		supervisorContextMessages: defaultSupervisorContextMessages,
 		supervisorTimeout:         defaultSupervisorTimeout,
-		logger:             logger.With("agent", name),
-		tracer:             tracer,
-		mMessages:          msgs,
-		mSessions:          sessions,
-		mChatDur:           chatDur,
-		mToolCalls:         toolCalls,
+		logger:                    logger.With("agent", name),
+		tracer:                    tracer,
+		mMessages:                 msgs,
+		mSessions:                 sessions,
+		mChatDur:                  chatDur,
+		mToolCalls:                toolCalls,
 	}
 }
 
@@ -632,7 +632,7 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 	}
 
 	// Update conversation stats.
-	if err := store.UpdateConversationStats(ctx, convID, assistMsg, len(toolRecords), toolErrors); err != nil {
+	if err := store.UpdateConversationStats(ctx, convID, e.name, assistMsg, len(toolRecords), toolErrors); err != nil {
 		e.logger.Warn("failed to update conversation stats", "error", err, "conversation", convID)
 	}
 }
@@ -778,6 +778,10 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	ctx = agentctx.WithExternalID(ctx, msg.ExternalID)
 	ctx = agentctx.WithConversationID(ctx, convID)
 	e.setAdapterContext(msg.Adapter, msg.ExternalID, convID)
+
+	// Register agent name for this session so the cost tracker can correctly
+	// attribute costs even for channel-based session IDs (e.g. "chan:name").
+	e.router.CostTracker().RegisterSessionAgent(convID, e.name)
 
 	// Wrap onEvent to accumulate content_delta text. If the context is
 	// cancelled mid-stream, savePartialResponse uses the accumulated content
@@ -1264,8 +1268,8 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 
 // approvalOutcome represents the result of the supervised approval chain.
 type approvalOutcome struct {
-	denied    bool   // true if the tool call was denied
-	denyText  string // denial reason fed to the LLM (only set when denied)
+	denied   bool   // true if the tool call was denied
+	denyText string // denial reason fed to the LLM (only set when denied)
 }
 
 var approvalApproved = approvalOutcome{}

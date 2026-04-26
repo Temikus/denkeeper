@@ -17,16 +17,16 @@ import (
 
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
 type agentConfigUpdateInput struct {
-	Name                *string                  `json:"name,omitempty"`
-	SessionTier         *string                  `json:"session_tier,omitempty"`
-	LLMProvider         *string                  `json:"llm_provider,omitempty"`
-	LLMModel            *string                  `json:"llm_model,omitempty"`
-	Description         *string                  `json:"description,omitempty"`
-	MaxToolRounds       *int                     `json:"max_tool_rounds,omitempty"`
-	BrowserURLAllowlist *[]string                `json:"browser_url_allowlist,omitempty"`
-	Fallbacks           *[]config.FallbackConfig `json:"fallbacks,omitempty"`
-	CostLimitSoft       *float64                 `json:"cost_limit_soft,omitempty"`
-	CostLimitHard       *float64                 `json:"cost_limit_hard,omitempty"`
+	Name                      *string                  `json:"name,omitempty"`
+	SessionTier               *string                  `json:"session_tier,omitempty"`
+	LLMProvider               *string                  `json:"llm_provider,omitempty"`
+	LLMModel                  *string                  `json:"llm_model,omitempty"`
+	Description               *string                  `json:"description,omitempty"`
+	MaxToolRounds             *int                     `json:"max_tool_rounds,omitempty"`
+	BrowserURLAllowlist       *[]string                `json:"browser_url_allowlist,omitempty"`
+	Fallbacks                 *[]config.FallbackConfig `json:"fallbacks,omitempty"`
+	CostLimitSoft             *float64                 `json:"cost_limit_soft,omitempty"`
+	CostLimitHard             *float64                 `json:"cost_limit_hard,omitempty"`
 	Supervisor                *string                  `json:"supervisor,omitempty"` // empty string to clear
 	SupervisorTimeout         *string                  `json:"supervisor_timeout,omitempty"`
 	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`

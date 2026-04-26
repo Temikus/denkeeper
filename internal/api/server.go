@@ -546,6 +546,11 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 // @Param agent query string false "Filter by agent name"
 // @Success 200 {object} map[string]any
 // @Router /costs [get]
+// handleCosts returns cost tracking data with a split data model:
+//   - global_cost, session_count, by_agent: from persistent SQLite (conversation_stats)
+//     so they survive server restarts. Pre-migration rows with empty agent are excluded.
+//   - session_costs, session_stats: from the in-memory CostTracker for current-process
+//     session detail and drill-down. These reset on restart.
 func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	sessions := s.deps.CostTracker.AllSessionStats()
 	agentFilter := r.URL.Query().Get("agent")
@@ -558,16 +563,30 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	byAgent := s.deps.CostTracker.AgentCosts()
-	if agentFilter != "" {
-		var one []llm.AgentStats
-		for _, a := range byAgent {
-			if a.Agent == agentFilter {
-				one = append(one, a)
-				break
-			}
+	// Use persistent per-agent data from SQLite so costs survive restarts.
+	var byAgent []agent.AgentCostSummary
+	var globalCost float64
+	var sessionCount int
+	if store, ok := s.deps.Memory.(agent.TelemetryStore); ok {
+		var err error
+		byAgent, err = store.GetCostsByAgent(r.Context())
+		if err != nil {
+			s.logger.Error("getting costs by agent", "error", err)
 		}
-		byAgent = one
+		if agentFilter != "" && byAgent != nil {
+			var one []agent.AgentCostSummary
+			for _, a := range byAgent {
+				if a.Agent == agentFilter {
+					one = append(one, a)
+					break
+				}
+			}
+			byAgent = one
+		}
+		for _, a := range byAgent {
+			globalCost += a.Cost
+			sessionCount += a.Sessions
+		}
 	}
 
 	// Build pricing config summary.
@@ -582,13 +601,13 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 
 	limits := s.deps.CostTracker.DefaultLimits()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"global_cost":     s.deps.CostTracker.GlobalCost(),
+		"global_cost":     globalCost,
 		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(), // deprecated, kept for compat
 		"cost_limits": map[string]float64{
 			"soft": limits.Soft,
 			"hard": limits.Hard,
 		},
-		"session_count":  len(filtered),
+		"session_count":  sessionCount,
 		"session_costs":  s.deps.CostTracker.AllSessionCosts(),
 		"session_stats":  filtered,
 		"by_agent":       byAgent,
