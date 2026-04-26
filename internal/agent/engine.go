@@ -328,12 +328,11 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 	return d
 }
 
-// roundNudgeRetry is the synthetic round number used for the nudge-retry LLM
-// call in recoverEmptyToolResponse — it sits outside the normal 0..N tool-round
-// sequence and is also flagged with nudge_retry: true in the audit detail.
-const roundNudgeRetry = -1
-
-// llmAuditOpts carries optional fields for emitLLMAudit.
+// llmAuditOpts carries optional fields for emitLLMAudit. Exactly one of
+// {round, nudgeRetry=true} should be set — round labels a numbered LLM
+// round-trip (0 = pre-loop, 1..N = after tool round N), while nudgeRetry
+// labels the synthetic re-prompt in recoverEmptyToolResponse and emits no
+// round field so audit queries that filter on round see only real rounds.
 type llmAuditOpts struct {
 	round      int
 	nudgeRetry bool
@@ -342,8 +341,7 @@ type llmAuditOpts struct {
 // emitLLMAudit emits a single audit event for one LLM round-trip. On the
 // success path resp must be non-nil; on the error path errMsg must be non-empty
 // and resp may be nil (a non-nil resp carries any partial content captured
-// before the failure). The round number lines up with tool_call audit events:
-// 0 = pre-loop call, 1..N = call after tool round N, roundNudgeRetry = nudge retry.
+// before the failure).
 func (e *Engine) emitLLMAudit(ctx context.Context, convID string, resp *llm.ChatResponse, errMsg string, opts llmAuditOpts) {
 	if e.auditor == nil {
 		return
@@ -365,9 +363,10 @@ func (e *Engine) emitLLMAudit(ctx context.Context, convID string, resp *llm.Chat
 		detail = buildLLMAuditDetail(resp, provider)
 		content = resp.Content
 	}
-	detail["round"] = opts.round
 	if opts.nudgeRetry {
 		detail["nudge_retry"] = true
+	} else {
+		detail["round"] = opts.round
 	}
 	fallback := "complete"
 	if status == audit.StatusError {
@@ -1243,10 +1242,10 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 	})
 	nudgeResp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
-		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: roundNudgeRetry, nudgeRetry: true})
+		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{nudgeRetry: true})
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
 	}
-	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{round: roundNudgeRetry, nudgeRetry: true})
+	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{nudgeRetry: true})
 	return nudgeResp, llmMessages, nil
 }
 
