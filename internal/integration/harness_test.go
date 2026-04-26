@@ -12,8 +12,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
@@ -106,6 +110,8 @@ type Harness struct {
 	auditorBE   *audit.BufferedEmitter // concrete type for Flush/Close
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
+	Sessions    *api.SessionManager // always wired by the harness
+	KeyStore    *api.KeyStore       // nil unless WithKeyStore is set
 	APIKey      string
 	configPath  string
 	config      *config.Config
@@ -153,6 +159,31 @@ type HarnessOpts struct {
 	// WithAgentFactory, when true, populates deps.AgentFactory so that
 	// agent CRUD endpoints can build engines at runtime.
 	WithAgentFactory bool
+
+	// PasswordHash sets the bcrypt password hash for /auth/login. The harness
+	// always wires a SessionManager so session-based auth and cookie-bearing
+	// requests work without extra opt-in.
+	PasswordHash string
+
+	// WithKeyStore, when true, constructs an in-memory KeyStore so that
+	// /api/v1/keys CRUD endpoints are available.
+	WithKeyStore bool
+
+	// ModelLister, when non-nil, populates deps.ModelLister so /api/v1/models
+	// returns the values produced by this function instead of 503.
+	ModelLister func(ctx context.Context) []string
+
+	// ModelDetailLister, when non-nil, populates deps.ModelDetailLister so
+	// /api/v1/models/details returns the values produced by this function.
+	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo
+
+	// ReloadFunc, when non-nil, populates deps.ReloadFunc so that
+	// POST /api/v1/server/reload invokes this callback instead of returning 503.
+	ReloadFunc func() error
+
+	// RestartFunc, when non-nil, populates deps.RestartFunc so that
+	// POST /api/v1/server/restart invokes this callback instead of returning 503.
+	RestartFunc func() error
 }
 
 type agentSetup struct {
@@ -352,17 +383,49 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		lifecycleMgr = tool.NewLifecycleManager(toolMgr, opts.ConfigPath, 0, logger)
 	}
 
+	// Session manager: always wired so cookie-based auth, /auth/login, and
+	// /auth/sessions work without per-test opt-in. Uses an in-memory SQLite
+	// store so sessions are server-tracked.
+	hexKey := strings.Repeat("0", 64) // 32 bytes (AES-256), test-only fixed key.
+	sessionMgr, err := api.NewSessionManager(hexKey, 24*time.Hour, false)
+	if err != nil {
+		t.Fatalf("creating session manager: %v", err)
+	}
+	sessionStore, err := api.NewInMemorySessionStore()
+	if err != nil {
+		t.Fatalf("creating session store: %v", err)
+	}
+	t.Cleanup(func() { _ = sessionStore.Close() })
+	sessionMgr.Store = sessionStore
+
+	// API key store: enabled by WithKeyStore.
+	var keyStore *api.KeyStore
+	if opts.WithKeyStore {
+		ks, err := api.NewInMemoryKeyStore()
+		if err != nil {
+			t.Fatalf("creating key store: %v", err)
+		}
+		keyStore = ks
+	}
+
 	deps := api.Deps{
-		Dispatcher:   dispatcher,
-		Scheduler:    sched,
-		CostTracker:  costTracker,
-		Memory:       mem,
-		Approvals:    approvalMgr,
-		KVStore:      kvStore,
-		AuditStore:   auditStore,
-		Auditor:      auditor,
-		ConfigPath:   opts.ConfigPath,
-		LifecycleMgr: lifecycleMgr,
+		Dispatcher:        dispatcher,
+		Scheduler:         sched,
+		CostTracker:       costTracker,
+		Memory:            mem,
+		Approvals:         approvalMgr,
+		KVStore:           kvStore,
+		AuditStore:        auditStore,
+		Auditor:           auditor,
+		ConfigPath:        opts.ConfigPath,
+		LifecycleMgr:      lifecycleMgr,
+		Sessions:          sessionMgr,
+		KeyStore:          keyStore,
+		PasswordHash:      opts.PasswordHash,
+		ModelLister:       opts.ModelLister,
+		ModelDetailLister: opts.ModelDetailLister,
+		ReloadFunc:        opts.ReloadFunc,
+		RestartFunc:       opts.RestartFunc,
 		Config: &config.Config{
 			Agents: agentConfigs,
 		},
@@ -412,6 +475,8 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		auditorBE:   auditor,
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
+		Sessions:    sessionMgr,
+		KeyStore:    keyStore,
 		APIKey:      apiKey,
 		configPath:  opts.ConfigPath,
 		config:      deps.Config,
@@ -453,6 +518,72 @@ func DecodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 func (h *Harness) FlushAudit(t *testing.T) {
 	t.Helper()
 	h.auditorBE.Flush()
+}
+
+// bcryptHashFor returns a bcrypt.MinCost hash of password. Test-only.
+func bcryptHashFor(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hashing password: %v", err)
+	}
+	return string(hash)
+}
+
+// SessionLogin performs POST /auth/login with the given password and returns
+// the dk_session cookie set by the response. Fails the test if login does not
+// return 200 or the cookie is missing.
+func (h *Harness) SessionLogin(t *testing.T, password string) *http.Cookie {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"password": password})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := h.Do(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "dk_session" {
+			return c
+		}
+	}
+	t.Fatalf("login: dk_session cookie not set")
+	return nil
+}
+
+// CookieRequest creates a request authenticated with a session cookie instead
+// of a bearer token.
+func (h *Harness) CookieRequest(method, path string, body any, cookie *http.Cookie) *http.Request {
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, r)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+// BearerRequest creates a request authenticated with the given API key string.
+// Useful for testing freshly-created keys (use h.AuthedRequest for the harness's
+// bootstrap key).
+func (h *Harness) BearerRequest(method, path string, body any, key string) *http.Request {
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, r)
+	req.Header.Set("Authorization", "Bearer "+key)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
 }
 
 func boolPtr(b bool) *bool { return &b }

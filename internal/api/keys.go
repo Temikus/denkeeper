@@ -72,6 +72,9 @@ func NewInMemoryKeyStore() (*KeyStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("api keys: open in-memory db: %w", err)
 	}
+	// SQLite ":memory:" databases are scoped to a single connection. Cap the
+	// pool at one so all queries hit the same in-memory database.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(keysSchema); err != nil {
 		return nil, fmt.Errorf("api keys: apply schema: %w", err)
 	}

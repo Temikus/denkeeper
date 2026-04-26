@@ -73,6 +73,9 @@ func NewInMemorySessionStore() (*SessionStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening in-memory session database: %w", err)
 	}
+	// SQLite ":memory:" databases are scoped to a single connection. Cap the
+	// pool at one so all queries hit the same in-memory database.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(sessionSchema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initializing session schema: %w", err)
