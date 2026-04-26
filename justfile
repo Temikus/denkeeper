@@ -157,8 +157,7 @@ build-full: build-ui build
 
 # Generate OpenAPI spec from Go annotations
 openapi:
-    @which swag > /dev/null 2>&1 || { echo "Installing swag CLI..."; go install github.com/swaggo/swag/cmd/swag@latest; }
-    swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
+    mise x -- swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
     rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
 
 # Run the Vite dev server (proxies /api to localhost:8080)

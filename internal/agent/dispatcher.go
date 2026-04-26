@@ -1286,6 +1286,40 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 		return
 	}
 
+	// Supervisor decisions are informational — no buttons needed.
+	switch evt.ApprovalStatus {
+	case "supervisor_approved":
+		if debug {
+			_ = a.Send(ctx, adapter.OutgoingMessage{
+				Text:       fmt.Sprintf("Tool **%s** approved by supervisor", evt.Tool),
+				ExternalID: msg.ExternalID,
+				Adapter:    msg.Adapter,
+			})
+		} else if alog != nil {
+			alog.autoApproved(ctx, evt.Tool+" (supervisor)")
+		}
+		return
+	case "supervisor_denied":
+		text := fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text)
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Text:       text,
+			ExternalID: msg.ExternalID,
+			Adapter:    msg.Adapter,
+		})
+		return
+	case "supervisor_escalated":
+		if debug {
+			_ = a.Send(ctx, adapter.OutgoingMessage{
+				Text:       fmt.Sprintf("Supervisor escalated tool **%s** — awaiting your review", evt.Tool),
+				ExternalID: msg.ExternalID,
+				Adapter:    msg.Adapter,
+			})
+		}
+		// Don't return — the subsequent awaitToolApproval will emit another
+		// tool_approval event with buttons for the human to act on.
+		return
+	}
+
 	if debug {
 		_ = a.Send(ctx, adapter.OutgoingMessage{
 			Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),

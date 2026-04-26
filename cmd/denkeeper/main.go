@@ -979,6 +979,22 @@ func buildDispatcherWithChannels(
 }
 
 // buildAllAgents creates an Engine for each configured agent and collects their bindings.
+// wireSupervisors links supervisor engines to supervised agents (second pass
+// after all engines are built).
+func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*agent.Engine, logger *slog.Logger) {
+	for _, ac := range agents {
+		if ac.Supervisor == "" {
+			continue
+		}
+		sup, ok := engines[ac.Supervisor]
+		if !ok {
+			continue // config validation catches this earlier
+		}
+		engines[ac.Name].SetSupervisor(sup)
+		logger.Info("supervisor wired", "agent", ac.Name, "supervisor", ac.Supervisor)
+	}
+}
+
 func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, abc agentBuildCtx) (map[string]*agent.Engine, []agent.Binding, error) {
 	engines := make(map[string]*agent.Engine, len(agents))
 	var bindings []agent.Binding
@@ -1063,6 +1079,13 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	e.SetAuditor(abc.auditor)
 	approvalTimeout, _ := time.ParseDuration(abc.cfg.Session.ApprovalTimeout) // validated by config.Parse
 	e.SetApprovalConfig(approvalTimeout, abc.cfg.Session.ApprovalRetries)
+
+	if ac.SupervisorTimeout != "" {
+		supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
+		e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
+	} else if ac.SupervisorContextMessages > 0 {
+		e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
+	}
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -1443,6 +1466,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+
+	wireSupervisors(cfg.Agents, engines, logger)
 
 	// Re-create dispatcher with the fully wired engines, bindings, and channels.
 	dispatcher = buildDispatcherWithChannels(ctx, cfg, engines, bindings, adapters, st.memory, logger)

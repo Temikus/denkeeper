@@ -423,14 +423,17 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		SkillCount     int      `json:"skill_count"`
 		HasTools       bool     `json:"has_tools"`
 		Adapters       []string `json:"adapters,omitempty"`
+		Supervisor     string   `json:"supervisor,omitempty"`
 	}
 
 	names := s.deps.Dispatcher.Agents()
 	agents := make([]agentInfo, 0, len(names))
-	// Look up configured adapter bindings for each agent.
+	// Look up configured adapter bindings and supervisor for each agent.
 	bindingMap := make(map[string][]string)
+	supervisorMap := make(map[string]string)
 	for _, ac := range s.deps.Config.Agents {
 		bindingMap[ac.Name] = ac.Adapters
+		supervisorMap[ac.Name] = ac.Supervisor
 	}
 	for _, name := range names {
 		e := s.deps.Dispatcher.Agent(name)
@@ -446,6 +449,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 			SkillCount:     len(e.Skills()),
 			HasTools:       e.HasTools(),
 			Adapters:       bindingMap[name],
+			Supervisor:     supervisorMap[name],
 		})
 	}
 	writeJSON(w, http.StatusOK, agents)
@@ -491,12 +495,14 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var fallbacks []config.FallbackConfig
 	var costLimitSoft *float64
 	var costLimitHard *float64
+	var supervisor string
 	for _, ac := range s.deps.Config.Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
 			fallbacks = ac.Fallbacks
 			costLimitSoft = ac.CostLimitSoft
 			costLimitHard = ac.CostLimitHard
+			supervisor = ac.Supervisor
 			break
 		}
 	}
@@ -524,6 +530,9 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if costLimitHard != nil {
 		resp["cost_limit_hard"] = *costLimitHard
+	}
+	if supervisor != "" {
+		resp["supervisor"] = supervisor
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
@@ -26,11 +27,14 @@ type agentConfigUpdateInput struct {
 	Fallbacks           *[]config.FallbackConfig `json:"fallbacks,omitempty"`
 	CostLimitSoft       *float64                 `json:"cost_limit_soft,omitempty"`
 	CostLimitHard       *float64                 `json:"cost_limit_hard,omitempty"`
+	Supervisor                *string                  `json:"supervisor,omitempty"` // empty string to clear
+	SupervisorTimeout         *string                  `json:"supervisor_timeout,omitempty"`
+	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`
 }
 
 // handleAgentConfigUpdate godoc
 // @Summary Update agent configuration
-// @Description Mutates agent settings: tier, provider, model, cost limits, fallbacks, etc.
+// @Description Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, etc.
 // @Tags agents
 // @Accept json
 // @Produce json
@@ -82,6 +86,12 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Validate and apply supervisor changes.
+	if errMsg := s.applySupervisorChanges(name, e, &input); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
+		return
+	}
+
 	// Sync per-agent cost limits to the live CostTracker.
 	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
 		s.syncAgentCostLimits(name, &input)
@@ -113,6 +123,16 @@ func validateAgentInput(input *agentConfigUpdateInput) string {
 	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
 		return "cost_limit_hard must be >= 0"
 	}
+	if input.SupervisorTimeout != nil && *input.SupervisorTimeout != "" {
+		if _, err := time.ParseDuration(*input.SupervisorTimeout); err != nil {
+			return "invalid supervisor_timeout: " + err.Error()
+		}
+	}
+	if input.SupervisorContextMessages != nil && *input.SupervisorContextMessages < 0 {
+		return "supervisor_context_messages must be >= 0"
+	}
+	// Supervisor validation is deferred to handleAgentConfigUpdate where we
+	// have access to the dispatcher and can verify the supervisor agent exists.
 	return ""
 }
 
@@ -215,6 +235,16 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 		return
 	}
 
+	changes := buildAgentConfigChanges(input)
+	if len(changes) > 0 {
+		if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
+			s.logger.Warn("failed to persist agent config", "agent", name, "error", err)
+		}
+	}
+}
+
+// buildAgentConfigChanges converts non-nil input fields to a TOML change map.
+func buildAgentConfigChanges(input *agentConfigUpdateInput) map[string]any {
 	changes := make(map[string]any)
 	if input.SessionTier != nil {
 		changes["session_tier"] = *input.SessionTier
@@ -247,11 +277,16 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 	if input.CostLimitHard != nil {
 		changes["cost_limit_hard"] = *input.CostLimitHard
 	}
-	if len(changes) > 0 {
-		if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
-			s.logger.Warn("failed to persist agent config", "agent", name, "error", err)
-		}
+	if input.Supervisor != nil {
+		changes["supervisor"] = *input.Supervisor
 	}
+	if input.SupervisorTimeout != nil {
+		changes["supervisor_timeout"] = *input.SupervisorTimeout
+	}
+	if input.SupervisorContextMessages != nil {
+		changes["supervisor_context_messages"] = *input.SupervisorContextMessages
+	}
+	return changes
 }
 
 // updateInMemoryAgentConfig applies input fields to the in-memory config.
@@ -281,6 +316,55 @@ func (s *Server) renameInMemoryAgent(oldName, newName string) {
 	}
 }
 
+// applySupervisorChanges validates and applies all supervisor-related changes
+// (reference, timeout, context messages). Returns an error message or "".
+func (s *Server) applySupervisorChanges(name string, e *agent.Engine, input *agentConfigUpdateInput) string {
+	if input.Supervisor != nil {
+		if errMsg := s.applySupervisor(name, e, *input.Supervisor); errMsg != "" {
+			return errMsg
+		}
+	}
+	if input.SupervisorTimeout != nil || input.SupervisorContextMessages != nil {
+		var timeout time.Duration
+		var ctxMsgs int
+		if input.SupervisorTimeout != nil {
+			timeout, _ = time.ParseDuration(*input.SupervisorTimeout) // validated earlier
+		}
+		if input.SupervisorContextMessages != nil {
+			ctxMsgs = *input.SupervisorContextMessages
+		}
+		e.SetSupervisorConfig(timeout, ctxMsgs)
+	}
+	return ""
+}
+
+// applySupervisor validates and wires (or clears) the supervisor reference.
+// Returns an error message or empty string on success.
+func (s *Server) applySupervisor(name string, e *agent.Engine, supervisorName string) string {
+	if supervisorName == "" {
+		// Clear supervisor.
+		e.SetSupervisor(nil)
+		return ""
+	}
+	if supervisorName == name {
+		return "agent cannot supervise itself"
+	}
+	sup := s.deps.Dispatcher.Agent(supervisorName)
+	if sup == nil {
+		return "supervisor agent not found: " + supervisorName
+	}
+	// Validate supervisor agent's tier is not supervised (would deadlock).
+	if sup.PermissionTier() == "supervised" {
+		return "supervisor agent must not use supervised tier"
+	}
+	// Validate no chaining — supervisor must not have its own supervisor.
+	if sup.Supervisor() != nil {
+		return "supervisor chaining is not supported: " + supervisorName + " already has a supervisor"
+	}
+	e.SetSupervisor(sup)
+	return ""
+}
+
 func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
 	if input.SessionTier != nil {
 		ac.SessionTier = *input.SessionTier
@@ -308,6 +392,15 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	}
 	if input.CostLimitHard != nil {
 		ac.CostLimitHard = input.CostLimitHard
+	}
+	if input.Supervisor != nil {
+		ac.Supervisor = *input.Supervisor
+	}
+	if input.SupervisorTimeout != nil {
+		ac.SupervisorTimeout = *input.SupervisorTimeout
+	}
+	if input.SupervisorContextMessages != nil {
+		ac.SupervisorContextMessages = *input.SupervisorContextMessages
 	}
 }
 
@@ -446,6 +539,16 @@ func (s *Server) agentDependencyError(name string) string {
 		}
 		if len(blockingSchedules) > 0 {
 			return "agent is referenced by schedules: " + strings.Join(blockingSchedules, ", ")
+		}
+
+		var blockingSupervisors []string
+		for _, ag := range s.deps.Config.Agents {
+			if ag.Supervisor == name {
+				blockingSupervisors = append(blockingSupervisors, ag.Name)
+			}
+		}
+		if len(blockingSupervisors) > 0 {
+			return "agent is used as supervisor by: " + strings.Join(blockingSupervisors, ", ")
 		}
 	}
 	return ""

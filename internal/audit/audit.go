@@ -16,8 +16,9 @@ const (
 	CategoryLLM      = "llm"
 	CategoryConfig   = "config"
 	CategorySession  = "session"
-	CategoryMCP      = "mcp"
-	CategorySafety   = "safety"
+	CategoryMCP        = "mcp"
+	CategorySafety     = "safety"
+	CategorySupervisor = "supervisor"
 )
 
 // Event statuses.

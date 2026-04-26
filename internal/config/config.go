@@ -425,6 +425,20 @@ type AgentInstanceConfig struct {
 	// Fallbacks overrides the global [[llm.fallback]] rules for this agent.
 	// When non-empty, these rules replace (not merge with) the global fallbacks.
 	Fallbacks []FallbackConfig `toml:"fallback"`
+
+	// Supervisor names another agent that reviews tool calls before execution.
+	// Only meaningful when session_tier = "supervised". The supervisor agent
+	// must exist, must not itself require supervision (no cycles), and should
+	// use session_tier = "autonomous".
+	Supervisor string `toml:"supervisor"`
+
+	// SupervisorTimeout overrides the default timeout (15s) for the
+	// supervisor's LLM review call. On timeout, escalates to human.
+	SupervisorTimeout string `toml:"supervisor_timeout"`
+
+	// SupervisorContextMessages overrides the default number (5) of recent
+	// conversation messages included in the supervisor's review prompt.
+	SupervisorContextMessages int `toml:"supervisor_context_messages"`
 }
 
 // ChannelConfig defines a named routing endpoint that binds adapter chats to an
@@ -1659,17 +1673,8 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 			return nil, fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
 		}
 
-		for _, binding := range a.Adapters {
-			if binding == "" {
-				return nil, fmt.Errorf("config: agent %q: empty adapter binding", a.Name)
-			}
-			// Check for conflicting wildcard bindings (e.g. two agents both claim "telegram").
-			if !strings.Contains(binding, ":") {
-				if prev, ok := wildcards[binding]; ok {
-					return nil, fmt.Errorf("config: agent %q: wildcard binding %q conflicts with agent %q", a.Name, binding, prev)
-				}
-				wildcards[binding] = a.Name
-			}
+		if err := validateAgentBindings(a, wildcards); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1677,7 +1682,65 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 		return nil, fmt.Errorf("config: exactly one agent must be named \"default\"")
 	}
 
+	if err := validateSupervisorRefs(agents, names); err != nil {
+		return nil, err
+	}
+
 	return names, nil
+}
+
+// validateAgentBindings checks adapter bindings for a single agent.
+func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) error {
+	for _, binding := range a.Adapters {
+		if binding == "" {
+			return fmt.Errorf("config: agent %q: empty adapter binding", a.Name)
+		}
+		if !strings.Contains(binding, ":") {
+			if prev, ok := wildcards[binding]; ok {
+				return fmt.Errorf("config: agent %q: wildcard binding %q conflicts with agent %q", a.Name, binding, prev)
+			}
+			wildcards[binding] = a.Name
+		}
+	}
+	return nil
+}
+
+// validateSupervisorRefs checks supervisor field references across agents.
+func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool) error {
+	agentByName := make(map[string]AgentInstanceConfig, len(agents))
+	for _, a := range agents {
+		agentByName[a.Name] = a
+	}
+	for _, a := range agents {
+		if a.Supervisor == "" {
+			continue
+		}
+		effectiveTier := a.SessionTier
+		if effectiveTier == "" {
+			effectiveTier = "autonomous" // default tier
+		}
+		if effectiveTier != "supervised" {
+			return fmt.Errorf("config: agent %q: supervisor is only meaningful when session_tier = \"supervised\"", a.Name)
+		}
+		if !names[a.Supervisor] {
+			return fmt.Errorf("config: agent %q: supervisor %q not found", a.Name, a.Supervisor)
+		}
+		if a.Supervisor == a.Name {
+			return fmt.Errorf("config: agent %q: cannot supervise itself", a.Name)
+		}
+		sup := agentByName[a.Supervisor]
+		if sup.Supervisor != "" {
+			return fmt.Errorf("config: agent %q: supervisor %q itself has a supervisor — chaining is not supported", a.Name, a.Supervisor)
+		}
+		supTier := sup.SessionTier
+		if supTier == "" {
+			supTier = "autonomous"
+		}
+		if supTier == "supervised" {
+			return fmt.Errorf("config: agent %q: supervisor %q must not use session_tier \"supervised\" (would deadlock)", a.Name, a.Supervisor)
+		}
+	}
+	return nil
 }
 
 // validateAgentRouting validates agents, channels, and schedules together,

@@ -217,7 +217,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mutates agent settings: tier, provider, model, cost limits, fallbacks, etc.",
+                "description": "Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, etc.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6351,6 +6351,16 @@
                     "type": "string"
                 },
                 "session_tier": {
+                    "type": "string"
+                },
+                "supervisor": {
+                    "description": "empty string to clear",
+                    "type": "string"
+                },
+                "supervisor_context_messages": {
+                    "type": "integer"
+                },
+                "supervisor_timeout": {
                     "type": "string"
                 }
             }

@@ -213,6 +213,7 @@
   let configCostSoft = $state('')
   let configCostHard = $state('')
   let configAllowlist = $state('')
+  let configSupervisor = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
 
@@ -228,6 +229,7 @@
     configMaxToolRounds = d.max_tool_rounds ?? 50
     configCostSoft = d.cost_limit_soft ?? ''
     configCostHard = d.cost_limit_hard ?? ''
+    configSupervisor = d.supervisor || ''
     configAllowlist = ''
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
@@ -268,6 +270,7 @@
         const hard = configCostHard === '' ? null : parseFloat(configCostHard)
         if (soft !== (detail.cost_limit_soft ?? null)) data.cost_limit_soft = soft
         if (hard !== (detail.cost_limit_hard ?? null)) data.cost_limit_hard = hard
+        if (configSupervisor !== (detail.supervisor || '')) data.supervisor = configSupervisor
       }
       if (Object.keys(data).length) {
         await api.updateAgentConfig(detail.name, data)
@@ -541,7 +544,7 @@
             {/if}
           </div>
         {/if}
-        <div class="meta">{a.permission_tier} · {a.skill_count} skills</div>
+        <div class="meta">{a.permission_tier}{#if a.supervisor} (via {a.supervisor}){/if} · {a.skill_count} skills{#if agents.some(other => other.supervisor === a.name)} · <span class="supervisor-role">supervisor</span>{/if}</div>
       </div>
     {/each}
     {#if agents.length === 0 && !error}
@@ -685,6 +688,16 @@
                 <option value="supervised">Supervised</option>
                 <option value="restricted">Restricted</option>
               </select>
+              {#if configTier === 'supervised'}
+                <label class="config-label" for="cfg-supervisor">Supervisor Agent</label>
+                <select id="cfg-supervisor" class="config-input" bind:value={configSupervisor}>
+                  <option value="">None (manual approval only)</option>
+                  {#each agents.filter(a => a.name !== detail?.name && a.permission_tier !== 'supervised') as a}
+                    <option value={a.name}>{a.display_name || a.name}</option>
+                  {/each}
+                </select>
+                <span class="hint">{configSupervisor ? 'Tool calls are reviewed by this agent before reaching you.' : 'All tool calls require manual approval. Select a supervisor to automate reviews.'}</span>
+              {/if}
               <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
               <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />
               <span class="hint">Maximum tool-call rounds per message before the agent stops. Default: 50.</span>
@@ -947,6 +960,7 @@
   .name-action-btn:hover { color: var(--text); }
   .rename-hint { font-size: 10px; color: var(--text-muted); }
   .meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .supervisor-role { color: var(--accent); font-weight: 500; }
   .detail { flex: 1; min-width: 0; }
 
   /* Breadcrumb */

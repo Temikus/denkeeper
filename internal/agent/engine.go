@@ -31,6 +31,8 @@ const defaultMaxToolRounds = 50
 const defaultRepeatDetectionThreshold = 3 // consecutive identical tool calls before abort
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
+const defaultSupervisorContextMessages = 5
+const defaultSupervisorTimeout = 15 * time.Second
 const maxConversationIDLen = 256
 
 // toolCallKey identifies a unique tool invocation by name and arguments.
@@ -106,6 +108,19 @@ type Engine struct {
 
 	logger *slog.Logger
 
+	// supervisor holds a reference to the supervisor Engine that reviews tool
+	// calls before they reach the human approval flow. Set via SetSupervisor
+	// after all engines are constructed. nil = no supervisor.
+	supervisor *Engine
+
+	// supervisorContextMessages controls how many recent conversation messages
+	// the supervisor sees when reviewing a tool call. Default 5.
+	supervisorContextMessages int
+
+	// supervisorTimeout is the maximum time to wait for the supervisor's LLM
+	// review call. Default 15s.
+	supervisorTimeout time.Duration
+
 	// Audit emitter (nil-safe: NopEmitter used when nil).
 	auditor audit.Emitter
 
@@ -153,9 +168,11 @@ func NewEngine(
 		skills:             skills,
 		tools:              tools,
 		approvals:          approvals,
-		maxContextMessages: defaultMaxContextMessages,
-		maxToolRounds:      defaultMaxToolRounds,
-		approvalTimeout:    defaultApprovalTimeout,
+		maxContextMessages:        defaultMaxContextMessages,
+		maxToolRounds:             defaultMaxToolRounds,
+		approvalTimeout:           defaultApprovalTimeout,
+		supervisorContextMessages: defaultSupervisorContextMessages,
+		supervisorTimeout:         defaultSupervisorTimeout,
 		logger:             logger.With("agent", name),
 		tracer:             tracer,
 		mMessages:          msgs,
@@ -193,6 +210,30 @@ func (e *Engine) SetApprovalConfig(timeout time.Duration, retries int) {
 		e.approvalTimeout = timeout
 	}
 	e.approvalRetries = retries
+}
+
+// SetSupervisor configures a supervisor engine that reviews tool calls before
+// they reach the human approval flow. Call this after all engines are constructed.
+func (e *Engine) SetSupervisor(s *Engine) {
+	e.supervisor = s
+}
+
+// Supervisor returns the supervisor engine, if any.
+func (e *Engine) Supervisor() *Engine {
+	return e.supervisor
+}
+
+// SetSupervisorConfig configures supervisor review parameters.
+// Zero values are ignored (the existing default is kept): pass 0 for timeout
+// to keep the default 15s, pass 0 for contextMessages to keep the default 5.
+// Call this after NewEngine, before the engine starts handling messages.
+func (e *Engine) SetSupervisorConfig(timeout time.Duration, contextMessages int) {
+	if timeout > 0 {
+		e.supervisorTimeout = timeout
+	}
+	if contextMessages > 0 {
+		e.supervisorContextMessages = contextMessages
+	}
 }
 
 // SetSkillDirs configures the directories used for skill creation and hot-reload.
@@ -625,7 +666,8 @@ type ChatEvent struct {
 	ApprovalCallback string `json:"approval_callback,omitempty"` // "appr:{id}" prefix
 
 	// ApprovalStatus distinguishes pending approvals from auto-approved ones.
-	// Values: "" (pending, needs user action), "auto_approved" (rule matched).
+	// Values: "" (pending, needs user action), "auto_approved" (rule matched),
+	// "supervisor_approved", "supervisor_denied", "supervisor_escalated".
 	ApprovalStatus string `json:"approval_status,omitempty"`
 }
 
@@ -1139,26 +1181,13 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		record.ServerName = e.tools.ToolServer(tc.Function.Name)
 	}
 
-	// Supervised tier: check auto-approve rules first, then request human approval.
+	// Supervised tier: check auto-approve rules first, then supervisor review,
+	// then fall through to human approval.
 	if supervised {
-		if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
-			e.logger.Info("tool auto-approved", "tool", tc.Function.Name, "scope", scope)
-			if onEvent != nil {
-				onEvent(ChatEvent{
-					Type:           "tool_approval",
-					Tool:           tc.Function.Name,
-					Round:          round,
-					Text:           fmt.Sprintf("Auto-approved (%s)", scope),
-					ApprovalStatus: "auto_approved",
-				})
-			}
-		} else {
-			result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
-			if !approved {
-				record.Success = false
-				record.ErrorMsg = "denied"
-				return result, record
-			}
+		if outcome := e.resolveSupervisedApproval(ctx, tc, round, convID, onEvent); outcome.denied {
+			record.Success = false
+			record.ErrorMsg = "denied"
+			return outcome.denyText, record
 		}
 	}
 
@@ -1231,6 +1260,106 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(evt)
 	}
 	return result, record
+}
+
+// approvalOutcome represents the result of the supervised approval chain.
+type approvalOutcome struct {
+	denied    bool   // true if the tool call was denied
+	denyText  string // denial reason fed to the LLM (only set when denied)
+}
+
+var approvalApproved = approvalOutcome{}
+
+func approvalDenied(text string) approvalOutcome {
+	return approvalOutcome{denied: true, denyText: text}
+}
+
+// resolveSupervisedApproval runs the three-stage approval chain for supervised
+// tool calls: auto-approve rules → supervisor review → human approval.
+func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) approvalOutcome {
+	// Stage 1: Auto-approve rules.
+	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
+		e.logger.Info("tool auto-approved", "tool", tc.Function.Name, "scope", scope)
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           fmt.Sprintf("Auto-approved (%s)", scope),
+				ApprovalStatus: "auto_approved",
+			})
+		}
+		return approvalApproved
+	}
+
+	// Stage 2: Supervisor agent review.
+	if e.supervisor != nil {
+		return e.resolveSupervisorReview(ctx, tc, round, convID, onEvent)
+	}
+
+	// Stage 3: Human approval (no supervisor configured).
+	result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
+	if !approved {
+		return approvalDenied(result)
+	}
+	return approvalApproved
+}
+
+// resolveSupervisorReview handles supervisor agent review of a tool call.
+// On ESCALATE or error, falls through to human approval.
+func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) approvalOutcome {
+	decision, reason, supErr := e.supervisorReview(ctx, tc, convID)
+	if supErr != nil {
+		e.logger.Warn("supervisor review failed, falling through to human approval",
+			"tool", tc.Function.Name, "error", supErr)
+		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
+		if !approved {
+			return approvalDenied(result)
+		}
+		return approvalApproved
+	}
+
+	switch decision {
+	case supervisorApprove:
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           fmt.Sprintf("Approved by supervisor: %s", reason),
+				ApprovalStatus: "supervisor_approved",
+			})
+		}
+		return approvalApproved
+
+	case supervisorDeny:
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           fmt.Sprintf("Denied by supervisor: %s", reason),
+				ApprovalStatus: "supervisor_denied",
+			})
+		}
+		return approvalDenied(fmt.Sprintf("Tool call denied by supervisor: %s", reason))
+
+	default: // supervisorEscalate
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           fmt.Sprintf("Supervisor escalated — awaiting your review: %s", reason),
+				ApprovalStatus: "supervisor_escalated",
+			})
+		}
+		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
+		if !approved {
+			return approvalDenied(result)
+		}
+		return approvalApproved
+	}
 }
 
 // awaitToolApproval submits a tool call for approval and blocks until the
@@ -1318,6 +1447,179 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		return "Tool call was denied by the operator.", false
 	}
 	return "Tool approval timed out — no response from operator.", false
+}
+
+// supervisorDecision represents the outcome of a supervisor agent's review.
+type supervisorDecision string
+
+const (
+	supervisorApprove  supervisorDecision = "APPROVE"
+	supervisorDeny     supervisorDecision = "DENY"
+	supervisorEscalate supervisorDecision = "ESCALATE"
+)
+
+// supervisorReview asks the supervisor agent to evaluate a tool call and return
+// an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
+// one-shot LLM call through the supervisor's Router — no conversation storage,
+// skill matching, or tool loops. Returns the decision, reason, and any error.
+func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID string) (supervisorDecision, string, error) {
+	if e.supervisor == nil {
+		return supervisorEscalate, "no supervisor configured", fmt.Errorf("no supervisor configured")
+	}
+
+	ctx, span := e.tracer.Start(ctx, "agent.supervisor_review",
+		trace.WithAttributes(
+			attribute.String("agent", e.name),
+			attribute.String("supervisor", e.supervisor.name),
+			attribute.String("tool", tc.Function.Name),
+		))
+	defer span.End()
+
+	start := time.Now()
+
+	// Build system prompt from supervisor's persona.
+	var sysPrompt string
+	if e.supervisor.persona != nil {
+		sysPrompt = e.supervisor.persona.SystemPrompt()
+	}
+	if sysPrompt == "" {
+		sysPrompt = "You are a security supervisor reviewing tool call requests. " +
+			"Evaluate each request for safety, alignment with user intent, and appropriate scope."
+	}
+
+	// Fetch recent conversation messages for context.
+	recent, err := e.memory.GetMessages(ctx, convID, e.supervisorContextMessages)
+	if err != nil {
+		e.logger.Warn("supervisor: failed to load conversation context", "error", err)
+		// Proceed without context rather than blocking.
+		recent = nil
+	}
+
+	// Build the review message with structured context.
+	var review strings.Builder
+	review.WriteString("## Tool Call Review Request\n\n")
+	fmt.Fprintf(&review, "**Agent**: %s\n", e.name)
+	fmt.Fprintf(&review, "**Tool**: %s\n", tc.Function.Name)
+	fmt.Fprintf(&review, "**Arguments**:\n```json\n%s\n```\n\n", tc.Function.Arguments)
+
+	if len(recent) > 0 {
+		// Find the user's original request (last user message).
+		for i := len(recent) - 1; i >= 0; i-- {
+			if recent[i].Role == "user" {
+				fmt.Fprintf(&review, "**User's request**: %q\n\n", truncateForSupervisor(recent[i].Content, 500))
+				break
+			}
+		}
+
+		fmt.Fprintf(&review, "**Recent conversation** (last %d messages):\n", len(recent))
+		for _, m := range recent {
+			content := truncateForSupervisor(m.Content, 200)
+			fmt.Fprintf(&review, "- [%s]: %s\n", m.Role, content)
+		}
+		review.WriteString("\n")
+	}
+
+	review.WriteString("**Evaluate**:\n")
+	review.WriteString("1. Does this tool call align with what the user requested?\n")
+	review.WriteString("2. Are the arguments safe (no injection, exfiltration, PII leakage)?\n")
+	review.WriteString("3. Is the scope appropriate (not overly broad)?\n\n")
+	review.WriteString("Respond with exactly one line:\n")
+	review.WriteString("APPROVE: <brief reason>\n")
+	review.WriteString("DENY: <brief reason>\n")
+	review.WriteString("ESCALATE: <brief reason why human review is needed>\n")
+
+	messages := []llm.Message{
+		{Role: "system", Content: sysPrompt},
+		{Role: "user", Content: review.String()},
+	}
+
+	// Call the supervisor's Router with a timeout — no tools, no streaming.
+	reviewCtx, cancel := context.WithTimeout(ctx, e.supervisorTimeout)
+	defer cancel()
+
+	resp, err := e.supervisor.router.Complete(reviewCtx, "supervisor:"+e.name, messages)
+	duration := time.Since(start)
+
+	if err != nil {
+		e.logger.Warn("supervisor review failed", "tool", tc.Function.Name, "error", err, "duration_ms", duration.Milliseconds())
+		span.SetAttributes(attribute.String("supervisor.decision", "error"))
+		return supervisorEscalate, fmt.Sprintf("supervisor error: %v", err), err
+	}
+
+	decision, reason := parseSupervisorResponse(resp.Content)
+	e.logger.Info("supervisor review complete",
+		"tool", tc.Function.Name, "decision", string(decision), "reason", reason,
+		"duration_ms", duration.Milliseconds())
+
+	span.SetAttributes(
+		attribute.String("supervisor.decision", string(decision)),
+		attribute.String("supervisor.reason", reason),
+	)
+
+	// Emit audit event.
+	auditStatus := audit.StatusOK
+	switch decision {
+	case supervisorDeny:
+		auditStatus = audit.StatusDenied
+	case supervisorEscalate:
+		auditStatus = audit.StatusPending
+	}
+	detailJSON, _ := json.Marshal(map[string]any{
+		"tool":       tc.Function.Name,
+		"arguments":  tc.Function.Arguments,
+		"decision":   string(decision),
+		"reason":     reason,
+		"supervisor": e.supervisor.name,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySupervisor,
+		Action:         "review",
+		Summary:        fmt.Sprintf("%s %s: %s", decision, tc.Function.Name, reason),
+		Detail:         string(detailJSON),
+		Status:         auditStatus,
+		DurationMs:     duration.Milliseconds(),
+		Source:         "supervisor:" + e.supervisor.name,
+		ConversationID: convID,
+	})
+
+	return decision, reason, nil
+}
+
+// parseSupervisorResponse extracts the decision and reason from the supervisor's
+// LLM response. It looks for APPROVE:/DENY:/ESCALATE: at the start of a line.
+// Defaults to ESCALATE if the response cannot be parsed.
+func parseSupervisorResponse(response string) (supervisorDecision, string) {
+	for _, line := range strings.Split(response, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		for _, prefix := range []string{"APPROVE:", "DENY:", "ESCALATE:"} {
+			if strings.HasPrefix(upper, prefix) {
+				reason := strings.TrimSpace(line[len(prefix):])
+				switch {
+				case strings.HasPrefix(upper, "APPROVE:"):
+					return supervisorApprove, reason
+				case strings.HasPrefix(upper, "DENY:"):
+					return supervisorDeny, reason
+				case strings.HasPrefix(upper, "ESCALATE:"):
+					return supervisorEscalate, reason
+				}
+			}
+		}
+	}
+	// Could not parse a clear decision — escalate to human to be safe.
+	return supervisorEscalate, "could not parse supervisor response: " + truncateForSupervisor(response, 200)
+}
+
+// truncateForSupervisor limits a string to maxLen characters for inclusion in
+// the supervisor review prompt or audit log.
+func truncateForSupervisor(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // adapterRouting stores adapter routing info for the current message.

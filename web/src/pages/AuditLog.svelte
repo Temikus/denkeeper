@@ -33,6 +33,7 @@
     { value: 'mcp', label: 'MCP' },
     { value: 'session', label: 'Sessions' },
     { value: 'skill', label: 'Skills' },
+    { value: 'supervisor', label: 'Supervisor' },
   ]
   const statuses = [
     { value: '', label: 'All' },

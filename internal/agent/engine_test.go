@@ -3042,3 +3042,268 @@ func TestEngine_AuditSource_ScheduledMessage(t *testing.T) {
 		t.Errorf("Source = %q, want scheduler", triggerEv.Source)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Supervisor agent tests
+// ---------------------------------------------------------------------------
+
+func TestParseSupervisorResponse_Approve(t *testing.T) {
+	decision, reason := parseSupervisorResponse("APPROVE: tool call aligns with user request")
+	if decision != supervisorApprove {
+		t.Errorf("decision = %q, want APPROVE", decision)
+	}
+	if reason != "tool call aligns with user request" {
+		t.Errorf("reason = %q, want 'tool call aligns with user request'", reason)
+	}
+}
+
+func TestParseSupervisorResponse_Deny(t *testing.T) {
+	decision, reason := parseSupervisorResponse("DENY: arguments contain potential injection")
+	if decision != supervisorDeny {
+		t.Errorf("decision = %q, want DENY", decision)
+	}
+	if reason != "arguments contain potential injection" {
+		t.Errorf("reason = %q", reason)
+	}
+}
+
+func TestParseSupervisorResponse_Escalate(t *testing.T) {
+	decision, reason := parseSupervisorResponse("ESCALATE: unusual tool usage pattern, human review recommended")
+	if decision != supervisorEscalate {
+		t.Errorf("decision = %q, want ESCALATE", decision)
+	}
+	if reason != "unusual tool usage pattern, human review recommended" {
+		t.Errorf("reason = %q", reason)
+	}
+}
+
+func TestParseSupervisorResponse_WithLeadingText(t *testing.T) {
+	// Some LLMs add text before the decision line.
+	resp := "Based on my analysis:\n\nAPPROVE: safe operation"
+	decision, reason := parseSupervisorResponse(resp)
+	if decision != supervisorApprove {
+		t.Errorf("decision = %q, want APPROVE", decision)
+	}
+	if reason != "safe operation" {
+		t.Errorf("reason = %q", reason)
+	}
+}
+
+func TestParseSupervisorResponse_Unparseable(t *testing.T) {
+	decision, reason := parseSupervisorResponse("I think this tool call is fine.")
+	if decision != supervisorEscalate {
+		t.Errorf("decision = %q, want ESCALATE (fallback)", decision)
+	}
+	if !strings.Contains(reason, "could not parse") {
+		t.Errorf("reason = %q, want to contain 'could not parse'", reason)
+	}
+}
+
+func TestParseSupervisorResponse_CaseInsensitive(t *testing.T) {
+	decision, _ := parseSupervisorResponse("approve: looks good")
+	if decision != supervisorApprove {
+		t.Errorf("decision = %q, want APPROVE (case insensitive)", decision)
+	}
+}
+
+func TestEngine_SupervisorApprove(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Primary agent's provider: tool call → final response.
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Here are the results.",
+				TokensUsed:   llm.TokenUsage{Total: 20},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	// Supervisor's provider: returns APPROVE.
+	supervisorProv := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "APPROVE: tool call aligns with user request", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	// Create supervisor engine (no tools, autonomous).
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var events []ChatEvent
+	_, chatErr := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-approve",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "search for test",
+		Timestamp:  time.Now(),
+	}, func(evt ChatEvent) { events = append(events, evt) })
+	if chatErr != nil {
+		t.Fatalf("ChatWithEvents: %v", chatErr)
+	}
+
+	// Verify supervisor_approved event was emitted.
+	found := false
+	for _, evt := range events {
+		if evt.Type == "tool_approval" && evt.ApprovalStatus == "supervisor_approved" {
+			found = true
+			if !strings.Contains(evt.Text, "Approved by supervisor") {
+				t.Errorf("approval text = %q, want to contain 'Approved by supervisor'", evt.Text)
+			}
+		}
+	}
+	if !found {
+		t.Error("no supervisor_approved event found")
+	}
+}
+
+func TestEngine_SupervisorDeny(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Primary agent: tool call → LLM gets denial → final response.
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "dangerous_tool", Arguments: `{"cmd":"rm -rf /"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "I understand that tool call was denied.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	// Supervisor: returns DENY.
+	supervisorProv := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "DENY: dangerous operation — potential system destruction", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var events []ChatEvent
+	_, chatErr := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-deny",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "delete everything",
+		Timestamp:  time.Now(),
+	}, func(evt ChatEvent) { events = append(events, evt) })
+	if chatErr != nil {
+		t.Fatalf("ChatWithEvents: %v", chatErr)
+	}
+
+	// Verify supervisor_denied event was emitted.
+	found := false
+	for _, evt := range events {
+		if evt.Type == "tool_approval" && evt.ApprovalStatus == "supervisor_denied" {
+			found = true
+			if !strings.Contains(evt.Text, "Denied by supervisor") {
+				t.Errorf("approval text = %q, want to contain 'Denied by supervisor'", evt.Text)
+			}
+		}
+	}
+	if !found {
+		t.Error("no supervisor_denied event found")
+	}
+}
+
+func TestEngine_SetSupervisor(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+
+	engine := NewEngine("default", router, store, nil, nil, nil, "", nil, nil, nil, testLogger())
+
+	if engine.Supervisor() != nil {
+		t.Error("expected nil supervisor initially")
+	}
+
+	supEngine := NewEngine("supervisor", router, store, nil, nil, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	if engine.Supervisor() != supEngine {
+		t.Error("expected supervisor to be set")
+	}
+
+	engine.SetSupervisor(nil)
+	if engine.Supervisor() != nil {
+		t.Error("expected supervisor to be cleared")
+	}
+}

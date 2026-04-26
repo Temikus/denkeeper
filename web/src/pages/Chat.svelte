@@ -242,8 +242,11 @@
   function approvalStatusIcon(status) {
     switch (status) {
       case 'auto_approved': return '\u2713'
+      case 'supervisor_approved': return '\u2713'
       case 'approved': return '\u2713'
+      case 'supervisor_denied': return '\u2717'
       case 'denied': return '\u2717'
+      case 'supervisor_escalated': return '\u2191'
       default: return '\u25cb'
     }
   }
@@ -251,8 +254,11 @@
   function approvalStatusLabel(status) {
     switch (status) {
       case 'auto_approved': return 'auto-approved'
+      case 'supervisor_approved': return 'supervisor approved'
       case 'approved': return 'approved'
+      case 'supervisor_denied': return 'supervisor denied'
       case 'denied': return 'denied'
+      case 'supervisor_escalated': return 'escalated to you'
       default: return 'pending'
     }
   }
@@ -417,7 +423,7 @@
             {#if msg.approvals?.length > 0}
               <div class="approval-cards">
                 {#each msg.approvals as appr}
-                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
                     <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
                     <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status)}</span>
                     <span class="tool-name">{appr.tool}</span>
@@ -435,6 +441,11 @@
                       {:else if appr.duration != null}
                         <span class="tool-dur">{appr.duration}ms</span>
                       {/if}
+                    {/if}
+                    {#if appr.status === 'supervisor_denied' && appr.text}
+                      <span class="tool-error">{appr.text}</span>
+                    {:else if appr.status === 'supervisor_escalated' && appr.text}
+                      <span class="tool-info">{appr.text}</span>
                     {/if}
                     {#if appr.execError}
                       <span class="tool-error">{appr.execError}</span>
@@ -710,6 +721,7 @@
   }
   .approval-card.pending { border-color: var(--accent); background: rgba(99,102,241,0.06); }
   .approval-card.auto { opacity: 0.7; }
+  .approval-card.denied { opacity: 0.85; }
   .approval-icon { font-family: monospace; font-weight: bold; width: 16px; text-align: center; }
   .approval-actions { display: flex; gap: 4px; margin-left: auto; }
   .btn-appr {
@@ -780,6 +792,13 @@
     width: 100%;
     font-size: 11px;
     color: var(--danger);
+    margin-top: 2px;
+    word-break: break-word;
+  }
+  .tool-info {
+    width: 100%;
+    font-size: 11px;
+    color: var(--text-muted);
     margin-top: 2px;
     word-break: break-word;
   }

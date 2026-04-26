@@ -3769,3 +3769,141 @@ adapters = ["telegram"]
 		t.Errorf("channel[1] = %q implicit=%v, want default:discord/true", cfg.Channels[1].Name, cfg.Channels[1].Implicit)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Supervisor validation tests
+// ---------------------------------------------------------------------------
+
+func TestParse_Agents_SupervisorValid(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "autonomous"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents[0].Supervisor != "guard" {
+		t.Errorf("supervisor = %q, want 'guard'", cfg.Agents[0].Supervisor)
+	}
+}
+
+func TestParse_Agents_SupervisorNotFound(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "nonexistent"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for nonexistent supervisor")
+	}
+	if !strings.Contains(err.Error(), "supervisor \"nonexistent\" not found") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_SupervisorSelfReference(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "default"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for self-referencing supervisor")
+	}
+	if !strings.Contains(err.Error(), "cannot supervise itself") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_SupervisorOnNonSupervisedAgent(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "autonomous"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "autonomous"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for supervisor on non-supervised agent")
+	}
+	if !strings.Contains(err.Error(), "only meaningful when session_tier") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_SupervisorChaining(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "supervised"
+supervisor = "meta-guard"
+
+[[agents]]
+name = "meta-guard"
+persona_dir = "/agents/meta-guard"
+session_tier = "autonomous"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for supervisor chaining")
+	}
+	if !strings.Contains(err.Error(), "chaining is not supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_SupervisorIsSupervisedTier(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "supervised"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for supervised supervisor")
+	}
+	if !strings.Contains(err.Error(), "must not use session_tier \"supervised\"") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
