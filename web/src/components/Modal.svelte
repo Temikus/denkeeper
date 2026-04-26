@@ -6,7 +6,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose() }} role="dialog" aria-modal="true" aria-label={title}>
+<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) onClose() }} role="dialog" aria-modal="true" aria-label={title} tabindex="-1">
   <div class="modal">
     <div class="modal-header">
       <h2>{title}</h2>
