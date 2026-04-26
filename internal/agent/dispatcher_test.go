@@ -740,6 +740,55 @@ func TestActivityLog_ToolEnd_WithError(t *testing.T) {
 	}
 }
 
+func TestActivityLog_ToolEnd_OrphanAppendsTerminalLine(t *testing.T) {
+	// A tool_end that arrives without a matching tool_start (e.g. supervisor
+	// denied execution before tool_start was emitted) must still produce a
+	// visible line. The line is terminal — a subsequent event for the same
+	// tool name must land on a fresh row, not overwrite the historical one.
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	l.toolEnd(ctx, "fetch", 50, "")
+
+	c := l.chunks[0]
+	if len(c.lines) != 1 {
+		t.Fatalf("expected 1 line after orphan toolEnd, got %d", len(c.lines))
+	}
+	if c.lines[0].status != "✅ 50ms" {
+		t.Errorf("status = %q, want ✅ 50ms", c.lines[0].status)
+	}
+	if _, ok := c.toolIndex["fetch"]; ok {
+		t.Errorf("terminal line should not remain in toolIndex")
+	}
+
+	l.toolStart(ctx, "fetch")
+	l.toolEnd(ctx, "fetch", 75, "")
+
+	if got := len(l.chunks[0].lines); got != 2 {
+		t.Errorf("second call should append a fresh row, got %d lines total", got)
+	}
+}
+
+func TestActivityLog_StatusContainsHTML_IsEscaped(t *testing.T) {
+	// Status text can carry untrusted content (e.g. a supervisor's free-text
+	// deny reason). renderChunk must HTML-escape status so a stray '<' or
+	// '&' cannot break Telegram's HTML parse mode.
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	l.supervisorLine(ctx, "fetch", "❌ denied: <script>&bad")
+
+	rendered := me.lastRendered()
+	if strings.Contains(rendered, "<script>") {
+		t.Errorf("status containing '<script>' must be escaped: %s", rendered)
+	}
+	if !strings.Contains(rendered, "&lt;script&gt;&amp;bad") {
+		t.Errorf("expected escaped status in rendered output: %s", rendered)
+	}
+}
+
 func TestActivityLog_SameToolCalledTwice(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
 	l := newTestActivityLog(me)
@@ -1928,6 +1977,34 @@ func TestDispatcher_Pipeline_DenyFlow_TransitionsLineInPlace(t *testing.T) {
 	}
 	if strings.Contains(last.Text, "approve?") {
 		t.Errorf("approval prompt should be cleared after denial: %s", last.Text)
+	}
+}
+
+func TestDispatcher_Pipeline_SupervisorEscalatedRendersInActivityLog(t *testing.T) {
+	// supervisor_escalated must surface a visible line in the activity log so
+	// the user understands why the subsequent human-approval prompt appeared.
+	// In compact (non-debug) mode the previous code took a silent return path,
+	// leaving the user with no feedback about the supervisor's decision until
+	// the awaitToolApproval prompt landed.
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+
+	incoming := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+	handle := d.buildEventHandler(context.Background(), incoming)
+
+	handle(ChatEvent{Type: "tool_approval", Tool: "web_search", ApprovalStatus: "supervisor_escalated"})
+
+	if got := len(ma.Sent()); got != 1 {
+		t.Fatalf("expected 1 SendAndGetID for the alog message, got %d", got)
+	}
+	rendered := ma.Sent()[0].Text
+	if !strings.Contains(rendered, "🔧 <b>web_search (supervisor)</b> — ↑ escalated") {
+		t.Errorf("missing escalation line in activity log: %s", rendered)
+	}
+	for _, m := range ma.Sent() {
+		if len(m.Buttons) > 0 {
+			t.Errorf("escalation line should not carry buttons; the human-approval prompt arrives as a separate event")
+		}
 	}
 }
 

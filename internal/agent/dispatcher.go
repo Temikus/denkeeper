@@ -1339,6 +1339,8 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 				ExternalID: msg.ExternalID,
 				Adapter:    msg.Adapter,
 			})
+		} else if alog != nil {
+			alog.supervisorLine(ctx, evt.Tool, "↑ escalated — awaiting your review")
 		}
 		// The subsequent awaitToolApproval emits another tool_approval event
 		// with buttons for the human to act on.
@@ -1477,7 +1479,7 @@ func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
 				b.WriteByte('\n')
 			}
 			fmt.Fprintf(&b, "🔧 <b>%s</b> — %s",
-				html.EscapeString(line.tool), line.status)
+				html.EscapeString(line.tool), html.EscapeString(line.status))
 		}
 		b.WriteString("</blockquote>")
 	}
@@ -1562,6 +1564,18 @@ func (l *activityLog) addLine(line activityLine) {
 	c.toolIndex[line.tool] = len(c.lines) - 1
 }
 
+// addTerminalLine appends a line that will not receive further status updates
+// (denied, supervisor decision, orphaned tool_end). addLine writes to
+// toolIndex so subsequent events can target the line; for terminal entries we
+// remove that index immediately so a later event for the same tool name lands
+// on a fresh row instead of overwriting the historical entry.
+func (l *activityLog) addTerminalLine(line activityLine) {
+	l.addLine(line)
+	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
+		delete(c.toolIndex, line.tool)
+	}
+}
+
 // updateActiveLine updates the status of an existing line for the given tool
 // in the active chunk. Returns true if a matching line was found.
 func (l *activityLog) updateActiveLine(tool, status string, removeFromIndex bool) bool {
@@ -1610,12 +1624,8 @@ func (l *activityLog) toolEnd(ctx context.Context, tool string, durationMS int64
 		l.flush(ctx)
 		return
 	}
-	// tool_end without a matching tool_start — add a new line.
-	l.addLine(activityLine{tool: tool, status: status})
-	// addLine doesn't remove from index; remove now since the call is complete.
-	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
-		delete(c.toolIndex, tool)
-	}
+	// tool_end without a matching tool_start — add a new terminal line.
+	l.addTerminalLine(activityLine{tool: tool, status: status})
 	l.flush(ctx)
 }
 
@@ -1630,10 +1640,7 @@ func (l *activityLog) toolDenied(ctx context.Context, tool string) {
 		l.flush(ctx)
 		return
 	}
-	l.addLine(activityLine{tool: tool, status: "❌ denied"})
-	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
-		delete(c.toolIndex, tool)
-	}
+	l.addTerminalLine(activityLine{tool: tool, status: "❌ denied"})
 	l.flush(ctx)
 }
 
@@ -1651,9 +1658,6 @@ func (l *activityLog) setPending(ctx context.Context, tool, args, callback strin
 
 // supervisorLine appends a non-button line for supervisor decisions.
 func (l *activityLog) supervisorLine(ctx context.Context, tool, status string) {
-	l.addLine(activityLine{tool: tool + " (supervisor)", status: status})
-	if c := l.chunks[len(l.chunks)-1]; c.toolIndex != nil {
-		delete(c.toolIndex, tool+" (supervisor)")
-	}
+	l.addTerminalLine(activityLine{tool: tool + " (supervisor)", status: status})
 	l.flush(ctx)
 }
