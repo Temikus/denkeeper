@@ -316,6 +316,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 			"You are "+a.Name+" test agent.",
 			a.Skills, opts.ToolManager, approvalMgr, logger,
 		)
+		e.SetAuditor(auditor)
 		engines[a.Name] = e
 
 		for _, adapter := range a.Adapters {
