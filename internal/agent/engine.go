@@ -318,7 +318,71 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 		}
 		d["thinking_content"] = text
 	}
+	if len(resp.ToolCalls) > 0 {
+		names := make([]string, 0, len(resp.ToolCalls))
+		for _, tc := range resp.ToolCalls {
+			names = append(names, tc.Function.Name)
+		}
+		d["tool_calls"] = names
+	}
 	return d
+}
+
+// roundNudgeRetry is the synthetic round number used for the nudge-retry LLM
+// call in recoverEmptyToolResponse — it sits outside the normal 0..N tool-round
+// sequence and is also flagged with nudge_retry: true in the audit detail.
+const roundNudgeRetry = -1
+
+// llmAuditOpts carries optional fields for emitLLMAudit.
+type llmAuditOpts struct {
+	round      int
+	nudgeRetry bool
+}
+
+// emitLLMAudit emits a single audit event for one LLM round-trip. On the
+// success path resp must be non-nil; on the error path errMsg must be non-empty
+// and resp may be nil (a non-nil resp carries any partial content captured
+// before the failure). The round number lines up with tool_call audit events:
+// 0 = pre-loop call, 1..N = call after tool round N, roundNudgeRetry = nudge retry.
+func (e *Engine) emitLLMAudit(ctx context.Context, convID string, resp *llm.ChatResponse, errMsg string, opts llmAuditOpts) {
+	if e.auditor == nil {
+		return
+	}
+	provider := e.router.DefaultProvider()
+	var detail map[string]any
+	var content string
+	status := audit.StatusOK
+	if errMsg != "" {
+		status = audit.StatusError
+		detail = map[string]any{"provider": provider, "error": errMsg}
+		if resp != nil {
+			for k, v := range buildLLMAuditDetail(resp, provider) {
+				detail[k] = v
+			}
+			content = resp.Content
+		}
+	} else {
+		detail = buildLLMAuditDetail(resp, provider)
+		content = resp.Content
+	}
+	detail["round"] = opts.round
+	if opts.nudgeRetry {
+		detail["nudge_retry"] = true
+	}
+	fallback := "complete"
+	if status == audit.StatusError {
+		fallback = "error"
+	}
+	body, _ := json.Marshal(detail)
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryLLM,
+		Action:         "complete",
+		Summary:        truncateSummary(content, fallback),
+		Detail:         string(body),
+		Status:         status,
+		Source:         "engine",
+		ConversationID: convID,
+	})
 }
 
 func truncateSummary(s, fallback string) string {
@@ -826,21 +890,6 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
-		// Audit: LLM completion error — ensures the audit trail has no
-		// silent gaps when the completion or tool loop fails.
-		errDetail, _ := json.Marshal(map[string]any{
-			"error":    err.Error(),
-			"provider": e.router.DefaultProvider(),
-		})
-		e.emitAudit(ctx, audit.Event{
-			Category:       audit.CategoryLLM,
-			Action:         "complete",
-			Summary:        truncateSummary("", "error"),
-			Detail:         string(errDetail),
-			Status:         audit.StatusError,
-			Source:         "engine",
-			ConversationID: convID,
-		})
 		e.savePartialResponse(ctx, convID, streamedContent.String())
 		return "", nil, err
 	}
@@ -863,18 +912,6 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		"tokens_completion", resp.TokensUsed.Completion,
 		"tokens_total", resp.TokensUsed.Total,
 	)
-
-	// Audit: LLM completion.
-	llmDetail, _ := json.Marshal(buildLLMAuditDetail(resp, e.router.DefaultProvider()))
-	e.emitAudit(ctx, audit.Event{
-		Category:       audit.CategoryLLM,
-		Action:         "complete",
-		Summary:        truncateSummary(resp.Content, "complete"),
-		Detail:         string(llmDetail),
-		Status:         audit.StatusOK,
-		Source:         "engine",
-		ConversationID: convID,
-	})
 
 	responseText := sanitizeStaleDirectives(resp.Content, e.logger)
 	var pendingApproval *approval.Request
@@ -1032,8 +1069,10 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 
 	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
+		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: 0})
 		return nil, llmMessages, nil, fmt.Errorf("LLM completion: %w", err)
 	}
+	e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: 0})
 
 	// Validate tool execution preconditions before entering the loop.
 	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
@@ -1114,8 +1153,10 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		var err error
 		resp, err = e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 		if err != nil {
+			e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: round + 1})
 			return nil, llmMessages, toolRecords, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
 		}
+		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: round + 1})
 
 		totalUsage.Prompt += resp.TokensUsed.Prompt
 		totalUsage.Completion += resp.TokensUsed.Completion
@@ -1202,8 +1243,10 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 	})
 	nudgeResp, err := e.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
+		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: roundNudgeRetry, nudgeRetry: true})
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
 	}
+	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{round: roundNudgeRetry, nudgeRetry: true})
 	return nudgeResp, llmMessages, nil
 }
 

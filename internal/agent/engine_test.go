@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2934,6 +2935,109 @@ func TestEngine_HandleMessage_EmitsAuditOnLLMError(t *testing.T) {
 	}
 	if !strings.Contains(llmEvents[0].Detail, "LLM unavailable") {
 		t.Errorf("LLM audit detail should contain the error message, got %q", llmEvents[0].Detail)
+	}
+	// The error event should carry round 0 (pre-loop call).
+	if !strings.Contains(llmEvents[0].Detail, `"round":0`) {
+		t.Errorf("LLM error audit detail should record round 0, got %q", llmEvents[0].Detail)
+	}
+}
+
+// TestEngine_HandleMessage_EmitsPerRoundLLMAudit verifies that a multi-round
+// tool flow emits one llm.complete audit event per LLM round-trip — round 0
+// for the pre-loop call and rounds 1..N for the in-loop calls — rather than a
+// single aggregated event at the end.
+func TestEngine_HandleMessage_EmitsPerRoundLLMAudit(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				Content:      "thinking about step 1",
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "step 2",
+				ToolCalls:    []llm.ToolCall{{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"b"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "All done.",
+				TokensUsed:   llm.TokenUsage{Total: 5},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	auditor := &collectingAuditor{}
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	text, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-multi",
+		UserID:     "user-1",
+		Text:       "Process",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+	if text != "All done." {
+		t.Errorf("response = %q, want %q", text, "All done.")
+	}
+
+	var llmEvents []audit.Event
+	for _, ev := range auditor.events {
+		if ev.Category == audit.CategoryLLM {
+			llmEvents = append(llmEvents, ev)
+		}
+	}
+	// Three LLM round-trips: round 0 (pre-loop) + rounds 1, 2 (in-loop).
+	if len(llmEvents) != 3 {
+		t.Fatalf("expected 3 LLM audit events, got %d", len(llmEvents))
+	}
+
+	expectRoundAndText := []struct {
+		round int
+		text  string
+	}{
+		{0, "thinking about step 1"},
+		{1, "step 2"},
+		{2, "All done."},
+	}
+	for i, want := range expectRoundAndText {
+		ev := llmEvents[i]
+		if ev.Status != audit.StatusOK {
+			t.Errorf("event[%d] status = %q, want %q", i, ev.Status, audit.StatusOK)
+		}
+		var d map[string]any
+		if err := json.Unmarshal([]byte(ev.Detail), &d); err != nil {
+			t.Fatalf("event[%d] detail unmarshal: %v", i, err)
+		}
+		gotRound, ok := d["round"].(float64)
+		if !ok || int(gotRound) != want.round {
+			t.Errorf("event[%d] round = %v, want %d", i, d["round"], want.round)
+		}
+		if got, _ := d["response_text"].(string); got != want.text {
+			t.Errorf("event[%d] response_text = %q, want %q", i, got, want.text)
+		}
 	}
 }
 
