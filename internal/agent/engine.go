@@ -579,10 +579,26 @@ When creating or updating schedules, use this channel value unless the user spec
 		MessageText: msg.Text,
 		SkillName:   msg.SkillName,
 	})
+	if msg.SkillName != "" && !skillNameMatched(matched, msg.SkillName) {
+		e.logger.Warn("scheduled skill not found — body will not be injected",
+			"skill", msg.SkillName,
+			"adapter", msg.Adapter,
+			"external_id", msg.ExternalID,
+		)
+	}
 	if suffix := skill.BuildPromptSection(matched); suffix != "" {
 		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: matched}
 	}
 	return buildSystemPromptResult{prompt: base, matchedSkills: matched}
+}
+
+func skillNameMatched(matched []skill.Skill, name string) bool {
+	for _, s := range matched {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // persistTelemetry writes tool calls, skill usages, and conversation stats

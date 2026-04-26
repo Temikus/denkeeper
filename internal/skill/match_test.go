@@ -89,6 +89,23 @@ func TestMatchSkills_ScheduleTrigger_NoMatch(t *testing.T) {
 	}
 }
 
+func TestMatchSkills_SkillName_OverridesMissingScheduleTrigger(t *testing.T) {
+	// A skill with only a command trigger should still match when the
+	// scheduler explicitly names it via SkillName. Without this, a misconfigured
+	// schedule (skill missing `schedule:` trigger) silently fires with no skill body.
+	skills := []Skill{makeSkill("heartbeat", "command:heartbeat")}
+	matched := MatchSkills(skills, MatchContext{
+		SkillName:   "heartbeat",
+		MessageText: "[Scheduled: heartbeat]",
+	})
+	if len(matched) != 1 {
+		t.Fatalf("got %d matched, want 1", len(matched))
+	}
+	if matched[0].Name != "heartbeat" {
+		t.Errorf("matched name = %q, want %q", matched[0].Name, "heartbeat")
+	}
+}
+
 func TestMatchSkills_MixedSkills(t *testing.T) {
 	skills := []Skill{
 		makeSkill("always-on"),                              // no triggers — always included

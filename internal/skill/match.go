@@ -29,6 +29,10 @@ func MatchSkills(skills []Skill, ctx MatchContext) []Skill {
 
 // skillMatches returns true if any of the skill's triggers match the context.
 func skillMatches(s Skill, ctx MatchContext) bool {
+	// SkillName is a scheduler routing directive — honor it regardless of declared triggers.
+	if ctx.SkillName != "" && ctx.SkillName == s.Name {
+		return true
+	}
 	for _, t := range s.ParsedTriggers {
 		switch t.Type {
 		case TriggerCommand:
