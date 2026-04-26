@@ -259,8 +259,8 @@
 
 <!-- Delete Confirmation -->
 {#if confirmDelete}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDelete = null }} role="dialog" aria-modal="true">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmDelete = null }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="confirm-modal">
       <h2>Delete Skill</h2>
       <p>Delete <strong>{confirmDelete.name}</strong> from agent <strong>{confirmDelete.agent}</strong>? This will remove the skill file.</p>

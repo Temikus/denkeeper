@@ -202,8 +202,8 @@
 
 <!-- Delete Confirmation Modal -->
 {#if confirmAction}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_interactive_supports_focus -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmAction = null }} role="dialog" aria-modal="true">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmAction = null }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="confirm-modal">
       <h2>Delete Profile</h2>
       <p>
