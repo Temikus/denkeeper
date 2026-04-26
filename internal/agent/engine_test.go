@@ -1321,6 +1321,51 @@ func TestBuildSystemPrompt_NoAdapterOmitsContext(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_IncludesKVGuidanceWhenPersonaSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
+		t.Fatalf("writing SOUL.md: %v", err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatalf("loading persona: %v", err)
+	}
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, p, "", nil, nil, nil, testLogger())
+
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	if !strings.Contains(result.prompt, "Structured Memory (KV)") {
+		t.Error("system prompt should contain Structured Memory (KV) section when persona is set")
+	}
+	for _, ns := range []string{"`cache:*`", "`log:*`", "`pref:*`", "`state:*`"} {
+		if !strings.Contains(result.prompt, ns) {
+			t.Errorf("system prompt missing namespace hint %s", ns)
+		}
+	}
+	if !strings.Contains(result.prompt, "Feel free to add new namespaces") {
+		t.Error("system prompt should invite the agent to add new namespaces")
+	}
+}
+
+func TestBuildSystemPrompt_IncludesKVGuidanceOnFallbackPath(t *testing.T) {
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	if !strings.Contains(result.prompt, "Structured Memory (KV)") {
+		t.Error("system prompt should contain KV guidance on the fallback path — fallback-path agents have the same kv_* tools wired")
+	}
+	for _, ns := range []string{"`cache:*`", "`log:*`", "`pref:*`", "`state:*`"} {
+		if !strings.Contains(result.prompt, ns) {
+			t.Errorf("fallback-path system prompt missing namespace hint %s", ns)
+		}
+	}
+	if !strings.Contains(result.prompt, "Base prompt.") {
+		t.Error("fallback prompt content should still be present")
+	}
+}
+
 func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {

@@ -560,6 +560,25 @@ User/soul/identity updates may require approval depending on your permission tie
 		base = e.fallbackPrompt
 	}
 
+	// KV guidance is independent of persona — fallback-path agents have the same
+	// kv_* tools wired via the Config-MCP server, so they need the same conventions.
+	base += `
+
+## Structured Memory (KV)
+
+You have a key-value store via kv_get / kv_set / kv_set_nx / kv_list / kv_delete. This is *your* memory — use it however suits the work. Structured data, dated logs, lookups, allowlists, in-progress state — all fair game.
+
+A few starter namespaces to keep things scannable:
+
+- ` + "`cache:*`" + ` — best-effort lookups (e.g. ` + "`cache:todoist:projects`" + `). Refetch on failure.
+- ` + "`log:*`" + `   — dated entries (e.g. ` + "`log:heartbeat:2026-04-26`" + `). Browse with kv_list.
+- ` + "`pref:*`" + `  — durable preferences (allowlists, thresholds).
+- ` + "`state:*`" + ` — in-progress multi-step ops.
+
+Feel free to add new namespaces (` + "`note:*`" + `, ` + "`task:*`" + `, ` + "`cred:*`" + ` — whatever fits) when the existing ones don't suit. Just keep the ` + "`prefix:subkey`" + ` shape so kv_list stays useful.
+
+Prefer KV over persona memory for anything structured or dated. Persona memory is for stable prose facts (identity, durable user context). When in doubt: structured/dated → KV; narrative → persona.`
+
 	// Inject session context so the agent knows its current delivery channel.
 	if msg.Adapter != "" && msg.ExternalID != "" {
 		base += fmt.Sprintf(`

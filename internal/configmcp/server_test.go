@@ -715,6 +715,33 @@ func TestServer_ListTools_NoKVToolsWithoutStore(t *testing.T) {
 	}
 }
 
+func TestServer_KVToolDescriptions_MentionNamespaces(t *testing.T) {
+	session, _ := newTestServerWithKV(t, nil)
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	// kv_get / kv_set surface namespace conventions; kv_list shows a prefix example.
+	wantInDesc := map[string][]string{
+		"kv_get":  {"`cache:*`", "`log:*`", "`pref:*`", "`state:*`"},
+		"kv_set":  {"`prefix:subkey`"},
+		"kv_list": {"`log:heartbeat:`"},
+	}
+	for _, tool := range result.Tools {
+		needles, ok := wantInDesc[tool.Name]
+		if !ok {
+			continue
+		}
+		for _, needle := range needles {
+			if !strings.Contains(tool.Description, needle) {
+				t.Errorf("%s description missing %q; got: %s", tool.Name, needle, tool.Description)
+			}
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: kv_get / kv_set
 // --------------------------------------------------------------------------

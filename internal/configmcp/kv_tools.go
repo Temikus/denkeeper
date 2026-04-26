@@ -15,7 +15,7 @@ import (
 func (s *Server) registerKVTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_get",
-		Description: "Get a value from your key-value store. Returns null if the key doesn't exist or has expired.",
+		Description: "Get a value from your key-value store. Returns null if the key doesn't exist or has expired. Keys are conventionally namespaced (`cache:*`, `log:*`, `pref:*`, `state:*`, or anything that fits the use case).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -27,7 +27,7 @@ func (s *Server) registerKVTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_set",
-		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry.",
+		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry. Use a `prefix:subkey` shape so kv_list stays useful; see system prompt for namespace conventions.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -53,7 +53,7 @@ func (s *Server) registerKVTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_list",
-		Description: "List keys in your key-value store, optionally filtered by prefix.",
+		Description: "List keys in your key-value store, optionally filtered by prefix. Prefix-filter to scan a namespace (e.g. `log:heartbeat:`).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
