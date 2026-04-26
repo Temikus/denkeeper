@@ -496,6 +496,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var costLimitSoft *float64
 	var costLimitHard *float64
 	var supervisor string
+	var supervisorTimeout string
+	var supervisorContextMessages int
 	for _, ac := range s.deps.Config.Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
@@ -503,6 +505,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			costLimitSoft = ac.CostLimitSoft
 			costLimitHard = ac.CostLimitHard
 			supervisor = ac.Supervisor
+			supervisorTimeout = ac.SupervisorTimeout
+			supervisorContextMessages = ac.SupervisorContextMessages
 			break
 		}
 	}
@@ -533,6 +537,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if supervisor != "" {
 		resp["supervisor"] = supervisor
+	}
+	if supervisorTimeout != "" {
+		resp["supervisor_timeout"] = supervisorTimeout
+	}
+	if supervisorContextMessages > 0 {
+		resp["supervisor_context_messages"] = supervisorContextMessages
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

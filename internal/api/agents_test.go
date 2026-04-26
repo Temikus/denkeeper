@@ -641,3 +641,66 @@ func TestAgentDetail_FallbacksEmptyNotNull(t *testing.T) {
 		t.Errorf("fallbacks should be empty, got %d", len(fb))
 	}
 }
+
+func TestAgentDetail_IncludesSupervisorConfig(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Config.Agents[0].Supervisor = "guard"
+	deps.Config.Agents[0].SupervisorTimeout = "10s"
+	deps.Config.Agents[0].SupervisorContextMessages = 3
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["supervisor"] != "guard" {
+		t.Errorf("supervisor = %v, want guard", resp["supervisor"])
+	}
+	if resp["supervisor_timeout"] != "10s" {
+		t.Errorf("supervisor_timeout = %v, want 10s", resp["supervisor_timeout"])
+	}
+	cm, ok := resp["supervisor_context_messages"].(float64)
+	if !ok {
+		t.Fatalf("supervisor_context_messages missing or wrong type: %v", resp["supervisor_context_messages"])
+	}
+	if int(cm) != 3 {
+		t.Errorf("supervisor_context_messages = %d, want 3", int(cm))
+	}
+}
+
+func TestAgentDetail_OmitsSupervisorFieldsWhenUnset(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, present := resp["supervisor"]; present {
+		t.Errorf("supervisor should be absent when unset, got %v", resp["supervisor"])
+	}
+	if _, present := resp["supervisor_timeout"]; present {
+		t.Errorf("supervisor_timeout should be absent when unset, got %v", resp["supervisor_timeout"])
+	}
+	if _, present := resp["supervisor_context_messages"]; present {
+		t.Errorf("supervisor_context_messages should be absent when unset, got %v", resp["supervisor_context_messages"])
+	}
+}
