@@ -620,10 +620,9 @@ action = "switch_model"
 	}
 }
 
-func TestParse_Fallbacks_SwitchModelRejectsProvider(t *testing.T) {
-	// switch_model rules implicitly inherit the agent's provider; carrying an
-	// explicit provider is ambiguous and must be rejected so users reach for
-	// switch_provider instead.
+func TestParse_Fallbacks_SwitchModelStripsProvider(t *testing.T) {
+	// Legacy configs may include provider on switch_model. We should migrate
+	// this gracefully by stripping provider instead of failing parse.
 	tomlData := []byte(baseConfig + `
 [[llm.fallback]]
 trigger = "error"
@@ -632,12 +631,21 @@ model = "anthropic/claude-haiku-4-5"
 provider = "openrouter"
 `)
 
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for switch_model with provider field")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "switch_model") || !strings.Contains(err.Error(), "switch_provider") {
-		t.Errorf("error = %q; expected hint pointing to switch_provider", err.Error())
+	if len(cfg.LLM.Fallbacks) != 1 {
+		t.Fatalf("expected 1 fallback, got %d", len(cfg.LLM.Fallbacks))
+	}
+	if got := cfg.LLM.Fallbacks[0].Provider; got != "" {
+		t.Errorf("provider = %q, want empty (stripped during migration)", got)
+	}
+	if got := cfg.LLM.Fallbacks[0].Action; got != "switch_model" {
+		t.Errorf("action = %q, want switch_model", got)
+	}
+	if got := cfg.LLM.Fallbacks[0].Model; got != "anthropic/claude-haiku-4-5" {
+		t.Errorf("model = %q, want anthropic/claude-haiku-4-5", got)
 	}
 }
 

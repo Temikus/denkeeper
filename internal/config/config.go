@@ -1061,22 +1061,29 @@ func MigrateFallbacks(scope string, rules []FallbackConfig) {
 	migrateFallbacks(scope, rules)
 }
 
-// migrateFallbacks rewrites legacy low_funds rules into the cost_limit/soft
-// equivalent and logs a one-time warning per scope. Mutates rules in place.
+// migrateFallbacks rewrites legacy fallback definitions into the currently
+// supported shape and logs a warning per migrated rule. Mutates rules in place.
 func migrateFallbacks(scope string, rules []FallbackConfig) {
 	for i := range rules {
-		if rules[i].Trigger != "low_funds" {
-			continue
+		if rules[i].Trigger == "low_funds" {
+			slog.Warn("migrating deprecated fallback rule",
+				"scope", scope, "index", i,
+				"from", "low_funds", "to", "cost_limit",
+				"threshold_dropped", rules[i].Threshold)
+			rules[i].Trigger = "cost_limit"
+			if rules[i].Scope == "" {
+				rules[i].Scope = "soft"
+			}
+			rules[i].Threshold = 0
 		}
-		slog.Warn("migrating deprecated fallback rule",
-			"scope", scope, "index", i,
-			"from", "low_funds", "to", "cost_limit",
-			"threshold_dropped", rules[i].Threshold)
-		rules[i].Trigger = "cost_limit"
-		if rules[i].Scope == "" {
-			rules[i].Scope = "soft"
+
+		if rules[i].Action == "switch_model" && rules[i].Provider != "" {
+			slog.Warn("normalizing fallback rule: dropping unsupported provider field for switch_model",
+				"scope", scope, "index", i,
+				"provider", rules[i].Provider,
+				"hint", "use switch_provider action to swap providers")
+			rules[i].Provider = ""
 		}
-		rules[i].Threshold = 0
 	}
 }
 
@@ -1916,9 +1923,6 @@ func validateFallback(i int, f FallbackConfig) error {
 	case "switch_model":
 		if f.Model == "" {
 			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" requires model field", i)
-		}
-		if f.Provider != "" {
-			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" does not accept a provider field — use \"switch_provider\" to swap providers", i)
 		}
 	case "wait_and_retry":
 		if f.MaxRetries <= 0 {
