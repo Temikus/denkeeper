@@ -16,6 +16,7 @@ just test-ui                  # Web UI tests (vitest)
 just lint                     # golangci-lint
 just fmt                      # gofmt -w .
 just check                    # fmt-check + vet + lint + test + test-ui (CI equivalent)
+just hook                     # Equivalent of `just check` with minimal output (for agent use)
 just scan                     # Security scans (gosec + govulncheck)
 just build-ui                 # Build web UI (auto-run by build/test/vet/lint when web/dist is missing)
 just build-full               # Build web then binary
@@ -23,6 +24,8 @@ just openapi                  # Generate OpenAPI spec (requires swag CLI)
 just web-dev                  # Vite dev server with hot-reload
 just test-integration         # E2E integration tests
 ```
+
+Note: if you need to run the full test suite, you should prefer `just hook` as that command is cached
 
 ## Architecture
 
