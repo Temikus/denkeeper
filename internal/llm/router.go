@@ -432,9 +432,6 @@ func (r *Router) applyCostLimitFallback(sessionID string, provider Provider) (Pr
 			"scope", rule.Scope, "action", rule.Action)
 		switch rule.Action {
 		case "switch_model":
-			if fp, ok := r.providers[rule.Provider]; ok && rule.Provider != "" {
-				activeProvider = fp
-			}
 			activeModel = rule.Model
 		case "switch_provider":
 			fp, ok := r.providers[rule.Provider]

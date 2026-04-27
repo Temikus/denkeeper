@@ -1917,6 +1917,9 @@ func validateFallback(i int, f FallbackConfig) error {
 		if f.Model == "" {
 			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" requires model field", i)
 		}
+		if f.Provider != "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" does not accept a provider field — use \"switch_provider\" to swap providers", i)
+		}
 	case "wait_and_retry":
 		if f.MaxRetries <= 0 {
 			return fmt.Errorf("config: llm.fallback[%d]: action \"wait_and_retry\" requires max_retries > 0", i)

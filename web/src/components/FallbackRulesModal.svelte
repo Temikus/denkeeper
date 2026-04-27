@@ -71,8 +71,12 @@
   }
 
   function onActionChange(idx) {
-    if ((rules[idx].action === 'switch_provider' || rules[idx].action === 'switch_model') && !rules[idx].provider) {
+    if (rules[idx].action === 'switch_provider' && !rules[idx].provider) {
       rules[idx].provider = defaultProviderForRule()
+    }
+    if (rules[idx].action === 'switch_model') {
+      // switch_model stays on the agent's provider — clear any stale value.
+      rules[idx].provider = ''
     }
   }
 
@@ -183,20 +187,11 @@
                       />
                     </div>
                   {:else if rule.action === 'switch_model'}
-                    <div class="field-group">
-                      <span class="field-label">Provider</span>
-                      <select class="input" bind:value={rule.provider}>
-                        {#each providers as p}
-                          <option value={p}>{p}</option>
-                        {/each}
-                      </select>
-                    </div>
                     <div class="field-group field-grow">
-                      <span class="field-label">Fallback Model</span>
+                      <span class="field-label">Fallback Model <span class="field-optional">(from {agentProvider || 'agent provider'})</span></span>
                       <ModelSelector
                         bind:value={rule.model}
-                        provider={rule.provider}
-                        onchange={(m, p) => onModelPicked(idx, m, p)}
+                        provider={agentProvider}
                       />
                     </div>
                   {:else if rule.action === 'wait_and_retry'}
