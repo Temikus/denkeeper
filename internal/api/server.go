@@ -1536,20 +1536,10 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 			}
 		}
 
-		// Notify the originating adapter channel of the resolution.
-		action := "Denied"
-		if approved {
-			action = "Approved"
-		}
-		notifyMsg := fmt.Sprintf("%s via API: %s", action, resolved.Summary)
-		if err := s.deps.Dispatcher.SendVia(r.Context(), resolved.AdapterName, adapter.OutgoingMessage{
-			ExternalID: resolved.ExternalID,
-			Text:       notifyMsg,
-		}); err != nil {
-			// Non-fatal: the action was already applied; just log.
-			s.logger.Warn("failed to send approval notification", "id", id, "error", err)
-		}
-
+		// The originating adapter is updated via the engine's event stream:
+		// approval resumes → engine emits tool_start/tool_end (or tool_approval
+		// status="denied"), which the dispatcher folds into the activity log
+		// in-place. Audit log records the API resolution via Manager.Resolve.
 		writeJSON(w, http.StatusOK, resolved)
 	}
 }
