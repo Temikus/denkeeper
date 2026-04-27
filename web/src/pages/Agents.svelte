@@ -11,6 +11,7 @@
   let error = $state('')
   let expandedGroup = $state(null)
   let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
+  let defaultProvider = $state('')   // global default_provider from /llm/providers
 
   // Inline rename state
   let renamingAgent = $state(null)
@@ -43,6 +44,7 @@
       agents = agentList || []
       if (providerData?.providers) {
         enabledProviders = providerData.providers.filter(p => p.enabled).map(p => p.name)
+        defaultProvider = providerData.default_provider || ''
       }
       if (agents.length) selectAgent(agents[0])
     } catch(e) {
@@ -920,7 +922,7 @@
 {#if showFallbackModal}
   <FallbackRulesModal
     bind:rules={fallbackRules}
-    agentProvider={detail?.llm_provider || detail?.provider || enabledProviders[0] || ''}
+    agentProvider={detail?.llm_provider || detail?.provider || defaultProvider || ''}
     onSave={saveFallbackRules}
     onClose={() => { showFallbackModal = false }}
   />
