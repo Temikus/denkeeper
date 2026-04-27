@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
@@ -184,6 +185,11 @@ type HarnessOpts struct {
 	// RestartFunc, when non-nil, populates deps.RestartFunc so that
 	// POST /api/v1/server/restart invokes this callback instead of returning 503.
 	RestartFunc func() error
+
+	// Adapters registers adapters with the dispatcher. Tests that need to
+	// observe (or assert the absence of) adapter Send calls should provide a
+	// recording mock here.
+	Adapters []adapter.Adapter
 }
 
 type agentSetup struct {
@@ -257,6 +263,10 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	auditor := audit.NewBufferedEmitter(auditStore, 100, logger)
 	auditor.Start(context.Background())
 	t.Cleanup(func() { auditor.Close() })
+
+	// Wire the auditor into the approval manager so resolutions land in the
+	// audit log (the runtime wires this in cmd/denkeeper/main.go).
+	approvalMgr.Auditor = auditor
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 
@@ -336,7 +346,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	if len(opts.Channels) > 0 {
 		dispatcherOpts = append(dispatcherOpts, agent.WithChannels(opts.Channels, mem))
 	}
-	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger, dispatcherOpts...)
+	dispatcher := agent.NewDispatcher(engines, bindings, opts.Adapters, logger, dispatcherOpts...)
 
 	// Wire Config MCP channel tools into the ToolManager after dispatcher creation.
 	if opts.WithConfigMCP && len(opts.Channels) > 0 {
