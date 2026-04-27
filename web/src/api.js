@@ -12,6 +12,11 @@ function authHeaders() {
   }
 }
 
+// Endpoints whose 401 response means the credential itself is invalid (key
+// revoked, session expired). For any other endpoint, a 401 may just mean the
+// handler refused us — don't nuke the credential.
+const credentialCheckEndpoints = ['/api/v1/agents', '/auth/session']
+
 async function apiFetch(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -19,9 +24,13 @@ async function apiFetch(path, options = {}) {
   })
 
   if (res.status === 401) {
-    token.clear()
-    authMode.set(null)
-    throw new Error('Unauthorized — please log in again')
+    if (credentialCheckEndpoints.some(p => path === p || path.startsWith(p + '?'))) {
+      token.clear()
+      authMode.set(null)
+      throw new Error('Unauthorized — please log in again')
+    }
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || 'Unauthorized')
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))

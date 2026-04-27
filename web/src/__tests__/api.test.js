@@ -37,7 +37,7 @@ describe('apiFetch auth handling', () => {
     expect(capturedAuth).toBeNull()
   })
 
-  test('401 response clears token and throws', async () => {
+  test('401 from credential-check endpoint clears token and throws', async () => {
     server.use(
       http.get('/api/v1/agents', () => new HttpResponse(null, { status: 401 }))
     )
@@ -45,6 +45,22 @@ describe('apiFetch auth handling', () => {
     await expect(api.agents()).rejects.toThrow('Unauthorized')
     const { get } = await import('svelte/store')
     expect(get(token)).toBe('')
+  })
+
+  // Regression: a 401 from a non-credential-check endpoint (e.g. an admin
+  // handler that checks the session cookie internally) used to clear the
+  // token and bounce the user to login. It should now throw without
+  // touching credentials, since the key itself is still valid.
+  test('401 from non-credential-check endpoint preserves token', async () => {
+    server.use(
+      http.get('/api/v1/auth/sessions', () =>
+        HttpResponse.json({ error: 'invalid session' }, { status: 401 })
+      )
+    )
+    token.set('still-valid-key')
+    await expect(api.listAuthSessions()).rejects.toThrow('invalid session')
+    const { get } = await import('svelte/store')
+    expect(get(token)).toBe('still-valid-key')
   })
 
   test('204 response returns null', async () => {

@@ -621,6 +621,67 @@ func TestHandleListSessions_NoStore(t *testing.T) {
 	}
 }
 
+// API-key requests have no session cookie; the handler should respond with
+// an empty list (200) rather than 401, otherwise the web client treats the
+// 401 as "log out". Regression test for the Settings-page logout loop.
+func TestHandleListSessions_NoCookie_APIKeyAuth(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/sessions", nil)
+	rec := httptest.NewRecorder()
+	s.handleListSessions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Sessions         []SessionRecord `json:"sessions"`
+		CurrentSessionID *string         `json:"current_session_id"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Sessions) != 0 {
+		t.Errorf("expected empty sessions, got %d", len(resp.Sessions))
+	}
+	if resp.CurrentSessionID != nil {
+		t.Errorf("expected null current_session_id, got %v", *resp.CurrentSessionID)
+	}
+}
+
+func TestHandleRevokeAllSessions_NoCookie_APIKeyAuth(t *testing.T) {
+	s := testServerWithAuth(t, testPasswordHash("pw"))
+	defer s.loginLimiter.stop()
+
+	store, err := NewInMemorySessionStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+	s.sessions.Store = store
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/sessions", nil)
+	rec := httptest.NewRecorder()
+	s.handleRevokeAllSessions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if revoked, _ := resp["revoked"].(float64); revoked != 0 {
+		t.Errorf("expected revoked=0, got %v", resp["revoked"])
+	}
+}
+
 func TestHandleRevokeSession_Success(t *testing.T) {
 	s := testServerWithAuth(t, testPasswordHash("pw"))
 	defer s.loginLimiter.stop()

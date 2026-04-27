@@ -282,7 +282,13 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := s.sessions.Read(r)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
+		// Authenticated via API key (no session cookie). API keys aren't
+		// browser sessions, so there's nothing to list — return empty rather
+		// than 401, which the web client treats as "log out".
+		writeJSON(w, http.StatusOK, map[string]any{
+			"sessions":           []any{},
+			"current_session_id": nil,
+		})
 		return
 	}
 
@@ -351,7 +357,8 @@ func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request)
 
 	sess, err := s.sessions.Read(r)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
+		// API-key auth has no associated browser session to revoke.
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": 0})
 		return
 	}
 
