@@ -135,25 +135,61 @@
     return `${Math.floor(diff / 86400000)}d ago`
   }
 
-  // Sparkline: hourly buckets from loaded events
+  // Sparkline: bucket count + width adapt to the selected time range so the
+  // bars actually cover the window the user filtered on.
+  const sparkConfig = {
+    '1h':  { count: 12, ms: 5 * 60_000 },
+    '24h': { count: 24, ms: 60 * 60_000 },
+    '7d':  { count: 14, ms: 12 * 60 * 60_000 },
+    '30d': { count: 30, ms: 24 * 60 * 60_000 },
+  }
+
+  function fmtBucket(start, end) {
+    const span = end.getTime() - start.getTime()
+    if (span <= 60 * 60_000) {
+      const t = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      return `${t(start)}\u2013${t(end)}`
+    }
+    if (span <= 24 * 60 * 60_000) {
+      return `${start.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} \u2192 ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    }
+    const d = (x) => x.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    return `${d(start)}\u2013${d(end)}`
+  }
+
   let sparkBars = $derived(() => {
     if (!events.length) return []
+    const { count, ms } = sparkConfig[timeRange] || sparkConfig['24h']
     const now = Date.now()
-    const buckets = new Array(14).fill(0)
-    const errorBuckets = new Array(14).fill(0)
+    const start = now - count * ms
+    const buckets = new Array(count).fill(0)
+    const errorBuckets = new Array(count).fill(0)
     for (const ev of events) {
-      const hoursAgo = Math.floor((now - new Date(ev.timestamp).getTime()) / 3600000)
-      if (hoursAgo >= 0 && hoursAgo < 14) {
-        buckets[13 - hoursAgo]++
-        if (ev.status === 'error') errorBuckets[13 - hoursAgo]++
-      }
+      const t = new Date(ev.timestamp).getTime()
+      if (t < start || t > now) continue
+      const idx = Math.min(count - 1, Math.floor((t - start) / ms))
+      buckets[idx]++
+      if (ev.status === 'error') errorBuckets[idx]++
     }
     const max = Math.max(...buckets, 1)
-    return buckets.map((count, i) => ({
-      pct: Math.max((count / max) * 100, count > 0 ? 5 : 0),
-      hasError: errorBuckets[i] > 0,
-    }))
+    return buckets.map((c, i) => {
+      const bs = new Date(start + i * ms)
+      const be = new Date(start + (i + 1) * ms)
+      const errs = errorBuckets[i]
+      const evtLabel = `${c} event${c === 1 ? '' : 's'}`
+      const errLabel = errs > 0 ? ` (${errs} error${errs === 1 ? '' : 's'})` : ''
+      return {
+        pct: Math.max((c / max) * 100, c > 0 ? 5 : 0),
+        hasError: errs > 0,
+        title: `${fmtBucket(bs, be)} \u2022 ${evtLabel}${errLabel}`,
+      }
+    })
   })
+
+  function sparkRangeLabel() {
+    const r = timeRange === 'custom' ? '24h' : (timeRange || '24h')
+    return `${r} ago`
+  }
 
   onMount(() => { refresh() })
   onDestroy(() => { clearInterval(refreshTimer); clearTimeout(searchTimeout) })
@@ -188,10 +224,16 @@
         <span><span class="stat-num" class:stat-error={stats.by_status?.error}>{stats.by_status?.error || 0}</span> <span class="stat-label">error</span></span>
       </div>
       {#if sparkBars().length > 0}
-        <div class="sparkline">
-          {#each sparkBars() as bar}
-            <div class="spark-bar" class:spark-error={bar.hasError} style="height: {bar.pct}%"></div>
-          {/each}
+        <div class="sparkline-wrap">
+          <div class="sparkline">
+            {#each sparkBars() as bar}
+              <div class="spark-bar" class:spark-error={bar.hasError} style="height: {bar.pct}%" title={bar.title}></div>
+            {/each}
+          </div>
+          <div class="sparkline-axis">
+            <span>{sparkRangeLabel()}</span>
+            <span>now</span>
+          </div>
         </div>
       {/if}
     </div>
@@ -298,9 +340,13 @@
   .stat-num { font-weight: 500; font-size: 15px; }
   .stat-label { color: var(--text-muted); }
   .stat-error { color: var(--danger); }
-  .sparkline { flex: 1; display: flex; align-items: flex-end; gap: 2px; height: 24px; }
-  .spark-bar { flex: 1; background: rgba(139,115,85,0.3); border-radius: 1px; min-height: 1px; }
+  .sparkline-wrap { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .sparkline { display: flex; align-items: flex-end; gap: 2px; height: 24px; }
+  .spark-bar { flex: 1; background: rgba(139,115,85,0.3); border-radius: 1px; min-height: 1px; cursor: help; }
+  .spark-bar:hover { background: rgba(139,115,85,0.55); }
   .spark-error { background: var(--accent); }
+  .spark-error:hover { background: var(--accent); opacity: 0.85; }
+  .sparkline-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); }
 
   /* Filters */
   .filters {

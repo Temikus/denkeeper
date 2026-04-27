@@ -138,12 +138,14 @@
           <td class="date">{fmtDate(a.expires_at)}</td>
           <td class="actions">
             {#if a.status === 'pending'}
-              <button class="btn-ok" onclick={() => resolve(a.id, true)} disabled={resolvingId === a.id}>
-                {resolvingId === a.id ? '...' : 'Approve'}
-              </button>
-              <button class="btn-bad" onclick={() => resolve(a.id, false)} disabled={resolvingId === a.id}>
-                {resolvingId === a.id ? '...' : 'Deny'}
-              </button>
+              <div class="action-buttons">
+                <button class="btn-ok" onclick={() => resolve(a.id, true)} disabled={resolvingId === a.id}>
+                  {resolvingId === a.id ? '...' : 'Approve'}
+                </button>
+                <button class="btn-bad" onclick={() => resolve(a.id, false)} disabled={resolvingId === a.id}>
+                  {resolvingId === a.id ? '...' : 'Deny'}
+                </button>
+              </div>
             {/if}
           </td>
         </tr>
@@ -249,7 +251,8 @@
     background: var(--surface);
   }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-  .actions { display: flex; gap: 6px; white-space: nowrap; }
+  .actions { white-space: nowrap; }
+  .action-buttons { display: inline-flex; gap: 6px; }
   .btn-ok  { padding: 4px 10px; border: none; border-radius: var(--radius); background: var(--success); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
   .btn-bad { padding: 4px 10px; border: none; border-radius: var(--radius); background: var(--danger);  color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
   .btn-ok:hover  { opacity: 0.85; }
