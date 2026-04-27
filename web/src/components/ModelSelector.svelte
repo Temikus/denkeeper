@@ -1,5 +1,6 @@
 <script>
   import { api } from '../api.js'
+  import { computeBreakpoints, popularityBars as computePopularityBars } from '../popularity.js'
 
   let { value = $bindable(''), onchange, provider = '' } = $props()
 
@@ -21,7 +22,7 @@
   // Effective provider: external prop takes precedence over internal filter.
   let activeProvider = $derived(provider || providerFilter)
 
-  let filtered = $derived(() => {
+  let filtered = $derived.by(() => {
     let list = models
     if (toolsOnly) list = list.filter(m => m.supports_tools)
     if (search) {
@@ -111,31 +112,10 @@
     return v + '/wk'
   }
 
-  // Precompute sorted token values for percentile lookups.
-  let tokenRanks = $derived(() => {
-    const vals = models.map(m => m.weekly_tokens || 0).filter(v => v > 0)
-    vals.sort((a, b) => a - b)
-    return vals
-  })
+  let popBreakpoints = $derived(computeBreakpoints(models))
 
-  // Returns 1-5 bars based on percentile rank within the dataset.
   function popularityBars(v) {
-    if (!v) return 0
-    const ranks = tokenRanks()
-    if (!ranks.length) return 0
-    // Find percentile position via bisect
-    let lo = 0, hi = ranks.length
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1
-      if (ranks[mid] < v) lo = mid + 1
-      else hi = mid
-    }
-    const pct = lo / ranks.length
-    if (pct >= 0.80) return 5
-    if (pct >= 0.60) return 4
-    if (pct >= 0.40) return 3
-    if (pct >= 0.20) return 2
-    return 1
+    return computePopularityBars(v, popBreakpoints)
   }
 </script>
 
@@ -190,11 +170,11 @@
         <div class="model-empty">Loading models…</div>
       {:else if !activeProvider && !models.length}
         <div class="model-empty">Select a provider to browse models, or type a model ID above</div>
-      {:else if !filtered().length}
+      {:else if !filtered.length}
         <div class="model-empty">No models found</div>
       {:else}
         <div class="model-list">
-          {#each filtered() as m}
+          {#each filtered as m}
             <button
               class="model-option"
               class:selected={m.id === value}
@@ -421,7 +401,7 @@
 
   .pop-bar {
     width: 3px;
-    background: var(--border);
+    background: color-mix(in srgb, var(--text-muted) 35%, transparent);
     border-radius: 1px;
   }
   .pop-bar:nth-child(1) { height: 4px; }
