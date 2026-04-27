@@ -355,7 +355,9 @@ func (s *Server) handleRevokeAllSessions(w http.ResponseWriter, r *http.Request)
 
 	sess, err := s.sessions.Read(r)
 	if err != nil {
-		// API-key auth has no associated browser session to revoke.
+		// API-key callers have no associated browser session, so there is
+		// nothing to revoke.  Return 200 with revoked:0 (not an error) so
+		// the web UI can treat every auth method uniformly.
 		writeJSON(w, http.StatusOK, map[string]any{"revoked": 0})
 		return
 	}
