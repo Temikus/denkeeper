@@ -5,24 +5,25 @@ default:
     @just --list
 
 # Build the web dashboard if internal/web/dist/ is missing (required by //go:embed).
-# Cheap when already built; runs full build-ui only on a fresh worktree.
+# Delegates to `task ui:build` which is fingerprinted: cheap when up to date,
+# rebuilds when web sources change.
 ensure-web-dist:
-    @test -f internal/web/dist/index.html || just build-ui
+    @mise x -- task ui:build
 
-# Build the denkeeper binary
-build: ensure-web-dist
-    go build -o pkg/bin/denkeeper ./cmd/denkeeper
+# Build the denkeeper binary (cached via Task: skips when Go + dist are unchanged)
+build:
+    @mise x -- task build
 
-# Run all tests (-count=1 disables Go's test cache so results always reflect
-# the current source — never trust cached "ok" lines after editing).
-test: ensure-web-dist
-    go test -race -count=1 ./...
+# Run all tests (cached via Task; --force to bust). -count=1 disables Go's
+# in-process test cache so a stale checksum never masks fresh failures.
+test:
+    @mise x -- task test
 
-# Run all tests (verbose)
+# Run all tests (verbose, uncached — agent-friendly diagnostic mode)
 test-v: ensure-web-dist
     go test -race -count=1 -v ./...
 
-# Run tests with coverage report
+# Run tests with coverage report (uncached)
 test-cover: ensure-web-dist
     go test -race -count=1 -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
@@ -31,9 +32,9 @@ test-cover: ensure-web-dist
 test-cover-html: test-cover
     go tool cover -html=coverage.out
 
-# Run integration tests (requires -tags=integration)
-test-integration: ensure-web-dist
-    go test -tags integration -race -count=1 -v ./internal/integration/...
+# Run integration tests (cached via Task; requires -tags=integration)
+test-integration:
+    @mise x -- task test:integration
 
 # Run tests for a specific package (e.g. just test-pkg internal/agent)
 test-pkg pkg: ensure-web-dist
@@ -67,67 +68,49 @@ serve-once config="":
         go run ./cmd/denkeeper serve
     fi
 
-# Run linter
-lint: ensure-web-dist
-    mise x -- golangci-lint run
+# Run linter (cached via Task)
+lint:
+    @mise x -- task lint
 
-# Run linter with auto-fix
+# Run linter with auto-fix (uncached — modifies files)
 lint-fix: ensure-web-dist
     mise x -- golangci-lint run --fix
 
-# Lint web UI (Svelte)
+# Lint web UI (cached via Task)
 lint-ui:
-    #!/usr/bin/env sh
-    # Catch unescaped ${VAR} in Svelte templates — Svelte interprets {VAR} as an
-    # expression, causing runtime ReferenceErrors. Use placeholder={"${VAR}"} instead.
-    errors=$(grep -rn -E '="[^"]*\$\{[A-Za-z_][A-Za-z_0-9]*\}[^"]*"' web/src --include='*.svelte' | grep -v '={"') || true
-    if [ -n "$errors" ]; then
-        echo "ERROR: Unescaped \${} in Svelte attribute strings (Svelte interprets {…} as expressions):"
-        echo "$errors"
-        echo ""
-        echo 'Fix: wrap the attribute value as a JS string, e.g. placeholder={"text ${VAR} text"}'
-        exit 1
-    fi
+    @mise x -- task ui:lint
 
-# Format all Go files
+# Format all Go files (uncached — modifies files)
 fmt:
     gofmt -w .
 
-# Check formatting (CI-friendly, exits non-zero if unformatted)
+# Check formatting (cached via Task)
 fmt-check:
-    @test -z "$(gofmt -l . | grep -v '^\.claude/')" || (echo "Unformatted files:" && gofmt -l . | grep -v '^\.claude/' && exit 1)
+    @mise x -- task fmt-check
 
-# Vet the codebase
-vet: ensure-web-dist
-    go vet ./...
+# Vet the codebase (cached via Task)
+vet:
+    @mise x -- task vet
 
 # Run all checks (fmt, vet, lint, test)
 check: fmt-check vet lint lint-ui test test-ui
 
 # Run all checks with minimal output (for agent hooks).
-# Skips when the working tree (tracked + untracked-not-ignored) hashes
-# identical to the last successful run. Set JUST_HOOK_FORCE=1 to override.
+# Per-step caching via Task: each step skips when its declared sources are
+# unchanged. Set JUST_HOOK_FORCE=1 to bypass all per-step caches.
 hook:
     #!/usr/bin/env bash
     set -euo pipefail
-    cache=pkg/.hook-fingerprint
-    fingerprint() {
-        {
-            git ls-files -z
-            git ls-files -z --others --exclude-standard
-        } | sort -uz | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256 | awk '{print $1}'
-    }
-    current=$(fingerprint)
-    if [ "${JUST_HOOK_FORCE:-}" != "1" ] && [ -f "$cache" ] && [ "$(cat "$cache")" = "$current" ]; then
-        echo "✓ no source changes since last successful hook (set JUST_HOOK_FORCE=1 to override)"
-        exit 0
+    force_flag=""
+    if [ "${JUST_HOOK_FORCE:-}" = "1" ]; then
+        force_flag="--force"
     fi
-    steps=("just fmt-check" "just vet" "just lint" "just lint-ui" "just test" "just test-ui")
+    steps=("fmt-check" "vet" "lint" "ui:lint" "test" "ui:test")
     labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui")
     tmpfile=$(mktemp)
     trap 'rm -f "$tmpfile"' EXIT
     for i in "${!steps[@]}"; do
-        if ${steps[$i]} >"$tmpfile" 2>&1; then
+        if mise x -- task --silent ${force_flag} "${steps[$i]}" >"$tmpfile" 2>&1; then
             echo "✓ ${labels[$i]}"
         else
             echo "✗ ${labels[$i]}"
@@ -135,7 +118,6 @@ hook:
             exit 1
         fi
     done
-    fingerprint > "$cache"
 
 # Run all checks including E2E (requires running server)
 check-full: check test-e2e
@@ -164,58 +146,35 @@ docker-up:
 docker-down:
     docker compose down
 
-# Build the web dashboard (requires Node.js and npm)
+# Build the web dashboard (cached via Task; runs npm ci only when lockfile changed)
 build-ui:
-    #!/usr/bin/env sh
-    cd web
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm run build
+    @mise x -- task ui:build
 
 # Full build: web dashboard then Go binary
 build-full: build-ui build
 
-# Generate OpenAPI spec from Go annotations
+# Generate OpenAPI spec from Go annotations (cached via Task)
 openapi:
-    mise x -- swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
-    rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
+    @mise x -- task openapi
 
 # Run the Vite dev server (proxies /api to localhost:8080)
 dev-ui:
-    #!/usr/bin/env sh
-    cd web
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm run dev
+    @mise x -- task ui:install
+    cd web && npm run dev
 
-# Run web UI unit tests
+# Run web UI unit tests (cached via Task)
 test-ui:
-    #!/usr/bin/env sh
-    cd web
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm test
+    @mise x -- task ui:test
 
 # Run web UI tests in watch mode
 test-ui-watch:
-    #!/usr/bin/env sh
-    cd web
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm run test:watch
+    @mise x -- task ui:install
+    cd web && npm run test:watch
 
 # Run Playwright E2E tests
 test-e2e:
-    #!/usr/bin/env sh
-    cd web
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npx playwright test
+    @mise x -- task ui:install
+    cd web && npx playwright test
 
 # Remove frontend build artifacts and node_modules
 clean-ui:
@@ -223,23 +182,13 @@ clean-ui:
 
 # Build the documentation website
 build-website:
-    #!/usr/bin/env sh
-    cd website
-    rm -rf resources/_gen
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm run build
+    @mise x -- task website:install
+    cd website && rm -rf resources/_gen && npm run build
 
 # Run the Hugo dev server for the documentation website
 dev-website:
-    #!/usr/bin/env sh
-    cd website
-    rm -rf resources/_gen
-    if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-        npm ci
-    fi
-    npm run dev
+    @mise x -- task website:install
+    cd website && rm -rf resources/_gen && npm run dev
 
 # Tag and push a release (usage: just release patch|minor|major)
 release bump:
@@ -265,21 +214,16 @@ release bump:
     git push origin "$tag"
     echo "Released ${tag}"
 
-# Run security scans (usage: just scan [gosec|govulncheck], default: all)
+# Run security scans (cached via Task; usage: just scan [gosec|govulncheck], default: all).
+# Pass --force to a specific scan (e.g. `mise x -- task scan:govulncheck --force`)
+# to re-check against a fresh vulnerability database when sources are unchanged.
 scan tool="all":
     #!/usr/bin/env sh
     set -e
     case "{{tool}}" in
-        all)
-            just scan gosec
-            just scan govulncheck
-            ;;
-        gosec)
-            go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101,G104,G120 ./...
-            ;;
-        govulncheck)
-            go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-            ;;
+        all)         mise x -- task scan ;;
+        gosec)       mise x -- task scan:gosec ;;
+        govulncheck) mise x -- task scan:govulncheck ;;
         *)
             echo "Unknown scan: {{tool}}. Available: gosec, govulncheck"
             exit 1

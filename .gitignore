@@ -45,6 +45,9 @@ Thumbs.db
 .mise.local.toml
 .claude/settings.local.json
 
+# Task fingerprint cache (per-target up-to-date checksums)
+.task/
+
 # ai tooling
 .claude
 

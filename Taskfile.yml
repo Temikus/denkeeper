@@ -1,0 +1,201 @@
+version: "3"
+
+# Per-task fingerprint caching. `just` remains the human-facing entrypoint;
+# justfile recipes delegate cacheable work to `task` so unchanged steps skip
+# in well under a second. Override with `task <name> --force`.
+
+# Prefer checksum since timestamps are unreliable
+method: checksum
+
+tasks:
+  # ---- Web UI ----------------------------------------------------------
+  ui:install:
+    desc: Install web UI dependencies if package-lock.json content changed
+    dir: web
+    sources:
+      - package.json
+      - package-lock.json
+    # Existence-only safety net: if node_modules has been wiped (e.g. `just clean-ui`)
+    # the source checksum alone wouldn't detect it. No mtime comparison.
+    status:
+      - test -f node_modules/.package-lock.json
+    cmds:
+      - npm ci
+
+  ui:build:
+    desc: Build the Svelte web dashboard
+    deps: [ui:install]
+    sources:
+      - web/src/**/*
+      - web/index.html
+      - web/vite.config.js
+      - web/package.json
+      - web/package-lock.json
+    generates:
+      - internal/web/dist/**/*
+    cmds:
+      - cd web && npm run build
+
+  ui:test:
+    desc: Run web UI unit tests
+    deps: [ui:install]
+    sources:
+      - web/src/**/*
+      - web/vite.config.js
+      - web/package.json
+      - web/package-lock.json
+    cmds:
+      - cd web && npm test
+
+  ui:lint:
+    desc: Lint Svelte templates for unescaped ${VAR} expressions
+    sources:
+      - web/src/**/*.svelte
+    cmds:
+      - |
+        errors=$(grep -rn -E '="[^"]*\$\{[A-Za-z_][A-Za-z_0-9]*\}[^"]*"' web/src --include='*.svelte' | grep -v '={"') || true
+        if [ -n "$errors" ]; then
+          echo "ERROR: Unescaped \${} in Svelte attribute strings (Svelte interprets {…} as expressions):"
+          echo "$errors"
+          echo ""
+          echo 'Fix: wrap the attribute value as a JS string, e.g. placeholder={"text ${VAR} text"}'
+          exit 1
+        fi
+
+  # ---- Go --------------------------------------------------------------
+  build:
+    desc: Build the denkeeper binary
+    deps: [ui:build]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/web/dist/**/*
+      - exclude: "**/*_test.go"
+      - exclude: web/**
+      - exclude: pkg/**
+    generates:
+      - pkg/bin/denkeeper
+    cmds:
+      - go build -o pkg/bin/denkeeper ./cmd/denkeeper
+
+  test:
+    desc: Run Go tests with race detector
+    deps: [ui:build]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/web/dist/**/*
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - go test -race -count=1 ./...
+
+  lint:
+    desc: Run golangci-lint
+    deps: [ui:build]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - .golangci.yml
+      - .golangci.yaml
+      - internal/web/dist/**/*
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - mise x -- golangci-lint run
+
+  vet:
+    desc: Run go vet
+    deps: [ui:build]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/web/dist/**/*
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - go vet ./...
+
+  fmt-check:
+    desc: Verify Go files are gofmt-clean
+    sources:
+      - "**/*.go"
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - |
+        unformatted=$(gofmt -l . | grep -v '^\.claude/' || true)
+        if [ -n "$unformatted" ]; then
+          echo "Unformatted files:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+  openapi:
+    desc: Generate OpenAPI spec from swag annotations
+    sources:
+      - internal/api/**/*.go
+      - exclude: "**/*_test.go"
+    generates:
+      - internal/api/docs/swagger.json
+    cmds:
+      - mise x -- swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
+      - rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
+
+  test:integration:
+    desc: Run integration tests (requires -tags integration)
+    deps: [ui:build]
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/web/dist/**/*
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - go test -tags integration -race -count=1 -v ./internal/integration/...
+
+  # ---- Security scans --------------------------------------------------
+  # Note: vulnerability databases evolve. Run with --force periodically (or
+  # after a quiet week of no source changes) to re-check against fresh data.
+  scan:gosec:
+    desc: Static security analysis of Go sources
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101,G104,G120 ./...
+
+  scan:govulncheck:
+    desc: Check Go sources against the official vulnerability database
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - exclude: web/**
+      - exclude: pkg/**
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  scan:
+    desc: Run all security scans (gosec + govulncheck)
+    deps: [scan:gosec, scan:govulncheck]
+
+  # ---- Documentation website ------------------------------------------
+  website:install:
+    desc: Install Hugo website dependencies if package-lock.json content changed
+    dir: website
+    sources:
+      - package.json
+      - package-lock.json
+    status:
+      - test -f node_modules/.package-lock.json
+    cmds:
+      - npm ci
