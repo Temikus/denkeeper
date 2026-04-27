@@ -123,7 +123,13 @@ cosign verify \
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
-- **Web dashboard** — embedded Svelte UI (served via the API server) with 15 pages: overview, chat, sessions, approvals, schedules, skills, tools, agent context viewer, LLM provider config, settings, and API key management; includes dark mode toggle and warm light theme
+- **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor calls are lightweight one-shot LLM calls with no conversation storage
+- **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 11 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`); web UI page with timeline and table views, category/status/agent/time filters
+- **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
+- **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
+- **Session history management** — `/clear` removes all messages from a session, `/compact` summarises via LLM and replaces all messages with a single summary; available in Telegram, Discord, web UI, and REST API
+- **OpenAPI spec** — generated via `swaggo/swag`, served at `GET /api/v1/openapi.json` (no auth required)
+- **Web dashboard** — embedded Svelte UI (served via the API server) with 17 pages: overview, chat, sessions, approvals, schedules, skills, tools, browser, KV store, costs, agents, API keys, providers, server config, settings, audit log, and channels; includes dark mode toggle and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
@@ -201,7 +207,9 @@ Key sections:
 | `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
-| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings) |
+| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, cost limits) |
+| `[[channels]]` | Named routing endpoints — bind adapter chats to agents with session identity; `session_mode` (`shared`/`ephemeral`) |
+| `[audit]` | Audit log settings (`enabled`, `retention_days`, `cleanup_interval`, `buffer_size`) |
 | `[mcp]` | Global MCP settings — request timeout, auto-restart, max restart attempts, restart cooldown, SSE URL allowlist |
 | `[tools.*]` | MCP tool server definitions — stdio (subprocess) or SSE (remote) transport, URL, headers, per-server timeout override |
 | `[plugins.*]` | Plugin definitions — subprocess or Docker-sandboxed (capability declarations) |
@@ -289,7 +297,8 @@ name = "work-assistant"
 persona_dir = "~/.denkeeper/agents/work-assistant"
 adapters = ["telegram:987654321"]    # specific chat only
 llm_model = "openai/gpt-4o"
-session_tier = "restricted"
+session_tier = "supervised"
+supervisor = "default"               # optional: auto-review tool calls before human approval
 ```
 
 If no `[[agents]]` section is present, a single `"default"` agent is synthesized from `[agent]`/`[session]`.
@@ -333,13 +342,14 @@ key  = "dk-your-secret-key"
 scopes = ["chat", "sessions:read", "costs:read"]
 ```
 
-**Available scopes**: `chat`, `admin`, `agents:read`, `agents:write`, `sessions:read`, `costs:read`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `kv:read`, `kv:write`
+**Available scopes**: `chat`, `admin`, `agents:read`, `agents:write`, `sessions:read`, `sessions:write`, `costs:read`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `kv:read`, `kv:write`, `channels:read`, `channels:write`, `audit:read`
 
 **Endpoints:**
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/health` | — | Health check (no auth) |
+| `GET` | `/api/v1/openapi.json` | — | OpenAPI 2.0 spec (no auth) |
 | `GET` | `/api/v1/setup` | — | First-run setup status |
 | `POST` | `/api/v1/setup` | — | Initialize first-run configuration |
 | `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
@@ -347,7 +357,9 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/models` | `agents:read` | List available LLM models from all providers |
 | `GET` | `/api/v1/models/details` | `agents:read` | Model details with pricing info |
 | `GET` | `/api/v1/llm/providers` | `admin` | List LLM providers with current config |
+| `POST` | `/api/v1/llm/providers` | `admin` | Create a named provider instance |
 | `PATCH` | `/api/v1/llm/providers/{name}` | `admin` | Update provider config (API key, base URL) |
+| `DELETE` | `/api/v1/llm/providers/{name}` | `admin` | Remove a provider instance |
 | `PATCH` | `/api/v1/llm/config` | `admin` | Update global LLM config (default provider, model) |
 | `GET` | `/api/v1/server/config` | `admin` | Server config (version, build info, CORS, WebSocket) |
 | `PATCH` | `/api/v1/server/config` | `admin` | Update server config (CORS origins, WebSocket settings) |
@@ -366,11 +378,19 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/sessions/{id}/stats` | `sessions:read` | Session telemetry summary |
 | `GET` | `/api/v1/sessions/{id}/tool-calls` | `sessions:read` | Tool call records for a session |
 | `GET` | `/api/v1/sessions/{id}/skills` | `sessions:read` | Skill usage for a session |
+| `POST` | `/api/v1/sessions/{id}/clear` | `sessions:write` | Clear all messages in a session (keeps conversation row) |
+| `POST` | `/api/v1/sessions/{id}/compact` | `sessions:write` | Compact session into LLM summary |
+| `POST` | `/api/v1/sessions/{id}/stop` | `chat` | Cancel in-flight request for a session |
 | `DELETE` | `/api/v1/sessions/{id}` | `sessions:read` | Delete a session and its history |
+| `POST` | `/api/v1/panic` | `admin` | Emergency stop — cancel all in-flight requests, pause scheduler |
+| `POST` | `/api/v1/resume` | `admin` | Clear panic state, resume scheduler |
+| `GET` | `/api/v1/panic` | `admin` | Get panic state (`{panicked, panic_time}`) |
 | `GET` | `/api/v1/telemetry/summary` | `costs:read` | Aggregate telemetry (`?since=&until=`) |
 | `GET` | `/api/v1/agents` | `agents:read` | List agents with metadata |
+| `POST` | `/api/v1/agents` | `admin` | Create a new agent at runtime |
 | `GET` | `/api/v1/agents/{name}` | `agents:read` | Agent details and skills |
-| `PATCH` | `/api/v1/agents/{name}` | `agents:write` | Mutate agent config |
+| `PATCH` | `/api/v1/agents/{name}` | `agents:write` | Mutate agent config (tier, model, supervisor, cost limits) |
+| `DELETE` | `/api/v1/agents/{name}` | `admin` | Remove an agent (rejects if referenced by channels/schedules) |
 | `GET` | `/api/v1/skills` | `skills:read` | List all skills across agents |
 | `GET` | `/api/v1/skills/{agent}` | `skills:read` | List skills for a specific agent |
 | `POST` | `/api/v1/skills/{agent}` | `skills:write` | Create a skill |
@@ -408,6 +428,15 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `GET` | `/api/v1/kv/{agent}/{key}` | `kv:read` | Get a KV key value |
 | `PUT` | `/api/v1/kv/{agent}/{key}` | `kv:write` | Set a KV key value (body: `{"value":"...","ttl":"5m"}`) |
 | `DELETE` | `/api/v1/kv/{agent}/{key}` | `kv:write` | Delete a KV key |
+| `GET` | `/api/v1/channels` | `channels:read` | List all channels |
+| `POST` | `/api/v1/channels` | `channels:write` | Create a channel |
+| `GET` | `/api/v1/channels/{name}` | `channels:read` | Channel detail |
+| `PATCH` | `/api/v1/channels/{name}` | `channels:write` | Update a channel |
+| `DELETE` | `/api/v1/channels/{name}` | `channels:write` | Remove a channel |
+| `POST` | `/api/v1/channels/{name}/activate` | `channels:write` | Set active channel for an adapter key |
+| `DELETE` | `/api/v1/channels/{name}/activate` | `channels:write` | Clear active channel override |
+| `GET` | `/api/v1/audit` | `audit:read` | List audit events (filter by `?category=&agent=&status=&since=&until=`) |
+| `GET` | `/api/v1/audit/stats` | `audit:read` | Aggregate counts by category/status |
 
 **Chat example:**
 
@@ -443,6 +472,7 @@ just test-v          # Verbose test output
 just test-pkg <pkg>  # Test a single package (e.g. just test-pkg internal/agent)
 just test-cover      # Tests with coverage report
 just test-cover-html # Open coverage in browser
+just test-ui         # Web UI tests (Vitest + jsdom + MSW)
 just test-integration # E2E integration tests (full in-process server + mock LLM)
 just lint            # Run golangci-lint
 just lint-fix        # Lint with auto-fix
@@ -450,6 +480,7 @@ just fmt             # Format all Go files
 just fmt-check       # CI-friendly format check
 just vet             # Run go vet
 just check           # Run all checks (fmt + vet + lint + test)
+just openapi         # Generate OpenAPI spec (requires swag CLI)
 just tidy            # go mod tidy
 just clean           # Remove build artifacts
 just loc             # Count lines of source vs test code
@@ -568,6 +599,32 @@ Denkeeper is built in phases:
 - [x] Web UI redesigns — card-layout Tools page with inspector modal, grouped sidebar navigation, animated theme toggle
 - [x] Session selector in chat toolbar
 - [x] Helm chart enhancements — `extraContainers` and ServiceMonitor support
+
+**Phase 11 — Telemetry & OpenAPI** ✅
+- [x] Persistent session telemetry — per-message model/provider/cost/token breakdown, tool call records, skill usage, `conversation_stats` table
+- [x] Telemetry API — `/sessions/{id}/stats`, `/sessions/{id}/tool-calls`, `/sessions/{id}/skills`, `/telemetry/summary`
+- [x] OpenAPI spec — `swaggo/swag` annotations on 15+ endpoints, served at `GET /api/v1/openapi.json`
+
+**Phase 12 — Auth & Onboarding** ✅
+- [x] Dashboard auth — password change, OIDC test endpoint, login preferences, session list + revoke
+- [x] Onboarding checklist — 5-milestone card on Overview page with dismiss flow
+- [x] Named provider instances — `[[llm.providers]]` array for multiple instances of the same provider type
+
+**Phase 13 — Channels** ✅
+- [x] Named channels (`[[channels]]`) — decouple sessions from adapters, cross-adapter sharing, ephemeral mode
+- [x] `/session` command — runtime channel switching persisted in SQLite
+- [x] Channels REST API — full CRUD + activate/deactivate endpoints
+- [x] Web dashboard Channels page with full CRUD UI and Chat channel selector
+
+**Phase 14 — Agent & Provider CRUD** ✅
+- [x] Audit log — 11 event categories, buffered SQLite emitter, REST API, web UI with timeline/table views
+- [x] Safety commands — `/stop`, `/panic`, `/resume` in all adapters + REST API + web UI
+- [x] Session management — `/clear` and `/compact` in all adapters + REST API + web UI
+- [x] Agent CRUD — `POST/DELETE /api/v1/agents` with runtime engine registration and TOML persistence
+- [x] Provider CRUD — `POST/DELETE /api/v1/llm/providers` with validation and TOML persistence
+- [x] Per-agent cost limits — `cost_limit_soft`/`cost_limit_hard` via `PATCH /api/v1/agents/{name}`, syncs to live CostTracker
+- [x] Supervisor agents — automated tool call review chain (auto-approve → supervisor → human approval)
+- [x] E2E integration test suite expanded to 155+ tests
 
 ## License
 
