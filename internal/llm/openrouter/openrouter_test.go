@@ -246,46 +246,6 @@ func TestName(t *testing.T) {
 	}
 }
 
-func TestFundsRemaining_WithLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/key" {
-			t.Errorf("path = %s, want /key", r.URL.Path)
-		}
-		if r.Method != http.MethodGet {
-			t.Errorf("method = %s, want GET", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"limit_remaining":42.50}}`))
-	}))
-	defer server.Close()
-
-	client := NewWithHTTPClient("key", server.URL, server.Client())
-	balance, err := client.FundsRemaining(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if balance != 42.50 {
-		t.Errorf("balance = %f, want 42.50", balance)
-	}
-}
-
-func TestFundsRemaining_Unlimited(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"limit_remaining":null}}`))
-	}))
-	defer server.Close()
-
-	client := NewWithHTTPClient("key", server.URL, server.Client())
-	balance, err := client.FundsRemaining(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if balance != -1 {
-		t.Errorf("balance = %f, want -1 (unlimited)", balance)
-	}
-}
-
 func TestChatCompletion_ToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req apiRequest
@@ -412,20 +372,6 @@ func TestChatCompletion_ToolCallPassesHistory(t *testing.T) {
 	}
 	if receivedReq.Messages[2].ToolCallID != "call_1" {
 		t.Errorf("tool_call_id = %q, want call_1", receivedReq.Messages[2].ToolCallID)
-	}
-}
-
-func TestFundsRemaining_HTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
-	}))
-	defer server.Close()
-
-	client := NewWithHTTPClient("bad-key", server.URL, server.Client())
-	_, err := client.FundsRemaining(context.Background())
-	if err == nil {
-		t.Fatal("expected error for non-200 response")
 	}
 }
 

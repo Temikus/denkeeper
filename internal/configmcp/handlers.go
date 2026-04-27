@@ -250,11 +250,11 @@ func (s *Server) registerTools() {
 						"items": {
 							"type": "object",
 							"properties": {
-								"trigger":     {"type": "string",  "enum": ["error", "rate_limit", "low_funds"]},
+								"trigger":     {"type": "string",  "enum": ["error", "rate_limit", "cost_limit", "low_funds"], "description": "low_funds is deprecated and auto-migrates to cost_limit/soft"},
 								"action":      {"type": "string",  "enum": ["switch_provider", "switch_model", "wait_and_retry"]},
-								"provider":    {"type": "string",  "description": "Target provider (for switch_provider)"},
+								"provider":    {"type": "string",  "description": "Target provider (for switch_provider, or scoping switch_model)"},
 								"model":       {"type": "string",  "description": "Target model (for switch_model)"},
-								"threshold":   {"type": "number",  "description": "USD remaining (for low_funds)"},
+								"scope":       {"type": "string",  "enum": ["soft", "hard"], "description": "Cost limit scope (for cost_limit)"},
 								"max_retries": {"type": "integer", "description": "Retry count (for wait_and_retry)"},
 								"backoff":     {"type": "string",  "enum": ["exponential", "constant"]}
 							},
@@ -889,17 +889,31 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("invalid arguments: " + err.Error()), nil
 	}
 
-	// Validate rules.
-	for i, r := range input.Rules {
+	// Validate + auto-migrate legacy low_funds rules into cost_limit/soft.
+	for i := range input.Rules {
+		if input.Rules[i].Trigger == "low_funds" {
+			input.Rules[i].Trigger = "cost_limit"
+			if input.Rules[i].Scope == "" {
+				input.Rules[i].Scope = "soft"
+			}
+		}
+		r := input.Rules[i]
 		switch r.Trigger {
-		case "error", "rate_limit", "low_funds":
+		case "error", "rate_limit", "cost_limit":
 		default:
-			return toolError(fmt.Sprintf("rules[%d]: trigger must be error, rate_limit, or low_funds", i)), nil
+			return toolError(fmt.Sprintf("rules[%d]: trigger must be error, rate_limit, or cost_limit", i)), nil
 		}
 		switch r.Action {
 		case "switch_provider", "switch_model", "wait_and_retry":
 		default:
 			return toolError(fmt.Sprintf("rules[%d]: action must be switch_provider, switch_model, or wait_and_retry", i)), nil
+		}
+		if r.Trigger == "cost_limit" {
+			switch r.Scope {
+			case "soft", "hard":
+			default:
+				return toolError(fmt.Sprintf("rules[%d]: cost_limit requires scope of soft or hard", i)), nil
+			}
 		}
 	}
 

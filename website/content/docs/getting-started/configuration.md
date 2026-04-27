@@ -31,7 +31,7 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 | `[llm.anthropic]` | Direct Anthropic API key |
 | `[llm.ollama]` | Ollama base URL |
 | `[llm.openai]` | OpenAI-compatible API key and endpoint |
-| `[[llm.fallback]]` | Fallback strategies (low funds, rate limit, error) |
+| `[[llm.fallback]]` | Fallback strategies (cost limit, rate limit, error) |
 | `[session]` | Default permission tier |
 | `[[agents]]` | Multi-agent definitions |
 | `[memory]` | SQLite database path |

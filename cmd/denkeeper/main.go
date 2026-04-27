@@ -764,7 +764,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 					Action:     r.Action,
 					Provider:   r.Provider,
 					Model:      r.Model,
-					Threshold:  r.Threshold,
+					Scope:      r.Scope,
 					MaxRetries: r.MaxRetries,
 					Backoff:    r.Backoff,
 				}
@@ -906,7 +906,7 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 			Action:     f.Action,
 			Provider:   f.Provider,
 			Model:      f.Model,
-			Threshold:  f.Threshold,
+			Scope:      f.Scope,
 			MaxRetries: f.MaxRetries,
 			Backoff:    f.Backoff,
 		}

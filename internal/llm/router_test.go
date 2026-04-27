@@ -39,34 +39,6 @@ func (c *capturingMockProvider) ChatCompletion(_ context.Context, req ChatReques
 	return c.mockProvider.ChatCompletion(context.Background(), req)
 }
 
-// balanceMockProvider extends mockProvider with BalanceProvider support.
-type balanceMockProvider struct {
-	mockProvider
-	balance    float64
-	balanceErr error
-}
-
-func (b *balanceMockProvider) FundsRemaining(_ context.Context) (float64, error) {
-	return b.balance, b.balanceErr
-}
-
-// balanceCapturingProvider records last model AND implements BalanceProvider.
-type balanceCapturingProvider struct {
-	mockProvider
-	balance    float64
-	balanceErr error
-	lastModel  string
-}
-
-func (b *balanceCapturingProvider) ChatCompletion(_ context.Context, req ChatRequest) (*ChatResponse, error) {
-	b.lastModel = req.Model
-	return b.mockProvider.ChatCompletion(context.Background(), req)
-}
-
-func (b *balanceCapturingProvider) FundsRemaining(_ context.Context) (float64, error) {
-	return b.balance, b.balanceErr
-}
-
 // statefulMockProvider fails for the first failCount calls, then succeeds.
 type statefulMockProvider struct {
 	name        string
@@ -95,18 +67,6 @@ type countingMockProvider struct {
 func (c *countingMockProvider) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	c.calls++
 	return c.mockProvider.ChatCompletion(ctx, req)
-}
-
-// countingBalanceMockProvider counts FundsRemaining calls.
-type countingBalanceMockProvider struct {
-	mockProvider
-	balance      float64
-	balanceCalls int
-}
-
-func (c *countingBalanceMockProvider) FundsRemaining(_ context.Context) (float64, error) {
-	c.balanceCalls++
-	return c.balance, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -466,101 +426,119 @@ func TestRouter_Fallback_RateLimit_NotFiredOn5xx(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Fallback: low_funds trigger
+// Fallback: cost_limit trigger
 // ---------------------------------------------------------------------------
 
-func TestRouter_Fallback_LowFunds_SwitchModel_BelowThreshold(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+func TestRouter_Fallback_CostLimit_Soft_NoFireWhenUnderLimit(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 5.0, Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
-	bp := &balanceCapturingProvider{balance: 10.0} // above threshold — no switch
-	bp.name = "primary"
-	bp.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(bp)
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
+	r.RegisterProvider(cap)
 	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
+		{Trigger: "cost_limit", Scope: "soft", Action: "switch_model", Model: "cheap-model"},
 	})
 
 	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if bp.lastModel != "expensive-model" {
-		t.Errorf("model = %q, want expensive-model (balance above threshold)", bp.lastModel)
+	if cap.lastModel != "expensive-model" {
+		t.Errorf("model = %q, want expensive-model (under soft limit)", cap.lastModel)
 	}
 }
 
-func TestRouter_Fallback_LowFunds_SwitchModel_AboveThreshold(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+func TestRouter_Fallback_CostLimit_Soft_SwitchesModel(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 1.0, Hard: 10.0}, nil)
 	r := NewRouter("primary", "expensive-model", ct)
-	bp := &balanceCapturingProvider{balance: 2.0} // below threshold
-	bp.name = "primary"
-	bp.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(bp)
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
+	r.RegisterProvider(cap)
 	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
+		{Trigger: "cost_limit", Scope: "soft", Action: "switch_model", Model: "cheap-model"},
 	})
+
+	ct.Record("s1", 2.0) // push over soft limit
 
 	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if bp.lastModel != "cheap-model" {
-		t.Errorf("model = %q, want cheap-model (balance below threshold)", bp.lastModel)
+	if cap.lastModel != "cheap-model" {
+		t.Errorf("model = %q, want cheap-model (over soft limit)", cap.lastModel)
 	}
 }
 
-func TestRouter_Fallback_LowFunds_Unlimited(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
-	r := NewRouter("primary", "expensive-model", ct)
-	bp := &balanceCapturingProvider{balance: -1} // unlimited
-	bp.name = "primary"
-	bp.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(bp)
-	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
-	})
-
-	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if bp.lastModel != "expensive-model" {
-		t.Errorf("model = %q, want expensive-model (unlimited balance)", bp.lastModel)
-	}
-}
-
-func TestRouter_Fallback_LowFunds_SwitchProvider(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+func TestRouter_Fallback_CostLimit_Soft_SwitchesProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 1.0, Hard: 10.0}, nil)
 	r := NewRouter("primary", "model", ct)
-	primary := &balanceMockProvider{balance: 1.0} // below threshold
-	primary.name = "primary"
-	primary.response = &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}}
-	secondary := &mockProvider{name: "secondary", response: &ChatResponse{Content: "secondary", TokensUsed: TokenUsage{Total: 5}}}
-	r.RegisterProvider(primary)
-	r.RegisterProvider(secondary)
+	r.RegisterProvider(&mockProvider{name: "primary", response: &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}}})
+	r.RegisterProvider(&mockProvider{name: "secondary", response: &ChatResponse{Content: "secondary", TokensUsed: TokenUsage{Total: 5}}})
 	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_provider", Provider: "secondary", Threshold: 5.0},
+		{Trigger: "cost_limit", Scope: "soft", Action: "switch_provider", Provider: "secondary"},
 	})
+
+	ct.Record("s1", 2.0)
 
 	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if resp.Content != "secondary" {
-		t.Errorf("content = %q, want secondary (provider switched due to low funds)", resp.Content)
+		t.Errorf("content = %q, want secondary (over soft limit)", resp.Content)
 	}
 }
 
-func TestRouter_Fallback_LowFunds_UnregisteredProvider(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+func TestRouter_Fallback_CostLimit_Hard_PreemptsHardLimitError(t *testing.T) {
+	// A scope=hard rule pointing at a free provider must swap before the
+	// hard-limit guard fires.
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
 	r := NewRouter("primary", "model", ct)
-	bp := &balanceMockProvider{balance: 1.0} // below threshold
-	bp.name = "primary"
-	bp.response = &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(bp)
+	r.RegisterProvider(&mockProvider{name: "primary", response: &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}}})
+	r.RegisterProvider(&mockProvider{name: "free", response: &ChatResponse{Content: "free", TokensUsed: TokenUsage{Total: 5}}})
 	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_provider", Provider: "nonexistent", Threshold: 5.0},
+		{Trigger: "cost_limit", Scope: "hard", Action: "switch_provider", Provider: "free"},
 	})
+
+	ct.Record("s1", 2.0) // over hard limit
+
+	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "free" {
+		t.Errorf("content = %q, want free (hard limit fallback fired)", resp.Content)
+	}
+}
+
+func TestRouter_Fallback_CostLimit_Hard_NoRule_StillErrors(t *testing.T) {
+	// Without a matching cost_limit rule, the hard-limit guard still fires.
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{name: "primary", response: &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}})
+
+	ct.Record("s1", 2.0)
+
+	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if !errors.Is(err, ErrHardLimitExceeded) {
+		t.Fatalf("expected ErrHardLimitExceeded, got %v", err)
+	}
+}
+
+func TestRouter_Fallback_CostLimit_UnregisteredProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 1.0, Hard: 10.0}, nil)
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{
+		name:     "primary",
+		response: &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}},
+	})
+	r.SetFallbacks([]FallbackRule{
+		{Trigger: "cost_limit", Scope: "soft", Action: "switch_provider", Provider: "nonexistent"},
+	})
+
+	ct.Record("s1", 2.0)
 
 	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
 	if err != nil {
@@ -568,75 +546,6 @@ func TestRouter_Fallback_LowFunds_UnregisteredProvider(t *testing.T) {
 	}
 	if resp.Content != "primary" {
 		t.Errorf("content = %q, want primary (unregistered fallback skipped)", resp.Content)
-	}
-}
-
-func TestRouter_Fallback_LowFunds_BalanceFetchError(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
-	r := NewRouter("primary", "model", ct)
-	bp := &balanceMockProvider{
-		balance:    0,
-		balanceErr: fmt.Errorf("API unreachable"),
-	}
-	bp.name = "primary"
-	bp.response = &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(bp)
-	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
-	})
-
-	// Balance fetch error — rule is skipped, primary is used
-	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Content != "primary" {
-		t.Errorf("content = %q, want primary (balance error skipped rule)", resp.Content)
-	}
-}
-
-func TestRouter_Fallback_LowFunds_NoBalanceProvider(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
-	r := NewRouter("primary", "model", ct)
-	// Regular mockProvider does NOT implement BalanceProvider
-	r.RegisterProvider(&mockProvider{
-		name:     "primary",
-		response: &ChatResponse{Content: "primary", TokensUsed: TokenUsage{Total: 5}},
-	})
-	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
-	})
-
-	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Content != "primary" {
-		t.Errorf("content = %q, want primary (provider lacks BalanceProvider)", resp.Content)
-	}
-}
-
-func TestRouter_Fallback_BalanceCached(t *testing.T) {
-	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
-	r := NewRouter("primary", "model", ct)
-	counting := &countingBalanceMockProvider{balance: 10.0} // above threshold — no switch
-	counting.name = "primary"
-	counting.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
-	r.RegisterProvider(counting)
-	r.SetFallbacks([]FallbackRule{
-		{Trigger: "low_funds", Action: "switch_model", Model: "cheap-model", Threshold: 5.0},
-	})
-
-	// Two calls — FundsRemaining should only be called once (TTL cache)
-	for range 2 {
-		_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-
-	if counting.balanceCalls != 1 {
-		t.Errorf("FundsRemaining called %d times, want 1 (cached)", counting.balanceCalls)
 	}
 }
 

@@ -113,6 +113,7 @@ func validateAgentInput(input *agentConfigUpdateInput) string {
 		return "invalid session_tier: must be autonomous, supervised, or restricted"
 	}
 	if input.Fallbacks != nil {
+		config.MigrateFallbacks("api:agent_patch", *input.Fallbacks)
 		if err := config.ValidateFallbacks(*input.Fallbacks); err != nil {
 			return err.Error()
 		}
@@ -221,7 +222,7 @@ func convertFallbackConfigs(cfgs []config.FallbackConfig) []llm.FallbackRule {
 			Action:     f.Action,
 			Provider:   f.Provider,
 			Model:      f.Model,
-			Threshold:  f.Threshold,
+			Scope:      f.Scope,
 			MaxRetries: f.MaxRetries,
 			Backoff:    f.Backoff,
 		}
@@ -635,8 +636,8 @@ func serializeFallbacks(fbs []config.FallbackConfig) []any {
 		if f.Model != "" {
 			m["model"] = f.Model
 		}
-		if f.Threshold > 0 {
-			m["threshold"] = f.Threshold
+		if f.Scope != "" {
+			m["scope"] = f.Scope
 		}
 		if f.MaxRetries > 0 {
 			m["max_retries"] = f.MaxRetries

@@ -6082,12 +6082,16 @@
                     "description": "required for switch_provider",
                     "type": "string"
                 },
+                "scope": {
+                    "description": "\"soft\" | \"hard\" — required for cost_limit",
+                    "type": "string"
+                },
                 "threshold": {
-                    "description": "required for low_funds (USD remaining)",
+                    "description": "Deprecated: legacy low_funds field, auto-migrated on load.",
                     "type": "number"
                 },
                 "trigger": {
-                    "description": "\"error\" | \"rate_limit\" | \"low_funds\"",
+                    "description": "\"error\" | \"rate_limit\" | \"cost_limit\"",
                     "type": "string"
                 }
             }

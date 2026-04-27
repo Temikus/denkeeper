@@ -688,10 +688,10 @@ llm_model = "claude-3-opus"
 			"model":    "llama3",
 		},
 		map[string]any{
-			"trigger":   "low_funds",
-			"action":    "switch_model",
-			"model":     "claude-haiku",
-			"threshold": 2.5,
+			"trigger": "cost_limit",
+			"action":  "switch_model",
+			"model":   "claude-haiku",
+			"scope":   "soft",
 		},
 	}
 	if err := UpdateAgentInConfig(path, "default", map[string]any{"fallback": fallbacks}); err != nil {
@@ -731,8 +731,8 @@ llm_model = "claude-3-opus"
 	if fb[1].Trigger != "error" || fb[1].Action != "switch_provider" || fb[1].Provider != "ollama" || fb[1].Model != "llama3" {
 		t.Errorf("fallback[1] = %+v, unexpected", fb[1])
 	}
-	// Rule 3: switch_model with threshold
-	if fb[2].Trigger != "low_funds" || fb[2].Action != "switch_model" || fb[2].Model != "claude-haiku" || fb[2].Threshold != 2.5 {
+	// Rule 3: cost_limit/soft switch_model
+	if fb[2].Trigger != "cost_limit" || fb[2].Action != "switch_model" || fb[2].Model != "claude-haiku" || fb[2].Scope != "soft" {
 		t.Errorf("fallback[2] = %+v, unexpected", fb[2])
 	}
 

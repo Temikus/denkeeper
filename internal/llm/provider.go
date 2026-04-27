@@ -31,12 +31,6 @@ type StreamingProvider interface {
 	SupportsStreaming() bool
 }
 
-// BalanceProvider is an optional interface implemented by providers that can
-// report their remaining credit balance. Returns -1 if the balance is unlimited.
-type BalanceProvider interface {
-	FundsRemaining(ctx context.Context) (float64, error)
-}
-
 // ModelLister is an optional interface implemented by providers that can
 // enumerate their available models.
 type ModelLister interface {
