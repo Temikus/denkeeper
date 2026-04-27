@@ -629,7 +629,7 @@ func TestActivityLog_RenderChunk_WrapsInBlockquote(t *testing.T) {
 		toolIndex: map[string]int{},
 	}
 	got := l.renderChunk(c, false)
-	want := "📋 <b>Activity log</b>\n<blockquote expandable>" +
+	want := "<blockquote expandable>📋 <b>Activity log</b>\n" +
 		"🔧 <b>search</b> — auto-approved\n🔧 <b>fetch</b> — ⏳" +
 		"</blockquote>"
 	if got != want {
@@ -646,7 +646,7 @@ func TestActivityLog_RenderChunk_AppendsPendingApproval(t *testing.T) {
 		toolIndex: map[string]int{},
 	}
 	got := l.renderChunk(c, true)
-	want := "📋 <b>Activity log</b>\n<blockquote expandable>🔧 <b>search</b> — ✅ 10ms</blockquote>\n" +
+	want := "<blockquote expandable>📋 <b>Activity log</b>\n🔧 <b>search</b> — ✅ 10ms</blockquote>\n" +
 		"🔧 <b>read_file</b> — approve?\n<blockquote expandable>{&#34;path&#34;:&#34;/etc/hosts&#34;}</blockquote>"
 	if got != want {
 		t.Errorf("render =\n%s\nwant:\n%s", got, want)

@@ -1406,11 +1406,11 @@ func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.Incoming
 // same message with inline keyboard buttons instead of being sent as separate
 // messages, keeping the chat clean.
 //
-// The activity log is rendered as a collapsible <blockquote expandable> so it
-// stays out of the way until the user expands it. Layout:
+// The activity log is rendered as a collapsible <blockquote expandable> with
+// the "📋 Activity log" header as its first line, so the collapsed preview
+// shows just the header and stays out of the way until expanded. Layout:
 //
-//	📋 Activity log
-//	┌─ (collapsed by default; expand to see) ─────────┐
+//	┌─ 📋 Activity log (collapsed; tap to expand) ────┐
 //	│ 🔧 search_web — auto-approved                  │
 //	│ 🔧 fetch_url — ✅ 340ms                         │
 //	│ 🔧 read_file — ⏳                              │
@@ -1473,12 +1473,9 @@ func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
 	var b strings.Builder
 
 	if len(c.lines) > 0 {
-		b.WriteString("📋 <b>Activity log</b>\n<blockquote expandable>")
-		for i, line := range c.lines {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			fmt.Fprintf(&b, "🔧 <b>%s</b> — %s",
+		b.WriteString("<blockquote expandable>📋 <b>Activity log</b>")
+		for _, line := range c.lines {
+			fmt.Fprintf(&b, "\n🔧 <b>%s</b> — %s",
 				html.EscapeString(line.tool), html.EscapeString(line.status))
 		}
 		b.WriteString("</blockquote>")
