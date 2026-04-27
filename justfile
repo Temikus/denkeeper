@@ -104,10 +104,24 @@ vet: ensure-web-dist
 # Run all checks (fmt, vet, lint, test)
 check: fmt-check vet lint lint-ui test test-ui
 
-# Run all checks with minimal output (for agent hooks)
+# Run all checks with minimal output (for agent hooks).
+# Skips when the working tree (tracked + untracked-not-ignored) hashes
+# identical to the last successful run. Set JUST_HOOK_FORCE=1 to override.
 hook:
     #!/usr/bin/env bash
     set -euo pipefail
+    cache=pkg/.hook-fingerprint
+    fingerprint() {
+        {
+            git ls-files -z
+            git ls-files -z --others --exclude-standard
+        } | sort -uz | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256 | awk '{print $1}'
+    }
+    current=$(fingerprint)
+    if [ "${JUST_HOOK_FORCE:-}" != "1" ] && [ -f "$cache" ] && [ "$(cat "$cache")" = "$current" ]; then
+        echo "✓ no source changes since last successful hook (set JUST_HOOK_FORCE=1 to override)"
+        exit 0
+    fi
     steps=("just fmt-check" "just vet" "just lint" "just lint-ui" "just test" "just test-ui")
     labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui")
     tmpfile=$(mktemp)
@@ -121,6 +135,7 @@ hook:
             exit 1
         fi
     done
+    fingerprint > "$cache"
 
 # Run all checks including E2E (requires running server)
 check-full: check test-e2e
