@@ -1928,18 +1928,25 @@ func validateFallback(i int, f FallbackConfig) error {
 		return fmt.Errorf("config: llm.fallback[%d]: invalid action %q", i, f.Action)
 	}
 	if f.Trigger == "cost_limit" {
-		switch f.Scope {
-		case "soft", "hard":
-		case "":
-			return fmt.Errorf("config: llm.fallback[%d]: trigger \"cost_limit\" requires scope (\"soft\" or \"hard\")", i)
-		default:
-			return fmt.Errorf("config: llm.fallback[%d]: invalid scope %q — must be \"soft\" or \"hard\"", i, f.Scope)
+		if err := validateFallbackScope(i, f.Scope); err != nil {
+			return err
 		}
 	}
 	if f.Backoff != "" && f.Backoff != "exponential" && f.Backoff != "constant" {
 		return fmt.Errorf("config: llm.fallback[%d]: invalid backoff %q — must be \"exponential\" or \"constant\"", i, f.Backoff)
 	}
 	return nil
+}
+
+func validateFallbackScope(i int, scope string) error {
+	switch scope {
+	case "soft", "hard":
+		return nil
+	case "":
+		return fmt.Errorf("config: llm.fallback[%d]: trigger \"cost_limit\" requires scope (\"soft\" or \"hard\")", i)
+	default:
+		return fmt.Errorf("config: llm.fallback[%d]: invalid scope %q — must be \"soft\" or \"hard\"", i, scope)
+	}
 }
 
 // validateSchedules checks all schedule entries for structural correctness.
