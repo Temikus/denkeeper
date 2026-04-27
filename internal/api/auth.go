@@ -265,12 +265,11 @@ func clientIP(r *http.Request) string {
 
 // handleListSessions godoc
 // @Summary List active sessions
-// @Description Return all active sessions for the authenticated user, including the current session ID.
+// @Description Return all active sessions for the authenticated user, including the current session ID. API-key callers (no session cookie) receive an empty list.
 // @Tags auth
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} map[string]any
-// @Failure 401 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /auth/sessions [get]
@@ -340,12 +339,11 @@ func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 
 // handleRevokeAllSessions godoc
 // @Summary Revoke all sessions
-// @Description Revoke all active sessions for the authenticated user.
+// @Description Revoke all active sessions for the authenticated user. API-key callers (no session cookie) receive {"revoked": 0}.
 // @Tags auth
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} map[string]any
-// @Failure 401 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /auth/sessions [delete]

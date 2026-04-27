@@ -12,11 +12,6 @@ function authHeaders() {
   }
 }
 
-// Endpoints whose 401 response means the credential itself is invalid (key
-// revoked, session expired). For any other endpoint, a 401 may just mean the
-// handler refused us — don't nuke the credential.
-const credentialCheckEndpoints = ['/api/v1/agents', '/auth/session']
-
 async function apiFetch(path, options = {}) {
   const res = await fetch(path, {
     ...options,
@@ -24,7 +19,11 @@ async function apiFetch(path, options = {}) {
   })
 
   if (res.status === 401) {
-    if (credentialCheckEndpoints.some(p => path === p || path.startsWith(p + '?'))) {
+    // The auth middleware sets X-Auth-Failure when the credential itself
+    // is bad (missing/revoked key, expired session). Without that header
+    // a 401 came from somewhere inside the handler and shouldn't nuke
+    // the user's credential — surface the error and let the caller cope.
+    if (res.headers.get('X-Auth-Failure') === 'credential-invalid') {
       token.clear()
       authMode.set(null)
       throw new Error('Unauthorized — please log in again')
@@ -275,8 +274,13 @@ export const api = {
       body: JSON.stringify({ agent, session_id: sessionId || undefined, channel: channel || undefined, message }),
     })
     if (res.status === 401) {
-      token.clear()
-      throw new Error('Unauthorized — please log in again')
+      if (res.headers.get('X-Auth-Failure') === 'credential-invalid') {
+        token.clear()
+        authMode.set(null)
+        throw new Error('Unauthorized — please log in again')
+      }
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || 'Unauthorized')
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))

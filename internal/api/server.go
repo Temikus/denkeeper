@@ -1682,6 +1682,10 @@ func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerF
 			if identified {
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": "insufficient scope"})
 			} else {
+				// Signal to clients that the credential itself is bad
+				// (vs. a 401 from a handler that internally gates on a
+				// session cookie even though the caller is API-key authed).
+				w.Header().Set("X-Auth-Failure", "credential-invalid")
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			}
 			return
@@ -2890,6 +2894,7 @@ func (s *Server) middlewareCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Auth-Failure")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 		}
 		if r.Method == http.MethodOptions {

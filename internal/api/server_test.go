@@ -273,6 +273,34 @@ func TestRequireScope_InvalidKey(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
+	// X-Auth-Failure tells the web client that the credential itself is bad
+	// (vs. a 401 from inside a handler), so it can clear the token and
+	// bounce to login. Missing the header would defeat the bug fix.
+	if got := rec.Header().Get("X-Auth-Failure"); got != "credential-invalid" {
+		t.Errorf("X-Auth-Failure = %q, want %q", got, "credential-invalid")
+	}
+}
+
+func TestRequireScope_ValidKeyWrongScope_NoAuthFailureHeader(t *testing.T) {
+	cfg := testConfig(config.APIKeyConfig{
+		Name: "test", Key: "dk-secret", Scopes: []string{"health"},
+	})
+	srv := New(cfg, testDeps(), testLogger())
+
+	handler := srv.RequireScope("chat", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer dk-secret")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	// 403 (insufficient scope) must NOT carry X-Auth-Failure — the
+	// credential is fine, just lacks permission.
+	if got := rec.Header().Get("X-Auth-Failure"); got != "" {
+		t.Errorf("X-Auth-Failure on 403 = %q, want empty", got)
+	}
 }
 
 func TestRequireScope_ValidKeyWrongScope(t *testing.T) {

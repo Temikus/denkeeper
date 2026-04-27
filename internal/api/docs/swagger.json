@@ -1233,7 +1233,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Return all active sessions for the authenticated user, including the current session ID.",
+                "description": "Return all active sessions for the authenticated user, including the current session ID. API-key callers (no session cookie) receive an empty list.",
                 "produces": [
                     "application/json"
                 ],
@@ -1247,15 +1247,6 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     },
                     "404": {
@@ -1284,7 +1275,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Revoke all active sessions for the authenticated user.",
+                "description": "Revoke all active sessions for the authenticated user. API-key callers (no session cookie) receive {\"revoked\": 0}.",
                 "produces": [
                     "application/json"
                 ],
@@ -1298,15 +1289,6 @@
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
                         }
                     },
                     "404": {

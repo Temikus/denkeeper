@@ -37,9 +37,12 @@ describe('apiFetch auth handling', () => {
     expect(capturedAuth).toBeNull()
   })
 
-  test('401 from credential-check endpoint clears token and throws', async () => {
+  test('401 with X-Auth-Failure header clears token and throws', async () => {
     server.use(
-      http.get('/api/v1/agents', () => new HttpResponse(null, { status: 401 }))
+      http.get('/api/v1/agents', () => new HttpResponse(null, {
+        status: 401,
+        headers: { 'X-Auth-Failure': 'credential-invalid' },
+      }))
     )
     token.set('old-key')
     await expect(api.agents()).rejects.toThrow('Unauthorized')
@@ -47,11 +50,11 @@ describe('apiFetch auth handling', () => {
     expect(get(token)).toBe('')
   })
 
-  // Regression: a 401 from a non-credential-check endpoint (e.g. an admin
-  // handler that checks the session cookie internally) used to clear the
-  // token and bounce the user to login. It should now throw without
-  // touching credentials, since the key itself is still valid.
-  test('401 from non-credential-check endpoint preserves token', async () => {
+  // Regression: a 401 without the X-Auth-Failure header means the handler
+  // refused us for some other reason (e.g. internal session-cookie check).
+  // It must not nuke the token, otherwise the user gets bounced to login
+  // even though their credential is still valid.
+  test('401 without X-Auth-Failure header preserves token', async () => {
     server.use(
       http.get('/api/v1/auth/sessions', () =>
         HttpResponse.json({ error: 'invalid session' }, { status: 401 })
@@ -384,9 +387,12 @@ describe('streamChat edge cases', () => {
     expect(chunks).toEqual(['hello'])
   })
 
-  test('401 during stream clears token and throws', async () => {
+  test('401 during stream with X-Auth-Failure clears token and throws', async () => {
     server.use(
-      http.post('/api/v1/chat', () => new HttpResponse(null, { status: 401 }))
+      http.post('/api/v1/chat', () => new HttpResponse(null, {
+        status: 401,
+        headers: { 'X-Auth-Failure': 'credential-invalid' },
+      }))
     )
 
     token.set('old-key')
@@ -396,6 +402,22 @@ describe('streamChat edge cases', () => {
 
     const { get } = await import('svelte/store')
     expect(get(token)).toBe('')
+  })
+
+  test('401 during stream without X-Auth-Failure preserves token', async () => {
+    server.use(
+      http.post('/api/v1/chat', () =>
+        HttpResponse.json({ error: 'session expired' }, { status: 401 })
+      )
+    )
+
+    token.set('still-valid-key')
+    await expect(
+      api.streamChat('default', '', 'hello', () => {}, () => {}, () => {})
+    ).rejects.toThrow('session expired')
+
+    const { get } = await import('svelte/store')
+    expect(get(token)).toBe('still-valid-key')
   })
 
   test('thinking and tool_approval events are forwarded to onToolEvent', async () => {
