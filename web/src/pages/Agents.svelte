@@ -920,7 +920,7 @@
 {#if showFallbackModal}
   <FallbackRulesModal
     bind:rules={fallbackRules}
-    agentProvider={detail?.llm_provider || ''}
+    agentProvider={detail?.llm_provider || detail?.provider || enabledProviders[0] || ''}
     onSave={saveFallbackRules}
     onClose={() => { showFallbackModal = false }}
   />
