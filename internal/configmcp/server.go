@@ -133,13 +133,13 @@ type CostSummaryData struct {
 
 // FallbackRuleInput describes a single fallback rule as provided by the agent.
 type FallbackRuleInput struct {
-	Trigger    string  `json:"trigger"`
-	Action     string  `json:"action"`
-	Provider   string  `json:"provider,omitempty"`
-	Model      string  `json:"model,omitempty"`
-	Threshold  float64 `json:"threshold,omitempty"`
-	MaxRetries int     `json:"max_retries,omitempty"`
-	Backoff    string  `json:"backoff,omitempty"`
+	Trigger    string `json:"trigger"`
+	Action     string `json:"action"`
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Scope      string `json:"scope,omitempty"`
+	MaxRetries int    `json:"max_retries,omitempty"`
+	Backoff    string `json:"backoff,omitempty"`
 }
 
 // Server is the in-process Config MCP server for a single agent.

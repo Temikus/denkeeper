@@ -46,8 +46,9 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # Each [[llm.fallback]] entry defines one fallback step, evaluated in order.
 #
 # trigger values:
-#   "low_funds"  — checked before each call; fires when the provider's API key
-#                  balance drops below threshold (USD). Requires threshold > 0.
+#   "cost_limit" — pre-call; fires when the session crosses the agent's soft or
+#                  hard cost limit (cost_limit_soft / cost_limit_hard). Requires
+#                  scope = "soft" | "hard".
 #   "rate_limit" — fires on HTTP 429. Use wait_and_retry, switch_provider, or
 #                  switch_model to recover.
 #   "error"      — fires on retryable server errors (5xx, network failures).
@@ -59,13 +60,16 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 #   "wait_and_retry"   — retry with backoff (requires max_retries > 0)
 #
 # backoff values: "exponential" (default, capped at 30s) | "constant" (1s)
+#
+# Legacy "low_funds" rules (with `threshold`) are auto-migrated to
+# `cost_limit` + `scope = "soft"` on load.
 
-# Switch to a free model when API key balance falls below $5.
+# Switch to a free model once the soft cost limit is crossed.
 # [[llm.fallback]]
-# trigger   = "low_funds"
-# action    = "switch_model"
-# model     = "meta-llama/llama-3.1-8b-instruct:free"
-# threshold = 5.00
+# trigger = "cost_limit"
+# action  = "switch_model"
+# scope   = "soft"
+# model   = "meta-llama/llama-3.1-8b-instruct:free"
 
 # Retry up to 3 times with exponential backoff on rate limiting.
 # [[llm.fallback]]

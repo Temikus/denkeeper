@@ -68,6 +68,22 @@
     return last - first + (events[events.length - 1].duration_ms || 0)
   })
 
+  let totalCost = $derived.by(() => {
+    let sum = 0
+    for (const e of events) {
+      if (e.category !== 'llm') continue
+      const d = parseDetail(e.detail)
+      if (typeof d.cost === 'number') sum += d.cost
+    }
+    return sum
+  })
+
+  function formatCost(c) {
+    if (!c || c <= 0) return ''
+    if (c < 0.01) return `$${c.toFixed(4)}`
+    return `$${c.toFixed(3)}`
+  }
+
   let statusChip = $derived.by(() => {
     if (!hasErrors) return null
     if (allFailed) return { text: `${errorCount} error${errorCount > 1 ? 's' : ''}`, cls: 'chip-error' }
@@ -115,6 +131,9 @@
     {/if}
     <span class="spacer"></span>
     <span class="session-duration">{formatDuration(totalDuration)}</span>
+    {#if totalCost > 0}
+      <span class="session-cost">{formatCost(totalCost)}</span>
+    {/if}
     <span class="session-time">{relativeTime(session.latest)}</span>
     <span class="session-chevron" class:open={isExpanded}>{isExpanded ? '\u25be' : '\u25b8'}</span>
   </div>
@@ -242,6 +261,7 @@
 
   .spacer { flex: 1; }
   .session-duration { font-size: 11px; color: #5F4A35; flex-shrink: 0; }
+  .session-cost { font-size: 11px; color: #5F4A35; flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .session-time { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
   .session-chevron { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
 

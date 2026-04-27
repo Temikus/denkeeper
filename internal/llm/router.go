@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -19,21 +18,14 @@ import (
 
 // FallbackRule describes a single fallback step the router will attempt.
 type FallbackRule struct {
-	Trigger    string  // "error" | "rate_limit" | "low_funds"
-	Action     string  // "switch_provider" | "switch_model" | "wait_and_retry"
-	Provider   string  // provider name — for switch_provider
-	Model      string  // model name — for switch_model; optional for switch_provider
-	Threshold  float64 // remaining credit threshold in USD — for low_funds
-	MaxRetries int     // number of retry attempts — for wait_and_retry
-	Backoff    string  // "exponential" | "constant" — for wait_and_retry
+	Trigger    string // "error" | "rate_limit" | "cost_limit"
+	Action     string // "switch_provider" | "switch_model" | "wait_and_retry"
+	Provider   string // provider name — for switch_provider
+	Model      string // model name — for switch_model; optional for switch_provider
+	Scope      string // "soft" | "hard" — for cost_limit (which agent limit triggers)
+	MaxRetries int    // number of retry attempts — for wait_and_retry
+	Backoff    string // "exponential" | "constant" — for wait_and_retry
 }
-
-type balanceCacheEntry struct {
-	balance   float64
-	fetchedAt time.Time
-}
-
-const balanceCacheTTL = 5 * time.Minute
 
 // Router selects the appropriate LLM provider for a request.
 type Router struct {
@@ -45,8 +37,6 @@ type Router struct {
 	toolSource        func() []ToolDef  // dynamic tool resolution; nil = no tools
 	pricing           *pricing.Registry // model pricing lookup; nil = legacy fallback
 	streamIdleTimeout time.Duration     // idle timeout for LLM SSE streams; 0 = disabled
-	balanceCache      map[string]balanceCacheEntry
-	mu                sync.Mutex // protects balanceCache
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
 	tracer    trace.Tracer
@@ -235,7 +225,6 @@ func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *
 		defaultProvider: defaultProvider,
 		defaultModel:    defaultModel,
 		costTracker:     costTracker,
-		balanceCache:    make(map[string]balanceCacheEntry),
 		tracer:          tracer,
 		mDuration:       dur,
 		mTokens:         tok,
@@ -296,10 +285,6 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
 	}
 
-	if r.costTracker.ExceedsHardLimit(sessionID) {
-		return nil, fmt.Errorf("session %q exceeded hard cost limit: %w", sessionID, ErrHardLimitExceeded)
-	}
-
 	ctx, span := r.tracer.Start(ctx, "llm.complete",
 		trace.WithAttributes(
 			attribute.String("gen_ai.system", r.defaultProvider),
@@ -315,10 +300,17 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		attribute.String("model", r.defaultModel),
 	)
 
-	// 1. Apply low_funds fallbacks pre-call (first matching rule wins).
-	activeProvider, activeModel := r.applyLowFundsFallback(ctx, sessionID, provider)
+	// 1. Apply cost_limit fallbacks pre-call so a scope=hard rule pointing at a
+	//    free provider can swap before the hard-limit guard fires.
+	activeProvider, activeModel := r.applyCostLimitFallback(sessionID, provider)
 
-	// 2. Make the primary call — enable streaming if the provider supports it.
+	// 2. Hard-limit guard: if no fallback rerouted us off the default provider
+	//    and the session is over the hard limit, refuse the call.
+	if activeProvider == provider && r.costTracker.ExceedsHardLimit(sessionID) {
+		return nil, fmt.Errorf("session %q exceeded hard cost limit: %w", sessionID, ErrHardLimitExceeded)
+	}
+
+	// 3. Make the primary call — enable streaming if the provider supports it.
 	currentTools := r.currentTools()
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
 	if onStream != nil {
@@ -346,14 +338,14 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		return resp, nil
 	}
 
-	// 3. Non-retryable errors skip all fallbacks immediately.
+	// 4. Non-retryable errors skip all fallbacks immediately.
 	if !isRetryable(err) {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
-	// 4. Apply error/rate_limit fallbacks in declaration order.
+	// 5. Apply error/rate_limit fallbacks in declaration order.
 	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, onStream, err)
 	if err != nil {
 		r.mErrors.Add(ctx, 1, attrs)
@@ -409,37 +401,47 @@ func (r *Router) setSpanResponseAttrs(span trace.Span, resp *ChatResponse, cost 
 	}
 }
 
-// applyLowFundsFallback checks low_funds rules and returns the provider/model
-// to use for the primary call. First matching rule wins.
-func (r *Router) applyLowFundsFallback(ctx context.Context, sessionID string, provider Provider) (Provider, string) {
+// applyCostLimitFallback checks cost_limit rules against the agent's
+// configured soft/hard limits in CostTracker and returns the provider/model
+// to use for the primary call. First matching rule wins. Per-rule Scope
+// selects which limit (soft or hard) gates the swap; an empty scope is
+// treated as "soft" for backward compatibility with auto-migrated rules.
+func (r *Router) applyCostLimitFallback(sessionID string, provider Provider) (Provider, string) {
 	activeProvider := provider
 	activeModel := r.defaultModel
 
 	for _, rule := range r.fallbacks {
-		if rule.Trigger != "low_funds" {
+		if rule.Trigger != "cost_limit" {
 			continue
 		}
-		balance, err := r.cachedBalance(ctx, activeProvider)
-		if err != nil {
-			slog.Warn("could not fetch provider balance, skipping low_funds rule",
-				"provider", activeProvider.Name(), "error", err)
+		var exceeded bool
+		switch rule.Scope {
+		case "hard":
+			exceeded = r.costTracker.ExceedsHardLimit(sessionID)
+		case "soft", "":
+			exceeded = r.costTracker.ExceedsSoftLimit(sessionID)
+		default:
+			slog.Warn("cost_limit fallback has unknown scope, skipping", "scope", rule.Scope)
 			continue
 		}
-		if balance == -1 || balance >= rule.Threshold {
+		if !exceeded {
 			continue
 		}
-		slog.Info("low_funds fallback triggered",
+		slog.Info("cost_limit fallback triggered",
 			"session", sessionID, "provider", activeProvider.Name(),
-			"balance", balance, "threshold", rule.Threshold, "action", rule.Action)
+			"scope", rule.Scope, "action", rule.Action)
 		switch rule.Action {
 		case "switch_model":
 			activeModel = rule.Model
 		case "switch_provider":
-			if fp, ok := r.providers[rule.Provider]; ok {
-				activeProvider = fp
-			} else {
-				slog.Warn("low_funds fallback provider not registered, skipping", "provider", rule.Provider)
+			fp, ok := r.providers[rule.Provider]
+			if !ok {
+				slog.Warn("cost_limit fallback provider not registered, skipping", "provider", rule.Provider)
 				continue
+			}
+			activeProvider = fp
+			if rule.Model != "" {
+				activeModel = rule.Model
 			}
 		}
 		break
@@ -454,7 +456,7 @@ func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, acti
 	err := lastErr
 
 	for _, rule := range r.fallbacks {
-		if rule.Trigger == "low_funds" {
+		if rule.Trigger == "cost_limit" {
 			continue
 		}
 		if !r.fallbackMatchesError(rule, err) {
@@ -533,34 +535,6 @@ func (r *Router) HealthCheck(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// cachedBalance returns the provider's remaining funds using a TTL cache.
-// Returns -1 if the provider doesn't implement BalanceProvider or balance is unlimited.
-func (r *Router) cachedBalance(ctx context.Context, p Provider) (float64, error) {
-	bp, ok := p.(BalanceProvider)
-	if !ok {
-		return -1, nil // provider doesn't support balance queries
-	}
-
-	r.mu.Lock()
-	entry, exists := r.balanceCache[p.Name()]
-	r.mu.Unlock()
-
-	if exists && time.Since(entry.fetchedAt) < balanceCacheTTL {
-		return entry.balance, nil
-	}
-
-	balance, err := bp.FundsRemaining(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("fetching balance for %q: %w", p.Name(), err)
-	}
-
-	r.mu.Lock()
-	r.balanceCache[p.Name()] = balanceCacheEntry{balance: balance, fetchedAt: time.Now()}
-	r.mu.Unlock()
-
-	return balance, nil
 }
 
 // doWaitAndRetry retries fn with backoff for up to maxRetries attempts.

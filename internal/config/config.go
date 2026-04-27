@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -657,11 +658,12 @@ type OpenAIConfig struct {
 // FallbackConfig defines a single fallback rule for the LLM router.
 // Rules are evaluated in declaration order; first match wins per trigger type.
 type FallbackConfig struct {
-	Trigger    string  `toml:"trigger"     json:"trigger"`               // "error" | "rate_limit" | "low_funds"
+	Trigger    string  `toml:"trigger"     json:"trigger"`               // "error" | "rate_limit" | "cost_limit"
 	Action     string  `toml:"action"      json:"action"`                // "switch_provider" | "switch_model" | "wait_and_retry"
 	Provider   string  `toml:"provider"    json:"provider,omitempty"`    // required for switch_provider
 	Model      string  `toml:"model"       json:"model,omitempty"`       // required for switch_model; optional for switch_provider
-	Threshold  float64 `toml:"threshold"   json:"threshold,omitempty"`   // required for low_funds (USD remaining)
+	Scope      string  `toml:"scope"       json:"scope,omitempty"`       // "soft" | "hard" — required for cost_limit
+	Threshold  float64 `toml:"threshold"   json:"threshold,omitempty"`   // Deprecated: legacy low_funds field, auto-migrated on load.
 	MaxRetries int     `toml:"max_retries" json:"max_retries,omitempty"` // required for wait_and_retry
 	Backoff    string  `toml:"backoff"     json:"backoff,omitempty"`     // "exponential" (default) | "constant"
 }
@@ -1044,10 +1046,37 @@ func applyLLMDefaults(cfg *Config) {
 		cfg.LLM.StreamIdleTimeoutSecs = 120
 	}
 
+	migrateFallbacks("llm", cfg.LLM.Fallbacks)
 	for i := range cfg.LLM.Fallbacks {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
 			cfg.LLM.Fallbacks[i].Backoff = "exponential"
 		}
+	}
+}
+
+// MigrateFallbacks is the exported entry point for rewriting legacy
+// low_funds rules into the modern cost_limit/soft form. Used by the REST
+// API to normalise PATCH bodies before validation.
+func MigrateFallbacks(scope string, rules []FallbackConfig) {
+	migrateFallbacks(scope, rules)
+}
+
+// migrateFallbacks rewrites legacy low_funds rules into the cost_limit/soft
+// equivalent and logs a one-time warning per scope. Mutates rules in place.
+func migrateFallbacks(scope string, rules []FallbackConfig) {
+	for i := range rules {
+		if rules[i].Trigger != "low_funds" {
+			continue
+		}
+		slog.Warn("migrating deprecated fallback rule",
+			"scope", scope, "index", i,
+			"from", "low_funds", "to", "cost_limit",
+			"threshold_dropped", rules[i].Threshold)
+		rules[i].Trigger = "cost_limit"
+		if rules[i].Scope == "" {
+			rules[i].Scope = "soft"
+		}
+		rules[i].Threshold = 0
 	}
 }
 
@@ -1276,6 +1305,12 @@ func applyAgentDefaults(cfg *Config) {
 		a := &cfg.Agents[i]
 		if a.PersonaDir == "" {
 			a.PersonaDir = filepath.Join(cfg.DataDir, "agents", a.Name)
+		}
+		migrateFallbacks("agent:"+a.Name, a.Fallbacks)
+		for j := range a.Fallbacks {
+			if a.Fallbacks[j].Backoff == "" {
+				a.Fallbacks[j].Backoff = "exponential"
+			}
 		}
 	}
 }
@@ -1855,33 +1890,63 @@ func ValidateFallbacks(fallbacks []FallbackConfig) error {
 
 func validateFallbacks(fallbacks []FallbackConfig) error {
 	for i, f := range fallbacks {
-		switch f.Trigger {
-		case "error", "rate_limit", "low_funds":
-		default:
-			return fmt.Errorf("config: llm.fallback[%d]: invalid trigger %q", i, f.Trigger)
-		}
-		switch f.Action {
-		case "switch_provider", "switch_model", "wait_and_retry":
-		default:
-			return fmt.Errorf("config: llm.fallback[%d]: invalid action %q", i, f.Action)
-		}
-		if f.Action == "switch_provider" && f.Provider == "" {
-			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_provider\" requires provider field", i)
-		}
-		if f.Action == "switch_model" && f.Model == "" {
-			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" requires model field", i)
-		}
-		if f.Action == "wait_and_retry" && f.MaxRetries <= 0 {
-			return fmt.Errorf("config: llm.fallback[%d]: action \"wait_and_retry\" requires max_retries > 0", i)
-		}
-		if f.Trigger == "low_funds" && f.Threshold <= 0 {
-			return fmt.Errorf("config: llm.fallback[%d]: trigger \"low_funds\" requires threshold > 0", i)
-		}
-		if f.Backoff != "" && f.Backoff != "exponential" && f.Backoff != "constant" {
-			return fmt.Errorf("config: llm.fallback[%d]: invalid backoff %q — must be \"exponential\" or \"constant\"", i, f.Backoff)
+		if err := validateFallback(i, f); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateFallback(i int, f FallbackConfig) error {
+	switch f.Trigger {
+	case "error", "rate_limit", "cost_limit":
+	case "low_funds":
+		// Tolerated at validation time — applyDefaults migrates these to
+		// cost_limit before they ever reach the runtime. We accept the
+		// legacy value so REST PATCH bodies posted by old clients still
+		// pass validation.
+	default:
+		return fmt.Errorf("config: llm.fallback[%d]: invalid trigger %q", i, f.Trigger)
+	}
+	switch f.Action {
+	case "switch_provider":
+		if f.Provider == "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_provider\" requires provider field", i)
+		}
+	case "switch_model":
+		if f.Model == "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" requires model field", i)
+		}
+		if f.Provider != "" {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"switch_model\" does not accept a provider field — use \"switch_provider\" to swap providers", i)
+		}
+	case "wait_and_retry":
+		if f.MaxRetries <= 0 {
+			return fmt.Errorf("config: llm.fallback[%d]: action \"wait_and_retry\" requires max_retries > 0", i)
+		}
+	default:
+		return fmt.Errorf("config: llm.fallback[%d]: invalid action %q", i, f.Action)
+	}
+	if f.Trigger == "cost_limit" {
+		if err := validateFallbackScope(i, f.Scope); err != nil {
+			return err
+		}
+	}
+	if f.Backoff != "" && f.Backoff != "exponential" && f.Backoff != "constant" {
+		return fmt.Errorf("config: llm.fallback[%d]: invalid backoff %q — must be \"exponential\" or \"constant\"", i, f.Backoff)
+	}
+	return nil
+}
+
+func validateFallbackScope(i int, scope string) error {
+	switch scope {
+	case "soft", "hard":
+		return nil
+	case "":
+		return fmt.Errorf("config: llm.fallback[%d]: trigger \"cost_limit\" requires scope (\"soft\" or \"hard\")", i)
+	default:
+		return fmt.Errorf("config: llm.fallback[%d]: invalid scope %q — must be \"soft\" or \"hard\"", i, scope)
+	}
 }
 
 // validateSchedules checks all schedule entries for structural correctness.

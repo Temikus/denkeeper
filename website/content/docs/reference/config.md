@@ -93,13 +93,15 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 
 | Key | Type | Description |
 |---|---|---|
-| `trigger` | string | `"low_funds"`, `"rate_limit"`, or `"error"` |
+| `trigger` | string | `"cost_limit"`, `"rate_limit"`, or `"error"` |
 | `action` | string | `"switch_provider"`, `"switch_model"`, or `"wait_and_retry"` |
 | `provider` | string | Target provider (for `switch_provider`) |
 | `model` | string | Target model (for `switch_model`) |
-| `threshold` | float | USD threshold (for `low_funds`) |
+| `scope` | string | `"soft"` or `"hard"` (for `cost_limit`) — which agent cost limit triggers the swap |
 | `max_retries` | int | Max retry count (for `wait_and_retry`) |
 | `backoff` | string | `"exponential"` (default) or `"constant"` |
+
+`cost_limit` rules consume the agent's `cost_limit_soft` / `cost_limit_hard` (resolved via `[[agents]]` overrides or the global `[llm]` defaults). Legacy `low_funds` rules with a `threshold` field auto-migrate to `cost_limit` + `scope = "soft"` on load.
 
 ## `[session]`
 

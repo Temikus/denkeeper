@@ -4,21 +4,27 @@
 default:
     @just --list
 
+# Build the web dashboard if internal/web/dist/ is missing (required by //go:embed).
+# Cheap when already built; runs full build-ui only on a fresh worktree.
+ensure-web-dist:
+    @test -f internal/web/dist/index.html || just build-ui
+
 # Build the denkeeper binary
-build:
+build: ensure-web-dist
     go build -o pkg/bin/denkeeper ./cmd/denkeeper
 
-# Run all tests
-test:
-    go test -race ./...
+# Run all tests (-count=1 disables Go's test cache so results always reflect
+# the current source — never trust cached "ok" lines after editing).
+test: ensure-web-dist
+    go test -race -count=1 ./...
 
 # Run all tests (verbose)
-test-v:
-    go test -race -v ./...
+test-v: ensure-web-dist
+    go test -race -count=1 -v ./...
 
 # Run tests with coverage report
-test-cover:
-    go test -race -coverprofile=coverage.out ./...
+test-cover: ensure-web-dist
+    go test -race -count=1 -coverprofile=coverage.out ./...
     go tool cover -func=coverage.out
 
 # Open coverage in browser
@@ -26,12 +32,12 @@ test-cover-html: test-cover
     go tool cover -html=coverage.out
 
 # Run integration tests (requires -tags=integration)
-test-integration:
-    go test -tags integration -race -v ./internal/integration/...
+test-integration: ensure-web-dist
+    go test -tags integration -race -count=1 -v ./internal/integration/...
 
 # Run tests for a specific package (e.g. just test-pkg internal/agent)
-test-pkg pkg:
-    go test -race -v ./{{pkg}}/...
+test-pkg pkg: ensure-web-dist
+    go test -race -count=1 -v ./{{pkg}}/...
 
 # Start the agent with live reload (optionally pass config path: just serve ./denkeeper.toml)
 serve config="":
@@ -62,11 +68,11 @@ serve-once config="":
     fi
 
 # Run linter
-lint:
+lint: ensure-web-dist
     mise x -- golangci-lint run
 
 # Run linter with auto-fix
-lint-fix:
+lint-fix: ensure-web-dist
     mise x -- golangci-lint run --fix
 
 # Lint web UI (Svelte)
@@ -92,7 +98,7 @@ fmt-check:
     @test -z "$(gofmt -l . | grep -v '^\.claude/')" || (echo "Unformatted files:" && gofmt -l . | grep -v '^\.claude/' && exit 1)
 
 # Vet the codebase
-vet:
+vet: ensure-web-dist
     go vet ./...
 
 # Run all checks (fmt, vet, lint, test)

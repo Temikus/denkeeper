@@ -205,7 +205,7 @@ Key sections:
 | `[llm.anthropic]` | Anthropic API key — legacy single-slot syntax, auto-converted to `[[llm.providers]]` |
 | `[llm.openrouter]` | OpenRouter API key — legacy single-slot syntax |
 | `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
-| `[[llm.fallback]]` | Fallback strategies (error/rate_limit/low_funds triggers) |
+| `[[llm.fallback]]` | Fallback strategies (error/rate_limit/cost_limit triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, cost limits) |
 | `[[channels]]` | Named routing endpoints — bind adapter chats to agents with session identity; `session_mode` (`shared`/`ephemeral`) |
@@ -541,7 +541,7 @@ Denkeeper is built in phases:
 - [x] Configurable session modes for schedules (`shared`/`isolated`)
 - [x] Skills system with trigger-based filtering and per-agent merge
 - [x] MCP tool support (agentic tool-call loop)
-- [x] Fallback strategies (error/rate_limit/low_funds → switch_provider/switch_model/wait_and_retry)
+- [x] Fallback strategies (error/rate_limit/cost_limit → switch_provider/switch_model/wait_and_retry)
 - [x] Voice messages (STT/TTS via OpenAI)
 - [x] Three permission tiers (autonomous/supervised/restricted), per-agent and per-schedule
 - [x] External REST API server skeleton (auth, rate limiting, CORS, TLS, health endpoint)

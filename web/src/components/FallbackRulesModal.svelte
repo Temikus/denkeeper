@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import ModelSelector from './ModelSelector.svelte'
 
-  let { rules = $bindable([]), onSave, onClose } = $props()
+  let { rules = $bindable([]), agentProvider = '', onSave, onClose } = $props()
 
   let saving = $state(false)
   let providers = $state([])
@@ -10,13 +11,18 @@
   const triggerOptions = [
     { value: 'rate_limit', label: 'Rate Limited' },
     { value: 'error', label: 'Error' },
-    { value: 'low_funds', label: 'Low Funds' },
+    { value: 'cost_limit', label: 'Cost Limit Reached' },
   ]
 
   const actionOptions = [
     { value: 'switch_provider', label: 'Switch Provider' },
     { value: 'switch_model', label: 'Switch Model' },
     { value: 'wait_and_retry', label: 'Wait & Retry' },
+  ]
+
+  const scopeOptions = [
+    { value: 'soft', label: 'Soft' },
+    { value: 'hard', label: 'Hard' },
   ]
 
   const backoffOptions = ['exponential', 'constant']
@@ -27,18 +33,22 @@
 
   // Evaluation timing label for each trigger type.
   function triggerTiming(v) {
-    return v === 'low_funds' ? 'pre-call' : 'post-call'
+    return v === 'cost_limit' ? 'pre-call' : 'post-call'
+  }
+
+  function defaultProviderForRule() {
+    return agentProvider || providers[0] || ''
   }
 
   function addRule() {
     rules = [...rules, {
       trigger: 'rate_limit',
       action: 'switch_provider',
-      provider: providers[0] || '',
+      provider: defaultProviderForRule(),
       model: '',
+      scope: 'soft',
       max_retries: 3,
       backoff: 'exponential',
-      threshold: 5.0,
     }]
   }
 
@@ -51,6 +61,30 @@
     const [item] = next.splice(from, 1)
     next.splice(to, 0, item)
     rules = next
+  }
+
+  // When the user picks a trigger or action, ensure required fields are populated.
+  function onTriggerChange(idx) {
+    if (rules[idx].trigger === 'cost_limit' && !rules[idx].scope) {
+      rules[idx].scope = 'soft'
+    }
+  }
+
+  function onActionChange(idx) {
+    if (rules[idx].action === 'switch_provider' && !rules[idx].provider) {
+      rules[idx].provider = defaultProviderForRule()
+    }
+    if (rules[idx].action === 'switch_model') {
+      // switch_model stays on the agent's provider — clear any stale value.
+      rules[idx].provider = ''
+    }
+  }
+
+  // ModelSelector emits (modelId, providerName) on selection.
+  function onModelPicked(idx, _modelId, providerName) {
+    if (providerName) {
+      rules[idx].provider = providerName
+    }
   }
 
   async function save() {
@@ -113,20 +147,21 @@
               <div class="rule-body">
                 <div class="rule-condition">
                   <span class="rule-if">IF</span>
-                  <select class="input input-accent" bind:value={rule.trigger}>
+                  <select class="input input-accent" bind:value={rule.trigger} onchange={() => onTriggerChange(idx)}>
                     {#each triggerOptions as opt}
                       <option value={opt.value}>{opt.label}</option>
                     {/each}
                   </select>
-                  {#if rule.trigger === 'low_funds'}
-                    <span class="rule-label">below</span>
-                    <div class="threshold-input">
-                      <span class="threshold-prefix">$</span>
-                      <input type="number" class="input input-num" bind:value={rule.threshold} min="0" step="0.5" />
-                    </div>
+                  {#if rule.trigger === 'cost_limit'}
+                    <span class="rule-label">scope</span>
+                    <select class="input" bind:value={rule.scope}>
+                      {#each scopeOptions as opt}
+                        <option value={opt.value}>{opt.label}</option>
+                      {/each}
+                    </select>
                   {/if}
                   <span class="rule-arrow">&rarr;</span>
-                  <select class="input" bind:value={rule.action}>
+                  <select class="input" bind:value={rule.action} onchange={() => onActionChange(idx)}>
                     {#each actionOptions as opt}
                       <option value={opt.value}>{opt.label}</option>
                     {/each}
@@ -143,14 +178,21 @@
                         {/each}
                       </select>
                     </div>
-                    <div class="field-group">
+                    <div class="field-group field-grow">
                       <span class="field-label">Model <span class="field-optional">(optional)</span></span>
-                      <input type="text" class="input mono" bind:value={rule.model} placeholder="Default" />
+                      <ModelSelector
+                        bind:value={rule.model}
+                        provider={rule.provider}
+                        onchange={(m, p) => onModelPicked(idx, m, p)}
+                      />
                     </div>
                   {:else if rule.action === 'switch_model'}
-                    <div class="field-group">
-                      <span class="field-label">Fallback Model</span>
-                      <input type="text" class="input mono" bind:value={rule.model} placeholder="e.g. anthropic/claude-haiku-4-5-20251001" />
+                    <div class="field-group field-grow">
+                      <span class="field-label">Fallback Model <span class="field-optional">(from {agentProvider || 'agent provider'})</span></span>
+                      <ModelSelector
+                        bind:value={rule.model}
+                        provider={agentProvider}
+                      />
                     </div>
                   {:else if rule.action === 'wait_and_retry'}
                     <div class="field-group">
@@ -384,30 +426,16 @@
     color: var(--text-muted);
   }
 
-  .threshold-input {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-  }
-  .threshold-prefix {
-    padding: 0 0 0 10px;
-    color: var(--text-muted);
-    font-size: 13px;
-  }
-  .threshold-input .input-num {
-    border: none;
-    width: 60px;
-  }
-
   .rule-fields {
     display: flex;
     gap: 8px;
     align-items: flex-end;
     flex-wrap: wrap;
+  }
+
+  .field-grow {
+    flex: 1 1 220px;
+    min-width: 220px;
   }
 
   .field-group {
@@ -447,8 +475,6 @@
     width: 60px;
     text-align: center;
   }
-
-  .mono { font-family: monospace; font-size: 12px; }
 
   select.input {
     cursor: pointer;

@@ -4,8 +4,8 @@
 
   let { event, expanded = false, ontoggle, compact = false, standalone = false } = $props()
 
-  const catLabels = { tool_call: 'TOOL', llm: 'LLM', approval: 'APPROVE', schedule: 'SCHED', config: 'CONFIG', skill: 'SKILL', mcp: 'MCP', session: 'SESSION', channel: 'CHAN' }
-  const catClasses = { tool_call: 'cat-tool', llm: 'cat-llm', approval: 'cat-approval', schedule: 'cat-schedule', config: 'cat-config', skill: 'cat-skill', mcp: 'cat-mcp', session: 'cat-session', channel: 'cat-session' }
+  const catLabels = { tool_call: 'TOOL', llm: 'LLM', approval: 'APPROVE', schedule: 'SCHED', config: 'CONFIG', skill: 'SKILL', mcp: 'MCP', session: 'SESSION', channel: 'CHAN', supervisor: 'SUPER' }
+  const catClasses = { tool_call: 'cat-tool', llm: 'cat-llm', approval: 'cat-approval', schedule: 'cat-schedule', config: 'cat-config', skill: 'cat-skill', mcp: 'cat-mcp', session: 'cat-session', channel: 'cat-session', supervisor: 'cat-supervisor' }
 
   function parseDetail(d) { if (!d) return {}; try { return JSON.parse(d) } catch { return {} } }
   function relativeTime(ts) {
@@ -70,6 +70,15 @@
   // LLM thinking badge
   let hasThinking = $derived(event.category === 'llm' && !!detail.thinking_content)
 
+  // Supervisor decision pill
+  let supervisorDecision = $derived(event.category === 'supervisor' ? (detail.decision || '') : '')
+  let supervisorPillClass = $derived.by(() => {
+    if (supervisorDecision === 'APPROVE') return 'pill-decision-approve'
+    if (supervisorDecision === 'DENY') return 'pill-decision-deny'
+    if (supervisorDecision === 'ESCALATE') return 'pill-decision-escalate'
+    return ''
+  })
+
   // Standalone dot class
   let dotClass = $derived(isError ? 'dot-error' : isDenied ? 'dot-muted' : 'dot-ok')
 </script>
@@ -107,6 +116,9 @@
       {/if}
       {#if llmChip}
         <span class="pill-shape">{llmChip}</span>
+      {/if}
+      {#if supervisorDecision}
+        <span class="pill-decision {supervisorPillClass}">{supervisorDecision}</span>
       {/if}
 
       {#if isError}
@@ -193,6 +205,7 @@
   .cat-skill { color: #06b6d4; background: rgba(6,182,212,0.08); }
   .cat-mcp { color: var(--accent); background: rgba(192,68,44,0.08); }
   .cat-session { color: #10b981; background: rgba(16,185,129,0.08); }
+  .cat-supervisor { color: #534AB7; background: rgba(127,119,221,0.12); }
 
   .row-summary {
     color: var(--text); white-space: nowrap;
@@ -223,6 +236,15 @@
     border-radius: 3px; color: var(--danger); background: rgba(226,75,74,0.10);
     white-space: nowrap; flex-shrink: 0;
   }
+
+  .pill-decision {
+    font-size: 9px; font-weight: 600; padding: 1px 5px;
+    border-radius: 3px; letter-spacing: 0.3px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .pill-decision-approve { color: #3B6D11; background: rgba(61,143,98,0.10); }
+  .pill-decision-deny { color: var(--danger); background: rgba(226,75,74,0.10); }
+  .pill-decision-escalate { color: #854F0B; background: rgba(186,117,23,0.12); }
 
   .spacer { flex: 1; }
 

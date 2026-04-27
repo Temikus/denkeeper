@@ -6,6 +6,7 @@
   let resultExpanded = $state(false)
   let thinkingExpanded = $state(false)
   let outputRawMode = $state(false)
+  let supervisorRawExpanded = $state(false)
   let copiedJSON = $state(false)
   let copiedOutput = $state(false)
 
@@ -26,6 +27,7 @@
   let isError = $derived(event.status === 'error')
   let isToolCall = $derived(event.category === 'tool_call')
   let isLLM = $derived(event.category === 'llm')
+  let isSupervisor = $derived(event.category === 'supervisor')
 
   // ─── TOOL CALL: ARGUMENTS ─────────────────────────────────────────────
   let hasArguments = $derived(isToolCall && !!detail?.arguments)
@@ -172,6 +174,27 @@
     }
   })
 
+  // ─── SUPERVISOR ──────────────────────────────────────────────────────
+  let supervisorDecision = $derived(isSupervisor ? (detail?.decision || '') : '')
+  let supervisorReason = $derived(isSupervisor ? (detail?.reason || '') : '')
+  let supervisorRaw = $derived(isSupervisor ? (detail?.raw_response || '') : '')
+  let supervisorName = $derived(isSupervisor ? (detail?.supervisor || '') : '')
+  let supervisorTool = $derived(isSupervisor ? (detail?.tool || '') : '')
+  let supervisorArgs = $derived.by(() => {
+    if (!isSupervisor || !detail?.arguments) return ''
+    try {
+      return JSON.stringify(JSON.parse(detail.arguments), null, 2)
+    } catch {
+      return detail.arguments
+    }
+  })
+  let supervisorDecisionClass = $derived.by(() => {
+    if (supervisorDecision === 'APPROVE') return 'decision-approve'
+    if (supervisorDecision === 'DENY') return 'decision-deny'
+    if (supervisorDecision === 'ESCALATE') return 'decision-escalate'
+    return ''
+  })
+
   // ─── SHARED: CONTEXT ─────────────────────────────────────────────────
   let contextFields = $derived.by(() => {
     if (!detail) return []
@@ -180,7 +203,8 @@
       'tokens_prompt', 'tokens_completion', 'tokens_cached',
       'finish_reason', 'round', 'arguments', 'result', 'result_truncated',
       'server', 'response_text', 'response_truncated',
-      'thinking_content', 'thinking_truncated'
+      'thinking_content', 'thinking_truncated',
+      'decision', 'reason', 'raw_response', 'supervisor'
     ])
     return Object.entries(detail).filter(([k]) => !skip.has(k)).map(([k, v]) => [k, String(v)])
   })
@@ -350,6 +374,56 @@
     </div>
   {/if}
 
+  <!-- ═══ SUPERVISOR sections ═══ -->
+  {#if isSupervisor}
+    {#if supervisorDecision}
+      <div class="detail-section">
+        <div class="detail-label">DECISION</div>
+        <div class="detail-content">
+          <span class="decision-badge {supervisorDecisionClass}">{supervisorDecision}</span>
+          {#if supervisorTool}
+            <span class="decision-target">on <code>{supervisorTool}</code></span>
+          {/if}
+        </div>
+      </div>
+    {/if}
+    {#if supervisorReason}
+      <div class="detail-section">
+        <div class="detail-label">REASON</div>
+        <div class="detail-content">
+          <div class="reason-block">{supervisorReason}</div>
+        </div>
+      </div>
+    {/if}
+    {#if supervisorRaw}
+      <div class="detail-section">
+        <div class="detail-label thinking-label">REASONING</div>
+        <div class="detail-content">
+          <div class="thinking-summary" role="button" tabindex="0" aria-expanded={supervisorRawExpanded}
+            onclick={() => supervisorRawExpanded = !supervisorRawExpanded}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); supervisorRawExpanded = !supervisorRawExpanded } }}>
+            <span class="thinking-chevron">{supervisorRawExpanded ? '\u25be' : '\u25b8'}</span>
+            <span class="thinking-meta">{formatSize(supervisorRaw.length)}</span>
+            <span class="result-sep">&middot;</span>
+            <span class="thinking-teaser">raw supervisor response</span>
+            <span class="thinking-toggle">{supervisorRawExpanded ? 'hide' : 'show'}</span>
+          </div>
+          {#if supervisorRawExpanded}
+            <div class="thinking-full"><pre>{supervisorRaw}</pre></div>
+          {/if}
+        </div>
+      </div>
+    {/if}
+    {#if supervisorArgs}
+      <div class="detail-section">
+        <div class="detail-label">ARGUMENTS</div>
+        <div class="detail-content">
+          <div class="args-block"><pre>{supervisorArgs}</pre></div>
+        </div>
+      </div>
+    {/if}
+  {/if}
+
   <!-- ═══ ERROR ═══ -->
   {#if isError && errorMsg}
     <div class="detail-section">
@@ -360,8 +434,8 @@
     </div>
   {/if}
 
-  <!-- ═══ Generic fallthrough (non-tool, non-LLM) ═══ -->
-  {#if !isToolCall && !isLLM && detail}
+  <!-- ═══ Generic fallthrough (non-tool, non-LLM, non-supervisor) ═══ -->
+  {#if !isToolCall && !isLLM && !isSupervisor && detail}
     <div class="detail-section">
       <div class="detail-label">DETAIL</div>
       <div class="detail-content args-block">
@@ -371,12 +445,15 @@
   {/if}
 
   <!-- ═══ CONTEXT ═══ -->
-  {#if contextFields.length > 0 || serverName || modelName || event.agent || event.conversation_id}
+  {#if contextFields.length > 0 || serverName || modelName || event.agent || event.conversation_id || supervisorName}
     <div class="detail-section">
       <div class="detail-label">CONTEXT</div>
       <div class="detail-content context-block">
         {#if event.agent}
           <div class="context-row"><span class="ctx-key">agent</span><span class="ctx-val">{event.agent}</span></div>
+        {/if}
+        {#if supervisorName}
+          <div class="context-row"><span class="ctx-key">supervisor</span><span class="ctx-val">{supervisorName}</span></div>
         {/if}
         {#if modelName}
           <div class="context-row">
@@ -743,6 +820,42 @@
   }
   .dot-input { background: #E8825E; }
   .dot-output { background: #3B6D11; }
+
+  /* Supervisor */
+  .decision-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+  .decision-approve { color: #3B6D11; background: rgba(61,143,98,0.10); }
+  .decision-deny { color: var(--danger); background: rgba(226,75,74,0.10); }
+  .decision-escalate { color: #854F0B; background: rgba(186,117,23,0.12); }
+  .decision-target {
+    margin-left: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .decision-target code {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text);
+    background: var(--hover-overlay);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .reason-block {
+    padding: 8px 10px;
+    background: var(--hover-overlay);
+    border-radius: var(--radius);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 
   /* Error */
   .error-block {

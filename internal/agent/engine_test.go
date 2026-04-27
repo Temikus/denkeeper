@@ -3428,6 +3428,94 @@ func TestEngine_SupervisorDeny(t *testing.T) {
 	}
 }
 
+func TestEngine_SupervisorAuditDetailIncludesRawResponse(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"x"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{Content: "done", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	rawSupervisor := "Reasoning: the query looks benign and aligns with the user request.\nAPPROVE: safe search query"
+	supervisorProv := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: rawSupervisor, TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "", nil, toolMgr, mgr, testLogger())
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	auditor := &collectingAuditor{}
+	engine.SetAuditor(auditor)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter: "test", ExternalID: "chat-sup-raw", UserID: "u", UserName: "t",
+		Text: "search", Timestamp: time.Now(),
+	}, nil); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	var supEv *audit.Event
+	for i := range auditor.events {
+		if auditor.events[i].Category == audit.CategorySupervisor {
+			supEv = &auditor.events[i]
+			break
+		}
+	}
+	if supEv == nil {
+		t.Fatal("no supervisor audit event emitted")
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(supEv.Detail), &detail); err != nil {
+		t.Fatalf("Detail not JSON: %v", err)
+	}
+	got, ok := detail["raw_response"].(string)
+	if !ok {
+		t.Fatalf("raw_response missing or not string: %#v", detail["raw_response"])
+	}
+	if got != rawSupervisor {
+		t.Errorf("raw_response = %q, want %q", got, rawSupervisor)
+	}
+	if detail["decision"] != "APPROVE" {
+		t.Errorf("decision = %v, want APPROVE", detail["decision"])
+	}
+}
+
 func TestEngine_SetSupervisor(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
