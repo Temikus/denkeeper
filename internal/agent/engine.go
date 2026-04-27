@@ -1655,11 +1655,12 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 		auditStatus = audit.StatusPending
 	}
 	detailJSON, _ := json.Marshal(map[string]any{
-		"tool":       tc.Function.Name,
-		"arguments":  tc.Function.Arguments,
-		"decision":   string(decision),
-		"reason":     reason,
-		"supervisor": e.supervisor.name,
+		"tool":         tc.Function.Name,
+		"arguments":    tc.Function.Arguments,
+		"decision":     string(decision),
+		"reason":       reason,
+		"supervisor":   e.supervisor.name,
+		"raw_response": resp.Content,
 	})
 	e.emitAudit(ctx, audit.Event{
 		Category:       audit.CategorySupervisor,

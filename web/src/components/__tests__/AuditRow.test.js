@@ -226,4 +226,62 @@ describe('AuditRow', () => {
     }})
     expect(screen.getByText('MCP')).toBeInTheDocument()
   })
+
+  test('renders supervisor event with SUPER badge', () => {
+    const { container } = render(AuditRow, { props: {
+      event: makeEvent({
+        category: 'supervisor', action: 'review',
+        summary: 'APPROVE web_search: query is benign',
+        detail: JSON.stringify({ tool: 'web_search', decision: 'APPROVE', reason: 'query is benign' }),
+      }),
+    }})
+    expect(screen.getByText('SUPER')).toBeInTheDocument()
+    expect(container.querySelector('.cat-supervisor')).toBeInTheDocument()
+  })
+
+  test('shows APPROVE decision pill on supervisor approve event', () => {
+    const { container } = render(AuditRow, { props: {
+      event: makeEvent({
+        category: 'supervisor', status: 'ok',
+        summary: 'APPROVE web_search',
+        detail: JSON.stringify({ tool: 'web_search', decision: 'APPROVE', reason: 'safe' }),
+      }),
+    }})
+    expect(screen.getByText('APPROVE')).toBeInTheDocument()
+    expect(container.querySelector('.pill-decision-approve')).toBeInTheDocument()
+  })
+
+  test('shows DENY decision pill on supervisor deny event', () => {
+    const { container } = render(AuditRow, { props: {
+      event: makeEvent({
+        category: 'supervisor', status: 'denied',
+        summary: 'DENY dangerous_tool',
+        detail: JSON.stringify({ tool: 'dangerous_tool', decision: 'DENY', reason: 'unsafe' }),
+      }),
+    }})
+    expect(screen.getByText('DENY')).toBeInTheDocument()
+    expect(container.querySelector('.pill-decision-deny')).toBeInTheDocument()
+  })
+
+  test('shows ESCALATE decision pill on supervisor escalate event', () => {
+    const { container } = render(AuditRow, { props: {
+      event: makeEvent({
+        category: 'supervisor', status: 'pending',
+        summary: 'ESCALATE odd_tool',
+        detail: JSON.stringify({ tool: 'odd_tool', decision: 'ESCALATE', reason: 'unclear' }),
+      }),
+    }})
+    expect(screen.getByText('ESCALATE')).toBeInTheDocument()
+    expect(container.querySelector('.pill-decision-escalate')).toBeInTheDocument()
+  })
+
+  test('does not show decision pill for non-supervisor events', () => {
+    const { container } = render(AuditRow, { props: {
+      event: makeEvent({
+        category: 'llm', action: 'complete', summary: 'response',
+        detail: JSON.stringify({ model: 'claude', decision: 'APPROVE' }),
+      }),
+    }})
+    expect(container.querySelector('.pill-decision')).not.toBeInTheDocument()
+  })
 })
