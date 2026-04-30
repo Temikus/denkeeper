@@ -32,7 +32,7 @@ const defaultRepeatDetectionThreshold = 3 // consecutive identical tool calls be
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
 const defaultSupervisorContextMessages = 5
-const defaultSupervisorTimeout = 15 * time.Second
+const defaultSupervisorTimeout = 30 * time.Second
 const maxConversationIDLen = 256
 
 // toolCallKey identifies a unique tool invocation by name and arguments.
@@ -765,7 +765,8 @@ type ChatEvent struct {
 
 	// ApprovalStatus distinguishes pending approvals from auto-approved ones.
 	// Values: "" (pending, needs user action), "auto_approved" (rule matched),
-	// "supervisor_approved", "supervisor_denied", "supervisor_escalated".
+	// "supervisor_approved", "supervisor_denied", "supervisor_escalated",
+	// "supervisor_error" (supervisor LLM call failed; falls through to human).
 	ApprovalStatus string `json:"approval_status,omitempty"`
 }
 
@@ -1393,6 +1394,15 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 	if supErr != nil {
 		e.logger.Warn("supervisor review failed, falling through to human approval",
 			"tool", tc.Function.Name, "error", supErr)
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           fmt.Sprintf("Supervisor unavailable (%v) — awaiting your review", supErr),
+				ApprovalStatus: "supervisor_error",
+			})
+		}
 		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
 		if !approved {
 			return approvalDenied(result)
@@ -1633,6 +1643,23 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 	if err != nil {
 		e.logger.Warn("supervisor review failed", "tool", tc.Function.Name, "error", err, "duration_ms", duration.Milliseconds())
 		span.SetAttributes(attribute.String("supervisor.decision", "error"))
+		errDetailJSON, _ := json.Marshal(map[string]any{
+			"tool":       tc.Function.Name,
+			"arguments":  tc.Function.Arguments,
+			"decision":   "error",
+			"reason":     err.Error(),
+			"supervisor": e.supervisor.name,
+		})
+		e.emitAudit(ctx, audit.Event{
+			Category:       audit.CategorySupervisor,
+			Action:         "review",
+			Summary:        fmt.Sprintf("ERROR %s: %v", tc.Function.Name, err),
+			Detail:         string(errDetailJSON),
+			Status:         audit.StatusError,
+			DurationMs:     duration.Milliseconds(),
+			Source:         "supervisor:" + e.supervisor.name,
+			ConversationID: convID,
+		})
 		return supervisorEscalate, fmt.Sprintf("supervisor error: %v", err), err
 	}
 

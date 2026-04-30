@@ -247,6 +247,7 @@
       case 'supervisor_denied': return '\u2717'
       case 'denied': return '\u2717'
       case 'supervisor_escalated': return '\u2191'
+      case 'supervisor_error': return '\u26a0'
       default: return '\u25cb'
     }
   }
@@ -259,6 +260,7 @@
       case 'supervisor_denied': return 'supervisor denied'
       case 'denied': return 'denied'
       case 'supervisor_escalated': return 'escalated to you'
+      case 'supervisor_error': return 'supervisor unavailable'
       default: return 'pending'
     }
   }

@@ -3544,3 +3544,115 @@ func TestEngine_SetSupervisor(t *testing.T) {
 		t.Error("expected supervisor to be cleared")
 	}
 }
+
+// TestEngine_SupervisorError verifies the silent-failure fix: when the
+// supervisor's LLM call errors out, an audit event is emitted (so failures
+// are visible) and a supervisor_error ChatEvent is fired (so chat UIs can
+// show why a tool dropped to human approval).
+func TestEngine_SupervisorError(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"x"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{Content: "done", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	// Supervisor provider has zero responses → ChatCompletion returns an error
+	// immediately, simulating an LLM/network failure.
+	supervisorProv := &sequentialProvider{}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "", nil, toolMgr, mgr, testLogger())
+	// Short approval timeout so the human-approval fall-through doesn't block
+	// the test waiting 5m for an operator that will never respond.
+	engine.SetApprovalConfig(50*time.Millisecond, 0)
+
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	auditor := &collectingAuditor{}
+	engine.SetAuditor(auditor)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var events []ChatEvent
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter: "test", ExternalID: "chat-sup-err", UserID: "u", UserName: "t",
+		Text: "search", Timestamp: time.Now(),
+	}, func(evt ChatEvent) { events = append(events, evt) }); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	// Verify supervisor_error ChatEvent was emitted.
+	var sawSupErrEvent bool
+	for _, evt := range events {
+		if evt.Type == "tool_approval" && evt.ApprovalStatus == "supervisor_error" {
+			sawSupErrEvent = true
+			if !strings.Contains(evt.Text, "Supervisor unavailable") {
+				t.Errorf("supervisor_error event text = %q, want to contain 'Supervisor unavailable'", evt.Text)
+			}
+			break
+		}
+	}
+	if !sawSupErrEvent {
+		t.Error("no supervisor_error tool_approval event found")
+	}
+
+	// Verify a supervisor audit event with status=error was emitted.
+	var supErrAudit *audit.Event
+	for i := range auditor.events {
+		ev := &auditor.events[i]
+		if ev.Category == audit.CategorySupervisor && ev.Status == audit.StatusError {
+			supErrAudit = ev
+			break
+		}
+	}
+	if supErrAudit == nil {
+		t.Fatal("no supervisor audit event with status=error emitted")
+	}
+	if supErrAudit.Source != "supervisor:supervisor" {
+		t.Errorf("audit Source = %q, want %q", supErrAudit.Source, "supervisor:supervisor")
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(supErrAudit.Detail), &detail); err != nil {
+		t.Fatalf("audit Detail not JSON: %v", err)
+	}
+	if detail["decision"] != "error" {
+		t.Errorf("audit detail decision = %v, want \"error\"", detail["decision"])
+	}
+	if detail["tool"] != "web_search" {
+		t.Errorf("audit detail tool = %v, want \"web_search\"", detail["tool"])
+	}
+	if reason, _ := detail["reason"].(string); reason == "" {
+		t.Error("audit detail reason is empty; want the underlying error message")
+	}
+}

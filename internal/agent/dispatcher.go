@@ -1290,8 +1290,48 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 	d.sendStandaloneApprovalPrompt(ctx, a, msg, evt)
 }
 
+// supervisorStatusRender carries the per-status debug text and activity-log
+// line used when rendering a supervisor approval transition. Both fields
+// are functions so they can interpolate evt.Text (e.g. the supervisor's
+// reason for denial).
+type supervisorStatusRender struct {
+	debugText func(evt ChatEvent) string
+	alogLine  func(evt ChatEvent) string
+}
+
+// supervisorStatusRenders maps supervisor_* approval statuses to their
+// render strings. Centralizing this keeps routeApprovalStatus flat enough
+// to satisfy the cyclomatic complexity budget.
+var supervisorStatusRenders = map[string]supervisorStatusRender{
+	"supervisor_approved": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Tool **%s** approved by supervisor", evt.Tool)
+		},
+		alogLine: func(_ ChatEvent) string { return "auto-approved" },
+	},
+	"supervisor_denied": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text)
+		},
+		alogLine: func(evt ChatEvent) string { return "❌ denied: " + evt.Text },
+	},
+	"supervisor_escalated": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Supervisor escalated tool **%s** — awaiting your review", evt.Tool)
+		},
+		alogLine: func(_ ChatEvent) string { return "↑ escalated — awaiting your review" },
+	},
+	"supervisor_error": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Supervisor unavailable for **%s** — awaiting your review (%s)", evt.Tool, evt.Text)
+		},
+		alogLine: func(_ ChatEvent) string { return "⚠ supervisor unavailable — awaiting your review" },
+	},
+}
+
 // routeApprovalStatus handles non-pending approval statuses (auto_approved,
-// denied, supervisor_*). Returns true when the event was handled.
+// denied, supervisor_approved, supervisor_denied, supervisor_escalated,
+// supervisor_error). Returns true when the event was handled.
 func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent, debug bool, alog *activityLog) bool {
 	switch evt.ApprovalStatus {
 	case "auto_approved":
@@ -1310,43 +1350,21 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 			alog.toolDenied(ctx, evt.Tool)
 		}
 		return true
-	case "supervisor_approved":
-		if debug {
-			_ = a.Send(ctx, adapter.OutgoingMessage{
-				Text:       fmt.Sprintf("Tool **%s** approved by supervisor", evt.Tool),
-				ExternalID: msg.ExternalID,
-				Adapter:    msg.Adapter,
-			})
-		} else if alog != nil {
-			alog.supervisorLine(ctx, evt.Tool, "auto-approved")
-		}
-		return true
-	case "supervisor_denied":
-		if debug {
-			_ = a.Send(ctx, adapter.OutgoingMessage{
-				Text:       fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text),
-				ExternalID: msg.ExternalID,
-				Adapter:    msg.Adapter,
-			})
-		} else if alog != nil {
-			alog.supervisorLine(ctx, evt.Tool, "❌ denied: "+evt.Text)
-		}
-		return true
-	case "supervisor_escalated":
-		if debug {
-			_ = a.Send(ctx, adapter.OutgoingMessage{
-				Text:       fmt.Sprintf("Supervisor escalated tool **%s** — awaiting your review", evt.Tool),
-				ExternalID: msg.ExternalID,
-				Adapter:    msg.Adapter,
-			})
-		} else if alog != nil {
-			alog.supervisorLine(ctx, evt.Tool, "↑ escalated — awaiting your review")
-		}
-		// The subsequent awaitToolApproval emits another tool_approval event
-		// with buttons for the human to act on.
-		return true
 	}
-	return false
+	render, ok := supervisorStatusRenders[evt.ApprovalStatus]
+	if !ok {
+		return false
+	}
+	if debug {
+		_ = a.Send(ctx, adapter.OutgoingMessage{
+			Text:       render.debugText(evt),
+			ExternalID: msg.ExternalID,
+			Adapter:    msg.Adapter,
+		})
+	} else if alog != nil {
+		alog.supervisorLine(ctx, evt.Tool, render.alogLine(evt))
+	}
+	return true
 }
 
 func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
