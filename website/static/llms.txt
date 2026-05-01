@@ -1,0 +1,27 @@
+# Denkeeper
+
+> A security-first, single-binary personal AI agent written in Go.
+> Self-hostable on anything from a Raspberry Pi to Kubernetes.
+
+## Quickstart
+
+- Docs:    https://denkeeper.io/docs/
+- GitHub:  https://github.com/Temikus/denkeeper
+- Install: curl -fsSL https://raw.githubusercontent.com/Temikus/denkeeper/main/install.sh | sh
+
+## API
+
+Running instances expose a REST API documented with OpenAPI 2.0.
+Fetch the spec from any live instance at: GET <base-url>/api/v1/openapi.json
+
+## Key Concepts
+
+- Agents:    named LLM personas with their own skills, model, and permission tier
+- Skills:    markdown files injected into the system prompt to shape agent behaviour
+- Channels:  named routing endpoints decoupling sessions from Telegram/Discord adapters
+- MCP Tools: denkeeper connects outward to MCP servers to give agents external tools
+- Approvals: supervised-tier tool calls require explicit human or API approval
+
+## Optional: llms-full.txt
+
+https://denkeeper.io/llms-full.txt  — extended reference with all config options

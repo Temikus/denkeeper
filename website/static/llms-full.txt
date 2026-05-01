@@ -1,0 +1,307 @@
+# Denkeeper — Full Reference
+
+> A security-first, single-binary personal AI agent written in Go.
+> Self-hostable on anything from a Raspberry Pi to Kubernetes.
+
+## Quickstart
+
+- Docs:    https://denkeeper.io/docs/
+- GitHub:  https://github.com/Temikus/denkeeper
+- Install: curl -fsSL https://raw.githubusercontent.com/Temikus/denkeeper/main/install.sh | sh
+
+## API
+
+Running instances expose a REST API documented with OpenAPI 2.0.
+Fetch the spec from any live instance at: GET <base-url>/api/v1/openapi.json
+
+The instance also serves a compact discovery file at: GET <base-url>/llms.txt
+
+## Key Concepts
+
+- Agents:    named LLM personas with their own skills, model, and permission tier
+- Skills:    markdown files injected into the system prompt to shape agent behaviour
+- Channels:  named routing endpoints decoupling sessions from Telegram/Discord adapters
+- MCP Tools: denkeeper connects outward to MCP servers to give agents external tools
+- Approvals: supervised-tier tool calls require explicit human or API approval
+- Fallbacks: automatic provider/model switching on cost limits, rate limits, or errors
+
+## Architecture
+
+Messages flow through:
+
+    Adapter (Telegram/Discord)
+    Web Dashboard (WS/SSE)      → Dispatcher → Engine (per agent) → LLM Router → Provider
+    REST API (POST /api/v1/chat)                    ↕                    ↕
+                                                MemoryStore          CostTracker
+                                                (SQLite)             + Pricing Registry
+
+Three permission tiers: autonomous (all actions), supervised (chat + tools with approval), restricted (chat + read-only tools).
+
+## TOML Configuration Reference
+
+Configuration is a single TOML file (default: ~/.denkeeper/denkeeper.toml).
+All paths default relative to `data_dir`. Override with `DENKEEPER_*` env vars.
+
+### Root
+
+    data_dir = "~/.denkeeper"        # base data directory
+    max_tools = 50                   # combined tools + plugins limit
+
+### [telegram]
+
+    token = ""                       # bot token from @BotFather
+    allowed_users = [123456789]      # allowed Telegram user IDs (int array)
+
+### [discord]
+
+    token = ""                       # Discord bot token
+    allowed_users = ["snowflake_id"] # Discord user snowflake IDs
+
+### [llm]
+
+    default_provider = "openrouter"  # default provider name
+    default_model = ""               # default model identifier
+    cost_limit_soft = 0.0            # soft cost limit per session (USD)
+    cost_limit_hard = 1.0            # hard cost limit per session (USD)
+    stream_idle_timeout_secs = 120   # idle timeout for LLM SSE streams
+
+### [[llm.providers]]
+
+Named provider instances (array). Multiple instances of the same type allowed.
+
+    [[llm.providers]]
+    name = "my-anthropic"            # unique provider name
+    type = "anthropic"               # "anthropic", "openai", "openrouter", "ollama"
+    api_key = ""                     # API key (required except ollama)
+    base_url = ""                    # API endpoint override
+    organization = ""                # OpenAI organization ID (openai type only)
+
+Legacy single-slot syntax (`[llm.anthropic]`, `[llm.openai]`, etc.) is still supported.
+
+### [[llm.fallback]]
+
+Automatic failover strategies.
+
+    [[llm.fallback]]
+    trigger = "cost_limit"           # "cost_limit", "rate_limit", "error"
+    action = "switch_provider"       # "switch_provider", "switch_model", "wait_and_retry"
+    provider = "fallback-provider"   # target provider (for switch_provider)
+    model = ""                       # target model (for switch_model)
+    scope = "soft"                   # "soft" or "hard" (for cost_limit)
+    max_retries = 3                  # max retries (for wait_and_retry)
+    backoff = "exponential"          # "exponential" or "constant"
+
+### [session]
+
+    tier = "supervised"              # default permission tier
+    approval_timeout = "5m"          # timeout for pending approvals
+    approval_retries = 0             # retries for timed-out approvals
+
+### [[agents]]
+
+Multi-agent definitions. If absent, a single "default" agent is synthesized.
+
+    [[agents]]
+    name = "my-agent"                # unique agent name
+    description = ""                 # human-readable description
+    persona_dir = ""                 # path to persona files (SOUL.md, USER.md, MEMORY.md)
+    skills_dir = ""                  # agent-specific skills directory
+    adapters = ["telegram"]          # adapter bindings
+    llm_provider = ""                # override default provider
+    llm_model = ""                   # override default model
+    session_tier = ""                # override default permission tier
+    browser_url_allowlist = []       # allowed domains for browser automation
+    cost_limit_soft = 0.0            # soft cost limit override
+    cost_limit_hard = 0.0            # hard cost limit override
+    max_context_messages = 0         # max messages in LLM context (0 = 50)
+    max_tool_rounds = 0              # max tool-call rounds (0 = 50)
+    supervisor = ""                  # supervisor agent name for tool call review
+    supervisor_timeout = ""          # supervisor call timeout
+    supervisor_context_messages = 5  # recent messages in supervisor prompt
+
+### [[channels]]
+
+Named routing endpoints decoupling sessions from adapters.
+
+    [[channels]]
+    name = "general"                 # unique channel identifier
+    agent = "my-agent"               # target agent name
+    adapters = ["telegram:123"]      # adapter bindings
+    delivery = "single"              # "single" or "broadcast"
+    session_mode = "persistent"      # "persistent" or "ephemeral"
+
+### [memory]
+
+    db_path = "data/memory.db"       # SQLite database path
+    retention_days = 90              # conversation retention period
+    max_conversations = 10000        # max stored conversations
+    cleanup_interval = "1h"          # cleanup frequency
+
+### [log]
+
+    level = "info"                   # "debug", "info", "warn", "error"
+    format = "text"                  # "text" or "json"
+
+### [api]
+
+    enabled = true                   # enable API server
+    listen = ":8080"                 # bind address
+    tls = false                      # enable HTTPS
+    cert_file = ""                   # TLS certificate path
+    key_file = ""                    # TLS private key path
+    cors_origins = []                # allowed CORS origins
+    rate_limit = 0                   # max requests/sec per key (0 = unlimited)
+    login_rate_limit = 5             # login attempts per window
+    login_rate_window = "15m"        # login rate window
+    websocket_enabled = true         # enable WebSocket endpoint
+    websocket_max_connections = 0    # max concurrent connections (0 = unlimited)
+    websocket_replay_buffer_ttl = "5m"  # event replay buffer duration
+    external_url = ""                # public URL for OAuth callbacks
+    timezone = "UTC"                 # IANA timezone for cron expressions
+
+### [[api.keys]]
+
+    [[api.keys]]
+    name = "my-key"                  # key label
+    key = "sk-..."                   # secret key value
+    scopes = ["chat", "admin"]       # permission scopes
+
+Available scopes: chat, admin, sessions:read, sessions:write, agents:read,
+approvals:read, approvals:write, schedules:read, schedules:write,
+skills:read, skills:write, tools:read, tools:write, costs:read,
+channels:read, channels:write, audit:read
+
+### [api.auth]
+
+    password_hash = ""               # bcrypt hash (use `denkeeper passwd`)
+    session_secret = ""              # AES-256 hex key (64 hex chars)
+    session_max_age = "24h"          # cookie lifetime
+    preferred_login_method = "auto"  # "auto", "password", "apikey"
+    session_record_retention = "720h"  # session record retention
+
+### [api.auth.oidc]
+
+    enabled = false                  # enable OIDC SSO
+    issuer = ""                      # OIDC issuer URL
+    client_id = ""                   # OAuth2 client ID
+    client_secret = ""               # OAuth2 client secret
+    redirect_url = ""                # callback URL
+    scopes = ["openid", "email", "profile"]
+    allowed_emails = []              # allowed email addresses
+
+### [tools.*]
+
+MCP tool server definitions.
+
+    [tools.my-tool]
+    transport = "stdio"              # "stdio" or "sse"
+    command = "my-mcp-server"        # server binary (stdio)
+    args = ["--flag"]                # arguments (stdio)
+    env = { API_KEY = "..." }        # environment variables
+    url = ""                         # remote URL (sse)
+    headers = {}                     # HTTP headers (sse)
+    request_timeout_secs = 30        # per-request timeout
+    auth = ""                        # "" or "oauth"
+
+### [mcp]
+
+Global MCP settings.
+
+    request_timeout_secs = 30        # per-request timeout
+    sse_keep_alive_secs = 15         # TCP keepalive interval
+    auto_restart = true              # auto-restart crashed servers
+    max_restart_attempts = 3         # failure threshold before giving up
+    restart_cooldown = "5m"          # cooldown before reset
+    init_retry_attempts = 5          # initial connection retries
+    init_retry_backoff = "2s"        # backoff between retries
+    url_allowlist = []               # allowed hosts for SSE servers
+
+### [[schedules]]
+
+    [[schedules]]
+    name = "daily-summary"           # unique schedule identifier
+    type = "agent"                   # "system" or "agent"
+    schedule = "0 9 * * *"           # cron expression or interval
+    skill = "daily-summary"          # skill to invoke
+    agent = "default"                # target agent
+    session_tier = "supervised"      # permission tier
+    channel = "telegram:123"         # delivery channel
+    tags = ["daily"]                 # freeform labels
+    enabled = true                   # enable/disable
+
+### [voice]
+
+    stt_provider = ""                # "openai" or "" (disabled)
+    tts_provider = ""                # "openai" or "" (disabled)
+    tts_voice = "alloy"              # voice ID
+    auto_voice_reply = false         # reply with voice when user sends voice
+
+### [web]
+
+    enabled = true                   # enable web search/fetch tools
+
+    [web.search]
+    provider = "duckduckgo"          # "duckduckgo" or "tavily"
+    api_key = ""                     # provider API key
+    max_results = 5                  # results to return
+
+    [web.fetch]
+    timeout = "30s"                  # HTTP timeout
+    max_size_bytes = 5242880         # response size limit (5MB)
+
+### [browser]
+
+    enabled = false                  # enable browser automation
+    image = "ghcr.io/temikus/denkeeper-browser:latest"
+    memory_limit = "512m"            # container memory limit
+    cpu_limit = "1"                  # container CPU limit
+    session_ttl = "10m"              # session idle timeout
+    max_pages = 5                    # max concurrent pages per agent
+
+### [kv]
+
+    max_keys_per_agent = 1000        # max keys per agent
+    max_value_bytes = 65536          # max value size (bytes)
+    cleanup_interval = "1h"          # expiry cleanup interval
+
+### [audit]
+
+    enabled = true                   # enable audit logging
+    retention_days = 30              # event retention
+    cleanup_interval = "1h"          # cleanup frequency
+    buffer_size = 1000               # in-memory buffer capacity
+
+### [costs]
+
+    default_rate_per_1k_tokens = 0.01  # fallback pricing rate
+
+    [costs.model_prices.my-custom-model]
+    input = 2.0                      # per million input tokens
+    output = 8.0                     # per million output tokens
+    cached_input = 0.5               # per million cached tokens
+
+### [otel]
+
+    enabled = false                  # enable OpenTelemetry
+    traces_endpoint = ""             # OTLP HTTP endpoint
+    service_name = "denkeeper"       # OTel service name
+
+## Environment Variable Overrides
+
+Key environment variables (full list in docs):
+
+    DENKEEPER_CONFIG                 # config file path
+    DENKEEPER_DATA_DIR               # base data directory
+    DENKEEPER_TELEGRAM_TOKEN         # Telegram bot token
+    DENKEEPER_DISCORD_TOKEN          # Discord bot token
+    DENKEEPER_LLM_PROVIDER           # default LLM provider
+    DENKEEPER_LLM_MODEL              # default LLM model
+    DENKEEPER_LLM_ANTHROPIC_API_KEY  # Anthropic API key
+    DENKEEPER_LLM_OPENAI_API_KEY     # OpenAI API key
+    DENKEEPER_LLM_OPENROUTER_API_KEY # OpenRouter API key
+    DENKEEPER_LLM_OLLAMA_BASE_URL    # Ollama base URL
+    DENKEEPER_API_LISTEN             # API listen address
+    DENKEEPER_API_EXTERNAL_URL       # public API URL
+    DENKEEPER_LOG_LEVEL              # log level
+    DENKEEPER_SESSION_TIER           # default permission tier
+    DENKEEPER_MEMORY_DB_PATH         # database path

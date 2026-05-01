@@ -150,6 +150,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// OpenAPI spec — no auth required.
 	mux.HandleFunc("GET /api/v1/openapi.json", s.handleOpenAPISpec)
 
+	// LLM-readable discovery file — no auth required.
+	mux.HandleFunc("GET /llms.txt", s.handleLLMsTxt)
+
 	// Prometheus metrics endpoint — no auth required.
 	if deps.MetricsHandler != nil {
 		mux.Handle("GET /metrics", deps.MetricsHandler)
