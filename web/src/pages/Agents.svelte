@@ -216,6 +216,8 @@
   let configCostHard = $state('')
   let configAllowlist = $state('')
   let configSupervisor = $state('')
+  let configSupervisorTimeout = $state('')
+  let configSupervisorContextMessages = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
 
@@ -232,6 +234,8 @@
     configCostSoft = d.cost_limit_soft ?? ''
     configCostHard = d.cost_limit_hard ?? ''
     configSupervisor = d.supervisor || ''
+    configSupervisorTimeout = d.supervisor_timeout || ''
+    configSupervisorContextMessages = d.supervisor_context_messages ?? ''
     configAllowlist = ''
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
@@ -273,6 +277,13 @@
         if (soft !== (detail.cost_limit_soft ?? null)) data.cost_limit_soft = soft
         if (hard !== (detail.cost_limit_hard ?? null)) data.cost_limit_hard = hard
         if (configSupervisor !== (detail.supervisor || '')) data.supervisor = configSupervisor
+        const currentTimeout = detail.supervisor_timeout || ''
+        if (configSupervisorTimeout.trim() !== currentTimeout) {
+          data.supervisor_timeout = configSupervisorTimeout.trim()
+        }
+        const formCtx = parseInt(configSupervisorContextMessages, 10) || 0
+        const currentCtx = detail.supervisor_context_messages || 0
+        if (formCtx !== currentCtx) data.supervisor_context_messages = formCtx
       }
       if (Object.keys(data).length) {
         await api.updateAgentConfig(detail.name, data)
@@ -699,6 +710,14 @@
                   {/each}
                 </select>
                 <span class="hint">{configSupervisor ? 'Tool calls are reviewed by this agent before reaching you.' : 'All tool calls require manual approval. Select a supervisor to automate reviews.'}</span>
+                {#if configSupervisor}
+                  <label class="config-label" for="cfg-supervisor-timeout">Supervisor Timeout</label>
+                  <input id="cfg-supervisor-timeout" class="config-input" type="text" bind:value={configSupervisorTimeout} placeholder="30s" />
+                  <span class="hint">Max wait for the supervisor's review. Go duration format: 30s, 1m, 90s. Empty = default (30s). On timeout the request falls through to manual approval.</span>
+                  <label class="config-label" for="cfg-supervisor-ctx">Supervisor Context Messages</label>
+                  <input id="cfg-supervisor-ctx" class="config-input" type="number" min="0" max="50" bind:value={configSupervisorContextMessages} placeholder="5" />
+                  <span class="hint">Recent conversation messages shown to the supervisor when reviewing. Empty or 0 = default (5).</span>
+                {/if}
               {/if}
               <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
               <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />

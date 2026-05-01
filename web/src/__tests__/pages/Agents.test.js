@@ -234,6 +234,47 @@ describe('Agents permission config', () => {
     })
   })
 
+  test('supervisor timeout and context inputs appear when supervisor is set', async () => {
+    const supervisedAgent = {
+      name: 'default', model: 'claude-3-opus', permission_tier: 'supervised',
+      supervisor: 'argus', supervisor_timeout: '10s', supervisor_context_messages: 3,
+      skill_count: 0, has_tools: false, max_tool_rounds: 50, fallbacks: [],
+      persona_sections: {}, adapters: [], tool_names: [],
+    }
+    server.use(
+      http.get('/api/v1/agents/:name', () => HttpResponse.json(supervisedAgent)),
+      http.get('/api/v1/agents', () => HttpResponse.json([
+        { name: 'default', permission_tier: 'supervised', supervisor: 'argus', skill_count: 0, has_tools: false, fallbacks: [] },
+        { name: 'argus', permission_tier: 'autonomous', skill_count: 0, has_tools: false, fallbacks: [] },
+      ]))
+    )
+
+    let patchBody = null
+    server.use(
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ ok: true })
+      })
+    )
+
+    render(Agents)
+    await waitFor(() => screen.getByText('PERMISSION'))
+
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Supervisor Timeout'))
+
+    expect(screen.getByLabelText('Supervisor Timeout').value).toBe('10s')
+    expect(screen.getByLabelText('Supervisor Context Messages').value).toBe('3')
+
+    await fireEvent.input(screen.getByLabelText('Supervisor Timeout'), { target: { value: '30s' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(patchBody).not.toBeNull()
+      expect(patchBody.supervisor_timeout).toBe('30s')
+    })
+  })
+
   test('changing provider and saving sends llm_provider in PATCH', async () => {
     let patchBody = null
     server.use(
