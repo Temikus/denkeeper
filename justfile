@@ -107,7 +107,7 @@ hook:
     fi
     steps=("fmt-check" "vet" "lint" "ui:lint" "test" "ui:test")
     labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui")
-    tmpfile=$(mktemp)
+    tmpfile=$(mktemp "${TMPDIR:-/tmp}/just-hook.XXXXXX")
     trap 'rm -f "$tmpfile"' EXIT
     for i in "${!steps[@]}"; do
         if mise x -- task --silent ${force_flag} "${steps[$i]}" >"$tmpfile" 2>&1; then
