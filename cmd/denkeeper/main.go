@@ -1506,7 +1506,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			ModelLister:       dispatcher.ListModels,
 			ModelDetailLister: dispatcher.ListModelDetails,
 			OAuthDeps:         oauthDeps,
-			ReloadFunc:        buildReloadFunc(path, cfg, logger),
+			ReloadFunc:        buildReloadFunc(path, cfg, dispatcher, logger),
 			RestartFunc:       selfRestartFunc,
 			AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 				return buildAgentEngine(ctx, ac, abc)
@@ -1573,13 +1573,31 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 
 // buildReloadFunc returns a function that re-reads the config file from disk
 // and overwrites cfg in place, allowing hot-reloading of most settings.
-func buildReloadFunc(path string, cfg *config.Config, logger *slog.Logger) func() error {
+// Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
+// re-applied to live engines so they don't go stale after a reload.
+func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, logger *slog.Logger) func() error {
 	return func() error {
 		newCfg, err := config.Load(path)
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
 		*cfg = *newCfg
+
+		for _, ac := range cfg.Agents {
+			e := dispatcher.Agent(ac.Name)
+			if e == nil {
+				continue
+			}
+			e.SetMaxContextMessages(ac.MaxContextMessages)
+			e.SetMaxToolRounds(ac.MaxToolRounds)
+			if ac.SupervisorTimeout != "" {
+				supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
+				e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
+			} else if ac.SupervisorContextMessages > 0 {
+				e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
+			}
+		}
+
 		logger.Info("config reloaded from disk", "path", path)
 		return nil
 	}

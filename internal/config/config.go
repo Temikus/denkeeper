@@ -433,7 +433,7 @@ type AgentInstanceConfig struct {
 	// use session_tier = "autonomous".
 	Supervisor string `toml:"supervisor"`
 
-	// SupervisorTimeout overrides the default timeout (15s) for the
+	// SupervisorTimeout overrides the default timeout (30s) for the
 	// supervisor's LLM review call. On timeout, escalates to human.
 	SupervisorTimeout string `toml:"supervisor_timeout"`
 
