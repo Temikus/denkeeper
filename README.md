@@ -123,7 +123,7 @@ cosign verify \
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
-- **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor calls are lightweight one-shot LLM calls with no conversation storage
+- **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor prompt includes skill/schedule context for scheduled invocations; configurable timeout (`supervisor_timeout`, default 30s) and context message count (`supervisor_context_messages`, default 5); LLM failures emit a `supervisor_error` event before falling through to human approval
 - **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 11 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`); web UI page with timeline and table views, category/status/agent/time filters
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
 - **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
@@ -207,7 +207,7 @@ Key sections:
 | `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/cost_limit triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
-| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, cost limits) |
+| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, supervisor_timeout, supervisor_context_messages, cost limits) |
 | `[[channels]]` | Named routing endpoints — bind adapter chats to agents with session identity; `session_mode` (`shared`/`ephemeral`) |
 | `[audit]` | Audit log settings (`enabled`, `retention_days`, `cleanup_interval`, `buffer_size`) |
 | `[mcp]` | Global MCP settings — request timeout, auto-restart, max restart attempts, restart cooldown, SSE URL allowlist |
@@ -350,6 +350,7 @@ scopes = ["chat", "sessions:read", "costs:read"]
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/health` | — | Health check (no auth) |
 | `GET` | `/api/v1/openapi.json` | — | OpenAPI 2.0 spec (no auth) |
+| `GET` | `/llms.txt` | — | LLM-readable instance summary: base URL, auth notes, key endpoints, configured agents (no auth) |
 | `GET` | `/api/v1/setup` | — | First-run setup status |
 | `POST` | `/api/v1/setup` | — | Initialize first-run configuration |
 | `POST` | `/api/v1/chat` | `chat` | Send a message; returns `{ session_id, response }`. Add `Accept: text/event-stream` for SSE. |
@@ -625,6 +626,15 @@ Denkeeper is built in phases:
 - [x] Per-agent cost limits — `cost_limit_soft`/`cost_limit_hard` via `PATCH /api/v1/agents/{name}`, syncs to live CostTracker
 - [x] Supervisor agents — automated tool call review chain (auto-approve → supervisor → human approval)
 - [x] E2E integration test suite expanded to 155+ tests
+
+**Phase 15 — Supervisor Polish & Discoverability** ✅
+- [x] `GET /llms.txt` — unauthenticated LLM-readable instance summary (base URL, auth notes, key endpoints, configured agents)
+- [x] Supervisor timeout and context knobs — `supervisor_timeout` (default 30s) and `supervisor_context_messages` (default 5) configurable per agent; exposed in Agents UI; re-applied on hot-reload
+- [x] Supervisor skill context — supervisor prompt now includes skill name/description and schedule info for scheduled invocations; evaluation criteria adapt accordingly
+- [x] Supervisor error surfacing — LLM failures emit a `supervisor_error` ChatEvent before falling through to human approval; error details recorded in audit log
+- [x] Build caching — `Taskfile.yml` with per-target fingerprint caching via Task; `just` remains the user-facing entrypoint
+- [x] Audit log sparkline improvements — time-range adaptive buckets (1h/24h/7d/30d), hover tooltips with timestamps and error counts, axis labels
+- [x] Config migration — `switch_model` fallback rules with a stale `provider` field are now gracefully normalized instead of rejected
 
 ## License
 

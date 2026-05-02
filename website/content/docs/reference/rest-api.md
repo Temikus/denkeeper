@@ -16,6 +16,12 @@ The REST API is enabled with `[api] enabled = true` in your config. All authenti
 
 No authentication required. Returns `200 OK` when the server is running.
 
+## Discovery
+
+### `GET /llms.txt`
+
+No authentication required. Returns a plain-text summary of this Denkeeper instance intended for LLM clients — base URL, authentication notes, key endpoints, and a list of configured agents with their descriptions. Useful for programmatic discovery when connecting an AI assistant to a Denkeeper instance.
+
 ## Chat
 
 ### `POST /api/v1/chat`

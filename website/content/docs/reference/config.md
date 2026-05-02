@@ -122,6 +122,9 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | `session_tier` | string | — | Override default permission tier |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
 | `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
+| `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised) |
+| `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval. |
+| `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context. |
 
 ## `[memory]`
 
