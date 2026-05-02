@@ -44,7 +44,8 @@ jobs:
         run: |
           SASS_VERSION="1.89.1"
           curl -fsSL "https://github.com/sass/dart-sass/releases/download/${SASS_VERSION}/dart-sass-${SASS_VERSION}-linux-x64.tar.gz" \
-            | sudo tar -xz -C /usr/local --strip-components=1
+            | sudo tar -xz -C /usr/local/lib --strip-components=1
+          sudo ln -s /usr/local/lib/sass /usr/local/bin/sass
           sass --version
 
       - name: Build site
