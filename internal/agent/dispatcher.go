@@ -1420,9 +1420,9 @@ func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.Incoming
 }
 
 // activityLog accumulates tool events into a Telegram message that is edited
-// in-place as new events arrive. Pending tool approvals are appended to the
-// same message with inline keyboard buttons instead of being sent as separate
-// messages, keeping the chat clean.
+// in-place as new events arrive. Tool approvals are sent as a separate
+// message so they trigger push notifications; after resolution the activity
+// log continues in that message.
 //
 // The activity log is rendered as a collapsible <blockquote expandable> with
 // the "📋 Activity log" header as its first line, so the collapsed preview
@@ -1528,6 +1528,7 @@ func (l *activityLog) flush(ctx context.Context) {
 		ParseMode:  "HTML",
 		ExternalID: l.externalID,
 		Adapter:    l.adapter,
+		Silent:     l.pending == nil,
 	}
 	if l.pending != nil {
 		msg.Buttons = []adapter.KeyboardButton{
@@ -1659,15 +1660,17 @@ func (l *activityLog) toolDenied(ctx context.Context, tool string) {
 	l.flush(ctx)
 }
 
-// setPending records a pending approval and re-renders the active chunk so
-// the approval section + buttons appear at the bottom.
+// setPending records a pending approval. If the current chunk was already
+// sent, it is frozen and a fresh chunk is started so the approval is
+// delivered as a new message — edits don't trigger push notifications.
 func (l *activityLog) setPending(ctx context.Context, tool, args, callback string) {
 	if runes := []rune(args); len(runes) > approvalArgsMaxChars {
 		args = string(runes[:approvalArgsMaxChars]) + "…"
 	}
 	l.pending = &pendingApproval{tool: tool, args: args, callback: callback}
-	// Ensure there is an active chunk to render onto.
-	l.ensureChunk()
+	if c := l.ensureChunk(); c.messageID != "" {
+		l.chunks = append(l.chunks, &logChunk{toolIndex: map[string]int{}})
+	}
 	l.flush(ctx)
 }
 

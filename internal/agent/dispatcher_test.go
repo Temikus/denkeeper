@@ -966,6 +966,57 @@ func TestActivityLog_ToolDeniedUpdatesExistingLine(t *testing.T) {
 	}
 }
 
+func TestActivityLog_SilentFlag_ActivityIsSilentApprovalIsNot(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	// Regular activity message must be silent.
+	l.toolStart(ctx, "search")
+	if !me.sends[0].Silent {
+		t.Errorf("activity send: Silent = false, want true")
+	}
+
+	// Approval message must not be silent.
+	me2 := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2"}}
+	l2 := newTestActivityLog(me2)
+	l2.toolStart(ctx, "search")
+	l2.setPending(ctx, "read_file", "{}", "cb-1")
+	if len(me2.sends) != 2 {
+		t.Fatalf("expected 2 sends (activity + approval), got %d", len(me2.sends))
+	}
+	if me2.sends[1].Silent {
+		t.Errorf("approval send: Silent = true, want false")
+	}
+}
+
+func TestActivityLog_SetPending_SpawnsNewChunkWhenAlreadySent(t *testing.T) {
+	me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2"}}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	// First send: activity message.
+	l.toolStart(ctx, "search")
+	if len(l.chunks) != 1 || l.chunks[0].messageID != "msg-1" {
+		t.Fatalf("setup: expected 1 chunk with msg-1, got %+v", l.chunks)
+	}
+
+	// setPending after the chunk is already sent must start a new chunk so
+	// the approval is delivered as a fresh message (notifications fire on new
+	// messages, not edits).
+	l.setPending(ctx, "read_file", "{}", "cb-1")
+
+	if len(l.chunks) != 2 {
+		t.Fatalf("expected 2 chunks after setPending, got %d", len(l.chunks))
+	}
+	if l.chunks[1].messageID != "msg-2" {
+		t.Errorf("approval chunk messageID = %q, want msg-2", l.chunks[1].messageID)
+	}
+	if len(me.sends) != 2 {
+		t.Errorf("expected 2 sends, got %d", len(me.sends))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Channel routing tests
 // ---------------------------------------------------------------------------

@@ -65,6 +65,9 @@ type OutgoingMessage struct {
 	// specifies the number of buttons in that row. For example, [2, 2] creates
 	// two rows of two buttons. When nil, each button gets its own row.
 	ButtonLayout []int
+	// Silent suppresses push notifications on platforms that support it
+	// (e.g. Telegram's disable_notification). Used for activity log messages.
+	Silent bool
 }
 
 // CallbackResolver handles adapter callback queries (e.g. Telegram inline

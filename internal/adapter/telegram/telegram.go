@@ -314,6 +314,7 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 
 	// Text reply (default path).
 	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
+	tgMsg.DisableNotification = msg.Silent
 
 	// Attach inline keyboard buttons if provided.
 	if len(msg.Buttons) > 0 {
@@ -532,6 +533,7 @@ func (a *Adapter) SendAndGetID(ctx context.Context, msg adapter.OutgoingMessage)
 	}
 
 	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
+	tgMsg.DisableNotification = msg.Silent
 	if msg.ParseMode != "" {
 		tgMsg.ParseMode = msg.ParseMode
 	} else {
