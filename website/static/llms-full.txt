@@ -61,9 +61,16 @@ All paths default relative to `data_dir`. Override with `DENKEEPER_*` env vars.
 
     default_provider = "openrouter"  # default provider name
     default_model = ""               # default model identifier
+    max_cost_per_session = 0.0       # legacy alias for cost_limit_hard
     cost_limit_soft = 0.0            # soft cost limit per session (USD)
     cost_limit_hard = 1.0            # hard cost limit per session (USD)
     stream_idle_timeout_secs = 120   # idle timeout for LLM SSE streams
+
+    [llm.openrouter.reasoning]
+    enabled = false                  # activate reasoning mode
+    effort = "medium"                # "xhigh", "high", "medium", "low", "minimal", "none"
+    max_tokens = 0                   # reasoning token budget (0 = provider default)
+    exclude = false                  # omit reasoning from response
 
 ### [[llm.providers]]
 
@@ -158,6 +165,7 @@ Named routing endpoints decoupling sessions from adapters.
     websocket_replay_buffer_ttl = "5m"  # event replay buffer duration
     external_url = ""                # public URL for OAuth callbacks
     timezone = "UTC"                 # IANA timezone for cron expressions
+    onboarding_dismissed = false     # hide onboarding checklist (set via API)
 
 ### [[api.keys]]
 
@@ -201,7 +209,12 @@ MCP tool server definitions.
     url = ""                         # remote URL (sse)
     headers = {}                     # HTTP headers (sse)
     request_timeout_secs = 30        # per-request timeout
+    sse_keep_alive_secs = 15         # TCP keepalive interval (sse)
     auth = ""                        # "" or "oauth"
+    client_id = ""                   # OAuth client ID
+    client_secret = ""               # OAuth client secret
+    scopes = []                      # OAuth scopes
+    allow_loopback = false           # bypass SSRF loopback block
 
 ### [mcp]
 
@@ -248,6 +261,12 @@ Global MCP settings.
     [web.fetch]
     timeout = "30s"                  # HTTP timeout
     max_size_bytes = 5242880         # response size limit (5MB)
+    user_agent = ""                  # HTTP User-Agent header
+    respect_robots_txt = false       # check robots.txt
+    respect_agents_txt = false       # check agents.txt
+
+    [web.fetch.jina]
+    enabled = false                  # enable Jina Reader fallback for JS-heavy pages
 
 ### [browser]
 
@@ -255,6 +274,7 @@ Global MCP settings.
     image = "ghcr.io/temikus/denkeeper-browser:latest"
     memory_limit = "512m"            # container memory limit
     cpu_limit = "1"                  # container CPU limit
+    profile_dir = "data/browser-profiles"  # browser profile directory
     session_ttl = "10m"              # session idle timeout
     max_pages = 5                    # max concurrent pages per agent
 
@@ -279,6 +299,40 @@ Global MCP settings.
     input = 2.0                      # per million input tokens
     output = 8.0                     # per million output tokens
     cached_input = 0.5               # per million cached tokens
+
+### [security]
+
+Plugin signature verification.
+
+    trusted_keys = []                # paths to Ed25519 public keys
+    allow_unsigned = true            # allow unsigned plugin binaries
+
+### [sandbox]
+
+Sandbox runtime backend for code execution.
+
+    runtime = "docker"               # "docker" or "kubernetes"
+
+    [sandbox.kubernetes]
+    namespace = "denkeeper-sandboxes"  # K8s namespace
+    kubeconfig = ""                  # path to kubeconfig
+    runtime_class = ""               # RuntimeClassName (gvisor, kata)
+
+### [plugins.*]
+
+Plugin definitions.
+
+    [plugins.my-plugin]
+    type = "subprocess"              # "subprocess" or "docker"
+    command = "my-plugin"            # plugin binary
+    args = []                        # command arguments
+    env = {}                         # environment variables
+    capabilities = ["tools"]         # declared capabilities
+    image = ""                       # Docker image (docker type only)
+    memory_limit = ""                # container memory limit (docker only)
+    cpu_limit = ""                   # container CPU limit (docker only)
+    network = "none"                 # Docker network mode
+    volumes = []                     # bind mounts (docker only)
 
 ### [otel]
 

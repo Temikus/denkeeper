@@ -230,6 +230,10 @@ scan tool="all":
             ;;
     esac
 
+# Check llms-full.txt covers all TOML config keys
+llms-check:
+    @mise x -- go test ./internal/config/ -run TestLLMsFullTxt -race -count=1
+
 # Count lines of Go code (source and test separately)
 loc:
     @echo "Source:"
