@@ -11,7 +11,18 @@ const (
 	keyAdapter        ctxKey = "adapter"
 	keyExternalID     ctxKey = "external_id"
 	keyConversationID ctxKey = "conversation_id"
+	keySkillContext   ctxKey = "skill_context"
 )
+
+// SkillSummary carries lightweight metadata about the skill driving the
+// current session. Used by the supervisor to understand *why* a tool call
+// is being made, especially for scheduled skill invocations.
+type SkillSummary struct {
+	Name         string
+	Description  string
+	IsScheduled  bool
+	ScheduleName string
+}
 
 // WithAdapter returns a context carrying the adapter name (e.g. "telegram", "ws").
 func WithAdapter(ctx context.Context, name string) context.Context {
@@ -43,5 +54,16 @@ func WithConversationID(ctx context.Context, id string) context.Context {
 // ConversationID extracts the conversation ID, or "" if unset.
 func ConversationID(ctx context.Context) string {
 	v, _ := ctx.Value(keyConversationID).(string)
+	return v
+}
+
+// WithSkillContext returns a context carrying skill metadata for supervisor review.
+func WithSkillContext(ctx context.Context, s *SkillSummary) context.Context {
+	return context.WithValue(ctx, keySkillContext, s)
+}
+
+// SkillContext extracts the skill summary, or nil if unset.
+func SkillContext(ctx context.Context) *SkillSummary {
+	v, _ := ctx.Value(keySkillContext).(*SkillSummary)
 	return v
 }

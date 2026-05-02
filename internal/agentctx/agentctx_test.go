@@ -44,6 +44,38 @@ func TestConversationID_Unset(t *testing.T) {
 	}
 }
 
+func TestSkillContext_RoundTrip(t *testing.T) {
+	s := &SkillSummary{
+		Name:         "heartbeat",
+		Description:  "Periodic health check",
+		IsScheduled:  true,
+		ScheduleName: "heartbeat-hourly",
+	}
+	ctx := WithSkillContext(context.Background(), s)
+	got := SkillContext(ctx)
+	if got == nil {
+		t.Fatal("SkillContext() returned nil")
+	}
+	if got.Name != "heartbeat" {
+		t.Errorf("Name = %q, want %q", got.Name, "heartbeat")
+	}
+	if got.Description != "Periodic health check" {
+		t.Errorf("Description = %q, want %q", got.Description, "Periodic health check")
+	}
+	if !got.IsScheduled {
+		t.Error("IsScheduled = false, want true")
+	}
+	if got.ScheduleName != "heartbeat-hourly" {
+		t.Errorf("ScheduleName = %q, want %q", got.ScheduleName, "heartbeat-hourly")
+	}
+}
+
+func TestSkillContext_Unset(t *testing.T) {
+	if got := SkillContext(context.Background()); got != nil {
+		t.Errorf("SkillContext() on empty ctx = %+v, want nil", got)
+	}
+}
+
 func TestAllKeys_Composed(t *testing.T) {
 	ctx := context.Background()
 	ctx = WithAdapter(ctx, "discord")

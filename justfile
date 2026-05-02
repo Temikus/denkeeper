@@ -93,7 +93,7 @@ vet:
     @mise x -- task vet
 
 # Run all checks (fmt, vet, lint, test)
-check: fmt-check vet lint lint-ui test test-ui
+check: fmt-check vet lint lint-ui test test-ui llms-check
 
 # Run all checks with minimal output (for agent hooks).
 # Per-step caching via Task: each step skips when its declared sources are

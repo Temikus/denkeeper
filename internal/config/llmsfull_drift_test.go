@@ -2,14 +2,19 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 )
 
 func TestLLMsFullTxt_CoversAllTOMLKeys(t *testing.T) {
-	data, err := os.ReadFile("../../website/static/llms-full.txt")
+	_, thisFile, _, _ := runtime.Caller(0)
+	llmsPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "website", "static", "llms-full.txt")
+
+	data, err := os.ReadFile(llmsPath)
 	if err != nil {
 		t.Fatalf("reading llms-full.txt: %v", err)
 	}
@@ -19,7 +24,7 @@ func TestLLMsFullTxt_CoversAllTOMLKeys(t *testing.T) {
 
 	var missing []string
 	for _, tag := range tags {
-		if !strings.Contains(content, tag) {
+		if !tagDocumented(content, tag) {
 			missing = append(missing, tag)
 		}
 	}
@@ -29,6 +34,15 @@ func TestLLMsFullTxt_CoversAllTOMLKeys(t *testing.T) {
 		t.Errorf("llms-full.txt is missing %d TOML config key(s) — update website/static/llms-full.txt:\n  %s",
 			len(missing), strings.Join(missing, "\n  "))
 	}
+}
+
+// tagDocumented checks that a TOML key appears as a config key ("key = "),
+// section header ("[key]", "[[key]]", "[parent.key]"), or map prefix
+// ("[tools.name]", "[plugins.name]") rather than in prose.
+func tagDocumented(content, tag string) bool {
+	return strings.Contains(content, tag+" =") ||
+		strings.Contains(content, tag+"]") ||
+		strings.Contains(content, tag+".")
 }
 
 func collectTOMLTags(t reflect.Type) []string {

@@ -66,6 +66,9 @@ All paths default relative to `data_dir`. Override with `DENKEEPER_*` env vars.
     cost_limit_hard = 1.0            # hard cost limit per session (USD)
     stream_idle_timeout_secs = 120   # idle timeout for LLM SSE streams
 
+    [llm.openrouter]
+    api_key = ""                     # OpenRouter API key
+
     [llm.openrouter.reasoning]
     enabled = false                  # activate reasoning mode
     effort = "medium"                # "xhigh", "high", "medium", "low", "minimal", "none"
@@ -85,6 +88,9 @@ Named provider instances (array). Multiple instances of the same type allowed.
 
 Legacy single-slot syntax (`[llm.anthropic]`, `[llm.openai]`, etc.) is still supported.
 
+    [llm.ollama]
+    base_url = "http://localhost:11434"  # Ollama server URL
+
 ### [[llm.fallback]]
 
 Automatic failover strategies.
@@ -96,6 +102,7 @@ Automatic failover strategies.
     model = ""                       # target model (for switch_model)
     scope = "soft"                   # "soft" or "hard" (for cost_limit)
     max_retries = 3                  # max retries (for wait_and_retry)
+    threshold = 0.0                  # cost threshold (for cost_limit trigger)
     backoff = "exponential"          # "exponential" or "constant"
 
 ### [session]
@@ -277,6 +284,9 @@ Global MCP settings.
     profile_dir = "data/browser-profiles"  # browser profile directory
     session_ttl = "10m"              # session idle timeout
     max_pages = 5                    # max concurrent pages per agent
+
+    [browser.url_allowlist]
+    domains = ["*.example.com"]      # allowed domains (supports wildcards)
 
 ### [kv]
 
