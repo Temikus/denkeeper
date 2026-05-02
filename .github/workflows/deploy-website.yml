@@ -41,7 +41,11 @@ jobs:
           extended: true
 
       - name: Install Dart Sass
-        run: sudo snap install dart-sass
+        run: |
+          SASS_VERSION="1.89.1"
+          curl -fsSL "https://github.com/sass/dart-sass/releases/download/${SASS_VERSION}/dart-sass-${SASS_VERSION}-linux-x64.tar.gz" \
+            | sudo tar -xz -C /usr/local --strip-components=1
+          sass --version
 
       - name: Build site
         run: hugo --minify --gc --environment production
