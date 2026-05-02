@@ -30,30 +30,6 @@
   let accountError = $state('')
   let accountLoading = $state(false)
 
-  // API key setup state
-  let setupName = $state('admin')
-  let setupScopes = $state({
-    admin: true,
-    chat: true,
-    'sessions:read': true,
-    'costs:read': true,
-    'skills:read': true,
-    'schedules:read': true,
-    'approvals:read': true,
-    'approvals:write': true,
-    'tools:read': true,
-    'tools:write': true,
-  })
-  let setupError = $state('')
-  let setupLoading = $state(false)
-
-  // Reveal state (after successful API key setup)
-  let revealedKey = $state('')
-  let copied = $state(false)
-
-  // Derived: true when there are multiple login method choices.
-  let hasMultipleMethods = $derived(passwordEnabled && true) // password + apikey always available
-
   // All valid API scopes — must match the canonical list in internal/scope/scope.go.
   // The scope sync test (internal/scope/scope_test.go) will fail if any are missing.
   const ALL_SCOPES = [
@@ -81,6 +57,27 @@
     { value: 'tools:read',       label: 'tools:read' },
     { value: 'tools:write',      label: 'tools:write' },
   ]
+
+  // API key setup state
+  let setupName = $state('admin')
+  let setupScopes = $state(Object.fromEntries(ALL_SCOPES.map(s => [s.value, true])))
+  let setupError = $state('')
+  let setupLoading = $state(false)
+  let scopesExpanded = $state(false)
+
+  // Reveal state (after successful API key setup)
+  let revealedKey = $state('')
+  let copied = $state(false)
+
+  // Derived: true when there are multiple login method choices.
+  let hasMultipleMethods = $derived(passwordEnabled && true) // password + apikey always available
+
+  let selectedScopeCount = $derived(Object.values(setupScopes).filter(Boolean).length)
+  let allScopesSelected = $derived(selectedScopeCount === ALL_SCOPES.length)
+
+  function setAllScopes(val) {
+    for (const s of ALL_SCOPES) setupScopes[s.value] = val
+  }
 
   // Map HTTP status codes to user-friendly error messages.
   function friendlyError(res) {
@@ -432,15 +429,33 @@
           disabled={setupLoading}
         />
         <span class="field-label">Scopes</span>
-        <div class="scopes-grid">
-          {#each ALL_SCOPES as { value, label }}
-            <label class="scope-item">
-              <input type="checkbox" bind:checked={setupScopes[value]} disabled={setupLoading} />
-              <code>{label}</code>
-            </label>
-          {/each}
+        <div class="scopes-foldout">
+          <button class="foldout-header" onclick={() => scopesExpanded = !scopesExpanded} type="button">
+            <span class="foldout-chevron" class:expanded={scopesExpanded}>{'▸'}</span>
+            <span class="foldout-summary">
+              {allScopesSelected ? `All ${ALL_SCOPES.length} scopes selected` : `${selectedScopeCount} of ${ALL_SCOPES.length} scopes selected`}
+            </span>
+            <span class="foldout-action">{scopesExpanded ? 'Collapse' : 'Customize'}</span>
+          </button>
+          {#if scopesExpanded}
+            <div class="foldout-body">
+              <div class="scope-toggles">
+                <button type="button" class="scope-toggle-btn" onclick={() => setAllScopes(true)} disabled={allScopesSelected}>Select all</button>
+                <span class="scope-toggle-sep">{'·'}</span>
+                <button type="button" class="scope-toggle-btn" onclick={() => setAllScopes(false)} disabled={selectedScopeCount === 0}>Deselect all</button>
+              </div>
+              <div class="scopes-grid">
+                {#each ALL_SCOPES as { value, label }}
+                  <label class="scope-item">
+                    <input type="checkbox" bind:checked={setupScopes[value]} disabled={setupLoading} />
+                    <code>{label}</code>
+                  </label>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
-        <button onclick={handleSetup} disabled={setupLoading || selectedScopes().length === 0}>
+        <button onclick={handleSetup} disabled={setupLoading || selectedScopeCount === 0}>
           {setupLoading ? 'Creating...' : 'Create key'}
         </button>
       {/if}
@@ -551,6 +566,65 @@
     flex: 1;
     border-top: 1px solid var(--border);
   }
+  .scopes-foldout {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .foldout-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    background: none;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .foldout-header:hover { background: none; }
+  .foldout-chevron {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+  }
+  .foldout-chevron.expanded { transform: rotate(90deg); }
+  .foldout-summary {
+    flex: 1;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .foldout-action {
+    font-size: 13px;
+    color: var(--accent);
+  }
+  .foldout-body {
+    border-top: 1px solid var(--border);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .scope-toggles {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .scope-toggle-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 400;
+  }
+  .scope-toggle-btn:hover { background: none; text-decoration: underline; }
+  .scope-toggle-btn:disabled { color: var(--text-muted); cursor: default; text-decoration: none; }
+  .scope-toggle-sep { color: var(--text-muted); font-size: 12px; }
   .scopes-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
