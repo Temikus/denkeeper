@@ -436,7 +436,7 @@ func TestDispatcher_SendErrorFeedback_OnEngineFailure(t *testing.T) {
 		Adapter:    "telegram",
 		ExternalID: "99999",
 	}
-	d.sendErrorFeedback(context.Background(), msg)
+	d.sendErrorFeedback(context.Background(), msg, fmt.Errorf("something broke"))
 
 	sent := ma.Sent()
 	if len(sent) != 1 {
@@ -456,7 +456,7 @@ func TestDispatcher_SendErrorFeedback_UnknownAdapter(t *testing.T) {
 
 	msg := adapter.IncomingMessage{Adapter: "nonexistent", ExternalID: "123"}
 	// Should not panic.
-	d.sendErrorFeedback(context.Background(), msg)
+	d.sendErrorFeedback(context.Background(), msg, fmt.Errorf("ignored"))
 }
 
 func TestStartTypingTicker_SendsTypingPeriodically(t *testing.T) {
