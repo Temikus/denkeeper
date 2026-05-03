@@ -65,6 +65,14 @@ jobs:
           name: web-ui-dist
           path: internal/web/dist/
       - uses: jdx/mise-action@v4
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^\\.claude/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.4

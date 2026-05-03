@@ -278,8 +278,10 @@ func TestManager_WaitForResolution_Approved(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	// Approve in a goroutine.
+	// Approve in a goroutine after a brief delay so WaitForResolution
+	// registers its waiter channel first (avoids a dropped notification).
 	go func() {
+		time.Sleep(10 * time.Millisecond)
 		_, _ = m.Resolve(ctx, req.ID, true, "operator")
 	}()
 
@@ -302,6 +304,7 @@ func TestManager_WaitForResolution_Denied(t *testing.T) {
 	}
 
 	go func() {
+		time.Sleep(10 * time.Millisecond)
 		_, _ = m.Resolve(ctx, req.ID, false, "operator")
 	}()
 
