@@ -3997,3 +3997,316 @@ session_tier = "supervised"
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+// --- Per-provider cost configuration tests ---
+
+func TestMigrateCostsToProviders_LegacyLimitsApplied(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+cost_limit_soft = 3.0
+cost_limit_hard = 10.0
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, p := range cfg.LLM.Providers {
+		if p.Name == "anthropic" {
+			if p.CostLimitSoft == nil || *p.CostLimitSoft != 3.0 {
+				t.Errorf("provider %q: cost_limit_soft = %v, want 3.0", p.Name, p.CostLimitSoft)
+			}
+			if p.CostLimitHard == nil || *p.CostLimitHard != 10.0 {
+				t.Errorf("provider %q: cost_limit_hard = %v, want 10.0", p.Name, p.CostLimitHard)
+			}
+			return
+		}
+	}
+	t.Fatal("anthropic provider not found")
+}
+
+func TestMigrateCostsToProviders_ProviderOverrideWins(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+cost_limit_soft = 3.0
+cost_limit_hard = 10.0
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_soft = 5.0
+cost_limit_hard = 20.0
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, p := range cfg.LLM.Providers {
+		if p.Name == "anthropic" {
+			if p.CostLimitSoft == nil || *p.CostLimitSoft != 5.0 {
+				t.Errorf("provider override lost: cost_limit_soft = %v, want 5.0", p.CostLimitSoft)
+			}
+			if p.CostLimitHard == nil || *p.CostLimitHard != 20.0 {
+				t.Errorf("provider override lost: cost_limit_hard = %v, want 20.0", p.CostLimitHard)
+			}
+			return
+		}
+	}
+	t.Fatal("anthropic provider not found")
+}
+
+func TestMigrateCostsToProviders_DefaultHardLimitNotMigrated(t *testing.T) {
+	tomlData := []byte(baseConfig)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The default hard limit (1.0) is set by applyLLMDefaults but should NOT
+	// be migrated to providers — only user-explicit values trigger migration.
+	for _, p := range cfg.LLM.Providers {
+		if p.CostLimitHard != nil {
+			t.Errorf("provider %q: cost_limit_hard = %.2f, want nil (default should not migrate)", p.Name, *p.CostLimitHard)
+		}
+	}
+}
+
+func TestParse_ProviderCostConfig(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_soft = 5.0
+cost_limit_hard = 10.0
+default_rate_per_1k_tokens = 0.02
+
+[llm.providers.model_prices."claude-opus-4"]
+input = 15.0
+output = 75.0
+cached_input = 1.5
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var found bool
+	for _, p := range cfg.LLM.Providers {
+		if p.Name != "anthropic" {
+			continue
+		}
+		found = true
+		if p.CostLimitSoft == nil || *p.CostLimitSoft != 5.0 {
+			t.Errorf("cost_limit_soft = %v, want 5.0", p.CostLimitSoft)
+		}
+		if p.CostLimitHard == nil || *p.CostLimitHard != 10.0 {
+			t.Errorf("cost_limit_hard = %v, want 10.0", p.CostLimitHard)
+		}
+		if p.DefaultRatePerKTokens == nil || *p.DefaultRatePerKTokens != 0.02 {
+			t.Errorf("default_rate_per_1k_tokens = %v, want 0.02", p.DefaultRatePerKTokens)
+		}
+		if len(p.ModelPrices) != 1 {
+			t.Fatalf("model_prices count = %d, want 1", len(p.ModelPrices))
+		}
+		opus := p.ModelPrices["claude-opus-4"]
+		if opus.InputPerMTok != 15.0 {
+			t.Errorf("claude-opus-4 input = %f, want 15.0", opus.InputPerMTok)
+		}
+		if opus.OutputPerMTok != 75.0 {
+			t.Errorf("claude-opus-4 output = %f, want 75.0", opus.OutputPerMTok)
+		}
+		if opus.CachedInputPerMTok != 1.5 {
+			t.Errorf("claude-opus-4 cached_input = %f, want 1.5", opus.CachedInputPerMTok)
+		}
+	}
+	if !found {
+		t.Fatal("anthropic provider not found")
+	}
+}
+
+func TestValidateProviderCostLimits_NegativeSoft(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_soft = -1.0
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative soft limit")
+	}
+	if !strings.Contains(err.Error(), "cost_limit_soft must be non-negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProviderCostLimits_NegativeHard(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_hard = -5.0
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative hard limit")
+	}
+	if !strings.Contains(err.Error(), "cost_limit_hard must be non-negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProviderCostLimits_SoftExceedsHard(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_soft = 20.0
+cost_limit_hard = 10.0
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for soft > hard")
+	}
+	if !strings.Contains(err.Error(), "must not exceed cost_limit_hard") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProviderCostLimits_NegativeRate(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+default_rate_per_1k_tokens = -0.01
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative rate")
+	}
+	if !strings.Contains(err.Error(), "default_rate_per_1k_tokens must be non-negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProviderCostLimits_NegativeModelPrice(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+
+[llm.providers.model_prices."bad-model"]
+input = -1.0
+output = 10.0
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative model price")
+	}
+	if !strings.Contains(err.Error(), "rates must be non-negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateProviderCostLimits_ValidConfig(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "anthropic"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-test"
+cost_limit_soft = 5.0
+cost_limit_hard = 10.0
+default_rate_per_1k_tokens = 0.02
+
+[llm.providers.model_prices."claude-opus-4"]
+input = 15.0
+output = 75.0
+cached_input = 1.5
+`)
+
+	_, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

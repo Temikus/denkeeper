@@ -671,7 +671,7 @@ func TestTokenCost_PrefersProviderCost(t *testing.T) {
 		CostUSD:    0.00123,
 		TokensUsed: TokenUsage{Total: 1000},
 	}
-	got, source := TokenCost(resp, nil)
+	got, source := TokenCost(resp, nil, "")
 	if got != 0.00123 {
 		t.Errorf("TokenCost with CostUSD = %f, want 0.00123", got)
 	}
@@ -686,7 +686,7 @@ func TestTokenCost_LegacyFallbackEstimate(t *testing.T) {
 		TokensUsed: TokenUsage{Total: 1000},
 	}
 	want := float64(1000) / 1000.0 * 0.01
-	got, source := TokenCost(resp, nil)
+	got, source := TokenCost(resp, nil, "")
 	if got != want {
 		t.Errorf("TokenCost fallback = %f, want %f", got, want)
 	}
@@ -705,7 +705,7 @@ func TestTokenCost_UsesRegistry(t *testing.T) {
 		Model:      "claude-sonnet-4-20250514",
 		TokensUsed: TokenUsage{Prompt: 1000, Completion: 500, CachedPrompt: 200, Total: 1700},
 	}
-	got, source := TokenCost(resp, reg)
+	got, source := TokenCost(resp, reg, "")
 	want := 1000.0/1_000_000*3.0 + 500.0/1_000_000*15.0 + 200.0/1_000_000*0.30
 	if diff := got - want; diff > 1e-12 || diff < -1e-12 {
 		t.Errorf("TokenCost = %e, want %e", got, want)

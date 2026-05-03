@@ -615,6 +615,11 @@ type ProviderInstanceConfig struct {
 	APIKey       string `toml:"api_key"      json:"-"`
 	BaseURL      string `toml:"base_url"     json:"base_url,omitempty"`
 	Organization string `toml:"organization" json:"organization,omitempty"` // openai-specific
+
+	CostLimitSoft         *float64                    `toml:"cost_limit_soft"            json:"cost_limit_soft,omitempty"`
+	CostLimitHard         *float64                    `toml:"cost_limit_hard"            json:"cost_limit_hard,omitempty"`
+	DefaultRatePerKTokens *float64                    `toml:"default_rate_per_1k_tokens" json:"default_rate_per_1k_tokens,omitempty"`
+	ModelPrices           map[string]ModelPriceConfig `toml:"model_prices"               json:"model_prices,omitempty"`
 }
 
 // ProviderNames returns the names of all configured provider instances.
@@ -855,15 +860,45 @@ func fixSlice(s []any) []any {
 func applyDefaults(cfg *Config) {
 	resolveDataDir(cfg)
 	applyScalarDefaults(cfg)
+
+	userSetSoft := cfg.LLM.CostLimitSoft > 0
+	userSetHard := cfg.LLM.CostLimitHard > 0 || cfg.LLM.MaxCostPerSession > 0
+	userCostSoft := cfg.LLM.CostLimitSoft
+	userCostHard := cfg.LLM.CostLimitHard
+	if cfg.LLM.MaxCostPerSession > 0 && userCostHard == 0 {
+		userCostHard = cfg.LLM.MaxCostPerSession
+	}
+
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
 	synthesizeLegacyProviders(cfg)
+	migrateCostsToProviders(cfg, userSetSoft, userCostSoft, userSetHard, userCostHard)
 	expandEnvVars(cfg)
 	applyMiscDefaults(cfg)
 	synthesizeDefaultAgent(cfg)
 	applyAgentDefaults(cfg)
 	synthesizeChannels(cfg)
 	applyScheduleDefaults(cfg)
+}
+
+// migrateCostsToProviders copies global cost limits onto providers that don't
+// have their own overrides. Only runs when the user explicitly set values
+// in the TOML (boolean flags distinguish "user set this" from "default applied").
+func migrateCostsToProviders(cfg *Config, userSetSoft bool, softVal float64, userSetHard bool, hardVal float64) {
+	if !userSetSoft && !userSetHard {
+		return
+	}
+	for i := range cfg.LLM.Providers {
+		p := &cfg.LLM.Providers[i]
+		if userSetSoft && p.CostLimitSoft == nil {
+			v := softVal
+			p.CostLimitSoft = &v
+		}
+		if userSetHard && p.CostLimitHard == nil {
+			v := hardVal
+			p.CostLimitHard = &v
+		}
+	}
 }
 
 // synthesizeLegacyProviders converts the old-style [llm.openai], [llm.anthropic], etc.
@@ -1606,6 +1641,14 @@ func validateCostLimits(cfg *Config) error {
 	if err := validateGlobalCostLimits(&cfg.LLM); err != nil {
 		return err
 	}
+	for _, p := range cfg.LLM.Providers {
+		if err := validateProviderCostLimits(p); err != nil {
+			return err
+		}
+		if err := validateProviderModelPrices(p.Name, p.ModelPrices); err != nil {
+			return err
+		}
+	}
 	for _, a := range cfg.Agents {
 		if err := validateAgentCostLimits(a, cfg.LLM.CostLimitSoft, cfg.LLM.CostLimitHard); err != nil {
 			return err
@@ -1648,6 +1691,34 @@ func validateAgentCostLimits(a AgentInstanceConfig, globalSoft, globalHard float
 	}
 	if soft > 0 && hard > 0 && soft > hard {
 		return fmt.Errorf("config: agent %q: cost_limit_soft ($%.2f) must not exceed cost_limit_hard ($%.2f)", a.Name, soft, hard)
+	}
+	return nil
+}
+
+func validateProviderCostLimits(p ProviderInstanceConfig) error {
+	if p.CostLimitSoft != nil && *p.CostLimitSoft < 0 {
+		return fmt.Errorf("config: provider %q: cost_limit_soft must be non-negative", p.Name)
+	}
+	if p.CostLimitHard != nil && *p.CostLimitHard < 0 {
+		return fmt.Errorf("config: provider %q: cost_limit_hard must be non-negative", p.Name)
+	}
+	if p.CostLimitSoft != nil && p.CostLimitHard != nil &&
+		*p.CostLimitSoft > 0 && *p.CostLimitHard > 0 &&
+		*p.CostLimitSoft > *p.CostLimitHard {
+		return fmt.Errorf("config: provider %q: cost_limit_soft ($%.2f) must not exceed cost_limit_hard ($%.2f)",
+			p.Name, *p.CostLimitSoft, *p.CostLimitHard)
+	}
+	if p.DefaultRatePerKTokens != nil && *p.DefaultRatePerKTokens < 0 {
+		return fmt.Errorf("config: provider %q: default_rate_per_1k_tokens must be non-negative", p.Name)
+	}
+	return nil
+}
+
+func validateProviderModelPrices(provider string, prices map[string]ModelPriceConfig) error {
+	for model, mp := range prices {
+		if mp.InputPerMTok < 0 || mp.OutputPerMTok < 0 || mp.CachedInputPerMTok < 0 {
+			return fmt.Errorf("config: provider %q model %q: rates must be non-negative", provider, model)
+		}
 	}
 	return nil
 }

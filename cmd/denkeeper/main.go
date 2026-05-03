@@ -305,6 +305,19 @@ func initLLMClients(cfg *config.Config) llmClients {
 			CachedInputPerMTok: mp.CachedInputPerMTok,
 		})
 	}
+	// Per-provider pricing overrides.
+	for _, pc := range cfg.LLM.Providers {
+		if pc.DefaultRatePerKTokens != nil && *pc.DefaultRatePerKTokens > 0 {
+			reg.SetProviderFallbackRate(pc.Name, *pc.DefaultRatePerKTokens)
+		}
+		for model, mp := range pc.ModelPrices {
+			reg.RegisterProviderModel(pc.Name, model, pricing.ModelPrice{
+				InputPerMTok:       mp.InputPerMTok,
+				OutputPerMTok:      mp.OutputPerMTok,
+				CachedInputPerMTok: mp.CachedInputPerMTok,
+			})
+		}
+	}
 
 	return llmClients{
 		providers:         providers,
@@ -352,7 +365,22 @@ func buildCostTracker(cfg *config.Config) *llm.CostTracker {
 			overrides[a.Name] = l
 		}
 	}
-	return llm.NewCostTracker(defaults, overrides)
+	ct := llm.NewCostTracker(defaults, overrides)
+
+	for _, p := range cfg.LLM.Providers {
+		if p.CostLimitSoft != nil || p.CostLimitHard != nil {
+			l := defaults
+			if p.CostLimitSoft != nil {
+				l.Soft = *p.CostLimitSoft
+			}
+			if p.CostLimitHard != nil {
+				l.Hard = *p.CostLimitHard
+			}
+			ct.SetProviderLimits(p.Name, l)
+		}
+	}
+
+	return ct
 }
 
 func initVoiceOpts(cfg *config.Config, logger *slog.Logger) *telegram.VoiceOpts {

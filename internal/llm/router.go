@@ -328,10 +328,10 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 			"tool_calls", len(resp.ToolCalls),
 			"tokens_total", resp.TokensUsed.Total,
 		)
-		cost, source := TokenCost(resp, r.pricing)
+		cost, source := TokenCost(resp, r.pricing, activeProvider.Name())
 		r.recordOTelSuccess(start, resp, cost, source, attrs)
 		r.setSpanResponseAttrs(span, resp, cost)
-		r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
+		r.costTracker.RecordWithProvider(sessionID, activeProvider.Name(), cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 		if source == "unknown" {
 			slog.Warn("no pricing data for model", "model", resp.Model)
 		}
@@ -346,17 +346,18 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	}
 
 	// 5. Apply error/rate_limit fallbacks in declaration order.
-	resp, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, onStream, err)
+	var resolvedProvider string
+	resp, resolvedProvider, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, onStream, err)
 	if err != nil {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
-	cost, source := TokenCost(resp, r.pricing)
+	cost, source := TokenCost(resp, r.pricing, resolvedProvider)
 	r.recordOTelSuccess(start, resp, cost, source, attrs)
 	r.setSpanResponseAttrs(span, resp, cost)
-	r.costTracker.RecordWithTokens(sessionID, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
+	r.costTracker.RecordWithProvider(sessionID, resolvedProvider, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
 	if source == "unknown" {
 		slog.Warn("no pricing data for model", "model", resp.Model)
 	}
@@ -450,8 +451,9 @@ func (r *Router) applyCostLimitFallback(sessionID string, provider Provider) (Pr
 }
 
 // applyErrorFallbacks iterates error/rate_limit fallback rules after a failed
-// primary call. Returns the successful response or the last error encountered.
-func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback, lastErr error) (*ChatResponse, error) {
+// primary call. Returns the successful response, the name of the provider that
+// served it, or the last error encountered.
+func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback, lastErr error) (*ChatResponse, string, error) {
 	var resp *ChatResponse
 	err := lastErr
 
@@ -465,13 +467,14 @@ func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, acti
 		slog.Info("fallback triggered",
 			"session", sessionID, "trigger", rule.Trigger, "action", rule.Action, "error", err)
 
-		resp, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages, tools, onStream)
+		var providerName string
+		resp, providerName, err = r.executeFallbackAction(ctx, rule, activeProvider, activeModel, messages, tools, onStream)
 		if err == nil {
-			return resp, nil
+			return resp, providerName, nil
 		}
 		slog.Warn("fallback also failed, trying next", "session", sessionID, "error", err)
 	}
-	return nil, err
+	return nil, "", err
 }
 
 // fallbackMatchesError checks whether a fallback rule applies to the given error.
@@ -485,8 +488,9 @@ func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
 	return false
 }
 
-// executeFallbackAction performs a single fallback action and returns the result.
-func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback) (*ChatResponse, error) {
+// executeFallbackAction performs a single fallback action and returns the
+// result along with the name of the provider that served it.
+func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback) (*ChatResponse, string, error) {
 	// buildReq creates a ChatRequest and enables streaming if the provider supports it.
 	buildReq := func(p Provider, model string) ChatRequest {
 		req := ChatRequest{Model: model, Messages: messages, Tools: tools}
@@ -507,25 +511,27 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 			resp, callErr = activeProvider.ChatCompletion(ctx, req)
 			return callErr
 		})
-		return resp, retryErr
+		return resp, activeProvider.Name(), retryErr
 
 	case "switch_provider":
 		fp, ok := r.providers[rule.Provider]
 		if !ok {
 			slog.Warn("fallback provider not registered, skipping", "provider", rule.Provider)
-			return nil, fmt.Errorf("fallback provider %q not registered", rule.Provider)
+			return nil, "", fmt.Errorf("fallback provider %q not registered", rule.Provider)
 		}
 		model := activeModel
 		if rule.Model != "" {
 			model = rule.Model
 		}
-		return fp.ChatCompletion(ctx, buildReq(fp, model))
+		resp, err := fp.ChatCompletion(ctx, buildReq(fp, model))
+		return resp, fp.Name(), err
 
 	case "switch_model":
-		return activeProvider.ChatCompletion(ctx, buildReq(activeProvider, rule.Model))
+		resp, err := activeProvider.ChatCompletion(ctx, buildReq(activeProvider, rule.Model))
+		return resp, activeProvider.Name(), err
 	}
 
-	return nil, fmt.Errorf("unknown fallback action %q", rule.Action)
+	return nil, "", fmt.Errorf("unknown fallback action %q", rule.Action)
 }
 
 func (r *Router) HealthCheck(ctx context.Context) error {
@@ -569,11 +575,13 @@ func doWaitAndRetry(ctx context.Context, maxRetries int, backoff string, fn func
 }
 
 // TokenCost returns the USD cost for a chat response using the pricing registry.
+// providerName selects the per-provider override layer (empty string skips it).
 // Priority: provider-reported cost > registry lookup > fallback rate > $0.
 // Also returns a pricing source string ("provider"/"registry"/"fallback"/"unknown").
-func TokenCost(resp *ChatResponse, reg *pricing.Registry) (float64, string) {
+func TokenCost(resp *ChatResponse, reg *pricing.Registry, providerName string) (float64, string) {
 	if reg != nil {
 		return reg.Cost(
+			providerName,
 			resp.Model,
 			resp.TokensUsed.Prompt,
 			resp.TokensUsed.Completion,

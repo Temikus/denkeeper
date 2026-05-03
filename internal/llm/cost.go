@@ -40,13 +40,15 @@ type AgentStats struct {
 
 // CostTracker tracks token usage and estimated costs per session and globally.
 type CostTracker struct {
-	mu             sync.Mutex
-	sessionCosts   map[string]float64
-	sessionStats   map[string]*SessionStats
-	sessionAgents  map[string]string // session ID → agent name
-	globalCost     float64
-	defaultLimits  SessionLimits
-	agentOverrides map[string]SessionLimits
+	mu               sync.Mutex
+	sessionCosts     map[string]float64
+	sessionStats     map[string]*SessionStats
+	sessionAgents    map[string]string // session ID → agent name
+	sessionProviders map[string]string // session ID → last active provider
+	globalCost       float64
+	defaultLimits    SessionLimits
+	agentOverrides   map[string]SessionLimits
+	providerLimits   map[string]SessionLimits
 }
 
 // NewCostTracker creates a CostTracker with default limits and optional per-agent overrides.
@@ -55,11 +57,13 @@ func NewCostTracker(defaults SessionLimits, agentOverrides map[string]SessionLim
 		agentOverrides = make(map[string]SessionLimits)
 	}
 	return &CostTracker{
-		sessionCosts:   make(map[string]float64),
-		sessionStats:   make(map[string]*SessionStats),
-		sessionAgents:  make(map[string]string),
-		defaultLimits:  defaults,
-		agentOverrides: agentOverrides,
+		sessionCosts:     make(map[string]float64),
+		sessionStats:     make(map[string]*SessionStats),
+		sessionAgents:    make(map[string]string),
+		sessionProviders: make(map[string]string),
+		defaultLimits:    defaults,
+		agentOverrides:   agentOverrides,
+		providerLimits:   make(map[string]SessionLimits),
 	}
 }
 
@@ -91,6 +95,7 @@ func (ct *CostTracker) Record(sessionID string, cost float64) bool {
 
 // RecordWithTokens adds cost and token usage for a session. Returns true if within budget.
 // The optional pricingSource parameter records which pricing method was used.
+// Deprecated: use RecordWithProvider for correct per-provider limit enforcement.
 func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTokens, outputTokens int, pricingSource ...string) bool {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
@@ -115,13 +120,18 @@ func (ct *CostTracker) RecordWithTokens(sessionID string, cost float64, inputTok
 	return hard == 0 || ct.sessionCosts[sessionID] <= hard
 }
 
-// limitsForSession resolves the effective limits for a session by checking
-// per-agent overrides first, then falling back to defaults.
+// limitsForSession resolves the effective limits for a session.
+// Priority: per-agent override → per-provider limit → default.
 // Must be called with ct.mu held.
 func (ct *CostTracker) limitsForSession(sessionID string) SessionLimits {
 	agent := ct.agentForSession(sessionID)
 	if override, ok := ct.agentOverrides[agent]; ok {
 		return override
+	}
+	if provider, ok := ct.sessionProviders[sessionID]; ok {
+		if l, ok := ct.providerLimits[provider]; ok {
+			return l
+		}
 	}
 	return ct.defaultLimits
 }
@@ -232,6 +242,43 @@ func (ct *CostTracker) SetAgentLimits(agent string, limits SessionLimits) {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 	ct.agentOverrides[agent] = limits
+}
+
+// SetProviderLimits sets per-provider cost limit overrides.
+func (ct *CostTracker) SetProviderLimits(provider string, limits SessionLimits) {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.providerLimits[provider] = limits
+}
+
+// RecordWithProvider adds cost, token usage, and provider attribution for a session.
+// Returns true if within hard budget.
+func (ct *CostTracker) RecordWithProvider(sessionID, provider string, cost float64, inputTokens, outputTokens int, pricingSource string) bool {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+
+	if provider != "" {
+		ct.sessionProviders[sessionID] = provider
+	}
+
+	ct.sessionCosts[sessionID] += cost
+	ct.globalCost += cost
+
+	s := ct.getOrCreateStats(sessionID)
+	s.Cost += cost
+	s.InputTokens += inputTokens
+	s.OutputTokens += outputTokens
+	s.Messages++
+
+	if pricingSource != "" {
+		if s.PricingSources == nil {
+			s.PricingSources = make(map[string]int)
+		}
+		s.PricingSources[pricingSource]++
+	}
+
+	hard := ct.limitsForSession(sessionID).Hard
+	return hard == 0 || ct.sessionCosts[sessionID] <= hard
 }
 
 // SetDefaultLimits updates the default cost limits applied to sessions

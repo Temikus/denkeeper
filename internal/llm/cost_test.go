@@ -347,6 +347,87 @@ func TestCostTracker_MaxBudgetPerSession_Deprecated(t *testing.T) {
 	}
 }
 
+func TestCostTracker_RecordWithProvider_TracksProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+
+	ct.RecordWithProvider("agent1:tg:1", "anthropic", 0.5, 100, 50, "registry")
+	ct.RecordWithProvider("agent1:tg:1", "anthropic", 0.3, 80, 40, "provider")
+
+	stats := ct.AllSessionStats()
+	s := stats["agent1:tg:1"]
+	if s.InputTokens != 180 {
+		t.Errorf("input tokens = %d, want 180", s.InputTokens)
+	}
+	if s.OutputTokens != 90 {
+		t.Errorf("output tokens = %d, want 90", s.OutputTokens)
+	}
+	if s.Messages != 2 {
+		t.Errorf("messages = %d, want 2", s.Messages)
+	}
+	if s.PricingSources["registry"] != 1 {
+		t.Errorf("registry count = %d, want 1", s.PricingSources["registry"])
+	}
+	if s.PricingSources["provider"] != 1 {
+		t.Errorf("provider count = %d, want 1", s.PricingSources["provider"])
+	}
+}
+
+func TestCostTracker_ProviderLimits(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Soft: 0.5, Hard: 1.0}, nil)
+	ct.SetProviderLimits("expensive-provider", SessionLimits{Soft: 5.0, Hard: 10.0})
+
+	// Session using the expensive provider should get higher limits.
+	ct.RecordWithProvider("agent:tg:1", "expensive-provider", 2.0, 100, 50, "registry")
+	if ct.ExceedsSoftLimit("agent:tg:1") {
+		t.Error("expected NOT to exceed soft limit (provider limit=5.0, cost=2.0)")
+	}
+	if ct.ExceedsHardLimit("agent:tg:1") {
+		t.Error("expected NOT to exceed hard limit (provider limit=10.0, cost=2.0)")
+	}
+
+	ct.RecordWithProvider("agent:tg:1", "expensive-provider", 4.0, 100, 50, "registry")
+	if !ct.ExceedsSoftLimit("agent:tg:1") {
+		t.Error("expected to exceed soft limit (provider limit=5.0, cost=6.0)")
+	}
+	if ct.ExceedsHardLimit("agent:tg:1") {
+		t.Error("expected NOT to exceed hard limit (provider limit=10.0, cost=6.0)")
+	}
+}
+
+func TestCostTracker_AgentOverrideTakesPriorityOverProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, map[string]SessionLimits{
+		"premium": {Hard: 50.0},
+	})
+	ct.SetProviderLimits("cheap-provider", SessionLimits{Hard: 5.0})
+
+	// Agent override (50.0) should win over provider limit (5.0).
+	ct.RecordWithProvider("premium:tg:1", "cheap-provider", 20.0, 100, 50, "registry")
+	if ct.ExceedsHardLimit("premium:tg:1") {
+		t.Error("agent override (50.0) should take priority over provider limit (5.0)")
+	}
+}
+
+func TestCostTracker_ProviderLimits_FallsBackToDefault(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
+	ct.SetProviderLimits("special", SessionLimits{Hard: 10.0})
+
+	// Session using a different provider should use default limits.
+	ct.RecordWithProvider("agent:tg:1", "other-provider", 2.0, 100, 50, "registry")
+	if !ct.ExceedsHardLimit("agent:tg:1") {
+		t.Error("expected to exceed default hard limit (1.0) at cost 2.0")
+	}
+}
+
+func TestCostTracker_RecordWithProvider_EmptyProvider(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 1.0}, nil)
+
+	// Empty provider should not affect limit resolution.
+	ct.RecordWithProvider("agent:tg:1", "", 0.5, 100, 50, "registry")
+	if ct.ExceedsHardLimit("agent:tg:1") {
+		t.Error("expected within default hard limit at cost 0.5")
+	}
+}
+
 func TestCostTracker_SetDefaultLimits(t *testing.T) {
 	ct := NewCostTracker(SessionLimits{Soft: 1.0, Hard: 5.0}, nil)
 
