@@ -1024,7 +1024,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	responseText, err := eng.Chat(r.Context(), msg)
 	if err != nil {
 		s.logger.Error("chat error", "error", err, "agent", agentName, "session", sessionID)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to process message"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": llm.UserFacingError(err)})
 		return
 	}
 

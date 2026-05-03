@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -91,7 +90,7 @@ func (s *Server) runChatStream(ctx context.Context, stream StreamSession, eng *a
 			return
 		}
 		s.logger.Error("chat stream error", "error", err, "session", sessionID)
-		stream.SendError(chatErrorMessage(err))
+		stream.SendError(llm.UserFacingError(err))
 		return
 	}
 
@@ -100,22 +99,4 @@ func (s *Server) runChatStream(ctx context.Context, stream StreamSession, eng *a
 	// completeness; clients that don't support deltas use it as the response.
 	stream.SendContent(responseText)
 	stream.SendDone(sessionID)
-}
-
-// chatErrorMessage returns a user-facing error message for chat failures.
-// Specific error types get descriptive messages; everything else is generic.
-func chatErrorMessage(err error) string {
-	if errors.Is(err, llm.ErrStreamIdleTimeout) {
-		return "The LLM provider stopped responding. Please try again."
-	}
-	var llmErr *llm.LLMError
-	if errors.As(err, &llmErr) {
-		switch {
-		case llmErr.StatusCode == 429:
-			return "Rate limited by the LLM provider. Please wait a moment and try again."
-		case llmErr.StatusCode >= 500:
-			return "The LLM provider is experiencing issues. Please try again later."
-		}
-	}
-	return "Failed to process message."
 }

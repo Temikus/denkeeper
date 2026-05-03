@@ -18,7 +18,8 @@ func TestUserFacingError_LLMErrors(t *testing.T) {
 		{"404 model", &LLMError{StatusCode: 404, Message: "model not found"}, "model was not found"},
 		{"422 unprocessable", &LLMError{StatusCode: 422, Message: "bad params"}, "configuration issue"},
 		{"429 rate limit", &LLMError{StatusCode: 429, Message: "slow down"}, "rate-limiting"},
-		{"500 generic LLM", &LLMError{StatusCode: 500, Message: "internal"}, "Sorry, I encountered an error"},
+		{"500 server error", &LLMError{StatusCode: 500, Message: "internal"}, "experiencing issues"},
+		{"502 server error", &LLMError{StatusCode: 502, Message: "bad gateway"}, "experiencing issues"},
 		{"non-LLM error", fmt.Errorf("network timeout"), "Sorry, I encountered an error"},
 	}
 	for _, tt := range tests {
@@ -36,5 +37,21 @@ func TestUserFacingError_Timeout(t *testing.T) {
 	got := UserFacingError(err)
 	if !strings.Contains(got, "timed out") {
 		t.Errorf("UserFacingError(DeadlineExceeded) = %q, want substring %q", got, "timed out")
+	}
+}
+
+func TestUserFacingError_Canceled(t *testing.T) {
+	err := fmt.Errorf("chat completion: %w", context.Canceled)
+	got := UserFacingError(err)
+	if !strings.Contains(got, "cancelled") {
+		t.Errorf("UserFacingError(Canceled) = %q, want substring %q", got, "cancelled")
+	}
+}
+
+func TestUserFacingError_StreamIdleTimeout(t *testing.T) {
+	err := fmt.Errorf("LLM completion: %w", ErrStreamIdleTimeout)
+	got := UserFacingError(err)
+	if !strings.Contains(got, "stopped responding") {
+		t.Errorf("UserFacingError(ErrStreamIdleTimeout) = %q, want substring %q", got, "stopped responding")
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/llm"
 )
 
 var (
@@ -532,7 +533,7 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 				return
 			}
 			c.hub.logger.Error("ws: chat error", "error", err, "session", sessionID)
-			c.sendError(sessionID, "internal", chatErrorMessage(err))
+			c.sendError(sessionID, "internal", llm.UserFacingError(err))
 			return
 		}
 
