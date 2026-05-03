@@ -55,3 +55,29 @@ func TestUserFacingError_StreamIdleTimeout(t *testing.T) {
 		t.Errorf("UserFacingError(ErrStreamIdleTimeout) = %q, want substring %q", got, "stopped responding")
 	}
 }
+
+func TestHTTPStatusForError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"canceled", context.Canceled, 499},
+		{"deadline exceeded", context.DeadlineExceeded, 504},
+		{"stream idle timeout", ErrStreamIdleTimeout, 504},
+		{"429 rate limit", &LLMError{StatusCode: 429, Message: "slow down"}, 429},
+		{"401 auth", &LLMError{StatusCode: 401, Message: "bad key"}, 502},
+		{"402 credits", &LLMError{StatusCode: 402, Message: "no credits"}, 502},
+		{"500 provider error", &LLMError{StatusCode: 500, Message: "internal"}, 502},
+		{"wrapped LLM error", fmt.Errorf("chat: %w", &LLMError{StatusCode: 402, Message: "x"}), 502},
+		{"generic error", fmt.Errorf("something broke"), 500},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HTTPStatusForError(tt.err)
+			if got != tt.want {
+				t.Errorf("HTTPStatusForError(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+		})
+	}
+}

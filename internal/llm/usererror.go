@@ -5,6 +5,29 @@ import (
 	"errors"
 )
 
+// HTTPStatusForError returns the HTTP status code that best represents the
+// error to an API client. Provider-side failures (auth, credits, model not
+// found, server errors) map to 502 Bad Gateway; rate limits pass through as
+// 429; cancellations and timeouts get their own codes.
+func HTTPStatusForError(err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 499 // nginx-style "client closed request"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrStreamIdleTimeout) {
+		return 504 // Gateway Timeout
+	}
+
+	var llmErr *LLMError
+	if errors.As(err, &llmErr) {
+		if llmErr.StatusCode == 429 {
+			return 429
+		}
+		return 502
+	}
+
+	return 500
+}
+
 // UserFacingError translates an LLM pipeline error into a short, actionable
 // message for end users. Unknown errors get a generic fallback.
 func UserFacingError(err error) string {
