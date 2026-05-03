@@ -3,6 +3,7 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -172,5 +173,55 @@ func TestBuildPluginDockerArgs(t *testing.T) {
 	}
 	if !imageFound {
 		t.Errorf("image not found in docker args, last arg = %q", lastArgs)
+	}
+}
+
+func TestUpdateDisabledTools_PersistsToConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte("[tools]\n[tools.my-server]\ncommand = \"/usr/bin/tool\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewManager(testLogger())
+	sc := &serverConn{
+		name:      "my-server",
+		transport: "stdio",
+		cfg:       config.ToolConfig{Command: "/usr/bin/tool"},
+	}
+	mgr.servers["my-server"] = sc
+	mgr.toolMap = map[string]*serverConn{"tool-a": sc, "tool-b": sc}
+
+	lm := NewLifecycleManager(mgr, cfgPath, 5, testLogger())
+
+	if err := lm.UpdateDisabledTools("my-server", []string{"tool-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify in-memory state.
+	cfg, _ := mgr.ServerToolConfig("my-server")
+	if len(cfg.DisabledTools) != 1 || cfg.DisabledTools[0] != "tool-a" {
+		t.Errorf("in-memory DisabledTools = %v, want [tool-a]", cfg.DisabledTools)
+	}
+
+	// Verify TOML persistence.
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "disabled_tools") {
+		t.Error("config file should contain disabled_tools")
+	}
+	if !strings.Contains(content, "tool-a") {
+		t.Error("config file should contain tool-a")
+	}
+}
+
+func TestUpdateDisabledTools_ServerNotFound(t *testing.T) {
+	lm, _ := newTestLifecycleMgr(t)
+	err := lm.UpdateDisabledTools("nonexistent", []string{"x"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent server")
 	}
 }

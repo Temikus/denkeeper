@@ -53,9 +53,14 @@
   // Tool defs modal
   let defsModal = null // { serverName, totalCount }
   let defsLoading = false
-  let defsTools = [] // { name, description, parameters }
+  let defsTools = [] // { name, description, parameters, disabled }
   let defsFilter = ''
   let expandedTool = null // tool name currently expanded, single-expand
+
+  // Disabled tools state (working copy in modal)
+  let disabledToolsSet = new Set()
+  let originalDisabledSet = new Set()
+  let savingDisabledTools = false
 
   // Category inference from tool name
   const categoryKeywords = {
@@ -112,6 +117,14 @@
       })
     : defsTools
   $: groupedDefs = groupByCategory(filteredDefs)
+  $: defsEnabledCount = defsTools.length - disabledToolsSet.size
+  $: defsDirty = !setsEqual(disabledToolsSet, originalDisabledSet)
+
+  function setsEqual(a, b) {
+    if (a.size !== b.size) return false
+    for (const v of a) { if (!b.has(v)) return false }
+    return true
+  }
 
   async function openDefsModal(serverName, totalCount) {
     defsModal = { serverName, totalCount }
@@ -119,15 +132,66 @@
     expandedTool = null
     defsLoading = true
     defsTools = []
+    disabledToolsSet = new Set()
+    originalDisabledSet = new Set()
     try {
       const res = await api.toolDefs(serverName)
       defsTools = res.tools || []
+      const initial = new Set(defsTools.filter(t => t.disabled).map(t => t.name))
+      disabledToolsSet = new Set(initial)
+      originalDisabledSet = new Set(initial)
     } catch (e) {
       error = e.message
       defsModal = null
     } finally {
       defsLoading = false
     }
+  }
+
+  function toggleToolEnabled(toolName) {
+    disabledToolsSet = new Set(disabledToolsSet)
+    if (disabledToolsSet.has(toolName)) {
+      disabledToolsSet.delete(toolName)
+    } else {
+      disabledToolsSet.add(toolName)
+    }
+  }
+
+  function toggleCategoryEnabled(catTools) {
+    const allDisabled = catTools.every(t => disabledToolsSet.has(t.name))
+    disabledToolsSet = new Set(disabledToolsSet)
+    for (const t of catTools) {
+      if (allDisabled) {
+        disabledToolsSet.delete(t.name)
+      } else {
+        disabledToolsSet.add(t.name)
+      }
+    }
+  }
+
+  function enableAllTools() {
+    disabledToolsSet = new Set()
+  }
+
+  function disableAllTools() {
+    disabledToolsSet = new Set(defsTools.map(t => t.name))
+  }
+
+  async function saveDisabledTools() {
+    savingDisabledTools = true
+    try {
+      await api.updateDisabledTools(defsModal.serverName, [...disabledToolsSet])
+      originalDisabledSet = new Set(disabledToolsSet)
+      await loadData()
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingDisabledTools = false
+    }
+  }
+
+  function cancelDisabledTools() {
+    disabledToolsSet = new Set(originalDisabledSet)
   }
 
   function extractParams(td) {
@@ -463,8 +527,11 @@
   }
 
   function toolCount(t) {
-    if (t.tool_names && t.tool_names.length > 0) return `${t.tool_names.length} tool${t.tool_names.length !== 1 ? 's' : ''}`
-    return null
+    if (!t.tool_names || t.tool_names.length === 0) return null
+    if (t.enabled_count < t.total_tool_count) {
+      return `${t.enabled_count}/${t.total_tool_count} tools`
+    }
+    return `${t.tool_names.length} tool${t.tool_names.length !== 1 ? 's' : ''}`
   }
 
   function toolEndpoint(t) {
@@ -926,7 +993,7 @@
       <div class="defs-header">
         <div>
           <h2 class="defs-title">Tools &mdash; {defsModal.serverName}</h2>
-          <span class="defs-subtitle">{defsModal.totalCount} tool{defsModal.totalCount !== 1 ? 's' : ''} available</span>
+          <span class="defs-subtitle">{defsEnabledCount} of {defsTools.length} tools enabled</span>
         </div>
         <button class="btn-ghost btn-card defs-close" onclick={() => defsModal = null} aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -935,6 +1002,10 @@
 
       <div class="defs-filter-wrap">
         <input type="text" class="defs-filter" bind:value={defsFilter} placeholder="Filter tools..." />
+        <div class="defs-bulk-actions">
+          <button class="btn-ghost btn-xs" onclick={enableAllTools} disabled={disabledToolsSet.size === 0}>Enable All</button>
+          <button class="btn-ghost btn-xs" onclick={disableAllTools} disabled={disabledToolsSet.size === defsTools.length}>Disable All</button>
+        </div>
       </div>
 
       <div class="defs-body">
@@ -944,11 +1015,19 @@
           <p class="muted">No tools match your filter.</p>
         {:else}
           {#each groupedDefs as [category, catTools]}
+            {@const catEnabledCount = catTools.filter(t => !disabledToolsSet.has(t.name)).length}
             <div class="defs-category">
-              <h3 class="defs-category-title">{category}</h3>
+              <div class="defs-category-header">
+                <h3 class="defs-category-title">{category} <span class="defs-category-count">{catEnabledCount}/{catTools.length}</span></h3>
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <label class="switch switch-sm" onclick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={catEnabledCount > 0} onchange={() => toggleCategoryEnabled(catTools)} />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
               {#each catTools as td}
                 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                <div class="defs-tool" class:expanded={expandedTool === td.name} onclick={() => toggleTool(td.name)}>
+                <div class="defs-tool" class:expanded={expandedTool === td.name} class:tool-disabled={disabledToolsSet.has(td.name)} onclick={() => toggleTool(td.name)}>
                   <div class="defs-tool-row">
                     <div class="defs-tool-icon" data-cat={categoryIcon(category)}>
                       {#if category === 'Search'}
@@ -973,6 +1052,11 @@
                         <span class="defs-tag {inferAccessTag(td)}">{inferAccessTag(td)}</span>
                       </div>
                     </div>
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                    <label class="switch switch-sm" onclick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={!disabledToolsSet.has(td.name)} onchange={() => toggleToolEnabled(td.name)} />
+                      <span class="switch-slider"></span>
+                    </label>
                   </div>
                   {#if expandedTool === td.name}
                     {@const params = extractParams(td)}
@@ -1012,7 +1096,16 @@
 
       <div class="defs-footer">
         <span class="muted">Showing {filteredDefs.length} of {defsTools.length} tools</span>
-        <button class="btn-ghost btn-card" onclick={() => defsModal = null}>Done</button>
+        <div class="defs-footer-actions">
+          {#if defsDirty}
+            <button class="btn-ghost btn-card" onclick={cancelDisabledTools} disabled={savingDisabledTools}>Cancel</button>
+            <button class="btn-primary btn-card" onclick={saveDisabledTools} disabled={savingDisabledTools}>
+              {savingDisabledTools ? 'Saving...' : 'Save'}
+            </button>
+          {:else}
+            <button class="btn-ghost btn-card" onclick={() => defsModal = null}>Done</button>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -1421,6 +1514,18 @@
   .defs-filter-wrap {
     padding: 12px 24px;
     border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .defs-bulk-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .btn-xs {
+    font-size: 12px;
+    padding: 4px 8px;
   }
   .defs-filter {
     width: 100%;
@@ -1441,15 +1546,26 @@
     min-height: 0;
   }
   .defs-category { margin-bottom: 8px; }
-  .defs-category-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-muted);
+  .defs-category-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     margin: 16px 0 8px;
     padding-bottom: 4px;
     border-bottom: 1px solid var(--border);
   }
-  .defs-category:first-child .defs-category-title { margin-top: 8px; }
+  .defs-category:first-child .defs-category-header { margin-top: 8px; }
+  .defs-category-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 0;
+  }
+  .defs-category-count {
+    font-weight: 400;
+    color: var(--text-muted);
+    margin-left: 4px;
+  }
 
   .defs-tool {
     border-radius: 6px;
@@ -1465,10 +1581,17 @@
     padding-bottom: 4px;
   }
 
+  .defs-tool.tool-disabled .defs-tool-name,
+  .defs-tool.tool-disabled .defs-tool-desc,
+  .defs-tool.tool-disabled .defs-tool-tags {
+    color: var(--text-muted);
+  }
+
   .defs-tool-row {
     display: flex;
     gap: 12px;
     padding: 10px 8px;
+    align-items: flex-start;
   }
 
   .defs-tool-icon {
@@ -1584,6 +1707,23 @@
     padding: 12px 24px;
     border-top: 1px solid var(--border);
     font-size: 13px;
+  }
+  .defs-footer-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .switch-sm {
+    width: 36px;
+    height: 20px;
+    margin-top: 4px;
+  }
+  .switch-sm .switch-slider::before {
+    height: 14px;
+    width: 14px;
+  }
+  .switch-sm input:checked + .switch-slider::before {
+    transform: translateX(16px);
   }
 
   /* Unsafe options section (inside connection settings) */

@@ -231,6 +231,7 @@ MCP tool server definitions.
     client_secret = ""               # OAuth client secret
     scopes = []                      # OAuth scopes
     allow_loopback = false           # bypass SSRF loopback block
+    disabled_tools = []              # MCP tool names to exclude from LLM
 
 ### [mcp]
 

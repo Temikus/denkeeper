@@ -193,6 +193,28 @@ func (lm *LifecycleManager) RestartTool(ctx context.Context, name string) error 
 	return nil
 }
 
+// UpdateDisabledTools updates the disabled tools for a server in memory and
+// persists the change to TOML. No MCP reconnect is performed.
+func (lm *LifecycleManager) UpdateDisabledTools(serverName string, disabledTools []string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if _, ok := lm.toolMgr.ServerInfo(serverName); !ok {
+		return fmt.Errorf("tool %q not found", serverName)
+	}
+
+	if err := lm.toolMgr.SetDisabledTools(serverName, disabledTools); err != nil {
+		return fmt.Errorf("updating disabled tools for %q: %w", serverName, err)
+	}
+
+	if err := updateDisabledToolsInConfig(lm.configPath, serverName, disabledTools); err != nil {
+		return fmt.Errorf("persisting disabled tools for %q: %w", serverName, err)
+	}
+
+	lm.logger.Info("disabled tools updated", "name", serverName, "count", len(disabledTools))
+	return nil
+}
+
 // AddPlugin validates, optionally spawns, registers, and persists the
 // [plugins.<name>] section.
 // validatePluginConfig checks that a plugin config has valid type and required fields.

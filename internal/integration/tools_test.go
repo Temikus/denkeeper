@@ -299,3 +299,66 @@ func TestTools_RestartRegistered(t *testing.T) {
 		t.Errorf("status after restart = %v, want connected", health["status"])
 	}
 }
+
+func TestTools_UpdateDisabledTools(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+	addTestTool(t, h, ts)
+
+	// Disable the "echo" tool.
+	rec := h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/echo-tool/disabled-tools", map[string]any{
+		"disabled_tools": []string{"echo"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var status map[string]any
+	DecodeJSON(t, rec, &status)
+	if int(status["enabled_count"].(float64)) != 0 {
+		t.Errorf("enabled_count = %v, want 0", status["enabled_count"])
+	}
+	if int(status["total_tool_count"].(float64)) != 1 {
+		t.Errorf("total_tool_count = %v, want 1", status["total_tool_count"])
+	}
+
+	// Defs endpoint should include the disabled flag.
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool/defs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("defs: status = %d", rec.Code)
+	}
+	var defsResp map[string]any
+	DecodeJSON(t, rec, &defsResp)
+	tools := defsResp["tools"].([]any)
+	for _, d := range tools {
+		def := d.(map[string]any)
+		if def["name"] == "echo" {
+			if def["disabled"] != true {
+				t.Errorf("echo tool disabled = %v, want true", def["disabled"])
+			}
+		}
+	}
+
+	// Re-enable by clearing the list.
+	rec = h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/echo-tool/disabled-tools", map[string]any{
+		"disabled_tools": []string{},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-enable: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	DecodeJSON(t, rec, &status)
+	if int(status["enabled_count"].(float64)) != 1 {
+		t.Errorf("enabled_count after re-enable = %v, want 1", status["enabled_count"])
+	}
+}
+
+func TestTools_UpdateDisabledTools_NotFound(t *testing.T) {
+	h := toolHarness(t)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/nonexistent/disabled-tools", map[string]any{
+		"disabled_tools": []string{"x"},
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}

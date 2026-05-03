@@ -538,6 +538,9 @@ type ToolConfig struct {
 	ClientSecret string   `toml:"client_secret"` // pre-registered OAuth client secret (optional)
 	Scopes       []string `toml:"scopes"`        // OAuth scopes to request (optional)
 
+	// Tool filtering — MCP tool names to exclude from the LLM tool payload.
+	DisabledTools []string `toml:"disabled_tools"`
+
 	// Unsafe options.
 	AllowLoopback bool `toml:"allow_loopback"` // bypass SSRF loopback block (localhost/127.x/::1)
 }

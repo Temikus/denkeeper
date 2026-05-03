@@ -54,6 +54,9 @@ type serverConn struct {
 	disabled     bool      // true when restarts exhausted
 	connecting   bool      // true while background init retries are in progress
 
+	// Tool filtering — tools in disabledSet are excluded from the LLM payload.
+	disabledSet map[string]bool
+
 	// OAuth state (nil for non-OAuth tools).
 	oauthHandler oauthHandler
 }
@@ -83,19 +86,22 @@ type OAuthHandlerFactory func(name string, cfg config.ToolConfig, httpClient *ht
 
 // ServerStatus exposes metadata about a registered MCP server.
 type ServerStatus struct {
-	Name         string           `json:"name"`
-	Command      string           `json:"command,omitempty"`
-	Args         []string         `json:"-"`          // excluded from JSON (may contain secrets)
-	ArgsCount    int              `json:"args_count"` // safe count for display
-	ToolNames    []string         `json:"tool_names"`
-	Status       string           `json:"status"` // "connected", "restarting", "error", "disabled"
-	Transport    string           `json:"transport,omitempty"`
-	URL          string           `json:"url,omitempty"` // redacted
-	RestartCount int              `json:"restart_count,omitempty"`
-	LastError    string           `json:"last_error,omitempty"`
-	UptimeSecs   float64          `json:"uptime_secs,omitempty"`
-	AuthType     string           `json:"auth_type,omitempty"` // "oauth" or ""
-	OAuthStatus  *OAuthStatusInfo `json:"oauth_status,omitempty"`
+	Name           string           `json:"name"`
+	Command        string           `json:"command,omitempty"`
+	Args           []string         `json:"-"`          // excluded from JSON (may contain secrets)
+	ArgsCount      int              `json:"args_count"` // safe count for display
+	ToolNames      []string         `json:"tool_names"`
+	Status         string           `json:"status"` // "connected", "restarting", "error", "disabled"
+	Transport      string           `json:"transport,omitempty"`
+	URL            string           `json:"url,omitempty"` // redacted
+	RestartCount   int              `json:"restart_count,omitempty"`
+	LastError      string           `json:"last_error,omitempty"`
+	UptimeSecs     float64          `json:"uptime_secs,omitempty"`
+	AuthType       string           `json:"auth_type,omitempty"` // "oauth" or ""
+	OAuthStatus    *OAuthStatusInfo `json:"oauth_status,omitempty"`
+	DisabledTools  []string         `json:"disabled_tools,omitempty"`
+	EnabledCount   int              `json:"enabled_count"`
+	TotalToolCount int              `json:"total_tool_count"`
 }
 
 // OAuthStatusInfo is a non-sensitive view of OAuth state for API responses.
@@ -106,15 +112,16 @@ type OAuthStatusInfo struct {
 
 // Manager manages MCP tool server connections and tool execution.
 type Manager struct {
-	mu       sync.RWMutex
-	parent   *Manager               // optional parent for delegated lookups (set by AdoptFrom)
-	servers  map[string]*serverConn // keyed by config name (e.g. "web-search")
-	toolMap  map[string]*serverConn // keyed by MCP tool name → owning server
-	toolDefs []llm.ToolDef          // cached OpenAI-format tool definitions
-	mcpCfg   config.MCPConfig       // global MCP settings
-	logger   *slog.Logger
-	oauth    *OAuthSupport // nil if OAuth not configured
-	Auditor  audit.Emitter // nil = no audit events
+	mu            sync.RWMutex
+	parent        *Manager               // optional parent for delegated lookups (set by AdoptFrom)
+	servers       map[string]*serverConn // keyed by config name (e.g. "web-search")
+	toolMap       map[string]*serverConn // keyed by MCP tool name → owning server
+	toolDefs      []llm.ToolDef          // cached OpenAI-format tool definitions
+	disabledCount int                    // total disabled tools across all servers; 0 = fast-path in ToolDefs
+	mcpCfg        config.MCPConfig       // global MCP settings
+	logger        *slog.Logger
+	oauth         *OAuthSupport // nil if OAuth not configured
+	Auditor       audit.Emitter // nil = no audit events
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.
@@ -254,9 +261,11 @@ func (m *Manager) registerStdio(ctx context.Context, name string, cfg config.Too
 		cfg:         cfg,
 		session:     session,
 		connectedAt: time.Now(),
+		disabledSet: buildDisabledSet(cfg.DisabledTools),
 	}
 
 	m.mu.Lock()
+	m.disabledCount += len(sc.disabledSet)
 	m.servers[name] = sc
 	m.mu.Unlock()
 
@@ -368,14 +377,19 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 		cfg:          cfg,
 		session:      session,
 		connectedAt:  time.Now(),
+		disabledSet:  buildDisabledSet(cfg.DisabledTools),
 		oauthHandler: oh,
 	}
 
 	m.mu.Lock()
 	// Close the old session if we're overwriting (e.g. OAuth reconnect).
-	if old, exists := m.servers[name]; exists && old.session != nil {
-		_ = old.session.Close()
+	if old, exists := m.servers[name]; exists {
+		m.disabledCount -= len(old.disabledSet)
+		if old.session != nil {
+			_ = old.session.Close()
+		}
 	}
+	m.disabledCount += len(sc.disabledSet)
 	m.servers[name] = sc
 	m.mu.Unlock()
 
@@ -480,9 +494,11 @@ func (m *Manager) setupOAuth(name string, cfg config.ToolConfig, httpClient *htt
 			transport:    "sse",
 			url:          resolvedURL,
 			cfg:          cfg,
+			disabledSet:  buildDisabledSet(cfg.DisabledTools),
 			oauthHandler: handler,
 		}
 		m.mu.Lock()
+		m.disabledCount += len(sc.disabledSet)
 		m.servers[name] = sc
 		m.mu.Unlock()
 		m.logger.Info("oauth: tool registered pending authorization",
@@ -491,6 +507,18 @@ func (m *Manager) setupOAuth(name string, cfg config.ToolConfig, httpClient *htt
 	}
 
 	return handler, false, nil
+}
+
+// buildDisabledSet converts a slice of tool names into a lookup map.
+func buildDisabledSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	s := make(map[string]bool, len(names))
+	for _, n := range names {
+		s[n] = true
+	}
+	return s
 }
 
 // discoverTools calls ListTools on the server's session and populates the
@@ -559,22 +587,42 @@ func (m *Manager) AdoptFrom(source *Manager) {
 }
 
 // ToolDefs returns OpenAI-format tool definitions for all registered tools,
-// including those from the parent manager (if any).
+// including those from the parent manager (if any). Disabled tools are
+// excluded from the result.
 func (m *Manager) ToolDefs() []llm.ToolDef {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	local := m.enabledToolDefs()
+
 	if m.parent == nil {
-		return m.toolDefs
+		return local
 	}
 	parentDefs := m.parent.ToolDefs()
-	if len(m.toolDefs) == 0 {
+	if len(local) == 0 {
 		return parentDefs
 	}
-	merged := make([]llm.ToolDef, 0, len(parentDefs)+len(m.toolDefs))
+	merged := make([]llm.ToolDef, 0, len(parentDefs)+len(local))
 	merged = append(merged, parentDefs...)
-	merged = append(merged, m.toolDefs...)
+	merged = append(merged, local...)
 	return merged
+}
+
+// enabledToolDefs returns toolDefs with disabled tools filtered out.
+// Caller must hold m.mu.
+func (m *Manager) enabledToolDefs() []llm.ToolDef {
+	if m.disabledCount == 0 {
+		return m.toolDefs
+	}
+
+	filtered := make([]llm.ToolDef, 0, len(m.toolDefs))
+	for _, td := range m.toolDefs {
+		if sc, ok := m.toolMap[td.Function.Name]; ok && sc.disabledSet[td.Function.Name] {
+			continue
+		}
+		filtered = append(filtered, td)
+	}
+	return filtered
 }
 
 // ToolNames returns the names of all registered MCP tools,
@@ -635,6 +683,9 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 			return parent.Execute(ctx, call)
 		}
 		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
+	}
+	if sc.disabledSet[call.Function.Name] {
+		return "", fmt.Errorf("tool %q is disabled", call.Function.Name)
 	}
 
 	serverName := sc.name
@@ -757,6 +808,7 @@ func (m *Manager) UnregisterServer(name string) error {
 	}
 	m.toolDefs = remaining
 
+	m.disabledCount -= len(sc.disabledSet)
 	delete(m.servers, name)
 
 	// Best-effort session cleanup. The server is already removed from the map,
@@ -875,42 +927,7 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 		}
 	}
 
-	var displayURL string
-	if sc.url != "" {
-		displayURL = redactURL(sc.url)
-	}
-
-	status := "connected"
-	if sc.disabled {
-		status = "disabled"
-	} else if sc.session == nil && sc.cfg.Auth == "oauth" {
-		// Registered but not yet connected — waiting for OAuth authorization.
-		status = "pending_auth"
-	} else if sc.connecting {
-		// Placeholder entry — background init retries are in progress.
-		status = "connecting"
-	} else if sc.lastError != "" {
-		status = "error"
-	}
-
-	var uptimeSecs float64
-	if !sc.connectedAt.IsZero() {
-		uptimeSecs = time.Since(sc.connectedAt).Seconds()
-	}
-
-	ss := ServerStatus{
-		Name:         sc.name,
-		Command:      sc.command,
-		Args:         sc.args,
-		ArgsCount:    len(sc.args),
-		ToolNames:    toolNames,
-		Status:       status,
-		Transport:    sc.transport,
-		URL:          displayURL,
-		RestartCount: sc.restartCount,
-		LastError:    sc.lastError,
-		UptimeSecs:   uptimeSecs,
-	}
+	ss := buildServerStatus(sc, toolNames)
 
 	if sc.cfg.Auth == "oauth" {
 		ss.AuthType = "oauth"
@@ -927,6 +944,63 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	return ss, true
 }
 
+func serverConnStatus(sc *serverConn) string {
+	switch {
+	case sc.disabled:
+		return "disabled"
+	case sc.session == nil && sc.cfg.Auth == "oauth":
+		return "pending_auth"
+	case sc.connecting:
+		return "connecting"
+	case sc.lastError != "":
+		return "error"
+	default:
+		return "connected"
+	}
+}
+
+func buildServerStatus(sc *serverConn, toolNames []string) ServerStatus {
+	var displayURL string
+	if sc.url != "" {
+		displayURL = redactURL(sc.url)
+	}
+
+	var uptimeSecs float64
+	if !sc.connectedAt.IsZero() {
+		uptimeSecs = time.Since(sc.connectedAt).Seconds()
+	}
+
+	totalCount := len(toolNames)
+	disabledCount := 0
+	for _, tn := range toolNames {
+		if sc.disabledSet[tn] {
+			disabledCount++
+		}
+	}
+
+	var disabledTools []string
+	if len(sc.cfg.DisabledTools) > 0 {
+		disabledTools = sc.cfg.DisabledTools
+	}
+
+	return ServerStatus{
+		Name:           sc.name,
+		Command:        sc.command,
+		Args:           sc.args,
+		ArgsCount:      len(sc.args),
+		ToolNames:      toolNames,
+		Status:         serverConnStatus(sc),
+		Transport:      sc.transport,
+		URL:            displayURL,
+		RestartCount:   sc.restartCount,
+		LastError:      sc.lastError,
+		UptimeSecs:     uptimeSecs,
+		DisabledTools:  disabledTools,
+		EnabledCount:   totalCount - disabledCount,
+		TotalToolCount: totalCount,
+	}
+}
+
 // ServerToolConfig returns the stored config.ToolConfig for a registered server.
 // This is used to pre-populate edit forms. Returns false if not found.
 func (m *Manager) ServerToolConfig(name string) (config.ToolConfig, bool) {
@@ -938,6 +1012,22 @@ func (m *Manager) ServerToolConfig(name string) (config.ToolConfig, bool) {
 		return config.ToolConfig{}, false
 	}
 	return sc.cfg, true
+}
+
+// SetDisabledTools updates the in-memory disabled tool set for a server.
+// No MCP reconnect is performed — changes take effect on the next ToolDefs() call.
+func (m *Manager) SetDisabledTools(serverName string, disabled []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sc, ok := m.servers[serverName]
+	if !ok {
+		return fmt.Errorf("tool server %q not found", serverName)
+	}
+	m.disabledCount += len(disabled) - len(sc.disabledSet)
+	sc.disabledSet = buildDisabledSet(disabled)
+	sc.cfg.DisabledTools = disabled
+	return nil
 }
 
 // Close shuts down all MCP server connections and OAuth handlers.

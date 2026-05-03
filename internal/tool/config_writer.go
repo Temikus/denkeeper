@@ -82,6 +82,17 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	if cfg.SSEKeepAliveSecs > 0 {
 		entry["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
 	}
+	toolConfigOAuthToMap(cfg, entry)
+	if cfg.AllowLoopback {
+		entry["allow_loopback"] = true
+	}
+	if len(cfg.DisabledTools) > 0 {
+		entry["disabled_tools"] = cfg.DisabledTools
+	}
+	return entry
+}
+
+func toolConfigOAuthToMap(cfg config.ToolConfig, entry map[string]any) {
 	if cfg.Auth != "" {
 		entry["auth"] = cfg.Auth
 	}
@@ -94,10 +105,37 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	if len(cfg.Scopes) > 0 {
 		entry["scopes"] = cfg.Scopes
 	}
-	if cfg.AllowLoopback {
-		entry["allow_loopback"] = true
+}
+
+// updateDisabledToolsInConfig persists only the disabled_tools field for a
+// specific tool server without touching any other config fields.
+func updateDisabledToolsInConfig(path, name string, disabledTools []string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
 	}
-	return entry
+
+	tools, ok := raw["tools"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("config: tools section not found")
+	}
+	entry, ok := tools[name].(map[string]any)
+	if !ok {
+		return fmt.Errorf("config: tool %q not found", name)
+	}
+
+	if len(disabledTools) > 0 {
+		entry["disabled_tools"] = disabledTools
+	} else {
+		delete(entry, "disabled_tools")
+	}
+	tools[name] = entry
+	raw["tools"] = tools
+
+	return writeRawConfig(path, raw)
 }
 
 // removeToolFromConfig reads the TOML config at path, removes [tools.<name>],

@@ -246,6 +246,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/tools/{name}/defs", s.RequireScope("tools:read", s.handleToolDefs))
 	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
 	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
+	mux.HandleFunc("PUT /api/v1/tools/{name}/disabled-tools", s.RequireScope("tools:write", s.handleUpdateDisabledTools))
 
 	// OAuth tool endpoints.
 	mux.HandleFunc("GET /api/v1/tools/oauth/callback", s.handleOAuthCallback) // no auth (browser redirect)
@@ -1893,16 +1894,24 @@ func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	defs, ok := s.deps.LifecycleMgr.ToolManager().ServerToolDefs(name)
+	mgr := s.deps.LifecycleMgr.ToolManager()
+	defs, ok := mgr.ServerToolDefs(name)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tool server not found"})
 		return
+	}
+
+	cfg, _ := mgr.ServerToolConfig(name)
+	disabledSet := make(map[string]bool, len(cfg.DisabledTools))
+	for _, t := range cfg.DisabledTools {
+		disabledSet[t] = true
 	}
 
 	type toolDefResp struct {
 		Name        string         `json:"name"`
 		Description string         `json:"description"`
 		Parameters  map[string]any `json:"parameters,omitempty"`
+		Disabled    bool           `json:"disabled"`
 	}
 	result := make([]toolDefResp, 0, len(defs))
 	for _, td := range defs {
@@ -1910,6 +1919,7 @@ func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
 			Name:        td.Function.Name,
 			Description: td.Function.Description,
 			Parameters:  td.Function.Parameters,
+			Disabled:    disabledSet[td.Function.Name],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tools": result})
@@ -2066,6 +2076,43 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleUpdateDisabledTools godoc
+// @Summary Update disabled tools
+// @Description Updates the set of disabled MCP tools for a specific tool server. Disabled tools are excluded from the LLM tool payload. No MCP server reconnect is performed.
+// @Tags tools
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Param body body object true "Disabled tools list" SchemaExample({"disabled_tools": ["tool-a", "tool-b"]})
+// @Success 200 {object} tool.ServerStatus "Updated server status"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/disabled-tools [put]
+func (s *Server) handleUpdateDisabledTools(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+
+	var body struct {
+		DisabledTools []string `json:"disabled_tools"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if err := s.deps.LifecycleMgr.UpdateDisabledTools(name, body.DisabledTools); err != nil {
+		s.logger.Error("updating disabled tools", "name", name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleToolHealth godoc

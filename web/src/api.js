@@ -185,6 +185,10 @@ export const api = {
   restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
   toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),
   toolDefs: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/defs`),
+  updateDisabledTools: (name, disabledTools) => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/disabled-tools`, {
+    method: 'PUT',
+    body: JSON.stringify({ disabled_tools: disabledTools }),
+  }),
 
   // OAuth tool endpoints
   toolOAuthStatus: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/oauth`),

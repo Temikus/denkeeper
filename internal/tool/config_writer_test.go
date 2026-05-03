@@ -98,6 +98,75 @@ token = "test"
 	}
 }
 
+func TestToolConfigToMap_IncludesDisabledTools(t *testing.T) {
+	cfg := config.ToolConfig{
+		Command:       "/usr/bin/tool",
+		DisabledTools: []string{"tool-a", "tool-b"},
+	}
+	m := toolConfigToMap(cfg)
+	dt, ok := m["disabled_tools"]
+	if !ok {
+		t.Fatal("disabled_tools not present in map")
+	}
+	dtSlice, ok := dt.([]string)
+	if !ok {
+		t.Fatalf("disabled_tools has type %T, want []string", dt)
+	}
+	if len(dtSlice) != 2 {
+		t.Errorf("disabled_tools len = %d, want 2", len(dtSlice))
+	}
+}
+
+func TestToolConfigToMap_OmitsEmptyDisabledTools(t *testing.T) {
+	cfg := config.ToolConfig{Command: "/usr/bin/tool"}
+	m := toolConfigToMap(cfg)
+	if _, ok := m["disabled_tools"]; ok {
+		t.Error("disabled_tools should be omitted when empty")
+	}
+}
+
+func TestUpdateDisabledToolsInConfig_AddAndRemove(t *testing.T) {
+	path := writeTestConfig(t, `[tools]
+[tools.my-server]
+command = "/usr/bin/tool"
+`)
+
+	if err := updateDisabledToolsInConfig(path, "my-server", []string{"tool-a", "tool-b"}); err != nil {
+		t.Fatal(err)
+	}
+	content := readConfig(t, path)
+	if !strings.Contains(content, "disabled_tools") {
+		t.Error("config should contain disabled_tools after update")
+	}
+	if !strings.Contains(content, "tool-a") {
+		t.Error("config should contain tool-a")
+	}
+
+	// Clear disabled tools.
+	if err := updateDisabledToolsInConfig(path, "my-server", nil); err != nil {
+		t.Fatal(err)
+	}
+	content = readConfig(t, path)
+	if strings.Contains(content, "disabled_tools") {
+		t.Error("disabled_tools should be removed when empty")
+	}
+	if !strings.Contains(content, "command") {
+		t.Error("other fields should be preserved")
+	}
+}
+
+func TestUpdateDisabledToolsInConfig_ToolNotFound(t *testing.T) {
+	path := writeTestConfig(t, `[tools]
+[tools.other]
+command = "/usr/bin/other"
+`)
+
+	err := updateDisabledToolsInConfig(path, "nonexistent", []string{"x"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent tool")
+	}
+}
+
 func TestAddPluginToConfig(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "test"
