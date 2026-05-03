@@ -396,16 +396,30 @@ func (s *Server) Run(ctx context.Context) error {
 
 // handleHealth godoc
 // @Summary Health check
-// @Description Returns server health status
+// @Description Returns server health status. When ready=true is set, also verifies that at least one agent is registered and returns 503 if not.
 // @Tags health
 // @Produce json
+// @Param ready query string false "Set to 'true' to check agent readiness"
 // @Success 200 {object} map[string]any
+// @Failure 503 {object} map[string]any "No agents registered (only when ready=true)"
 // @Router /health [get]
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
-	})
+	}
+
+	if r.URL.Query().Get("ready") == "true" {
+		agents := s.deps.Dispatcher.Agents()
+		resp["agents"] = len(agents)
+		if len(agents) == 0 {
+			resp["status"] = "not_ready"
+			writeJSON(w, http.StatusServiceUnavailable, resp)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAgents godoc

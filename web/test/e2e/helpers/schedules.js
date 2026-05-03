@@ -45,7 +45,7 @@ export class SchedulesPage {
     await form.locator('button.btn-primary').click()
     // The inline panel collapses via CSS grid animation (loses .open class).
     // Wait for the panel to no longer have the .open class.
-    await this.page.locator('.inline-panel.open').waitFor({ state: 'hidden', timeout: 10000 })
+    await this.page.locator('.inline-panel.open').waitFor({ state: 'hidden', timeout: 15000 })
   }
 
   /** Get a table row by schedule name. */

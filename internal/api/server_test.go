@@ -163,6 +163,52 @@ func TestHealth_ReturnsOK(t *testing.T) {
 	}
 }
 
+func TestHealth_ReadyFlag_WithAgents(t *testing.T) {
+	srv := New(testConfig(), testDeps(), testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health?ready=true", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHealth_ReadyFlag_NoAgents(t *testing.T) {
+	deps := testDeps()
+	deps.Dispatcher = agent.NewDispatcher(
+		map[string]*agent.Engine{},
+		nil, nil, testLogger(),
+	)
+	srv := New(testConfig(), deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health?ready=true", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHealth_WithoutReadyFlag_NoAgents(t *testing.T) {
+	deps := testDeps()
+	deps.Dispatcher = agent.NewDispatcher(
+		map[string]*agent.Engine{},
+		nil, nil, testLogger(),
+	)
+	srv := New(testConfig(), deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (bare /health should always return 200)", rec.Code, http.StatusOK)
+	}
+}
+
 // logRecord captures slog output for assertions.
 type logRecord struct {
 	Level   slog.Level

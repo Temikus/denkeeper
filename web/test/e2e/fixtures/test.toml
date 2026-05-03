@@ -24,5 +24,10 @@ base_url = 'http://127.0.0.1:19111'
 [session]
 tier = 'autonomous'
 
+[[agents]]
+name = "default"
+description = "E2E test agent"
+session_tier = "autonomous"
+
 [web]
 enabled = false

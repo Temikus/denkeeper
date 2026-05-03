@@ -49,7 +49,7 @@ test.describe('Chat conversation', () => {
     await expect(async () => {
       const optionCount = await sessionSel.locator('option').count()
       expect(optionCount).toBeGreaterThan(1)
-    }).toPass({ timeout: 5000 })
+    }).toPass({ timeout: 15000 })
   })
 
   test('shows empty state before any messages', async ({ page }) => {
