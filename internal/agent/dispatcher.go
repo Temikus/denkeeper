@@ -773,7 +773,7 @@ func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *E
 		}
 		d.logger.Error("handling message", "error", err, "agent", e.Name(), "adapter", msg.Adapter, "user", msg.UserName)
 		span.RecordError(err)
-		d.sendErrorFeedback(msgCtx, msg)
+		d.sendErrorFeedback(msgCtx, msg, err)
 		return
 	}
 
@@ -1412,7 +1412,7 @@ func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter
 // sendErrorFeedback attempts to notify the user that their message could not be
 // processed. This prevents the silent-failure scenario where the user sends a
 // message and never receives any response.
-func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.IncomingMessage) {
+func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.IncomingMessage, err error) {
 	a, ok := d.adapters[msg.Adapter]
 	if !ok {
 		return
@@ -1420,7 +1420,7 @@ func (d *Dispatcher) sendErrorFeedback(ctx context.Context, msg adapter.Incoming
 	_ = a.Send(ctx, adapter.OutgoingMessage{
 		Adapter:    msg.Adapter,
 		ExternalID: msg.ExternalID,
-		Text:       "Sorry, I encountered an error processing your message. Please try again.",
+		Text:       llm.UserFacingError(err),
 	})
 }
 
