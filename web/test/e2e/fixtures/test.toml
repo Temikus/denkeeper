@@ -1,6 +1,7 @@
 [api]
 listen = ':8080'
 login_rate_limit = 0
+wizard_completed = true
 
 [api.auth]
 password_hash = '$2a$13$7GUyWo4wSXOVEW5GqDRqOeHggYFzyYvkwhFfl/kPcyCP28.l6vrm.'
