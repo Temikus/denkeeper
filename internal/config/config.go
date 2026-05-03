@@ -266,6 +266,10 @@ type APIConfig struct {
 	// OnboardingDismissed hides the onboarding checklist on the Overview page.
 	// Set automatically via POST /api/v1/onboarding/dismiss.
 	OnboardingDismissed bool `toml:"onboarding_dismissed"`
+
+	// WizardCompleted indicates the post-auth setup wizard has been completed
+	// (or skipped). Set via POST /api/v1/onboarding/wizard-complete.
+	WizardCompleted bool `toml:"wizard_completed"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults
@@ -1316,8 +1320,9 @@ func applyBrowserDefaults(cfg *Config) {
 }
 
 // synthesizeDefaultAgent provides backward-compatible multi-agent support:
-// if no [[agents]] defined, synthesize a single "default" agent from the
-// legacy [agent]/[session] config.
+// if no [[agents]] defined AND at least one adapter token is configured
+// (headless mode), synthesize a single "default" agent. When no adapters
+// are configured the user is expected to create agents via the web wizard.
 func synthesizeDefaultAgent(cfg *Config) {
 	if len(cfg.Agents) != 0 {
 		return
@@ -1330,7 +1335,7 @@ func synthesizeDefaultAgent(cfg *Config) {
 		defaultAdapters = append(defaultAdapters, "discord")
 	}
 	if len(defaultAdapters) == 0 {
-		defaultAdapters = []string{"telegram"} // placeholder; validated later
+		return
 	}
 	cfg.Agents = []AgentInstanceConfig{{
 		Name:        "default",
@@ -1407,8 +1412,8 @@ func applyScheduleDefaults(cfg *Config) {
 		if s.SessionMode == "" {
 			s.SessionMode = "shared"
 		}
-		if s.Agent == "" {
-			s.Agent = "default"
+		if s.Agent == "" && len(cfg.Agents) > 0 {
+			s.Agent = cfg.Agents[0].Name
 		}
 	}
 }
@@ -1753,7 +1758,7 @@ func validateSandbox(s *SandboxConfig) error {
 // agent names for cross-referencing by other validators.
 func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 	if len(agents) == 0 {
-		return nil, fmt.Errorf("config: at least one agent must be defined")
+		return map[string]bool{}, nil
 	}
 
 	names := make(map[string]bool, len(agents))
@@ -1789,10 +1794,6 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 		if err := validateAgentBindings(a, wildcards); err != nil {
 			return nil, err
 		}
-	}
-
-	if !names["default"] {
-		return nil, fmt.Errorf("config: exactly one agent must be named \"default\"")
 	}
 
 	if err := validateSupervisorRefs(agents, names); err != nil {

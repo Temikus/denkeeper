@@ -103,14 +103,14 @@ func TestAgentConfig_RenameAgent(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_RenameDefault_Fails(t *testing.T) {
+func TestAgentConfig_RenameDefault_Succeeds(t *testing.T) {
 	h := NewHarness(t, nil)
 
 	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default", map[string]any{
 		"name": "renamed",
 	}))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 }
 
@@ -327,12 +327,17 @@ func TestAgentDelete_Basic(t *testing.T) {
 	}
 }
 
-func TestAgentDelete_Default(t *testing.T) {
+func TestAgentDelete_LastAgent(t *testing.T) {
 	h := agentCrudHarness(t)
 
 	rec := h.Do(h.AuthedRequest("DELETE", "/api/v1/agents/default", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for default agent, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for last agent, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	DecodeJSON(t, rec, &resp)
+	if !strings.Contains(resp["error"], "last agent") {
+		t.Errorf("error should mention last agent: %s", resp["error"])
 	}
 }
 
@@ -533,5 +538,226 @@ session_tier = "supervised"
 	}
 	if !strings.Contains(string(content), "cost_limit_hard") {
 		t.Errorf("cost_limit_hard not found in TOML:\n%s", content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Companion supervisor creation (wizard flow)
+// ---------------------------------------------------------------------------
+
+func TestAgentCreate_WithCompanionSupervisor(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "worker",
+		"llm_provider": "mock",
+		"llm_model":    "test-model",
+		"session_tier": "supervised",
+		"create_supervisor": map[string]any{
+			"name":             "overseer",
+			"llm_model":        "test-model",
+			"timeout":          "45s",
+			"context_messages": 3,
+		},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	DecodeJSON(t, rec, &result)
+	if result["name"] != "worker" {
+		t.Errorf("name = %q, want worker", result["name"])
+	}
+	if result["supervisor"] != "overseer" {
+		t.Errorf("supervisor = %q, want overseer", result["supervisor"])
+	}
+
+	// Both agents should exist.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/worker", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker not found: %d", rec.Code)
+	}
+	var workerDetail map[string]any
+	DecodeJSON(t, rec, &workerDetail)
+	if workerDetail["supervisor"] != "overseer" {
+		t.Errorf("worker.supervisor = %v, want overseer", workerDetail["supervisor"])
+	}
+
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/overseer", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overseer not found: %d", rec.Code)
+	}
+	var supDetail map[string]any
+	DecodeJSON(t, rec, &supDetail)
+	if supDetail["permission_tier"] != "autonomous" {
+		t.Errorf("overseer tier = %v, want autonomous", supDetail["permission_tier"])
+	}
+}
+
+func TestAgentCreate_WithCompanionSupervisor_DefaultName(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":              "bot",
+		"session_tier":      "supervised",
+		"create_supervisor": map[string]any{},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	DecodeJSON(t, rec, &result)
+	if result["supervisor"] != "supervisor" {
+		t.Errorf("supervisor = %q, want supervisor", result["supervisor"])
+	}
+}
+
+func TestAgentCreate_WithCompanionSupervisor_ConflictingName(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	// First create an agent that will conflict with the supervisor name.
+	body := map[string]any{"name": "overseer"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Now try to create an agent with a companion supervisor named "overseer".
+	// The main agent is created first, then companion creation fails and rolls back.
+	body = map[string]any{
+		"name":         "worker",
+		"session_tier": "supervised",
+		"create_supervisor": map[string]any{
+			"name": "overseer",
+		},
+	}
+	rec = h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for conflicting supervisor name, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	DecodeJSON(t, rec, &resp)
+	if !strings.Contains(resp["error"], "already exists") {
+		t.Errorf("error should mention already exists: %s", resp["error"])
+	}
+
+	// Main agent should have been rolled back.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/worker", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("worker should be rolled back, got %d", rec.Code)
+	}
+}
+
+func TestAgentCreate_WithCompanionSupervisor_RollbackOnlyAgent(t *testing.T) {
+	// Start with NO pre-existing agents except the one we create. This exercises
+	// the edge case where rollbackAgent is called on the only agent in the
+	// dispatcher (the last-agent guard). The rollback should still clean up
+	// config and in-memory state even if dispatcher removal is blocked.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "existing", Tier: "supervised", Adapters: []string{"telegram"}},
+		},
+		ConfigPath:       cfgPath,
+		WithAgentFactory: true,
+	})
+	h.Config().DataDir = dir
+
+	// Create "existing-supervisor" first so it conflicts.
+	body := map[string]any{"name": "existing-supervisor"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Now create a new supervised agent whose companion supervisor conflicts.
+	body = map[string]any{
+		"name":         "new-agent",
+		"session_tier": "supervised",
+		"create_supervisor": map[string]any{
+			"name": "existing-supervisor",
+		},
+	}
+	rec = h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// The main agent should be rolled back from both runtime and config.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/new-agent", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("new-agent should be rolled back, got %d", rec.Code)
+	}
+
+	// Config file should not contain the rolled-back agent.
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if strings.Contains(string(content), "new-agent") {
+		t.Errorf("config should not contain rolled-back agent; content:\n%s", content)
+	}
+}
+
+func TestAgentCreate_WithCompanionSupervisor_WrongTier_Ignored(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	// When tier is not "supervised", create_supervisor is silently ignored.
+	body := map[string]any{
+		"name":              "worker",
+		"session_tier":      "autonomous",
+		"create_supervisor": map[string]any{"name": "sup"},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result map[string]string
+	DecodeJSON(t, rec, &result)
+	if _, hasSup := result["supervisor"]; hasSup {
+		t.Errorf("expected no supervisor field for non-supervised agent, got %q", result["supervisor"])
+	}
+
+	// Supervisor agent should not exist.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/sup", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("supervisor should not exist, got %d", rec.Code)
+	}
+}
+
+func TestAgentCreate_WithCompanionSupervisor_PersistsToTOML(t *testing.T) {
+	h := agentCrudHarness(t)
+
+	body := map[string]any{
+		"name":         "toml-worker",
+		"session_tier": "supervised",
+		"create_supervisor": map[string]any{
+			"name": "toml-sup",
+		},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/agents", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	s := string(content)
+	if !strings.Contains(s, "toml-worker") {
+		t.Errorf("config missing worker agent:\n%s", s)
+	}
+	if !strings.Contains(s, "toml-sup") {
+		t.Errorf("config missing supervisor agent:\n%s", s)
 	}
 }

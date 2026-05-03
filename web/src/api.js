@@ -339,6 +339,7 @@ export const api = {
   // Onboarding.
   onboarding: () => apiFetch('/api/v1/onboarding'),
   dismissOnboarding: () => apiFetch('/api/v1/onboarding/dismiss', { method: 'POST' }),
+  wizardComplete: () => apiFetch('/api/v1/onboarding/wizard-complete', { method: 'POST' }),
 
   // Auth endpoints (no auth required).
   authConfig: () => fetch('/auth/config').then(r => r.json()),

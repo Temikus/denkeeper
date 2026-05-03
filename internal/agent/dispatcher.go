@@ -161,8 +161,20 @@ func NewDispatcher(
 	return d
 }
 
+// FallbackAgent returns the "default" agent if it exists, otherwise the first
+// available agent, or nil if no agents are registered.
+func (d *Dispatcher) FallbackAgent() *Engine {
+	if e, ok := d.agents["default"]; ok {
+		return e
+	}
+	for _, e := range d.agents {
+		return e
+	}
+	return nil
+}
+
 // resolveAgent finds the Engine that should handle the given message.
-// Priority: specific binding > wildcard binding > "default" agent.
+// Priority: specific binding > wildcard binding > fallback agent.
 func (d *Dispatcher) resolveAgent(msg adapter.IncomingMessage) *Engine {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -178,7 +190,7 @@ func (d *Dispatcher) resolveAgent(msg adapter.IncomingMessage) *Engine {
 			return e
 		}
 	}
-	return d.agents["default"]
+	return d.FallbackAgent()
 }
 
 // hasChannels returns true when channel-based routing is configured.
@@ -550,17 +562,17 @@ func (d *Dispatcher) AddAgent(name string, engine *Engine) error {
 }
 
 // RemoveAgent removes an engine from the dispatcher's runtime map.
-// Returns an error if the agent does not exist or is "default".
+// Returns an error if the agent does not exist or is the last registered agent.
 // Callers must check for channel/schedule references before calling.
 func (d *Dispatcher) RemoveAgent(name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if name == "default" {
-		return fmt.Errorf("cannot remove the default agent")
-	}
 	if _, ok := d.agents[name]; !ok {
 		return fmt.Errorf("agent %q not found", name)
+	}
+	if len(d.agents) == 1 {
+		return fmt.Errorf("cannot remove the last agent")
 	}
 
 	delete(d.agents, name)
@@ -580,25 +592,18 @@ func (d *Dispatcher) RemoveAgent(name string) error {
 	return nil
 }
 
-// ListModels returns available LLM models by querying the default agent's router.
+// ListModels returns available LLM models by querying the fallback agent's router.
 func (d *Dispatcher) ListModels(ctx context.Context) []string {
-	if e := d.agents["default"]; e != nil {
-		return e.ListModels(ctx)
-	}
-	// Fall back to first available agent.
-	for _, e := range d.agents {
+	if e := d.FallbackAgent(); e != nil {
 		return e.ListModels(ctx)
 	}
 	return nil
 }
 
-// ListModelDetails returns enriched model metadata by querying the default agent's router.
+// ListModelDetails returns enriched model metadata by querying the fallback agent's router.
 // When providerFilter is non-empty only the named provider is queried.
 func (d *Dispatcher) ListModelDetails(ctx context.Context, providerFilter string) []llm.ModelInfo {
-	if e := d.agents["default"]; e != nil {
-		return e.ListModelDetails(ctx, providerFilter)
-	}
-	for _, e := range d.agents {
+	if e := d.FallbackAgent(); e != nil {
 		return e.ListModelDetails(ctx, providerFilter)
 	}
 	return nil

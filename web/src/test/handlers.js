@@ -255,8 +255,10 @@ export const handlers = [
       { id: 'skill', label: 'Create a skill file', done: true },
     ],
     dismissed: false,
+    wizard_completed: true,
   })),
   http.post('/api/v1/onboarding/dismiss', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/onboarding/wizard-complete', () => new HttpResponse(null, { status: 204 })),
 
   // Audit
   http.get('/api/v1/audit', () => HttpResponse.json({ events: auditEvents, total: auditEvents.length })),

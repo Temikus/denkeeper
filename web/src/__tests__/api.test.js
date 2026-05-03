@@ -774,6 +774,20 @@ describe('API method smoke tests', () => {
     token.set('key')
     const result = await api.onboarding()
     expect(result.show_onboarding).toBe(false)
+    expect(result.wizard_completed).toBe(true)
+  })
+
+  test('wizardComplete() sends POST', async () => {
+    let called = false
+    server.use(
+      http.post('/api/v1/onboarding/wizard-complete', () => {
+        called = true
+        return new HttpResponse(null, { status: 204 })
+      })
+    )
+    token.set('key')
+    await api.wizardComplete()
+    expect(called).toBe(true)
   })
 
   test('updateLLMProvider() sends PATCH', async () => {

@@ -181,6 +181,7 @@ Named routing endpoints decoupling sessions from adapters.
     external_url = ""                # public URL for OAuth callbacks
     timezone = "UTC"                 # IANA timezone for cron expressions
     onboarding_dismissed = false     # hide onboarding checklist (set via API)
+    wizard_completed = false         # post-auth setup wizard completed (set via API)
 
 ### [[api.keys]]
 

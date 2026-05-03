@@ -142,9 +142,9 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
-- `POST /api/v1/agents` (scope `admin`) — create a new agent; body: `{name, llm_provider, llm_model, session_tier, description}`. Creates persona directory, persists to `[[agents]]` in TOML.
+- `POST /api/v1/agents` (scope `admin`) — create a new agent; body: `{name, llm_provider, llm_model, session_tier, description, create_supervisor}`. Optional `create_supervisor: {name, llm_model, timeout, context_messages}` atomically creates a companion supervisor when `session_tier="supervised"`. Creates persona directory, persists to `[[agents]]` in TOML.
 - `PATCH /api/v1/agents/{name}` — agent config mutation; supports `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`
-- `DELETE /api/v1/agents/{name}` (scope `admin`) — remove agent. Rejects if referenced by channels/schedules. Removes from TOML. Does not delete persona files.
+- `DELETE /api/v1/agents/{name}` (scope `admin`) — remove agent. Rejects if referenced by channels/schedules or if it is the last agent. Removes from TOML. Does not delete persona files.
 - `GET /api/v1/llm/providers` (scope `admin`) — list LLM providers with current config
 - `POST /api/v1/llm/providers` (scope `admin`) — create a named provider instance; body: `{name, type, api_key, base_url, organization}`
 - `PATCH /api/v1/llm/providers/{name}` (scope `admin`) — update provider config (API key, base URL, etc.)
@@ -155,8 +155,9 @@ Key endpoints (all require auth unless noted):
 - `POST /api/v1/auth/password` (scope `admin`) — change password (bcrypt verify + re-hash + persist)
 - `GET /api/v1/auth/oidc/test` (scope `admin`) — test OIDC provider reachability (fresh discovery, 10s timeout)
 - `POST /api/v1/auth/preferences` (scope `admin`) — set preferred login method (auto/password/apikey)
-- `GET /api/v1/onboarding` (scope `admin`) — checklist of 5 setup milestones; `show_onboarding` false when all done or dismissed
+- `GET /api/v1/onboarding` (scope `admin`) — checklist of 5 setup milestones; `show_onboarding` false when all done or dismissed; includes `wizard_completed` bool
 - `POST /api/v1/onboarding/dismiss` (scope `admin`) — persist `onboarding_dismissed=true` to TOML, hide card
+- `POST /api/v1/onboarding/wizard-complete` (scope `admin`) — persist `wizard_completed=true` to TOML, suppress post-auth setup wizard
 - `GET/PATCH /api/v1/server/config` (scope `admin`) — server config (version, build info, CORS, WebSocket settings)
 - `POST /api/v1/server/reload` (scope `admin`) — reload config from disk
 - `POST /api/v1/server/restart` (scope `admin`) — restart the server process

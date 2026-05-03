@@ -192,9 +192,6 @@ func (s *Server) syncAgentCostLimits(name string, input *agentConfigUpdateInput)
 // handleAgentRename validates and executes an agent rename.
 // Returns (0, "") on success, or (httpStatus, errorMessage) on failure.
 func (s *Server) handleAgentRename(oldName, newName string) (int, string) {
-	if oldName == "default" {
-		return http.StatusBadRequest, "cannot rename the default agent"
-	}
 	if !config.ValidResourceName(newName) {
 		return http.StatusBadRequest, "invalid agent name: must be lowercase alphanumeric with hyphens, max 64 chars"
 	}
@@ -409,13 +406,23 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 // Agent create & delete
 // ---------------------------------------------------------------------------
 
+// companionSupervisorInput holds optional companion-supervisor config for
+// atomic agent + supervisor creation (used by the setup wizard).
+type companionSupervisorInput struct {
+	Name            string `json:"name"`
+	LLMModel        string `json:"llm_model,omitempty"`
+	Timeout         string `json:"timeout,omitempty"`
+	ContextMessages int    `json:"context_messages,omitempty"`
+}
+
 // agentCreateInput holds the fields for POST /api/v1/agents.
 type agentCreateInput struct {
-	Name        string `json:"name"`
-	LLMProvider string `json:"llm_provider,omitempty"`
-	LLMModel    string `json:"llm_model,omitempty"`
-	SessionTier string `json:"session_tier,omitempty"`
-	Description string `json:"description,omitempty"`
+	Name             string                    `json:"name"`
+	LLMProvider      string                    `json:"llm_provider,omitempty"`
+	LLMModel         string                    `json:"llm_model,omitempty"`
+	SessionTier      string                    `json:"session_tier,omitempty"`
+	Description      string                    `json:"description,omitempty"`
+	CreateSupervisor *companionSupervisorInput `json:"create_supervisor,omitempty"`
 }
 
 // handleCreateAgent godoc
@@ -430,6 +437,19 @@ type agentCreateInput struct {
 // @Failure 400 {object} map[string]string
 // @Failure 409 {object} map[string]string
 // @Router /agents [post]
+func (s *Server) validateAgentCreateInput(input *agentCreateInput) (int, string) {
+	if !config.ValidResourceName(input.Name) {
+		return http.StatusBadRequest, "invalid agent name: must be lowercase alphanumeric with hyphens, 1-64 chars"
+	}
+	if s.deps.Dispatcher.Agent(input.Name) != nil {
+		return http.StatusConflict, "agent already exists"
+	}
+	if input.SessionTier != "" && !security.ValidTier(input.SessionTier) {
+		return http.StatusBadRequest, "invalid session_tier: must be autonomous, supervised, or restricted"
+	}
+	return 0, ""
+}
+
 func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AgentFactory == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent creation not available"})
@@ -446,24 +466,11 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !config.ValidResourceName(input.Name) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid agent name: must be lowercase alphanumeric with hyphens, 1-64 chars",
-		})
-		return
-	}
-	if s.deps.Dispatcher.Agent(input.Name) != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "agent already exists"})
-		return
-	}
-	if input.SessionTier != "" && !security.ValidTier(input.SessionTier) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid session_tier: must be autonomous, supervised, or restricted",
-		})
+	if code, msg := s.validateAgentCreateInput(&input); msg != "" {
+		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
 
-	// Compute persona directory and ensure it exists.
 	personaDir := filepath.Join(s.deps.Config.DataDir, "agents", input.Name)
 	if err := os.MkdirAll(personaDir, 0o750); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -512,10 +519,142 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		s.deps.Config.Agents = append(s.deps.Config.Agents, ac)
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{
-		"name":   input.Name,
-		"status": "created",
-	})
+	resp := map[string]string{"name": input.Name, "status": "created"}
+	if input.CreateSupervisor != nil && input.SessionTier == "supervised" {
+		supName, supCode, supErr := s.createCompanionSupervisor(input.Name, e, input.LLMProvider, input.CreateSupervisor)
+		if supErr != "" {
+			s.rollbackAgent(input.Name)
+			writeJSON(w, supCode, map[string]string{"error": supErr})
+			return
+		}
+		resp["supervisor"] = supName
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) rollbackAgent(name string) {
+	if err := s.deps.Dispatcher.RemoveAgent(name); err != nil {
+		s.logger.Warn("rollback: failed to remove agent from dispatcher", "agent", name, "error", err)
+	}
+	if rmErr := tool.RemoveAgentFromConfig(s.deps.ConfigPath, name); rmErr != nil {
+		s.logger.Warn("rollback: failed to remove agent from config", "agent", name, "error", rmErr)
+	}
+	if s.deps.Config != nil {
+		for i, a := range s.deps.Config.Agents {
+			if a.Name == name {
+				personaDir := a.PersonaDir
+				s.deps.Config.Agents = append(s.deps.Config.Agents[:i], s.deps.Config.Agents[i+1:]...)
+				if personaDir != "" {
+					_ = os.Remove(personaDir)
+				}
+				break
+			}
+		}
+	}
+}
+
+func resolveCompanionName(sup *companionSupervisorInput) string {
+	if sup.Name != "" {
+		return sup.Name
+	}
+	return "supervisor"
+}
+
+func (s *Server) validateCompanionName(supName, agentName string) (int, string) {
+	if !config.ValidResourceName(supName) {
+		return http.StatusBadRequest, "invalid supervisor name: must be lowercase alphanumeric with hyphens, 1-64 chars"
+	}
+	if s.deps.Dispatcher.Agent(supName) != nil {
+		return http.StatusConflict, "supervisor agent name already exists: " + supName
+	}
+	if supName == agentName {
+		return http.StatusBadRequest, "supervisor name must differ from agent name"
+	}
+	return 0, ""
+}
+
+// createCompanionSupervisor creates an autonomous supervisor agent and wires it
+// to the given supervised agent. Returns (supervisorName, httpStatus, errorMessage).
+func (s *Server) createCompanionSupervisor(agentName string, mainEngine *agent.Engine, llmProvider string, sup *companionSupervisorInput) (string, int, string) {
+	supName := resolveCompanionName(sup)
+	if code, errMsg := s.validateCompanionName(supName, agentName); errMsg != "" {
+		return "", code, errMsg
+	}
+
+	supPersonaDir := filepath.Join(s.deps.Config.DataDir, "agents", supName)
+	if err := os.MkdirAll(supPersonaDir, 0o750); err != nil {
+		return "", http.StatusInternalServerError, "creating supervisor persona directory: " + err.Error()
+	}
+
+	supAC := config.AgentInstanceConfig{
+		Name:        supName,
+		LLMProvider: llmProvider,
+		LLMModel:    sup.LLMModel,
+		SessionTier: "autonomous",
+		PersonaDir:  supPersonaDir,
+	}
+
+	supEngine, _, err := s.deps.AgentFactory(supAC)
+	if err != nil {
+		return "", http.StatusInternalServerError, "building supervisor engine: " + err.Error()
+	}
+
+	if err := tool.AddAgentToConfig(s.deps.ConfigPath, supName, llmProvider, sup.LLMModel, "autonomous", "", supPersonaDir); err != nil {
+		return "", http.StatusInternalServerError, "persisting supervisor to config: " + err.Error()
+	}
+
+	if err := s.deps.Dispatcher.AddAgent(supName, supEngine); err != nil {
+		_ = tool.RemoveAgentFromConfig(s.deps.ConfigPath, supName)
+		return "", http.StatusInternalServerError, "registering supervisor agent: " + err.Error()
+	}
+
+	if s.deps.Config != nil {
+		s.deps.Config.Agents = append(s.deps.Config.Agents, supAC)
+	}
+
+	s.wireCompanionSupervisor(agentName, mainEngine, supEngine, sup)
+	return supName, 0, ""
+}
+
+func (s *Server) wireCompanionSupervisor(agentName string, mainEngine, supEngine *agent.Engine, sup *companionSupervisorInput) {
+	mainEngine.SetSupervisor(supEngine)
+
+	timeout, err := time.ParseDuration(sup.Timeout)
+	if err != nil {
+		timeout = 30 * time.Second
+	}
+	ctxMsgs := sup.ContextMessages
+	if ctxMsgs == 0 {
+		ctxMsgs = 5
+	}
+	mainEngine.SetSupervisorConfig(timeout, ctxMsgs)
+
+	supName := resolveCompanionName(sup)
+	supChanges := map[string]any{"supervisor": supName}
+	if sup.Timeout != "" {
+		supChanges["supervisor_timeout"] = sup.Timeout
+	}
+	if sup.ContextMessages > 0 {
+		supChanges["supervisor_context_messages"] = int64(sup.ContextMessages)
+	}
+	if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, agentName, supChanges); err != nil {
+		s.logger.Warn("failed to persist supervisor reference", "agent", agentName, "error", err)
+	}
+
+	if s.deps.Config != nil {
+		for i := range s.deps.Config.Agents {
+			if s.deps.Config.Agents[i].Name == agentName {
+				s.deps.Config.Agents[i].Supervisor = supName
+				if sup.Timeout != "" {
+					s.deps.Config.Agents[i].SupervisorTimeout = sup.Timeout
+				}
+				if sup.ContextMessages > 0 {
+					s.deps.Config.Agents[i].SupervisorContextMessages = sup.ContextMessages
+				}
+				break
+			}
+		}
+	}
 }
 
 // agentDependencyError checks whether the named agent is referenced by any
@@ -577,12 +716,12 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "config persistence not available"})
 		return
 	}
-	if name == "default" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot delete the default agent"})
-		return
-	}
 	if s.deps.Dispatcher.Agent(name) == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		return
+	}
+	if len(s.deps.Dispatcher.Agents()) == 1 {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "cannot remove the last agent"})
 		return
 	}
 

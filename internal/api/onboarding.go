@@ -16,9 +16,10 @@ type onboardingStep struct {
 }
 
 type onboardingResponse struct {
-	ShowOnboarding bool             `json:"show_onboarding"`
-	Steps          []onboardingStep `json:"steps"`
-	Dismissed      bool             `json:"dismissed"`
+	ShowOnboarding  bool             `json:"show_onboarding"`
+	Steps           []onboardingStep `json:"steps"`
+	Dismissed       bool             `json:"dismissed"`
+	WizardCompleted bool             `json:"wizard_completed"`
 }
 
 // handleOnboarding godoc
@@ -46,9 +47,10 @@ func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, onboardingResponse{
-		ShowOnboarding: !dismissed && !allDone,
-		Steps:          steps,
-		Dismissed:      dismissed,
+		ShowOnboarding:  !dismissed && !allDone,
+		Steps:           steps,
+		Dismissed:       dismissed,
+		WizardCompleted: cfg.API.WizardCompleted,
 	})
 }
 
@@ -136,5 +138,28 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.deps.Config.API.OnboardingDismissed = true
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleWizardComplete godoc
+// @Summary      Mark setup wizard complete
+// @Description  Persists wizard_completed=true to the TOML config so the post-auth setup wizard is not shown again.
+// @Tags         onboarding
+// @Produce      json
+// @Security     BearerAuth
+// @Success      204  "Wizard marked complete"
+// @Failure      401  {object}  map[string]string  "Unauthorized"
+// @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
+// @Failure      500  {object}  map[string]string  "Failed to persist"
+// @Router       /onboarding/wizard-complete [post]
+func (s *Server) handleWizardComplete(w http.ResponseWriter, r *http.Request) {
+	if err := tool.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
+		"wizard_completed": true,
+	}); err != nil {
+		s.logger.Error("persisting wizard complete", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist"})
+		return
+	}
+	s.deps.Config.API.WizardCompleted = true
 	w.WriteHeader(http.StatusNoContent)
 }

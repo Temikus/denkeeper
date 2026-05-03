@@ -6,6 +6,7 @@
   import { initWS, destroyWS } from './wsStore.js'
   import Nav from './components/Nav.svelte'
   import Login from './pages/Login.svelte'
+  import SetupWizard from './pages/SetupWizard.svelte'
   import Overview from './pages/Overview.svelte'
   import Agents from './pages/Agents.svelte'
   import Approvals from './pages/Approvals.svelte'
@@ -28,6 +29,21 @@
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
 
+  let showWizard = $state(false)
+
+  async function checkWizard() {
+    if (localStorage.getItem('dk_wizard_state')) {
+      showWizard = true
+      return
+    }
+    try {
+      const ob = await api.onboarding()
+      if (!ob.wizard_completed) {
+        showWizard = true
+      }
+    } catch { /* ignore — e.g. insufficient scope */ }
+  }
+
   // On mount, check if we have a valid session cookie (e.g. after OIDC redirect)
   // and initialize the global WebSocket connection.
   onMount(async () => {
@@ -42,10 +58,16 @@
     initWS()
   })
   onDestroy(() => destroyWS())
+
+  $effect(() => {
+    if ($isAuthenticated) checkWizard()
+  })
 </script>
 
 {#if !$isAuthenticated}
   <Login />
+{:else if showWizard}
+  <SetupWizard onComplete={() => { showWizard = false }} />
 {:else}
   <div class="shell">
     <Nav active={route} />

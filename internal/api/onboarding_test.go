@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -111,6 +113,72 @@ func TestHandleOnboarding_Dismissed(t *testing.T) {
 	}
 	if !resp.Dismissed {
 		t.Error("expected dismissed=true")
+	}
+}
+
+func TestHandleOnboarding_IncludesWizardCompleted(t *testing.T) {
+	cfg := &config.Config{
+		API: config.APIConfig{WizardCompleted: true},
+	}
+	s := testOnboardingServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/onboarding", nil)
+	rec := httptest.NewRecorder()
+	s.handleOnboarding(rec, req)
+
+	var resp onboardingResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if !resp.WizardCompleted {
+		t.Error("expected wizard_completed=true in response")
+	}
+}
+
+func TestHandleOnboarding_WizardCompletedDefaultFalse(t *testing.T) {
+	cfg := &config.Config{}
+	s := testOnboardingServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/onboarding", nil)
+	rec := httptest.NewRecorder()
+	s.handleOnboarding(rec, req)
+
+	var resp onboardingResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp.WizardCompleted {
+		t.Error("expected wizard_completed=false by default")
+	}
+}
+
+func TestHandleWizardComplete(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := dir + "/config.toml"
+	if err := os.WriteFile(cfgPath, []byte("[api]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{}
+	s := &Server{
+		cfg:    cfg.API,
+		deps:   Deps{Config: cfg, ConfigPath: cfgPath},
+		logger: testLogger(),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/wizard-complete", nil)
+	rec := httptest.NewRecorder()
+	s.handleWizardComplete(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if !cfg.API.WizardCompleted {
+		t.Error("expected in-memory WizardCompleted=true after POST")
+	}
+
+	// Verify the flag was persisted to TOML.
+	data, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(data), "wizard_completed") {
+		t.Error("expected wizard_completed persisted to TOML config")
 	}
 }
 

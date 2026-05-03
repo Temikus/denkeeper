@@ -423,11 +423,18 @@ func (c *WSConn) resolveChannelRouting(sessionID, channelName, agentName string)
 	return ch.AgentName, convID, true
 }
 
-func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
-	agentName := f.Agent
-	if agentName == "" {
-		agentName = "default"
+func (c *WSConn) resolveAgentName(explicit string) string {
+	if explicit != "" {
+		return explicit
 	}
+	if fb := c.server.deps.Dispatcher.FallbackAgent(); fb != nil {
+		return fb.Name()
+	}
+	return ""
+}
+
+func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
+	agentName := c.resolveAgentName(f.Agent)
 	if len(f.Message) > maxChatMessageLen {
 		c.sendError(f.SessionID, "invalid_frame",
 			fmt.Sprintf("message exceeds maximum length of %d bytes", maxChatMessageLen))

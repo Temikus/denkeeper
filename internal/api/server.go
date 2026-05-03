@@ -307,6 +307,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/auth/preferences", s.RequireScope("admin", s.handleAuthPreferences))
 	mux.HandleFunc("GET /api/v1/onboarding", s.RequireScope("admin", s.handleOnboarding))
 	mux.HandleFunc("POST /api/v1/onboarding/dismiss", s.RequireScope("admin", s.handleOnboardingDismiss))
+	mux.HandleFunc("POST /api/v1/onboarding/wizard-complete", s.RequireScope("admin", s.handleWizardComplete))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)
@@ -918,7 +919,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 // chatRequest is the JSON body for POST /api/v1/chat.
 type chatRequest struct {
-	Agent     string `json:"agent"`      // optional; defaults to "default"
+	Agent     string `json:"agent"`      // optional; defaults to fallback agent
 	Channel   string `json:"channel"`    // optional; routes through named channel
 	SessionID string `json:"session_id"` // optional; generated if blank
 	Message   string `json:"message"`    // required
@@ -963,7 +964,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	agentName := req.Agent
 	if agentName == "" {
-		agentName = "default"
+		if fb := s.deps.Dispatcher.FallbackAgent(); fb != nil {
+			agentName = fb.Name()
+		}
 	}
 
 	// Channel routing: if a channel is specified, resolve the agent and

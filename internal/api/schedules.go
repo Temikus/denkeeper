@@ -134,7 +134,9 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	agentName := input.Agent
 	if agentName == "" {
-		agentName = "default"
+		if fb := s.deps.Dispatcher.FallbackAgent(); fb != nil {
+			agentName = fb.Name()
+		}
 	}
 
 	// Look up the engine so we can wire the schedule job.
@@ -231,7 +233,9 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	agentName := cfg.Agent
 	if agentName == "" {
-		agentName = "default"
+		if fb := s.deps.Dispatcher.FallbackAgent(); fb != nil {
+			agentName = fb.Name()
+		}
 	}
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {

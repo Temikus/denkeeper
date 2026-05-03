@@ -983,7 +983,7 @@ session_tier = "restricted"
 	}
 }
 
-func TestParse_Agents_MissingDefault(t *testing.T) {
+func TestParse_Agents_NoDefault(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[agents]]
 name = "work"
@@ -991,12 +991,12 @@ persona_dir = "/agents/work"
 adapters = ["telegram"]
 `)
 
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error when no default agent defined")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "named \"default\"") {
-		t.Errorf("unexpected error: %v", err)
+	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "work" {
+		t.Errorf("expected single agent 'work', got %+v", cfg.Agents)
 	}
 }
 

@@ -18,7 +18,7 @@ type WSClientFrame struct {
 type ChatRequestFrame struct {
 	Type           string `json:"type"`                       // "chat_request"
 	SessionID      string `json:"session_id,omitempty"`       // omit to create new session
-	Agent          string `json:"agent,omitempty"`            // agent name; defaults to "default"
+	Agent          string `json:"agent,omitempty"`            // agent name; defaults to fallback agent
 	Channel        string `json:"channel,omitempty"`          // channel name; routes through named channel
 	Message        string `json:"message"`                    // user message text
 	UserID         string `json:"user_id,omitempty"`          // optional user identifier
