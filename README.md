@@ -148,7 +148,7 @@ Adapter (Telegram/Discord) ─┐
 Web Dashboard (WS/SSE) ─────┼→ Dispatcher → Engine (per agent) → LLM Router → Provider (Anthropic/OpenAI/OpenRouter/Ollama)
 REST API (/api/v1/chat) ────┘                    ↕                    ↕
                                              MemoryStore          CostTracker
-                                             (SQLite)
+                                             (SQLite)              + Pricing Registry
 
 Scheduler ──────────────────────────────────────┘
 ```
@@ -523,118 +523,6 @@ agents/default/
   skills/            Bundled skills (e.g. help.md)
   SOUL.md            Agent personality
 ```
-
-## Roadmap
-
-Denkeeper is built in phases:
-
-**Phase 1 — Foundation** ✅
-- [x] Telegram adapter with user allowlist
-- [x] LLM routing via OpenRouter
-- [x] Conversation memory (SQLite)
-- [x] Per-session cost budgets
-- [x] Permission engine (supervised tier)
-- [x] Agent persona system (SOUL.md, USER.md, MEMORY.md injection)
-
-**Phase 2 — Core Features** ✅
-- [x] Multi-agent routing with per-agent personas, skills, LLM models, and permissions
-- [x] Scheduler with cron/interval/named expressions, per-schedule agent targeting
-- [x] Configurable session modes for schedules (`shared`/`isolated`)
-- [x] Skills system with trigger-based filtering and per-agent merge
-- [x] MCP tool support (agentic tool-call loop)
-- [x] Fallback strategies (error/rate_limit/cost_limit → switch_provider/switch_model/wait_and_retry)
-- [x] Voice messages (STT/TTS via OpenAI)
-- [x] Three permission tiers (autonomous/supervised/restricted), per-agent and per-schedule
-- [x] External REST API server skeleton (auth, rate limiting, CORS, TLS, health endpoint)
-
-**Phase 3 — Extensibility** ✅
-- [x] REST API chat endpoint — `POST /api/v1/chat` with JSON response and SSE streaming, `session_id` for conversation continuity, `DELETE /api/v1/sessions/:id`
-- [x] Approval workflows — supervised-tier Telegram inline buttons (Approve/Deny) + REST API (`GET|POST /api/v1/approvals/...`); TTL expiry, stale callback UX, keyboard auto-removal on resolution
-- [x] Config MCP server — per-agent in-process MCP tools for skill, schedule, tool, plugin, and KV self-modification
-- [x] Ollama LLM provider — local inference with conditional OpenRouter API key validation
-- [x] Plugin system — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification
-- [x] Runtime tool management — add/remove MCP tools and plugins at runtime; REST API CRUD (`tools:read`/`tools:write` scopes); TOML config persistence
-- [x] Agent KV store — per-agent SQLite-backed key-value storage with TTL, exposed as Config MCP tools
-- [x] CLI plugin signing — `denkeeper plugin keygen/sign/verify` commands for Ed25519 binary signing
-- [x] Web dashboard — embedded Svelte UI with overview, chat, sessions, approvals, schedules, skills, tools, agents, and API key management
-
-**Phase 4 — Polish** ✅
-- [x] Discord adapter — DM and guild channel support, allowlist, typing indicator, action-row approval buttons
-- [x] Anthropic direct LLM provider — Anthropic Messages API, tool_use support, no OpenRouter dependency
-- [x] API Key CRUD — runtime key management (create/revoke/rotate) without TOML restarts
-- [x] Web dashboard Chat page — SSE streaming chat UI in the dashboard
-- [x] GoReleaser, .deb/.rpm packages, Homebrew tap config
-- [x] CI/CD pipeline (golangci-lint, govulncheck, cosign signing, SBOM generation)
-- [x] One-liner install script + systemd service unit
-
-**Phase 5 — Documentation** ✅
-- [x] Hugo documentation website (Hugo + Doks theme, deployed via GitHub Pages at [denkeeper.io](https://denkeeper.io))
-- [x] Getting-started guides, concept docs, and reference pages
-- [x] One-liner install script hosted at `get.denkeeper.io`
-
-**Phase 6 — Browser Automation** ✅
-- [x] Browser automation — first-party Docker plugin with headless Chromium + Playwright MCP server, tmpfs/shm support for read-only containers
-- [x] Persistent browser profiles — per-agent profile storage with volume mounts
-- [x] URL allowlist enforcement — per-agent domain filtering with wildcard support, link-local/metadata blocking
-- [x] Browser orchestrator skill — built-in skill for multi-step browser workflow patterns (vision + non-vision LLMs)
-- [x] Screenshot-to-text fallback — DOM extraction pipeline with readability heuristics for non-vision LLMs
-
-**Phase 7 — Remote MCP & Observability** ✅
-- [x] Remote MCP servers — SSE/Streamable HTTP transport alongside existing stdio; auto-restart with configurable backoff (`[mcp]` section)
-- [x] MCP security hardening — SSRF blocklist, HTTP header injection prevention, redirect target validation, env var denylist for secrets, URL/arg redaction in API responses
-- [x] Pipeline logging — structured log events throughout the chat pipeline with finish reason, token breakdown, tool durations, and round summaries
-- [x] Real-time tool call streaming — `tool_start`/`tool_end` SSE events with `duration_ms` for inline tool progress in the web dashboard
-
-**Phase 8 — Cost Accuracy** ✅
-- [x] Pricing registry — bundled defaults for ~70 models with exact-match > prefix-match > fallback lookup
-- [x] Pricing source tracking — `pricing_source` OTel attribute for cost auditability
-
-**Phase 9 — WebSocket Streaming** ✅
-- [x] WebSocket transport — bidirectional `GET /api/v1/ws` with auto-reconnect, replay buffer, and SSE fallback
-- [x] Inline approvals — approve/deny/auto-approve tool calls directly in the web chat UI
-- [x] Auto-approve rules — session-scoped (in-memory) and permanent (SQLite) rules with REST API CRUD
-- [x] MCP OAuth 2.1 — authorization flow for remote SSE tool servers (e.g. Todoist); per-tool `auth = "oauth"` config
-
-**Phase 10 — Web UI Testing & Polish** ✅
-- [x] Web UI test infrastructure — Vitest + jsdom + MSW with 130+ tests
-- [x] Web UI redesigns — card-layout Tools page with inspector modal, grouped sidebar navigation, animated theme toggle
-- [x] Session selector in chat toolbar
-- [x] Helm chart enhancements — `extraContainers` and ServiceMonitor support
-
-**Phase 11 — Telemetry & OpenAPI** ✅
-- [x] Persistent session telemetry — per-message model/provider/cost/token breakdown, tool call records, skill usage, `conversation_stats` table
-- [x] Telemetry API — `/sessions/{id}/stats`, `/sessions/{id}/tool-calls`, `/sessions/{id}/skills`, `/telemetry/summary`
-- [x] OpenAPI spec — `swaggo/swag` annotations on 15+ endpoints, served at `GET /api/v1/openapi.json`
-
-**Phase 12 — Auth & Onboarding** ✅
-- [x] Dashboard auth — password change, OIDC test endpoint, login preferences, session list + revoke
-- [x] Onboarding checklist — 5-milestone card on Overview page with dismiss flow
-- [x] Named provider instances — `[[llm.providers]]` array for multiple instances of the same provider type
-
-**Phase 13 — Channels** ✅
-- [x] Named channels (`[[channels]]`) — decouple sessions from adapters, cross-adapter sharing, ephemeral mode
-- [x] `/session` command — runtime channel switching persisted in SQLite
-- [x] Channels REST API — full CRUD + activate/deactivate endpoints
-- [x] Web dashboard Channels page with full CRUD UI and Chat channel selector
-
-**Phase 14 — Agent & Provider CRUD** ✅
-- [x] Audit log — 11 event categories, buffered SQLite emitter, REST API, web UI with timeline/table views
-- [x] Safety commands — `/stop`, `/panic`, `/resume` in all adapters + REST API + web UI
-- [x] Session management — `/clear` and `/compact` in all adapters + REST API + web UI
-- [x] Agent CRUD — `POST/DELETE /api/v1/agents` with runtime engine registration and TOML persistence
-- [x] Provider CRUD — `POST/DELETE /api/v1/llm/providers` with validation and TOML persistence
-- [x] Per-agent cost limits — `cost_limit_soft`/`cost_limit_hard` via `PATCH /api/v1/agents/{name}`, syncs to live CostTracker
-- [x] Supervisor agents — automated tool call review chain (auto-approve → supervisor → human approval)
-- [x] E2E integration test suite expanded to 155+ tests
-
-**Phase 15 — Supervisor Polish & Discoverability** ✅
-- [x] `GET /llms.txt` — unauthenticated LLM-readable instance summary (base URL, auth notes, key endpoints, configured agents)
-- [x] Supervisor timeout and context knobs — `supervisor_timeout` (default 30s) and `supervisor_context_messages` (default 5) configurable per agent; exposed in Agents UI; re-applied on hot-reload
-- [x] Supervisor skill context — supervisor prompt now includes skill name/description and schedule info for scheduled invocations; evaluation criteria adapt accordingly
-- [x] Supervisor error surfacing — LLM failures emit a `supervisor_error` ChatEvent before falling through to human approval; error details recorded in audit log
-- [x] Build caching — `Taskfile.yml` with per-target fingerprint caching via Task; `just` remains the user-facing entrypoint
-- [x] Audit log sparkline improvements — time-range adaptive buckets (1h/24h/7d/30d), hover tooltips with timestamps and error counts, axis labels
-- [x] Config migration — `switch_model` fallback rules with a stale `provider` field are now gracefully normalized instead of rejected
 
 ## License
 

@@ -134,7 +134,7 @@ jobs:
 
   build:
     name: Build
-    needs: build-ui
+    needs: [test, lint]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -176,7 +176,7 @@ jobs:
 
   test-e2e:
     name: E2E Tests
-    needs: [build-ui, build]
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
