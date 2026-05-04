@@ -1133,6 +1133,109 @@ func TestWriteRawConfig_CreatesBackup(t *testing.T) {
 	}
 }
 
+func TestUpdateLLMProviderInstanceConfig_NilDeletesKey(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "mycloud"
+
+[[llm.providers]]
+name = "mycloud"
+type = "openai"
+api_key = "sk-test"
+cost_limit_soft = 1.5
+cost_limit_hard = 5.0
+default_rate_per_1k_tokens = 0.02
+`)
+
+	changes := map[string]any{
+		"cost_limit_soft":            nil,
+		"cost_limit_hard":            nil,
+		"default_rate_per_1k_tokens": nil,
+	}
+	if err := UpdateLLMProviderInstanceConfig(path, "mycloud", changes); err != nil {
+		t.Fatalf("UpdateLLMProviderInstanceConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "cost_limit_soft") {
+		t.Errorf("cost_limit_soft should be deleted; content:\n%s", content)
+	}
+	if strings.Contains(content, "cost_limit_hard") {
+		t.Errorf("cost_limit_hard should be deleted; content:\n%s", content)
+	}
+	if strings.Contains(content, "default_rate_per_1k_tokens") {
+		t.Errorf("default_rate_per_1k_tokens should be deleted; content:\n%s", content)
+	}
+	if !strings.Contains(content, "sk-test") {
+		t.Errorf("api_key should be preserved; content:\n%s", content)
+	}
+	if !strings.Contains(content, "openai") {
+		t.Errorf("type should be preserved; content:\n%s", content)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if len(cfg.LLM.Providers) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(cfg.LLM.Providers))
+	}
+	p := cfg.LLM.Providers[0]
+	if p.CostLimitSoft != nil {
+		t.Errorf("CostLimitSoft = %v, want nil", *p.CostLimitSoft)
+	}
+	if p.CostLimitHard != nil {
+		t.Errorf("CostLimitHard = %v, want nil", *p.CostLimitHard)
+	}
+	if p.DefaultRatePerKTokens != nil {
+		t.Errorf("DefaultRatePerKTokens = %v, want nil", *p.DefaultRatePerKTokens)
+	}
+}
+
+func TestUpdateLLMProviderInstanceConfig_NilMixedWithUpdates(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "mycloud"
+
+[[llm.providers]]
+name = "mycloud"
+type = "openai"
+api_key = "sk-old"
+cost_limit_soft = 1.5
+cost_limit_hard = 5.0
+`)
+
+	changes := map[string]any{
+		"api_key":         "sk-new",
+		"cost_limit_soft": nil,
+		"cost_limit_hard": 10.0,
+	}
+	if err := UpdateLLMProviderInstanceConfig(path, "mycloud", changes); err != nil {
+		t.Fatalf("UpdateLLMProviderInstanceConfig: %v", err)
+	}
+
+	content := readConfig(t, path)
+	if strings.Contains(content, "cost_limit_soft") {
+		t.Errorf("cost_limit_soft should be deleted; content:\n%s", content)
+	}
+	if !strings.Contains(content, "sk-new") {
+		t.Errorf("api_key should be updated to sk-new; content:\n%s", content)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	p := cfg.LLM.Providers[0]
+	if p.CostLimitSoft != nil {
+		t.Errorf("CostLimitSoft = %v, want nil", *p.CostLimitSoft)
+	}
+	if p.CostLimitHard == nil || *p.CostLimitHard != 10.0 {
+		t.Errorf("CostLimitHard = %v, want 10.0", p.CostLimitHard)
+	}
+	if p.APIKey != "sk-new" {
+		t.Errorf("APIKey = %q, want sk-new", p.APIKey)
+	}
+}
+
 func TestConcurrentConfigWrites(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 

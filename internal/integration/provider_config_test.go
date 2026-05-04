@@ -293,3 +293,324 @@ func TestLLMConfig_PatchCostLimits_SyncsCostTracker(t *testing.T) {
 		t.Errorf("hard limit = %f, want 7.0", updated.Hard)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-provider cost fields (Phase 4)
+// ---------------------------------------------------------------------------
+
+func TestProviderPatch_CostFields_RoundTrip(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	// PATCH cost fields onto the existing provider.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{
+			"cost_limit_soft":            5.0,
+			"cost_limit_hard":            10.0,
+			"default_rate_per_1k_tokens": 0.02,
+			"model_prices": map[string]any{
+				"gpt-4o": map[string]any{
+					"input": 2.5, "output": 10.0, "cached_input": 1.25,
+				},
+			},
+		}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// GET and verify round-trip.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/llm/providers", nil))
+	var body map[string]any
+	DecodeJSON(t, rec, &body)
+
+	providers := body["providers"].([]any)
+	p := providers[0].(map[string]any)
+	if p["cost_limit_soft"] != 5.0 {
+		t.Errorf("cost_limit_soft = %v, want 5.0", p["cost_limit_soft"])
+	}
+	if p["cost_limit_hard"] != 10.0 {
+		t.Errorf("cost_limit_hard = %v, want 10.0", p["cost_limit_hard"])
+	}
+	if p["default_rate_per_1k_tokens"] != 0.02 {
+		t.Errorf("default_rate_per_1k_tokens = %v, want 0.02", p["default_rate_per_1k_tokens"])
+	}
+	mp, ok := p["model_prices"].(map[string]any)
+	if !ok {
+		t.Fatalf("model_prices missing or wrong type: %v", p["model_prices"])
+	}
+	gpt4o, ok := mp["gpt-4o"].(map[string]any)
+	if !ok {
+		t.Fatalf("model_prices[gpt-4o] missing: %v", mp)
+	}
+	if gpt4o["input"] != 2.5 {
+		t.Errorf("gpt-4o input = %v, want 2.5", gpt4o["input"])
+	}
+}
+
+func TestProviderPatch_CostFields_SyncsCostTracker(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": 2.0, "cost_limit_hard": 8.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	limits := h.CostTracker.ProviderLimits("mock-existing")
+	if limits.Soft != 2.0 {
+		t.Errorf("provider soft limit = %f, want 2.0", limits.Soft)
+	}
+	if limits.Hard != 8.0 {
+		t.Errorf("provider hard limit = %f, want 8.0", limits.Hard)
+	}
+}
+
+func TestProviderPatch_NegativeCostFields_Rejected(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": -1.0}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for negative cost_limit_soft, got %d", rec.Code)
+	}
+
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_hard": -1.0}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for negative cost_limit_hard, got %d", rec.Code)
+	}
+
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"default_rate_per_1k_tokens": -0.01}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for negative default_rate_per_1k_tokens, got %d", rec.Code)
+	}
+}
+
+func TestProviderPatch_ExplicitNull_ClearsLimit(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	// Set a cost limit first.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": 5.0, "cost_limit_hard": 10.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Clear by sending explicit null (nil in Go map serializes as JSON null).
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": nil, "cost_limit_hard": nil}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// GET should omit the fields (explicit null clears to nil pointer).
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/llm/providers", nil))
+	var body map[string]any
+	DecodeJSON(t, rec, &body)
+
+	providers := body["providers"].([]any)
+	p := providers[0].(map[string]any)
+	if _, exists := p["cost_limit_soft"]; exists {
+		t.Errorf("cost_limit_soft should be omitted after clearing, got %v", p["cost_limit_soft"])
+	}
+	if _, exists := p["cost_limit_hard"]; exists {
+		t.Errorf("cost_limit_hard should be omitted after clearing, got %v", p["cost_limit_hard"])
+	}
+}
+
+func TestProviderPatch_ClearCostFields_SurvivesReload(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	// Set cost limits.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": 5.0, "cost_limit_hard": 10.0}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Clear by sending explicit null.
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-existing",
+		map[string]any{"cost_limit_soft": nil, "cost_limit_hard": nil}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Reload config from TOML (simulates restart).
+	cfg, err := config.Load(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	for _, pc := range cfg.LLM.Providers {
+		if pc.Name == "mock-existing" {
+			if pc.CostLimitSoft != nil {
+				t.Errorf("cost_limit_soft should be nil after reload, got %v", *pc.CostLimitSoft)
+			}
+			if pc.CostLimitHard != nil {
+				t.Errorf("cost_limit_hard should be nil after reload, got %v", *pc.CostLimitHard)
+			}
+			return
+		}
+	}
+	t.Fatal("mock-existing not found in reloaded config")
+}
+
+func TestProviderCreate_WithCostFields(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	body := map[string]any{
+		"name":            "cost-provider",
+		"type":            "ollama",
+		"base_url":        "http://localhost:11434",
+		"cost_limit_soft": 1.0,
+		"cost_limit_hard": 5.0,
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/llm/providers", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify in-memory config has cost fields.
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/llm/providers", nil))
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+
+	providers := resp["providers"].([]any)
+	var found bool
+	for _, p := range providers {
+		pm := p.(map[string]any)
+		if pm["name"] == "cost-provider" {
+			if pm["cost_limit_soft"] != 1.0 {
+				t.Errorf("cost_limit_soft = %v, want 1.0", pm["cost_limit_soft"])
+			}
+			if pm["cost_limit_hard"] != 5.0 {
+				t.Errorf("cost_limit_hard = %v, want 5.0", pm["cost_limit_hard"])
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("cost-provider not found in GET response")
+	}
+
+	// Verify CostTracker was synced.
+	limits := h.CostTracker.ProviderLimits("cost-provider")
+	if limits.Soft != 1.0 {
+		t.Errorf("CostTracker soft = %f, want 1.0", limits.Soft)
+	}
+	if limits.Hard != 5.0 {
+		t.Errorf("CostTracker hard = %f, want 5.0", limits.Hard)
+	}
+}
+
+func TestProviderCreate_CostFields_PersistToTOML(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	body := map[string]any{
+		"name":                       "cost-toml",
+		"type":                       "ollama",
+		"base_url":                   "http://localhost:11434",
+		"cost_limit_soft":            2.5,
+		"cost_limit_hard":            7.0,
+		"default_rate_per_1k_tokens": 0.05,
+		"model_prices": map[string]any{
+			"llama3": map[string]any{
+				"input": 1.0, "output": 3.0, "cached_input": 0.5,
+			},
+		},
+	}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/llm/providers", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	tomlStr := string(content)
+
+	if !strings.Contains(tomlStr, "cost-toml") {
+		t.Fatalf("provider not in TOML; content:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "cost_limit_soft") {
+		t.Errorf("cost_limit_soft missing from TOML; content:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "cost_limit_hard") {
+		t.Errorf("cost_limit_hard missing from TOML; content:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "default_rate_per_1k_tokens") {
+		t.Errorf("default_rate_per_1k_tokens missing from TOML; content:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "llama3") {
+		t.Errorf("model_prices.llama3 missing from TOML; content:\n%s", tomlStr)
+	}
+
+	// Verify the TOML parses correctly and values survive the round-trip.
+	cfg, err := config.Load(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("config.Load failed: %v", err)
+	}
+	var found bool
+	for _, pc := range cfg.LLM.Providers {
+		if pc.Name == "cost-toml" {
+			found = true
+			if pc.CostLimitSoft == nil || *pc.CostLimitSoft != 2.5 {
+				t.Errorf("parsed cost_limit_soft = %v, want 2.5", pc.CostLimitSoft)
+			}
+			if pc.CostLimitHard == nil || *pc.CostLimitHard != 7.0 {
+				t.Errorf("parsed cost_limit_hard = %v, want 7.0", pc.CostLimitHard)
+			}
+			if pc.DefaultRatePerKTokens == nil || *pc.DefaultRatePerKTokens != 0.05 {
+				t.Errorf("parsed default_rate_per_1k_tokens = %v, want 0.05", pc.DefaultRatePerKTokens)
+			}
+			if pc.ModelPrices == nil {
+				t.Fatal("parsed model_prices is nil")
+			}
+			if mp, ok := pc.ModelPrices["llama3"]; !ok {
+				t.Error("model_prices[llama3] missing after reload")
+			} else {
+				if mp.InputPerMTok != 1.0 {
+					t.Errorf("llama3 input = %f, want 1.0", mp.InputPerMTok)
+				}
+				if mp.OutputPerMTok != 3.0 {
+					t.Errorf("llama3 output = %f, want 3.0", mp.OutputPerMTok)
+				}
+				if mp.CachedInputPerMTok != 0.5 {
+					t.Errorf("llama3 cached_input = %f, want 0.5", mp.CachedInputPerMTok)
+				}
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("cost-toml provider not found after config.Load")
+	}
+}
+
+func TestCosts_PerProviderArray(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	rec := h.Do(h.AuthedRequest("GET", "/api/v1/costs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	DecodeJSON(t, rec, &body)
+
+	// per_provider key must exist (may be empty array with no messages).
+	pp, ok := body["per_provider"]
+	if !ok {
+		t.Fatal("per_provider key missing from /api/v1/costs response")
+	}
+	arr, ok := pp.([]any)
+	if !ok {
+		t.Fatalf("per_provider is not an array: %T", pp)
+	}
+	// No messages seeded, so should be empty.
+	if len(arr) != 0 {
+		t.Errorf("per_provider should be empty with no messages, got %d entries", len(arr))
+	}
+}

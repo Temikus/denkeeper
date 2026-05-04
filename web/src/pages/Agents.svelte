@@ -723,11 +723,11 @@
               <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />
               <span class="hint">Maximum tool-call rounds per message before the agent stops. Default: 50.</span>
               <label class="config-label" for="cfg-cost-soft">Cost Limit Soft ($)</label>
-              <input id="cfg-cost-soft" class="config-input" type="number" min="0" step="0.01" bind:value={configCostSoft} placeholder="Inherit global" />
-              <span class="hint">Soft cost limit per session. Empty = inherit global. 0 = disabled.</span>
+              <input id="cfg-cost-soft" class="config-input" type="number" min="0" step="0.01" bind:value={configCostSoft} placeholder="Inherit from provider" />
+              <span class="hint">Soft cost limit per session. Empty = inherit from provider. 0 = disabled.</span>
               <label class="config-label" for="cfg-cost-hard">Cost Limit Hard ($)</label>
-              <input id="cfg-cost-hard" class="config-input" type="number" min="0" step="0.01" bind:value={configCostHard} placeholder="Inherit global" />
-              <span class="hint">Hard cost limit per session. Stops the session immediately. Empty = inherit global.</span>
+              <input id="cfg-cost-hard" class="config-input" type="number" min="0" step="0.01" bind:value={configCostHard} placeholder="Inherit from provider" />
+              <span class="hint">Hard cost limit per session. Stops the session immediately. Empty = inherit from provider.</span>
             </div>
           {/if}
           <div class="config-panel-actions">

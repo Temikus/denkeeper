@@ -767,7 +767,11 @@ func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) 
 		}
 		if m["name"] == name {
 			for k, v := range changes {
-				m[k] = v
+				if v == nil {
+					delete(m, k)
+				} else {
+					m[k] = v
+				}
 			}
 			providers[i] = m
 			found = true

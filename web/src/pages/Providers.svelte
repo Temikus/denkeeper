@@ -61,8 +61,6 @@
     configDraft = {
       default_provider: data.default_provider || '',
       default_model: data.default_model || '',
-      cost_limit_soft: data.cost_limit_soft || 0,
-      cost_limit_hard: data.cost_limit_hard || 0,
     }
     editingConfig = true
   }
@@ -78,16 +76,11 @@
       const patch = {}
       if (configDraft.default_provider !== (data.default_provider || '')) patch.default_provider = configDraft.default_provider
       if (configDraft.default_model !== (data.default_model || '')) patch.default_model = configDraft.default_model
-      if (configDraft.cost_limit_soft !== (data.cost_limit_soft || 0)) patch.cost_limit_soft = parseFloat(configDraft.cost_limit_soft) || 0
-      if (configDraft.cost_limit_hard !== (data.cost_limit_hard || 0)) patch.cost_limit_hard = parseFloat(configDraft.cost_limit_hard) || 0
 
       if (Object.keys(patch).length > 0) {
         await api.updateLLMConfig(patch)
-        // Update local state
         if (patch.default_provider !== undefined) data.default_provider = patch.default_provider
         if (patch.default_model !== undefined) data.default_model = patch.default_model
-        if (patch.cost_limit_soft !== undefined) data.cost_limit_soft = patch.cost_limit_soft
-        if (patch.cost_limit_hard !== undefined) data.cost_limit_hard = patch.cost_limit_hard
       }
       editingConfig = false
       saveConfigOk = true
@@ -109,6 +102,12 @@
       organization: p?.organization || '',
       reasoning_enabled: !!(p?.reasoning?.enabled),
       reasoning_effort: p?.reasoning?.effort || '',
+      cost_limit_soft: p?.cost_limit_soft ?? '',
+      cost_limit_hard: p?.cost_limit_hard ?? '',
+      default_rate_per_1k_tokens: p?.default_rate_per_1k_tokens ?? '',
+      model_prices: p?.model_prices
+        ? Object.entries(p.model_prices).map(([k, v]) => ({ model: k, input: v.input, output: v.output, cached_input: v.cached_input }))
+        : [],
     }
     editingProvider = name
   }
@@ -146,15 +145,41 @@
         }
       }
 
+      // Cost fields.
+      const softVal = providerDraft.cost_limit_soft !== '' ? parseFloat(providerDraft.cost_limit_soft) : null
+      const hardVal = providerDraft.cost_limit_hard !== '' ? parseFloat(providerDraft.cost_limit_hard) : null
+      const rateVal = providerDraft.default_rate_per_1k_tokens !== '' ? parseFloat(providerDraft.default_rate_per_1k_tokens) : null
+      if (softVal !== (p?.cost_limit_soft ?? null)) patch.cost_limit_soft = softVal
+      if (hardVal !== (p?.cost_limit_hard ?? null)) patch.cost_limit_hard = hardVal
+      if (rateVal !== (p?.default_rate_per_1k_tokens ?? null)) patch.default_rate_per_1k_tokens = rateVal
+
+      // Model price overrides — always send the full map when editing.
+      const validPrices = providerDraft.model_prices.filter(r => r.model.trim())
+      const oldCount = p?.model_prices ? Object.keys(p.model_prices).length : 0
+      if (validPrices.length > 0 || oldCount > 0) {
+        const mp = {}
+        for (const r of validPrices) {
+          mp[r.model.trim()] = {
+            input: parseFloat(r.input) || 0,
+            output: parseFloat(r.output) || 0,
+            cached_input: parseFloat(r.cached_input) || 0,
+          }
+        }
+        patch.model_prices = mp
+      }
+
       if (Object.keys(patch).length > 0) {
         await api.updateLLMProvider(editingProvider, patch)
-        // Update local state
         if (p) {
           if (patch.api_key) p.api_key_set = true
           if (patch.api_key) p.enabled = true
           if (patch.base_url !== undefined) p.base_url = patch.base_url
           if (patch.organization !== undefined) p.organization = patch.organization
           if (patch.reasoning) p.reasoning = patch.reasoning
+          if (patch.cost_limit_soft !== undefined) p.cost_limit_soft = patch.cost_limit_soft
+          if (patch.cost_limit_hard !== undefined) p.cost_limit_hard = patch.cost_limit_hard
+          if (patch.default_rate_per_1k_tokens !== undefined) p.default_rate_per_1k_tokens = patch.default_rate_per_1k_tokens
+          if (patch.model_prices !== undefined) p.model_prices = Object.keys(patch.model_prices).length > 0 ? patch.model_prices : null
         }
       }
 
@@ -315,14 +340,6 @@
           <span class="default-label">Default Model</span>
           <span class="default-value mono">{data.default_model || '(not set)'}</span>
         </div>
-        <div class="default-item">
-          <span class="default-label">Cost Limit (soft)</span>
-          <span class="default-value">{data.cost_limit_soft > 0 ? `$${data.cost_limit_soft.toFixed(2)}` : 'None'}</span>
-        </div>
-        <div class="default-item">
-          <span class="default-label">Cost Limit (hard)</span>
-          <span class="default-value">{data.cost_limit_hard > 0 ? `$${data.cost_limit_hard.toFixed(2)}` : 'None'}</span>
-        </div>
       </div>
       <div class="card-actions">
         <button class="btn btn-sm" onclick={startEditConfig}>Edit</button>
@@ -341,16 +358,6 @@
         <div class="form-row">
           <label class="form-label">Default Model</label>
           <ModelSelector bind:value={configDraft.default_model} provider={configDraft.default_provider} />
-        </div>
-        <div class="form-row-pair">
-          <div class="form-row">
-            <label class="form-label" for="cost-soft">Cost Limit Soft ($)</label>
-            <input id="cost-soft" type="number" class="input" bind:value={configDraft.cost_limit_soft} min="0" step="0.01" />
-          </div>
-          <div class="form-row">
-            <label class="form-label" for="cost-hard">Cost Limit Hard ($)</label>
-            <input id="cost-hard" type="number" class="input" bind:value={configDraft.cost_limit_hard} min="0" step="0.01" />
-          </div>
         </div>
         <div class="config-actions">
           <button class="btn btn-primary" onclick={saveConfig} disabled={savingConfig}>
@@ -411,6 +418,34 @@
             </div>
           {/if}
         </div>
+        {#if p.cost_limit_soft != null || p.cost_limit_hard != null || p.default_rate_per_1k_tokens != null || (p.model_prices && Object.keys(p.model_prices).length > 0)}
+          <div class="provider-fields costs-section">
+            {#if p.cost_limit_soft != null}
+              <div class="field-row">
+                <span class="field-label">Soft Limit</span>
+                <span class="field-value">${p.cost_limit_soft.toFixed(2)}</span>
+              </div>
+            {/if}
+            {#if p.cost_limit_hard != null}
+              <div class="field-row">
+                <span class="field-label">Hard Limit</span>
+                <span class="field-value">${p.cost_limit_hard.toFixed(2)}</span>
+              </div>
+            {/if}
+            {#if p.default_rate_per_1k_tokens != null}
+              <div class="field-row">
+                <span class="field-label">Fallback Rate</span>
+                <span class="field-value">${p.default_rate_per_1k_tokens}/1k tokens</span>
+              </div>
+            {/if}
+            {#if p.model_prices && Object.keys(p.model_prices).length > 0}
+              <div class="field-row">
+                <span class="field-label">Model Overrides</span>
+                <span class="field-value">{Object.keys(p.model_prices).length} model{Object.keys(p.model_prices).length !== 1 ? 's' : ''}</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
         <div class="card-actions">
           <button class="btn btn-sm" onclick={() => startEditProvider(p.name)}>Edit</button>
           <button class="btn btn-sm btn-danger-text" onclick={() => { confirmDelete = p.name; deleteError = '' }} data-testid="delete-provider-btn">Delete</button>
@@ -491,6 +526,45 @@
               </div>
             </div>
           {/if}
+          <div class="cost-section-header">Cost Limits</div>
+          <div class="form-row-pair">
+            <div class="form-row">
+              <label class="form-label" for="cost-soft-{p.name}">Soft Limit ($)</label>
+              <input id="cost-soft-{p.name}" type="number" class="input" bind:value={providerDraft.cost_limit_soft} min="0" step="0.01" placeholder="None" />
+            </div>
+            <div class="form-row">
+              <label class="form-label" for="cost-hard-{p.name}">Hard Limit ($)</label>
+              <input id="cost-hard-{p.name}" type="number" class="input" bind:value={providerDraft.cost_limit_hard} min="0" step="0.01" placeholder="None" />
+            </div>
+          </div>
+          <div class="form-row">
+            <label class="form-label" for="fallback-rate-{p.name}">Fallback Rate ($/1K tokens)</label>
+            <input id="fallback-rate-{p.name}" type="number" class="input" bind:value={providerDraft.default_rate_per_1k_tokens} min="0" step="0.001" placeholder="None" />
+          </div>
+          <div class="model-prices-section">
+            <div class="form-label">Model Price Overrides</div>
+            {#if providerDraft.model_prices.length > 0}
+              <div class="model-prices-table">
+                <div class="model-prices-header">
+                  <span>Model</span>
+                  <span>Input $/M</span>
+                  <span>Output $/M</span>
+                  <span>Cached $/M</span>
+                  <span></span>
+                </div>
+                {#each providerDraft.model_prices as row, i}
+                  <div class="model-prices-row">
+                    <input type="text" class="input input-sm" bind:value={row.model} placeholder="model-name" />
+                    <input type="number" class="input input-sm" bind:value={row.input} min="0" step="0.01" placeholder="0" />
+                    <input type="number" class="input input-sm" bind:value={row.output} min="0" step="0.01" placeholder="0" />
+                    <input type="number" class="input input-sm" bind:value={row.cached_input} min="0" step="0.01" placeholder="0" />
+                    <button class="btn btn-sm btn-danger-text" onclick={() => { providerDraft.model_prices = providerDraft.model_prices.filter((_, idx) => idx !== i) }}>Remove</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <button class="btn btn-sm" onclick={() => { providerDraft.model_prices = [...providerDraft.model_prices, { model: '', input: '', output: '', cached_input: '' }] }}>Add Override</button>
+          </div>
           <div class="restart-note">Changes to provider settings require a restart to take effect.</div>
           <div class="config-actions">
             <button class="btn btn-primary" onclick={saveProvider} disabled={savingProvider}>
@@ -776,5 +850,50 @@
     display: flex;
     gap: 8px;
     margin-top: 8px;
+  }
+
+  .costs-section {
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 8px;
+  }
+
+  .cost-section-header {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 14px;
+    margin-bottom: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .model-prices-section {
+    margin-top: 10px;
+  }
+  .model-prices-table {
+    margin-bottom: 8px;
+  }
+  .model-prices-header,
+  .model-prices-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .model-prices-header {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .model-prices-row {
+    padding: 4px 0;
+  }
+  .model-prices-row + .model-prices-row {
+    border-top: 1px solid var(--border);
   }
 </style>

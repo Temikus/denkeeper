@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -11,15 +12,142 @@ import (
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
+// validateCostFields checks that cost limit fields are non-negative.
+func validateCostFields(soft, hard, rate *float64) string {
+	if soft != nil && *soft < 0 {
+		return "cost_limit_soft must be >= 0"
+	}
+	if hard != nil && *hard < 0 {
+		return "cost_limit_hard must be >= 0"
+	}
+	if rate != nil && *rate < 0 {
+		return "default_rate_per_1k_tokens must be >= 0"
+	}
+	return ""
+}
+
+// modelPricesToMap converts ModelPriceConfig map to a generic map for TOML persistence.
+func modelPricesToMap(prices map[string]config.ModelPriceConfig) map[string]any {
+	mp := make(map[string]any, len(prices))
+	for model, price := range prices {
+		mp[model] = map[string]any{
+			"input":        price.InputPerMTok,
+			"output":       price.OutputPerMTok,
+			"cached_input": price.CachedInputPerMTok,
+		}
+	}
+	return mp
+}
+
+// costChangesMap builds a TOML-compatible changes map from cost fields.
+func costChangesMap(soft, hard, rate *float64, prices map[string]config.ModelPriceConfig) map[string]any {
+	changes := make(map[string]any)
+	if soft != nil {
+		changes["cost_limit_soft"] = *soft
+	}
+	if hard != nil {
+		changes["cost_limit_hard"] = *hard
+	}
+	if rate != nil {
+		changes["default_rate_per_1k_tokens"] = *rate
+	}
+	if len(prices) > 0 {
+		changes["model_prices"] = modelPricesToMap(prices)
+	}
+	return changes
+}
+
+// costPersistChanges builds a TOML changes map for cost fields, including explicit null clearing.
+// A nil value signals UpdateLLMProviderInstanceConfig to delete the key from TOML.
+func costPersistChanges(soft, hard, rate *float64, prices map[string]config.ModelPriceConfig, nulls nullCostFields) map[string]any {
+	changes := costChangesMap(soft, hard, rate, prices)
+	if nulls.Soft {
+		changes["cost_limit_soft"] = nil
+	}
+	if nulls.Hard {
+		changes["cost_limit_hard"] = nil
+	}
+	if nulls.Rate {
+		changes["default_rate_per_1k_tokens"] = nil
+	}
+	return changes
+}
+
+// validateBaseURL returns an error message if the URL is invalid, or "" if ok.
+func validateBaseURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "invalid base_url: must be a valid URL with scheme and host"
+	}
+	return ""
+}
+
+// nullCostFields tracks which cost fields were explicitly set to null in the JSON body.
+type nullCostFields struct {
+	Soft bool
+	Hard bool
+	Rate bool
+}
+
+// detectNullCostFields inspects raw JSON to identify cost fields explicitly set to null.
+func detectNullCostFields(body []byte) nullCostFields {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nullCostFields{}
+	}
+	return nullCostFields{
+		Soft: string(raw["cost_limit_soft"]) == "null",
+		Hard: string(raw["cost_limit_hard"]) == "null",
+		Rate: string(raw["default_rate_per_1k_tokens"]) == "null",
+	}
+}
+
+// syncProviderCostTracker updates the live CostTracker with new provider limits.
+func (s *Server) syncProviderCostTracker(name string, soft, hard *float64) {
+	if soft == nil && hard == nil {
+		return
+	}
+	limits := llm.SessionLimits{}
+	if soft != nil {
+		limits.Soft = *soft
+	}
+	if hard != nil {
+		limits.Hard = *hard
+	}
+	s.deps.CostTracker.SetProviderLimits(name, limits)
+}
+
+// persistCreateProviderCosts persists cost fields to TOML and syncs the live CostTracker.
+// Returns an error if TOML persistence fails (CostTracker is still synced).
+func (s *Server) persistCreateProviderCosts(name string, soft, hard, rate *float64, prices map[string]config.ModelPriceConfig) error {
+	changes := costChangesMap(soft, hard, rate, prices)
+	var persistErr error
+	if len(changes) > 0 {
+		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
+			s.logger.Warn("failed to persist provider cost config", "provider", name, "error", err)
+			persistErr = err
+		}
+	}
+	s.syncProviderCostTracker(name, soft, hard)
+	return persistErr
+}
+
 // providerInfo is the JSON shape returned by GET /api/v1/llm/providers.
 type providerInfo struct {
-	Name         string                         `json:"name"`
-	Type         string                         `json:"type"`
-	Enabled      bool                           `json:"enabled"`
-	APIKeySet    bool                           `json:"api_key_set"`
-	BaseURL      string                         `json:"base_url,omitempty"`
-	Organization string                         `json:"organization,omitempty"`
-	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
+	Name                  string                             `json:"name"`
+	Type                  string                             `json:"type"`
+	Enabled               bool                               `json:"enabled"`
+	APIKeySet             bool                               `json:"api_key_set"`
+	BaseURL               string                             `json:"base_url,omitempty"`
+	Organization          string                             `json:"organization,omitempty"`
+	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
+	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
+	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
+	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
+	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
 }
 
 type llmProvidersResponse struct {
@@ -55,6 +183,12 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 			r := cfg.OpenRouter.Reasoning
 			pi.Reasoning = &r
 		}
+		pi.CostLimitSoft = pc.CostLimitSoft
+		pi.CostLimitHard = pc.CostLimitHard
+		pi.DefaultRatePerKTokens = pc.DefaultRatePerKTokens
+		if len(pc.ModelPrices) > 0 {
+			pi.ModelPrices = pc.ModelPrices
+		}
 		providers = append(providers, pi)
 	}
 
@@ -69,10 +203,14 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 // providerUpdateInput holds the mutable fields for PATCH /api/v1/llm/providers/{name}.
 type providerUpdateInput struct {
-	APIKey       *string                        `json:"api_key,omitempty"`
-	BaseURL      *string                        `json:"base_url,omitempty"`
-	Organization *string                        `json:"organization,omitempty"`
-	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
+	APIKey                *string                            `json:"api_key,omitempty"`
+	BaseURL               *string                            `json:"base_url,omitempty"`
+	Organization          *string                            `json:"organization,omitempty"`
+	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
+	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
+	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
+	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
+	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
 }
 
 // handlePatchLLMProvider godoc
@@ -98,19 +236,24 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reading body: " + err.Error()})
+		return
+	}
+
 	var input providerUpdateInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	if err := json.Unmarshal(body, &input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
 
-	// Validate base_url if provided.
-	if input.BaseURL != nil && *input.BaseURL != "" {
-		u, err := url.Parse(*input.BaseURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid base_url: must be a valid URL with scheme and host",
-			})
+	// Detect explicitly null cost fields (distinct from absent).
+	nullCosts := detectNullCostFields(body)
+
+	if input.BaseURL != nil {
+		if msg := validateBaseURL(*input.BaseURL); msg != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 			return
 		}
 	}
@@ -139,9 +282,14 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
 	// Apply to in-memory config and persist.
-	s.applyLLMProviderUpdate(name, &input)
-	s.persistLLMProvider(name, &input)
+	s.applyLLMProviderUpdate(name, &input, nullCosts)
+	s.persistLLMProvider(name, &input, nullCosts)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -156,7 +304,7 @@ func (s *Server) findProviderInstance(name string) *config.ProviderInstanceConfi
 	return nil
 }
 
-func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput) {
+func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput, nulls nullCostFields) {
 	pc := s.findProviderInstance(name)
 	if pc == nil {
 		return
@@ -174,6 +322,27 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput)
 	if input.Reasoning != nil && pc.Type == "openrouter" {
 		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
 	}
+
+	if nulls.Soft {
+		pc.CostLimitSoft = nil
+	} else if input.CostLimitSoft != nil {
+		pc.CostLimitSoft = input.CostLimitSoft
+	}
+	if nulls.Hard {
+		pc.CostLimitHard = nil
+	} else if input.CostLimitHard != nil {
+		pc.CostLimitHard = input.CostLimitHard
+	}
+	if nulls.Rate {
+		pc.DefaultRatePerKTokens = nil
+	} else if input.DefaultRatePerKTokens != nil {
+		pc.DefaultRatePerKTokens = input.DefaultRatePerKTokens
+	}
+	if input.ModelPrices != nil {
+		pc.ModelPrices = input.ModelPrices
+	}
+
+	s.syncProviderCostTracker(name, pc.CostLimitSoft, pc.CostLimitHard)
 
 	// Keep legacy structs in sync for backward compat.
 	s.syncLegacyProviderConfig(name, pc)
@@ -198,7 +367,7 @@ func (s *Server) syncLegacyProviderConfig(name string, pc *config.ProviderInstan
 	}
 }
 
-func (s *Server) persistLLMProvider(name string, input *providerUpdateInput) {
+func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nulls nullCostFields) {
 	if s.deps.ConfigPath == "" {
 		return
 	}
@@ -213,6 +382,10 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput) {
 	if input.Organization != nil {
 		changes["organization"] = *input.Organization
 	}
+	for k, v := range costPersistChanges(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens, input.ModelPrices, nulls) {
+		changes[k] = v
+	}
+
 	if len(changes) > 0 {
 		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist LLM provider config", "provider", name, "error", err)
@@ -300,6 +473,8 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Sync the live CostTracker so new sessions use updated limits.
 	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
+		w.Header().Set("Deprecation", "true")
+		w.Header().Set("Sunset", "2026-08-01")
 		s.deps.CostTracker.SetDefaultLimits(llm.SessionLimits{
 			Soft: s.deps.Config.LLM.CostLimitSoft,
 			Hard: s.deps.Config.LLM.CostLimitHard,
@@ -343,11 +518,15 @@ func (s *Server) persistLLMConfig(input *llmConfigUpdateInput) {
 
 // providerCreateInput holds the fields for POST /api/v1/llm/providers.
 type providerCreateInput struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	APIKey       string `json:"api_key,omitempty"`
-	BaseURL      string `json:"base_url,omitempty"`
-	Organization string `json:"organization,omitempty"`
+	Name                  string                             `json:"name"`
+	Type                  string                             `json:"type"`
+	APIKey                string                             `json:"api_key,omitempty"`
+	BaseURL               string                             `json:"base_url,omitempty"`
+	Organization          string                             `json:"organization,omitempty"`
+	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
+	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
+	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
+	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
 }
 
 // handleCreateLLMProvider godoc
@@ -399,20 +578,20 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if input.BaseURL != "" {
-		u, err := url.Parse(input.BaseURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid base_url: must be a valid URL with scheme and host",
-			})
-			return
-		}
+	if msg := validateBaseURL(input.BaseURL); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
 	}
 
 	if input.Organization != "" && input.Type != "openai" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "organization is only supported for openai-type providers",
 		})
+		return
+	}
+
+	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 
@@ -427,13 +606,19 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	costPersistErr := s.persistCreateProviderCosts(input.Name, input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens, input.ModelPrices)
+
 	// Update in-memory config.
 	s.deps.Config.LLM.Providers = append(s.deps.Config.LLM.Providers, config.ProviderInstanceConfig{
-		Name:         input.Name,
-		Type:         input.Type,
-		APIKey:       input.APIKey,
-		BaseURL:      input.BaseURL,
-		Organization: input.Organization,
+		Name:                  input.Name,
+		Type:                  input.Type,
+		APIKey:                input.APIKey,
+		BaseURL:               input.BaseURL,
+		Organization:          input.Organization,
+		CostLimitSoft:         input.CostLimitSoft,
+		CostLimitHard:         input.CostLimitHard,
+		DefaultRatePerKTokens: input.DefaultRatePerKTokens,
+		ModelPrices:           input.ModelPrices,
 	})
 
 	if s.deps.Auditor != nil {
@@ -446,10 +631,14 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		})
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{
+	resp := map[string]string{
 		"name":   input.Name,
 		"status": "created",
-	})
+	}
+	if costPersistErr != nil {
+		resp["warning"] = "cost fields not persisted to config: " + costPersistErr.Error()
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleDeleteLLMProvider godoc

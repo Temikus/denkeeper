@@ -107,21 +107,6 @@
       <div class="label">Total Cost</div>
       <div class="value">${data.global_cost.toFixed(4)}</div>
     </div>
-    {#if data.cost_limits}
-      <div class="card">
-        <div class="label">Soft Limit</div>
-        <div class="value limit-soft">{data.cost_limits.soft > 0 ? `$${data.cost_limits.soft.toFixed(4)}` : 'Off'}</div>
-      </div>
-      <div class="card">
-        <div class="label">Hard Limit</div>
-        <div class="value limit-hard">{data.cost_limits.hard > 0 ? `$${data.cost_limits.hard.toFixed(4)}` : 'Off'}</div>
-      </div>
-    {:else}
-      <div class="card">
-        <div class="label">Session Budget</div>
-        <div class="value">${data.max_per_session.toFixed(4)}</div>
-      </div>
-    {/if}
     <div class="card">
       <div class="label">Sessions</div>
       <div class="value">{data.session_count}</div>
@@ -151,6 +136,42 @@
       {/if}
     {/if}
   </div>
+
+  {#if data.per_provider && data.per_provider.length > 0}
+    <h2 class="section-title">Per-Provider Breakdown</h2>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th class="num">Spend</th>
+            <th class="num">Soft Limit</th>
+            <th class="num">Hard Limit</th>
+            <th class="num">% of Cap</th>
+            <th class="num">Messages</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each data.per_provider as pp}
+            <tr>
+              <td class="provider-name">{pp.provider}</td>
+              <td class="num mono">${pp.cost.toFixed(4)}</td>
+              <td class="num">{pp.soft != null ? `$${pp.soft.toFixed(2)}` : '—'}</td>
+              <td class="num">{pp.hard != null ? `$${pp.hard.toFixed(2)}` : '—'}</td>
+              <td class="num">
+                {#if pp.hard != null && pp.hard > 0}
+                  <span class:limit-warn={pp.cost / pp.hard > 0.8}>{(pp.cost / pp.hard * 100).toFixed(1)}%</span>
+                {:else}
+                  &mdash;
+                {/if}
+              </td>
+              <td class="num mono">{pp.messages}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
 
   <h2 class="section-title">Per-Agent Breakdown</h2>
 
@@ -306,4 +327,6 @@
   .source-badge.green { background: rgba(34, 197, 94, 0.15); color: rgb(34, 197, 94); }
   .source-badge.yellow { background: rgba(234, 179, 8, 0.15); color: rgb(202, 156, 8); }
   .source-badge.red { background: rgba(239, 68, 68, 0.15); color: rgb(239, 68, 68); }
+  .provider-name { font-weight: 600; }
+  .limit-warn { color: rgb(202, 156, 8); font-weight: 600; }
 </style>

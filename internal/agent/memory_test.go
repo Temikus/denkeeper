@@ -780,6 +780,81 @@ func TestGetCostsByAgent_ChannelConversations(t *testing.T) {
 	}
 }
 
+func TestGetCostsByProvider(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "tg", "1")
+
+	// Seed assistant messages with different providers.
+	_, _ = store.AddMessage(ctx, "tg:1", StoredMessage{
+		Role: "assistant", Content: "a1", Model: "claude-3", Provider: "anthropic",
+		Cost: 0.10, TokensPrompt: 100, TokensCompletion: 50, TokensCached: 10,
+	})
+	_, _ = store.AddMessage(ctx, "tg:1", StoredMessage{
+		Role: "assistant", Content: "a2", Model: "claude-3", Provider: "anthropic",
+		Cost: 0.05, TokensPrompt: 80, TokensCompletion: 30, TokensCached: 5,
+	})
+	_, _ = store.AddMessage(ctx, "tg:1", StoredMessage{
+		Role: "assistant", Content: "o1", Model: "gpt-4", Provider: "openai",
+		Cost: 0.20, TokensPrompt: 200, TokensCompletion: 100, TokensCached: 0,
+	})
+	// User messages should be excluded.
+	_, _ = store.AddMessage(ctx, "tg:1", StoredMessage{
+		Role: "user", Content: "u1", Provider: "anthropic", Cost: 0.01,
+	})
+	// Empty provider should be excluded.
+	_, _ = store.AddMessage(ctx, "tg:1", StoredMessage{
+		Role: "assistant", Content: "e1", Model: "unknown", Provider: "",
+		Cost: 0.01,
+	})
+
+	results, err := store.GetCostsByProvider(ctx)
+	if err != nil {
+		t.Fatalf("GetCostsByProvider: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 providers, got %d", len(results))
+	}
+
+	// Ordered by cost DESC: openai (0.20) first, then anthropic (0.15).
+	if results[0].Provider != "openai" {
+		t.Errorf("results[0].Provider = %q, want openai", results[0].Provider)
+	}
+	if results[0].Cost != 0.20 {
+		t.Errorf("openai cost = %f, want 0.20", results[0].Cost)
+	}
+	if results[0].Messages != 1 {
+		t.Errorf("openai messages = %d, want 1", results[0].Messages)
+	}
+	if results[0].InputTokens != 200 {
+		t.Errorf("openai input_tokens = %d, want 200", results[0].InputTokens)
+	}
+	if results[0].OutputTokens != 100 {
+		t.Errorf("openai output_tokens = %d, want 100", results[0].OutputTokens)
+	}
+
+	if results[1].Provider != "anthropic" {
+		t.Errorf("results[1].Provider = %q, want anthropic", results[1].Provider)
+	}
+	if results[1].Cost < 0.14 || results[1].Cost > 0.16 {
+		t.Errorf("anthropic cost = %f, want ~0.15", results[1].Cost)
+	}
+	if results[1].Messages != 2 {
+		t.Errorf("anthropic messages = %d, want 2", results[1].Messages)
+	}
+	if results[1].InputTokens != 180 {
+		t.Errorf("anthropic input_tokens = %d, want 180", results[1].InputTokens)
+	}
+	if results[1].CachedTokens != 15 {
+		t.Errorf("anthropic cached_tokens = %d, want 15", results[1].CachedTokens)
+	}
+}
+
 func TestGetConversationStats_NotFound(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {

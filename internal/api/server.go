@@ -575,6 +575,44 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 // @Param agent query string false "Filter by agent name"
 // @Success 200 {object} map[string]any
 // @Router /costs [get]
+
+type providerCostEntry struct {
+	Provider string   `json:"provider"`
+	Cost     float64  `json:"cost"`
+	Soft     *float64 `json:"soft"`
+	Hard     *float64 `json:"hard"`
+	Messages int      `json:"messages"`
+}
+
+func (s *Server) buildPerProviderCosts(ctx context.Context) []providerCostEntry {
+	store, ok := s.deps.Memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	byProvider, err := store.GetCostsByProvider(ctx)
+	if err != nil {
+		s.logger.Error("getting costs by provider", "error", err)
+		return nil
+	}
+	result := make([]providerCostEntry, 0, len(byProvider))
+	for _, bp := range byProvider {
+		entry := providerCostEntry{
+			Provider: bp.Provider,
+			Cost:     bp.Cost,
+			Messages: bp.Messages,
+		}
+		for _, pc := range s.deps.Config.LLM.Providers {
+			if pc.Name == bp.Provider {
+				entry.Soft = pc.CostLimitSoft
+				entry.Hard = pc.CostLimitHard
+				break
+			}
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
 // handleCosts returns cost tracking data with a split data model:
 //   - global_cost, session_count, by_agent: from persistent SQLite (conversation_stats)
 //     so they survive server restarts. Pre-migration rows with empty agent are excluded.
@@ -618,6 +656,8 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	perProvider := s.buildPerProviderCosts(r.Context())
+
 	// Build pricing config summary.
 	pricingConfig := map[string]any{
 		"fallback_rate_per_1k_tokens": 0.0,
@@ -632,10 +672,11 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_cost":     globalCost,
 		"max_per_session": s.deps.CostTracker.MaxBudgetPerSession(), // deprecated, kept for compat
-		"cost_limits": map[string]float64{
+		"cost_limits": map[string]float64{ // deprecated — use per_provider limits
 			"soft": limits.Soft,
 			"hard": limits.Hard,
 		},
+		"per_provider":   perProvider,
 		"session_count":  sessionCount,
 		"session_costs":  s.deps.CostTracker.AllSessionCosts(),
 		"session_stats":  filtered,

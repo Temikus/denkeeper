@@ -40,7 +40,7 @@ type AgentStats struct {
 
 // CostTracker tracks token usage and estimated costs per session and globally.
 type CostTracker struct {
-	mu               sync.Mutex
+	mu               sync.RWMutex
 	sessionCosts     map[string]float64
 	sessionStats     map[string]*SessionStats
 	sessionAgents    map[string]string // session ID → agent name
@@ -147,23 +147,23 @@ func (ct *CostTracker) getOrCreateStats(sessionID string) *SessionStats {
 
 // SessionCost returns the total cost for a session.
 func (ct *CostTracker) SessionCost(sessionID string) float64 {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	return ct.sessionCosts[sessionID]
 }
 
 // GlobalCost returns the total cost across all sessions.
 func (ct *CostTracker) GlobalCost() float64 {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	return ct.globalCost
 }
 
 // ExceedsSoftLimit checks if a session has exceeded its soft cost limit.
 // Returns false if the soft limit is disabled (zero).
 func (ct *CostTracker) ExceedsSoftLimit(sessionID string) bool {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	soft := ct.limitsForSession(sessionID).Soft
 	return soft > 0 && ct.sessionCosts[sessionID] > soft
 }
@@ -171,8 +171,8 @@ func (ct *CostTracker) ExceedsSoftLimit(sessionID string) bool {
 // ExceedsHardLimit checks if a session has exceeded its hard cost limit.
 // Returns false if the hard limit is disabled (zero).
 func (ct *CostTracker) ExceedsHardLimit(sessionID string) bool {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	hard := ct.limitsForSession(sessionID).Hard
 	return hard > 0 && ct.sessionCosts[sessionID] > hard
 }
@@ -185,8 +185,8 @@ func (ct *CostTracker) ExceedsBudget(sessionID string) bool {
 
 // AllSessionCosts returns a copy of all session costs.
 func (ct *CostTracker) AllSessionCosts() map[string]float64 {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	out := make(map[string]float64, len(ct.sessionCosts))
 	for k, v := range ct.sessionCosts {
 		out[k] = v
@@ -196,8 +196,8 @@ func (ct *CostTracker) AllSessionCosts() map[string]float64 {
 
 // AllSessionStats returns a copy of all session stats.
 func (ct *CostTracker) AllSessionStats() map[string]SessionStats {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	out := make(map[string]SessionStats, len(ct.sessionStats))
 	for k, v := range ct.sessionStats {
 		out[k] = *v
@@ -207,8 +207,8 @@ func (ct *CostTracker) AllSessionStats() map[string]SessionStats {
 
 // AgentCosts returns per-agent aggregated stats from the in-memory tracker.
 func (ct *CostTracker) AgentCosts() []AgentStats {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 
 	agents := make(map[string]*AgentStats)
 	for id, s := range ct.sessionStats {
@@ -234,6 +234,8 @@ func (ct *CostTracker) AgentCosts() []AgentStats {
 
 // DefaultLimits returns the default cost limits.
 func (ct *CostTracker) DefaultLimits() SessionLimits {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	return ct.defaultLimits
 }
 
@@ -249,6 +251,13 @@ func (ct *CostTracker) SetProviderLimits(provider string, limits SessionLimits) 
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 	ct.providerLimits[provider] = limits
+}
+
+// ProviderLimits returns the cost limits for a specific provider.
+func (ct *CostTracker) ProviderLimits(provider string) SessionLimits {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
+	return ct.providerLimits[provider]
 }
 
 // RecordWithProvider adds cost, token usage, and provider attribution for a session.
@@ -292,6 +301,8 @@ func (ct *CostTracker) SetDefaultLimits(limits SessionLimits) {
 // MaxBudgetPerSession returns the default hard cost cap.
 // Deprecated: use DefaultLimits().Hard.
 func (ct *CostTracker) MaxBudgetPerSession() float64 {
+	ct.mu.RLock()
+	defer ct.mu.RUnlock()
 	return ct.defaultLimits.Hard
 }
 

@@ -10,6 +10,10 @@ const costsResponse = {
   cost_limits: { soft: 5.0, hard: 10.0 },
   max_per_session: 5.0,
   session_count: 3,
+  per_provider: [
+    { provider: 'anthropic', cost: 1.80, soft: 5.0, hard: 10.0, messages: 8 },
+    { provider: 'openrouter', cost: 0.70, soft: null, hard: null, messages: 4 },
+  ],
   by_agent: [
     { agent: 'default', cost: 2.00, messages: 10, sessions: 3, input_tokens: 50000, output_tokens: 10000 },
     { agent: 'helper', cost: 0.50, messages: 5, sessions: 1, input_tokens: 20000, output_tokens: 5000 },
@@ -50,11 +54,22 @@ describe('Costs page', () => {
     })
   })
 
-  test('renders cost limits', async () => {
+  test('renders per-provider breakdown table', async () => {
     render(Costs)
     await waitFor(() => {
-      expect(screen.getByText('Soft Limit')).toBeInTheDocument()
-      expect(screen.getByText('Hard Limit')).toBeInTheDocument()
+      expect(screen.getByText('Per-Provider Breakdown')).toBeInTheDocument()
+      expect(screen.getByText('anthropic')).toBeInTheDocument()
+      expect(screen.getByText('openrouter')).toBeInTheDocument()
+      expect(screen.getByText('$1.8000')).toBeInTheDocument()
+      expect(screen.getByText('$0.7000')).toBeInTheDocument()
+    })
+  })
+
+  test('renders percentage of cap for provider with hard limit', async () => {
+    render(Costs)
+    await waitFor(() => {
+      // anthropic: 1.80 / 10.0 = 18.0%
+      expect(screen.getByText('18.0%')).toBeInTheDocument()
     })
   })
 

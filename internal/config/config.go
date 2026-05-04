@@ -58,9 +58,9 @@ type CostsConfig struct {
 
 // ModelPriceConfig holds per-million-token pricing for a model override.
 type ModelPriceConfig struct {
-	InputPerMTok       float64 `toml:"input"`
-	OutputPerMTok      float64 `toml:"output"`
-	CachedInputPerMTok float64 `toml:"cached_input"`
+	InputPerMTok       float64 `toml:"input"        json:"input"`
+	OutputPerMTok      float64 `toml:"output"       json:"output"`
+	CachedInputPerMTok float64 `toml:"cached_input" json:"cached_input"`
 }
 
 // OTelConfig controls OpenTelemetry observability instrumentation.

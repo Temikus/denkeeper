@@ -22,8 +22,6 @@ describe('Providers page', () => {
       expect(screen.getByText('LLM Defaults')).toBeInTheDocument()
       expect(screen.getByText('openrouter')).toBeInTheDocument()
       expect(screen.getByText('anthropic/claude-3-opus')).toBeInTheDocument()
-      expect(screen.getByText('$0.50')).toBeInTheDocument()
-      expect(screen.getByText('$1.00')).toBeInTheDocument()
     })
   })
 
@@ -88,11 +86,8 @@ describe('Providers page', () => {
     const editButtons = screen.getAllByText('Edit')
     await fireEvent.click(editButtons[0])
 
-    // Form should show with provider select and cost inputs
     await waitFor(() => {
       expect(screen.getByLabelText('Default Provider')).toBeInTheDocument()
-      expect(screen.getByLabelText('Cost Limit Soft ($)')).toBeInTheDocument()
-      expect(screen.getByLabelText('Cost Limit Hard ($)')).toBeInTheDocument()
     })
   })
 
@@ -251,6 +246,61 @@ describe('Providers page', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('delete-confirm')).toBeInTheDocument()
+    })
+  })
+
+  test('provider card shows cost fields in display mode', async () => {
+    render(Providers)
+    await waitFor(() => {
+      expect(screen.getByText('Anthropic')).toBeInTheDocument()
+      // Anthropic has cost_limit_soft: 5.0 and cost_limit_hard: 10.0
+      expect(screen.getByText('$5.00')).toBeInTheDocument()
+      expect(screen.getByText('$10.00')).toBeInTheDocument()
+    })
+  })
+
+  test('edit provider shows cost inputs', async () => {
+    render(Providers)
+    await waitFor(() => {
+      expect(screen.getByText('Anthropic')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[1])
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Soft Limit ($)')).toBeInTheDocument()
+      expect(screen.getByLabelText('Hard Limit ($)')).toBeInTheDocument()
+      expect(screen.getByLabelText('Fallback Rate ($/1K tokens)')).toBeInTheDocument()
+      expect(screen.getByText('Model Price Overrides')).toBeInTheDocument()
+    })
+  })
+
+  test('save provider sends cost fields in PATCH', async () => {
+    let patchBody = null
+    server.use(
+      http.patch('/api/v1/llm/providers/:name', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ status: 'updated' })
+      })
+    )
+
+    render(Providers)
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[1])
+
+    await waitFor(() => expect(screen.getByLabelText('Soft Limit ($)')).toBeInTheDocument())
+
+    const softInput = screen.getByLabelText('Soft Limit ($)')
+    await fireEvent.input(softInput, { target: { value: '3' } })
+
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      expect(patchBody).not.toBeNull()
+      expect(patchBody.cost_limit_soft).toBe(3)
     })
   })
 

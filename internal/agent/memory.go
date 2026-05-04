@@ -142,6 +142,7 @@ type TelemetryStore interface {
 	GetSkillUsages(ctx context.Context, convID string) ([]SkillUsageRecord, error)
 	GetTelemetrySummary(ctx context.Context, since, until *time.Time) (*TelemetrySummary, error)
 	GetCostsByAgent(ctx context.Context) ([]AgentCostSummary, error)
+	GetCostsByProvider(ctx context.Context) ([]ProviderCostSummary, error)
 	PruneByCount(ctx context.Context, maxConversations int) (int, error)
 }
 
@@ -820,6 +821,16 @@ type AgentCostSummary struct {
 	Sessions     int     `db:"sessions"         json:"sessions"`
 }
 
+// ProviderCostSummary aggregates cost/token data per provider from message-level records.
+type ProviderCostSummary struct {
+	Provider     string  `db:"provider"          json:"provider"`
+	Cost         float64 `db:"total_cost"        json:"cost"`
+	InputTokens  int     `db:"total_prompt"      json:"input_tokens"`
+	OutputTokens int     `db:"total_completion"   json:"output_tokens"`
+	CachedTokens int     `db:"total_cached"      json:"cached_tokens"`
+	Messages     int     `db:"messages"          json:"messages"`
+}
+
 // GetTelemetrySummary returns aggregated telemetry data, optionally filtered by time range.
 func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, until *time.Time) (*TelemetrySummary, error) {
 	summary := &TelemetrySummary{}
@@ -874,6 +885,26 @@ func (s *SQLiteMemoryStore) GetCostsByAgent(ctx context.Context) ([]AgentCostSum
 		 ORDER BY total_cost DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("querying costs by agent: %w", err)
+	}
+	return results, nil
+}
+
+// GetCostsByProvider returns per-provider aggregated cost data from message-level records.
+func (s *SQLiteMemoryStore) GetCostsByProvider(ctx context.Context) ([]ProviderCostSummary, error) {
+	var results []ProviderCostSummary
+	err := s.db.SelectContext(ctx, &results,
+		`SELECT provider,
+		        SUM(cost) AS total_cost,
+		        SUM(tokens_prompt) AS total_prompt,
+		        SUM(tokens_completion) AS total_completion,
+		        SUM(tokens_cached) AS total_cached,
+		        COUNT(*) AS messages
+		 FROM messages
+		 WHERE role = 'assistant' AND provider != ''
+		 GROUP BY provider
+		 ORDER BY total_cost DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying costs by provider: %w", err)
 	}
 	return results, nil
 }

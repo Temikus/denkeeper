@@ -276,13 +276,14 @@ export const handlers = [
     cost_limit_soft: 0.5,
     cost_limit_hard: 1.0,
     providers: [
-      { name: 'anthropic', type: 'anthropic', enabled: false, api_key_set: false },
+      { name: 'anthropic', type: 'anthropic', enabled: false, api_key_set: false, cost_limit_soft: 5.0, cost_limit_hard: 10.0 },
       { name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true },
       { name: 'openai', type: 'openai', enabled: false, api_key_set: false },
       { name: 'ollama', type: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
     ],
   })),
   http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'new-provider', status: 'created' }, { status: 201 })),
+  http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated' })),
   http.delete('/api/v1/llm/providers/:name', () => new HttpResponse(null, { status: 204 })),
 
   // Server config
