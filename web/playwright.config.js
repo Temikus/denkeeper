@@ -6,10 +6,10 @@ export default defineConfig({
   globalSetup: './test/e2e/global-setup.js',
   globalTeardown: './test/e2e/global-teardown.js',
   timeout: 30000,
-  retries: process.env.CI ? 2 : 0,
+  retries: 0,
   use: {
     baseURL: process.env.BASE_URL || 'http://localhost:8080',
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
   webServer: process.env.CI ? undefined : {

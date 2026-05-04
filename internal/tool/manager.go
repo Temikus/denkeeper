@@ -625,6 +625,22 @@ func (m *Manager) enabledToolDefs() []llm.ToolDef {
 	return filtered
 }
 
+// recomputeDisabledCount re-derives disabledCount from all servers.
+// Caller must hold m.mu (write lock).
+func (m *Manager) recomputeDisabledCount() {
+	var count int
+	for _, sc := range m.servers {
+		count += len(sc.disabledSet)
+	}
+	if count != m.disabledCount {
+		m.logger.Warn("disabledCount drift detected and corrected",
+			slog.Int("had", m.disabledCount),
+			slog.Int("recomputed", count),
+		)
+	}
+	m.disabledCount = count
+}
+
 // ToolNames returns the names of all registered MCP tools,
 // including those from the parent manager (if any).
 func (m *Manager) ToolNames() []string {
@@ -808,8 +824,8 @@ func (m *Manager) UnregisterServer(name string) error {
 	}
 	m.toolDefs = remaining
 
-	m.disabledCount -= len(sc.disabledSet)
 	delete(m.servers, name)
+	m.recomputeDisabledCount()
 
 	// Best-effort session cleanup. The server is already removed from the map,
 	// so returning an error here would leave callers in an inconsistent state

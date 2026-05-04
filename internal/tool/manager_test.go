@@ -379,6 +379,86 @@ func TestSetDisabledTools_NonexistentToolName(t *testing.T) {
 	}
 }
 
+func TestDisabledCount_ConsistentAfterUnregister(t *testing.T) {
+	m := NewManager(testLogger())
+	sc1 := &serverConn{
+		name:        "server-1",
+		disabledSet: map[string]bool{"tool-a": true},
+	}
+	sc2 := &serverConn{
+		name:        "server-2",
+		disabledSet: map[string]bool{"tool-x": true, "tool-y": true},
+	}
+	m.servers["server-1"] = sc1
+	m.servers["server-2"] = sc2
+	m.toolMap = map[string]*serverConn{
+		"tool-a": sc1,
+		"tool-x": sc2,
+		"tool-y": sc2,
+	}
+	m.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "tool-a"}},
+		{Type: "function", Function: llm.FunctionDef{Name: "tool-x"}},
+		{Type: "function", Function: llm.FunctionDef{Name: "tool-y"}},
+	}
+	m.disabledCount = 3
+
+	if err := m.UnregisterServer("server-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.RLock()
+	got := m.disabledCount
+	m.mu.RUnlock()
+	if got != 1 {
+		t.Errorf("disabledCount = %d after unregister, want 1", got)
+	}
+}
+
+func TestDisabledCount_DriftCorrectedOnUnregister(t *testing.T) {
+	m := NewManager(testLogger())
+	sc := &serverConn{
+		name:        "server-1",
+		disabledSet: map[string]bool{"tool-a": true},
+	}
+	m.servers["server-1"] = sc
+	m.servers["server-2"] = &serverConn{name: "server-2"}
+	m.toolMap = map[string]*serverConn{"tool-a": sc}
+	m.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "tool-a"}},
+	}
+	m.disabledCount = 99
+
+	if err := m.UnregisterServer("server-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.RLock()
+	got := m.disabledCount
+	m.mu.RUnlock()
+	if got != 1 {
+		t.Errorf("disabledCount = %d after drift correction, want 1", got)
+	}
+}
+
+func TestDisabledCount_NegativeDriftCorrected(t *testing.T) {
+	m := NewManager(testLogger())
+	sc := &serverConn{name: "only-server"}
+	m.servers["only-server"] = sc
+	m.disabledCount = -1
+
+	if err := m.UnregisterServer("only-server"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.RLock()
+	got := m.disabledCount
+	m.mu.RUnlock()
+	if got != 0 {
+		t.Errorf("disabledCount = %d, want 0 after removing last server", got)
+	}
+}
+
 func toolNames(defs []llm.ToolDef) []string {
 	names := make([]string, len(defs))
 	for i, td := range defs {
