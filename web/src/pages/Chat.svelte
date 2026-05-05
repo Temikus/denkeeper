@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import { get } from 'svelte/store'
   import { api } from '../api.js'
+  import { isMobile } from '../store.js'
   import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, clearCurrentSession, compactCurrentSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
 
@@ -17,6 +18,15 @@
     const a = agents.find(x => x.name === $chatState.agent)
     return a?.display_name || $chatState.agent
   }
+
+  function agentMeta() {
+    const a = agents.find(x => x.name === $chatState.agent)
+    if (!a) return ''
+    const model = (a.llm_model || '').replace(/-\d{8}$/, '')
+    return [model, a.permission_tier].filter(Boolean).join(' · ')
+  }
+
+  let showMobileChannelMenu = $state(false)
 
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
@@ -301,9 +311,32 @@
 </script>
 
 <div class="chat-shell">
-  <h1 class="page-title">Chat</h1>
-  <!-- Toolbar -->
-  <div class="toolbar" role="toolbar" aria-label="Chat controls">
+  {#if $isMobile}
+    <!-- Mobile compact header -->
+    <div class="mobile-chat-header">
+      <button class="mobile-chat-back" onclick={() => history.back()} aria-label="Go back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div class="mobile-chat-info">
+        <span class="mobile-chat-name">{agentLabel()}</span>
+        <span class="mobile-chat-meta">{agentMeta()}</span>
+      </div>
+      {#if channels.length > 0}
+        <div class="mobile-channel-badge-wrap">
+          <select class="mobile-channel-select" value={$chatState.channel} onchange={switchChannel} disabled={$chatState.sending}>
+            <option value="">No channel</option>
+            {#each channels as ch}
+              <option value={ch.name}>#{ch.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <h1 class="page-title">Chat</h1>
+  {/if}
+  <!-- Toolbar (desktop only) -->
+  <div class="toolbar" class:mobile-hidden={$isMobile} role="toolbar" aria-label="Chat controls">
     <label>
       Agent
       <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent" data-testid="agent-selector">
@@ -1008,14 +1041,54 @@
   }
   .muted { color: var(--text-muted); }
 
-  /* Responsive: small screens */
-  @media (max-width: 640px) {
-    .chat-shell { max-width: 100%; }
-    .toolbar { gap: 8px; }
-    .toolbar label { font-size: 12px; }
-    .toolbar select { max-width: 140px; font-size: 12px; }
-    .btn-ghost { padding: 4px 8px; font-size: 12px; }
-    .bubble { max-width: 90%; }
+  /* Mobile header */
+  .mobile-hidden { display: none !important; }
+
+  .mobile-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .mobile-chat-back {
+    background: none; border: none; cursor: pointer;
+    color: var(--text); padding: 4px;
+    display: flex; align-items: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-chat-info { flex: 1; min-width: 0; }
+  .mobile-chat-name { display: block; font-size: 16px; font-weight: 700; }
+  .mobile-chat-meta { display: block; font-size: 12px; color: var(--text-muted); }
+  .mobile-channel-badge-wrap { flex-shrink: 0; }
+  .mobile-channel-select {
+    background: #F0EBE3; border: none; border-radius: 12px;
+    padding: 4px 10px; font-size: 13px; color: var(--text);
+    font-family: inherit; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+  }
+  :global(:root.dark) .mobile-channel-select {
+    background: var(--surface);
+  }
+
+  /* Responsive: mobile */
+  @media (max-width: 768px) {
+    .chat-shell {
+      max-width: 100%;
+      height: calc(100vh - var(--bottom-nav-height) - var(--safe-area-bottom) - 32px);
+    }
+    .bubble { max-width: 85%; font-size: 15px; line-height: 21px; }
+    .bubble-header { display: none; }
+    .input-area { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 0 0; }
+    .btn-send, .btn-stop {
+      width: 38px; height: 38px; border-radius: 50%;
+      padding: 0; display: flex; align-items: center; justify-content: center;
+      font-size: 0;
+    }
+    .btn-send::after { content: '↑'; font-size: 18px; }
+    .btn-stop::after { content: '■'; font-size: 14px; }
+    textarea { min-height: 38px; padding: 8px 12px; font-size: 15px; }
     .approval-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
     .pending-banner { padding: 8px; }
   }

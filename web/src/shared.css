@@ -317,6 +317,40 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* ---------- Mobile utilities ---------------------------------------------- */
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+  .page-title {
+    font-size: 24px;
+  }
+  .confirm-modal {
+    width: calc(100vw - 32px);
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  .inline-form .row {
+    flex-direction: column;
+    gap: 0;
+  }
+  .table {
+    font-size: 12px;
+  }
+  .table th,
+  .table td {
+    padding: 8px 6px;
+  }
+  .btn-primary,
+  .btn-ghost,
+  .btn-save {
+    min-height: 44px;
+  }
+}
+
 /* ---------- Reduced motion ----------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {

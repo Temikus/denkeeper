@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { isMobile } from '../store.js'
+  import { currentRoute, navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
   import FallbackRulesModal from '../components/FallbackRulesModal.svelte'
@@ -35,6 +37,24 @@
   let idBody = $state('')
   let idRawMode = $state(false)
 
+  // Mobile state
+  let mobileTab = $state('config')
+  let subRoute = $derived($currentRoute.split('/').slice(1).join('/'))
+  let mobileShowDetail = $derived($isMobile && !!detail)
+
+  function mobileBack() {
+    selected = null
+    detail = null
+    navigate('agents')
+  }
+
+  function tierColor(tier) {
+    if (tier === 'autonomous') return 'var(--success)'
+    if (tier === 'supervised') return 'var(--warn)'
+    if (tier === 'restricted') return 'var(--danger)'
+    return 'var(--text-muted)'
+  }
+
   onMount(async () => {
     try {
       const [agentList, providerData] = await Promise.all([
@@ -46,7 +66,13 @@
         enabledProviders = providerData.providers.filter(p => p.enabled).map(p => p.name)
         defaultProvider = providerData.default_provider || ''
       }
-      if (agents.length) selectAgent(agents[0])
+      if (subRoute) {
+        const match = agents.find(a => a.name === subRoute)
+        if (match) selectAgent(match)
+        else if (agents.length) selectAgent(agents[0])
+      } else if (agents.length && !$isMobile) {
+        selectAgent(agents[0])
+      }
     } catch(e) {
       error = e.message
     }
@@ -55,6 +81,7 @@
   async function selectAgent(a) {
     if (!a) return
     selected = a
+    if ($isMobile) navigate('agents/' + a.name)
     detail = null
     expandedGroup = null
     expandedSection = null
@@ -458,10 +485,12 @@
   }
 </script>
 
-<div class="page-header">
-  <h1 class="page-title">Agents</h1>
-  <button class="btn-primary btn-sm" onclick={openAddForm} data-testid="add-agent-btn">+ Add Agent</button>
-</div>
+{#if !($isMobile && mobileShowDetail)}
+  <div class="page-header">
+    <h1 class="page-title">Agents</h1>
+    <button class="btn-primary btn-sm mobile-fab" onclick={openAddForm} data-testid="add-agent-btn">+ Add Agent</button>
+  </div>
+{/if}
 <ErrorBanner message={error} />
 
 {#if showAddForm}
@@ -516,82 +545,127 @@
 </div>
 {/if}
 
-<div class="layout">
-  <aside class="list">
-    {#each agents as a}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div
-        class="item"
-        class:active={selected?.name === a.name}
-        onclick={() => { if (renamingAgent !== a.name) selectAgent(a) }}
-        role="button"
-        tabindex="0"
-      >
-        {#if renamingAgent === a.name}
-          <div class="name-edit">
-            <div class="name-edit-row">
-              <!-- svelte-ignore a11y_autofocus -->
-              <input
-                class="name-input"
-                bind:value={renameValue}
-                use:autofocus
-                disabled={renameSaving}
-                onkeydown={(e) => { if (e.key === 'Enter') confirmRename(a.name); if (e.key === 'Escape') cancelRename() }}
-              />
-              <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); confirmRename(a.name) }} disabled={renameSaving} title="Confirm">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-              </button>
-              <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); cancelRename() }} title="Cancel">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
+<div class="layout" class:mobile-detail-active={$isMobile && mobileShowDetail}>
+  {#if !($isMobile && mobileShowDetail)}
+    <!-- Agent list: desktop sidebar or mobile card list -->
+    <aside class="list" class:mobile-cards={$isMobile}>
+      {#each agents as a}
+        {#if $isMobile}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div class="mobile-card" onclick={() => selectAgent(a)} role="button" tabindex="0">
+            <div class="mobile-card-top">
+              <div class="mobile-card-icon" style="background: {tierColor(a.permission_tier)}20; color: {tierColor(a.permission_tier)}">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </div>
+              <div class="mobile-card-info">
+                <div class="mobile-card-name">{a.display_name || a.name}</div>
+                <div class="mobile-card-model">{a.llm_provider || 'default'} / {a.llm_model || '—'}</div>
+              </div>
+              <svg class="mobile-card-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
-            <div class="rename-hint">Enter to save · Esc to cancel</div>
+            <div class="mobile-card-bottom">
+              <span class="mobile-tier-pill" style="color: {tierColor(a.permission_tier)}">{a.permission_tier.toUpperCase()}</span>
+              <span class="mobile-card-stat">{a.skill_count} skill{a.skill_count !== 1 ? 's' : ''}</span>
+              <span class="mobile-card-dot"></span>
+              <span class="mobile-card-stat">{a.tool_count ?? 0} tool{(a.tool_count ?? 0) !== 1 ? 's' : ''}</span>
+              {#if agents.some(other => other.supervisor === a.name)}
+                <span class="mobile-card-dot"></span>
+                <span class="mobile-card-stat" style="color: var(--accent)">supervisor</span>
+              {:else if a.supervisor}
+                <span class="mobile-card-dot"></span>
+                <span class="mobile-card-stat">via {a.supervisor}</span>
+              {/if}
+            </div>
           </div>
         {:else}
-          <div class="name">
-            <span class="name-text">{a.display_name || a.name}</span>
-            {#if a.name !== 'default'}
-              <button class="edit-btn" onclick={(e) => startRename(a.name, e)} title="Rename agent">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-              </button>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            class="item"
+            class:active={selected?.name === a.name}
+            onclick={() => { if (renamingAgent !== a.name) selectAgent(a) }}
+            role="button"
+            tabindex="0"
+          >
+            {#if renamingAgent === a.name}
+              <div class="name-edit">
+                <div class="name-edit-row">
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input
+                    class="name-input"
+                    bind:value={renameValue}
+                    use:autofocus
+                    disabled={renameSaving}
+                    onkeydown={(e) => { if (e.key === 'Enter') confirmRename(a.name); if (e.key === 'Escape') cancelRename() }}
+                  />
+                  <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); confirmRename(a.name) }} disabled={renameSaving} title="Confirm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </button>
+                  <button class="name-action-btn" onclick={(e) => { e.stopPropagation(); cancelRename() }} title="Cancel">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+                <div class="rename-hint">Enter to save · Esc to cancel</div>
+              </div>
+            {:else}
+              <div class="name">
+                <span class="name-text">{a.display_name || a.name}</span>
+                {#if a.name !== 'default'}
+                  <button class="edit-btn" onclick={(e) => startRename(a.name, e)} title="Rename agent">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                  </button>
+                {/if}
+              </div>
             {/if}
+            <div class="meta">{a.permission_tier}{#if a.supervisor} (via {a.supervisor}){/if} · {a.skill_count} skills{#if agents.some(other => other.supervisor === a.name)} · <span class="supervisor-role">supervisor</span>{/if}</div>
           </div>
         {/if}
-        <div class="meta">{a.permission_tier}{#if a.supervisor} (via {a.supervisor}){/if} · {a.skill_count} skills{#if agents.some(other => other.supervisor === a.name)} · <span class="supervisor-role">supervisor</span>{/if}</div>
-      </div>
-    {/each}
-    {#if agents.length === 0 && !error}
-      <p class="empty">No agents.</p>
-    {/if}
-  </aside>
+      {/each}
+      {#if agents.length === 0 && !error}
+        <p class="empty">No agents.</p>
+      {/if}
+    </aside>
+  {/if}
 
   {#if detail}
     <section class="detail">
-      <!-- Breadcrumb -->
-      <div class="breadcrumb">
-        <span class="bc-link">Agents</span>
-        <span class="bc-sep">›</span>
-        <span class="bc-current">{detail.name} Status</span>
-      </div>
-
-      <!-- Header -->
-      <div class="agent-header">
-        <div>
-          <h1 class="agent-name">{agentDisplayName(detail.name)}</h1>
-          <p class="agent-subtitle">
-            {detail.persona_dir ? 'Persona Active' : 'No Persona'}
-            {#if detail.model}· {detail.model}{/if}
-          </p>
-        </div>
-        <div class="header-actions">
-          {#if configSaveOk}
-            <span class="save-ok">Saved</span>
-          {/if}
+      {#if $isMobile}
+        <!-- Mobile back header -->
+        <div class="mobile-detail-header">
+          <button class="mobile-back-btn" onclick={mobileBack}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            <span>{agentDisplayName(detail.name)}</span>
+          </button>
+          <span class="mobile-detail-sub">{detail.persona_dir ? 'Persona Active' : 'No Persona'}</span>
           {#if detail.name !== 'default'}
-            <button class="btn-ghost btn-sm btn-danger-text" onclick={() => { confirmDelete = detail.name; deleteError = '' }} data-testid="delete-agent-btn">Delete</button>
+            <button class="btn-ghost btn-sm btn-danger-text mobile-delete" onclick={() => { confirmDelete = detail.name; deleteError = '' }}>Delete</button>
           {/if}
         </div>
-      </div>
+      {:else}
+        <!-- Desktop breadcrumb + header -->
+        <div class="breadcrumb">
+          <span class="bc-link">Agents</span>
+          <span class="bc-sep">›</span>
+          <span class="bc-current">{detail.name} Status</span>
+        </div>
+
+        <div class="agent-header">
+          <div>
+            <h1 class="agent-name">{agentDisplayName(detail.name)}</h1>
+            <p class="agent-subtitle">
+              {detail.persona_dir ? 'Persona Active' : 'No Persona'}
+              {#if detail.model}· {detail.model}{/if}
+            </p>
+          </div>
+          <div class="header-actions">
+            {#if configSaveOk}
+              <span class="save-ok">Saved</span>
+            {/if}
+            {#if detail.name !== 'default'}
+              <button class="btn-ghost btn-sm btn-danger-text" onclick={() => { confirmDelete = detail.name; deleteError = '' }} data-testid="delete-agent-btn">Delete</button>
+            {/if}
+          </div>
+        </div>
+      {/if}
       {#if confirmDelete === detail.name}
         <div class="delete-confirm" data-testid="delete-confirm">
           <span>Delete agent <strong>{detail.name}</strong>?</span>
@@ -607,6 +681,7 @@
         </div>
       {/if}
 
+      {#if !$isMobile || mobileTab === 'config'}
       <!-- Stats cards — summary row -->
       <div class="stat-cards">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -672,8 +747,17 @@
         </div>
       </div>
 
+      <!-- Mobile tab bar -->
+      {#if $isMobile}
+        <div class="mobile-tabs">
+          <button class="mobile-tab" class:active={mobileTab === 'config'} onclick={() => mobileTab = 'config'}>Config</button>
+          <button class="mobile-tab" class:active={mobileTab === 'persona'} onclick={() => mobileTab = 'persona'}>Persona</button>
+          <button class="mobile-tab" class:active={mobileTab === 'tools'} onclick={() => mobileTab = 'tools'}>Tools</button>
+        </div>
+      {/if}
+
       <!-- Full-width config panel below cards -->
-      {#if expandedCard}
+      {#if (!$isMobile || mobileTab === 'config') && expandedCard}
         <div class="config-panel" aria-hidden={!expandedCard}>
           {#if expandedCard === 'model'}
             <div class="config-panel-title">Model Configuration</div>
@@ -738,7 +822,9 @@
           </div>
         </div>
       {/if}
+      {/if}
 
+      {#if !$isMobile || mobileTab === 'persona'}
       <!-- Persona -->
       <div class="card">
         <div class="card-header">
@@ -855,6 +941,9 @@
         </div>
       </div>
 
+      {/if}
+
+      {#if !$isMobile || mobileTab === 'tools'}
       <!-- Active Capabilities (Skills) -->
       <div class="card">
         <div class="card-header">
@@ -931,6 +1020,7 @@
           </div>
           <p class="empty">Configured — none registered yet.</p>
         </div>
+      {/if}
       {/if}
     </section>
   {:else if !error && agents.length > 0}
@@ -1231,11 +1321,91 @@
   @media (max-width: 900px) {
     .stat-cards { grid-template-columns: repeat(2, 1fr); }
   }
-  @media (max-width: 600px) {
+  @media (max-width: 768px) {
     .layout { flex-direction: column; }
-    .list { width: 100%; flex-direction: row; overflow-x: auto; }
-    .stat-cards { grid-template-columns: 1fr; }
+    .layout.mobile-detail-active { gap: 0; }
+    .list { width: 100%; }
+    .list.mobile-cards { display: flex; flex-direction: column; gap: 12px; }
+    .stat-cards { grid-template-columns: repeat(2, 1fr); }
+
+    .mobile-fab {
+      width: 36px; height: 36px; border-radius: 50%;
+      padding: 0; display: flex; align-items: center; justify-content: center;
+      font-size: 20px; line-height: 1;
+    }
   }
+
+  /* Mobile agent cards */
+  .mobile-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-card:active { border-color: var(--accent); }
+  .mobile-card-top { display: flex; align-items: center; gap: 12px; }
+  .mobile-card-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .mobile-card-info { flex: 1; min-width: 0; }
+  .mobile-card-name { font-size: 15px; font-weight: 600; }
+  .mobile-card-model { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+  .mobile-card-chevron { color: var(--text-muted); flex-shrink: 0; }
+  .mobile-card-bottom { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .mobile-tier-pill {
+    font-size: 11px; font-weight: 500;
+    letter-spacing: 0.03em;
+    padding: 2px 8px; border-radius: 4px;
+    background: currentColor;
+    -webkit-background-clip: text; background-clip: text;
+  }
+  .mobile-card-stat { font-size: 12px; color: var(--text-muted); }
+  .mobile-card-dot {
+    width: 3px; height: 3px; border-radius: 50%;
+    background: var(--text-muted); flex-shrink: 0;
+  }
+
+  /* Mobile detail header */
+  .mobile-detail-header {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 8px; margin-bottom: 16px;
+  }
+  .mobile-back-btn {
+    display: flex; align-items: center; gap: 4px;
+    background: none; border: none; cursor: pointer;
+    color: var(--text); font-size: 18px; font-weight: 700;
+    padding: 0; font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-detail-sub {
+    font-size: 13px; color: var(--text-muted);
+  }
+  .mobile-delete { margin-left: auto; }
+
+  /* Mobile tab bar */
+  .mobile-tabs {
+    display: flex; gap: 0; margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mobile-tab {
+    flex: 1; padding: 10px 0; background: none; border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 14px; font-weight: 500; color: var(--text-muted);
+    cursor: pointer; text-align: center; font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .stat-card, .sp-preview, .section-name, .config-panel { transition: none; }
   }

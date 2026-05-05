@@ -5,6 +5,7 @@
   import { api } from './api.js'
   import { initWS, destroyWS } from './wsStore.js'
   import Nav from './components/Nav.svelte'
+  import BottomNav from './components/BottomNav.svelte'
   import Login from './pages/Login.svelte'
   import SetupWizard from './pages/SetupWizard.svelte'
   import Overview from './pages/Overview.svelte'
@@ -24,6 +25,7 @@
   import Settings from './pages/Settings.svelte'
   import AuditLog from './pages/AuditLog.svelte'
   import Channels from './pages/Channels.svelte'
+  import MoreMenu from './pages/MoreMenu.svelte'
   import './shared.css'
 
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
@@ -106,10 +108,13 @@
         <AuditLog />
       {:else if route === 'settings'}
         <Settings />
+      {:else if route === 'more'}
+        <MoreMenu />
       {:else}
         <p style="color: var(--text-muted)">Page not found.</p>
       {/if}
     </main>
+    <BottomNav active={route} />
   </div>
 {/if}
 
@@ -134,6 +139,8 @@
     --radius:      6px;
     --hover-overlay: rgba(0, 0, 0, 0.04);
     --overlay-bg:    rgba(0, 0, 0, 0.4);
+    --bottom-nav-height: 60px;
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 
     /* Sidebar tokens */
     --sidebar-bg:           #FDF8F0;
@@ -196,5 +203,11 @@
     flex: 1;
     overflow-y: auto;
     padding: 28px 32px;
+  }
+
+  @media (max-width: 768px) {
+    .content {
+      padding: 16px 16px calc(var(--bottom-nav-height) + var(--safe-area-bottom) + 16px);
+    }
   }
 </style>

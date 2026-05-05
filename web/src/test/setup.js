@@ -3,6 +3,20 @@ import { cleanup } from '@testing-library/svelte'
 import { afterEach, beforeAll, afterAll } from 'vitest'
 import { server } from './server.js'
 
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: (query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+  }),
+})
+
 // Node 22+ ships built-in localStorage without .clear().
 // Provide a polyfill that removes all keys.
 function clearStorage(storage) {

@@ -46,3 +46,15 @@ export const isAuthenticated = derived(
   [token, authMode],
   ([$t, $m]) => $t.length > 0 || $m === 'session'
 )
+
+function createMobileStore() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return writable(false)
+  }
+  const mql = window.matchMedia('(max-width: 768px)')
+  const { subscribe, set } = writable(mql.matches)
+  mql.addEventListener('change', (e) => set(e.matches))
+  return { subscribe }
+}
+
+export const isMobile = createMobileStore()

@@ -344,4 +344,8 @@
     color: var(--danger);
     border-color: var(--danger);
   }
+
+  @media (max-width: 768px) {
+    .nav { display: none; }
+  }
 </style>

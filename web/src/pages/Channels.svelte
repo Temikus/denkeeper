@@ -467,7 +467,7 @@
   .btn-danger-text:hover { background: rgba(224,92,110,0.1); }
 
   /* Responsive */
-  @media (max-width: 600px) {
+  @media (max-width: 768px) {
     .layout { flex-direction: column; }
     .list { width: 100%; flex-direction: row; overflow-x: auto; }
     .field { flex-direction: column; gap: 4px; }
