@@ -24,7 +24,7 @@ test.describe('Responsive layout', () => {
     await login.goto()
     await login.loginWithPassword('test')
 
-    // Nav should be visible on desktop.
-    await expect(page.locator('nav')).toBeVisible()
+    // Sidebar nav should be visible on desktop (bottom nav is hidden via CSS at this width).
+    await expect(page.locator('nav.nav')).toBeVisible()
   })
 })
