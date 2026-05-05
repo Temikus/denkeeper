@@ -3,6 +3,8 @@ import { cleanup } from '@testing-library/svelte'
 import { afterEach, beforeAll, afterAll } from 'vitest'
 import { server } from './server.js'
 
+// Always returns matches:false — tests run as "desktop". Mobile-conditional
+// assertions need a per-test override (e.g. vi.fn returning matches:true).
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query) => ({
