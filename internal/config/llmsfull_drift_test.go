@@ -58,7 +58,7 @@ func collectTOMLTags(t reflect.Type) []string {
 }
 
 func walkType(t reflect.Type, seen map[string]bool) {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -74,18 +74,18 @@ func walkType(t reflect.Type, seen map[string]bool) {
 		seen[tag] = true
 
 		ft := f.Type
-		if ft.Kind() == reflect.Ptr {
+		if ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
 		if ft.Kind() == reflect.Slice {
 			ft = ft.Elem()
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 		}
 		if ft.Kind() == reflect.Map {
 			ft = ft.Elem()
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 		}
