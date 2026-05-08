@@ -18,7 +18,7 @@ test.describe('Theme persistence', () => {
 
     // Reload the page — session cookie persists, so we stay logged in.
     await page.reload()
-    await page.locator('nav').waitFor({ state: 'visible', timeout: 10000 })
+    await page.locator('nav').first().waitFor({ state: 'visible', timeout: 10000 })
 
     // Theme should persist via localStorage.
     await expect(html).toHaveClass(/dark/)
