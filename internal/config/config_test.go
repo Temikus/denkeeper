@@ -751,12 +751,19 @@ func TestParse_ToolMissingCommand(t *testing.T) {
 args = ["--flag"]
 `)
 
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for tool missing command")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "command is required") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-tool"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-tool")
+	}
+	if !strings.Contains(w, "command is required") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-tool"].IsEnabled() {
+		t.Error("expected bad-tool to be disabled")
 	}
 }
 
@@ -3310,12 +3317,19 @@ func TestParse_ToolSSEMissingURL(t *testing.T) {
 [tools.bad-sse]
 transport = "sse"
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for SSE tool missing URL")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "url is required") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-sse"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-sse")
+	}
+	if !strings.Contains(w, "url is required") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-sse"].IsEnabled() {
+		t.Error("expected bad-sse to be disabled")
 	}
 }
 
@@ -3326,12 +3340,19 @@ transport = "sse"
 url = "https://mcp.example.com"
 command = "/usr/bin/should-not-be-here"
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for SSE tool with command")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "command must be empty") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-sse"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-sse")
+	}
+	if !strings.Contains(w, "command must be empty") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-sse"].IsEnabled() {
+		t.Error("expected bad-sse to be disabled")
 	}
 }
 
@@ -3341,12 +3362,19 @@ func TestParse_ToolStdioWithURL(t *testing.T) {
 command = "/usr/bin/tool"
 url = "https://should-not-be-here.com"
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for stdio tool with URL")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "url must be empty") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-stdio"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-stdio")
+	}
+	if !strings.Contains(w, "url must be empty") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-stdio"].IsEnabled() {
+		t.Error("expected bad-stdio to be disabled")
 	}
 }
 
@@ -3358,12 +3386,19 @@ command = "/usr/bin/tool"
 [tools.bad-stdio.headers]
 Authorization = "Bearer should-not-be-here"
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for stdio tool with headers")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "headers are not supported") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-stdio"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-stdio")
+	}
+	if !strings.Contains(w, "headers are not supported") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-stdio"].IsEnabled() {
+		t.Error("expected bad-stdio to be disabled")
 	}
 }
 
@@ -3373,12 +3408,19 @@ func TestParse_ToolUnknownTransport(t *testing.T) {
 transport = "grpc"
 command = "/usr/bin/tool"
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for unknown transport")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported transport") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-transport"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-transport")
+	}
+	if !strings.Contains(w, "unsupported transport") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-transport"].IsEnabled() {
+		t.Error("expected bad-transport to be disabled")
 	}
 }
 
@@ -3388,12 +3430,19 @@ func TestParse_ToolMissingCommand_StdioExplicit(t *testing.T) {
 transport = "stdio"
 args = ["--flag"]
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for stdio tool missing command")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "command is required") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-tool"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-tool")
+	}
+	if !strings.Contains(w, "command is required") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-tool"].IsEnabled() {
+		t.Error("expected bad-tool to be disabled")
 	}
 }
 
@@ -3404,12 +3453,80 @@ transport = "sse"
 url = "https://mcp.example.com"
 args = ["--flag"]
 `)
-	_, err := Parse(tomlData)
-	if err == nil {
-		t.Fatal("expected error for SSE tool with args")
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "args must be empty") {
-		t.Errorf("unexpected error: %v", err)
+	w, ok := cfg.ToolWarnings["bad-sse"]
+	if !ok {
+		t.Fatal("expected tool warning for bad-sse")
+	}
+	if !strings.Contains(w, "args must be empty") {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if cfg.Tools["bad-sse"].IsEnabled() {
+		t.Error("expected bad-sse to be disabled")
+	}
+}
+
+func TestParse_ToolEnabled_DefaultTrue(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.my-tool]
+command = "/usr/bin/tool"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Tools["my-tool"].IsEnabled() {
+		t.Error("expected tool to be enabled by default")
+	}
+	if len(cfg.ToolWarnings) > 0 {
+		t.Errorf("expected no warnings, got: %v", cfg.ToolWarnings)
+	}
+}
+
+func TestParse_ToolEnabled_ExplicitFalse(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.my-tool]
+command = "/usr/bin/tool"
+enabled = false
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Tools["my-tool"].IsEnabled() {
+		t.Error("expected tool to be disabled")
+	}
+	if len(cfg.ToolWarnings) > 0 {
+		t.Errorf("expected no warnings for explicitly disabled tool, got: %v", cfg.ToolWarnings)
+	}
+}
+
+func TestParse_ToolValidAndInvalidMixed(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[tools.good-tool]
+command = "/usr/bin/tool"
+
+[tools.bad-tool]
+args = ["--flag"]
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !cfg.Tools["good-tool"].IsEnabled() {
+		t.Error("expected good-tool to remain enabled")
+	}
+	if cfg.Tools["bad-tool"].IsEnabled() {
+		t.Error("expected bad-tool to be disabled")
+	}
+	if _, ok := cfg.ToolWarnings["bad-tool"]; !ok {
+		t.Error("expected warning for bad-tool")
+	}
+	if _, ok := cfg.ToolWarnings["good-tool"]; ok {
+		t.Error("expected no warning for good-tool")
 	}
 }
 

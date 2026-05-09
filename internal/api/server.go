@@ -247,6 +247,8 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/tools/{name}/health", s.RequireScope("tools:read", s.handleToolHealth))
 	mux.HandleFunc("POST /api/v1/tools/{name}/restart", s.RequireScope("tools:write", s.handleRestartTool))
 	mux.HandleFunc("PUT /api/v1/tools/{name}/disabled-tools", s.RequireScope("tools:write", s.handleUpdateDisabledTools))
+	mux.HandleFunc("POST /api/v1/tools/{name}/enable", s.RequireScope("tools:write", s.handleEnableTool))
+	mux.HandleFunc("POST /api/v1/tools/{name}/disable", s.RequireScope("tools:write", s.handleDisableTool))
 
 	// OAuth tool endpoints.
 	mux.HandleFunc("GET /api/v1/tools/oauth/callback", s.handleOAuthCallback) // no auth (browser redirect)
@@ -1894,6 +1896,10 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		"restart_count": info.RestartCount,
 		"last_error":    info.LastError,
 		"uptime_secs":   info.UptimeSecs,
+		"enabled":       info.Enabled,
+	}
+	if info.ConfigError != "" {
+		resp["config_error"] = info.ConfigError
 	}
 	if info.AuthType != "" {
 		resp["auth_type"] = info.AuthType
@@ -2210,6 +2216,56 @@ func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.LifecycleMgr.RestartTool(r.Context(), name); err != nil {
 		s.logger.Error("restarting tool", "name", name, "error", err)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleEnableTool godoc
+// @Summary Enable a tool server
+// @Description Starts a previously disabled MCP tool server and persists the change.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} tool.ServerStatus "Enabled tool server"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/enable [post]
+func (s *Server) handleEnableTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.LifecycleMgr.EnableTool(r.Context(), name); err != nil {
+		s.logger.Error("enabling tool", "name", name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleDisableTool godoc
+// @Summary Disable a tool server
+// @Description Stops an MCP tool server and marks it as disabled.
+// @Tags tools
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Tool server name"
+// @Success 200 {object} tool.ServerStatus "Disabled tool server"
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string "Tool management not configured"
+// @Router /tools/{name}/disable [post]
+func (s *Server) handleDisableTool(w http.ResponseWriter, r *http.Request) {
+	if !s.lifecycleRequired(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if err := s.deps.LifecycleMgr.DisableTool(r.Context(), name); err != nil {
+		s.logger.Error("disabling tool", "name", name, "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)

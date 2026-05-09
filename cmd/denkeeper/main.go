@@ -518,10 +518,21 @@ func registerWithInitRetry(ctx context.Context, mgr *tool.Manager, mcpCfg config
 
 // registerNonOAuthTools registers tools that don't require OAuth at startup.
 // OAuth tools are deferred until after initOAuthSupport wires the handler factory.
-func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConfig, mgr *tool.Manager, mcpCfg config.MCPConfig, logger *slog.Logger) error {
-	for name, tc := range tools {
+func registerNonOAuthTools(ctx context.Context, cfg *config.Config, mgr *tool.Manager, mcpCfg config.MCPConfig, logger *slog.Logger) error {
+	for name, tc := range cfg.Tools {
 		if tc.Auth == "oauth" {
 			logger.Info("tool server deferred (needs OAuth)", "name", name)
+			continue
+		}
+		if warning, hasWarning := cfg.ToolWarnings[name]; hasWarning {
+			logger.Warn("tool server has invalid configuration — registered as disabled",
+				"name", name, "error", warning)
+			mgr.RegisterDisabled(name, tc, warning, true)
+			continue
+		}
+		if !tc.IsEnabled() {
+			logger.Info("tool server disabled by config", "name", name)
+			mgr.RegisterDisabled(name, tc, "disabled by user", false)
 			continue
 		}
 		bg, err := registerWithInitRetry(ctx, mgr, mcpCfg, name, tc, logger)
@@ -543,6 +554,17 @@ func registerNonOAuthTools(ctx context.Context, tools map[string]config.ToolConf
 func registerDeferredOAuthTools(ctx context.Context, cfg *config.Config, mgr *tool.Manager, logger *slog.Logger) error {
 	for name, tc := range cfg.Tools {
 		if tc.Auth != "oauth" {
+			continue
+		}
+		if warning, hasWarning := cfg.ToolWarnings[name]; hasWarning {
+			logger.Warn("OAuth tool server has invalid configuration — registered as disabled",
+				"name", name, "error", warning)
+			mgr.RegisterDisabled(name, tc, warning, true)
+			continue
+		}
+		if !tc.IsEnabled() {
+			logger.Info("OAuth tool server disabled by config", "name", name)
+			mgr.RegisterDisabled(name, tc, "disabled by user", false)
 			continue
 		}
 		bg, err := registerWithInitRetry(ctx, mgr, cfg.MCP, name, tc, logger)
@@ -572,7 +594,7 @@ func initSharedTools(ctx context.Context, cfg *config.Config, logger *slog.Logge
 
 	if len(cfg.Tools) > 0 {
 		ensureToolMgr()
-		if err := registerNonOAuthTools(ctx, cfg.Tools, sharedToolMgr, cfg.MCP, logger); err != nil {
+		if err := registerNonOAuthTools(ctx, cfg, sharedToolMgr, cfg.MCP, logger); err != nil {
 			return nil, "", cleanups, err
 		}
 	}

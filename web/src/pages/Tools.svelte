@@ -510,17 +510,47 @@
     }
   }
 
+  let togglingTool = null
+
+  async function enableTool(name) {
+    togglingTool = name
+    error = ''
+    try {
+      await api.enableTool(name)
+      await loadData()
+    } catch (e) {
+      error = e.message
+    } finally {
+      togglingTool = null
+    }
+  }
+
+  async function disableTool(name) {
+    togglingTool = name
+    error = ''
+    try {
+      await api.disableTool(name)
+      await loadData()
+    } catch (e) {
+      error = e.message
+    } finally {
+      togglingTool = null
+    }
+  }
+
   function statusDot(status) {
     if (status === 'connected') return 'green'
     if (status === 'pending_auth') return 'orange'
+    if (status === 'config_error') return 'red'
     if (status === 'error') return 'red'
-    if (status === 'disabled') return 'red'
+    if (status === 'disabled') return 'grey'
     return 'grey'
   }
 
   function statusLabel(t) {
+    if (t.status === 'config_error') return 'Config Error'
     if (t.status === 'error') return 'Error'
-    if (t.status === 'disabled') return `Disabled`
+    if (t.status === 'disabled') return 'Disabled'
     if (t.status === 'pending_auth') return 'Needs Auth'
     if (t.status === 'connected') return 'Connected'
     return t.status
@@ -539,10 +569,15 @@
   }
 
   function isErrorTool(t) {
-    return t.status === 'error' || t.status === 'disabled'
+    return t.status === 'error' || t.status === 'config_error'
   }
 
-  $: connectedTools = tools.filter(t => !isErrorTool(t))
+  function isDisabledTool(t) {
+    return t.status === 'disabled'
+  }
+
+  $: connectedTools = tools.filter(t => !isErrorTool(t) && !isDisabledTool(t))
+  $: disabledTools = tools.filter(t => isDisabledTool(t))
   $: errorTools = tools.filter(t => isErrorTool(t))
 
   onMount(loadData)
@@ -786,6 +821,40 @@
                       </button>
                     {/if}
                   {/if}
+                  <button class="btn-ghost btn-card" onclick={() => disableTool(t.name)} disabled={togglingTool === t.name}>
+                    {togglingTool === t.name ? 'Disabling...' : 'Disable'}
+                  </button>
+                  <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
+                  <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
+                </div>
+              </div>
+              {#if editingToolName === t.name}
+                <div class="tool-card-edit">
+                  <div class="inline-form">
+                    {@render toolFormFields()}
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if disabledTools.length > 0}
+        <h3 class="group-heading">Disabled</h3>
+        <div class="tool-cards">
+          {#each disabledTools as t}
+            <div class="tool-card">
+              <div class="tool-card-row">
+                <span class="status-dot grey"></span>
+                <span class="tool-name">{t.name}</span>
+                <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
+                <span class="status-badge disabled">{statusLabel(t)}</span>
+                <span class="tool-count">{'—'}</span>
+                <div class="tool-actions">
+                  <button class="btn-primary btn-card" onclick={() => enableTool(t.name)} disabled={togglingTool === t.name}>
+                    {togglingTool === t.name ? 'Enabling...' : 'Enable'}
+                  </button>
                   <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
                   <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
                 </div>
@@ -830,6 +899,17 @@
                 <div class="tool-card-edit">
                   <div class="inline-form">
                     {@render toolFormFields()}
+                  </div>
+                </div>
+              {:else if t.config_error}
+                <div class="tool-error-detail">
+                  <div class="tool-error-icon">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11" r="0.75" fill="currentColor"/></svg>
+                  </div>
+                  <div class="tool-error-content">
+                    <div class="tool-error-title">Configuration error</div>
+                    <code class="tool-error-msg">{t.config_error}</code>
+                    <p class="tool-error-hint">Fix the configuration in denkeeper.toml, then click Edit or use the Enable button to retry.</p>
                   </div>
                 </div>
               {:else if t.last_error}
@@ -1221,6 +1301,10 @@
     background: rgba(196, 58, 58, 0.1);
     color: var(--danger);
   }
+  .status-badge.disabled {
+    background: rgba(128, 128, 128, 0.1);
+    color: var(--text-muted);
+  }
 
   /* Shared settings card (OAuth, Connection settings) */
   .settings-card {
@@ -1455,6 +1539,11 @@
     opacity: 0.8;
     word-break: break-all;
     line-height: 1.5;
+  }
+  .tool-error-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 4px 0 0;
   }
   .btn-retry {
     align-self: flex-start;

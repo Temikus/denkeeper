@@ -145,6 +145,24 @@ func TestTools_DefsNotFound(t *testing.T) {
 	}
 }
 
+func TestTools_EnableNotFound(t *testing.T) {
+	h := toolHarness(t)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools/nonexistent/enable", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestTools_DisableNotFound(t *testing.T) {
+	h := toolHarness(t)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools/nonexistent/disable", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Happy-path CRUD tests (Phase 2 — require test MCP server)
 // ---------------------------------------------------------------------------

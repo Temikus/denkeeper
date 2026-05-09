@@ -48,6 +48,9 @@ func addToolToConfig(path, name string, cfg config.ToolConfig) error {
 // omitting zero-value fields.
 func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	entry := map[string]any{}
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		entry["enabled"] = false
+	}
 	if cfg.Transport != "" && cfg.Transport != "stdio" {
 		entry["transport"] = cfg.Transport
 	}
@@ -126,6 +129,37 @@ func updateDisabledToolsInConfig(path, name string, disabledTools []string) erro
 	raw["tools"] = tools
 
 	return config.WriteRawConfig(path, raw)
+}
+
+// updateEnabledInConfig persists only the enabled field for a specific tool
+// server without touching any other config fields.
+func updateEnabledInConfig(path, name string, enabled bool) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	raw, err := readRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	tools, ok := raw["tools"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("config: tools section not found")
+	}
+	entry, ok := tools[name].(map[string]any)
+	if !ok {
+		return fmt.Errorf("config: tool %q not found", name)
+	}
+
+	if enabled {
+		delete(entry, "enabled")
+	} else {
+		entry["enabled"] = false
+	}
+	tools[name] = entry
+	raw["tools"] = tools
+
+	return writeRawConfig(path, raw)
 }
 
 // removeToolFromConfig reads the TOML config at path, removes [tools.<name>],

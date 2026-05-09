@@ -53,6 +53,8 @@ type serverConn struct {
 	lastError    string    // most recent failure message
 	disabled     bool      // true when restarts exhausted
 	connecting   bool      // true while background init retries are in progress
+	userDisabled bool      // true when explicitly disabled by user
+	configError  string    // non-empty when auto-disabled due to config validation error
 
 	// Tool filtering — tools in disabledSet are excluded from the LLM payload.
 	disabledSet map[string]bool
@@ -102,6 +104,8 @@ type ServerStatus struct {
 	DisabledTools  []string         `json:"disabled_tools,omitempty"`
 	EnabledCount   int              `json:"enabled_count"`
 	TotalToolCount int              `json:"total_tool_count"`
+	Enabled        bool             `json:"enabled"`
+	ConfigError    string           `json:"config_error,omitempty"`
 }
 
 // OAuthStatusInfo is a non-sensitive view of OAuth state for API responses.
@@ -176,6 +180,32 @@ func (m *Manager) MarkDisabled(name string) {
 		sc.connecting = false
 		sc.disabled = true
 	}
+}
+
+// RegisterDisabled creates a placeholder entry for a tool that should not
+// spawn a process. The tool appears in listings with its disabled reason.
+// isConfigError distinguishes config validation failures from user-initiated disabling.
+func (m *Manager) RegisterDisabled(name string, cfg config.ToolConfig, reason string, isConfigError bool) {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := &serverConn{
+		name:      name,
+		command:   cfg.Command,
+		args:      cfg.Args,
+		transport: transport,
+		url:       cfg.URL,
+		cfg:       cfg,
+	}
+	if isConfigError {
+		sc.configError = reason
+	} else {
+		sc.userDisabled = true
+	}
+	m.servers[name] = sc
 }
 
 // RegisterServer connects to an MCP server (stdio subprocess or remote SSE)
@@ -962,6 +992,10 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 
 func serverConnStatus(sc *serverConn) string {
 	switch {
+	case sc.userDisabled:
+		return "disabled"
+	case sc.configError != "":
+		return "config_error"
 	case sc.disabled:
 		return "disabled"
 	case sc.session == nil && sc.cfg.Auth == "oauth":
@@ -1014,6 +1048,8 @@ func buildServerStatus(sc *serverConn, toolNames []string) ServerStatus {
 		DisabledTools:  disabledTools,
 		EnabledCount:   totalCount - disabledCount,
 		TotalToolCount: totalCount,
+		Enabled:        !sc.userDisabled && !sc.disabled && sc.configError == "",
+		ConfigError:    sc.configError,
 	}
 }
 
@@ -1109,8 +1145,8 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		m.mu.RLock()
 		sc, ok := m.servers[name]
 		m.mu.RUnlock()
-		if !ok || sc.disabled || sc.transport == "" || sc.session == nil {
-			// Skip in-process servers, disabled servers, and OAuth-pending tools.
+		if !ok || sc.disabled || sc.userDisabled || sc.configError != "" || sc.transport == "" || sc.session == nil {
+			// Skip in-process, disabled, config-error, and OAuth-pending servers.
 			continue
 		}
 

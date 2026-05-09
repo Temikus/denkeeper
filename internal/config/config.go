@@ -42,6 +42,10 @@ type Config struct {
 	MCP       MCPConfig               `toml:"mcp"`
 	Costs     CostsConfig             `toml:"costs"`
 	Audit     AuditConfig             `toml:"audit"`
+
+	// ToolWarnings holds per-tool validation errors that were demoted to
+	// warnings (the tool is auto-disabled instead of blocking startup).
+	ToolWarnings map[string]string `toml:"-"`
 }
 
 // CostsConfig controls the pricing registry and cost calculation.
@@ -547,6 +551,7 @@ type MCPConfig struct {
 
 // ToolConfig defines an MCP tool server to spawn.
 type ToolConfig struct {
+	Enabled            *bool             `toml:"enabled"` // nil = true (default); explicit false = disabled
 	Command            string            `toml:"command"`
 	Args               []string          `toml:"args"`
 	Env                map[string]string `toml:"env"`
@@ -567,6 +572,11 @@ type ToolConfig struct {
 
 	// Unsafe options.
 	AllowLoopback bool `toml:"allow_loopback"` // bypass SSRF loopback block (localhost/127.x/::1)
+}
+
+// IsEnabled returns whether the tool server is enabled.
+func (tc ToolConfig) IsEnabled() bool {
+	return tc.Enabled == nil || *tc.Enabled
 }
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.
@@ -914,6 +924,7 @@ func applyDefaults(cfg *Config) {
 	applyAgentDefaults(cfg)
 	synthesizeChannels(cfg)
 	applyScheduleDefaults(cfg)
+	applyToolDefaults(cfg)
 }
 
 // migrateCostsToProviders copies global cost limits onto providers that don't
@@ -1455,6 +1466,16 @@ func applyScheduleDefaults(cfg *Config) {
 	}
 }
 
+func applyToolDefaults(cfg *Config) {
+	for name, tc := range cfg.Tools {
+		if tc.Enabled == nil {
+			v := true
+			tc.Enabled = &v
+			cfg.Tools[name] = tc
+		}
+	}
+}
+
 // validTiers is the set of recognised permission tier names.
 var validTiers = map[string]bool{
 	"supervised": true,
@@ -1608,9 +1629,7 @@ func validate(cfg *Config) error {
 	if err := validateMCP(&cfg.MCP); err != nil {
 		return fmt.Errorf("validate mcp: %w", err)
 	}
-	if err := validateTools(cfg.Tools); err != nil {
-		return fmt.Errorf("validate tools: %w", err)
-	}
+	validateTools(cfg)
 	if err := validatePlugins(cfg.Plugins, cfg.Tools); err != nil {
 		return fmt.Errorf("validate plugins: %w", err)
 	}
@@ -2328,13 +2347,21 @@ func validateMCP(mcp *MCPConfig) error {
 	return nil
 }
 
-func validateTools(tools map[string]ToolConfig) error {
-	for name, tc := range tools {
+func validateTools(cfg *Config) {
+	for name, tc := range cfg.Tools {
+		if !tc.IsEnabled() {
+			continue
+		}
 		if err := validateToolConfig(name, tc); err != nil {
-			return err
+			if cfg.ToolWarnings == nil {
+				cfg.ToolWarnings = make(map[string]string)
+			}
+			cfg.ToolWarnings[name] = err.Error()
+			v := false
+			tc.Enabled = &v
+			cfg.Tools[name] = tc
 		}
 	}
-	return nil
 }
 
 func validateToolConfig(name string, tc ToolConfig) error {

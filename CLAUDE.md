@@ -115,7 +115,7 @@ cached_input = 0.5 # per million cached input tokens (0 = same as input)
 
 `internal/tool/manager.go` manages MCP server connections (stdio subprocess or SSE remote).
 
-**Health monitoring**: `StartHealthChecker(ctx, interval)` probes servers via ListTools every 30s. Crashed servers are auto-restarted with exponential backoff. Config: `[mcp]` section with `auto_restart` (default true), `max_restart_attempts` (default 3), `restart_cooldown` (default "5m"). `ServerStatus` reports `connected`/`error`/`disabled` with `restart_count`, `last_error`, `uptime_secs`. Manual restart via `Manager.RestartServer()`, `LifecycleManager.RestartTool()`, REST `POST /api/v1/tools/{name}/restart`, or Config MCP `tool_restart`.
+**Health monitoring**: `StartHealthChecker(ctx, interval)` probes servers via ListTools every 30s. Crashed servers are auto-restarted with exponential backoff. Config: `[mcp]` section with `auto_restart` (default true), `max_restart_attempts` (default 3), `restart_cooldown` (default "5m"). `ServerStatus` reports `connected`/`error`/`disabled`/`config_error` with `restart_count`, `last_error`, `uptime_secs`, `enabled`, `config_error`. Manual restart via `Manager.RestartServer()`, `LifecycleManager.RestartTool()`, REST `POST /api/v1/tools/{name}/restart`, or Config MCP `tool_restart`. Enable/disable via `LifecycleManager.EnableTool()`/`DisableTool()`, REST `POST /api/v1/tools/{name}/enable` and `/disable`.
 
 **OAuth 2.1 for MCP tools**: `internal/tool/oauth/` implements the MCP OAuth 2.1 spec for remote SSE tool servers that require authorization. Config per tool: `auth = "oauth"` with optional `client_id`, `client_secret`, `scopes`. OAuth routes are mounted at `/api/v1/tools/{name}/oauth/...`. Token storage in SQLite. `api.external_url` used for callback URL construction.
 
@@ -142,6 +142,8 @@ Key endpoints (all require auth unless noted):
 - `GET/POST/PUT/DELETE /api/v1/tools/...` — tool/plugin CRUD (PUT for edit)
 - `GET /api/v1/tools/{name}/health` (scope `tools:read`) — server health status
 - `POST /api/v1/tools/{name}/restart` (scope `tools:write`) — manually restart a tool server
+- `POST /api/v1/tools/{name}/enable` (scope `tools:write`) — enable a disabled tool server; starts the MCP process and persists to TOML
+- `POST /api/v1/tools/{name}/disable` (scope `tools:write`) — disable a tool server; stops the MCP process and persists `enabled = false` to TOML
 - `POST /api/v1/agents` (scope `admin`) — create a new agent; body: `{name, llm_provider, llm_model, session_tier, description, create_supervisor}`. Optional `create_supervisor: {name, llm_model, timeout, context_messages}` atomically creates a companion supervisor when `session_tier="supervised"`. Creates persona directory, persists to `[[agents]]` in TOML.
 - `PATCH /api/v1/agents/{name}` — agent config mutation; supports `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`
 - `DELETE /api/v1/agents/{name}` (scope `admin`) — remove agent. Rejects if referenced by channels/schedules or if it is the last agent. Removes from TOML. Does not delete persona files.
@@ -234,6 +236,8 @@ Things you can't infer by reading the code at a glance:
 - **Safety commands**: panic state is transient (cleared on restart). `Scheduler.Pause()/Resume()` cancels entry goroutines without cancelling the root context. Dispatcher keys in-flight requests by `adapter:externalID`.
 - **Pricing lookup priority**: provider-reported > registry exact > registry longest-prefix > `[costs]` fallback > $0 (with warning). Source ends up as the `pricing_source` OTel attribute.
 - **MCP server health**: `StartHealthChecker` polls via `ListTools` every 30s. Restart defaults: `auto_restart=true`, `max_restart_attempts=3`, `restart_cooldown=5m`.
+- **Tool `enabled` field**: `ToolConfig.Enabled *bool` — `nil` (absent in TOML) defaults to `true` via `applyToolDefaults`. Explicit `enabled = false` disables without removing the config. `IsEnabled()` helper method. Config writer omits the key when true (backward compat).
+- **Graceful tool validation**: `validateTools` is non-fatal — invalid tools are auto-disabled with `Enabled = &false` and their validation error is stored in `Config.ToolWarnings`. The server starts and runs with the remaining valid tools. Invalid tools appear in the tools list with `config_error` status.
 - **Supervisor config validation**: supervisor must exist, must not itself be supervised (no chaining), must not use `supervised` tier (would deadlock), and `supervisor` is only valid on supervised agents. Delete guard rejects removing an agent referenced as a supervisor. `supervisor_timeout` is a Go duration string (e.g. `"30s"`, `"1m"`); `supervisor_context_messages` is an int (0 = use default of 5).
 - **Config MCP tools** (the in-process per-agent set, not the REST API): `schedule_update`, `schedule_delete`, `set_fallback`, `get_cost_summary`, `skill_delete`, `channel_list`, `channel_switch`, `channel_info`.
 - **Shared validators** (in `internal/config`): `ValidResourceName`, `ValidProviderType`, `IsProviderReferenced` — use these when adding new CRUD endpoints to keep validation consistent.

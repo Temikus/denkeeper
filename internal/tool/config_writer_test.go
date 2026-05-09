@@ -165,6 +165,87 @@ command = "/usr/bin/other"
 	}
 }
 
+func TestToolConfigToMap_IncludesEnabledFalse(t *testing.T) {
+	f := false
+	cfg := config.ToolConfig{
+		Command: "/usr/bin/tool",
+		Enabled: &f,
+	}
+	m := toolConfigToMap(cfg)
+	v, ok := m["enabled"]
+	if !ok {
+		t.Fatal("enabled not present in map when false")
+	}
+	if v != false {
+		t.Errorf("enabled = %v, want false", v)
+	}
+}
+
+func TestToolConfigToMap_OmitsEnabledTrue(t *testing.T) {
+	tr := true
+	cfg := config.ToolConfig{
+		Command: "/usr/bin/tool",
+		Enabled: &tr,
+	}
+	m := toolConfigToMap(cfg)
+	if _, ok := m["enabled"]; ok {
+		t.Error("enabled should be omitted when true")
+	}
+}
+
+func TestToolConfigToMap_OmitsEnabledNil(t *testing.T) {
+	cfg := config.ToolConfig{
+		Command: "/usr/bin/tool",
+	}
+	m := toolConfigToMap(cfg)
+	if _, ok := m["enabled"]; ok {
+		t.Error("enabled should be omitted when nil")
+	}
+}
+
+func TestUpdateEnabledInConfig_Disable(t *testing.T) {
+	path := writeTestConfig(t, `[tools]
+[tools.my-server]
+command = "/usr/bin/tool"
+`)
+
+	if err := updateEnabledInConfig(path, "my-server", false); err != nil {
+		t.Fatal(err)
+	}
+	content := readConfig(t, path)
+	if !strings.Contains(content, "enabled = false") {
+		t.Error("config should contain enabled = false after disabling")
+	}
+}
+
+func TestUpdateEnabledInConfig_Enable(t *testing.T) {
+	path := writeTestConfig(t, `[tools]
+[tools.my-server]
+command = "/usr/bin/tool"
+enabled = false
+`)
+
+	if err := updateEnabledInConfig(path, "my-server", true); err != nil {
+		t.Fatal(err)
+	}
+	content := readConfig(t, path)
+	if strings.Contains(content, "enabled") {
+		t.Error("config should not contain enabled key after enabling (omit = default true)")
+	}
+}
+
+func TestUpdateEnabledInConfig_ToolNotFound(t *testing.T) {
+	path := writeTestConfig(t, `[tools]
+[tools.other]
+command = "/usr/bin/other"
+`)
+
+	err := updateEnabledInConfig(path, "nonexistent", false)
+	if err == nil {
+		t.Fatal("expected error for nonexistent tool")
+	}
+}
+
 func TestAddPluginToConfig(t *testing.T) {
 	path := writeTestConfig(t, `[telegram]
 token = "test"
