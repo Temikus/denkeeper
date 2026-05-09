@@ -12,7 +12,6 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
@@ -202,7 +201,7 @@ func (s *Server) handleAgentRename(oldName, newName string) (int, string) {
 		return http.StatusInternalServerError, "renaming agent: " + err.Error()
 	}
 	if s.deps.ConfigPath != "" {
-		if err := tool.RenameAgentInConfig(s.deps.ConfigPath, oldName, newName); err != nil {
+		if err := config.RenameAgentInConfig(s.deps.ConfigPath, oldName, newName); err != nil {
 			s.logger.Warn("failed to persist agent rename", "old", oldName, "new", newName, "error", err)
 		}
 	}
@@ -235,7 +234,7 @@ func (s *Server) persistAgentConfig(name string, input *agentConfigUpdateInput) 
 
 	changes := buildAgentConfigChanges(input)
 	if len(changes) > 0 {
-		if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
+		if err := config.UpdateAgentInConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist agent config", "agent", name, "error", err)
 		}
 	}
@@ -498,7 +497,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Persist to TOML first — this is the source of truth. If it fails,
 	// don't register the agent in memory to avoid config drift on restart.
-	if err := tool.AddAgentToConfig(s.deps.ConfigPath, input.Name, input.LLMProvider, input.LLMModel, input.SessionTier, input.Description, personaDir); err != nil {
+	if err := config.AddAgentToConfig(s.deps.ConfigPath, input.Name, input.LLMProvider, input.LLMModel, input.SessionTier, input.Description, personaDir); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "persisting agent to config: " + err.Error(),
 		})
@@ -508,7 +507,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if err := s.deps.Dispatcher.AddAgent(input.Name, e); err != nil {
 		// TOML was written but runtime registration failed — remove TOML entry
 		// to stay consistent.
-		if rmErr := tool.RemoveAgentFromConfig(s.deps.ConfigPath, input.Name); rmErr != nil {
+		if rmErr := config.RemoveAgentFromConfig(s.deps.ConfigPath, input.Name); rmErr != nil {
 			s.logger.Warn("failed to roll back agent config after AddAgent error", "agent", input.Name, "error", rmErr)
 		}
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -536,7 +535,7 @@ func (s *Server) rollbackAgent(name string) {
 	if err := s.deps.Dispatcher.RemoveAgent(name); err != nil {
 		s.logger.Warn("rollback: failed to remove agent from dispatcher", "agent", name, "error", err)
 	}
-	if rmErr := tool.RemoveAgentFromConfig(s.deps.ConfigPath, name); rmErr != nil {
+	if rmErr := config.RemoveAgentFromConfig(s.deps.ConfigPath, name); rmErr != nil {
 		s.logger.Warn("rollback: failed to remove agent from config", "agent", name, "error", rmErr)
 	}
 	if s.deps.Config != nil {
@@ -599,12 +598,12 @@ func (s *Server) createCompanionSupervisor(agentName string, mainEngine *agent.E
 		return "", http.StatusInternalServerError, "building supervisor engine: " + err.Error()
 	}
 
-	if err := tool.AddAgentToConfig(s.deps.ConfigPath, supName, llmProvider, sup.LLMModel, "autonomous", "", supPersonaDir); err != nil {
+	if err := config.AddAgentToConfig(s.deps.ConfigPath, supName, llmProvider, sup.LLMModel, "autonomous", "", supPersonaDir); err != nil {
 		return "", http.StatusInternalServerError, "persisting supervisor to config: " + err.Error()
 	}
 
 	if err := s.deps.Dispatcher.AddAgent(supName, supEngine); err != nil {
-		_ = tool.RemoveAgentFromConfig(s.deps.ConfigPath, supName)
+		_ = config.RemoveAgentFromConfig(s.deps.ConfigPath, supName)
 		return "", http.StatusInternalServerError, "registering supervisor agent: " + err.Error()
 	}
 
@@ -637,7 +636,7 @@ func (s *Server) wireCompanionSupervisor(agentName string, mainEngine, supEngine
 	if sup.ContextMessages > 0 {
 		supChanges["supervisor_context_messages"] = int64(sup.ContextMessages)
 	}
-	if err := tool.UpdateAgentInConfig(s.deps.ConfigPath, agentName, supChanges); err != nil {
+	if err := config.UpdateAgentInConfig(s.deps.ConfigPath, agentName, supChanges); err != nil {
 		s.logger.Warn("failed to persist supervisor reference", "agent", agentName, "error", err)
 	}
 
@@ -732,7 +731,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Persist removal to TOML first — this is the source of truth. If it
 	// fails, don't remove the agent from memory to avoid config drift.
-	if err := tool.RemoveAgentFromConfig(s.deps.ConfigPath, name); err != nil {
+	if err := config.RemoveAgentFromConfig(s.deps.ConfigPath, name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "removing agent from config: " + err.Error(),
 		})

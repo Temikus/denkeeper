@@ -9,7 +9,6 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // validateCostFields checks that cost limit fields are non-negative.
@@ -126,7 +125,7 @@ func (s *Server) persistCreateProviderCosts(name string, soft, hard, rate *float
 	changes := costChangesMap(soft, hard, rate, prices)
 	var persistErr error
 	if len(changes) > 0 {
-		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
+		if err := config.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist provider cost config", "provider", name, "error", err)
 			persistErr = err
 		}
@@ -387,7 +386,7 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nul
 	}
 
 	if len(changes) > 0 {
-		if err := tool.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
+		if err := config.UpdateLLMProviderInstanceConfig(s.deps.ConfigPath, name, changes); err != nil {
 			s.logger.Warn("failed to persist LLM provider config", "provider", name, "error", err)
 		}
 	}
@@ -407,7 +406,7 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nul
 		if input.Reasoning.Exclude != nil {
 			r["exclude"] = *input.Reasoning.Exclude
 		}
-		if err := tool.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
+		if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
 			s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
 		}
 	}
@@ -506,7 +505,7 @@ func (s *Server) persistLLMConfig(input *llmConfigUpdateInput) {
 		changes["cost_limit_hard"] = *input.CostLimitHard
 	}
 	if len(changes) > 0 {
-		if err := tool.UpdateLLMConfig(s.deps.ConfigPath, changes); err != nil {
+		if err := config.UpdateLLMConfig(s.deps.ConfigPath, changes); err != nil {
 			s.logger.Warn("failed to persist LLM config", "error", err)
 		}
 	}
@@ -596,7 +595,7 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Persist to TOML — source of truth.
-	if err := tool.AddLLMProviderToConfig(
+	if err := config.AddLLMProviderToConfig(
 		s.deps.ConfigPath, input.Name, input.Type,
 		input.APIKey, input.BaseURL, input.Organization,
 	); err != nil {
@@ -681,7 +680,7 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Persist removal to TOML — source of truth.
-	if err := tool.RemoveLLMProviderFromConfig(s.deps.ConfigPath, name); err != nil {
+	if err := config.RemoveLLMProviderFromConfig(s.deps.ConfigPath, name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "removing provider from config: " + err.Error(),
 		})

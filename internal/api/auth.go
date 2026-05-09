@@ -12,7 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/Temikus/denkeeper/internal/tool"
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 // rateBucket tracks login attempts for a single IP.
@@ -474,7 +474,7 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.deps.ConfigPath != "" {
-		if err := tool.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{"password_hash": string(hash)}); err != nil {
+		if err := config.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{"password_hash": string(hash)}); err != nil {
 			s.logger.Error("persisting password change", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save configuration"})
 			return
@@ -570,7 +570,7 @@ func (s *Server) handleAuthPreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.deps.ConfigPath != "" {
-		if err := tool.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{
+		if err := config.UpdateAuthConfig(s.deps.ConfigPath, map[string]any{
 			"preferred_login_method": input.PreferredLoginMethod,
 		}); err != nil {
 			s.logger.Error("persisting auth preferences", "error", err)

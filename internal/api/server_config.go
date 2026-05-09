@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/Temikus/denkeeper/internal/tool"
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 // serverConfigResponse is the safe-to-expose subset of APIConfig.
@@ -186,7 +186,7 @@ func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 		changes["timezone"] = *input.Timezone
 	}
 	if len(changes) > 0 {
-		if err := tool.UpdateAPIConfig(s.deps.ConfigPath, changes); err != nil {
+		if err := config.UpdateAPIConfig(s.deps.ConfigPath, changes); err != nil {
 			s.logger.Warn("failed to persist server config", "error", err)
 		}
 	}

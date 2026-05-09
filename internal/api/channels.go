@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/agent"
-	"github.com/Temikus/denkeeper/internal/tool"
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 // channelResponse is the JSON representation of a channel in API responses.
@@ -290,7 +290,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.AddChannelToConfig(s.deps.ConfigPath, input.Name, input.Agent, input.Delivery, input.SessionMode, input.Adapters); err != nil {
+	if err := config.AddChannelToConfig(s.deps.ConfigPath, input.Name, input.Agent, input.Delivery, input.SessionMode, input.Adapters); err != nil {
 		s.logger.Error("persisting channel to config", "error", err, "channel", input.Name)
 	}
 
@@ -369,7 +369,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.UpdateChannelInConfig(s.deps.ConfigPath, name, merged.AgentName, merged.Delivery, merged.SessionMode, merged.Adapters); err != nil {
+	if err := config.UpdateChannelInConfig(s.deps.ConfigPath, name, merged.AgentName, merged.Delivery, merged.SessionMode, merged.Adapters); err != nil {
 		s.logger.Error("persisting channel update to config", "error", err, "channel", name)
 	}
 
@@ -466,7 +466,7 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.RemoveChannelFromConfig(s.deps.ConfigPath, name); err != nil {
+	if err := config.RemoveChannelFromConfig(s.deps.ConfigPath, name); err != nil {
 		s.logger.Error("persisting channel removal to config", "error", err, "channel", name)
 	}
 

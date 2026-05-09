@@ -2873,7 +2873,7 @@ func (s *Server) handleSetupAccount(w http.ResponseWriter, r *http.Request) {
 	sessionSecret := hex.EncodeToString(secretBytes)
 
 	// Persist to TOML config for restart survival.
-	if err := tool.SetAuthConfig(s.deps.ConfigPath, string(hash), sessionSecret); err != nil {
+	if err := config.SetAuthConfig(s.deps.ConfigPath, string(hash), sessionSecret); err != nil {
 		s.logger.Error("persisting auth config", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save configuration"})
 		return

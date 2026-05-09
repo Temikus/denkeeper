@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/Temikus/denkeeper/internal/config"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 type onboardingStep struct {
@@ -130,7 +129,7 @@ func hasSkillFiles(cfg *config.Config) bool {
 // @Failure      500  {object}  map[string]string  "Failed to persist"
 // @Router       /onboarding/dismiss [post]
 func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request) {
-	if err := tool.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
+	if err := config.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
 		"onboarding_dismissed": true,
 	}); err != nil {
 		s.logger.Error("persisting onboarding dismiss", "error", err)
@@ -153,7 +152,7 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 // @Failure      500  {object}  map[string]string  "Failed to persist"
 // @Router       /onboarding/wizard-complete [post]
 func (s *Server) handleWizardComplete(w http.ResponseWriter, r *http.Request) {
-	if err := tool.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
+	if err := config.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
 		"wizard_completed": true,
 	}); err != nil {
 		s.logger.Error("persisting wizard complete", "error", err)

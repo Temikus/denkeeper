@@ -10,7 +10,6 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // ---------------------------------------------------------------------------
@@ -174,7 +173,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.AddScheduleToConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
+	if err := config.AddScheduleToConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
 		cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier, agentName,
 		cfg.Tags, cfg.Enabled); err != nil {
 		s.logger.Error("schedule created but config persistence failed", "name", cfg.Name, "error", err)
@@ -263,7 +262,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.UpdateScheduleInConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
+	if err := config.UpdateScheduleInConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
 		cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier, agentName,
 		cfg.Tags, cfg.Enabled); err != nil {
 		s.logger.Error("schedule updated but config persistence failed", "name", cfg.Name, "error", err)
@@ -301,7 +300,7 @@ func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tool.RemoveScheduleFromConfig(s.deps.ConfigPath, name); err != nil {
+	if err := config.RemoveScheduleFromConfig(s.deps.ConfigPath, name); err != nil {
 		s.logger.Error("schedule deleted but config persistence failed", "name", name, "error", err)
 	}
 

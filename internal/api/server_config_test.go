@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 func testDepsWithServerConfig() Deps {
@@ -193,7 +192,7 @@ func TestUpdateAPIConfig_Persistence(t *testing.T) {
 
 	// Update external_url via the config writer.
 	changes := map[string]any{"external_url": "https://den.example.com"}
-	if err := tool.UpdateAPIConfig(cfgPath, changes); err != nil {
+	if err := config.UpdateAPIConfig(cfgPath, changes); err != nil {
 		t.Fatalf("UpdateAPIConfig: %v", err)
 	}
 
