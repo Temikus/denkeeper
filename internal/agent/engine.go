@@ -34,6 +34,16 @@ const defaultApprovalTimeout = 5 * time.Minute
 const defaultSupervisorContextMessages = 5
 const defaultSupervisorTimeout = 30 * time.Second
 const maxConversationIDLen = 256
+const defaultReviewMaxIter = 6
+const defaultReviewTimeout = 2 * time.Minute
+
+type nudgeState struct {
+	turnsSinceMemory int
+	iterSinceSkill   int
+	lastActive       time.Time
+}
+
+const nudgeMaxEntries = 500
 
 // toolCallKey identifies a unique tool invocation by name and arguments.
 type toolCallKey struct {
@@ -121,6 +131,17 @@ type Engine struct {
 	// review call. Default 15s.
 	supervisorTimeout time.Duration
 
+	// Reviewer runs post-turn background reviews. Set via SetReviewer.
+	reviewer      *Engine
+	reviewMaxIter int
+	reviewTimeout time.Duration
+
+	// Nudge counters trigger periodic reviews.
+	nudgeCountersMu     sync.Mutex
+	nudgeCounters       map[string]*nudgeState
+	memoryNudgeInterval int
+	skillNudgeInterval  int
+
 	// Audit emitter (nil-safe: NopEmitter used when nil).
 	auditor audit.Emitter
 
@@ -173,6 +194,9 @@ func NewEngine(
 		approvalTimeout:           defaultApprovalTimeout,
 		supervisorContextMessages: defaultSupervisorContextMessages,
 		supervisorTimeout:         defaultSupervisorTimeout,
+		reviewMaxIter:             defaultReviewMaxIter,
+		reviewTimeout:             defaultReviewTimeout,
+		nudgeCounters:             make(map[string]*nudgeState),
 		logger:                    logger.With("agent", name),
 		tracer:                    tracer,
 		mMessages:                 msgs,
@@ -255,6 +279,24 @@ func (e *Engine) SetScheduler(sched *scheduler.Scheduler) {
 // SetAuditor sets the audit emitter for this engine.
 func (e *Engine) SetAuditor(a audit.Emitter) {
 	e.auditor = a
+}
+
+func (e *Engine) SetReviewer(r *Engine) {
+	e.reviewer = r
+}
+
+func (e *Engine) SetReviewerConfig(maxIter int, timeout time.Duration) {
+	if maxIter > 0 {
+		e.reviewMaxIter = maxIter
+	}
+	if timeout > 0 {
+		e.reviewTimeout = timeout
+	}
+}
+
+func (e *Engine) SetNudgeConfig(memoryInterval, skillInterval int) {
+	e.memoryNudgeInterval = memoryInterval
+	e.skillNudgeInterval = skillInterval
 }
 
 // truncateSummary returns the first line of s, capped at 80 chars, or fallback if empty.
@@ -716,6 +758,12 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 			e.logger.Warn("failed to persist skill usages", "error", err, "conversation", convID)
 		}
 
+		for _, s := range matched {
+			if err := store.BumpSkillUse(ctx, e.name, s.Name); err != nil {
+				e.logger.Debug("skill use telemetry failed", "skill", s.Name, "error", err)
+			}
+		}
+
 		// Audit: skill matches.
 		for _, s := range matched {
 			e.emitAudit(ctx, audit.Event{
@@ -778,24 +826,24 @@ type ChatEventFunc func(ChatEvent)
 // the caller wants to receive the reply directly (e.g. the REST API).
 // Any pending approval request is accessible via GET /api/v1/approvals.
 func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
-	text, _, err := e.chatWithApproval(ctx, msg, nil)
+	text, _, _, err := e.chatWithApproval(ctx, msg, nil)
 	return text, err
 }
 
 // ChatWithEvents is like Chat but calls onEvent for intermediate status events
 // (tool calls, etc.) that can be streamed to the client in real time.
 func (e *Engine) ChatWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, error) {
-	text, _, err := e.chatWithApproval(ctx, msg, onEvent)
+	text, _, _, err := e.chatWithApproval(ctx, msg, onEvent)
 	return text, err
 }
 
 // chatWithApproval is the internal full-pipeline implementation. It returns
 // both the response text and any approval request that was created during this
 // call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
-func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, *approval.Request, error) {
+func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, *approval.Request, string, error) {
 	perms := e.resolvePermissions(msg)
 	if !perms.CanExecute("chat") {
-		return "", nil, fmt.Errorf("chat action not permitted")
+		return "", nil, "", fmt.Errorf("chat action not permitted")
 	}
 
 	agentAttr := attribute.String("agent", e.name)
@@ -818,7 +866,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	convID, err := e.resolveConversation(ctx, msg)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	span.SetAttributes(attribute.String("conversation.id", convID))
 
@@ -827,7 +875,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		Content: msg.Text,
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("storing user message: %w", err)
+		return "", nil, convID, fmt.Errorf("storing user message: %w", err)
 	}
 
 	// Audit: session trigger (user prompt or scheduled invocation).
@@ -848,7 +896,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	history, err := e.memory.GetMessages(ctx, convID, e.maxContextMessages)
 	if err != nil {
-		return "", nil, fmt.Errorf("loading history: %w", err)
+		return "", nil, convID, fmt.Errorf("loading history: %w", err)
 	}
 	truncated := len(history) >= e.maxContextMessages
 	if truncated {
@@ -894,7 +942,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
 		e.savePartialResponse(ctx, convID, streamedContent.String())
-		return "", nil, err
+		return "", nil, convID, err
 	}
 
 	if onEvent != nil {
@@ -950,8 +998,10 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	}
 	assistMsgID, err := e.memory.AddMessage(saveCtx, convID, assistMsg)
 	if err != nil {
-		return "", nil, fmt.Errorf("storing assistant message: %w", err)
+		return "", nil, convID, fmt.Errorf("storing assistant message: %w", err)
 	}
+
+	e.nudgeIncToolRounds(convID, len(toolRecords))
 
 	// Persist telemetry data (tool calls, skill usages, stats).
 	e.persistTelemetry(saveCtx, convID, userMsgID, assistMsgID, assistMsg, toolRecords, sysResult.matchedSkills, msg)
@@ -964,7 +1014,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		"model", resp.Model,
 		"conversation", convID,
 	)
-	return responseText, pendingApproval, nil
+	return responseText, pendingApproval, convID, nil
 }
 
 // resolvePermissions returns the effective permission engine for the message,
@@ -1900,7 +1950,7 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 // intermediate pipeline events (thinking, tool calls, usage). The Dispatcher
 // uses this to refresh adapter typing indicators during processing.
 func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) error {
-	responseText, pendingApproval, err := e.chatWithApproval(ctx, msg, onEvent)
+	responseText, pendingApproval, convID, err := e.chatWithApproval(ctx, msg, onEvent)
 	if err != nil {
 		return err
 	}
@@ -1921,6 +1971,13 @@ func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.Incomi
 		if err := e.sendFunc(ctx, out); err != nil {
 			return fmt.Errorf("sending response: %w", err)
 		}
+	}
+
+	e.nudgeIncTurns(convID)
+	reviewMemory, reviewSkills := e.nudgeShouldReview(convID)
+	if reviewMemory || reviewSkills {
+		e.nudgeReset(convID, reviewMemory, reviewSkills)
+		e.maybeRunReview(convID, reviewMemory, reviewSkills)
 	}
 
 	e.logger.Info("response sent", "adapter", msg.Adapter)
@@ -1995,4 +2052,123 @@ func (e *Engine) CompactSession(ctx context.Context, convID string) (string, err
 	})
 	e.logger.Info("session compacted", "conversation", convID, "original_messages", len(msgs), "summary_len", len(summary))
 	return summary, nil
+}
+
+// --- Nudge counter methods ---
+
+func (e *Engine) nudgeIncTurns(convID string) {
+	e.nudgeCountersMu.Lock()
+	defer e.nudgeCountersMu.Unlock()
+	ns := e.nudgeCounters[convID]
+	if ns == nil {
+		if len(e.nudgeCounters) >= nudgeMaxEntries {
+			e.nudgePruneLocked()
+		}
+		ns = &nudgeState{}
+		e.nudgeCounters[convID] = ns
+	}
+	ns.turnsSinceMemory++
+	ns.lastActive = time.Now()
+}
+
+func (e *Engine) nudgePruneLocked() {
+	oldest := ""
+	var oldestTime time.Time
+	for id, ns := range e.nudgeCounters {
+		if oldest == "" || ns.lastActive.Before(oldestTime) {
+			oldest = id
+			oldestTime = ns.lastActive
+		}
+	}
+	if oldest != "" {
+		delete(e.nudgeCounters, oldest)
+	}
+}
+
+func (e *Engine) nudgeIncToolRounds(convID string, count int) {
+	if count == 0 {
+		return
+	}
+	e.nudgeCountersMu.Lock()
+	defer e.nudgeCountersMu.Unlock()
+	ns := e.nudgeCounters[convID]
+	if ns == nil {
+		if len(e.nudgeCounters) >= nudgeMaxEntries {
+			e.nudgePruneLocked()
+		}
+		ns = &nudgeState{}
+		e.nudgeCounters[convID] = ns
+	}
+	ns.iterSinceSkill += count
+	ns.lastActive = time.Now()
+}
+
+func (e *Engine) nudgeShouldReview(convID string) (reviewMemory, reviewSkills bool) {
+	e.nudgeCountersMu.Lock()
+	defer e.nudgeCountersMu.Unlock()
+	ns := e.nudgeCounters[convID]
+	if ns == nil {
+		return false, false
+	}
+	if e.memoryNudgeInterval > 0 && ns.turnsSinceMemory >= e.memoryNudgeInterval {
+		reviewMemory = true
+	}
+	if e.skillNudgeInterval > 0 && ns.iterSinceSkill >= e.skillNudgeInterval {
+		reviewSkills = true
+	}
+	return
+}
+
+func (e *Engine) nudgeReset(convID string, memory, skills bool) {
+	e.nudgeCountersMu.Lock()
+	defer e.nudgeCountersMu.Unlock()
+	ns := e.nudgeCounters[convID]
+	if ns == nil {
+		return
+	}
+	if memory {
+		ns.turnsSinceMemory = 0
+	}
+	if skills {
+		ns.iterSinceSkill = 0
+	}
+}
+
+// NudgeResetExternal resets nudge counters from external events (e.g. agent
+// self-writes to memory or skills). kind is "memory" or "skill".
+func (e *Engine) NudgeResetExternal(convID, kind string) {
+	e.nudgeCountersMu.Lock()
+	defer e.nudgeCountersMu.Unlock()
+	ns := e.nudgeCounters[convID]
+	if ns == nil {
+		return
+	}
+	switch kind {
+	case "memory":
+		ns.turnsSinceMemory = 0
+	case "skill":
+		ns.iterSinceSkill = 0
+	}
+}
+
+// --- Post-turn reviewer ---
+
+func (e *Engine) maybeRunReview(convID string, reviewMemory, reviewSkills bool) {
+	if e.reviewer == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), e.reviewTimeout)
+		defer cancel()
+
+		prompt := buildReviewPrompt(reviewMemory, reviewSkills)
+		msg := adapter.IncomingMessage{
+			Adapter:    "review",
+			ExternalID: convID,
+			Text:       prompt,
+		}
+		if err := e.reviewer.HandleMessage(ctx, msg); err != nil {
+			e.logger.Warn("post-turn review failed", "error", err, "conversation", convID)
+		}
+	}()
 }

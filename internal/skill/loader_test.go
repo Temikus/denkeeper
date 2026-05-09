@@ -308,3 +308,75 @@ func TestBuildPromptSection_Multiple(t *testing.T) {
 		t.Error("greet should appear before farewell")
 	}
 }
+
+func TestLoadDir_SubdirPopulatesSubFileNames(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "research")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "templates"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`+++
+name = "research"
++++
+
+Research things.`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "api.md"), []byte("API docs"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "templates", "report.txt"), []byte("Template"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadDir(dir, discardLogger())
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("got %d skills, want 1", len(skills))
+	}
+
+	sk := skills[0]
+	if sk.Dir != skillDir {
+		t.Errorf("Dir = %q, want %q", sk.Dir, skillDir)
+	}
+	if len(sk.SubFileNames) != 2 {
+		t.Fatalf("SubFileNames = %v, want 2 entries", sk.SubFileNames)
+	}
+	if sk.SubFileNames[0] != "references/api.md" {
+		t.Errorf("SubFileNames[0] = %q, want references/api.md", sk.SubFileNames[0])
+	}
+	if sk.SubFileNames[1] != "templates/report.txt" {
+		t.Errorf("SubFileNames[1] = %q, want templates/report.txt", sk.SubFileNames[1])
+	}
+}
+
+func TestLoadDir_FlatSkillHasNoSubFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "simple.md"), []byte(`+++
+name = "simple"
++++
+
+Simple skill.`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadDir(dir, discardLogger())
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("got %d skills, want 1", len(skills))
+	}
+	if skills[0].Dir != "" {
+		t.Errorf("flat skill should have empty Dir, got %q", skills[0].Dir)
+	}
+	if len(skills[0].SubFileNames) != 0 {
+		t.Errorf("flat skill should have no SubFileNames, got %v", skills[0].SubFileNames)
+	}
+}

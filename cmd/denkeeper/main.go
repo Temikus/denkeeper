@@ -812,7 +812,17 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		SetActiveChannel:         abc.dispatcher.SetActiveChannelByKey,
 		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
 		Auditor:                  abc.auditor,
-		Logger:                   abc.logger,
+		IsSkillPinned:            buildIsSkillPinned(agentName, abc.memory),
+		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
+		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),
+		SetSkillOrigin:           buildSkillOriginSetter(abc.memory, abc.logger),
+		NudgeReset: func(kind string) {
+			_, _, convID := e.AdapterContext()
+			if convID != "" {
+				e.NudgeResetExternal(convID, kind)
+			}
+		},
+		Logger: abc.logger,
 	})
 	session, err := cmcpSrv.Connect(ctx)
 	if err != nil {
@@ -823,6 +833,79 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	}
 	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
 	return nil
+}
+
+func buildIsSkillPinned(agentName string, memory agent.MemoryStore) func(name string) (bool, error) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	return func(name string) (bool, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stats, err := ts.GetSkillUsage(ctx, agentName, name)
+		if err != nil {
+			return false, err
+		}
+		if stats == nil {
+			return false, nil
+		}
+		return stats.Pinned, nil
+	}
+}
+
+func buildSkillBump(memory agent.MemoryStore, logger *slog.Logger, kind string) func(agentName, skillName string) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	return func(agentName, skillName string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var err error
+		switch kind {
+		case "view":
+			err = ts.BumpSkillView(ctx, agentName, skillName)
+		case "patch":
+			err = ts.BumpSkillPatch(ctx, agentName, skillName)
+		}
+		if err != nil {
+			logger.Debug("skill telemetry bump failed", "kind", kind, "skill", skillName, "error", err)
+		}
+	}
+}
+
+func seedSkillProvenance(ctx context.Context, agentName string, skills []skill.Skill, memory agent.MemoryStore, logger *slog.Logger) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return
+	}
+	for _, sk := range skills {
+		existing, err := ts.GetSkillUsage(ctx, agentName, sk.Name)
+		if err != nil {
+			logger.Debug("checking skill provenance failed", "skill", sk.Name, "error", err)
+			continue
+		}
+		if existing == nil {
+			if err := ts.SetSkillOrigin(ctx, agentName, sk.Name, "operator"); err != nil {
+				logger.Debug("seeding skill provenance failed", "skill", sk.Name, "error", err)
+			}
+		}
+	}
+}
+
+func buildSkillOriginSetter(memory agent.MemoryStore, logger *slog.Logger) func(agentName, skillName, origin string) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	return func(agentName, skillName, origin string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := ts.SetSkillOrigin(ctx, agentName, skillName, origin); err != nil {
+			logger.Debug("setting skill origin failed", "skill", skillName, "origin", origin, "error", err)
+		}
+	}
 }
 
 // connectWebMCP creates the per-agent Web MCP server (search + fetch tools),
@@ -1046,6 +1129,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	} else {
 		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
 	}
+	p.SetCharLimits(abc.cfg.Memory.PersonaMemoryCharLimit, abc.cfg.Memory.PersonaUserCharLimit)
 
 	sr := loadAgentSkills(ac, abc)
 
@@ -1118,11 +1202,16 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
 	}
+
+	seedSkillProvenance(ctx, ac.Name, sr.skills, abc.memory, abc.logger)
+
 	if err := connectWebMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
 		return nil, nil, err
 	}
 
 	agentRouter.SetTools(agentToolMgr.ToolDefs)
+
+	wireNudgeAndReviewer(ctx, ac, e, p, abc)
 
 	var bindings []agent.Binding
 	for _, binding := range ac.Adapters {
@@ -1138,6 +1227,92 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	)
 
 	return e, bindings, nil
+}
+
+func wireNudgeAndReviewer(ctx context.Context, ac config.AgentInstanceConfig, e *agent.Engine, p *persona.Persona, abc agentBuildCtx) {
+	if ac.NudgeMemoryInterval > 0 || ac.NudgeSkillInterval > 0 {
+		e.SetNudgeConfig(ac.NudgeMemoryInterval, ac.NudgeSkillInterval)
+	}
+
+	if ac.ReviewerModel == "" {
+		return
+	}
+
+	revEngine, err := buildReviewerEngine(ctx, ac, e, p, abc)
+	if err != nil {
+		abc.logger.Warn("reviewer engine failed, post-turn review disabled", "agent", ac.Name, "error", err)
+		return
+	}
+	e.SetReviewer(revEngine)
+	if ac.ReviewMaxIterations > 0 || ac.ReviewTimeout != "" {
+		var revTimeout time.Duration
+		if ac.ReviewTimeout != "" {
+			revTimeout, _ = time.ParseDuration(ac.ReviewTimeout)
+		}
+		e.SetReviewerConfig(ac.ReviewMaxIterations, revTimeout)
+	}
+	abc.logger.Info("post-turn reviewer configured", "agent", ac.Name, "reviewer_model", ac.ReviewerModel)
+}
+
+func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, parent *agent.Engine, p *persona.Persona, abc agentBuildCtx) (*agent.Engine, error) {
+	revProvider := ac.LLMProvider
+	if ac.ReviewerProvider != "" {
+		revProvider = ac.ReviewerProvider
+	}
+	if revProvider == "" {
+		revProvider = abc.cfg.LLM.DefaultProvider
+	}
+	revRouter := buildAgentRouter(revProvider, ac.ReviewerModel, abc)
+
+	revPerms, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		return nil, fmt.Errorf("reviewer permissions: %w", err)
+	}
+
+	revToolMgr := tool.NewManager(abc.logger)
+	revLogger := abc.logger.With("reviewer_for", ac.Name)
+
+	noopSend := func(_ context.Context, _ adapter.OutgoingMessage) error { return nil }
+
+	revEngine := agent.NewEngine(
+		ac.Name+"-reviewer",
+		revRouter,
+		abc.memory,
+		noopSend,
+		revPerms,
+		p,
+		persona.DefaultPrompt,
+		parent.Skills(),
+		revToolMgr,
+		nil,
+		revLogger,
+	)
+
+	revCMCP := configmcp.New(configmcp.Deps{
+		AgentName:          ac.Name,
+		GetSkills:          parent.Skills,
+		GetSkill:           parent.GetSkill,
+		UpdateSkill:        parent.UpdateSkill,
+		PermissionTier:     func() string { return "autonomous" },
+		GetPersonaSection:  parent.PersonaSection,
+		SavePersonaSection: parent.SavePersonaSection,
+		AppendMemoryEntry:  parent.AppendMemoryEntry,
+		RemoveMemoryEntry:  parent.RemoveMemoryEntry,
+		IsSkillPinned:      buildIsSkillPinned(ac.Name, abc.memory),
+		BumpSkillView:      buildSkillBump(abc.memory, abc.logger, "view"),
+		BumpSkillPatch:     buildSkillBump(abc.memory, abc.logger, "patch"),
+		Logger:             revLogger,
+	})
+	session, err := revCMCP.Connect(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reviewer config MCP: %w", err)
+	}
+	if err := revToolMgr.RegisterSession(ctx, "config-"+ac.Name+"-reviewer", session); err != nil {
+		return nil, fmt.Errorf("registering reviewer config MCP: %w", err)
+	}
+
+	revRouter.SetTools(revToolMgr.ToolDefs)
+	return revEngine, nil
 }
 
 func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler.Scheduler, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) error {
@@ -1344,7 +1519,7 @@ func ensureSessionSecret(cfg *config.Config, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("generating session secret: %w", err)
 	}
-	if err := tool.SetSessionSecret(configPath, secret); err != nil {
+	if err := config.SetSessionSecret(configPath, secret); err != nil {
 		return fmt.Errorf("persisting session secret: %w", err)
 	}
 	cfg.API.Auth.SessionSecret = secret

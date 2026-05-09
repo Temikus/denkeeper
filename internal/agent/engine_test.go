@@ -3884,3 +3884,282 @@ func TestEngine_SupervisorReview_NoSkillContext(t *testing.T) {
 		t.Errorf("review prompt should use user-request criteria for regular messages:\n%s", reviewPrompt)
 	}
 }
+
+// --------------------------------------------------------------------------
+// Tests: nudge counters
+// --------------------------------------------------------------------------
+
+func newNudgeEngine(t *testing.T, memInterval, skillInterval int) *Engine {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "ok",
+			TokensUsed:   llm.TokenUsage{Prompt: 5, Completion: 5, Total: 10},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+
+	perms, _ := security.NewPermissionEngine("autonomous")
+	e := NewEngine("test", router, store, func(_ context.Context, _ adapter.OutgoingMessage) error { return nil }, perms, nil, "test", nil, nil, nil, testLogger())
+	e.SetNudgeConfig(memInterval, skillInterval)
+	return e
+}
+
+func TestNudge_MemoryFiresAtThreshold(t *testing.T) {
+	e := newNudgeEngine(t, 3, 0)
+	convID := "conv-1"
+
+	for i := 0; i < 2; i++ {
+		e.nudgeIncTurns(convID)
+	}
+	mem, _ := e.nudgeShouldReview(convID)
+	if mem {
+		t.Error("should not trigger review before threshold")
+	}
+
+	e.nudgeIncTurns(convID)
+	mem, _ = e.nudgeShouldReview(convID)
+	if !mem {
+		t.Error("should trigger memory review at threshold")
+	}
+}
+
+func TestNudge_SkillFiresOnHighToolUse(t *testing.T) {
+	e := newNudgeEngine(t, 0, 5)
+	convID := "conv-1"
+
+	e.nudgeIncToolRounds(convID, 4)
+	_, sk := e.nudgeShouldReview(convID)
+	if sk {
+		t.Error("should not trigger review before threshold")
+	}
+
+	e.nudgeIncToolRounds(convID, 1)
+	_, sk = e.nudgeShouldReview(convID)
+	if !sk {
+		t.Error("should trigger skill review at threshold")
+	}
+}
+
+func TestNudge_AgentSelfWriteResets(t *testing.T) {
+	e := newNudgeEngine(t, 3, 5)
+	convID := "conv-1"
+
+	e.nudgeIncTurns(convID)
+	e.nudgeIncTurns(convID)
+	e.nudgeIncToolRounds(convID, 4)
+
+	e.NudgeResetExternal(convID, "memory")
+	mem, sk := e.nudgeShouldReview(convID)
+	if mem {
+		t.Error("memory counter should be reset")
+	}
+	if sk {
+		t.Error("skill counter should still be below threshold")
+	}
+
+	e.nudgeIncTurns(convID)
+	e.nudgeIncTurns(convID)
+	e.nudgeIncTurns(convID)
+	mem, _ = e.nudgeShouldReview(convID)
+	if !mem {
+		t.Error("memory should fire again after reset + 3 more turns")
+	}
+}
+
+func TestNudge_IsolatedAcrossConversations(t *testing.T) {
+	e := newNudgeEngine(t, 2, 0)
+
+	e.nudgeIncTurns("conv-a")
+	e.nudgeIncTurns("conv-a")
+
+	e.nudgeIncTurns("conv-b")
+
+	memA, _ := e.nudgeShouldReview("conv-a")
+	memB, _ := e.nudgeShouldReview("conv-b")
+
+	if !memA {
+		t.Error("conv-a should trigger at 2 turns")
+	}
+	if memB {
+		t.Error("conv-b should NOT trigger at 1 turn")
+	}
+}
+
+func TestNudge_ZeroIntervalNeverFires(t *testing.T) {
+	e := newNudgeEngine(t, 0, 0)
+	convID := "conv-1"
+
+	for i := 0; i < 100; i++ {
+		e.nudgeIncTurns(convID)
+		e.nudgeIncToolRounds(convID, 10)
+	}
+	mem, sk := e.nudgeShouldReview(convID)
+	if mem || sk {
+		t.Error("should never trigger with zero intervals")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: review lifecycle
+// --------------------------------------------------------------------------
+
+func TestReview_NoOpWhenNoReviewer(t *testing.T) {
+	e := newNudgeEngine(t, 1, 0)
+	// No reviewer set — maybeRunReview should be a no-op
+	e.maybeRunReview("conv-1", true, true)
+	// Success = no panic, no goroutine leak
+}
+
+func TestReview_NoOpBelowThreshold(t *testing.T) {
+	e := newNudgeEngine(t, 5, 10)
+	convID := "conv-1"
+
+	e.nudgeIncTurns(convID)
+	e.nudgeIncToolRounds(convID, 2)
+
+	mem, sk := e.nudgeShouldReview(convID)
+	if mem || sk {
+		t.Error("should not trigger below both thresholds")
+	}
+}
+
+func TestReview_BuildReviewPrompt_BothFlags(t *testing.T) {
+	prompt := buildReviewPrompt(true, true)
+	if !strings.Contains(prompt, "MEMORY") {
+		t.Error("should contain memory review prompt")
+	}
+	if !strings.Contains(prompt, "skill") {
+		t.Error("should contain skill review prompt")
+	}
+}
+
+func TestReview_BuildReviewPrompt_MemoryOnly(t *testing.T) {
+	prompt := buildReviewPrompt(true, false)
+	if !strings.Contains(prompt, "MEMORY") {
+		t.Error("should contain memory review prompt")
+	}
+	if strings.Contains(prompt, "skills should be created") {
+		t.Error("should NOT contain skill review prompt")
+	}
+}
+
+func TestReview_BuildReviewPrompt_NeitherFlag(t *testing.T) {
+	prompt := buildReviewPrompt(false, false)
+	if prompt != "" {
+		t.Errorf("expected empty prompt, got %q", prompt)
+	}
+}
+
+func TestReview_NudgeResetAfterReview(t *testing.T) {
+	e := newNudgeEngine(t, 2, 3)
+	convID := "conv-1"
+
+	e.nudgeIncTurns(convID)
+	e.nudgeIncTurns(convID)
+	e.nudgeIncToolRounds(convID, 3)
+
+	mem, sk := e.nudgeShouldReview(convID)
+	if !mem || !sk {
+		t.Fatal("should trigger both reviews")
+	}
+
+	e.nudgeReset(convID, true, true)
+	mem, sk = e.nudgeShouldReview(convID)
+	if mem || sk {
+		t.Error("should not trigger after reset")
+	}
+}
+
+func TestReview_DoesNotBlockResponse(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Hello!",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	main := NewEngine("main", router, store, func(_ context.Context, _ adapter.OutgoingMessage) error { return nil }, perms, nil, "test", nil, nil, nil, testLogger())
+	main.SetNudgeConfig(1, 0) // trigger every turn
+
+	reviewerRouter := llm.NewRouter("mock", "test-model", costTracker)
+	reviewerRouter.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "Memory is up to date.",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+
+	reviewStore, _ := NewInMemoryStore()
+	defer func() { _ = reviewStore.Close() }()
+	revPerms, _ := security.NewPermissionEngine("autonomous")
+	reviewer := NewEngine("reviewer", reviewerRouter, reviewStore, func(_ context.Context, _ adapter.OutgoingMessage) error { return nil }, revPerms, nil, "test", nil, nil, nil, testLogger())
+	main.SetReviewer(reviewer)
+
+	// HandleMessage should return without waiting for reviewer
+	done := make(chan error, 1)
+	go func() {
+		done <- main.HandleMessage(context.Background(), adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "test-1",
+			Text:       "Hi",
+			Timestamp:  time.Now(),
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandleMessage blocked — reviewer may be blocking the response")
+	}
+}
+
+func TestReview_TimeoutBounded(t *testing.T) {
+	e := newNudgeEngine(t, 0, 0)
+	e.SetReviewerConfig(0, 100*time.Millisecond) // very short timeout
+
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	slowRouter := llm.NewRouter("mock", "test-model", costTracker)
+	slowRouter.RegisterProvider(&mockProvider{
+		response: &llm.ChatResponse{
+			Content:      "done",
+			TokensUsed:   llm.TokenUsage{Total: 10},
+			Model:        "test-model",
+			FinishReason: "stop",
+		},
+	})
+	revPerms, _ := security.NewPermissionEngine("autonomous")
+	reviewer := NewEngine("reviewer", slowRouter, store, func(_ context.Context, _ adapter.OutgoingMessage) error { return nil }, revPerms, nil, "test", nil, nil, nil, testLogger())
+	e.SetReviewer(reviewer)
+
+	// Should not panic; timeout will limit duration
+	e.maybeRunReview("conv-1", true, false)
+	time.Sleep(200 * time.Millisecond) // let goroutine finish
+}

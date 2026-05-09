@@ -2112,3 +2112,398 @@ func TestScheduleAdd_NoConfigPath_NoPersistence(t *testing.T) {
 	}
 	// No assertion on disk — just verify it doesn't panic or error without ConfigPath.
 }
+
+// --------------------------------------------------------------------------
+// Tests: skill_patch
+// --------------------------------------------------------------------------
+
+func newSkillPatchServer(t *testing.T, tier string, body string, pinned bool) (*mcp.ClientSession, *skill.Skill) {
+	t.Helper()
+	sk := &skill.Skill{
+		Name:        "greet",
+		Description: "Greets users",
+		Body:        body,
+	}
+
+	var mu sync.RWMutex
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		if err := os.MkdirAll(d.AgentSkillsDir, 0o755); err != nil {
+			t.Fatalf("creating skills dir: %v", err)
+		}
+		d.PermissionTier = func() string { return tier }
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			mu.RLock()
+			defer mu.RUnlock()
+			if name == sk.Name {
+				return *sk, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(name string, s skill.Skill) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if name == sk.Name {
+				*sk = s
+				return true
+			}
+			return false
+		}
+		d.IsSkillPinned = func(name string) (bool, error) {
+			if name == sk.Name {
+				return pinned, nil
+			}
+			return false, nil
+		}
+	})
+	return session, sk
+}
+
+func TestSkillPatch_HappyPath(t *testing.T) {
+	session, sk := newSkillPatchServer(t, "autonomous", "Hello world, welcome!", false)
+
+	text, isErr := callTool(t, session, "skill_patch", map[string]string{
+		"name":       "greet",
+		"old_string": "Hello world",
+		"new_string": "Hi there",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(sk.Body, "Hi there") {
+		t.Errorf("expected body to contain 'Hi there', got %q", sk.Body)
+	}
+	if strings.Contains(sk.Body, "Hello world") {
+		t.Errorf("expected body to NOT contain 'Hello world', got %q", sk.Body)
+	}
+}
+
+func TestSkillPatch_NoMatchErrors(t *testing.T) {
+	session, _ := newSkillPatchServer(t, "autonomous", "Hello world", false)
+
+	text, isErr := callTool(t, session, "skill_patch", map[string]string{
+		"name":       "greet",
+		"old_string": "not found text",
+		"new_string": "replacement",
+	})
+	if !isErr {
+		t.Fatal("expected error for no match")
+	}
+	if !strings.Contains(text, "not found") {
+		t.Errorf("expected 'not found' error, got %q", text)
+	}
+}
+
+func TestSkillPatch_MultipleMatchErrors(t *testing.T) {
+	session, _ := newSkillPatchServer(t, "autonomous", "foo bar foo baz", false)
+
+	text, isErr := callTool(t, session, "skill_patch", map[string]string{
+		"name":       "greet",
+		"old_string": "foo",
+		"new_string": "qux",
+	})
+	if !isErr {
+		t.Fatal("expected error for multiple matches")
+	}
+	if !strings.Contains(text, "2 times") {
+		t.Errorf("expected match count error, got %q", text)
+	}
+}
+
+func TestSkillPatch_PinnedRefuses(t *testing.T) {
+	session, _ := newSkillPatchServer(t, "autonomous", "Hello world", true)
+
+	text, isErr := callTool(t, session, "skill_patch", map[string]string{
+		"name":       "greet",
+		"old_string": "Hello",
+		"new_string": "Hi",
+	})
+	if !isErr {
+		t.Fatal("expected error for pinned skill")
+	}
+	if !strings.Contains(text, "pinned") {
+		t.Errorf("expected 'pinned' error, got %q", text)
+	}
+}
+
+func TestSkillPatch_EmptyNewStringDeletes(t *testing.T) {
+	session, sk := newSkillPatchServer(t, "autonomous", "Keep this. Remove this part.", false)
+
+	text, isErr := callTool(t, session, "skill_patch", map[string]string{
+		"name":       "greet",
+		"old_string": " Remove this part.",
+		"new_string": "",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if sk.Body != "Keep this." {
+		t.Errorf("expected body 'Keep this.', got %q", sk.Body)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: skill_read_file / skill_write_file
+// --------------------------------------------------------------------------
+
+func newSkillFileServer(t *testing.T, tier string) (*mcp.ClientSession, *skill.Skill, string) {
+	t.Helper()
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "research")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "api.md"), []byte("# API Reference\nSome content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sk := &skill.Skill{
+		Name:         "research",
+		Description:  "Research skill",
+		Body:         "Do research.",
+		Dir:          skillDir,
+		SubFileNames: []string{"references/api.md"},
+	}
+
+	var mu sync.RWMutex
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.AgentSkillsDir = filepath.Join(dir, "skills")
+		d.PermissionTier = func() string { return tier }
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			mu.RLock()
+			defer mu.RUnlock()
+			if name == sk.Name {
+				return *sk, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(name string, s skill.Skill) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if name == sk.Name {
+				*sk = s
+				return true
+			}
+			return false
+		}
+	})
+	return session, sk, skillDir
+}
+
+func TestSkillReadFile_HappyPath(t *testing.T) {
+	session, _, _ := newSkillFileServer(t, "autonomous")
+
+	text, isErr := callTool(t, session, "skill_read_file", map[string]string{
+		"skill":     "research",
+		"file_path": "references/api.md",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(text, "API Reference") {
+		t.Errorf("expected file content, got %q", text)
+	}
+}
+
+func TestSkillReadFile_NotFound(t *testing.T) {
+	session, _, _ := newSkillFileServer(t, "autonomous")
+
+	text, isErr := callTool(t, session, "skill_read_file", map[string]string{
+		"skill":     "research",
+		"file_path": "references/nonexistent.md",
+	})
+	if !isErr {
+		t.Fatal("expected error for nonexistent file")
+	}
+	if !strings.Contains(text, "not found") {
+		t.Errorf("expected 'not found' error, got %q", text)
+	}
+}
+
+func TestSkillReadFile_FlatSkillRejects(t *testing.T) {
+	// Create a server with a flat skill (no Dir)
+	flatSk := &skill.Skill{Name: "flat", Body: "simple"}
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "flat" {
+				return *flatSk, true
+			}
+			return skill.Skill{}, false
+		}
+	})
+
+	text, isErr := callTool(t, session, "skill_read_file", map[string]string{
+		"skill":     "flat",
+		"file_path": "references/test.md",
+	})
+	if !isErr {
+		t.Fatal("expected error for flat skill")
+	}
+	if !strings.Contains(text, "flat-file") {
+		t.Errorf("expected flat-file error, got %q", text)
+	}
+}
+
+func TestSkillWriteFile_CreatesNewReference(t *testing.T) {
+	session, sk, _ := newSkillFileServer(t, "autonomous")
+
+	text, isErr := callTool(t, session, "skill_write_file", map[string]string{
+		"skill":     "research",
+		"file_path": "references/new-doc.md",
+		"content":   "# New Doc\nNew content",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+
+	if !strings.Contains(text, `"ok":true`) && !strings.Contains(text, `"ok": true`) {
+		t.Errorf("expected ok response, got %q", text)
+	}
+
+	// Verify sub_files updated
+	found := false
+	for _, f := range sk.SubFileNames {
+		if f == "references/new-doc.md" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("SubFileNames should include new-doc.md, got %v", sk.SubFileNames)
+	}
+}
+
+func TestSkillWriteFile_OverwritesExisting(t *testing.T) {
+	session, _, skillDir := newSkillFileServer(t, "autonomous")
+
+	text, isErr := callTool(t, session, "skill_write_file", map[string]string{
+		"skill":     "research",
+		"file_path": "references/api.md",
+		"content":   "# Updated API\nNew content",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+
+	data, err := os.ReadFile(filepath.Join(skillDir, "references", "api.md"))
+	if err != nil {
+		t.Fatalf("reading overwritten file: %v", err)
+	}
+	if !strings.Contains(string(data), "Updated API") {
+		t.Errorf("file should be overwritten, got %q", string(data))
+	}
+}
+
+func TestSkillWriteFile_PinnedRefuses(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "pinned-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.AgentSkillsDir = filepath.Join(dir, "skills")
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			if name == "pinned-skill" {
+				return skill.Skill{Name: "pinned-skill", Dir: skillDir}, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(_ string, _ skill.Skill) bool { return true }
+		d.IsSkillPinned = func(name string) (bool, error) {
+			return name == "pinned-skill", nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "skill_write_file", map[string]string{
+		"skill":     "pinned-skill",
+		"file_path": "references/test.md",
+		"content":   "test",
+	})
+	if !isErr {
+		t.Fatal("expected error for pinned skill")
+	}
+	if !strings.Contains(text, "pinned") {
+		t.Errorf("expected 'pinned' error, got %q", text)
+	}
+}
+
+func TestSkillWriteFile_AutoConvertsFlat(t *testing.T) {
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a flat skill file
+	flatContent := `+++
+name = "flat-skill"
+description = "A flat skill"
++++
+
+Body content.`
+	if err := os.WriteFile(filepath.Join(skillsDir, "flat-skill.md"), []byte(flatContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sk := &skill.Skill{
+		Name:        "flat-skill",
+		Description: "A flat skill",
+		Body:        "Body content.",
+		Source:      filepath.Join(skillsDir, "flat-skill.md"),
+	}
+
+	var mu sync.RWMutex
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.AgentSkillsDir = skillsDir
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			mu.RLock()
+			defer mu.RUnlock()
+			if name == "flat-skill" {
+				return *sk, true
+			}
+			return skill.Skill{}, false
+		}
+		d.UpdateSkill = func(name string, s skill.Skill) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if name == "flat-skill" {
+				*sk = s
+				return true
+			}
+			return false
+		}
+	})
+
+	text, isErr := callTool(t, session, "skill_write_file", map[string]string{
+		"skill":     "flat-skill",
+		"file_path": "references/notes.md",
+		"content":   "Some reference notes.",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+
+	// Verify conversion happened
+	if sk.Dir == "" {
+		t.Error("skill Dir should be set after auto-conversion")
+	}
+
+	// Verify SKILL.md moved
+	if _, err := os.Stat(filepath.Join(skillsDir, "flat-skill", "SKILL.md")); err != nil {
+		t.Errorf("SKILL.md should exist in subdirectory: %v", err)
+	}
+
+	// Verify old flat file removed
+	if _, err := os.Stat(filepath.Join(skillsDir, "flat-skill.md")); err == nil {
+		t.Error("old flat file should be removed after conversion")
+	}
+
+	// Verify the new file exists
+	data, err := os.ReadFile(filepath.Join(skillsDir, "flat-skill", "references", "notes.md"))
+	if err != nil {
+		t.Fatalf("reading new reference file: %v", err)
+	}
+	if string(data) != "Some reference notes." {
+		t.Errorf("unexpected file content: %q", string(data))
+	}
+}

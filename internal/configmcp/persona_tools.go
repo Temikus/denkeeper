@@ -3,12 +3,14 @@ package configmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/persona"
 )
 
 // registerPersonaTools adds the persona_get and persona_update MCP tools.
@@ -159,42 +161,68 @@ func (s *Server) handlePersonaMemoryManage(_ context.Context, req *mcp.CallToolR
 
 	switch input.Operation {
 	case "append":
-		if strings.TrimSpace(input.Content) == "" {
-			return toolError("content is required for append operation"), nil
-		}
-		if s.deps.AppendMemoryEntry == nil {
-			return toolError("append not available: no persona configured"), nil
-		}
-		if err := s.deps.AppendMemoryEntry(input.Content); err != nil {
-			return toolError(fmt.Sprintf("append failed: %v", err)), nil
-		}
-		return toolText(`{"ok": true, "operation": "append"}`), nil
-
+		return s.handleMemoryAppend(input.Content)
 	case "remove":
-		if strings.TrimSpace(input.Heading) == "" {
-			return toolError("heading is required for remove operation"), nil
-		}
-		if s.deps.RemoveMemoryEntry == nil {
-			return toolError("remove not available: no persona configured"), nil
-		}
-		if err := s.deps.RemoveMemoryEntry(input.Heading); err != nil {
-			return toolError(fmt.Sprintf("remove failed: %v", err)), nil
-		}
-		return toolText(`{"ok": true, "operation": "remove"}`), nil
-
+		return s.handleMemoryRemove(input.Heading)
 	case "replace":
-		if strings.TrimSpace(input.Content) == "" {
-			return toolError("content is required for replace operation"), nil
-		}
-		if s.deps.SavePersonaSection == nil {
-			return toolError("replace not available: no persona configured"), nil
-		}
-		if err := s.deps.SavePersonaSection("memory", input.Content); err != nil {
-			return toolError(fmt.Sprintf("replace failed: %v", err)), nil
-		}
-		return toolText(`{"ok": true, "operation": "replace"}`), nil
-
+		return s.handleMemoryReplace(input.Content)
 	default:
 		return toolError(fmt.Sprintf("unknown operation %q, must be one of: append, remove, replace", input.Operation)), nil
 	}
+}
+
+func (s *Server) handleMemoryAppend(content string) (*mcp.CallToolResult, error) {
+	if strings.TrimSpace(content) == "" {
+		return toolError("content is required for append operation"), nil
+	}
+	if s.deps.AppendMemoryEntry == nil {
+		return toolError("append not available: no persona configured"), nil
+	}
+	if err := s.deps.AppendMemoryEntry(content); err != nil {
+		var memFull *persona.MemoryFullError
+		if errors.As(err, &memFull) {
+			resp, _ := json.Marshal(map[string]any{
+				"success":         false,
+				"error":           memFull.Error(),
+				"current_entries": memFull.CurrentEntries,
+				"usage":           fmt.Sprintf("%d/%d", memFull.Current, memFull.Limit),
+				"hint":            "Use persona_memory_manage operation=remove to drop entries first, or operation=replace to consolidate.",
+			})
+			return toolText(string(resp)), nil
+		}
+		return toolError(fmt.Sprintf("append failed: %v", err)), nil
+	}
+	if s.deps.NudgeReset != nil {
+		s.deps.NudgeReset("memory")
+	}
+	return toolText(`{"ok": true, "operation": "append"}`), nil
+}
+
+func (s *Server) handleMemoryRemove(heading string) (*mcp.CallToolResult, error) {
+	if strings.TrimSpace(heading) == "" {
+		return toolError("heading is required for remove operation"), nil
+	}
+	if s.deps.RemoveMemoryEntry == nil {
+		return toolError("remove not available: no persona configured"), nil
+	}
+	if err := s.deps.RemoveMemoryEntry(heading); err != nil {
+		return toolError(fmt.Sprintf("remove failed: %v", err)), nil
+	}
+	if s.deps.NudgeReset != nil {
+		s.deps.NudgeReset("memory")
+	}
+	return toolText(`{"ok": true, "operation": "remove"}`), nil
+}
+
+func (s *Server) handleMemoryReplace(content string) (*mcp.CallToolResult, error) {
+	if strings.TrimSpace(content) == "" {
+		return toolError("content is required for replace operation"), nil
+	}
+	if s.deps.SavePersonaSection == nil {
+		return toolError("replace not available: no persona configured"), nil
+	}
+	if err := s.deps.SavePersonaSection("memory", content); err != nil {
+		return toolError(fmt.Sprintf("replace failed: %v", err)), nil
+	}
+	return toolText(`{"ok": true, "operation": "replace"}`), nil
 }

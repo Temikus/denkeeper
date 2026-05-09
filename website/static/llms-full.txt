@@ -140,6 +140,12 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     supervisor = ""                  # supervisor agent name for tool call review
     supervisor_timeout = ""          # supervisor call timeout
     supervisor_context_messages = 5  # recent messages in supervisor prompt
+    reviewer_model = ""              # LLM model for post-turn review (empty = disabled)
+    reviewer_provider = ""           # LLM provider for reviewer (empty = inherit agent's)
+    review_max_iterations = 0        # reviewer tool-call rounds (0 = 6)
+    review_timeout = ""              # reviewer timeout (empty = 2m)
+    nudge_memory_interval = 0        # user turns between memory review nudges (0 = disabled)
+    nudge_skill_interval = 0         # tool rounds between skill review nudges (0 = disabled)
 
 ### [[channels]]
 
@@ -158,6 +164,8 @@ Named routing endpoints decoupling sessions from adapters.
     retention_days = 90              # conversation retention period
     max_conversations = 10000        # max stored conversations
     cleanup_interval = "1h"          # cleanup frequency
+    persona_memory_char_limit = 2200 # MEMORY.md character limit (0 = unlimited)
+    persona_user_char_limit = 1375   # USER.md character limit (0 = unlimited)
 
 ### [log]
 

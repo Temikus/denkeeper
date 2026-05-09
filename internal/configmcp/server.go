@@ -121,6 +121,20 @@ type Deps struct {
 	// Auditor emits audit events. If nil, broadcast delivery audit is disabled.
 	Auditor audit.Emitter
 
+	// IsSkillPinned checks if a skill is pinned (curator-immune). Nil = not pinned.
+	IsSkillPinned func(name string) (bool, error)
+
+	// BumpSkillView records a skill view in telemetry. Best-effort; nil = no-op.
+	BumpSkillView func(agent, skill string)
+	// BumpSkillPatch records a skill patch in telemetry. Best-effort; nil = no-op.
+	BumpSkillPatch func(agent, skill string)
+	// SetSkillOrigin marks a skill's provenance. Best-effort; nil = no-op.
+	SetSkillOrigin func(agent, skill, origin string)
+
+	// NudgeReset resets nudge counters after an agent self-write.
+	// kind: "memory" or "skill". The callee resolves convID from engine adapter context.
+	NudgeReset func(kind string)
+
 	Logger *slog.Logger
 }
 

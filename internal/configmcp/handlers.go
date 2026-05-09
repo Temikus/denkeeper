@@ -19,7 +19,6 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
-	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // registerTools adds all four Config MCP tools to the server.
@@ -77,6 +76,53 @@ func (s *Server) registerTools() {
 				"required": ["name"]
 			}`),
 		}, s.handleSkillUpdate)
+	}
+
+	if s.deps.GetSkill != nil && s.deps.UpdateSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_patch",
+			Description: "Find-and-replace in a skill's body. The old_string must match exactly once. More surgical than skill_update for small edits.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name":       {"type": "string", "description": "Name of the skill to patch"},
+					"old_string": {"type": "string", "description": "Exact text to find (must match exactly once)"},
+					"new_string": {"type": "string", "description": "Replacement text (empty string deletes the match)"}
+				},
+				"required": ["name", "old_string", "new_string"]
+			}`),
+		}, s.handleSkillPatch)
+	}
+
+	if s.deps.GetSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_read_file",
+			Description: "Read a sub-file from a subdirectory-form skill. Only files under references/, templates/, or scripts/ are accessible.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"skill":     {"type": "string", "description": "Name of the skill"},
+					"file_path": {"type": "string", "description": "Relative path within the skill directory (e.g. references/oauth.md)"}
+				},
+				"required": ["skill", "file_path"]
+			}`),
+		}, s.handleSkillReadFile)
+	}
+
+	if s.deps.GetSkill != nil && s.deps.UpdateSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_write_file",
+			Description: "Write a sub-file in a subdirectory-form skill. Creates parent directories if needed. Only references/, templates/, or scripts/ are writable. Flat-file skills are auto-converted to subdirectory form.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"skill":     {"type": "string", "description": "Name of the skill"},
+					"file_path": {"type": "string", "description": "Relative path within the skill directory (e.g. templates/greeting.txt)"},
+					"content":   {"type": "string", "description": "File content to write"}
+				},
+				"required": ["skill", "file_path", "content"]
+			}`),
+		}, s.handleSkillWriteFile)
 	}
 
 	s.mcpServer.AddTool(&mcp.Tool{
@@ -338,7 +384,13 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 
 	deps := s.deps
 	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		return ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p)
+		if err := ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p); err != nil {
+			return err
+		}
+		if deps.SetSkillOrigin != nil {
+			deps.SetSkillOrigin(deps.AgentName, input.Name, "agent")
+		}
+		return nil
 	})
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
@@ -351,6 +403,7 @@ func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mc
 		Description string   `json:"description"`
 		Version     string   `json:"version"`
 		Triggers    []string `json:"triggers"`
+		SubFiles    []string `json:"sub_files,omitempty"`
 	}
 
 	skills := s.deps.GetSkills()
@@ -361,6 +414,7 @@ func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mc
 			Description: sk.Description,
 			Version:     sk.Version,
 			Triggers:    sk.Triggers,
+			SubFiles:    sk.SubFileNames,
 		}
 	}
 
@@ -387,12 +441,17 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
 	}
 
+	if s.deps.BumpSkillView != nil {
+		s.deps.BumpSkillView(s.deps.AgentName, input.Name)
+	}
+
 	type skillDetail struct {
 		Name        string   `json:"name"`
 		Description string   `json:"description"`
 		Version     string   `json:"version"`
 		Triggers    []string `json:"triggers"`
 		Body        string   `json:"body"`
+		SubFiles    []string `json:"sub_files,omitempty"`
 	}
 
 	data, err := json.MarshalIndent(skillDetail{
@@ -401,6 +460,7 @@ func (s *Server) handleSkillGet(_ context.Context, req *mcp.CallToolRequest) (*m
 		Version:     sk.Version,
 		Triggers:    sk.Triggers,
 		Body:        sk.Body,
+		SubFiles:    sk.SubFileNames,
 	}, "", "  ")
 	if err != nil {
 		return toolError("marshaling skill: " + err.Error()), nil
@@ -460,39 +520,265 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
 	}
 
-	// Determine effective name.
-	effectiveName := input.Name
-	isRename := false
-	if input.NewName != nil && strings.TrimSpace(*input.NewName) != "" && *input.NewName != input.Name {
-		effectiveName = strings.TrimSpace(*input.NewName)
-		isRename = true
+	effectiveName, isRename := resolveSkillRename(input.Name, input.NewName)
+	if isRename {
 		if _, exists := s.deps.GetSkill(effectiveName); exists {
 			return toolError(fmt.Sprintf("skill %q already exists", effectiveName)), nil
 		}
 	}
 
 	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body)
-
-	deps := s.deps
-	var applyFn approval.ActionFunc
-	if isRename {
-		oldName := input.Name
-		applyFn = approval.ActionFunc(func(_ context.Context, p string) error {
-			return ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p)
-		})
-	} else {
-		applyFn = approval.ActionFunc(func(_ context.Context, p string) error {
-			return ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, input.Name, p)
-		})
-	}
-
-	summary := "Update skill: " + input.Name
-	if isRename {
-		summary = fmt.Sprintf("Rename skill: %s → %s", input.Name, effectiveName)
-	}
+	applyFn, summary := s.buildSkillUpdateAction(input.Name, effectiveName, isRename, payload)
 
 	return applyOrSubmit(ctx, s.deps, approval.ActionKindUpdateSkill,
 		summary, payload, applyFn, false)
+}
+
+func resolveSkillRename(name string, newName *string) (effectiveName string, isRename bool) {
+	if newName != nil && strings.TrimSpace(*newName) != "" && *newName != name {
+		return strings.TrimSpace(*newName), true
+	}
+	return name, false
+}
+
+func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename bool, _ string) (approval.ActionFunc, string) {
+	deps := s.deps
+	if isRename {
+		fn := approval.ActionFunc(func(_ context.Context, p string) error {
+			if err := ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p); err != nil {
+				return err
+			}
+			if deps.BumpSkillPatch != nil {
+				deps.BumpSkillPatch(deps.AgentName, effectiveName)
+			}
+			if deps.NudgeReset != nil {
+				deps.NudgeReset("skill")
+			}
+			return nil
+		})
+		return fn, fmt.Sprintf("Rename skill: %s → %s", oldName, effectiveName)
+	}
+	fn := approval.ActionFunc(func(_ context.Context, p string) error {
+		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, oldName, p); err != nil {
+			return err
+		}
+		if deps.BumpSkillPatch != nil {
+			deps.BumpSkillPatch(deps.AgentName, oldName)
+		}
+		if deps.NudgeReset != nil {
+			deps.NudgeReset("skill")
+		}
+		return nil
+	})
+	return fn, "Update skill: " + oldName
+}
+
+func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.AgentSkillsDir == "" {
+		return toolError("skill_patch is not available: no agent skills directory configured"), nil
+	}
+	tier := s.deps.PermissionTier()
+	if tier == "restricted" {
+		return toolError("skill_patch is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Name      string `json:"name"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		return toolError("name is required"), nil
+	}
+	if input.OldString == "" {
+		return toolError("old_string is required"), nil
+	}
+
+	sk, ok := s.deps.GetSkill(input.Name)
+	if !ok {
+		return toolError(fmt.Sprintf("skill %q not found", input.Name)), nil
+	}
+
+	if s.deps.IsSkillPinned != nil {
+		pinned, err := s.deps.IsSkillPinned(input.Name)
+		if err == nil && pinned {
+			return toolError(fmt.Sprintf("skill %q is pinned and cannot be patched", input.Name)), nil
+		}
+	}
+
+	count := strings.Count(sk.Body, input.OldString)
+	if count == 0 {
+		return toolError("old_string not found in skill body"), nil
+	}
+	if count > 1 {
+		return toolError(fmt.Sprintf("old_string matches %d times; must match exactly once", count)), nil
+	}
+
+	newBody := strings.Replace(sk.Body, input.OldString, input.NewString, 1)
+	payload := BuildSkillPayload(input.Name, sk.Description, sk.Version, sk.Triggers, newBody)
+
+	deps := s.deps
+	skillName := input.Name
+	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
+		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, skillName, p); err != nil {
+			return err
+		}
+		if deps.BumpSkillPatch != nil {
+			deps.BumpSkillPatch(deps.AgentName, skillName)
+		}
+		if deps.NudgeReset != nil {
+			deps.NudgeReset("skill")
+		}
+		return nil
+	})
+
+	return applyOrSubmit(ctx, s.deps, approval.ActionKindUpdateSkill,
+		"Patch skill: "+input.Name, payload, applyFn, false)
+}
+
+func (s *Server) handleSkillReadFile(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		Skill    string `json:"skill"`
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Skill) == "" {
+		return toolError("skill is required"), nil
+	}
+	if strings.TrimSpace(input.FilePath) == "" {
+		return toolError("file_path is required"), nil
+	}
+
+	sk, ok := s.deps.GetSkill(input.Skill)
+	if !ok {
+		return toolError(fmt.Sprintf("skill %q not found", input.Skill)), nil
+	}
+	if sk.Dir == "" {
+		return toolError(fmt.Sprintf("skill %q is a flat-file skill; sub-files are only available for subdirectory-form skills", input.Skill)), nil
+	}
+
+	resolved, err := skill.ValidateSubpath(sk.Dir, input.FilePath)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+
+	data, err := os.ReadFile(resolved) // #nosec G304 -- path validated by ValidateSubpath
+	if err != nil {
+		if os.IsNotExist(err) {
+			return toolError(fmt.Sprintf("file %q not found in skill %q", input.FilePath, input.Skill)), nil
+		}
+		return toolError(fmt.Sprintf("reading file: %v", err)), nil
+	}
+
+	if s.deps.BumpSkillView != nil {
+		s.deps.BumpSkillView(s.deps.AgentName, input.Skill)
+	}
+
+	return toolText(string(data)), nil
+}
+
+func (s *Server) handleSkillWriteFile(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.deps.AgentSkillsDir == "" {
+		return toolError("skill_write_file is not available: no agent skills directory configured"), nil
+	}
+	if s.deps.PermissionTier() == "restricted" {
+		return toolError("skill_write_file is not available in restricted mode"), nil
+	}
+
+	var input struct {
+		Skill    string `json:"skill"`
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Skill) == "" {
+		return toolError("skill is required"), nil
+	}
+	if strings.TrimSpace(input.FilePath) == "" {
+		return toolError("file_path is required"), nil
+	}
+
+	sk, ok := s.deps.GetSkill(input.Skill)
+	if !ok {
+		return toolError(fmt.Sprintf("skill %q not found", input.Skill)), nil
+	}
+
+	if s.deps.IsSkillPinned != nil {
+		pinned, err := s.deps.IsSkillPinned(input.Skill)
+		if err == nil && pinned {
+			return toolError(fmt.Sprintf("skill %q is pinned and cannot be modified", input.Skill)), nil
+		}
+	}
+
+	return s.writeSkillFile(ctx, &sk, input.FilePath, input.Content)
+}
+
+func (s *Server) writeSkillFile(ctx context.Context, sk *skill.Skill, filePath, content string) (*mcp.CallToolResult, error) {
+	if sk.Dir == "" {
+		if err := s.convertFlatToSubdir(sk); err != nil {
+			return toolError(fmt.Sprintf("auto-converting to subdirectory form: %v", err)), nil
+		}
+	}
+
+	resolved, err := skill.ValidateSubpath(sk.Dir, filePath)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+
+	parentDir := filepath.Dir(resolved)
+	if err := os.MkdirAll(parentDir, 0o750); err != nil {
+		return toolError(fmt.Sprintf("creating directory: %v", err)), nil
+	}
+
+	tmpPath := resolved + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil { // #nosec G306
+		return toolError(fmt.Sprintf("writing file: %v", err)), nil
+	}
+	if err := os.Rename(tmpPath, resolved); err != nil {
+		_ = os.Remove(tmpPath)
+		return toolError(fmt.Sprintf("renaming temp file: %v", err)), nil
+	}
+
+	sk.SubFileNames = skill.ScanSubFiles(sk.Dir)
+	s.deps.UpdateSkill(sk.Name, *sk)
+
+	if s.deps.BumpSkillPatch != nil {
+		s.deps.BumpSkillPatch(s.deps.AgentName, sk.Name)
+	}
+
+	resp, _ := json.Marshal(map[string]any{
+		"ok":        true,
+		"file_path": filePath,
+		"sub_files": sk.SubFileNames,
+	})
+	return toolText(string(resp)), nil
+}
+
+func (s *Server) convertFlatToSubdir(sk *skill.Skill) error {
+	newDir := filepath.Join(s.deps.AgentSkillsDir, sk.Name)
+	if err := os.MkdirAll(newDir, 0o750); err != nil {
+		return fmt.Errorf("creating skill directory: %w", err)
+	}
+
+	oldPath := filepath.Join(s.deps.AgentSkillsDir, sk.Name+".md")
+	newPath := filepath.Join(newDir, "SKILL.md")
+
+	if _, err := os.Stat(oldPath); err == nil {
+		if err := os.Rename(oldPath, newPath); err != nil {
+			return fmt.Errorf("moving skill file: %w", err)
+		}
+	}
+
+	sk.Dir = newDir
+	sk.Source = newPath
+	return nil
 }
 
 type scheduleAddInput struct {
@@ -598,7 +884,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 			return err
 		}
 		if configPath != "" {
-			return tool.AddScheduleToConfig(configPath, cfg.Name, cfg.Schedule,
+			return config.AddScheduleToConfig(configPath, cfg.Name, cfg.Schedule,
 				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
 				agentName, cfg.Tags, cfg.Enabled)
 		}
@@ -774,7 +1060,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 			return err
 		}
 		if configPath != "" {
-			return tool.UpdateScheduleInConfig(configPath, cfg.Name, cfg.Schedule,
+			return config.UpdateScheduleInConfig(configPath, cfg.Name, cfg.Schedule,
 				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
 				agentName, cfg.Tags, cfg.Enabled)
 		}
@@ -864,7 +1150,7 @@ func (s *Server) handleScheduleDelete(ctx context.Context, req *mcp.CallToolRequ
 			return fmt.Errorf("unregistering schedule: %w", err)
 		}
 		if configPath != "" {
-			if err := tool.RemoveScheduleFromConfig(configPath, input.Name); err != nil {
+			if err := config.RemoveScheduleFromConfig(configPath, input.Name); err != nil {
 				logger.Error("schedule deleted but config persistence failed", "name", input.Name, "error", err)
 			}
 		}

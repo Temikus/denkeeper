@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -29,6 +30,15 @@ type Skill struct {
 	Requires       SkillRequires
 	Body           string // markdown body — everything after the closing +++
 	Source         string // file path, for logging/debugging
+
+	// SubFileNames lists relative paths to sub-files within a subdirectory-form
+	// skill (e.g. "references/oauth.md", "templates/greeting.txt"). Sorted.
+	// Empty for flat-file skills.
+	SubFileNames []string
+
+	// Dir is the skill directory path. Non-empty only for subdirectory-form
+	// skills (containing SKILL.md). Empty for flat-file skills.
+	Dir string
 }
 
 // frontmatter is the TOML-decoded structure of the +++ block.
@@ -110,6 +120,7 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 
 	for _, entry := range entries {
 		var path string
+		var skillDir string
 
 		if entry.IsDir() {
 			candidate := filepath.Join(dir, entry.Name(), "SKILL.md")
@@ -117,6 +128,7 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 				continue // subdir has no SKILL.md — skip
 			}
 			path = candidate
+			skillDir = filepath.Join(dir, entry.Name())
 		} else {
 			if filepath.Ext(entry.Name()) != ".md" {
 				continue
@@ -136,10 +148,37 @@ func LoadDir(dir string, logger *slog.Logger) ([]Skill, error) {
 			continue
 		}
 
+		if skillDir != "" {
+			s.Dir = skillDir
+			s.SubFileNames = ScanSubFiles(skillDir)
+		}
+
 		skills = append(skills, *s)
 	}
 
 	return skills, nil
+}
+
+// AllowedSubdirs lists the permitted subdirectory prefixes within a skill directory.
+var AllowedSubdirs = []string{"references", "templates", "scripts"}
+
+// ScanSubFiles walks allowed subdirectories within a skill directory and returns
+// sorted relative paths to all regular files found.
+func ScanSubFiles(skillDir string) []string {
+	var files []string
+	for _, subdir := range AllowedSubdirs {
+		subEntries, err := os.ReadDir(filepath.Join(skillDir, subdir))
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if !se.IsDir() {
+				files = append(files, subdir+"/"+se.Name())
+			}
+		}
+	}
+	sort.Strings(files)
+	return files
 }
 
 // BuildPromptSection assembles a list of skills into a formatted system-prompt
