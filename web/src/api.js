@@ -183,6 +183,8 @@ export const api = {
   }),
   removeTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   restartTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/restart`, { method: 'POST' }),
+  enableTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/enable`, { method: 'POST' }),
+  disableTool: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/disable`, { method: 'POST' }),
   toolHealth: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/health`),
   toolDefs: name => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/defs`),
   updateDisabledTools: (name, disabledTools) => apiFetch(`/api/v1/tools/${encodeURIComponent(name)}/disabled-tools`, {

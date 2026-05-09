@@ -215,6 +215,75 @@ func (lm *LifecycleManager) UpdateDisabledTools(serverName string, disabledTools
 	return nil
 }
 
+// DisableTool stops the MCP server process, marks it as user-disabled,
+// and persists enabled=false to TOML.
+func (lm *LifecycleManager) DisableTool(ctx context.Context, name string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	info, ok := lm.toolMgr.ServerInfo(name)
+	if !ok {
+		return fmt.Errorf("tool %q not found", name)
+	}
+	if !info.Enabled {
+		return nil
+	}
+
+	cfg, cfgOK := lm.toolMgr.ServerToolConfig(name)
+	if !cfgOK {
+		return fmt.Errorf("tool %q config not found", name)
+	}
+
+	if err := lm.toolMgr.UnregisterServer(name); err != nil {
+		lm.logger.Warn("error stopping tool during disable", "name", name, "error", err)
+	}
+
+	lm.toolMgr.RegisterDisabled(name, cfg, "disabled by user", false)
+
+	if err := updateEnabledInConfig(lm.configPath, name, false); err != nil {
+		return fmt.Errorf("persisting disabled state for %q: %w", name, err)
+	}
+
+	lm.logger.Info("tool disabled", "name", name)
+	return nil
+}
+
+// EnableTool starts a previously disabled MCP server and persists
+// enabled=true to TOML.
+func (lm *LifecycleManager) EnableTool(ctx context.Context, name string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	info, ok := lm.toolMgr.ServerInfo(name)
+	if !ok {
+		return fmt.Errorf("tool %q not found", name)
+	}
+	// Already running — skip. Config-error and user-disabled servers
+	// report Enabled=false, so they fall through to the re-register path.
+	if info.Enabled && info.ConfigError == "" {
+		return nil
+	}
+
+	cfg, cfgOK := lm.toolMgr.ServerToolConfig(name)
+	if !cfgOK {
+		return fmt.Errorf("tool %q config not found", name)
+	}
+
+	_ = lm.toolMgr.UnregisterServer(name)
+
+	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
+		lm.toolMgr.RegisterDisabled(name, cfg, err.Error(), false)
+		return fmt.Errorf("enabling tool %q: %w", name, err)
+	}
+
+	if err := updateEnabledInConfig(lm.configPath, name, true); err != nil {
+		return fmt.Errorf("persisting enabled state for %q: %w", name, err)
+	}
+
+	lm.logger.Info("tool enabled", "name", name)
+	return nil
+}
+
 // AddPlugin validates, optionally spawns, registers, and persists the
 // [plugins.<name>] section.
 // validatePluginConfig checks that a plugin config has valid type and required fields.

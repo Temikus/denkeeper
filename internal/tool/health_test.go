@@ -92,6 +92,9 @@ func TestServerStatus_Disabled(t *testing.T) {
 	if status.RestartCount != 4 {
 		t.Errorf("RestartCount = %d, want 4", status.RestartCount)
 	}
+	if status.Enabled {
+		t.Error("expected Enabled = false for restart-exhausted server")
+	}
 }
 
 func TestStartHealthChecker_DisabledByConfig(t *testing.T) {
@@ -270,5 +273,69 @@ func TestRestartServer_SSE_RecoveryOnFailure(t *testing.T) {
 	}
 	if info.LastError == "" {
 		t.Error("LastError should be set after failed restart")
+	}
+}
+
+func TestRegisterDisabled_UserDisabled(t *testing.T) {
+	m := NewManager(testLogger())
+	cfg := config.ToolConfig{
+		Command: "/usr/bin/tool",
+	}
+
+	m.RegisterDisabled("my-tool", cfg, "disabled by user", false)
+
+	status, ok := m.ServerInfo("my-tool")
+	if !ok {
+		t.Fatal("expected server to be found")
+	}
+	if status.Status != "disabled" {
+		t.Errorf("Status = %q, want %q", status.Status, "disabled")
+	}
+	if status.Enabled {
+		t.Error("expected Enabled = false")
+	}
+	if status.ConfigError != "" {
+		t.Errorf("ConfigError = %q, want empty", status.ConfigError)
+	}
+}
+
+func TestRegisterDisabled_ConfigError(t *testing.T) {
+	m := NewManager(testLogger())
+	cfg := config.ToolConfig{
+		Transport: "sse",
+	}
+
+	m.RegisterDisabled("bad-tool", cfg, "url is required for sse transport", true)
+
+	status, ok := m.ServerInfo("bad-tool")
+	if !ok {
+		t.Fatal("expected server to be found")
+	}
+	if status.Status != "config_error" {
+		t.Errorf("Status = %q, want %q", status.Status, "config_error")
+	}
+	if status.Enabled {
+		t.Error("expected Enabled = false")
+	}
+	if status.ConfigError != "url is required for sse transport" {
+		t.Errorf("ConfigError = %q, want %q", status.ConfigError, "url is required for sse transport")
+	}
+}
+
+func TestServerStatus_UserDisabledTakesPriority(t *testing.T) {
+	m := NewManager(testLogger())
+	m.servers["test"] = &serverConn{
+		name:         "test",
+		transport:    "stdio",
+		userDisabled: true,
+		lastError:    "some error",
+	}
+
+	status, ok := m.ServerInfo("test")
+	if !ok {
+		t.Fatal("expected server to be found")
+	}
+	if status.Status != "disabled" {
+		t.Errorf("Status = %q, want %q (userDisabled should take priority)", status.Status, "disabled")
 	}
 }
