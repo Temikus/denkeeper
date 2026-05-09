@@ -144,6 +144,32 @@ type TelemetryStore interface {
 	GetCostsByAgent(ctx context.Context) ([]AgentCostSummary, error)
 	GetCostsByProvider(ctx context.Context) ([]ProviderCostSummary, error)
 	PruneByCount(ctx context.Context, maxConversations int) (int, error)
+
+	BumpSkillView(ctx context.Context, agent, skill string) error
+	BumpSkillUse(ctx context.Context, agent, skill string) error
+	BumpSkillPatch(ctx context.Context, agent, skill string) error
+	GetSkillUsage(ctx context.Context, agent, skill string) (*SkillUsageStats, error)
+	ListSkillUsage(ctx context.Context, agent string) ([]SkillUsageStats, error)
+	SetSkillState(ctx context.Context, agent, skill, state string) error
+	SetSkillPinned(ctx context.Context, agent, skill string, pinned bool) error
+	SetSkillOrigin(ctx context.Context, agent, skill, origin string) error
+}
+
+// SkillUsageStats holds per-skill telemetry counters and metadata.
+type SkillUsageStats struct {
+	SkillName     string     `db:"skill_name" json:"skill_name"`
+	AgentName     string     `db:"agent_name" json:"agent_name"`
+	ViewCount     int        `db:"view_count" json:"view_count"`
+	UseCount      int        `db:"use_count" json:"use_count"`
+	PatchCount    int        `db:"patch_count" json:"patch_count"`
+	LastViewedAt  *time.Time `db:"last_viewed_at" json:"last_viewed_at,omitempty"`
+	LastUsedAt    *time.Time `db:"last_used_at" json:"last_used_at,omitempty"`
+	LastPatchedAt *time.Time `db:"last_patched_at" json:"last_patched_at,omitempty"`
+	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
+	State         string     `db:"state" json:"state"`
+	Pinned        bool       `db:"pinned" json:"pinned"`
+	ArchivedAt    *time.Time `db:"archived_at" json:"archived_at,omitempty"`
+	Origin        string     `db:"origin" json:"origin"`
 }
 
 // SQLiteMemoryStore implements MemoryStore and TelemetryStore using SQLite.
@@ -238,6 +264,27 @@ CREATE TABLE IF NOT EXISTS conversation_stats (
 );
 `
 
+const skillUsageSchema = `
+CREATE TABLE IF NOT EXISTS skill_usage (
+    skill_name      TEXT NOT NULL,
+    agent_name      TEXT NOT NULL DEFAULT '',
+    view_count      INTEGER NOT NULL DEFAULT 0,
+    use_count       INTEGER NOT NULL DEFAULT 0,
+    patch_count     INTEGER NOT NULL DEFAULT 0,
+    last_viewed_at  DATETIME,
+    last_used_at    DATETIME,
+    last_patched_at DATETIME,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    state           TEXT NOT NULL DEFAULT 'active',
+    pinned          INTEGER NOT NULL DEFAULT 0,
+    archived_at     DATETIME,
+    origin          TEXT NOT NULL DEFAULT 'unknown',
+    PRIMARY KEY (agent_name, skill_name)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_usage_state ON skill_usage(state);
+CREATE INDEX IF NOT EXISTS idx_skill_usage_last_used ON skill_usage(last_used_at);
+`
+
 const channelSchema = `
 CREATE TABLE IF NOT EXISTS active_channels (
     adapter_key TEXT PRIMARY KEY,
@@ -266,6 +313,9 @@ func initDB(db *sqlx.DB) error {
 	}
 	if _, err := db.Exec(channelSchema); err != nil {
 		return fmt.Errorf("initializing channel schema: %w", err)
+	}
+	if _, err := db.Exec(skillUsageSchema); err != nil {
+		return fmt.Errorf("initializing skill usage schema: %w", err)
 	}
 	return nil
 }
@@ -982,4 +1032,128 @@ func (s *SQLiteMemoryStore) ListActiveChannels(ctx context.Context) (map[string]
 		result[key] = name
 	}
 	return result, rows.Err()
+}
+
+// --- Skill telemetry ---
+
+func (s *SQLiteMemoryStore) BumpSkillView(ctx context.Context, agent, skill string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, view_count, last_viewed_at, created_at)
+		VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			view_count = view_count + 1,
+			last_viewed_at = CURRENT_TIMESTAMP`,
+		skill, agent)
+	if err != nil {
+		return fmt.Errorf("bumping skill view: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) BumpSkillUse(ctx context.Context, agent, skill string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, use_count, last_used_at, created_at)
+		VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			use_count = use_count + 1,
+			last_used_at = CURRENT_TIMESTAMP`,
+		skill, agent)
+	if err != nil {
+		return fmt.Errorf("bumping skill use: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) BumpSkillPatch(ctx context.Context, agent, skill string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, patch_count, last_patched_at, created_at)
+		VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			patch_count = patch_count + 1,
+			last_patched_at = CURRENT_TIMESTAMP`,
+		skill, agent)
+	if err != nil {
+		return fmt.Errorf("bumping skill patch: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) GetSkillUsage(ctx context.Context, agent, skill string) (*SkillUsageStats, error) {
+	var stats SkillUsageStats
+	err := s.db.GetContext(ctx, &stats,
+		`SELECT skill_name, agent_name, view_count, use_count, patch_count,
+		        last_viewed_at, last_used_at, last_patched_at, created_at,
+		        state, pinned, archived_at, origin
+		 FROM skill_usage WHERE agent_name = ? AND skill_name = ?`,
+		agent, skill)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting skill usage: %w", err)
+	}
+	return &stats, nil
+}
+
+func (s *SQLiteMemoryStore) ListSkillUsage(ctx context.Context, agent string) ([]SkillUsageStats, error) {
+	var stats []SkillUsageStats
+	err := s.db.SelectContext(ctx, &stats,
+		`SELECT skill_name, agent_name, view_count, use_count, patch_count,
+		        last_viewed_at, last_used_at, last_patched_at, created_at,
+		        state, pinned, archived_at, origin
+		 FROM skill_usage WHERE agent_name = ?
+		 ORDER BY skill_name ASC`,
+		agent)
+	if err != nil {
+		return nil, fmt.Errorf("listing skill usage: %w", err)
+	}
+	return stats, nil
+}
+
+func (s *SQLiteMemoryStore) SetSkillState(ctx context.Context, agent, skill, state string) error {
+	var archivedAt any
+	if state == "archived" {
+		archivedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, state, archived_at, created_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			state = excluded.state,
+			archived_at = excluded.archived_at`,
+		skill, agent, state, archivedAt)
+	if err != nil {
+		return fmt.Errorf("setting skill state: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) SetSkillPinned(ctx context.Context, agent, skill string, pinned bool) error {
+	pinnedInt := 0
+	if pinned {
+		pinnedInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, pinned, created_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			pinned = excluded.pinned`,
+		skill, agent, pinnedInt)
+	if err != nil {
+		return fmt.Errorf("setting skill pinned: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteMemoryStore) SetSkillOrigin(ctx context.Context, agent, skill, origin string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_usage (skill_name, agent_name, origin, created_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(agent_name, skill_name) DO UPDATE SET
+			origin = excluded.origin`,
+		skill, agent, origin)
+	if err != nil {
+		return fmt.Errorf("setting skill origin: %w", err)
+	}
+	return nil
 }

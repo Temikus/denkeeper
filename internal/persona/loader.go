@@ -21,6 +21,27 @@ type Identity struct {
 // DefaultPrompt is the fallback system prompt when no persona files are available.
 const DefaultPrompt = "You are Denkeeper, a helpful personal AI assistant."
 
+const (
+	DefaultMemoryCharLimit = 2200
+	DefaultUserCharLimit   = 1375
+)
+
+// MemoryFullError is returned when a persona section would exceed its char limit.
+type MemoryFullError struct {
+	Section        string
+	Limit          int
+	Current        int
+	Adding         int
+	CurrentEntries []string
+}
+
+func (e *MemoryFullError) Error() string {
+	return fmt.Sprintf(
+		"persona %s at %d/%d chars; adding %d chars would exceed the limit. Replace or remove existing entries first.",
+		e.Section, e.Current, e.Limit, e.Adding,
+	)
+}
+
 // Persona holds the content of persona definition files. All exported fields
 // are guarded by mu; callers must use the accessor methods or hold the lock.
 type Persona struct {
@@ -34,6 +55,9 @@ type Persona struct {
 	identityRaw string
 	identity    *Identity
 
+	memoryCharLimit int // 0 = unlimited
+	userCharLimit   int // 0 = unlimited
+
 	// Editable tracks which sections the agent can modify without elevated permissions.
 	// true = freely writable; false = requires approval or elevated permissions.
 	Editable map[string]bool
@@ -42,6 +66,15 @@ type Persona struct {
 // Dir returns the directory the persona was loaded from.
 // Empty string means no write path is available.
 func (p *Persona) Dir() string { return p.dir }
+
+// SetCharLimits configures the character limits for MEMORY.md and USER.md.
+// A value of 0 means unlimited.
+func (p *Persona) SetCharLimits(memory, user int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.memoryCharLimit = memory
+	p.userCharLimit = user
+}
 
 // GetSoul returns the SOUL.md content.
 func (p *Persona) GetSoul() string {
@@ -200,6 +233,17 @@ func (p *Persona) saveLocked(section, content string) error {
 	if p.dir == "" {
 		return fmt.Errorf("persona: no directory set, cannot save %q section", section)
 	}
+
+	trimmed := strings.TrimSpace(content)
+	if section == "user" && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
+		return &MemoryFullError{
+			Section: "user",
+			Limit:   p.userCharLimit,
+			Current: len(p.user),
+			Adding:  len(trimmed),
+		}
+	}
+
 	filename, err := sectionFilename(section)
 	if err != nil {
 		return err
@@ -209,7 +253,6 @@ func (p *Persona) saveLocked(section, content string) error {
 	}
 	target := filepath.Join(p.dir, filename)
 	tmp := target + ".tmp"
-	trimmed := strings.TrimSpace(content)
 	if err := os.WriteFile(tmp, []byte(trimmed+"\n"), 0600); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("persona: writing %s: %w", filename, err)
@@ -252,6 +295,21 @@ func (p *Persona) AppendMemoryEntry(entry string) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	proposedLen := len(entry)
+	if p.memory != "" {
+		proposedLen += len(p.memory) + len("\n\n---\n\n")
+	}
+
+	if p.memoryCharLimit > 0 && proposedLen > p.memoryCharLimit {
+		return &MemoryFullError{
+			Section:        "memory",
+			Limit:          p.memoryCharLimit,
+			Current:        len(p.memory),
+			Adding:         len(entry),
+			CurrentEntries: splitMemoryEntries(p.memory),
+		}
+	}
 
 	var updated string
 	if p.memory == "" {
@@ -451,14 +509,24 @@ func (p *Persona) SystemPrompt() string {
 	b.WriteString(p.soul)
 
 	if p.user != "" {
-		b.WriteString("\n\n# User\n\n")
+		b.WriteString("\n\n")
+		b.WriteString(sectionHeader("User", len(p.user), p.userCharLimit))
 		b.WriteString(p.user)
 	}
 
 	if p.memory != "" {
-		b.WriteString("\n\n# Memory\n\n")
+		b.WriteString("\n\n")
+		b.WriteString(sectionHeader("Memory", len(p.memory), p.memoryCharLimit))
 		b.WriteString(p.memory)
 	}
 
 	return b.String()
+}
+
+func sectionHeader(name string, current, limit int) string {
+	if limit <= 0 {
+		return "# " + name + "\n\n"
+	}
+	pct := current * 100 / limit
+	return fmt.Sprintf("# %s [%d%% — %d/%d chars]\n\n", name, pct, current, limit)
 }

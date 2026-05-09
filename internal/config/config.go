@@ -444,6 +444,30 @@ type AgentInstanceConfig struct {
 	// SupervisorContextMessages overrides the default number (5) of recent
 	// conversation messages included in the supervisor's review prompt.
 	SupervisorContextMessages int `toml:"supervisor_context_messages"`
+
+	// ReviewerModel is the LLM model used for post-turn reviews. If empty,
+	// post-turn review is disabled for this agent.
+	ReviewerModel string `toml:"reviewer_model"`
+
+	// ReviewerProvider is the LLM provider for the reviewer. If empty,
+	// inherits the agent's own llm_provider.
+	ReviewerProvider string `toml:"reviewer_provider"`
+
+	// ReviewMaxIterations limits the reviewer's tool-call rounds. 0 means
+	// use the default (6).
+	ReviewMaxIterations int `toml:"review_max_iterations"`
+
+	// ReviewTimeout is the maximum duration for a review pass (e.g. "2m").
+	// 0 or empty means use the default (2m).
+	ReviewTimeout string `toml:"review_timeout"`
+
+	// NudgeMemoryInterval is the number of user turns between automatic
+	// memory review nudges. 0 means disabled.
+	NudgeMemoryInterval int `toml:"nudge_memory_interval"`
+
+	// NudgeSkillInterval is the number of tool-call rounds between automatic
+	// skill review nudges. 0 means disabled.
+	NudgeSkillInterval int `toml:"nudge_skill_interval"`
 }
 
 // ChannelConfig defines a named routing endpoint that binds adapter chats to an
@@ -715,6 +739,10 @@ type MemoryConfig struct {
 	MaxConversations int `toml:"max_conversations"`
 	// CleanupInterval is how often retention policies are enforced (Go duration string). Default "1h".
 	CleanupInterval string `toml:"cleanup_interval"`
+	// PersonaMemoryCharLimit caps MEMORY.md size in characters. 0 = unlimited.
+	PersonaMemoryCharLimit int `toml:"persona_memory_char_limit"`
+	// PersonaUserCharLimit caps USER.md size in characters. 0 = unlimited.
+	PersonaUserCharLimit int `toml:"persona_user_char_limit"`
 }
 
 // KVConfig configures the per-agent key-value store.
@@ -987,6 +1015,12 @@ func applyScalarDefaults(cfg *Config) {
 	}
 	if cfg.Memory.CleanupInterval == "" {
 		cfg.Memory.CleanupInterval = "1h"
+	}
+	if cfg.Memory.PersonaMemoryCharLimit == 0 {
+		cfg.Memory.PersonaMemoryCharLimit = 2200
+	}
+	if cfg.Memory.PersonaUserCharLimit == 0 {
+		cfg.Memory.PersonaUserCharLimit = 1375
 	}
 	if cfg.Agent.PersonaDir == "" {
 		cfg.Agent.PersonaDir = filepath.Join(cfg.DataDir, "agents", "default")

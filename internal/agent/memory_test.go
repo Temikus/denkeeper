@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1372,5 +1374,219 @@ func TestClearMessages_KeepsConversation(t *testing.T) {
 	}
 	if convos[0].MessageCount != 0 {
 		t.Errorf("message count = %d, want 0", convos[0].MessageCount)
+	}
+}
+
+func TestSkillTelemetry_BumpFreshSkill(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	if err := store.BumpSkillUse(ctx, "agent-a", "daily-report"); err != nil {
+		t.Fatalf("BumpSkillUse: %v", err)
+	}
+
+	stats, err := store.GetSkillUsage(ctx, "agent-a", "daily-report")
+	if err != nil {
+		t.Fatalf("GetSkillUsage: %v", err)
+	}
+	if stats == nil {
+		t.Fatal("expected non-nil stats")
+	}
+	if stats.UseCount != 1 {
+		t.Errorf("use_count = %d, want 1", stats.UseCount)
+	}
+	if stats.ViewCount != 0 {
+		t.Errorf("view_count = %d, want 0", stats.ViewCount)
+	}
+	if stats.LastUsedAt == nil {
+		t.Error("last_used_at should be set")
+	}
+	if stats.CreatedAt.IsZero() {
+		t.Error("created_at should be set")
+	}
+}
+
+func TestSkillTelemetry_BumpExistingSkill(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	if err := store.BumpSkillUse(ctx, "a", "sk1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BumpSkillView(ctx, "a", "sk1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BumpSkillUse(ctx, "a", "sk1"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.GetSkillUsage(ctx, "a", "sk1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.UseCount != 2 {
+		t.Errorf("use_count = %d, want 2", stats.UseCount)
+	}
+	if stats.ViewCount != 1 {
+		t.Errorf("view_count = %d, want 1", stats.ViewCount)
+	}
+	if stats.PatchCount != 0 {
+		t.Errorf("patch_count = %d, want 0", stats.PatchCount)
+	}
+}
+
+func TestSkillTelemetry_ConcurrentBumps(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "concurrent.db")
+	store, err := NewSQLiteMemoryStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			_ = store.BumpSkillUse(ctx, "a", "concurrent-skill")
+		}()
+	}
+	wg.Wait()
+
+	stats, err := store.GetSkillUsage(ctx, "a", "concurrent-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.UseCount != n {
+		t.Errorf("use_count = %d, want %d", stats.UseCount, n)
+	}
+}
+
+func TestSkillTelemetry_ListFiltersByAgent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_ = store.BumpSkillUse(ctx, "agent-a", "skill-1")
+	_ = store.BumpSkillUse(ctx, "agent-a", "skill-2")
+	_ = store.BumpSkillUse(ctx, "agent-b", "skill-3")
+
+	listA, err := store.ListSkillUsage(ctx, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listA) != 2 {
+		t.Errorf("agent-a skills = %d, want 2", len(listA))
+	}
+
+	listB, err := store.ListSkillUsage(ctx, "agent-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listB) != 1 {
+		t.Errorf("agent-b skills = %d, want 1", len(listB))
+	}
+}
+
+func TestSkillTelemetry_SetSkillState(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_ = store.BumpSkillUse(ctx, "a", "sk")
+	if err := store.SetSkillState(ctx, "a", "sk", "archived"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, _ := store.GetSkillUsage(ctx, "a", "sk")
+	if stats.State != "archived" {
+		t.Errorf("state = %q, want archived", stats.State)
+	}
+	if stats.ArchivedAt == nil {
+		t.Error("archived_at should be set")
+	}
+}
+
+func TestSkillTelemetry_SetSkillPinned(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_ = store.BumpSkillUse(ctx, "a", "sk")
+	if err := store.SetSkillPinned(ctx, "a", "sk", true); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, _ := store.GetSkillUsage(ctx, "a", "sk")
+	if !stats.Pinned {
+		t.Error("pinned = false, want true")
+	}
+
+	if err := store.SetSkillPinned(ctx, "a", "sk", false); err != nil {
+		t.Fatal(err)
+	}
+	stats, _ = store.GetSkillUsage(ctx, "a", "sk")
+	if stats.Pinned {
+		t.Error("pinned = true, want false")
+	}
+}
+
+func TestSkillTelemetry_SetSkillOrigin(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	if err := store.SetSkillOrigin(ctx, "a", "sk", "operator"); err != nil {
+		t.Fatal(err)
+	}
+	stats, _ := store.GetSkillUsage(ctx, "a", "sk")
+	if stats.Origin != "operator" {
+		t.Errorf("origin = %q, want operator", stats.Origin)
+	}
+
+	if err := store.SetSkillOrigin(ctx, "a", "sk", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	stats, _ = store.GetSkillUsage(ctx, "a", "sk")
+	if stats.Origin != "agent" {
+		t.Errorf("origin = %q, want agent", stats.Origin)
+	}
+}
+
+func TestSkillTelemetry_GetSkillUsage_NotFound(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	stats, err := store.GetSkillUsage(context.Background(), "x", "nonexistent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats != nil {
+		t.Error("expected nil stats for nonexistent skill")
 	}
 }

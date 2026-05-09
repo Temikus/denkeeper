@@ -1,6 +1,7 @@
 package persona
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -644,5 +645,152 @@ func TestNewEmpty_IncludesIdentity(t *testing.T) {
 	p := NewEmpty("/tmp/test")
 	if !p.IsEditable("identity") {
 		t.Error("NewEmpty persona should have identity as editable")
+	}
+}
+
+func TestMemory_LimitEnforced(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul content")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCharLimits(50, 0)
+
+	if err := p.AppendMemoryEntry("short"); err != nil {
+		t.Fatalf("first append should succeed: %v", err)
+	}
+
+	longEntry := strings.Repeat("x", 50)
+	err = p.AppendMemoryEntry(longEntry)
+	if err == nil {
+		t.Fatal("expected MemoryFullError")
+	}
+	var memErr *MemoryFullError
+	if !errors.As(err, &memErr) {
+		t.Fatalf("expected *MemoryFullError, got %T: %v", err, err)
+	}
+	if memErr.Section != "memory" {
+		t.Errorf("section = %q, want memory", memErr.Section)
+	}
+	if memErr.Limit != 50 {
+		t.Errorf("limit = %d, want 50", memErr.Limit)
+	}
+}
+
+func TestMemory_ReplaceUnderLimit(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCharLimits(20, 0)
+
+	if err := p.AppendMemoryEntry(strings.Repeat("a", 20)); err != nil {
+		t.Fatalf("first append should succeed: %v", err)
+	}
+
+	if err := p.Save("memory", strings.Repeat("b", 15)); err != nil {
+		t.Fatalf("replace should succeed: %v", err)
+	}
+	if p.GetMemory() != strings.Repeat("b", 15) {
+		t.Error("memory content should be replaced")
+	}
+}
+
+func TestMemory_ZeroLimitIsUnlimited(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	big := strings.Repeat("x", 10000)
+	if err := p.AppendMemoryEntry(big); err != nil {
+		t.Fatalf("unlimited append should succeed: %v", err)
+	}
+}
+
+func TestMemoryFullError_HasCurrentEntries(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCharLimits(40, 0)
+
+	_ = p.AppendMemoryEntry("entry one")
+	_ = p.AppendMemoryEntry("entry two")
+
+	err = p.AppendMemoryEntry(strings.Repeat("x", 40))
+	var memErr *MemoryFullError
+	if !errors.As(err, &memErr) {
+		t.Fatalf("expected *MemoryFullError, got %T", err)
+	}
+	if len(memErr.CurrentEntries) != 2 {
+		t.Errorf("current_entries = %d, want 2", len(memErr.CurrentEntries))
+	}
+}
+
+func TestUser_LimitEnforced(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCharLimits(0, 20)
+
+	err = p.Save("user", strings.Repeat("x", 25))
+	if err == nil {
+		t.Fatal("expected MemoryFullError for user section")
+	}
+	var memErr *MemoryFullError
+	if !errors.As(err, &memErr) {
+		t.Fatalf("expected *MemoryFullError, got %T", err)
+	}
+	if memErr.Section != "user" {
+		t.Errorf("section = %q, want user", memErr.Section)
+	}
+}
+
+func TestSystemPrompt_IncludesUsageHeader(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), strings.Repeat("m", 1100))
+	writeTestFile(t, filepath.Join(dir, "USER.md"), "user info")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetCharLimits(2200, 1375)
+
+	prompt := p.SystemPrompt()
+	if !strings.Contains(prompt, "# Memory [50%") {
+		t.Errorf("prompt should contain Memory usage header, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# User [") {
+		t.Errorf("prompt should contain User usage header, got:\n%s", prompt)
+	}
+}
+
+func TestSystemPrompt_NoUsageHeaderWhenUnlimited(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "soul")
+	writeTestFile(t, filepath.Join(dir, "MEMORY.md"), "mem")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := p.SystemPrompt()
+	if strings.Contains(prompt, "%") {
+		t.Errorf("unlimited should not have usage header, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# Memory\n") {
+		t.Errorf("should have plain Memory header, got:\n%s", prompt)
 	}
 }
