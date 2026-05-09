@@ -42,14 +42,18 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"name":        sk.Name,
 		"description": sk.Description,
 		"version":     sk.Version,
 		"triggers":    sk.Triggers,
 		"body":        sk.Body,
 		"agent":       agentName,
-	})
+	}
+	if len(sk.SubFileNames) > 0 {
+		resp["sub_files"] = sk.SubFileNames
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type skillCreateInput struct {

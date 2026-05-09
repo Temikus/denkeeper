@@ -747,6 +747,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 		Description string   `json:"description,omitempty"`
 		Version     string   `json:"version,omitempty"`
 		Triggers    []string `json:"triggers,omitempty"`
+		SubFiles    []string `json:"sub_files,omitempty"`
 		Agent       string   `json:"agent"`
 	}
 
@@ -768,6 +769,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 				Description: sk.Description,
 				Version:     sk.Version,
 				Triggers:    sk.Triggers,
+				SubFiles:    sk.SubFileNames,
 				Agent:       name,
 			})
 		}
@@ -798,6 +800,7 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 		Description string   `json:"description,omitempty"`
 		Version     string   `json:"version,omitempty"`
 		Triggers    []string `json:"triggers,omitempty"`
+		SubFiles    []string `json:"sub_files,omitempty"`
 	}
 
 	skills := e.Skills()
@@ -808,6 +811,7 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 			Description: sk.Description,
 			Version:     sk.Version,
 			Triggers:    sk.Triggers,
+			SubFiles:    sk.SubFileNames,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

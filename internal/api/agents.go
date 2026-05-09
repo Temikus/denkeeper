@@ -29,6 +29,12 @@ type agentConfigUpdateInput struct {
 	Supervisor                *string                  `json:"supervisor,omitempty"` // empty string to clear
 	SupervisorTimeout         *string                  `json:"supervisor_timeout,omitempty"`
 	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`
+	ReviewerModel             *string                  `json:"reviewer_model,omitempty"`
+	ReviewerProvider          *string                  `json:"reviewer_provider,omitempty"`
+	ReviewMaxIterations       *int                     `json:"review_max_iterations,omitempty"`
+	ReviewTimeout             *string                  `json:"review_timeout,omitempty"`
+	NudgeMemoryInterval       *int                     `json:"nudge_memory_interval,omitempty"`
+	NudgeSkillInterval        *int                     `json:"nudge_skill_interval,omitempty"`
 }
 
 // handleAgentConfigUpdate godoc
@@ -123,6 +129,16 @@ func validateAgentInput(input *agentConfigUpdateInput) string {
 	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
 		return "cost_limit_hard must be >= 0"
 	}
+	if msg := validateSupervisorFields(input); msg != "" {
+		return msg
+	}
+	if msg := validateReviewerFields(input); msg != "" {
+		return msg
+	}
+	return ""
+}
+
+func validateSupervisorFields(input *agentConfigUpdateInput) string {
 	if input.SupervisorTimeout != nil && *input.SupervisorTimeout != "" {
 		if _, err := time.ParseDuration(*input.SupervisorTimeout); err != nil {
 			return "invalid supervisor_timeout: " + err.Error()
@@ -131,8 +147,24 @@ func validateAgentInput(input *agentConfigUpdateInput) string {
 	if input.SupervisorContextMessages != nil && *input.SupervisorContextMessages < 0 {
 		return "supervisor_context_messages must be >= 0"
 	}
-	// Supervisor validation is deferred to handleAgentConfigUpdate where we
-	// have access to the dispatcher and can verify the supervisor agent exists.
+	return ""
+}
+
+func validateReviewerFields(input *agentConfigUpdateInput) string {
+	if input.ReviewTimeout != nil && *input.ReviewTimeout != "" {
+		if _, err := time.ParseDuration(*input.ReviewTimeout); err != nil {
+			return "invalid review_timeout: " + err.Error()
+		}
+	}
+	if input.ReviewMaxIterations != nil && *input.ReviewMaxIterations < 0 {
+		return "review_max_iterations must be >= 0"
+	}
+	if input.NudgeMemoryInterval != nil && *input.NudgeMemoryInterval < 0 {
+		return "nudge_memory_interval must be >= 0"
+	}
+	if input.NudgeSkillInterval != nil && *input.NudgeSkillInterval < 0 {
+		return "nudge_skill_interval must be >= 0"
+	}
 	return ""
 }
 
@@ -161,7 +193,33 @@ func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (i
 	if input.Fallbacks != nil {
 		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
 	}
+	applyReviewerRuntime(e, input)
 	return 0, ""
+}
+
+func applyReviewerRuntime(e *agent.Engine, input *agentConfigUpdateInput) {
+	if input.NudgeMemoryInterval != nil || input.NudgeSkillInterval != nil {
+		memInterval := 0
+		skillInterval := 0
+		if input.NudgeMemoryInterval != nil {
+			memInterval = *input.NudgeMemoryInterval
+		}
+		if input.NudgeSkillInterval != nil {
+			skillInterval = *input.NudgeSkillInterval
+		}
+		e.SetNudgeConfig(memInterval, skillInterval)
+	}
+	if input.ReviewMaxIterations != nil || input.ReviewTimeout != nil {
+		var revTimeout time.Duration
+		if input.ReviewTimeout != nil && *input.ReviewTimeout != "" {
+			revTimeout, _ = time.ParseDuration(*input.ReviewTimeout)
+		}
+		maxIter := 0
+		if input.ReviewMaxIterations != nil {
+			maxIter = *input.ReviewMaxIterations
+		}
+		e.SetReviewerConfig(maxIter, revTimeout)
+	}
 }
 
 // syncAgentCostLimits propagates cost limit changes to the live CostTracker.
@@ -274,6 +332,12 @@ func buildAgentConfigChanges(input *agentConfigUpdateInput) map[string]any {
 	if input.CostLimitHard != nil {
 		changes["cost_limit_hard"] = *input.CostLimitHard
 	}
+	addSupervisorConfigChanges(changes, input)
+	addReviewerConfigChanges(changes, input)
+	return changes
+}
+
+func addSupervisorConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
 	if input.Supervisor != nil {
 		changes["supervisor"] = *input.Supervisor
 	}
@@ -283,7 +347,27 @@ func buildAgentConfigChanges(input *agentConfigUpdateInput) map[string]any {
 	if input.SupervisorContextMessages != nil {
 		changes["supervisor_context_messages"] = *input.SupervisorContextMessages
 	}
-	return changes
+}
+
+func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
+	if input.ReviewerModel != nil {
+		changes["reviewer_model"] = *input.ReviewerModel
+	}
+	if input.ReviewerProvider != nil {
+		changes["reviewer_provider"] = *input.ReviewerProvider
+	}
+	if input.ReviewMaxIterations != nil {
+		changes["review_max_iterations"] = *input.ReviewMaxIterations
+	}
+	if input.ReviewTimeout != nil {
+		changes["review_timeout"] = *input.ReviewTimeout
+	}
+	if input.NudgeMemoryInterval != nil {
+		changes["nudge_memory_interval"] = *input.NudgeMemoryInterval
+	}
+	if input.NudgeSkillInterval != nil {
+		changes["nudge_skill_interval"] = *input.NudgeSkillInterval
+	}
 }
 
 // updateInMemoryAgentConfig applies input fields to the in-memory config.
@@ -390,6 +474,11 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	if input.CostLimitHard != nil {
 		ac.CostLimitHard = input.CostLimitHard
 	}
+	applySupervisorFields(ac, input)
+	applyReviewerFields(ac, input)
+}
+
+func applySupervisorFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
 	if input.Supervisor != nil {
 		ac.Supervisor = *input.Supervisor
 	}
@@ -398,6 +487,27 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	}
 	if input.SupervisorContextMessages != nil {
 		ac.SupervisorContextMessages = *input.SupervisorContextMessages
+	}
+}
+
+func applyReviewerFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
+	if input.ReviewerModel != nil {
+		ac.ReviewerModel = *input.ReviewerModel
+	}
+	if input.ReviewerProvider != nil {
+		ac.ReviewerProvider = *input.ReviewerProvider
+	}
+	if input.ReviewMaxIterations != nil {
+		ac.ReviewMaxIterations = *input.ReviewMaxIterations
+	}
+	if input.ReviewTimeout != nil {
+		ac.ReviewTimeout = *input.ReviewTimeout
+	}
+	if input.NudgeMemoryInterval != nil {
+		ac.NudgeMemoryInterval = *input.NudgeMemoryInterval
+	}
+	if input.NudgeSkillInterval != nil {
+		ac.NudgeSkillInterval = *input.NudgeSkillInterval
 	}
 }
 
