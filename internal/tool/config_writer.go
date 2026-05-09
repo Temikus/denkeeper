@@ -134,10 +134,10 @@ func updateDisabledToolsInConfig(path, name string, disabledTools []string) erro
 // updateEnabledInConfig persists only the enabled field for a specific tool
 // server without touching any other config fields.
 func updateEnabledInConfig(path, name string, enabled bool) error {
-	configMu.Lock()
-	defer configMu.Unlock()
+	config.ConfigMu.Lock()
+	defer config.ConfigMu.Unlock()
 
-	raw, err := readRawConfig(path)
+	raw, err := config.ReadRawConfig(path)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func updateEnabledInConfig(path, name string, enabled bool) error {
 	tools[name] = entry
 	raw["tools"] = tools
 
-	return writeRawConfig(path, raw)
+	return config.WriteRawConfig(path, raw)
 }
 
 // removeToolFromConfig reads the TOML config at path, removes [tools.<name>],
