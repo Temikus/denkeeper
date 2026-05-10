@@ -2205,7 +2205,8 @@ func (s *Server) handleToolHealth(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param name path string true "Tool server name"
 // @Success 200 {object} tool.ServerStatus "Restarted tool server"
-// @Failure 404 {object} map[string]string
+// @Failure 404 {object} map[string]string "Tool not found"
+// @Failure 500 {object} map[string]string "Restart failed"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name}/restart [post]
 func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
@@ -2215,7 +2216,11 @@ func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := s.deps.LifecycleMgr.RestartTool(r.Context(), name); err != nil {
 		s.logger.Error("restarting tool", "name", name, "error", err)
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if errors.Is(err, tool.ErrToolNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
@@ -2230,7 +2235,8 @@ func (s *Server) handleRestartTool(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param name path string true "Tool server name"
 // @Success 200 {object} tool.ServerStatus "Enabled tool server"
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} map[string]string "Enable failed"
+// @Failure 404 {object} map[string]string "Tool not found"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name}/enable [post]
 func (s *Server) handleEnableTool(w http.ResponseWriter, r *http.Request) {
@@ -2240,7 +2246,11 @@ func (s *Server) handleEnableTool(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := s.deps.LifecycleMgr.EnableTool(r.Context(), name); err != nil {
 		s.logger.Error("enabling tool", "name", name, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if errors.Is(err, tool.ErrToolNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)
@@ -2255,7 +2265,8 @@ func (s *Server) handleEnableTool(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param name path string true "Tool server name"
 // @Success 200 {object} tool.ServerStatus "Disabled tool server"
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} map[string]string "Disable failed"
+// @Failure 404 {object} map[string]string "Tool not found"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name}/disable [post]
 func (s *Server) handleDisableTool(w http.ResponseWriter, r *http.Request) {
@@ -2265,7 +2276,11 @@ func (s *Server) handleDisableTool(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := s.deps.LifecycleMgr.DisableTool(r.Context(), name); err != nil {
 		s.logger.Error("disabling tool", "name", name, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if errors.Is(err, tool.ErrToolNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	info, _ := s.deps.LifecycleMgr.ToolManager().ServerInfo(name)

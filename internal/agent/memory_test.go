@@ -1590,3 +1590,172 @@ func TestSkillTelemetry_GetSkillUsage_NotFound(t *testing.T) {
 		t.Error("expected nil stats for nonexistent skill")
 	}
 }
+
+func TestFTS5_BasicSearch(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_ = store.UpdateConversationStats(ctx, convID, "default", StoredMessage{}, 0, 0)
+
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "Tell me about quantum computing research",
+	})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "assistant", Content: "Quantum computing uses qubits instead of classical bits",
+	})
+
+	hits, err := store.SearchMessages(ctx, "quantum", 10, "")
+	if err != nil {
+		t.Fatalf("SearchMessages: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected at least one hit for 'quantum'")
+	}
+	if hits[0].ConversationID != convID {
+		t.Errorf("conversation_id = %q, want %q", hits[0].ConversationID, convID)
+	}
+	if !strings.Contains(hits[0].Snippet, "quantum") && !strings.Contains(hits[0].Snippet, "Quantum") {
+		t.Errorf("snippet should contain the search term, got: %s", hits[0].Snippet)
+	}
+}
+
+func TestFTS5_TriggerKeepsIndexInSync(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_ = store.UpdateConversationStats(ctx, convID, "default", StoredMessage{}, 0, 0)
+
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "uniquetoken_xyzzy for deletion test",
+	})
+
+	hits, err := store.SearchMessages(ctx, "uniquetoken_xyzzy", 10, "")
+	if err != nil {
+		t.Fatalf("search after insert: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("expected 1 hit after insert, got %d", len(hits))
+	}
+
+	// Delete the conversation (which cascades to messages).
+	if err := store.DeleteConversation(ctx, convID); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
+
+	hits, err = store.SearchMessages(ctx, "uniquetoken_xyzzy", 10, "")
+	if err != nil {
+		t.Fatalf("search after delete: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("expected 0 hits after delete, got %d", len(hits))
+	}
+}
+
+func TestFTS5_AgentFilter(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convA, _ := store.GetOrCreateConversation(ctx, "test", "a1")
+	_ = store.UpdateConversationStats(ctx, convA, "alice", StoredMessage{}, 0, 0)
+	_, _ = store.AddMessage(ctx, convA, StoredMessage{
+		Role: "user", Content: "secret recipe for chocolate cake",
+	})
+
+	convB, _ := store.GetOrCreateConversation(ctx, "test", "b1")
+	_ = store.UpdateConversationStats(ctx, convB, "bob", StoredMessage{}, 0, 0)
+	_, _ = store.AddMessage(ctx, convB, StoredMessage{
+		Role: "user", Content: "recipe for banana bread",
+	})
+
+	// Alice should only see her own conversation.
+	hits, err := store.SearchMessages(ctx, "recipe", 10, "alice")
+	if err != nil {
+		t.Fatalf("SearchMessages alice: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("alice expected 1 hit, got %d", len(hits))
+	}
+	if hits[0].ConversationID != convA {
+		t.Errorf("hit conversation = %q, want %q", hits[0].ConversationID, convA)
+	}
+
+	// Bob should only see his own conversation.
+	hits, err = store.SearchMessages(ctx, "recipe", 10, "bob")
+	if err != nil {
+		t.Fatalf("SearchMessages bob: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("bob expected 1 hit, got %d", len(hits))
+	}
+	if hits[0].ConversationID != convB {
+		t.Errorf("hit conversation = %q, want %q", hits[0].ConversationID, convB)
+	}
+
+	// No filter returns both.
+	hits, err = store.SearchMessages(ctx, "recipe", 10, "")
+	if err != nil {
+		t.Fatalf("SearchMessages no filter: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Errorf("no filter expected 2 hits, got %d", len(hits))
+	}
+}
+
+func TestFTS5_EmptyQuery(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	_, err = store.SearchMessages(context.Background(), "", 10, "")
+	if err == nil {
+		t.Error("expected error for empty query")
+	}
+	_, err = store.SearchMessages(context.Background(), "   ", 10, "")
+	if err == nil {
+		t.Error("expected error for whitespace-only query")
+	}
+}
+
+func TestFTS5_PhraseSearch(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_ = store.UpdateConversationStats(ctx, convID, "default", StoredMessage{}, 0, 0)
+
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "the quick brown fox jumps over the lazy dog",
+	})
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "the fox is brown and quick",
+	})
+
+	// Phrase search should only match the exact sequence.
+	hits, err := store.SearchMessages(ctx, `"quick brown fox"`, 10, "")
+	if err != nil {
+		t.Fatalf("SearchMessages phrase: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("phrase search expected 1 hit, got %d", len(hits))
+	}
+}

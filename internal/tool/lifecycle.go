@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -9,6 +10,10 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/config"
 )
+
+// ErrToolNotFound is returned when an operation targets a tool name that
+// is not registered with the manager.
+var ErrToolNotFound = errors.New("tool not found")
 
 // DefaultMaxTools is the combined limit for tools + plugins.
 const DefaultMaxTools = 50
@@ -223,7 +228,7 @@ func (lm *LifecycleManager) DisableTool(ctx context.Context, name string) error 
 
 	info, ok := lm.toolMgr.ServerInfo(name)
 	if !ok {
-		return fmt.Errorf("tool %q not found", name)
+		return fmt.Errorf("tool %q: %w", name, ErrToolNotFound)
 	}
 	if !info.Enabled {
 		return nil
@@ -256,7 +261,7 @@ func (lm *LifecycleManager) EnableTool(ctx context.Context, name string) error {
 
 	info, ok := lm.toolMgr.ServerInfo(name)
 	if !ok {
-		return fmt.Errorf("tool %q not found", name)
+		return fmt.Errorf("tool %q: %w", name, ErrToolNotFound)
 	}
 	// Already running — skip. Config-error and user-disabled servers
 	// report Enabled=false, so they fall through to the re-register path.

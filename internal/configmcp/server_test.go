@@ -9,10 +9,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -2505,5 +2507,73 @@ Body content.`
 	}
 	if string(data) != "Some reference notes." {
 		t.Errorf("unexpected file content: %q", string(data))
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: session_search
+// --------------------------------------------------------------------------
+
+func TestSessionSearch_BasicHit(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SearchMessages = func(_ context.Context, query string, limit int, agentFilter string) ([]agent.MessageSearchHit, error) {
+			return []agent.MessageSearchHit{
+				{
+					ID:             1,
+					ConversationID: "chan:test",
+					Role:           "user",
+					CreatedAt:      time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+					Snippet:        "discussing <b>quantum</b> computing",
+				},
+			}, nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "session_search", map[string]any{
+		"query": "quantum",
+	})
+	if isErr {
+		t.Fatalf("unexpected error: %s", text)
+	}
+	if !strings.Contains(text, "1 result") {
+		t.Errorf("expected '1 result' in output, got: %s", text)
+	}
+	if !strings.Contains(text, "chan:test") {
+		t.Errorf("expected conversation ID in output, got: %s", text)
+	}
+	if !strings.Contains(text, "quantum") {
+		t.Errorf("expected snippet content in output, got: %s", text)
+	}
+}
+
+func TestSessionSearch_EmptyQuery(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SearchMessages = func(_ context.Context, _ string, _ int, _ string) ([]agent.MessageSearchHit, error) {
+			t.Fatal("SearchMessages should not be called with empty query")
+			return nil, nil
+		}
+	})
+
+	_, isErr := callTool(t, session, "session_search", map[string]any{
+		"query": "",
+	})
+	if !isErr {
+		t.Error("expected error for empty query")
+	}
+}
+
+func TestSessionSearch_NilDep(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.SearchMessages = nil
+	})
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range result.Tools {
+		if tool.Name == "session_search" {
+			t.Error("session_search should not be registered when SearchMessages dep is nil")
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 )
 
 func TestSkills_ListAll(t *testing.T) {
@@ -257,7 +258,7 @@ func TestSkills_TelemetryBumpedOnChat(t *testing.T) {
 			{
 				Name: "default", Tier: "autonomous", Adapters: []string{"api"},
 				Skills: []skill.Skill{
-					skill.NewTestSkill("greet", "Greeting skill", []string{"command:hello"}, "Greet the user warmly."),
+					skilltest.New("greet", "Greeting skill", []string{"command:hello"}, "Greet the user warmly."),
 				},
 			},
 		},
@@ -341,8 +342,8 @@ func TestSkills_TelemetryListByAgent(t *testing.T) {
 			{
 				Name: "default", Tier: "autonomous", Adapters: []string{"api"},
 				Skills: []skill.Skill{
-					skill.NewTestSkill("greet", "Greeting", []string{"command:hello"}, "Greet."),
-					skill.NewTestSkill("help", "Help", []string{"command:help"}, "Help."),
+					skilltest.New("greet", "Greeting", []string{"command:hello"}, "Greet."),
+					skilltest.New("help", "Help", []string{"command:help"}, "Help."),
 				},
 			},
 		},

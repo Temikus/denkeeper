@@ -41,22 +41,6 @@ type Skill struct {
 	Dir string
 }
 
-// NewTestSkill constructs a Skill with parsed triggers for use in tests.
-// Panics if any trigger string is invalid.
-func NewTestSkill(name, description string, triggers []string, body string) Skill {
-	parsed, err := ParseTriggers(triggers)
-	if err != nil {
-		panic("skill.NewTestSkill: " + err.Error())
-	}
-	return Skill{
-		Name:           name,
-		Description:    description,
-		Triggers:       triggers,
-		ParsedTriggers: parsed,
-		Body:           body,
-	}
-}
-
 // frontmatter is the TOML-decoded structure of the +++ block.
 type frontmatter struct {
 	Name        string        `toml:"name"`

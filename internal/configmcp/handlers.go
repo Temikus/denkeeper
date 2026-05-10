@@ -21,7 +21,10 @@ import (
 	"github.com/Temikus/denkeeper/internal/skill"
 )
 
-// registerTools adds all four Config MCP tools to the server.
+// registerTools registers all Config MCP tools. Each optional dependency is
+// nil-guarded here so registration helpers stay unconditional.
+//
+//nolint:gocyclo // dispatcher with one branch per optional dep; not reducible without hurting readability.
 func (s *Server) registerTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "skill_create",
@@ -316,11 +319,7 @@ func (s *Server) registerTools() {
 
 	// Cost summary tool.
 	if s.deps.CostSummary != nil {
-		s.mcpServer.AddTool(&mcp.Tool{
-			Name:        "get_cost_summary",
-			Description: "Return current cost tracking data: global cost, per-session costs, and budget limit.",
-			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
-		}, s.handleGetCostSummary)
+		s.registerCostTools()
 	}
 
 	// KV store tools (registered only when a KVStore is provided).
@@ -341,6 +340,11 @@ func (s *Server) registerTools() {
 	// Channel tools (registered only when channel access is available).
 	if s.deps.GetChannels != nil {
 		s.registerChannelTools()
+	}
+
+	// Session search (registered only when SearchMessages is provided).
+	if s.deps.SearchMessages != nil {
+		s.registerSearchTools()
 	}
 }
 
@@ -1217,6 +1221,14 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 		summary, string(payload), applyFn, false)
 }
 
+func (s *Server) registerCostTools() {
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "get_cost_summary",
+		Description: "Return current cost tracking data: global cost, per-session costs, and budget limit.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+	}, s.handleGetCostSummary)
+}
+
 func (s *Server) handleGetCostSummary(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	data := s.deps.CostSummary()
 	out, err := json.MarshalIndent(data, "", "  ")
@@ -1749,4 +1761,50 @@ func toolError(text string) *mcp.CallToolResult {
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 		IsError: true,
 	}
+}
+
+func (s *Server) registerSearchTools() {
+	s.mcpServer.AddTool(&mcp.Tool{
+		Name:        "session_search",
+		Description: `Search across all past conversations for content matching a query. Returns relevant excerpts with conversation IDs you can follow up on. Use for "did we discuss X last week?" — separate from your live conversation context.`,
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"query": {"type": "string", "description": "FTS5 search expression. Use plain words for AND, OR for either, quotes for phrase, NEAR(a b, 5) for proximity."},
+				"limit": {"type": "integer", "description": "Max results (default 20, max 50)"}
+			},
+			"required": ["query"]
+		}`),
+	}, s.handleSessionSearch)
+}
+
+func (s *Server) handleSessionSearch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return toolError("invalid arguments: " + err.Error()), nil
+	}
+	if strings.TrimSpace(input.Query) == "" {
+		return toolError("query is required"), nil
+	}
+
+	hits, err := s.deps.SearchMessages(ctx, input.Query, input.Limit, s.deps.AgentName)
+	if err != nil {
+		s.deps.Logger.Error("session_search failed", "query", input.Query, "error", err)
+		return toolError("search failed: " + err.Error()), nil
+	}
+
+	if len(hits) == 0 {
+		return toolText("No results found for: " + input.Query), nil
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d result(s) for: %s\n\n", len(hits), input.Query)
+	for i, h := range hits {
+		fmt.Fprintf(&sb, "%d. [%s] %s (%s)\n   %s\n\n",
+			i+1, h.ConversationID, h.Role, h.CreatedAt.Format("2006-01-02 15:04"), h.Snippet)
+	}
+	return toolText(sb.String()), nil
 }

@@ -131,6 +131,10 @@ type Deps struct {
 	// SetSkillOrigin marks a skill's provenance. Best-effort; nil = no-op.
 	SetSkillOrigin func(agent, skill, origin string)
 
+	// SearchMessages searches across conversations for content matching a query.
+	// Nil → session_search tool not registered.
+	SearchMessages func(ctx context.Context, query string, limit int, agentFilter string) ([]agent.MessageSearchHit, error)
+
 	// NudgeReset resets nudge counters after an agent self-write.
 	// kind: "memory" or "skill". The callee resolves convID from engine adapter context.
 	NudgeReset func(kind string)

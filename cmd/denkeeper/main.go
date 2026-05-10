@@ -838,6 +838,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
 		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),
 		SetSkillOrigin:           buildSkillOriginSetter(abc.memory, abc.logger),
+		SearchMessages:           buildSearchMessages(agentName, abc.memory),
 		NudgeReset: func(kind string) {
 			_, _, convID := e.AdapterContext()
 			if convID != "" {
@@ -928,6 +929,14 @@ func buildSkillOriginSetter(memory agent.MemoryStore, logger *slog.Logger) func(
 			logger.Debug("setting skill origin failed", "skill", skillName, "origin", origin, "error", err)
 		}
 	}
+}
+
+func buildSearchMessages(agentName string, memory agent.MemoryStore) func(ctx context.Context, query string, limit int, agentFilter string) ([]agent.MessageSearchHit, error) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	return ts.SearchMessages
 }
 
 // connectWebMCP creates the per-agent Web MCP server (search + fetch tools),

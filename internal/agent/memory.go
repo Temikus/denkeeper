@@ -153,6 +153,8 @@ type TelemetryStore interface {
 	SetSkillState(ctx context.Context, agent, skill, state string) error
 	SetSkillPinned(ctx context.Context, agent, skill string, pinned bool) error
 	SetSkillOrigin(ctx context.Context, agent, skill, origin string) error
+
+	SearchMessages(ctx context.Context, query string, limit int, agentFilter string) ([]MessageSearchHit, error)
 }
 
 // SkillUsageStats holds per-skill telemetry counters and metadata.
@@ -293,6 +295,37 @@ CREATE TABLE IF NOT EXISTS active_channels (
 );
 `
 
+var fts5Statements = []string{
+	`CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    content,
+    role UNINDEXED,
+    conversation_id UNINDEXED,
+    content='messages',
+    content_rowid='id',
+    tokenize='porter unicode61 remove_diacritics 2'
+)`,
+	`CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content, role, conversation_id)
+    VALUES (new.id, new.content, new.role, new.conversation_id);
+END`,
+	`CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content, role, conversation_id)
+    VALUES ('delete', old.id, old.content, old.role, old.conversation_id);
+END`,
+	`CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content, role, conversation_id)
+    VALUES ('delete', old.id, old.content, old.role, old.conversation_id);
+    INSERT INTO messages_fts(rowid, content, role, conversation_id)
+    VALUES (new.id, new.content, new.role, new.conversation_id);
+END`,
+}
+
+const fts5Backfill = `
+INSERT OR IGNORE INTO messages_fts(rowid, content, role, conversation_id)
+SELECT id, content, role, conversation_id FROM messages
+WHERE id NOT IN (SELECT rowid FROM messages_fts)
+`
+
 // initDB runs the base schema then applies telemetry migrations.
 func initDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
@@ -316,6 +349,9 @@ func initDB(db *sqlx.DB) error {
 	}
 	if _, err := db.Exec(skillUsageSchema); err != nil {
 		return fmt.Errorf("initializing skill usage schema: %w", err)
+	}
+	if err := initFTS5(db); err != nil {
+		return fmt.Errorf("initializing FTS5: %w", err)
 	}
 	return nil
 }
@@ -1154,6 +1190,73 @@ func (s *SQLiteMemoryStore) SetSkillOrigin(ctx context.Context, agent, skill, or
 		skill, agent, origin)
 	if err != nil {
 		return fmt.Errorf("setting skill origin: %w", err)
+	}
+	return nil
+}
+
+// MessageSearchHit represents a single FTS5 search result.
+type MessageSearchHit struct {
+	ID             int64     `db:"id"              json:"id"`
+	ConversationID string    `db:"conversation_id" json:"conversation_id"`
+	Role           string    `db:"role"            json:"role"`
+	CreatedAt      time.Time `db:"created_at"      json:"created_at"`
+	Snippet        string    `db:"snippet"         json:"snippet"`
+}
+
+// SearchMessages performs a full-text search across messages, optionally
+// filtered by agent name via the conversation_stats join.
+func (s *SQLiteMemoryStore) SearchMessages(ctx context.Context, query string, limit int, agentFilter string) ([]MessageSearchHit, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("search query must not be empty")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	rows, err := s.db.QueryxContext(ctx, `
+		SELECT
+			m.id,
+			m.conversation_id,
+			m.role,
+			m.created_at,
+			snippet(messages_fts, 0, '<b>', '</b>', '...', 32) AS snippet
+		FROM messages_fts
+		JOIN messages m ON m.id = messages_fts.rowid
+		JOIN conversation_stats cs ON cs.conversation_id = m.conversation_id
+		WHERE messages_fts MATCH ?
+		  AND (? = '' OR cs.agent = ?)
+		ORDER BY rank
+		LIMIT ?
+	`, query, agentFilter, agentFilter, limit)
+	if err != nil {
+		return nil, fmt.Errorf("searching messages: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var hits []MessageSearchHit
+	for rows.Next() {
+		var h MessageSearchHit
+		if err := rows.StructScan(&h); err != nil {
+			return nil, fmt.Errorf("scanning search hit: %w", err)
+		}
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
+
+// initFTS5 creates the FTS5 virtual table and triggers, then backfills
+// any existing messages not yet indexed.
+func initFTS5(db *sqlx.DB) error {
+	for _, stmt := range fts5Statements {
+		if _, err := db.Exec(stmt); err != nil {
+			if strings.Contains(err.Error(), "already exists") {
+				continue
+			}
+			return fmt.Errorf("FTS5 schema: %w", err)
+		}
+	}
+	if _, err := db.Exec(fts5Backfill); err != nil {
+		return fmt.Errorf("FTS5 backfill: %w", err)
 	}
 	return nil
 }

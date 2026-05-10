@@ -878,7 +878,7 @@ func (m *Manager) RestartServer(ctx context.Context, name string) error {
 	sc, ok := m.servers[name]
 	if !ok {
 		m.mu.RUnlock()
-		return fmt.Errorf("server %q is not registered", name)
+		return fmt.Errorf("server %q: %w", name, ErrToolNotFound)
 	}
 	cfg := sc.cfg
 	// Carry over the negotiated transport so restarts skip failed protocols
