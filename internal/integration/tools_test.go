@@ -149,8 +149,8 @@ func TestTools_EnableNotFound(t *testing.T) {
 	h := toolHarness(t)
 
 	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools/nonexistent/enable", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -158,8 +158,8 @@ func TestTools_DisableNotFound(t *testing.T) {
 	h := toolHarness(t)
 
 	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools/nonexistent/disable", nil))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
