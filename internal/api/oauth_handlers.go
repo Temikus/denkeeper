@@ -218,9 +218,44 @@ func (s *Server) startOAuthReconnect(name string, mgr *tool.Manager) {
 			s.logger.Warn("oauth: reconnection failed (expected if waiting for auth)",
 				slog.String("tool", name),
 				slog.String("error", err.Error()))
-		} else {
+			return
+		}
+
+		// Some MCP servers (e.g. Fastmail) accept Initialize and ListTools
+		// without requiring OAuth. The SDK only triggers the authorization
+		// flow on 401/403, so if the server never returns those during
+		// registration we must initiate the flow proactively.
+		oh := mgr.GetOAuthHandler(name)
+		if oh == nil || oh.HasToken() {
 			s.logger.Debug("oauth: re-registration completed successfully",
 				slog.String("tool", name))
+			return
+		}
+
+		serverURL := mgr.ServerResolvedURL(name)
+		if serverURL == "" {
+			s.logger.Error("oauth: resolved URL not available for proactive OAuth",
+				slog.String("tool", name))
+			return
+		}
+
+		s.logger.Info("oauth: server connected without auth, proactively initiating OAuth",
+			slog.String("tool", name))
+
+		if err := oh.InitiateOAuth(bgCtx, serverURL); err != nil {
+			s.logger.Warn("oauth: proactive OAuth initiation failed",
+				slog.String("tool", name),
+				slog.String("error", err.Error()))
+			return
+		}
+
+		// Re-register to discover tools with the new auth token.
+		s.logger.Info("oauth: proactive OAuth complete, re-registering with token",
+			slog.String("tool", name))
+		if err := mgr.RegisterServer(bgCtx, name, cfg); err != nil {
+			s.logger.Warn("oauth: post-OAuth re-registration failed",
+				slog.String("tool", name),
+				slog.String("error", err.Error()))
 		}
 	}()
 }

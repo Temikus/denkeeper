@@ -71,6 +71,7 @@ type oauthHandler interface {
 	HasToken() bool
 	ClearToken() error
 	Close()
+	InitiateOAuth(ctx context.Context, serverURL string) error
 }
 
 // OAuthSupport holds OAuth infrastructure injected into the Manager.
@@ -832,6 +833,17 @@ func (m *Manager) GetOAuthHandler(name string) oauthHandler {
 		return sc.oauthHandler
 	}
 	return nil
+}
+
+// ServerResolvedURL returns the resolved (non-redacted) URL for a remote
+// server. Returns empty string if the server is not found or has no URL.
+func (m *Manager) ServerResolvedURL(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if sc, ok := m.servers[name]; ok {
+		return sc.url
+	}
+	return ""
 }
 
 func (m *Manager) UnregisterServer(name string) error {

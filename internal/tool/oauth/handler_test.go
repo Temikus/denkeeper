@@ -2,9 +2,11 @@ package oauth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -723,4 +725,92 @@ func TestPersistToken_DCRCredentialsCaptured(t *testing.T) {
 	if got.AuthStyle != oauth2.AuthStyleInParams {
 		t.Errorf("auth style: got %d, want %d", got.AuthStyle, oauth2.AuthStyleInParams)
 	}
+}
+
+// mockOAuthMetadataServer returns a test server that serves the OAuth
+// metadata endpoints required for the authorization flow:
+//   - /.well-known/oauth-protected-resource/* → Protected Resource Metadata
+//   - /.well-known/oauth-authorization-server → Authorization Server Metadata
+func mockOAuthMetadataServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource/mcp":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"resource":              srv.URL + "/mcp",
+				"authorization_servers": []string{srv.URL},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                           srv.URL,
+				"authorization_endpoint":           srv.URL + "/authorize",
+				"token_endpoint":                   srv.URL + "/token",
+				"response_types_supported":         []string{"code"},
+				"code_challenge_methods_supported": []string{"S256"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestHandler_InitiateOAuth_CreatesPendingAuth(t *testing.T) {
+	store, pending, logger := testHandlerDeps(t)
+	srv := mockOAuthMetadataServer(t)
+
+	h, err := NewHandler(HandlerConfig{
+		ToolName:     "fastmail",
+		CallbackURL:  "http://localhost:8080/api/v1/tools/oauth/callback",
+		ClientID:     "test-client",
+		ClientSecret: "test-secret",
+		Store:        store,
+		Pending:      pending,
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// InitiateOAuth blocks on WaitForCompletion, so run it in a goroutine.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- h.InitiateOAuth(ctx, srv.URL+"/mcp")
+	}()
+
+	// Poll for the PendingAuth to appear with an auth URL.
+	var pa *PendingAuth
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for pa == nil {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for PendingAuth with auth URL")
+		case <-ticker.C:
+			pa = pending.GetByToolName("fastmail")
+			if pa != nil && pa.AuthURL == "" {
+				pa = nil
+			}
+		}
+	}
+
+	if pa.AuthURL == "" {
+		t.Fatal("expected non-empty auth URL")
+	}
+	if pa.ToolName != "fastmail" {
+		t.Errorf("tool name = %q, want %q", pa.ToolName, "fastmail")
+	}
+
+	// Cancel ctx to unblock WaitForCompletion and let the goroutine exit.
+	cancel()
+	<-errCh
 }

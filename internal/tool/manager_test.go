@@ -459,6 +459,26 @@ func TestDisabledCount_NegativeDriftCorrected(t *testing.T) {
 	}
 }
 
+func TestManager_ServerResolvedURL_NotFound(t *testing.T) {
+	m := NewManager(testLogger())
+	if got := m.ServerResolvedURL("nonexistent"); got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+func TestManager_ServerResolvedURL_ReturnsStoredURL(t *testing.T) {
+	m := NewManager(testLogger())
+	m.servers["sse-tool"] = &serverConn{
+		name: "sse-tool",
+		url:  "https://api.example.com/mcp",
+	}
+
+	got := m.ServerResolvedURL("sse-tool")
+	if got != "https://api.example.com/mcp" {
+		t.Errorf("ServerResolvedURL = %q, want %q", got, "https://api.example.com/mcp")
+	}
+}
+
 func toolNames(defs []llm.ToolDef) []string {
 	names := make([]string, len(defs))
 	for i, td := range defs {

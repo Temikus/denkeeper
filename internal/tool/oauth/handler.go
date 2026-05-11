@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -447,6 +448,30 @@ func (h *Handler) HasToken() bool {
 // Close cancels any background token refresh operations.
 func (h *Handler) Close() {
 	h.cancel()
+}
+
+// InitiateOAuth proactively triggers the OAuth authorization flow for servers
+// that accept connections without requiring authentication. It constructs a
+// synthetic 401 response and delegates to Authorize, which discovers OAuth
+// metadata from the server URL and runs the authorization code flow.
+// This method blocks until the user completes the OAuth flow or ctx is cancelled.
+func (h *Handler) InitiateOAuth(ctx context.Context, serverURL string) error {
+	h.logger.Info("oauth: proactively initiating OAuth flow",
+		slog.String("tool", h.toolName),
+		slog.String("server_url", serverURL))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL, nil)
+	if err != nil {
+		return fmt.Errorf("oauth: creating synthetic request for %q: %w", h.toolName, err)
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+
+	return h.Authorize(ctx, req, resp)
 }
 
 // ClearToken removes the cached token and stored token.
