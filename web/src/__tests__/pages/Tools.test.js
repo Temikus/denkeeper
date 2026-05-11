@@ -37,28 +37,29 @@ describe('Tools page', () => {
     })
   })
 
-  test('shows Connected status for connected tools', async () => {
+  test('shows connected tools with green status dot', async () => {
     render(Tools)
     await waitFor(() => {
-      const matches = screen.getAllByText('Connected')
-      expect(matches.length).toBeGreaterThan(0)
+      const dot = document.querySelector('.status-dot.green')
+      expect(dot).toBeInTheDocument()
     })
   })
 
-  test('shows Error status for errored tools', async () => {
+  test('shows error tools with red status dot', async () => {
     render(Tools)
     await waitFor(() => {
-      expect(screen.getByText('Error')).toBeInTheDocument()
+      const dot = document.querySelector('.status-dot.red')
+      expect(dot).toBeInTheDocument()
     })
   })
 
-  test('groups tools into Connected and Errors sections', async () => {
+  test('groups tools into Connected and Needs attention sections', async () => {
     render(Tools)
     await waitFor(() => {
       const headings = screen.getAllByRole('heading', { level: 3 })
-      const texts = headings.map(h => h.textContent)
-      expect(texts).toContain('Connected')
-      expect(texts).toContain('Errors')
+      const texts = headings.map(h => h.textContent.trim())
+      expect(texts.some(t => t.startsWith('Connected'))).toBe(true)
+      expect(texts.some(t => t.startsWith('Needs attention'))).toBe(true)
     })
   })
 
@@ -119,20 +120,23 @@ describe('Tools page', () => {
     })
   })
 
-  test('shows Retry connection button for errored tools', async () => {
+  test('shows Retry button for errored tools', async () => {
     render(Tools)
     await waitFor(() => {
-      expect(screen.getByText('Retry connection')).toBeInTheDocument()
+      expect(screen.getByText('Retry')).toBeInTheDocument()
     })
   })
 
-  test('shows Edit and Remove buttons for tools', async () => {
+  test('kebab menu contains Edit and Remove actions', async () => {
     render(Tools)
+    await waitFor(() => screen.getByText('web_search'))
+
+    const kebabBtns = screen.getAllByTitle('More actions')
+    await fireEvent.click(kebabBtns[0])
+
     await waitFor(() => {
-      const editBtns = screen.getAllByText('Edit')
-      const removeBtns = screen.getAllByText('Remove')
-      expect(editBtns.length).toBeGreaterThan(0)
-      expect(removeBtns.length).toBeGreaterThan(0)
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getByText('Remove')).toBeInTheDocument()
     })
   })
 
@@ -307,7 +311,7 @@ describe('Tools add form', () => {
 })
 
 describe('Tools edit form', () => {
-  test('clicking Edit loads tool config into inline form', async () => {
+  test('clicking Edit in kebab menu loads tool config into inline form', async () => {
     server.use(
       http.get('/api/v1/tools/:name', () =>
         HttpResponse.json({
@@ -323,18 +327,20 @@ describe('Tools edit form', () => {
     render(Tools)
     await waitFor(() => screen.getByText('web_search'))
 
-    const editBtns = screen.getAllByText('Edit')
-    await fireEvent.click(editBtns[0])
+    const kebabBtns = screen.getAllByTitle('More actions')
+    await fireEvent.click(kebabBtns[0])
+
+    await waitFor(() => screen.getByText('Edit'))
+    await fireEvent.click(screen.getByText('Edit'))
 
     await waitFor(() => {
-      // Form should be populated with tool data
       expect(screen.getByText('Save Changes')).toBeInTheDocument()
     })
   })
 })
 
 describe('Tools retry and remove', () => {
-  test('Retry connection calls restart API', async () => {
+  test('Retry button calls restart API', async () => {
     let restartCalled = false
     server.use(
       http.post('/api/v1/tools/:name/restart', () => {
@@ -344,27 +350,28 @@ describe('Tools retry and remove', () => {
     )
 
     render(Tools)
-    await waitFor(() => screen.getByText('Retry connection'))
+    await waitFor(() => screen.getByText('Retry'))
 
-    await fireEvent.click(screen.getByText('Retry connection'))
+    await fireEvent.click(screen.getByText('Retry'))
 
     await waitFor(() => {
       expect(restartCalled).toBe(true)
     })
   })
 
-  test('Remove button opens confirm dialog', async () => {
+  test('Remove in kebab menu opens confirm dialog', async () => {
     render(Tools)
     await waitFor(() => screen.getByText('web_search'))
 
-    const removeBtns = screen.getAllByText('Remove')
-    await fireEvent.click(removeBtns[0])
+    const kebabBtns = screen.getAllByTitle('More actions')
+    await fireEvent.click(kebabBtns[0])
+
+    await waitFor(() => screen.getByText('Remove'))
+    await fireEvent.click(screen.getByText('Remove'))
 
     await waitFor(() => {
-      // Confirm dialog overlay should appear
       const overlay = document.querySelector('.overlay')
       expect(overlay).toBeInTheDocument()
-      // Confirm dialog mentions the tool name in a <strong> tag
       const strong = overlay.querySelector('strong')
       expect(strong.textContent).toBe('web_search')
     })

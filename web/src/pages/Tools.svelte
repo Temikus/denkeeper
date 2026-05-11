@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import KebabMenu from '../components/KebabMenu.svelte'
 
   let tools = []
   let plugins = []
@@ -790,42 +791,42 @@
       <p class="muted">No MCP tools configured. Add one to extend your agent's capabilities.</p>
     {:else}
       {#if connectedTools.length > 0}
-        <h3 class="group-heading">Connected</h3>
+        <h3 class="group-heading">Connected <span class="group-count">&middot; {connectedTools.length}</span></h3>
         <div class="tool-cards">
           {#each connectedTools as t}
             <div class="tool-card">
               <div class="tool-card-row">
                 <span class="status-dot green"></span>
-                <span class="tool-name">{t.name}</span>
-                <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
-                <span class="status-badge connected">{statusLabel(t)}</span>
-                {#if t.auth_type === 'oauth'}
-                  {#if t.oauth_status?.has_token}
-                    <span class="oauth-badge connected" title="OAuth connected">OAuth</span>
-                  {:else}
-                    <span class="oauth-badge needs-auth" title="Authorization required">OAuth</span>
-                  {/if}
-                {/if}
-                {#if toolCount(t)}
-                  <button class="tool-count-link" onclick={() => openDefsModal(t.name, t.tool_names?.length || 0)}>{toolCount(t)}</button>
-                {:else}
-                  <span class="tool-count">{'\u2014'}</span>
-                {/if}
-                <div class="tool-actions">
-                  {#if t.auth_type === 'oauth'}
-                    {#if t.oauth_status?.has_token}
-                      <button class="btn-ghost btn-card" onclick={() => revokeOAuthToken(t.name)}>Disconnect</button>
-                    {:else}
-                      <button class="btn-primary btn-card" onclick={() => startOAuthConnect(t.name)} disabled={connectingOAuth === t.name}>
-                        {connectingOAuth === t.name ? 'Connecting...' : 'Connect'}
-                      </button>
+                <div class="tool-card-info">
+                  <div class="tool-card-meta">
+                    <span class="tool-name">{t.name}</span>
+                    {#if t.auth_type === 'oauth'}
+                      <span class="auth-tag oauth">OAuth</span>
                     {/if}
+                    {#if toolCount(t)}
+                      <span class="meta-sep">&middot;</span>
+                      <button class="tool-count-link" onclick={() => openDefsModal(t.name, t.tool_names?.length || 0)}>{toolCount(t)}</button>
+                    {/if}
+                  </div>
+                  <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
+                </div>
+                <div class="tool-card-actions">
+                  {#if t.auth_type === 'oauth' && !t.oauth_status?.has_token}
+                    <button class="btn-primary btn-card" onclick={() => startOAuthConnect(t.name)} disabled={connectingOAuth === t.name}>
+                      {connectingOAuth === t.name ? 'Connecting...' : 'Connect'}
+                    </button>
+                  {:else}
+                    <button class="btn-ghost btn-card" onclick={() => disableTool(t.name)} disabled={togglingTool === t.name}>
+                      {togglingTool === t.name ? 'Disabling...' : 'Disable'}
+                    </button>
                   {/if}
-                  <button class="btn-ghost btn-card" onclick={() => disableTool(t.name)} disabled={togglingTool === t.name}>
-                    {togglingTool === t.name ? 'Disabling...' : 'Disable'}
-                  </button>
-                  <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
-                  <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
+                  <KebabMenu items={[
+                    { label: 'Edit', onclick: () => openEditToolForm(t.name) },
+                    ...(toolCount(t) ? [{ label: 'View tools', onclick: () => openDefsModal(t.name, t.tool_names?.length || 0) }] : []),
+                    ...(t.auth_type === 'oauth' && t.oauth_status?.has_token ? [{ label: 'Disconnect OAuth', onclick: () => revokeOAuthToken(t.name) }] : []),
+                    { separator: true },
+                    { label: 'Remove', danger: true, onclick: () => { confirmRemove = { kind: 'tool', name: t.name } } },
+                  ]} />
                 </div>
               </div>
               {#if editingToolName === t.name}
@@ -841,22 +842,30 @@
       {/if}
 
       {#if disabledTools.length > 0}
-        <h3 class="group-heading">Disabled</h3>
+        <h3 class="group-heading">Disabled <span class="group-count">&middot; {disabledTools.length}</span></h3>
         <div class="tool-cards">
           {#each disabledTools as t}
             <div class="tool-card">
               <div class="tool-card-row">
                 <span class="status-dot grey"></span>
-                <span class="tool-name">{t.name}</span>
-                <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
-                <span class="status-badge disabled">{statusLabel(t)}</span>
-                <span class="tool-count">{'—'}</span>
-                <div class="tool-actions">
+                <div class="tool-card-info">
+                  <div class="tool-card-meta">
+                    <span class="tool-name">{t.name}</span>
+                    {#if t.auth_type === 'oauth'}
+                      <span class="auth-tag oauth">OAuth</span>
+                    {/if}
+                  </div>
+                  <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
+                </div>
+                <div class="tool-card-actions">
                   <button class="btn-primary btn-card" onclick={() => enableTool(t.name)} disabled={togglingTool === t.name}>
                     {togglingTool === t.name ? 'Enabling...' : 'Enable'}
                   </button>
-                  <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
-                  <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
+                  <KebabMenu items={[
+                    { label: 'Edit', onclick: () => openEditToolForm(t.name) },
+                    { separator: true },
+                    { label: 'Remove', danger: true, onclick: () => { confirmRemove = { kind: 'tool', name: t.name } } },
+                  ]} />
                 </div>
               </div>
               {#if editingToolName === t.name}
@@ -872,27 +881,36 @@
       {/if}
 
       {#if errorTools.length > 0}
-        <h3 class="group-heading">Errors</h3>
+        <h3 class="group-heading">Needs attention <span class="group-count">&middot; {errorTools.length}</span></h3>
         <div class="tool-cards">
           {#each errorTools as t}
             <div class="tool-card error">
               <div class="tool-card-row">
                 <span class="status-dot red"></span>
-                <span class="tool-name">{t.name}</span>
-                <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
-                <span class="status-badge error">{statusLabel(t)}</span>
-                {#if t.auth_type === 'oauth' && t.oauth_status?.needs_reauth}
-                  <span class="oauth-badge needs-auth" title="Authorization required">OAuth</span>
-                {/if}
-                <span class="tool-count">{'\u2014'}</span>
-                <div class="tool-actions">
+                <div class="tool-card-info">
+                  <div class="tool-card-meta">
+                    <span class="tool-name">{t.name}</span>
+                    {#if t.auth_type === 'oauth'}
+                      <span class="auth-tag oauth">OAuth</span>
+                    {/if}
+                  </div>
+                  <span class="tool-endpoint mono">{toolEndpoint(t)}</span>
+                </div>
+                <div class="tool-card-actions">
                   {#if t.auth_type === 'oauth' && t.oauth_status?.needs_reauth}
                     <button class="btn-primary btn-card" onclick={() => startOAuthConnect(t.name)} disabled={connectingOAuth === t.name}>
                       {connectingOAuth === t.name ? 'Connecting...' : 'Connect'}
                     </button>
+                  {:else if t.last_error && !t.config_error}
+                    <button class="btn-ghost btn-card" onclick={() => restartTool(t.name)} disabled={restartingTool === t.name}>
+                      {restartingTool === t.name ? 'Retrying...' : 'Retry'}
+                    </button>
                   {/if}
-                  <button class="btn-ghost btn-card" onclick={() => openEditToolForm(t.name)}>Edit</button>
-                  <button class="btn-ghost btn-card" onclick={() => { confirmRemove = { kind: 'tool', name: t.name } }}>Remove</button>
+                  <KebabMenu items={[
+                    { label: 'Edit', onclick: () => openEditToolForm(t.name) },
+                    { separator: true },
+                    { label: 'Remove', danger: true, onclick: () => { confirmRemove = { kind: 'tool', name: t.name } } },
+                  ]} />
                 </div>
               </div>
               {#if editingToolName === t.name}
@@ -909,7 +927,7 @@
                   <div class="tool-error-content">
                     <div class="tool-error-title">Configuration error</div>
                     <code class="tool-error-msg">{t.config_error}</code>
-                    <p class="tool-error-hint">Fix the configuration in denkeeper.toml, then click Edit or use the Enable button to retry.</p>
+                    <p class="tool-error-hint">Fix the configuration in denkeeper.toml and the tool will retry automatically.</p>
                   </div>
                 </div>
               {:else if t.last_error}
@@ -920,9 +938,6 @@
                   <div class="tool-error-content">
                     <div class="tool-error-title">Connection failed</div>
                     <code class="tool-error-msg">{t.last_error}</code>
-                    <button class="btn-ghost btn-retry" onclick={() => restartTool(t.name)} disabled={restartingTool === t.name}>
-                      {restartingTool === t.name ? 'Retrying...' : 'Retry connection'}
-                    </button>
                   </div>
                 </div>
               {/if}
@@ -1237,12 +1252,15 @@
 
   /* Tool cards grouped layout */
   .group-heading {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 600;
-    margin: 20px 0 10px;
-    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 24px 0 10px;
+    color: var(--text-muted);
   }
   .group-heading:first-of-type { margin-top: 0; }
+  .group-count { font-weight: 400; }
 
   .tool-cards {
     display: flex;
@@ -1255,30 +1273,48 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow: hidden;
+    overflow: visible;
   }
   .tool-card.error {
-    border-color: var(--danger);
-    border-color: rgba(196, 58, 58, 0.35);
+    border-color: rgba(196, 58, 58, 0.25);
   }
 
   .tool-card-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     padding: 14px 16px;
+  }
+
+  .tool-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .tool-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tool-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   .tool-name {
     font-weight: 600;
     font-size: 14px;
     white-space: nowrap;
-    min-width: 100px;
   }
 
   .tool-endpoint {
-    flex: 1;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1286,24 +1322,26 @@
     min-width: 0;
   }
 
-  .status-badge {
-    font-size: 12px;
-    font-weight: 500;
-    padding: 3px 10px;
-    border-radius: 4px;
+  .auth-tag {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
     white-space: nowrap;
-  }
-  .status-badge.connected {
-    background: rgba(61, 143, 98, 0.12);
-    color: var(--success);
-  }
-  .status-badge.error {
-    background: rgba(196, 58, 58, 0.1);
-    color: var(--danger);
-  }
-  .status-badge.disabled {
-    background: rgba(128, 128, 128, 0.1);
+    background: rgba(138, 122, 106, 0.10);
     color: var(--text-muted);
+  }
+  .auth-tag.oauth {
+    background: rgba(234, 179, 8, 0.15);
+    color: #b45309;
+  }
+
+  .meta-sep {
+    color: var(--text-muted);
+    font-size: 12px;
+    opacity: 0.5;
   }
 
   /* Shared settings card (OAuth, Connection settings) */
@@ -1464,36 +1502,6 @@
     color: var(--text-muted);
   }
 
-  .oauth-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 3px;
-    white-space: nowrap;
-    letter-spacing: 0.3px;
-  }
-  .oauth-badge.connected {
-    background: rgba(61, 143, 98, 0.1);
-    color: var(--success);
-  }
-  .oauth-badge.needs-auth {
-    background: rgba(234, 179, 8, 0.15);
-    color: #b45309;
-  }
-
-  .tool-count {
-    font-size: 13px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    min-width: 50px;
-  }
-
-  .tool-actions {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
   .btn-card {
     padding: 5px 14px;
     font-size: 13px;
@@ -1502,6 +1510,7 @@
   /* Inline edit form inside card */
   .tool-card-edit {
     border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
     padding: 0;
   }
   .tool-card-edit .inline-form {
@@ -1516,6 +1525,7 @@
     padding: 12px 16px;
     background: rgba(196, 58, 58, 0.06);
     border-top: 1px solid rgba(196, 58, 58, 0.15);
+    border-radius: 0 0 var(--radius) var(--radius);
   }
   .tool-error-icon {
     color: var(--danger);
@@ -1545,25 +1555,18 @@
     color: var(--text-muted);
     margin: 4px 0 0;
   }
-  .btn-retry {
-    align-self: flex-start;
-    margin-top: 4px;
-    font-size: 13px;
-    padding: 5px 14px;
-  }
 
   /* Clickable tool count link */
   .tool-count-link {
     background: none;
     border: none;
-    font-size: 13px;
+    font-size: 12px;
     color: var(--text-muted);
     cursor: pointer;
     white-space: nowrap;
-    min-width: 50px;
     padding: 0;
     text-decoration: underline;
-    text-decoration-style: dotted;
+    text-decoration-style: dashed;
     text-underline-offset: 3px;
   }
   .tool-count-link:hover { color: var(--text); }

@@ -221,8 +221,8 @@
 {#if confirmDelete}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="overlay" onclick={() => confirmDelete = null} role="dialog" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="confirm-modal" onclick={(e) => e.stopPropagation()}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="confirm-modal" role="alertdialog" aria-label="Confirm deletion" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <h2>Delete key?</h2>
       <p>Are you sure you want to delete <code>{confirmDelete}</code> from agent <strong>{selectedAgent}</strong>?</p>
       <div class="modal-actions">
