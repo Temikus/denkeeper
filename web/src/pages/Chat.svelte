@@ -545,7 +545,7 @@
         bind:value={input}
         onkeydown={handleKeydown}
         oninput={handleInput}
-        placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+        placeholder={$isMobile ? "Type a message..." : "Type a message... (Enter to send, Shift+Enter for newline)"}
         rows="1"
         aria-label="Chat message input"
         data-testid="chat-input"
@@ -1080,7 +1080,7 @@
     }
     .bubble { max-width: 85%; font-size: 15px; line-height: 21px; }
     .bubble-header { display: none; }
-    .input-area { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 0 0; }
+    .input-area { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 16px 0; margin: 0 -16px; }
     .btn-send, .btn-stop {
       width: 38px; height: 38px; border-radius: 50%;
       padding: 0; display: flex; align-items: center; justify-content: center;
@@ -1088,7 +1088,7 @@
     }
     .btn-send::after { content: '↑'; font-size: 18px; }
     .btn-stop::after { content: '■'; font-size: 14px; }
-    textarea { min-height: 38px; padding: 8px 12px; font-size: 15px; }
+    textarea { min-height: 38px; padding: 8px 12px; font-size: 14px; }
     .approval-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
     .pending-banner { padding: 8px; }
   }
