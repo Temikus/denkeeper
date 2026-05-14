@@ -1893,4 +1893,31 @@
   .unsafe-popover-anchor:hover .unsafe-popover {
     display: block;
   }
+
+  @media (max-width: 768px) {
+    .tool-card-row > .status-dot {
+      display: none;
+    }
+    .tool-card-meta {
+      flex-wrap: wrap;
+    }
+    .tool-name {
+      white-space: normal;
+      word-break: break-word;
+    }
+    .tool-endpoint {
+      white-space: normal;
+      word-break: break-all;
+    }
+    .defs-params {
+      margin-left: 8px;
+    }
+    .defs-filter-wrap {
+      flex-wrap: wrap;
+    }
+    .defs-bulk-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
+  }
 </style>
