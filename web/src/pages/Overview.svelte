@@ -229,7 +229,7 @@
   .agent-card:hover { border-color: var(--accent); }
   .agent-name { font-weight: 600; margin-bottom: 6px; }
   .agent-meta { display: flex; gap: 10px; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-  .tier { background: var(--border); padding: 1px 6px; border-radius: 10px; }
+  .tier { background: var(--border); padding: 2px 8px; border-radius: 10px; }
   .agent-model { font-size: 11px; color: var(--text-muted); font-family: monospace; }
   .loading { color: var(--text-muted); }
 
