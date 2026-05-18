@@ -718,6 +718,22 @@ func (m *Manager) ToolServer(toolName string) string {
 	return sc.name
 }
 
+// ToolDescription returns the MCP description for the named tool, or ""
+// if the tool is not found or has no description.
+func (m *Manager) ToolDescription(toolName string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, td := range m.toolDefs {
+		if td.Function.Name == toolName {
+			return td.Function.Description
+		}
+	}
+	if m.parent != nil {
+		return m.parent.ToolDescription(toolName)
+	}
+	return ""
+}
+
 // Execute runs a single tool call and returns the text result.
 // If the tool is not found locally, it delegates to the parent manager.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {

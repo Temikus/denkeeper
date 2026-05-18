@@ -29,6 +29,8 @@ type agentConfigUpdateInput struct {
 	Supervisor                *string                  `json:"supervisor,omitempty"` // empty string to clear
 	SupervisorTimeout         *string                  `json:"supervisor_timeout,omitempty"`
 	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`
+	SupervisorBodyExcerptLen  *int                     `json:"supervisor_body_excerpt_len,omitempty"`
+	SupervisorToolDescLen     *int                     `json:"supervisor_tool_desc_len,omitempty"`
 	ReviewerModel             *string                  `json:"reviewer_model,omitempty"`
 	ReviewerProvider          *string                  `json:"reviewer_provider,omitempty"`
 	ReviewMaxIterations       *int                     `json:"review_max_iterations,omitempty"`
@@ -146,6 +148,12 @@ func validateSupervisorFields(input *agentConfigUpdateInput) string {
 	}
 	if input.SupervisorContextMessages != nil && *input.SupervisorContextMessages < 0 {
 		return "supervisor_context_messages must be >= 0"
+	}
+	if input.SupervisorBodyExcerptLen != nil && *input.SupervisorBodyExcerptLen < 0 {
+		return "supervisor_body_excerpt_len must be >= 0"
+	}
+	if input.SupervisorToolDescLen != nil && *input.SupervisorToolDescLen < 0 {
+		return "supervisor_tool_desc_len must be >= 0"
 	}
 	return ""
 }
@@ -347,6 +355,12 @@ func addSupervisorConfigChanges(changes map[string]any, input *agentConfigUpdate
 	if input.SupervisorContextMessages != nil {
 		changes["supervisor_context_messages"] = *input.SupervisorContextMessages
 	}
+	if input.SupervisorBodyExcerptLen != nil {
+		changes["supervisor_body_excerpt_len"] = *input.SupervisorBodyExcerptLen
+	}
+	if input.SupervisorToolDescLen != nil {
+		changes["supervisor_tool_desc_len"] = *input.SupervisorToolDescLen
+	}
 }
 
 func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
@@ -415,6 +429,16 @@ func (s *Server) applySupervisorChanges(name string, e *agent.Engine, input *age
 			ctxMsgs = *input.SupervisorContextMessages
 		}
 		e.SetSupervisorConfig(timeout, ctxMsgs)
+	}
+	if input.SupervisorBodyExcerptLen != nil || input.SupervisorToolDescLen != nil {
+		var bodyLen, descLen int
+		if input.SupervisorBodyExcerptLen != nil {
+			bodyLen = *input.SupervisorBodyExcerptLen
+		}
+		if input.SupervisorToolDescLen != nil {
+			descLen = *input.SupervisorToolDescLen
+		}
+		e.SetSupervisorExcerptConfig(bodyLen, descLen)
 	}
 	return ""
 }
@@ -487,6 +511,12 @@ func applySupervisorFields(ac *config.AgentInstanceConfig, input *agentConfigUpd
 	}
 	if input.SupervisorContextMessages != nil {
 		ac.SupervisorContextMessages = *input.SupervisorContextMessages
+	}
+	if input.SupervisorBodyExcerptLen != nil {
+		ac.SupervisorBodyExcerptLen = *input.SupervisorBodyExcerptLen
+	}
+	if input.SupervisorToolDescLen != nil {
+		ac.SupervisorToolDescLen = *input.SupervisorToolDescLen
 	}
 }
 

@@ -20,6 +20,7 @@ const (
 type SkillSummary struct {
 	Name         string
 	Description  string
+	Body         string // skill body (markdown); truncated at render time
 	IsScheduled  bool
 	ScheduleName string
 }

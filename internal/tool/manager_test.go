@@ -479,6 +479,63 @@ func TestManager_ServerResolvedURL_ReturnsStoredURL(t *testing.T) {
 	}
 }
 
+func TestToolDescription_Found(t *testing.T) {
+	m := NewManager(testLogger())
+	m.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "search_web", Description: "Search the web for information"}},
+		{Type: "function", Function: llm.FunctionDef{Name: "delete-object", Description: "Delete a Todoist object by ID and type"}},
+	}
+
+	got := m.ToolDescription("delete-object")
+	if got != "Delete a Todoist object by ID and type" {
+		t.Errorf("ToolDescription = %q, want %q", got, "Delete a Todoist object by ID and type")
+	}
+}
+
+func TestToolDescription_NotFound(t *testing.T) {
+	m := NewManager(testLogger())
+	m.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "search_web", Description: "Search the web"}},
+	}
+
+	if got := m.ToolDescription("nonexistent"); got != "" {
+		t.Errorf("ToolDescription for missing tool = %q, want empty", got)
+	}
+}
+
+func TestToolDescription_DelegatesToParent(t *testing.T) {
+	parent := NewManager(testLogger())
+	parent.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "parent-tool", Description: "From parent"}},
+	}
+
+	child := NewManager(testLogger())
+	child.parent = parent
+
+	got := child.ToolDescription("parent-tool")
+	if got != "From parent" {
+		t.Errorf("ToolDescription via parent = %q, want %q", got, "From parent")
+	}
+}
+
+func TestToolDescription_ChildWinsOverParent(t *testing.T) {
+	parent := NewManager(testLogger())
+	parent.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "shared-tool", Description: "Parent version"}},
+	}
+
+	child := NewManager(testLogger())
+	child.parent = parent
+	child.toolDefs = []llm.ToolDef{
+		{Type: "function", Function: llm.FunctionDef{Name: "shared-tool", Description: "Child version"}},
+	}
+
+	got := child.ToolDescription("shared-tool")
+	if got != "Child version" {
+		t.Errorf("ToolDescription = %q, want %q (child should win)", got, "Child version")
+	}
+}
+
 func toolNames(defs []llm.ToolDef) []string {
 	names := make([]string, len(defs))
 	for i, td := range defs {

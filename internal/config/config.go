@@ -449,6 +449,15 @@ type AgentInstanceConfig struct {
 	// conversation messages included in the supervisor's review prompt.
 	SupervisorContextMessages int `toml:"supervisor_context_messages"`
 
+	// SupervisorBodyExcerptLen overrides the max characters of skill body
+	// included in the supervisor review prompt (default 500; 0 = use default).
+	SupervisorBodyExcerptLen int `toml:"supervisor_body_excerpt_len"`
+
+	// SupervisorToolDescLen overrides the max characters of the MCP tool
+	// description included in the supervisor review prompt (default 200;
+	// 0 = use default).
+	SupervisorToolDescLen int `toml:"supervisor_tool_desc_len"`
+
 	// ReviewerModel is the LLM model used for post-turn reviews. If empty,
 	// post-turn review is disabled for this agent.
 	ReviewerModel string `toml:"reviewer_model"`

@@ -140,6 +140,8 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     supervisor = ""                  # supervisor agent name for tool call review
     supervisor_timeout = ""          # supervisor call timeout
     supervisor_context_messages = 5  # recent messages in supervisor prompt
+    supervisor_body_excerpt_len = 0  # max chars of skill body in supervisor prompt (0 = use default 500)
+    supervisor_tool_desc_len = 0     # max chars of tool description in supervisor prompt (0 = use default 200)
     reviewer_model = ""              # LLM model for post-turn review (empty = disabled)
     reviewer_provider = ""           # LLM provider for reviewer (empty = inherit agent's)
     review_max_iterations = 0        # reviewer tool-call rounds (0 = 6)

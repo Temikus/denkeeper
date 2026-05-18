@@ -1223,12 +1223,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	approvalTimeout, _ := time.ParseDuration(abc.cfg.Session.ApprovalTimeout) // validated by config.Parse
 	e.SetApprovalConfig(approvalTimeout, abc.cfg.Session.ApprovalRetries)
 
-	if ac.SupervisorTimeout != "" {
-		supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
-		e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
-	} else if ac.SupervisorContextMessages > 0 {
-		e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
-	}
+	applySupervisorKnobs(e, ac)
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -1824,16 +1819,23 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 			}
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
-			if ac.SupervisorTimeout != "" {
-				supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
-				e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
-			} else if ac.SupervisorContextMessages > 0 {
-				e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
-			}
+			applySupervisorKnobs(e, ac)
 		}
 
 		logger.Info("config reloaded from disk", "path", path)
 		return nil
+	}
+}
+
+func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
+	if ac.SupervisorTimeout != "" {
+		supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
+		e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
+	} else if ac.SupervisorContextMessages > 0 {
+		e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
+	}
+	if ac.SupervisorBodyExcerptLen > 0 || ac.SupervisorToolDescLen > 0 {
+		e.SetSupervisorExcerptConfig(ac.SupervisorBodyExcerptLen, ac.SupervisorToolDescLen)
 	}
 }
 
