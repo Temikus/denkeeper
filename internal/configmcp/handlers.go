@@ -1770,7 +1770,7 @@ func (s *Server) registerSearchTools() {
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"query": {"type": "string", "description": "FTS5 search expression. Use plain words for AND, OR for either, quotes for phrase, NEAR(a b, 5) for proximity."},
+				"query": {"type": "string", "description": "FTS5 search expression. Use plain words for AND, OR for either, quoted phrases for exact match, NEAR(a b, 5) for proximity. Quote tokens containing hyphens (e.g. \"2026-05-16\") — bare hyphens are FTS5 NOT operators."},
 				"limit": {"type": "integer", "description": "Max results (default 20, max 50)"}
 			},
 			"required": ["query"]

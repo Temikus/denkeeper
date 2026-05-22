@@ -1203,6 +1203,73 @@ type MessageSearchHit struct {
 	Snippet        string    `db:"snippet"         json:"snippet"`
 }
 
+// sanitizeFTS5Query quotes bare tokens that contain internal hyphens so FTS5
+// doesn't misinterpret them as NOT operators (e.g. "2026-05-16" would become
+// 2026 NOT 05 NOT 16, failing with "no such column: 05").
+func sanitizeFTS5Query(query string) string {
+	var result strings.Builder
+	result.Grow(len(query) + 16)
+	i := 0
+	for i < len(query) {
+		if query[i] == '"' {
+			// Pass quoted phrases through unchanged.
+			j := i + 1
+			for j < len(query) && query[j] != '"' {
+				j++
+			}
+			if j < len(query) {
+				j++
+			}
+			result.WriteString(query[i:j])
+			i = j
+			continue
+		}
+		if query[i] == ' ' || query[i] == '\t' {
+			result.WriteByte(query[i])
+			i++
+			continue
+		}
+		// Read a bare token (stops at whitespace or opening quote).
+		j := i
+		for j < len(query) && query[j] != ' ' && query[j] != '\t' && query[j] != '"' {
+			j++
+		}
+		token := query[i:j]
+		if fts5TokenNeedsQuoting(token) {
+			result.WriteByte('"')
+			result.WriteString(token)
+			result.WriteByte('"')
+		} else {
+			result.WriteString(token)
+		}
+		i = j
+	}
+	return result.String()
+}
+
+// fts5TokenNeedsQuoting returns true for bare tokens with internal hyphens
+// (dates, hyphenated words) that FTS5 would misparse. Leading-hyphen NOT
+// prefixes and FTS5 keywords are left alone.
+func fts5TokenNeedsQuoting(token string) bool {
+	if len(token) == 0 {
+		return false
+	}
+	// Leading hyphen is a valid NOT prefix.
+	if token[0] == '-' {
+		return false
+	}
+	// FTS5 operators and functions.
+	upper := strings.ToUpper(token)
+	switch upper {
+	case "AND", "OR", "NOT":
+		return false
+	}
+	if strings.HasPrefix(upper, "NEAR(") {
+		return false
+	}
+	return strings.ContainsRune(token, '-')
+}
+
 // SearchMessages performs a full-text search across messages, optionally
 // filtered by agent name via the conversation_stats join.
 func (s *SQLiteMemoryStore) SearchMessages(ctx context.Context, query string, limit int, agentFilter string) ([]MessageSearchHit, error) {
@@ -1212,6 +1279,8 @@ func (s *SQLiteMemoryStore) SearchMessages(ctx context.Context, query string, li
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
+
+	query = sanitizeFTS5Query(query)
 
 	rows, err := s.db.QueryxContext(ctx, `
 		SELECT

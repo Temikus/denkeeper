@@ -1759,3 +1759,83 @@ func TestFTS5_PhraseSearch(t *testing.T) {
 		t.Errorf("phrase search expected 1 hit, got %d", len(hits))
 	}
 }
+
+func TestSanitizeFTS5Query(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain words", "hello world", "hello world"},
+		{"quoted phrase unchanged", `"hello world"`, `"hello world"`},
+		{"bare date gets quoted", "2026-05-16", `"2026-05-16"`},
+		{"multiple dates", "2026-05-16 2026-05-17", `"2026-05-16" "2026-05-17"`},
+		{"mixed quoted and bare dates",
+			`"Scheduled" "daily-github-trending" 2026-05-16 2026-05-17`,
+			`"Scheduled" "daily-github-trending" "2026-05-16" "2026-05-17"`},
+		{"leading hyphen NOT preserved", "-excluded", "-excluded"},
+		{"hyphenated word quoted", "session-search", `"session-search"`},
+		{"OR preserved", "foo OR bar", "foo OR bar"},
+		{"NOT preserved", "NOT secret", "NOT secret"},
+		{"NEAR preserved", "NEAR(a b, 5)", "NEAR(a b, 5)"},
+		{"no change for plain", "quantum", "quantum"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeFTS5Query(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeFTS5Query(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFTS5_DateSearch(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_ = store.UpdateConversationStats(ctx, convID, "default", StoredMessage{}, 0, 0)
+
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "Scheduled daily-github-trending run on 2026-05-16",
+	})
+
+	// Bare date query that previously caused "no such column: 05".
+	hits, err := store.SearchMessages(ctx, "2026-05-16", 10, "")
+	if err != nil {
+		t.Fatalf("SearchMessages with date: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("date search expected 1 hit, got %d", len(hits))
+	}
+}
+
+func TestFTS5_HyphenatedWordSearch(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "test", "1")
+	_ = store.UpdateConversationStats(ctx, convID, "default", StoredMessage{}, 0, 0)
+
+	_, _ = store.AddMessage(ctx, convID, StoredMessage{
+		Role: "user", Content: "the session-search tool returned an error",
+	})
+
+	hits, err := store.SearchMessages(ctx, "session-search", 10, "")
+	if err != nil {
+		t.Fatalf("SearchMessages with hyphenated word: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("hyphenated word search expected 1 hit, got %d", len(hits))
+	}
+}
