@@ -218,6 +218,7 @@ Every user-facing feature must include thoughtful UX treatment.
 | Telemetry | `internal/agent/memory.go` | `[memory]` |
 | Audit Log | `internal/audit/` | `[audit]` |
 | Channels | `internal/agent/channel.go`, `dispatcher.go` | `[[channels]]` |
+| MCP Server | `internal/mcpserver/` | `[api.mcp_server]` |
 
 ## Non-obvious Defaults & Invariants
 

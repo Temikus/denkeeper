@@ -21,6 +21,12 @@ type serverConfigResponse struct {
 	WebSocketEnabled         bool     `json:"websocket_enabled"`
 	WebSocketMaxConnections  int      `json:"websocket_max_connections"`
 	WebSocketReplayBufferTTL string   `json:"websocket_replay_buffer_ttl"`
+	MCPServerEnabled         bool     `json:"mcp_server_enabled"`
+	MCPServerTransport       string   `json:"mcp_server_transport"`
+	MCPServerSessionTimeout  string   `json:"mcp_server_session_timeout"`
+	MCPServerChatTimeout     string   `json:"mcp_server_chat_timeout"`
+	MCPServerStateless       bool     `json:"mcp_server_stateless"`
+	MCPServerEndpoint        string   `json:"mcp_server_endpoint"`
 	Version                  string   `json:"version"`
 	Commit                   string   `json:"commit"`
 	BuildDate                string   `json:"build_date"`
@@ -29,8 +35,13 @@ type serverConfigResponse struct {
 
 // serverConfigUpdateInput holds the mutable fields for PATCH /api/v1/server/config.
 type serverConfigUpdateInput struct {
-	ExternalURL *string `json:"external_url,omitempty"`
-	Timezone    *string `json:"timezone,omitempty"`
+	ExternalURL             *string `json:"external_url,omitempty"`
+	Timezone                *string `json:"timezone,omitempty"`
+	MCPServerEnabled        *bool   `json:"mcp_server_enabled,omitempty"`
+	MCPServerTransport      *string `json:"mcp_server_transport,omitempty"`
+	MCPServerSessionTimeout *string `json:"mcp_server_session_timeout,omitempty"`
+	MCPServerChatTimeout    *string `json:"mcp_server_chat_timeout,omitempty"`
+	MCPServerStateless      *bool   `json:"mcp_server_stateless,omitempty"`
 }
 
 // handleGetServerConfig godoc
@@ -55,6 +66,12 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		WebSocketEnabled:         cfg.IsWebSocketEnabled(),
 		WebSocketMaxConnections:  cfg.WebSocketMaxConnections,
 		WebSocketReplayBufferTTL: cfg.WebSocketReplayBufferTTL,
+		MCPServerEnabled:         cfg.IsMCPServerEnabled(),
+		MCPServerTransport:       cfg.MCPServer.Transport,
+		MCPServerSessionTimeout:  cfg.MCPServer.SessionTimeout,
+		MCPServerChatTimeout:     cfg.MCPServer.ChatTimeout,
+		MCPServerStateless:       cfg.MCPServer.Stateless,
+		MCPServerEndpoint:        s.mcpServerEndpoint(),
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -86,37 +103,76 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if errMsg := validateServerConfigInput(&input); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
+		return
+	}
+
+	applyServerConfigInput(&s.deps.Config.API, &input)
+	s.persistServerConfig(&input)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func validateServerConfigInput(input *serverConfigUpdateInput) string {
 	if input.ExternalURL != nil && *input.ExternalURL != "" {
 		u, err := url.Parse(*input.ExternalURL)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid external_url: must be a valid URL with scheme and host",
-			})
-			return
+			return "invalid external_url: must be a valid URL with scheme and host"
 		}
 	}
-
 	if input.Timezone != nil && *input.Timezone != "" {
 		if _, err := time.LoadLocation(*input.Timezone); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid timezone: must be a valid IANA timezone name (e.g. America/New_York)",
-			})
-			return
+			return "invalid timezone: must be a valid IANA timezone name (e.g. America/New_York)"
 		}
 	}
+	return validateMCPServerInput(input)
+}
 
-	// Apply to in-memory config.
+func validateMCPServerInput(input *serverConfigUpdateInput) string {
+	if input.MCPServerTransport != nil {
+		t := *input.MCPServerTransport
+		if t != "streamable" && t != "sse" {
+			return "mcp_server_transport must be 'streamable' or 'sse'"
+		}
+	}
+	if msg := validateOptionalDuration(input.MCPServerSessionTimeout, "mcp_server_session_timeout"); msg != "" {
+		return msg
+	}
+	return validateOptionalDuration(input.MCPServerChatTimeout, "mcp_server_chat_timeout")
+}
+
+func validateOptionalDuration(val *string, name string) string {
+	if val == nil || *val == "" {
+		return ""
+	}
+	if _, err := time.ParseDuration(*val); err != nil {
+		return "invalid " + name + ": " + err.Error()
+	}
+	return ""
+}
+
+func applyServerConfigInput(cfg *config.APIConfig, input *serverConfigUpdateInput) {
 	if input.ExternalURL != nil {
-		s.deps.Config.API.ExternalURL = *input.ExternalURL
+		cfg.ExternalURL = *input.ExternalURL
 	}
 	if input.Timezone != nil {
-		s.deps.Config.API.Timezone = *input.Timezone
+		cfg.Timezone = *input.Timezone
 	}
-
-	// Persist to TOML.
-	s.persistServerConfig(&input)
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	if input.MCPServerEnabled != nil {
+		cfg.MCPServer.Enabled = input.MCPServerEnabled
+	}
+	if input.MCPServerTransport != nil {
+		cfg.MCPServer.Transport = *input.MCPServerTransport
+	}
+	if input.MCPServerSessionTimeout != nil {
+		cfg.MCPServer.SessionTimeout = *input.MCPServerSessionTimeout
+	}
+	if input.MCPServerChatTimeout != nil {
+		cfg.MCPServer.ChatTimeout = *input.MCPServerChatTimeout
+	}
+	if input.MCPServerStateless != nil {
+		cfg.MCPServer.Stateless = *input.MCPServerStateless
+	}
 }
 
 // handleReloadConfig godoc
@@ -185,9 +241,38 @@ func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 	if input.Timezone != nil {
 		changes["timezone"] = *input.Timezone
 	}
+
+	mcpChanges := make(map[string]any)
+	if input.MCPServerEnabled != nil {
+		mcpChanges["enabled"] = *input.MCPServerEnabled
+	}
+	if input.MCPServerTransport != nil {
+		mcpChanges["transport"] = *input.MCPServerTransport
+	}
+	if input.MCPServerSessionTimeout != nil {
+		mcpChanges["session_timeout"] = *input.MCPServerSessionTimeout
+	}
+	if input.MCPServerChatTimeout != nil {
+		mcpChanges["chat_timeout"] = *input.MCPServerChatTimeout
+	}
+	if input.MCPServerStateless != nil {
+		mcpChanges["stateless"] = *input.MCPServerStateless
+	}
+	if len(mcpChanges) > 0 {
+		changes["mcp_server"] = mcpChanges
+	}
+
 	if len(changes) > 0 {
 		if err := config.UpdateAPIConfig(s.deps.ConfigPath, changes); err != nil {
 			s.logger.Warn("failed to persist server config", "error", err)
 		}
 	}
+}
+
+func (s *Server) mcpServerEndpoint() string {
+	base := s.deps.Config.API.ExternalURL
+	if base == "" {
+		base = "http://" + s.deps.Config.API.Listen
+	}
+	return base + "/api/v1/mcp"
 }

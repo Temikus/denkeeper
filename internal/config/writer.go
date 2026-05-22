@@ -708,7 +708,18 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 		apiSection = map[string]any{}
 	}
 	for k, v := range changes {
-		apiSection[k] = v
+		if sub, isSub := v.(map[string]any); isSub {
+			existing, _ := apiSection[k].(map[string]any)
+			if existing == nil {
+				existing = map[string]any{}
+			}
+			for sk, sv := range sub {
+				existing[sk] = sv
+			}
+			apiSection[k] = existing
+		} else {
+			apiSection[k] = v
+		}
 	}
 	raw["api"] = apiSection
 

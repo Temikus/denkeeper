@@ -36,6 +36,7 @@ import (
 	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
 	"github.com/Temikus/denkeeper/internal/llm/openrouter"
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
+	"github.com/Temikus/denkeeper/internal/mcpserver"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -1434,10 +1435,80 @@ func otelMetricsHandler(cfg *config.Config) http.Handler {
 	return nil
 }
 
-func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logger *slog.Logger) (*api.Server, error) {
-	keyStore, ksErr := api.NewKeyStore(cfg.Memory.DBPath)
-	if ksErr != nil {
-		return nil, fmt.Errorf("initializing api key store: %w", ksErr)
+type startAPIWithMCPArgs struct {
+	dispatcher      *agent.Dispatcher
+	sched           *scheduler.Scheduler
+	cost            *llm.CostTracker
+	memory          agent.MemoryStore
+	approvalManager *approval.Manager
+	lifecycleMgr    *tool.LifecycleManager
+	browserProfiles *browser.ProfileService
+	kvStore         kv.Store
+	auditStore      audit.Store
+	auditor         audit.Emitter
+	oauthDeps       *api.OAuthDeps
+	abc             agentBuildCtx
+	path            string
+	logger          *slog.Logger
+}
+
+func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPArgs) error {
+	keyStore, hasActiveKey, err := initKeyStore(ctx, cfg, a.logger)
+	if err != nil {
+		return err
+	}
+
+	mcpSrv := mcpserver.New(cfg.API.MCPServer, mcpserver.Deps{
+		Dispatcher:   a.dispatcher,
+		Scheduler:    a.sched,
+		CostTracker:  a.cost,
+		Memory:       a.memory,
+		Config:       cfg,
+		Approvals:    a.approvalManager,
+		LifecycleMgr: a.lifecycleMgr,
+		KeyStore:     keyStore,
+		TOMLKeys:     cfg.API.Keys,
+		KVStore:      a.kvStore,
+		ConfigPath:   a.path,
+		Version:      version,
+		Logger:       a.logger,
+	})
+
+	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, api.Deps{
+		Dispatcher:        a.dispatcher,
+		Scheduler:         a.sched,
+		CostTracker:       a.cost,
+		Memory:            a.memory,
+		Config:            cfg,
+		Approvals:         a.approvalManager,
+		LifecycleMgr:      a.lifecycleMgr,
+		BrowserProfiles:   a.browserProfiles,
+		WebHandler:        web.Handler(),
+		MetricsHandler:    otelMetricsHandler(cfg),
+		KeyStore:          keyStore,
+		KVStore:           a.kvStore,
+		AuditStore:        a.auditStore,
+		Auditor:           a.auditor,
+		ConfigPath:        a.path,
+		ModelLister:       a.dispatcher.ListModels,
+		ModelDetailLister: a.dispatcher.ListModelDetails,
+		OAuthDeps:         a.oauthDeps,
+		MCPHandler:        mcpSrv.Handler(),
+		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.logger),
+		RestartFunc:       selfRestartFunc,
+		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
+			return buildAgentEngine(ctx, ac, a.abc)
+		},
+		Version:   version,
+		Commit:    commit,
+		BuildDate: date,
+	}, hasActiveKey, a.logger)
+}
+
+func initKeyStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*api.KeyStore, bool, error) {
+	keyStore, err := api.NewKeyStore(cfg.Memory.DBPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("initializing api key store: %w", err)
 	}
 
 	existingKeys, _ := keyStore.List(ctx)
@@ -1451,9 +1522,10 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 	if !hasActiveKey && cfg.API.Auth.PasswordHash == "" {
 		logger.Warn("no API keys or password found — open the web dashboard to complete setup")
 	}
+	return keyStore, hasActiveKey, nil
+}
 
-	deps.KeyStore = keyStore
-
+func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, hasActiveKey bool, logger *slog.Logger) (*api.Server, error) {
 	// Initialize auth subsystem if configured.
 	if err := initAPIAuth(ctx, cfg, &deps, logger); err != nil {
 		return nil, fmt.Errorf("initializing auth: %w", err)
@@ -1484,8 +1556,8 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, logg
 
 // startAPIAndWireBroadcast starts the API server and wires the adapter→WebSocket
 // broadcast so the web UI is notified when messages arrive via external adapters.
-func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, deps api.Deps, logger *slog.Logger) error {
-	apiServer, err := startAPIServer(ctx, cfg, deps, logger)
+func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
+	apiServer, err := startAPIServer(ctx, cfg, deps, hasActiveKey, logger)
 	if err != nil {
 		return err
 	}
@@ -1717,33 +1789,22 @@ func runServe(_ *cobra.Command, _ []string) error {
 	handleShutdownSignals(cancel, logger)
 
 	if cfg.API.IsEnabled() {
-		if err := startAPIAndWireBroadcast(ctx, cfg, dispatcher, api.Deps{
-			Dispatcher:        dispatcher,
-			Scheduler:         sched,
-			CostTracker:       clients.cost,
-			Memory:            st.memory,
-			Config:            cfg,
-			Approvals:         st.approvalManager,
-			LifecycleMgr:      lifecycleMgr,
-			BrowserProfiles:   browserProfiles,
-			WebHandler:        web.Handler(),
-			MetricsHandler:    otelMetricsHandler(cfg),
-			KVStore:           st.kvStore,
-			AuditStore:        st.auditStore,
-			Auditor:           auditor,
-			ConfigPath:        path,
-			ModelLister:       dispatcher.ListModels,
-			ModelDetailLister: dispatcher.ListModelDetails,
-			OAuthDeps:         oauthDeps,
-			ReloadFunc:        buildReloadFunc(path, cfg, dispatcher, logger),
-			RestartFunc:       selfRestartFunc,
-			AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
-				return buildAgentEngine(ctx, ac, abc)
-			},
-			Version:   version,
-			Commit:    commit,
-			BuildDate: date,
-		}, logger); err != nil {
+		if err := startAPIWithMCP(ctx, cfg, startAPIWithMCPArgs{
+			dispatcher:      dispatcher,
+			sched:           sched,
+			cost:            clients.cost,
+			memory:          st.memory,
+			approvalManager: st.approvalManager,
+			lifecycleMgr:    lifecycleMgr,
+			browserProfiles: browserProfiles,
+			kvStore:         st.kvStore,
+			auditStore:      st.auditStore,
+			auditor:         auditor,
+			oauthDeps:       oauthDeps,
+			abc:             abc,
+			path:            path,
+			logger:          logger,
+		}); err != nil {
 			return err
 		}
 	}

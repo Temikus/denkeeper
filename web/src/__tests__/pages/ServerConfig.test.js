@@ -25,7 +25,7 @@ describe('ServerConfig page', () => {
       expect(screen.getByText('Listen Address')).toBeInTheDocument()
     })
     expect(screen.getByText(':8080')).toBeInTheDocument()
-    expect(screen.getByText('Disabled')).toBeInTheDocument()
+    expect(screen.getAllByText('Disabled').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('100 req/s')).toBeInTheDocument()
     expect(screen.getByText('https://example.com')).toBeInTheDocument()
   })

@@ -68,6 +68,7 @@ type Deps struct {
 	AuditStore        audit.Store                                                              // nil = audit endpoints return 503
 	Auditor           audit.Emitter                                                            // nil = no audit events from schedule delivery
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
+	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
@@ -316,6 +317,14 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)
 	}
 
+	// MCP server endpoint — gated by live config check.
+	if deps.MCPHandler != nil {
+		gated := s.mcpGate(deps.MCPHandler)
+		mux.Handle("/api/v1/mcp", gated)
+		mux.Handle("/api/v1/mcp/", gated)
+		logger.Debug("mcp-server: endpoint registered at /api/v1/mcp")
+	}
+
 	// Web dashboard — catch-all for non-API paths (more-specific /api/v1/ routes always win).
 	if deps.WebHandler != nil {
 		mux.Handle("/", deps.WebHandler)
@@ -336,6 +345,19 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	}
 
 	return s
+}
+
+// mcpGate wraps an http.Handler and checks the live config at request time.
+// Returns 404 when the MCP server is disabled, allowing dynamic toggle
+// without rebuilding the mux.
+func (s *Server) mcpGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.deps.Config.API.IsMCPServerEnabled() {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "MCP server is disabled"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // HTTPHandler returns the server's HTTP handler for use in tests.
@@ -410,6 +432,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
+	}
+	if s.deps.Config.API.IsMCPServerEnabled() {
+		resp["mcp_server_enabled"] = true
+		resp["mcp_server_endpoint"] = s.mcpServerEndpoint()
 	}
 
 	if r.URL.Query().Get("ready") == "true" {
