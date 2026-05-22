@@ -13,7 +13,9 @@ import (
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/approval"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -22,17 +24,19 @@ import (
 
 // Deps holds the application dependencies the MCP server needs.
 type Deps struct {
-	Dispatcher   *agent.Dispatcher
-	Scheduler    *scheduler.Scheduler
-	CostTracker  *llm.CostTracker
-	Memory       agent.MemoryStore
-	Config       *config.Config
-	Approvals    *approval.Manager
-	LifecycleMgr *tool.LifecycleManager
-	KeyStore     *api.KeyStore
-	TOMLKeys     []config.APIKeyConfig
-	KVStore      kv.Store
-	ConfigPath   string
-	Version      string
-	Logger       *slog.Logger
+	Dispatcher      *agent.Dispatcher
+	Scheduler       *scheduler.Scheduler
+	CostTracker     *llm.CostTracker
+	Memory          agent.MemoryStore
+	Config          *config.Config
+	Approvals       *approval.Manager
+	LifecycleMgr    *tool.LifecycleManager
+	KeyStore        *api.KeyStore
+	TOMLKeys        []config.APIKeyConfig
+	KVStore         kv.Store
+	ChannelResolver configmcp.ChannelResolver
+	Auditor         audit.Emitter
+	ConfigPath      string
+	Version         string
+	Logger          *slog.Logger
 }

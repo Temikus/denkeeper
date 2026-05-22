@@ -707,6 +707,9 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 	if !ok {
 		apiSection = map[string]any{}
 	}
+	// Nested map values (e.g. mcp_server) are merged key-by-key rather than
+	// replaced wholesale, so callers can update individual sub-keys without
+	// clobbering siblings. Scalar values are replaced as before.
 	for k, v := range changes {
 		if sub, isSub := v.(map[string]any); isSub {
 			existing, _ := apiSection[k].(map[string]any)

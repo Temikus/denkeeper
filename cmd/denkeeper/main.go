@@ -1459,19 +1459,21 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 	}
 
 	mcpSrv := mcpserver.New(cfg.API.MCPServer, mcpserver.Deps{
-		Dispatcher:   a.dispatcher,
-		Scheduler:    a.sched,
-		CostTracker:  a.cost,
-		Memory:       a.memory,
-		Config:       cfg,
-		Approvals:    a.approvalManager,
-		LifecycleMgr: a.lifecycleMgr,
-		KeyStore:     keyStore,
-		TOMLKeys:     cfg.API.Keys,
-		KVStore:      a.kvStore,
-		ConfigPath:   a.path,
-		Version:      version,
-		Logger:       a.logger,
+		Dispatcher:      a.dispatcher,
+		Scheduler:       a.sched,
+		CostTracker:     a.cost,
+		Memory:          a.memory,
+		Config:          cfg,
+		Approvals:       a.approvalManager,
+		LifecycleMgr:    a.lifecycleMgr,
+		KeyStore:        keyStore,
+		TOMLKeys:        cfg.API.Keys,
+		KVStore:         a.kvStore,
+		ChannelResolver: buildChannelResolver(a.dispatcher),
+		Auditor:         a.auditor,
+		ConfigPath:      a.path,
+		Version:         version,
+		Logger:          a.logger,
 	})
 
 	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, api.Deps{
