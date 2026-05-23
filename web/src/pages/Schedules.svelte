@@ -8,6 +8,11 @@
   let error = ''
   let timezone = 'UTC'
 
+  // Available channels and agents for dropdowns
+  let channels = []
+  let agents = []
+  let loadWarning = ''
+
   // Inline add/edit panel
   let showForm = false
   let editingName = null // null = add mode, string = edit mode
@@ -15,9 +20,11 @@
   let formSchedule = ''
   let formSkill = ''
   let formChannel = ''
+  let formChannelCustom = ''
   let formSessionMode = 'isolated'
   let formSessionTier = ''
-  let formAgent = 'default'
+  let formAgent = ''
+  let formAgentCustom = ''
   let formTags = ''
   let formEnabled = true
   let saving = false
@@ -30,9 +37,21 @@
     loading = true
     error = ''
     try {
-      const [sched, cfg] = await Promise.all([api.schedules(), api.serverConfig()])
+      let chErr = false, agErr = false
+      const [sched, cfg, ch, ag] = await Promise.all([
+        api.schedules(),
+        api.serverConfig(),
+        api.channels().catch(() => { chErr = true; return [] }),
+        api.agents().catch(() => { agErr = true; return [] }),
+      ])
       schedules = sched || []
       timezone = cfg?.timezone || 'UTC'
+      channels = (ch || []).filter(c => !c.implicit)
+      agents = ag || []
+      const warnings = []
+      if (chErr) warnings.push('channels')
+      if (agErr) warnings.push('agents')
+      loadWarning = warnings.length ? `Could not load ${warnings.join(' and ')} — use Custom entry instead.` : ''
     } catch (e) {
       error = e.message
     } finally {
@@ -40,15 +59,25 @@
     }
   }
 
+  function resolvedChannel() {
+    return formChannel === '__custom__' ? formChannelCustom : formChannel
+  }
+
+  function resolvedAgent() {
+    return formAgent === '__custom__' ? formAgentCustom : (formAgent || 'default')
+  }
+
   function openAdd() {
     editingName = null
     formName = ''
     formSchedule = ''
     formSkill = ''
-    formChannel = ''
+    formChannel = channels.length ? channels[0].name : '__custom__'
+    formChannelCustom = ''
     formSessionMode = 'isolated'
     formSessionTier = ''
-    formAgent = 'default'
+    formAgent = agents.length ? agents[0].name : '__custom__'
+    formAgentCustom = ''
     formTags = ''
     formEnabled = true
     showForm = true
@@ -59,10 +88,14 @@
     formName = s.name
     formSchedule = s.expression
     formSkill = s.skill || ''
-    formChannel = s.channel || ''
+    const knownChannel = channels.find(c => c.name === s.channel)
+    formChannel = knownChannel ? s.channel : '__custom__'
+    formChannelCustom = knownChannel ? '' : (s.channel || '')
     formSessionMode = s.session_mode || 'isolated'
     formSessionTier = s.session_tier || ''
-    formAgent = s.agent || 'default'
+    const knownAgent = agents.find(a => a.name === s.agent)
+    formAgent = knownAgent ? s.agent : '__custom__'
+    formAgentCustom = formAgent === '__custom__' ? (s.agent || '') : ''
     formTags = (s.tags || []).join(', ')
     formEnabled = s.enabled
     showForm = true
@@ -77,28 +110,28 @@
     error = ''
     try {
       const tags = formTags.trim() ? formTags.split(',').map(t => t.trim()).filter(Boolean) : []
+      const channel = resolvedChannel()
+      const agent = resolvedAgent()
       if (editingName) {
-        // Update (PATCH)
         await api.updateSchedule(editingName, {
           schedule: formSchedule,
           skill: formSkill || undefined,
-          channel: formChannel,
+          channel,
           session_mode: formSessionMode,
           session_tier: formSessionTier || undefined,
-          agent: formAgent || undefined,
+          agent: agent || undefined,
           tags: tags.length ? tags : undefined,
           enabled: formEnabled,
         })
       } else {
-        // Create (POST)
         await api.addSchedule({
           name: formName.trim(),
           schedule: formSchedule,
           skill: formSkill || undefined,
-          channel: formChannel,
+          channel,
           session_mode: formSessionMode,
           session_tier: formSessionTier || undefined,
-          agent: formAgent || 'default',
+          agent: agent || 'default',
           tags: tags.length ? tags : undefined,
           enabled: formEnabled,
         })
@@ -142,6 +175,10 @@
 
   <ErrorBanner message={error} />
 
+  {#if loadWarning}
+    <p class="load-warning" data-testid="load-warning">{loadWarning}</p>
+  {/if}
+
   <!-- Inline Add/Edit Panel -->
   <div class="inline-panel" class:open={showForm}>
     <div class="inline-panel-inner">
@@ -162,7 +199,15 @@
         </label>
         <label>
           Channel
-          <input type="text" bind:value={formChannel} placeholder="adapter:externalID (e.g. telegram:123456)" />
+          <select bind:value={formChannel} disabled={saving} data-testid="channel-select">
+            {#each channels as ch}
+              <option value={ch.name}>{ch.name} ({ch.agent})</option>
+            {/each}
+            <option value="__custom__">Custom...</option>
+          </select>
+          {#if formChannel === '__custom__'}
+            <input type="text" bind:value={formChannelCustom} placeholder="channel name" style="margin-top: 6px" />
+          {/if}
         </label>
         <div class="row">
           <label>
@@ -184,7 +229,15 @@
         </div>
         <label>
           Agent
-          <input type="text" bind:value={formAgent} placeholder="default" />
+          <select bind:value={formAgent} disabled={saving} data-testid="agent-select">
+            {#each agents as a}
+              <option value={a.name}>{a.name}</option>
+            {/each}
+            <option value="__custom__">Custom...</option>
+          </select>
+          {#if formAgent === '__custom__'}
+            <input type="text" bind:value={formAgentCustom} placeholder="agent name" style="margin-top: 6px" />
+          {/if}
         </label>
         <label>
           Tags <span class="hint">(comma-separated)</span>
@@ -196,7 +249,7 @@
         </label>
         <div class="form-actions">
           <button class="btn-primary" onclick={saveSchedule}
-            disabled={saving || !formName.trim() || !formSchedule.trim() || !formChannel.trim()}>
+            disabled={saving || !formName.trim() || !formSchedule.trim() || !resolvedChannel().trim()}>
             {saving ? 'Saving...' : (editingName ? 'Update' : 'Add Schedule')}
           </button>
           <button class="btn-ghost" onclick={closeForm}>Cancel</button>
@@ -272,4 +325,5 @@
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border); margin-right: 4px; vertical-align: middle; }
   .dot.on { background: var(--success); }
   .actions { white-space: nowrap; }
+  .load-warning { font-size: 12px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
 </style>
