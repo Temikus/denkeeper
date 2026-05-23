@@ -22,10 +22,19 @@ import (
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
+// ScheduleManager is the subset of scheduler.Scheduler used by the MCP
+// server. Using an interface allows tests to inject failures.
+type ScheduleManager interface {
+	AgentEntries() []scheduler.Entry
+	RegisterAndStart(cfg scheduler.Config, job scheduler.JobFunc) error
+	GetEntry(name string) (scheduler.Entry, bool)
+	Unregister(name string) error
+}
+
 // Deps holds the application dependencies the MCP server needs.
 type Deps struct {
 	Dispatcher      *agent.Dispatcher
-	Scheduler       *scheduler.Scheduler
+	Scheduler       ScheduleManager
 	CostTracker     *llm.CostTracker
 	Memory          agent.MemoryStore
 	Config          *config.Config

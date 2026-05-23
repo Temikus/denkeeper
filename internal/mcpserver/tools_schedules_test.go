@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestValidateScheduleCreateInput_Valid(t *testing.T) {
@@ -199,5 +201,89 @@ func TestRollbackSchedule_FailsDuplicate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate") {
 		t.Errorf("expected duplicate error, got: %v", err)
+	}
+}
+
+// failingScheduler wraps a real scheduler but returns an injected error
+// from RegisterAndStart once failAfter reaches 0.
+type failingScheduler struct {
+	*scheduler.Scheduler
+	registerErr error
+	failAfter   int // number of RegisterAndStart calls to pass through before failing
+	calls       int
+}
+
+func (f *failingScheduler) RegisterAndStart(cfg scheduler.Config, job scheduler.JobFunc) error {
+	f.calls++
+	if f.calls > f.failAfter && f.registerErr != nil {
+		return f.registerErr
+	}
+	return f.Scheduler.RegisterAndStart(cfg, job)
+}
+
+func TestHandleScheduleUpdate_RollbackDoubleFail(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	realSched := scheduler.New(logger, time.UTC)
+	e := testEngine(t)
+
+	engines := map[string]*agent.Engine{"test-agent": e}
+	dispatcher := agent.NewDispatcher(engines, nil, nil, logger)
+
+	// Register the initial schedule on the real scheduler.
+	cfg := scheduler.Config{
+		Name:     "target",
+		Type:     string(scheduler.ScheduleTypeAgent),
+		Schedule: "0 9 * * *",
+		Agent:    "test-agent",
+		Channel:  "telegram:12345",
+		Enabled:  true,
+	}
+	if err := realSched.RegisterAndStart(cfg, func(scheduler.Entry) {}); err != nil {
+		t.Fatalf("seed schedule: %v", err)
+	}
+
+	// Wrap in failingScheduler: the initial RegisterAndStart (seed above)
+	// already passed through the real scheduler, so set failAfter=0 to make
+	// ALL subsequent RegisterAndStart calls fail — both the update attempt
+	// and the rollback attempt.
+	fs := &failingScheduler{
+		Scheduler:   realSched,
+		registerErr: errors.New("injected: storage full"),
+		failAfter:   0,
+	}
+
+	s := &Server{
+		deps: Deps{
+			Scheduler:  fs,
+			Dispatcher: dispatcher,
+			Logger:     logger,
+		},
+	}
+
+	ctx := withScopes(context.Background(), []string{"admin"})
+	disabled := false
+	result, _, err := s.handleScheduleUpdate(ctx, nil, scheduleUpdateInput{
+		Name:    "target",
+		Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatal("expected MCP error result")
+	}
+
+	tc, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", result.Content[0])
+	}
+	if !strings.Contains(tc.Text, "update failed") {
+		t.Errorf("expected 'update failed' in error, got: %s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "rollback also failed") {
+		t.Errorf("expected 'rollback also failed' in error, got: %s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "target") {
+		t.Errorf("expected schedule name in error, got: %s", tc.Text)
 	}
 }

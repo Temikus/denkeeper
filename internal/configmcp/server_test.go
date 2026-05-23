@@ -1493,6 +1493,135 @@ func TestScheduleUpdate_MissingName(t *testing.T) {
 	}
 }
 
+func TestScheduleUpdate_CrossAgentReassign(t *testing.T) {
+	otherHandlerCalled := false
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ResolveAgentHandler = func(name string) func(context.Context, adapter.IncomingMessage) error {
+			if name == "other-agent" {
+				return func(_ context.Context, _ adapter.IncomingMessage) error {
+					otherHandlerCalled = true
+					return nil
+				}
+			}
+			return nil
+		}
+	})
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "reassign-me", "schedule": "@daily", "channel": "telegram:1",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "reassign-me",
+		"agent": "other-agent",
+	})
+	if isErr {
+		t.Fatalf("schedule_update error: %s", text)
+	}
+
+	listText, _ := callTool(t, session, "schedule_list", map[string]any{})
+	if !strings.Contains(listText, "other-agent") {
+		t.Errorf("expected agent to be updated to other-agent in list, got: %s", listText)
+	}
+	_ = otherHandlerCalled
+}
+
+func TestScheduleUpdate_CrossAgentUnknown(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ResolveAgentHandler = func(name string) func(context.Context, adapter.IncomingMessage) error {
+			return nil
+		}
+	})
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "unknown-agent-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "unknown-agent-test",
+		"agent": "nonexistent",
+	})
+	if !isErr {
+		t.Fatal("expected error for unknown agent")
+	}
+	if !strings.Contains(text, "nonexistent") {
+		t.Errorf("expected error to mention agent name; got: %s", text)
+	}
+}
+
+func TestScheduleUpdate_CrossAgentNoResolver(t *testing.T) {
+	session, _ := newTestServer(t, nil) // ResolveAgentHandler is nil
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "no-resolver-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "no-resolver-test",
+		"agent": "some-other-agent",
+	})
+	if !isErr {
+		t.Fatal("expected error when ResolveAgentHandler is nil")
+	}
+	if !strings.Contains(text, "not supported") {
+		t.Errorf("expected 'not supported' error; got: %s", text)
+	}
+}
+
+func TestScheduleUpdate_SameAgentNoResolver(t *testing.T) {
+	session, _ := newTestServer(t, nil) // ResolveAgentHandler is nil
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "same-agent-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	// Updating to the same agent should succeed even without a resolver.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "same-agent-test",
+		"agent": "test-agent",
+	})
+	if isErr {
+		t.Fatalf("expected success for same-agent update; got error: %s", text)
+	}
+}
+
+func TestScheduleUpdate_EmptyAgentTreatedAsSelf(t *testing.T) {
+	session, _ := newTestServer(t, nil) // ResolveAgentHandler is nil
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "empty-agent-test", "schedule": "@daily", "channel": "telegram:1",
+	})
+	if isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	// Empty string agent should be treated as "self", not trigger cross-agent resolution.
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":  "empty-agent-test",
+		"agent": "",
+	})
+	if isErr {
+		t.Fatalf("expected success for empty-agent update; got error: %s", text)
+	}
+
+	listText, _ := callTool(t, session, "schedule_list", map[string]any{})
+	if !strings.Contains(listText, "empty-agent-test") {
+		t.Errorf("schedule should still be listed; got: %s", listText)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: tool discovery includes new tools
 // --------------------------------------------------------------------------

@@ -33,6 +33,7 @@ type scheduleUpdateInput struct {
 	Channel     *string  `json:"channel,omitempty" jsonschema:"New target channel"`
 	SessionMode *string  `json:"session_mode,omitempty" jsonschema:"New session mode"`
 	SessionTier *string  `json:"session_tier,omitempty" jsonschema:"New permission tier"`
+	Agent       *string  `json:"agent,omitempty" jsonschema:"New agent name to run the schedule"`
 	Tags        []string `json:"tags,omitempty" jsonschema:"New tags (replaces existing)"`
 	Enabled     *bool    `json:"enabled,omitempty" jsonschema:"Enable or disable"`
 }
@@ -200,6 +201,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, _ *mcp.CallToolReques
 		Channel:     input.Channel,
 		SessionMode: input.SessionMode,
 		SessionTier: input.SessionTier,
+		Agent:       input.Agent,
 		Tags:        input.Tags,
 		Enabled:     input.Enabled,
 	})

@@ -797,6 +797,13 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		RemoveSkill:    e.RemoveSkill,
 		Sched:          abc.sched,
 		HandleMessage:  e.HandleMessage,
+		ResolveAgentHandler: func(name string) func(context.Context, adapter.IncomingMessage) error {
+			eng := abc.dispatcher.Agent(name)
+			if eng == nil {
+				return nil
+			}
+			return eng.HandleMessage
+		},
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
 		KVStore:        abc.kvStore,

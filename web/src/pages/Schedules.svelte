@@ -85,6 +85,7 @@
           channel: formChannel,
           session_mode: formSessionMode,
           session_tier: formSessionTier || undefined,
+          agent: formAgent || undefined,
           tags: tags.length ? tags : undefined,
           enabled: formEnabled,
         })
@@ -181,12 +182,10 @@
             </select>
           </label>
         </div>
-        {#if !editingName}
-          <label>
-            Agent
-            <input type="text" bind:value={formAgent} placeholder="default" />
-          </label>
-        {/if}
+        <label>
+          Agent
+          <input type="text" bind:value={formAgent} placeholder="default" />
+        </label>
         <label>
           Tags <span class="hint">(comma-separated)</span>
           <input type="text" bind:value={formTags} placeholder="e.g. reporting, daily" />

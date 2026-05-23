@@ -947,6 +947,7 @@ type ScheduleUpdateInput struct {
 	Channel     *string  `json:"channel"`
 	SessionMode *string  `json:"session_mode"`
 	SessionTier *string  `json:"session_tier"`
+	Agent       *string  `json:"agent"`
 	Tags        []string `json:"tags"`
 	Enabled     *bool    `json:"enabled"`
 }
@@ -994,12 +995,17 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 		tags = input.Tags
 	}
 
+	agentName := existing.Agent
+	if input.Agent != nil {
+		agentName = *input.Agent
+	}
+
 	return scheduler.Config{
 		Name:        input.Name,
 		Type:        string(scheduler.ScheduleTypeAgent),
 		Schedule:    expr,
 		Skill:       skill,
-		Agent:       existing.Agent,
+		Agent:       agentName,
 		SessionTier: sessionTier,
 		SessionMode: sessionMode,
 		Channel:     channel,
@@ -1008,15 +1014,41 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 	}, ""
 }
 
-func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// resolveScheduleHandler returns the message handler for the given agent name.
+// If the agent matches this server's own agent, the local handler is returned.
+// An empty agentName is treated as "self" (no reassignment).
+// Otherwise it resolves via ResolveAgentHandler. Returns a non-empty error
+// string on failure.
+func (s *Server) resolveScheduleHandler(agentName string) (func(context.Context, adapter.IncomingMessage) error, string) {
+	if agentName == s.deps.AgentName || agentName == "" {
+		return s.deps.HandleMessage, ""
+	}
+	if s.deps.ResolveAgentHandler == nil {
+		return nil, "cross-agent schedule reassignment is not supported"
+	}
+	h := s.deps.ResolveAgentHandler(agentName)
+	if h == nil {
+		return nil, fmt.Sprintf("agent %q not found", agentName)
+	}
+	return h, ""
+}
+
+func (s *Server) requireScheduleWrite() *mcp.CallToolResult {
 	if s.deps.Sched == nil {
-		return toolError("schedule_update is not available: no scheduler configured"), nil
+		return toolError("schedule_update is not available: no scheduler configured")
 	}
 	if s.deps.HandleMessage == nil {
-		return toolError("schedule_update is not available: no message handler configured"), nil
+		return toolError("schedule_update is not available: no message handler configured")
 	}
 	if s.deps.PermissionTier() == "restricted" {
-		return toolError("schedule_update is not available in restricted mode"), nil
+		return toolError("schedule_update is not available in restricted mode")
+	}
+	return nil
+}
+
+func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if r := s.requireScheduleWrite(); r != nil {
+		return r, nil
 	}
 
 	var input ScheduleUpdateInput
@@ -1043,6 +1075,11 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		}
 	}
 
+	handleMsg, resolveErr := s.resolveScheduleHandler(cfg.Agent)
+	if resolveErr != "" {
+		return toolError(resolveErr), nil
+	}
+
 	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
 		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled)
 	if err != nil {
@@ -1050,11 +1087,10 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	schedRef := s.deps.Sched
-	handleMsg := s.deps.HandleMessage
 	logger := s.deps.Logger
 	chResolver := s.deps.ChannelResolver
 	configPath := s.deps.ConfigPath
-	agentName := s.deps.AgentName
+	agentName := cfg.Agent
 
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
 		if err := schedRef.Unregister(input.Name); err != nil {

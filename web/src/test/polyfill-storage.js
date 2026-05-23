@@ -1,7 +1,8 @@
-// Node 25+ provides a bare `localStorage` global that lacks the Web Storage
-// API (getItem, setItem, removeItem, clear, key, length). When vitest's jsdom
-// environment sets up window.localStorage, it doesn't always override the
-// global `localStorage`. This polyfill bridges the gap.
+// Node 25+ provides a built-in `localStorage` backed by a file (set via
+// --localstorage-file). When multiple vitest workers share the same backing
+// file, cross-file test contamination can occur. Always replace both storage
+// globals with isolated in-memory implementations so each test file gets
+// a clean, independent store.
 
 function createStorage() {
   const store = new Map()
@@ -15,10 +16,5 @@ function createStorage() {
   }
 }
 
-// Only polyfill if the native localStorage lacks getItem (Node 25+).
-if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage.getItem !== 'function') {
-  globalThis.localStorage = createStorage()
-}
-if (typeof globalThis.sessionStorage === 'undefined' || typeof globalThis.sessionStorage.getItem !== 'function') {
-  globalThis.sessionStorage = createStorage()
-}
+globalThis.localStorage = createStorage()
+globalThis.sessionStorage = createStorage()

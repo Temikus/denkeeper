@@ -61,6 +61,12 @@ type Deps struct {
 	// is disabled.
 	HandleMessage func(ctx context.Context, msg adapter.IncomingMessage) error
 
+	// ResolveAgentHandler resolves another agent's HandleMessage by name.
+	// Used by schedule_update when the agent field is changed. Returns nil
+	// if the agent is not found. If nil, cross-agent schedule reassignment
+	// is not supported via Config MCP.
+	ResolveAgentHandler func(name string) func(context.Context, adapter.IncomingMessage) error
+
 	// PermissionTier returns the current effective tier for the agent
 	// ("autonomous", "supervised", or "restricted").
 	PermissionTier func() string
