@@ -15,8 +15,10 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -449,6 +451,190 @@ func TestMCPServer_ScheduleDelete_NotFound(t *testing.T) {
 	text, _ := result.Content[0].(*mcp.TextContent)
 	if text == nil || !strings.Contains(text.Text, "not found") {
 		t.Errorf("expected 'not found', got: %v", text)
+	}
+}
+
+// stubProvider satisfies llm.Provider for tests that need an Engine but never
+// call the LLM (e.g. schedule registration).
+type stubProvider struct{}
+
+func (stubProvider) Name() string { return "stub" }
+func (stubProvider) ChatCompletion(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "stub"}, nil
+}
+func (stubProvider) HealthCheck(context.Context) error { return nil }
+
+func testDepsWithAgent(t *testing.T) mcpserver.Deps {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	mem, err := agent.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating memory store: %v", err)
+	}
+
+	perms, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	router := llm.NewRouter("stub", "test-model", nil)
+	router.RegisterProvider(stubProvider{})
+
+	e := agent.NewEngine("test-agent", router, mem, nil, perms, nil,
+		"You are a test agent.", nil, nil, nil, logger)
+
+	engines := map[string]*agent.Engine{"test-agent": e}
+	bindings := []agent.Binding{{Pattern: "telegram:*", AgentName: "test-agent"}}
+	dispatcher := agent.NewDispatcher(engines, bindings, nil, logger)
+
+	return mcpserver.Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  scheduler.New(logger, time.UTC),
+		TOMLKeys: []config.APIKeyConfig{
+			{Name: "test-key", Key: "dk-test-integration-key", Scopes: []string{"admin"}},
+		},
+		Logger: logger,
+	}
+}
+
+func TestMCPServer_ScheduleCreateListDeleteLifecycle(t *testing.T) {
+	deps := testDepsWithAgent(t)
+	ts := startMCPServer(t, deps)
+	session := connectClient(t, ts, "dk-test-integration-key")
+
+	// Create a schedule
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_create",
+		Arguments: map[string]any{
+			"name":     "daily-test",
+			"schedule": "0 9 * * *",
+			"channel":  "telegram:12345",
+			"agent":    "test-agent",
+			"skill":    "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("call schedule_create: %v", err)
+	}
+	if result.IsError {
+		text, _ := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("schedule_create failed: %s", text.Text)
+	}
+
+	// Verify it appears in schedule_list
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_list",
+	})
+	if err != nil {
+		t.Fatalf("call schedule_list: %v", err)
+	}
+	text, _ := result.Content[0].(*mcp.TextContent)
+	if !strings.Contains(text.Text, "daily-test") {
+		t.Errorf("expected 'daily-test' in schedule list, got: %s", text.Text)
+	}
+
+	var schedules []map[string]any
+	if err := json.Unmarshal([]byte(text.Text), &schedules); err != nil {
+		t.Fatalf("unmarshal schedule list: %v", err)
+	}
+	if len(schedules) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(schedules))
+	}
+	if schedules[0]["name"] != "daily-test" {
+		t.Errorf("expected name=daily-test, got %v", schedules[0]["name"])
+	}
+	if schedules[0]["agent"] != "test-agent" {
+		t.Errorf("expected agent=test-agent, got %v", schedules[0]["agent"])
+	}
+
+	// Delete the schedule
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "schedule_delete",
+		Arguments: map[string]any{"name": "daily-test"},
+	})
+	if err != nil {
+		t.Fatalf("call schedule_delete: %v", err)
+	}
+	if result.IsError {
+		text, _ := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("schedule_delete failed: %s", text.Text)
+	}
+
+	// Verify it's gone
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_list",
+	})
+	if err != nil {
+		t.Fatalf("call schedule_list after delete: %v", err)
+	}
+	text, _ = result.Content[0].(*mcp.TextContent)
+	if text.Text != "[]" {
+		t.Errorf("expected empty list after delete, got: %s", text.Text)
+	}
+}
+
+func TestMCPServer_ScheduleUpdateLifecycle(t *testing.T) {
+	deps := testDepsWithAgent(t)
+	ts := startMCPServer(t, deps)
+	session := connectClient(t, ts, "dk-test-integration-key")
+
+	// Create a schedule
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_create",
+		Arguments: map[string]any{
+			"name":     "updatable",
+			"schedule": "0 9 * * *",
+			"channel":  "telegram:12345",
+			"agent":    "test-agent",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if result.IsError {
+		text, _ := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("create failed: %s", text.Text)
+	}
+
+	// Update the schedule expression
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_update",
+		Arguments: map[string]any{
+			"name":     "updatable",
+			"schedule": "0 18 * * *",
+			"enabled":  false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if result.IsError {
+		text, _ := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("update failed: %s", text.Text)
+	}
+
+	// Verify the update via schedule_list
+	result, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_list",
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	text, _ := result.Content[0].(*mcp.TextContent)
+	var schedules []map[string]any
+	if err := json.Unmarshal([]byte(text.Text), &schedules); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(schedules) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(schedules))
+	}
+	if schedules[0]["expression"] != "0 18 * * *" {
+		t.Errorf("expected updated expression '0 18 * * *', got %v", schedules[0]["expression"])
+	}
+	if schedules[0]["enabled"] != false {
+		t.Errorf("expected enabled=false, got %v", schedules[0]["enabled"])
 	}
 }
 

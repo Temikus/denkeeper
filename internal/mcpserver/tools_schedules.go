@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -219,7 +220,10 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, _ *mcp.CallToolReques
 		s.deps.ChannelResolver, configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
 
 	if err := s.deps.Scheduler.RegisterAndStart(merged, job); err != nil {
-		return toolError("registering updated schedule: " + err.Error()), nil, nil
+		if rbErr := s.rollbackSchedule(existing, e); rbErr != nil {
+			return toolError(fmt.Sprintf("update failed: %v; rollback also failed: %v — schedule %q may be missing", err, rbErr, input.Name)), nil, nil
+		}
+		return toolError("registering updated schedule (rolled back): " + err.Error()), nil, nil
 	}
 
 	if s.deps.ConfigPath != "" {
@@ -288,4 +292,27 @@ func validateScheduleCreateInput(input scheduleCreateInput) string {
 		return fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
 	}
 	return ""
+}
+
+func (s *Server) rollbackSchedule(entry scheduler.Entry, e *agent.Engine) error {
+	oldCfg := scheduler.Config{
+		Name:        entry.Name,
+		Type:        string(entry.Type),
+		Schedule:    entry.Expr,
+		Skill:       entry.Skill,
+		Agent:       entry.Agent,
+		SessionTier: entry.SessionTier,
+		SessionMode: entry.SessionMode,
+		Channel:     entry.Channel,
+		Tags:        entry.Tags,
+		Enabled:     entry.Enabled,
+	}
+	oldJob := configmcp.BuildScheduleJob(oldCfg, e.HandleMessage, s.deps.Logger,
+		s.deps.ChannelResolver, configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
+	if err := s.deps.Scheduler.RegisterAndStart(oldCfg, oldJob); err != nil {
+		s.deps.Logger.Error("failed to rollback schedule after update failure",
+			"name", entry.Name, "error", err)
+		return err
+	}
+	return nil
 }
