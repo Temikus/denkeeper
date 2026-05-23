@@ -81,6 +81,69 @@ describe('Skills page', () => {
     })
   })
 
+  test('edit form shows agent pill instead of disabled input', async () => {
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => {
+      expect(screen.getByText('Edit Skill')).toBeInTheDocument()
+    })
+
+    // Agent pill should show the agent name
+    const pill = document.querySelector('.agent-pill')
+    expect(pill).toBeInTheDocument()
+    expect(pill.textContent.trim()).toContain('default')
+
+    // No disabled agent input should be present
+    const disabledInputs = document.querySelectorAll('input[disabled]')
+    expect(disabledInputs.length).toBe(0)
+  })
+
+  test('edit form shows scope hint', async () => {
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => {
+      expect(screen.getByText(/Skills are scoped to one agent/)).toBeInTheDocument()
+    })
+  })
+
+  test('edit form shows skill name as subtitle', async () => {
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => {
+      expect(document.querySelector('.form-subtitle')).toBeInTheDocument()
+      expect(document.querySelector('.form-subtitle').textContent).toBe('greeting')
+    })
+  })
+
+  test('add form shows agent dropdown not pill', async () => {
+    render(Skills)
+    await waitFor(() => {
+      expect(screen.getByText('+ Add Skill')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('+ Add Skill'))
+    await waitFor(() => {
+      expect(screen.getByText('Add Skill', { selector: 'h2' })).toBeInTheDocument()
+    })
+
+    // Agent dropdown should be present in add mode
+    expect(document.querySelector('select')).toBeInTheDocument()
+    // No agent pill in add mode
+    expect(document.querySelector('.agent-pill')).not.toBeInTheDocument()
+  })
+
   test('delete shows confirmation', async () => {
     render(Skills)
     await waitFor(() => {

@@ -171,8 +171,22 @@
   <div class="inline-panel" class:open={showForm}>
     <div class="inline-panel-inner">
       <div class="inline-form">
-        <h2 class="form-title">{editingSkill ? 'Edit Skill' : 'Add Skill'}</h2>
-        {#if !editingSkill}
+        {#if editingSkill}
+          <div class="form-header-row">
+            <div>
+              <h2 class="form-title">Edit Skill</h2>
+              <span class="form-subtitle">{editingSkill.name}</span>
+            </div>
+            <span class="agent-pill">
+              {editingSkill.agent}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </span>
+          </div>
+          <div class="form-scope-hint">
+            Skills are scoped to one agent. To reuse elsewhere, duplicate it.
+          </div>
+        {:else}
+          <h2 class="form-title">Add Skill</h2>
           <label>
             Agent
             <select bind:value={formAgent}>
@@ -183,11 +197,6 @@
                 <option value="default">default</option>
               {/if}
             </select>
-          </label>
-        {:else}
-          <label>
-            Agent
-            <input type="text" value={editingSkill.agent} disabled />
           </label>
         {/if}
         <label>
@@ -293,5 +302,20 @@
   .desc { max-width: 220px; }
   .actions { white-space: nowrap; }
   .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .form-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .form-header-row .form-title { margin-bottom: 4px; }
+  .form-subtitle { font-size: 12px; color: var(--text-muted); }
+  .agent-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(192, 68, 44, 0.08); border: 1px solid rgba(192, 68, 44, 0.18);
+    color: var(--accent); font-size: 12px; font-weight: 500;
+    padding: 5px 10px; border-radius: 999px; white-space: nowrap;
+  }
+  :global(:root.dark) .agent-pill {
+    background: rgba(224, 122, 90, 0.12); border-color: rgba(224, 122, 90, 0.22);
+  }
+  .form-scope-hint {
+    font-size: 11.5px; color: var(--text-muted); margin-bottom: 16px;
+  }
   .body-loading { color: var(--text-muted); font-style: italic; padding: 12px 0; }
 </style>
