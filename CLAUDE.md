@@ -70,6 +70,7 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 
 ## Testing Patterns
 
+- **Coverage thresholds are quality gates** — never lower them to make CI pass. If coverage drops below the threshold, add tests to cover the gap. Only the project owner may approve lowering a threshold.
 - Hand-written mocks that satisfy interfaces — no codegen.
 - In-memory SQLite (`:memory:`) for persistence tests via `NewInMemoryStore()`.
 - Individual `TestName_Scenario` functions (not table-driven).
@@ -218,6 +219,7 @@ Every user-facing feature must include thoughtful UX treatment.
 | Telemetry | `internal/agent/memory.go` | `[memory]` |
 | Audit Log | `internal/audit/` | `[audit]` |
 | Channels | `internal/agent/channel.go`, `dispatcher.go` | `[[channels]]` |
+| MCP Server | `internal/mcpserver/` | `[api.mcp_server]` |
 
 ## Non-obvious Defaults & Invariants
 

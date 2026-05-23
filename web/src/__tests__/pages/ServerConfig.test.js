@@ -25,7 +25,7 @@ describe('ServerConfig page', () => {
       expect(screen.getByText('Listen Address')).toBeInTheDocument()
     })
     expect(screen.getByText(':8080')).toBeInTheDocument()
-    expect(screen.getByText('Disabled')).toBeInTheDocument()
+    expect(screen.getAllByText('Disabled').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('100 req/s')).toBeInTheDocument()
     expect(screen.getByText('https://example.com')).toBeInTheDocument()
   })
@@ -353,6 +353,73 @@ describe('ServerConfig page', () => {
     await fireEvent.click(screen.getByText('Save'))
     await waitFor(() => {
       expect(screen.getByText('TZ save failed')).toBeInTheDocument()
+    })
+  })
+
+  test('MCP Server section shows Disabled by default', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('MCP Server')).toBeInTheDocument()
+    })
+    // MCP endpoint/transport/timeout cards should NOT be visible when disabled
+    expect(screen.queryByText('Endpoint')).not.toBeInTheDocument()
+    expect(screen.queryByText('Transport')).not.toBeInTheDocument()
+  })
+
+  test('MCP Server enabled shows endpoint, transport and timeout fields', async () => {
+    server.use(
+      http.get('/api/v1/server/config', () => HttpResponse.json({
+        listen: ':8080',
+        tls: false,
+        rate_limit: 100,
+        cors_origins: ['https://example.com'],
+        websocket_enabled: true,
+        websocket_max_connections: 50,
+        websocket_replay_buffer_ttl: '5m',
+        mcp_server_enabled: true,
+        mcp_server_transport: 'streamable',
+        mcp_server_session_timeout: '30m',
+        mcp_server_chat_timeout: '2m',
+        mcp_server_stateless: false,
+        mcp_server_endpoint: 'http://localhost:8080/api/v1/mcp',
+        external_url: 'https://den.example.com',
+        timezone: 'UTC',
+        version: 'v0.25.0',
+        commit: 'abc1234',
+        go_version: 'go1.22.0',
+      })),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Endpoint')).toBeInTheDocument()
+    })
+    expect(screen.getByText('http://localhost:8080/api/v1/mcp')).toBeInTheDocument()
+    expect(screen.getByText('Copy')).toBeInTheDocument()
+    expect(screen.getByText('Transport')).toBeInTheDocument()
+    expect(screen.getByText('Session Timeout')).toBeInTheDocument()
+    expect(screen.getByText('Chat Timeout')).toBeInTheDocument()
+    expect(screen.getByText('Stateless')).toBeInTheDocument()
+    expect(screen.getByText('Transport changes require a server restart to take effect.')).toBeInTheDocument()
+  })
+
+  test('MCP Server toggle calls PATCH', async () => {
+    let patchCalled = false
+    server.use(
+      http.patch('/api/v1/server/config', async ({ request }) => {
+        const body = await request.json()
+        expect(body.mcp_server_enabled).toBe(true)
+        patchCalled = true
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('MCP Server')).toBeInTheDocument()
+    })
+    const checkbox = screen.getByRole('checkbox')
+    await fireEvent.change(checkbox, { target: { checked: true } })
+    await waitFor(() => {
+      expect(patchCalled).toBe(true)
     })
   })
 })

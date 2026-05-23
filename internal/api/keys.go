@@ -173,6 +173,20 @@ func (ks *KeyStore) FindActiveByHash(ctx context.Context, tokenHash string) (*st
 	return &sk, nil
 }
 
+// FindScopesByToken hashes the token, looks up the active key, and returns
+// the key name and scopes. Returns found=false when no key matches. This is
+// the exported entry point for packages that need token-based auth without
+// access to the unexported storedKey type.
+func (ks *KeyStore) FindScopesByToken(ctx context.Context, token string) (name string, scopes []string, found bool) {
+	sk, _ := ks.FindActiveByHash(ctx, hashToken(token))
+	if sk == nil {
+		return "", nil, false
+	}
+	_ = json.Unmarshal([]byte(sk.ScopesJSON), &scopes)
+	go ks.TouchLastUsed(context.WithoutCancel(ctx), sk.ID)
+	return sk.Name, scopes, true
+}
+
 // TouchLastUsed updates last_used_at for the given key ID (best-effort, non-fatal).
 func (ks *KeyStore) TouchLastUsed(ctx context.Context, id string) {
 	_, _ = ks.db.ExecContext(ctx,

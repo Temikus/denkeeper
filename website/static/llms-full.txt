@@ -193,6 +193,15 @@ Named routing endpoints decoupling sessions from adapters.
     onboarding_dismissed = false     # hide onboarding checklist (set via API)
     wizard_completed = false         # post-auth setup wizard completed (set via API)
 
+### [api.mcp_server]
+
+    [api.mcp_server]
+    enabled = false                  # opt-in MCP server at /api/v1/mcp
+    session_timeout = "30m"          # idle session cleanup duration
+    transport = "streamable"         # "streamable" (default) or "sse" (legacy)
+    chat_timeout = "2m"              # max time for chat tool calls
+    stateless = false                # disable session tracking
+
 ### [[api.keys]]
 
     [[api.keys]]

@@ -274,6 +274,28 @@ type APIConfig struct {
 	// WizardCompleted indicates the post-auth setup wizard has been completed
 	// (or skipped). Set via POST /api/v1/onboarding/wizard-complete.
 	WizardCompleted bool `toml:"wizard_completed"`
+
+	// MCPServer configures the MCP server endpoint that allows external MCP
+	// clients (Claude Code, other AI tools) to interact with Denkeeper agents.
+	MCPServer APIMCPServerConfig `toml:"mcp_server"`
+}
+
+// APIMCPServerConfig controls the MCP server endpoint exposed at /api/v1/mcp.
+type APIMCPServerConfig struct {
+	// Enabled controls whether the MCP server endpoint is active. Default: false (opt-in).
+	Enabled *bool `toml:"enabled"`
+
+	// SessionTimeout is the idle session cleanup duration (Go duration string). Default: "30m".
+	SessionTimeout string `toml:"session_timeout"`
+
+	// Transport selects the MCP transport: "streamable" (default) or "sse" (legacy).
+	Transport string `toml:"transport"`
+
+	// ChatTimeout is the maximum time for a single chat tool call (Go duration string). Default: "2m".
+	ChatTimeout string `toml:"chat_timeout"`
+
+	// Stateless disables session tracking when true. Default: false.
+	Stateless bool `toml:"stateless"`
 }
 
 // IsEnabled returns whether the API server should start. After applyDefaults
@@ -286,6 +308,38 @@ func (a *APIConfig) IsEnabled() bool {
 // registered. After applyDefaults the pointer is always non-nil.
 func (a *APIConfig) IsWebSocketEnabled() bool {
 	return a.WebSocketEnabled == nil || *a.WebSocketEnabled
+}
+
+// IsMCPServerEnabled returns whether the MCP server endpoint should be active.
+// Defaults to false (opt-in) when the pointer is nil.
+func (a *APIConfig) IsMCPServerEnabled() bool {
+	return a.MCPServer.Enabled != nil && *a.MCPServer.Enabled
+}
+
+// MCPServerSessionTimeout parses and returns the MCP session timeout duration.
+// Returns 30m if the value is empty or unparseable.
+func (a *APIConfig) MCPServerSessionTimeout() time.Duration {
+	if a.MCPServer.SessionTimeout == "" {
+		return 30 * time.Minute
+	}
+	d, err := time.ParseDuration(a.MCPServer.SessionTimeout)
+	if err != nil {
+		return 30 * time.Minute
+	}
+	return d
+}
+
+// MCPServerChatTimeout parses and returns the MCP chat tool timeout duration.
+// Returns 2m if the value is empty or unparseable.
+func (a *APIConfig) MCPServerChatTimeout() time.Duration {
+	if a.MCPServer.ChatTimeout == "" {
+		return 2 * time.Minute
+	}
+	d, err := time.ParseDuration(a.MCPServer.ChatTimeout)
+	if err != nil {
+		return 2 * time.Minute
+	}
+	return d
 }
 
 // GetLoginRateLimit returns the configured login rate limit, defaulting to 5.
@@ -1065,6 +1119,7 @@ func applyScalarDefaults(cfg *Config) {
 		cfg.OTel.ServiceName = "denkeeper"
 	}
 	applyMCPDefaults(&cfg.MCP)
+	applyMCPServerDefaults(&cfg.API.MCPServer)
 	if cfg.API.Timezone == "" {
 		cfg.API.Timezone = "UTC"
 	}
@@ -1093,6 +1148,18 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.InitRetryBackoff == "" {
 		mcp.InitRetryBackoff = "2s"
+	}
+}
+
+func applyMCPServerDefaults(m *APIMCPServerConfig) {
+	if m.SessionTimeout == "" {
+		m.SessionTimeout = "30m"
+	}
+	if m.Transport == "" {
+		m.Transport = "streamable"
+	}
+	if m.ChatTimeout == "" {
+		m.ChatTimeout = "2m"
 	}
 }
 
@@ -2246,6 +2313,28 @@ func validateAPI(api *APIConfig) error {
 	}
 	if err := validateAuth(&api.Auth); err != nil {
 		return err
+	}
+	if err := validateMCPServer(&api.MCPServer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMCPServer(m *APIMCPServerConfig) error {
+	switch m.Transport {
+	case "", "streamable", "sse":
+	default:
+		return fmt.Errorf("config: api.mcp_server.transport: must be \"streamable\" or \"sse\", got %q", m.Transport)
+	}
+	if m.SessionTimeout != "" {
+		if _, err := time.ParseDuration(m.SessionTimeout); err != nil {
+			return fmt.Errorf("config: api.mcp_server.session_timeout: invalid duration %q: %w", m.SessionTimeout, err)
+		}
+	}
+	if m.ChatTimeout != "" {
+		if _, err := time.ParseDuration(m.ChatTimeout); err != nil {
+			return fmt.Errorf("config: api.mcp_server.chat_timeout: invalid duration %q: %w", m.ChatTimeout, err)
+		}
 	}
 	return nil
 }

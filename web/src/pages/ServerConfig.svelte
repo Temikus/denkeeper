@@ -28,6 +28,11 @@
   let savingTz = $state(false)
   let saveTzOk = $state(false)
 
+  // MCP Server
+  let savingMcp = $state(false)
+  let saveMcpOk = $state(false)
+  let mcpCopied = $state(false)
+
   async function fetchConfig() {
     loading = true
     error = ''
@@ -98,6 +103,45 @@
     return timezoneGroups
       .map(g => ({ ...g, zones: g.zones.filter(z => z.toLowerCase().includes(q)) }))
       .filter(g => g.zones.length > 0)
+  }
+
+  async function toggleMcp() {
+    savingMcp = true
+    error = ''
+    try {
+      const enabled = !config.mcp_server_enabled
+      await api.updateServerConfig({ mcp_server_enabled: enabled })
+      config.mcp_server_enabled = enabled
+      saveMcpOk = true
+      setTimeout(() => { saveMcpOk = false }, 3000)
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingMcp = false
+    }
+  }
+
+  async function saveMcpField(field, value) {
+    savingMcp = true
+    error = ''
+    try {
+      await api.updateServerConfig({ [field]: value })
+      config[field] = value
+      saveMcpOk = true
+      setTimeout(() => { saveMcpOk = false }, 3000)
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingMcp = false
+    }
+  }
+
+  function copyEndpoint() {
+    if (config?.mcp_server_endpoint) {
+      navigator.clipboard.writeText(config.mcp_server_endpoint)
+      mcpCopied = true
+      setTimeout(() => { mcpCopied = false }, 2000)
+    }
   }
 
   async function reloadConfig() {
@@ -229,6 +273,110 @@
       <div class="value value-sm mono">{config.websocket_replay_buffer_ttl || '—'}</div>
     </div>
   </div>
+
+  <h2 class="section-title">MCP Server</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Status</div>
+        <div class="config-desc">
+          Expose an MCP server endpoint at /api/v1/mcp for external MCP clients
+          (Claude Code, other AI tools). Authenticate with API keys.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <span class="status-dot" class:status-on={config.mcp_server_enabled} class:status-off={!config.mcp_server_enabled}></span>
+        <span class="config-value">{config.mcp_server_enabled ? 'Enabled' : 'Disabled'}</span>
+        <label class="switch">
+          <input type="checkbox" checked={config.mcp_server_enabled} onchange={toggleMcp} disabled={savingMcp} />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  {#if config.mcp_server_enabled}
+    <div class="config-card" style="margin-top: 14px;">
+      <div class="config-row">
+        <div class="config-label">
+          <div class="config-name">Endpoint</div>
+          <div class="config-desc">
+            Use this URL when configuring MCP clients. Requires a Bearer token (API key).
+          </div>
+        </div>
+        <div class="config-value-row">
+          <span class="config-value mono">{config.mcp_server_endpoint}</span>
+          <button class="btn btn-sm" onclick={copyEndpoint}>
+            {mcpCopied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 14px;">
+      <div class="card">
+        <div class="label">Transport</div>
+        <div class="value value-sm">
+          <select
+            class="input inline-select"
+            value={config.mcp_server_transport}
+            onchange={(e) => saveMcpField('mcp_server_transport', e.target.value)}
+            disabled={savingMcp}
+          >
+            <option value="streamable">Streamable HTTP</option>
+            <option value="sse">SSE (legacy)</option>
+          </select>
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Session Timeout</div>
+        <div class="value value-sm">
+          <input
+            type="text"
+            class="input inline-input"
+            value={config.mcp_server_session_timeout || '30m'}
+            disabled={savingMcp}
+            onchange={(e) => saveMcpField('mcp_server_session_timeout', e.target.value)}
+            placeholder="30m"
+          />
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Chat Timeout</div>
+        <div class="value value-sm">
+          <input
+            type="text"
+            class="input inline-input"
+            value={config.mcp_server_chat_timeout || '2m'}
+            disabled={savingMcp}
+            onchange={(e) => saveMcpField('mcp_server_chat_timeout', e.target.value)}
+            placeholder="2m"
+          />
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Stateless</div>
+        <div class="value value-sm">
+          <select
+            class="input inline-select"
+            value={config.mcp_server_stateless ? 'true' : 'false'}
+            onchange={(e) => saveMcpField('mcp_server_stateless', e.target.value === 'true')}
+            disabled={savingMcp}
+          >
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="mcp-hint">
+      Transport changes require a server restart to take effect.
+    </div>
+  {/if}
+  {#if saveMcpOk}
+    <div class="save-ok">Saved</div>
+  {/if}
 
   <h2 class="section-title">External Access</h2>
   <div class="config-card">
@@ -442,4 +590,63 @@
     margin-top: 4px;
   }
   .btn-link:hover { text-decoration: underline; }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .status-on { background: var(--success); }
+  .status-off { background: var(--text-muted); }
+
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: var(--border);
+    border-radius: 20px;
+    transition: background 0.2s;
+  }
+  .slider::before {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    bottom: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(16px); }
+  .switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+
+  .inline-select {
+    width: auto;
+    padding: 4px 8px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+
+  .inline-input {
+    width: 80px;
+    padding: 4px 8px;
+    font-size: 13px;
+  }
+
+  .mcp-hint {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
 </style>
