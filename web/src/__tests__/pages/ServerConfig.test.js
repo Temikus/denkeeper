@@ -164,6 +164,198 @@ describe('ServerConfig page', () => {
     })
   })
 
+  test('timezone edit opens picker and saves', async () => {
+    vi.useFakeTimers()
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Timezone')).toBeInTheDocument()
+    })
+
+    // Click Edit on timezone row
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[0])
+
+    // Timezone filter input should appear
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter timezones...')).toBeInTheDocument()
+    })
+
+    // Select element should be visible
+    const select = document.querySelector('.tz-select')
+    expect(select).toBeInTheDocument()
+
+    // Save button should be visible
+    expect(screen.getByText('Save')).toBeInTheDocument()
+
+    // Click Save
+    await fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => {
+      expect(screen.getByText(/Saved/)).toBeInTheDocument()
+    })
+
+    vi.useRealTimers()
+  })
+
+  test('timezone cancel returns to view mode', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Timezone')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[0])
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter timezones...')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Cancel'))
+    expect(screen.queryByPlaceholderText('Filter timezones...')).not.toBeInTheDocument()
+  })
+
+  test('timezone custom input toggle works', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Timezone')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[0])
+    await waitFor(() => {
+      expect(screen.getByText('Enter custom value')).toBeInTheDocument()
+    })
+
+    // Switch to custom input
+    await fireEvent.click(screen.getByText('Enter custom value'))
+    expect(screen.getByPlaceholderText('e.g. America/New_York')).toBeInTheDocument()
+
+    // Switch back to list
+    await fireEvent.click(screen.getByText('Back to list'))
+    expect(screen.getByPlaceholderText('Filter timezones...')).toBeInTheDocument()
+  })
+
+  test('timezone filter narrows options', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Timezone')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[0])
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter timezones...')).toBeInTheDocument()
+    })
+
+    const filter = screen.getByPlaceholderText('Filter timezones...')
+    await fireEvent.input(filter, { target: { value: 'Tokyo' } })
+
+    // Should show only matching timezone(s)
+    const options = document.querySelectorAll('.tz-select option')
+    expect(options.length).toBeGreaterThan(0)
+    const texts = Array.from(options).map(o => o.textContent)
+    expect(texts.some(t => t.includes('Tokyo'))).toBe(true)
+  })
+
+  test('reload config button works', async () => {
+    vi.useFakeTimers()
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Reload')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Reload'))
+    await waitFor(() => {
+      expect(screen.getByText('Config reloaded')).toBeInTheDocument()
+    })
+
+    vi.useRealTimers()
+  })
+
+  test('reload config error shows ErrorBanner', async () => {
+    server.use(
+      http.post('/api/v1/server/reload', () =>
+        HttpResponse.json({ error: 'Reload failed' }, { status: 500 })
+      ),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Reload')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Reload'))
+    await waitFor(() => {
+      expect(screen.getByText('Reload failed')).toBeInTheDocument()
+    })
+  })
+
+  test('restart shows confirm then executes', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Restart')).toBeInTheDocument()
+    })
+
+    // Click Restart to show confirmation
+    await fireEvent.click(screen.getByText('Restart'))
+    expect(screen.getByText('Confirm Restart')).toBeInTheDocument()
+    expect(screen.getByText('Cancel')).toBeInTheDocument()
+  })
+
+  test('restart cancel hides confirmation', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Restart')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Restart'))
+    expect(screen.getByText('Confirm Restart')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByText('Cancel'))
+    // Should be back to showing Restart button
+    expect(screen.getByText('Restart')).toBeInTheDocument()
+    expect(screen.queryByText('Confirm Restart')).not.toBeInTheDocument()
+  })
+
+  test('restart error shows ErrorBanner', async () => {
+    server.use(
+      http.post('/api/v1/server/restart', () =>
+        HttpResponse.json({ error: 'Restart failed' }, { status: 500 })
+      ),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Restart')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Restart'))
+    await fireEvent.click(screen.getByText('Confirm Restart'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Restart failed')).toBeInTheDocument()
+    })
+  })
+
+  test('timezone save error shows ErrorBanner', async () => {
+    server.use(
+      http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'TZ save failed' }, { status: 500 })
+      ),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('Timezone')).toBeInTheDocument()
+    })
+
+    const editButtons = screen.getAllByText('Edit')
+    await fireEvent.click(editButtons[0])
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Filter timezones...')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => {
+      expect(screen.getByText('TZ save failed')).toBeInTheDocument()
+    })
+  })
+
   test('MCP Server section shows Disabled by default', async () => {
     render(ServerConfig)
     await waitFor(() => {
