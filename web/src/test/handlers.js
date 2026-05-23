@@ -302,4 +302,6 @@ export const handlers = [
     go_version: 'go1.22.0',
   })),
   http.patch('/api/v1/server/config', () => HttpResponse.json({ ok: true })),
+  http.post('/api/v1/server/reload', () => HttpResponse.json({ ok: true })),
+  http.post('/api/v1/server/restart', () => new HttpResponse(null, { status: 204 })),
 ]
