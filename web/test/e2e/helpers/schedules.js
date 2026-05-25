@@ -32,10 +32,30 @@ export class SchedulesPage {
       await form.locator('input[placeholder*="@daily"]').fill(expression)
     }
     if (channel) {
-      await form.locator('input[placeholder*="adapter:externalID"]').fill(channel)
+      await this._selectOrCustom(form, '[data-testid="channel-select"]', 'input[placeholder="channel name"]', channel)
     }
     if (agent) {
-      await form.locator('input[placeholder="default"]').fill(agent)
+      await this._selectOrCustom(form, '[data-testid="agent-select"]', 'input[placeholder="agent name"]', agent)
+    }
+  }
+
+  /**
+   * Select a value from a dropdown, or pick "Custom..." and type into the text input.
+   * @param {import('@playwright/test').Locator} form
+   * @param {string} selectSelector
+   * @param {string} customInputSelector
+   * @param {string} value
+   */
+  async _selectOrCustom(form, selectSelector, customInputSelector, value) {
+    const select = form.locator(selectSelector)
+    const options = await select.locator('option').evaluateAll(
+      (opts) => opts.map(o => o.value).filter(v => v !== '__custom__')
+    )
+    if (options.includes(value)) {
+      await select.selectOption(value)
+    } else {
+      await select.selectOption('__custom__')
+      await form.locator(customInputSelector).fill(value)
     }
   }
 
