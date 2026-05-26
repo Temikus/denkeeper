@@ -62,9 +62,20 @@ export class SchedulesPage {
   /** Click the save button (Add Schedule or Update). */
   async save() {
     const form = this.page.locator('[data-testid="schedule-form"]')
-    await form.locator('button.btn-primary').click()
+    const btn = form.locator('[data-testid="schedule-save-btn"]')
+    // Click and wait for the schedule API response in parallel.
+    const [response] = await Promise.all([
+      this.page.waitForResponse(
+        (resp) => resp.url().includes('/api/v1/schedules') && ['POST', 'PATCH'].includes(resp.request().method()),
+        { timeout: 10000 },
+      ),
+      btn.click(),
+    ])
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Schedule save returned ${response.status()}: ${body}`)
+    }
     // The inline panel collapses via CSS grid animation (loses .open class).
-    // Wait for the panel to no longer have the .open class.
     await this.page.locator('.inline-panel.open').waitFor({ state: 'hidden', timeout: 15000 })
   }
 

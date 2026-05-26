@@ -248,7 +248,7 @@
           Enabled
         </label>
         <div class="form-actions">
-          <button class="btn-primary" onclick={saveSchedule}
+          <button class="btn-primary" onclick={saveSchedule} data-testid="schedule-save-btn"
             disabled={saving || !formName.trim() || !formSchedule.trim() || !resolvedChannel().trim()}>
             {saving ? 'Saving...' : (editingName ? 'Update' : 'Add Schedule')}
           </button>
