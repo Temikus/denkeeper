@@ -458,6 +458,58 @@ curl -X POST http://localhost:8080/api/v1/chat \
 
 Pass the same `session_id` in subsequent requests to continue the conversation. Omit it to start a new session with an auto-generated ID.
 
+### MCP Server
+
+Denkeeper can expose itself as an MCP server, letting external MCP clients (Claude Code, Claude Desktop, Cursor, etc.) use its agents, skills, schedules, sessions, and tools directly. The endpoint supports both Streamable HTTP (default) and SSE transports.
+
+**Enable in config:**
+
+```toml
+[api.mcp_server]
+enabled = true
+# transport = "streamable"   # or "sse" for legacy clients
+# session_timeout = "30m"
+# stateless = false
+```
+
+**Client configuration:**
+
+Claude Code (`~/.claude/settings.json` or project `.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "denkeeper": {
+      "type": "http",
+      "url": "http://localhost:8080/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer dk-your-secret-key"
+      }
+    }
+  }
+}
+```
+
+Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "denkeeper": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer dk-your-secret-key"
+      }
+    }
+  }
+}
+```
+
+Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
+
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+
 ## Development
 
 [just](https://github.com/casey/just) is used as the command runner. Run `just` to see all available recipes:
