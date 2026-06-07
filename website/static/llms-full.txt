@@ -82,7 +82,9 @@ Named provider instances (array). Multiple instances of the same type allowed.
     [[llm.providers]]
     name = "my-anthropic"            # unique provider name
     type = "anthropic"               # "anthropic", "openai", "openrouter", "ollama"
-    api_key = ""                     # API key (required except ollama)
+    api_key = ""                     # API key (required except ollama / oauth)
+    auth = ""                        # "" / "api_key" (default) or "oauth" (anthropic only)
+    oauth_token = ""                 # Claude subscription token from `claude setup-token` (auth = "oauth")
     base_url = ""                    # API endpoint override
     organization = ""                # OpenAI organization ID (openai type only)
     cost_limit_soft = 5.00           # per-provider soft cost limit (USD per session)

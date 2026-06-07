@@ -54,6 +54,8 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 
 **Named provider instances**: `[[llm.providers]]` array allows multiple instances of the same provider type (e.g. two OpenAI-compatible endpoints). Each entry has `name`, `type` (`anthropic`/`openai`/`openrouter`/`ollama`), `api_key`, `base_url`, `organization`. Legacy `[llm.openai]` single-slot syntax is still supported and auto-converted. Per-agent `llm_provider` references instances by name.
 
+**Anthropic subscription OAuth**: anthropic-type providers support `auth = "oauth"` to authenticate with a Claude subscription token (minted by `claude setup-token`) instead of an API key. Set `oauth_token` in TOML, or supply it via `CLAUDE_CODE_OAUTH_TOKEN` / `DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN` (resolved in `resolveProviderOAuthTokens`). The provider sends `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` instead of `x-api-key` (see `anthropic.NewWithOptions` / `AuthOAuth`). `auth` defaults to `api_key`, is only valid on anthropic providers, and requires a token when `oauth` (validated in `validateProviderInstances`/`validateProviderAPIKeys`). The TOML writer omits `auth` when it's the default (backward compat). Subscription usage draws from the plan's monthly Agent SDK credit, separate from interactive limits (effective 2026-06-15). Connection test: `POST /api/v1/llm/providers/{name}/test` verifies credentials via ListModels and accepts optional unsaved-credential overrides (uses `Deps.ProviderFactory`).
+
 **Data directory**: All default paths (db, persona, skills) are derived from a single base directory. Set via `DENKEEPER_DATA_DIR` env var, `data_dir` in TOML, or defaults to `~/.denkeeper`. The Helm chart sets `DENKEEPER_DATA_DIR=/data` so everything lands on the writable PVC.
 
 **Wiring** happens in `cmd/denkeeper/main.go` — config drives everything. All behavior should be configurable via TOML, not hardcoded.
@@ -152,6 +154,7 @@ Key endpoints (all require auth unless noted):
 - `POST /api/v1/llm/providers` (scope `admin`) — create a named provider instance; body: `{name, type, api_key, base_url, organization}`
 - `PATCH /api/v1/llm/providers/{name}` (scope `admin`) — update provider config (API key, base URL, etc.)
 - `DELETE /api/v1/llm/providers/{name}` (scope `admin`) — remove a provider instance (rejects if referenced by agents or default_provider)
+- `POST /api/v1/llm/providers/{name}/test` (scope `admin`) — verify provider credentials via a live ListModels/HealthCheck probe; optional body `{auth, api_key, oauth_token, base_url}` overrides saved credentials so a freshly-pasted token can be tested before saving
 - `PATCH /api/v1/llm/config` (scope `admin`) — update global LLM config (default provider, model, etc.)
 - `GET /api/v1/auth/status` (scope `admin`) — auth config summary (password, OIDC, sessions, preferences)
 - `GET/DELETE /api/v1/auth/sessions` (scope `admin`) — session list + revoke

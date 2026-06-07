@@ -2058,6 +2058,155 @@ api_key = "sk-ant-test"
 	}
 }
 
+func TestParse_AnthropicOAuth_Valid(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "claude-sub"
+
+[[llm.providers]]
+name = "claude-sub"
+type = "anthropic"
+auth = "oauth"
+oauth_token = "sk-ant-oat01-token"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error for anthropic oauth config: %v", err)
+	}
+	p := cfg.LLM.Providers[0]
+	if !p.IsOAuth() {
+		t.Errorf("expected provider to be OAuth, auth = %q", p.Auth)
+	}
+	if p.OAuthToken != "sk-ant-oat01-token" {
+		t.Errorf("oauth_token = %q, want sk-ant-oat01-token", p.OAuthToken)
+	}
+}
+
+func TestParse_AnthropicOAuth_MissingToken(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "claude-sub"
+
+[[llm.providers]]
+name = "claude-sub"
+type = "anthropic"
+auth = "oauth"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for oauth provider without token")
+	}
+	if !strings.Contains(err.Error(), "requires an oauth_token") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_OAuth_RejectedForNonAnthropic(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "gw"
+
+[[llm.providers]]
+name = "gw"
+type = "openai"
+auth = "oauth"
+oauth_token = "sk-ant-oat01-token"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for oauth on openai provider")
+	}
+	if !strings.Contains(err.Error(), "only supported for type \"anthropic\"") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_InvalidAuthMode(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "claude-sub"
+
+[[llm.providers]]
+name = "claude-sub"
+type = "anthropic"
+auth = "bogus"
+oauth_token = "x"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid auth mode")
+	}
+	if !strings.Contains(err.Error(), "invalid auth") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_AnthropicOAuth_TokenFromEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fromenv")
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "claude-sub"
+
+[[llm.providers]]
+name = "claude-sub"
+type = "anthropic"
+auth = "oauth"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.Providers[0].OAuthToken != "sk-ant-oat01-fromenv" {
+		t.Errorf("oauth_token = %q, want value from env", cfg.LLM.Providers[0].OAuthToken)
+	}
+}
+
+func TestParse_AnthropicOAuth_LegacySection(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "tg-token"
+allowed_users = [111222333]
+
+[llm]
+default_provider = "anthropic"
+
+[llm.anthropic]
+auth = "oauth"
+oauth_token = "sk-ant-oat01-legacy"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.LLM.HasProvider("anthropic") {
+		t.Fatal("expected synthesized anthropic provider")
+	}
+	p := cfg.LLM.Providers[0]
+	if !p.IsOAuth() || p.OAuthToken != "sk-ant-oat01-legacy" {
+		t.Errorf("synthesized provider = %+v, want oauth with legacy token", p)
+	}
+}
+
 func TestParse_DiscordOnly_DefaultAgentAdapters(t *testing.T) {
 	// When only discord is configured, the synthesized default agent should
 	// have "discord" in its adapters list (not "telegram").

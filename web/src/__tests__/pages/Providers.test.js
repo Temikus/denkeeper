@@ -304,6 +304,115 @@ describe('Providers page', () => {
     })
   })
 
+  test('add form shows auth toggle only for anthropic', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-type-select')).toBeInTheDocument())
+
+    // Default type is openai — no auth toggle.
+    expect(screen.queryByText('Claude subscription (OAuth)')).not.toBeInTheDocument()
+
+    // Switch to anthropic — toggle appears.
+    await fireEvent.change(screen.getByTestId('provider-type-select'), { target: { value: 'anthropic' } })
+    await waitFor(() => {
+      expect(screen.getByText('Claude subscription (OAuth)')).toBeInTheDocument()
+    })
+  })
+
+  test('selecting OAuth reveals token field and billing banner, hides API key', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-type-select')).toBeInTheDocument())
+
+    await fireEvent.change(screen.getByTestId('provider-type-select'), { target: { value: 'anthropic' } })
+    const oauthRadio = await screen.findByDisplayValue('oauth')
+    await fireEvent.click(oauthRadio)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-oauth-input')).toBeInTheDocument()
+      expect(screen.getByText(/Subscription billing/)).toBeInTheDocument()
+      expect(screen.getByText(/claude setup-token/)).toBeInTheDocument()
+      // API key field hidden in OAuth mode.
+      expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+    })
+  })
+
+  test('create OAuth provider posts auth and oauth_token', async () => {
+    let postBody = null
+    server.use(
+      http.post('/api/v1/llm/providers', async ({ request }) => {
+        postBody = await request.json()
+        return HttpResponse.json({ name: 'claude-sub', status: 'created' }, { status: 201 })
+      })
+    )
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-type-select')).toBeInTheDocument())
+
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'claude-sub' } })
+    await fireEvent.change(screen.getByTestId('provider-type-select'), { target: { value: 'anthropic' } })
+    const oauthRadio = await screen.findByDisplayValue('oauth')
+    await fireEvent.click(oauthRadio)
+    await fireEvent.input(screen.getByTestId('provider-oauth-input'), { target: { value: 'sk-ant-oat01-xyz' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => {
+      expect(postBody).not.toBeNull()
+      expect(postBody.auth).toBe('oauth')
+      expect(postBody.oauth_token).toBe('sk-ant-oat01-xyz')
+      expect(postBody.api_key).toBeUndefined()
+    })
+  })
+
+  test('create OAuth provider blocks when token missing', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('add-provider-btn')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-type-select')).toBeInTheDocument())
+
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'claude-sub' } })
+    await fireEvent.change(screen.getByTestId('provider-type-select'), { target: { value: 'anthropic' } })
+    const oauthRadio = await screen.findByDisplayValue('oauth')
+    await fireEvent.click(oauthRadio)
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Paste a subscription token')
+    })
+  })
+
+  test('test connection button reports success', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+
+    const testButtons = screen.getAllByTestId('test-provider-btn')
+    await fireEvent.click(testButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByText(/Connected — 5 models available/)).toBeInTheDocument()
+    })
+  })
+
+  test('test connection button reports failure', async () => {
+    server.use(
+      http.post('/api/v1/llm/providers/:name/test', () =>
+        HttpResponse.json({ ok: false, error: 'invalid token' }, { status: 502 })
+      )
+    )
+    render(Providers)
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+
+    const testButtons = screen.getAllByTestId('test-provider-btn')
+    await fireEvent.click(testButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByText(/invalid token/)).toBeInTheDocument()
+    })
+  })
+
   test('confirm delete calls DELETE and refreshes list', async () => {
     let deleteCalled = false
     server.use(

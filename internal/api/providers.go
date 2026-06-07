@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
@@ -84,6 +87,24 @@ func validateBaseURL(raw string) string {
 	return ""
 }
 
+// validateProviderAuth checks the auth mode for a provider. typ is the provider
+// type and token is the OAuth token (empty string when not supplied). Returns an
+// error message string, or "" if valid. An empty auth means the default api_key.
+func validateProviderAuth(auth, typ, token string) string {
+	if !config.ValidAuthMode(auth) {
+		return "invalid auth: must be one of: api_key, oauth"
+	}
+	if auth == config.AuthModeOAuth {
+		if typ != "anthropic" {
+			return "auth \"oauth\" is only supported for anthropic-type providers"
+		}
+		if token == "" {
+			return "oauth_token is required when auth is \"oauth\" (generate one with `claude setup-token`)"
+		}
+	}
+	return ""
+}
+
 // nullCostFields tracks which cost fields were explicitly set to null in the JSON body.
 type nullCostFields struct {
 	Soft bool
@@ -140,6 +161,8 @@ type providerInfo struct {
 	Type                  string                             `json:"type"`
 	Enabled               bool                               `json:"enabled"`
 	APIKeySet             bool                               `json:"api_key_set"`
+	Auth                  string                             `json:"auth"`
+	OAuthTokenSet         bool                               `json:"oauth_token_set"`
 	BaseURL               string                             `json:"base_url,omitempty"`
 	Organization          string                             `json:"organization,omitempty"`
 	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
@@ -170,13 +193,23 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 	providers := make([]providerInfo, 0, len(cfg.Providers))
 	for _, pc := range cfg.Providers {
+		auth := pc.Auth
+		if auth == "" {
+			auth = config.AuthModeAPIKey
+		}
+		enabled := pc.APIKey != "" || pc.Type == "ollama"
+		if pc.IsOAuth() {
+			enabled = pc.OAuthToken != ""
+		}
 		pi := providerInfo{
-			Name:         pc.Name,
-			Type:         pc.Type,
-			Enabled:      pc.APIKey != "" || pc.Type == "ollama",
-			APIKeySet:    pc.APIKey != "",
-			BaseURL:      pc.BaseURL,
-			Organization: pc.Organization,
+			Name:          pc.Name,
+			Type:          pc.Type,
+			Enabled:       enabled,
+			APIKeySet:     pc.APIKey != "",
+			Auth:          auth,
+			OAuthTokenSet: pc.OAuthToken != "",
+			BaseURL:       pc.BaseURL,
+			Organization:  pc.Organization,
 		}
 		if pc.Type == "openrouter" {
 			r := cfg.OpenRouter.Reasoning
@@ -203,6 +236,8 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 // providerUpdateInput holds the mutable fields for PATCH /api/v1/llm/providers/{name}.
 type providerUpdateInput struct {
 	APIKey                *string                            `json:"api_key,omitempty"`
+	Auth                  *string                            `json:"auth,omitempty"`
+	OAuthToken            *string                            `json:"oauth_token,omitempty"`
 	BaseURL               *string                            `json:"base_url,omitempty"`
 	Organization          *string                            `json:"organization,omitempty"`
 	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
@@ -286,11 +321,153 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Validate the auth mode against the resulting state (auth/token may be set
+	// in this patch or already present on the provider).
+	if msg := validatePatchedProviderAuth(pc, &input); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
 	// Apply to in-memory config and persist.
 	s.applyLLMProviderUpdate(name, &input, nullCosts)
 	s.persistLLMProvider(name, &input, nullCosts)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// providerTestInput optionally overrides saved credentials for a connection
+// test, so a freshly-pasted token can be verified before it is persisted. All
+// fields are optional; absent fields fall back to the saved provider config.
+type providerTestInput struct {
+	Auth       *string `json:"auth,omitempty"`
+	APIKey     *string `json:"api_key,omitempty"`
+	OAuthToken *string `json:"oauth_token,omitempty"`
+	BaseURL    *string `json:"base_url,omitempty"`
+}
+
+// handleTestLLMProvider godoc
+// @Summary Test LLM provider connection
+// @Description Verifies provider credentials by listing models. Accepts optional credential overrides to test before saving.
+// @Tags providers
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param name path string true "Provider name"
+// @Param body body providerTestInput false "Optional credential overrides"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]string
+// @Failure 502 {object} map[string]any
+// @Router /llm/providers/{name}/test [post]
+func (s *Server) handleTestLLMProvider(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ProviderFactory == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider testing not available"})
+		return
+	}
+
+	name := r.PathValue("name")
+	pc := s.findProviderInstance(name)
+	if pc == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown provider: " + name})
+		return
+	}
+
+	// Apply optional overrides onto a copy so the test can validate unsaved creds.
+	test := *pc
+	if body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)); len(body) > 0 {
+		var in providerTestInput
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+		applyProviderTestOverrides(&test, &in)
+	}
+
+	if msg := validateProviderAuth(test.Auth, test.Type, test.OAuthToken); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
+	provider := s.deps.ProviderFactory(test)
+	if provider == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not construct provider client"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	ok, models, err := testProviderConnection(ctx, provider)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": providerTestError(err)})
+		return
+	}
+
+	resp := map[string]any{"ok": true}
+	if models >= 0 {
+		resp["models"] = models
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// applyProviderTestOverrides mutates pc with any non-nil fields from in.
+func applyProviderTestOverrides(pc *config.ProviderInstanceConfig, in *providerTestInput) {
+	if in.Auth != nil {
+		pc.Auth = *in.Auth
+	}
+	if in.APIKey != nil {
+		pc.APIKey = *in.APIKey
+	}
+	if in.OAuthToken != nil {
+		pc.OAuthToken = *in.OAuthToken
+	}
+	if in.BaseURL != nil {
+		pc.BaseURL = *in.BaseURL
+	}
+}
+
+// testProviderConnection probes a provider. It prefers ListModels (which both
+// validates credentials and yields a count); otherwise it falls back to
+// HealthCheck. The returned count is -1 when only a health check was performed.
+func testProviderConnection(ctx context.Context, provider llm.Provider) (ok bool, models int, err error) {
+	if lister, isLister := provider.(llm.ModelLister); isLister {
+		list, lerr := lister.ListModels(ctx)
+		if lerr != nil {
+			return false, 0, lerr
+		}
+		return true, len(list), nil
+	}
+	if herr := provider.HealthCheck(ctx); herr != nil {
+		return false, 0, herr
+	}
+	return true, -1, nil
+}
+
+// providerTestError renders a user-facing message for a failed connection test,
+// surfacing the upstream API status/message when available.
+func providerTestError(err error) string {
+	if err == nil {
+		return "connection failed"
+	}
+	var llmErr *llm.LLMError
+	if errors.As(err, &llmErr) {
+		return llmErr.Message
+	}
+	return err.Error()
+}
+
+// validatePatchedProviderAuth validates the auth mode that would result from
+// applying a PATCH to an existing provider, accounting for fields not present in
+// the patch (which retain their current values).
+func validatePatchedProviderAuth(pc *config.ProviderInstanceConfig, input *providerUpdateInput) string {
+	auth := pc.Auth
+	if input.Auth != nil {
+		auth = *input.Auth
+	}
+	token := pc.OAuthToken
+	if input.OAuthToken != nil {
+		token = *input.OAuthToken
+	}
+	return validateProviderAuth(auth, pc.Type, token)
 }
 
 // findProviderInstance returns a pointer to the named provider in config, or nil.
@@ -310,6 +487,12 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 	}
 	if input.APIKey != nil {
 		pc.APIKey = *input.APIKey
+	}
+	if input.Auth != nil {
+		pc.Auth = *input.Auth
+	}
+	if input.OAuthToken != nil {
+		pc.OAuthToken = *input.OAuthToken
 	}
 	if input.BaseURL != nil {
 		pc.BaseURL = *input.BaseURL
@@ -355,6 +538,8 @@ func (s *Server) syncLegacyProviderConfig(name string, pc *config.ProviderInstan
 	case "anthropic":
 		s.deps.Config.LLM.Anthropic.APIKey = pc.APIKey
 		s.deps.Config.LLM.Anthropic.BaseURL = pc.BaseURL
+		s.deps.Config.LLM.Anthropic.Auth = pc.Auth
+		s.deps.Config.LLM.Anthropic.OAuthToken = pc.OAuthToken
 	case "openrouter":
 		s.deps.Config.LLM.OpenRouter.APIKey = pc.APIKey
 	case "openai":
@@ -374,6 +559,22 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nul
 	changes := make(map[string]any)
 	if input.APIKey != nil {
 		changes["api_key"] = *input.APIKey
+	}
+	if input.Auth != nil {
+		// "api_key" is the default; persist it as a deletion so the key is
+		// omitted from TOML (backward-compat), and write "oauth" explicitly.
+		if *input.Auth == config.AuthModeOAuth {
+			changes["auth"] = config.AuthModeOAuth
+		} else {
+			changes["auth"] = nil
+		}
+	}
+	if input.OAuthToken != nil {
+		if *input.OAuthToken == "" {
+			changes["oauth_token"] = nil
+		} else {
+			changes["oauth_token"] = *input.OAuthToken
+		}
 	}
 	if input.BaseURL != nil {
 		changes["base_url"] = *input.BaseURL
@@ -520,6 +721,8 @@ type providerCreateInput struct {
 	Name                  string                             `json:"name"`
 	Type                  string                             `json:"type"`
 	APIKey                string                             `json:"api_key,omitempty"`
+	Auth                  string                             `json:"auth,omitempty"`
+	OAuthToken            string                             `json:"oauth_token,omitempty"`
 	BaseURL               string                             `json:"base_url,omitempty"`
 	Organization          string                             `json:"organization,omitempty"`
 	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
@@ -589,16 +792,26 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if msg := validateProviderAuth(input.Auth, input.Type, input.OAuthToken); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
 	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 
 	// Persist to TOML — source of truth.
-	if err := config.AddLLMProviderToConfig(
-		s.deps.ConfigPath, input.Name, input.Type,
-		input.APIKey, input.BaseURL, input.Organization,
-	); err != nil {
+	if err := config.AddLLMProviderToConfig(s.deps.ConfigPath, config.ProviderInstanceConfig{
+		Name:         input.Name,
+		Type:         input.Type,
+		APIKey:       input.APIKey,
+		BaseURL:      input.BaseURL,
+		Organization: input.Organization,
+		Auth:         input.Auth,
+		OAuthToken:   input.OAuthToken,
+	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "persisting provider to config: " + err.Error(),
 		})
@@ -612,6 +825,8 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		Name:                  input.Name,
 		Type:                  input.Type,
 		APIKey:                input.APIKey,
+		Auth:                  input.Auth,
+		OAuthToken:            input.OAuthToken,
 		BaseURL:               input.BaseURL,
 		Organization:          input.Organization,
 		CostLimitSoft:         input.CostLimitSoft,

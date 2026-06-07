@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "Personal AI agent management API — multi-agent routing, LLM providers, tools, approvals, and more.",
+        "description": "Personal AI agent management API \u2014 multi-agent routing, LLM providers, tools, approvals, and more.",
         "title": "Denkeeper API",
         "contact": {
             "name": "Denkeeper",
@@ -335,7 +335,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires agents:read scope",
+                        "description": "Forbidden \u2014 requires agents:read scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -430,7 +430,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires agents:write scope",
+                        "description": "Forbidden \u2014 requires agents:write scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3157,6 +3157,69 @@
                 }
             }
         },
+        "/llm/providers/{name}/test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Verifies provider credentials by listing models. Accepts optional credential overrides to test before saving.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Test LLM provider connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional credential overrides",
+                        "name": "body",
+                        "in": "body",
+                        "required": false,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.providerTestInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/models": {
             "get": {
                 "security": [
@@ -3267,7 +3330,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3307,7 +3370,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3379,7 +3442,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Triggers an emergency stop — cancels all in-flight requests and pauses the scheduler.",
+                "description": "Triggers an emergency stop \u2014 cancels all in-flight requests and pauses the scheduler.",
                 "tags": [
                     "safety"
                 ],
@@ -3861,7 +3924,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3928,7 +3991,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3974,7 +4037,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4038,7 +4101,7 @@
                         }
                     },
                     "403": {
-                        "description": "Forbidden — requires admin scope",
+                        "description": "Forbidden \u2014 requires admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4564,7 +4627,7 @@
                 }
             },
             "post": {
-                "description": "Creates the first API key during initial setup. Returns 409 once any active key exists. No authentication required — the endpoint locks itself after first use.",
+                "description": "Creates the first API key during initial setup. Returns 409 once any active key exists. No authentication required \u2014 the endpoint locks itself after first use.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4635,7 +4698,7 @@
         },
         "/setup/account": {
             "post": {
-                "description": "Creates an admin account (password login) verified by a one-time setup PIN displayed in server logs at startup. No authentication required — the endpoint self-disables after successful use.",
+                "description": "Creates an admin account (password login) verified by a one-time setup PIN displayed in server logs at startup. No authentication required \u2014 the endpoint self-disables after successful use.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5902,7 +5965,7 @@
                     "type": "string"
                 },
                 "callback_data": {
-                    "description": "CallbackData is the base prefix embedded in Telegram inline button data.\nFormat: \"appr:{id}\" — buttons append \":approve\" or \":deny\".",
+                    "description": "CallbackData is the base prefix embedded in Telegram inline button data.\nFormat: \"appr:{id}\" \u2014 buttons append \":approve\" or \":deny\".",
                     "type": "string"
                 },
                 "conversation_id": {
@@ -6065,7 +6128,7 @@
                     "type": "string"
                 },
                 "scope": {
-                    "description": "\"soft\" | \"hard\" — required for cost_limit",
+                    "description": "\"soft\" | \"hard\" \u2014 required for cost_limit",
                     "type": "string"
                 },
                 "threshold": {
@@ -6546,10 +6609,16 @@
                 "api_key": {
                     "type": "string"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                },
+                "oauth_token": {
                     "type": "string"
                 },
                 "organization": {
@@ -6566,6 +6635,9 @@
                 "api_key_set": {
                     "type": "boolean"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
                     "type": "string"
                 },
@@ -6574,6 +6646,9 @@
                 },
                 "name": {
                     "type": "string"
+                },
+                "oauth_token_set": {
+                    "type": "boolean"
                 },
                 "organization": {
                     "type": "string"
@@ -6586,13 +6661,36 @@
                 }
             }
         },
+        "internal_api.providerTestInput": {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string"
+                },
+                "auth": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "oauth_token": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.providerUpdateInput": {
             "type": "object",
             "properties": {
                 "api_key": {
                     "type": "string"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
+                    "type": "string"
+                },
+                "oauth_token": {
                     "type": "string"
                 },
                 "organization": {

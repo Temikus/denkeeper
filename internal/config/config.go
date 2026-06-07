@@ -720,10 +720,26 @@ type ProviderInstanceConfig struct {
 	BaseURL      string `toml:"base_url"     json:"base_url,omitempty"`
 	Organization string `toml:"organization" json:"organization,omitempty"` // openai-specific
 
+	// Auth selects the authentication scheme. "" / "api_key" use the X-Api-Key
+	// header (the default). "oauth" authenticates with a Claude subscription
+	// token (anthropic only) via the Authorization: Bearer header. See AuthMode*.
+	Auth string `toml:"auth" json:"auth,omitempty"`
+	// OAuthToken is a Claude subscription OAuth token (sk-ant-oat...) minted by
+	// `claude setup-token`. Only used when Auth == "oauth". Never serialized to
+	// JSON — it is a subscription credential. May also be supplied via the
+	// CLAUDE_CODE_OAUTH_TOKEN environment variable.
+	OAuthToken string `toml:"oauth_token" json:"-"`
+
 	CostLimitSoft         *float64                    `toml:"cost_limit_soft"            json:"cost_limit_soft,omitempty"`
 	CostLimitHard         *float64                    `toml:"cost_limit_hard"            json:"cost_limit_hard,omitempty"`
 	DefaultRatePerKTokens *float64                    `toml:"default_rate_per_1k_tokens" json:"default_rate_per_1k_tokens,omitempty"`
 	ModelPrices           map[string]ModelPriceConfig `toml:"model_prices"               json:"model_prices,omitempty"`
+}
+
+// IsOAuth reports whether this provider authenticates with a Claude
+// subscription OAuth token rather than a static API key.
+func (p ProviderInstanceConfig) IsOAuth() bool {
+	return p.Auth == AuthModeOAuth
 }
 
 // ProviderNames returns the names of all configured provider instances.
@@ -751,6 +767,10 @@ type AnthropicConfig struct {
 	APIKey string `toml:"api_key"`
 	// BaseURL overrides the default API endpoint. Useful for Bedrock/Vertex proxies.
 	BaseURL string `toml:"base_url"`
+	// Auth selects the authentication scheme: "" / "api_key" (default) or "oauth".
+	Auth string `toml:"auth"`
+	// OAuthToken is a Claude subscription token (sk-ant-oat...) used when Auth == "oauth".
+	OAuthToken string `toml:"oauth_token"`
 }
 
 // OpenAIConfig configures the OpenAI-compatible LLM provider.
@@ -980,6 +1000,7 @@ func applyDefaults(cfg *Config) {
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
 	synthesizeLegacyProviders(cfg)
+	resolveProviderOAuthTokens(cfg)
 	migrateCostsToProviders(cfg, userSetSoft, userCostSoft, userSetHard, userCostHard)
 	expandEnvVars(cfg)
 	applyMiscDefaults(cfg)
@@ -1015,34 +1036,60 @@ func migrateCostsToProviders(cfg *Config, userSetSoft bool, softVal float64, use
 // if no [[llm.providers]] entry with the same name already exists. This allows users
 // to migrate incrementally from the old single-slot syntax to the new array syntax.
 func synthesizeLegacyProviders(cfg *Config) {
-	add := func(name, typ, apiKey, baseURL, org string) {
-		if cfg.LLM.HasProvider(name) {
+	add := func(p ProviderInstanceConfig) {
+		if cfg.LLM.HasProvider(p.Name) {
 			return
 		}
-		cfg.LLM.Providers = append(cfg.LLM.Providers, ProviderInstanceConfig{
-			Name:         name,
-			Type:         typ,
-			APIKey:       apiKey,
-			BaseURL:      baseURL,
-			Organization: org,
-		})
+		cfg.LLM.Providers = append(cfg.LLM.Providers, p)
 	}
 
 	// Always synthesize entries for legacy provider sections. Even if the API key
 	// is missing, we need the entry so validation can produce a clear "requires
 	// api_key" error rather than "provider not found". The key check happens in
 	// validateProviderAPIKeys.
-	if cfg.LLM.Anthropic.APIKey != "" || IsProviderReferenced(cfg, "anthropic") {
-		add("anthropic", "anthropic", cfg.LLM.Anthropic.APIKey, cfg.LLM.Anthropic.BaseURL, "")
+	if cfg.LLM.Anthropic.APIKey != "" || cfg.LLM.Anthropic.OAuthToken != "" ||
+		cfg.LLM.Anthropic.Auth == AuthModeOAuth || IsProviderReferenced(cfg, "anthropic") {
+		add(ProviderInstanceConfig{
+			Name:       "anthropic",
+			Type:       "anthropic",
+			APIKey:     cfg.LLM.Anthropic.APIKey,
+			BaseURL:    cfg.LLM.Anthropic.BaseURL,
+			Auth:       cfg.LLM.Anthropic.Auth,
+			OAuthToken: cfg.LLM.Anthropic.OAuthToken,
+		})
 	}
 	if cfg.LLM.OpenRouter.APIKey != "" || IsProviderReferenced(cfg, "openrouter") {
-		add("openrouter", "openrouter", cfg.LLM.OpenRouter.APIKey, "", "")
+		add(ProviderInstanceConfig{Name: "openrouter", Type: "openrouter", APIKey: cfg.LLM.OpenRouter.APIKey})
 	}
 	if cfg.LLM.OpenAI.APIKey != "" || IsProviderReferenced(cfg, "openai") {
-		add("openai", "openai", cfg.LLM.OpenAI.APIKey, cfg.LLM.OpenAI.BaseURL, cfg.LLM.OpenAI.Organization)
+		add(ProviderInstanceConfig{
+			Name: "openai", Type: "openai", APIKey: cfg.LLM.OpenAI.APIKey,
+			BaseURL: cfg.LLM.OpenAI.BaseURL, Organization: cfg.LLM.OpenAI.Organization,
+		})
 	}
 	if cfg.LLM.Ollama.BaseURL != "" || IsProviderReferenced(cfg, "ollama") {
-		add("ollama", "ollama", "", cfg.LLM.Ollama.BaseURL, "")
+		add(ProviderInstanceConfig{Name: "ollama", Type: "ollama", BaseURL: cfg.LLM.Ollama.BaseURL})
+	}
+}
+
+// resolveProviderOAuthTokens fills in the OAuth token for anthropic providers
+// configured with auth = "oauth" but no token in TOML, from the environment.
+// CLAUDE_CODE_OAUTH_TOKEN is the variable `claude setup-token` documents, so
+// users who already export it (e.g. for Claude Code) get it picked up for free;
+// DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN is the Denkeeper-namespaced alias.
+func resolveProviderOAuthTokens(cfg *Config) {
+	token := os.Getenv("DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN")
+	if token == "" {
+		token = os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+	}
+	if token == "" {
+		return
+	}
+	for i := range cfg.LLM.Providers {
+		p := &cfg.LLM.Providers[i]
+		if p.Type == "anthropic" && p.IsOAuth() && p.OAuthToken == "" {
+			p.OAuthToken = token
+		}
 	}
 }
 
@@ -1290,6 +1337,7 @@ func applyEnvOverrides(cfg *Config) {
 	envOverrideInt("DENKEEPER_LLM_OPENROUTER_REASONING_MAX_TOKENS", &cfg.LLM.OpenRouter.Reasoning.MaxTokens)
 	envOverride("DENKEEPER_LLM_ANTHROPIC_API_KEY", &cfg.LLM.Anthropic.APIKey)
 	envOverride("DENKEEPER_LLM_ANTHROPIC_BASE_URL", &cfg.LLM.Anthropic.BaseURL)
+	envOverride("DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN", &cfg.LLM.Anthropic.OAuthToken)
 	envOverride("DENKEEPER_LLM_OLLAMA_BASE_URL", &cfg.LLM.Ollama.BaseURL)
 	envOverride("DENKEEPER_LLM_OPENAI_API_KEY", &cfg.LLM.OpenAI.APIKey)
 	envOverride("DENKEEPER_LLM_OPENAI_BASE_URL", &cfg.LLM.OpenAI.BaseURL)
@@ -1598,6 +1646,27 @@ func ValidProviderType(typ string) bool {
 	return validProviderTypes[typ]
 }
 
+// Provider authentication modes.
+const (
+	// AuthModeAPIKey authenticates with a static API key via the X-Api-Key
+	// header. This is the default for every provider type.
+	AuthModeAPIKey = "api_key"
+	// AuthModeOAuth authenticates with a Claude subscription OAuth token via the
+	// Authorization: Bearer header. Anthropic provider only.
+	AuthModeOAuth = "oauth"
+)
+
+// validAuthModes is the set of recognized provider authentication modes.
+var validAuthModes = map[string]bool{
+	AuthModeAPIKey: true, AuthModeOAuth: true,
+}
+
+// ValidAuthMode reports whether mode is a recognized provider auth mode.
+// The empty string is accepted and treated as the default (api_key).
+func ValidAuthMode(mode string) bool {
+	return mode == "" || validAuthModes[mode]
+}
+
 // resourceNameRe is the shared pattern for agent, provider, and channel names:
 // lowercase alphanumeric with hyphens, 1-64 chars.
 var resourceNameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
@@ -1623,6 +1692,12 @@ func validateProviderInstances(cfg *Config) error {
 		}
 		if !validProviderTypes[p.Type] {
 			return fmt.Errorf("config: llm.providers[%d] %q: invalid type %q — must be one of: anthropic, openai, openrouter, ollama", i, p.Name, p.Type)
+		}
+		if !ValidAuthMode(p.Auth) {
+			return fmt.Errorf("config: llm.providers[%d] %q: invalid auth %q — must be one of: api_key, oauth", i, p.Name, p.Auth)
+		}
+		if p.Auth == AuthModeOAuth && p.Type != "anthropic" {
+			return fmt.Errorf("config: llm.providers[%d] %q: auth = \"oauth\" is only supported for type \"anthropic\" (got %q)", i, p.Name, p.Type)
 		}
 		if seen[p.Name] {
 			return fmt.Errorf("config: llm.providers[%d]: duplicate provider name %q", i, p.Name)
@@ -1662,7 +1737,16 @@ func validateProviderAPIKeys(cfg *Config) error {
 	}
 
 	for _, p := range cfg.LLM.Providers {
-		if referenced[p.Name] && providerNeedsAPIKey(p.Type) && p.APIKey == "" {
+		if !referenced[p.Name] {
+			continue
+		}
+		if p.IsOAuth() {
+			if p.OAuthToken == "" {
+				return fmt.Errorf("config: provider %q (auth oauth) requires an oauth_token — generate one with `claude setup-token` or set CLAUDE_CODE_OAUTH_TOKEN", p.Name)
+			}
+			continue
+		}
+		if providerNeedsAPIKey(p.Type) && p.APIKey == "" {
 			return fmt.Errorf("config: provider %q (type %s) requires an api_key", p.Name, p.Type)
 		}
 	}

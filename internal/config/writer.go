@@ -511,19 +511,27 @@ func rawProviders(raw map[string]any) []any {
 	}
 }
 
-func providerToMap(name, typ, apiKey, baseURL, organization string) map[string]any {
+func providerToMap(p ProviderInstanceConfig) map[string]any {
 	m := map[string]any{
-		"name": name,
-		"type": typ,
+		"name": p.Name,
+		"type": p.Type,
 	}
-	if apiKey != "" {
-		m["api_key"] = apiKey
+	if p.APIKey != "" {
+		m["api_key"] = p.APIKey
 	}
-	if baseURL != "" {
-		m["base_url"] = baseURL
+	if p.BaseURL != "" {
+		m["base_url"] = p.BaseURL
 	}
-	if organization != "" {
-		m["organization"] = organization
+	if p.Organization != "" {
+		m["organization"] = p.Organization
+	}
+	// Only "oauth" is persisted; "api_key" is the default and omitted for
+	// backward compatibility (matches how enabled=true is omitted elsewhere).
+	if p.Auth == AuthModeOAuth {
+		m["auth"] = p.Auth
+	}
+	if p.OAuthToken != "" {
+		m["oauth_token"] = p.OAuthToken
 	}
 	return m
 }
@@ -634,7 +642,7 @@ func UpdateLLMProviderInstanceConfig(path, name string, changes map[string]any) 
 }
 
 // AddLLMProviderToConfig appends a [[llm.providers]] entry to the TOML config.
-func AddLLMProviderToConfig(path, name, typ, apiKey, baseURL, organization string) error {
+func AddLLMProviderToConfig(path string, p ProviderInstanceConfig) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -643,7 +651,7 @@ func AddLLMProviderToConfig(path, name, typ, apiKey, baseURL, organization strin
 		return err
 	}
 
-	entry := providerToMap(name, typ, apiKey, baseURL, organization)
+	entry := providerToMap(p)
 
 	llmSection, ok := raw["llm"].(map[string]any)
 	if !ok {

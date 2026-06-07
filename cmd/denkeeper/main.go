@@ -333,7 +333,13 @@ func initLLMClients(cfg *config.Config) llmClients {
 func createProvider(pc config.ProviderInstanceConfig, cfg *config.Config) llm.Provider {
 	switch pc.Type {
 	case "anthropic":
-		return anthropicllm.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
+		return anthropicllm.NewWithOptions(anthropicllm.Options{
+			Name:       pc.Name,
+			APIKey:     pc.APIKey,
+			BaseURL:    pc.BaseURL,
+			Auth:       pc.Auth,
+			OAuthToken: pc.OAuthToken,
+		})
 	case "openai":
 		return openaillm.NewFull(pc.Name, pc.APIKey, pc.BaseURL, pc.Organization)
 	case "openrouter":
@@ -1501,10 +1507,13 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		ConfigPath:        a.path,
 		ModelLister:       a.dispatcher.ListModels,
 		ModelDetailLister: a.dispatcher.ListModelDetails,
-		OAuthDeps:         a.oauthDeps,
-		MCPHandler:        mcpSrv.Handler(),
-		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.logger),
-		RestartFunc:       selfRestartFunc,
+		ProviderFactory: func(pc config.ProviderInstanceConfig) llm.Provider {
+			return createProvider(pc, cfg)
+		},
+		OAuthDeps:   a.oauthDeps,
+		MCPHandler:  mcpSrv.Handler(),
+		ReloadFunc:  buildReloadFunc(a.path, cfg, a.dispatcher, a.logger),
+		RestartFunc: selfRestartFunc,
 		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 			return buildAgentEngine(ctx, ac, a.abc)
 		},

@@ -65,6 +65,7 @@ type Deps struct {
 	SetupPIN          string                                                                   // one-time PIN for account setup (empty = disabled)
 	ModelLister       func(ctx context.Context) []string                                       // returns available LLM models; nil = endpoint returns 503
 	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo         // returns enriched model metadata; nil = endpoint returns 503
+	ProviderFactory   func(config.ProviderInstanceConfig) llm.Provider                         // builds a live provider client for connection tests; nil = test endpoint returns 503
 	AuditStore        audit.Store                                                              // nil = audit endpoints return 503
 	Auditor           audit.Emitter                                                            // nil = no audit events from schedule delivery
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
@@ -280,6 +281,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/llm/providers", s.RequireScope("admin", s.handleCreateLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
 	mux.HandleFunc("DELETE /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handleDeleteLLMProvider))
+	mux.HandleFunc("POST /api/v1/llm/providers/{name}/test", s.RequireScope("admin", s.handleTestLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
 
 	// Server config endpoints (require admin scope).
