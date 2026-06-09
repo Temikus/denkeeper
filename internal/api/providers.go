@@ -505,6 +505,17 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
 	}
 
+	applyProviderCostUpdate(pc, input, nulls)
+
+	s.syncProviderCostTracker(name, pc.CostLimitSoft, pc.CostLimitHard)
+
+	// Keep legacy structs in sync for backward compat.
+	s.syncLegacyProviderConfig(name, pc)
+}
+
+// applyProviderCostUpdate applies cost-limit and pricing fields from input to
+// pc, honoring explicit-null requests in nulls.
+func applyProviderCostUpdate(pc *config.ProviderInstanceConfig, input *providerUpdateInput, nulls nullCostFields) {
 	if nulls.Soft {
 		pc.CostLimitSoft = nil
 	} else if input.CostLimitSoft != nil {
@@ -523,11 +534,6 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 	if input.ModelPrices != nil {
 		pc.ModelPrices = input.ModelPrices
 	}
-
-	s.syncProviderCostTracker(name, pc.CostLimitSoft, pc.CostLimitHard)
-
-	// Keep legacy structs in sync for backward compat.
-	s.syncLegacyProviderConfig(name, pc)
 }
 
 // syncLegacyProviderConfig mirrors changes from a ProviderInstanceConfig back
@@ -594,22 +600,28 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nul
 
 	// Reasoning config lives in [llm.openrouter.reasoning], not in [[llm.providers]].
 	if input.Reasoning != nil {
-		r := make(map[string]any)
-		if input.Reasoning.Enabled != nil {
-			r["enabled"] = *input.Reasoning.Enabled
-		}
-		if input.Reasoning.Effort != "" {
-			r["effort"] = input.Reasoning.Effort
-		}
-		if input.Reasoning.MaxTokens > 0 {
-			r["max_tokens"] = input.Reasoning.MaxTokens
-		}
-		if input.Reasoning.Exclude != nil {
-			r["exclude"] = *input.Reasoning.Exclude
-		}
-		if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
-			s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
-		}
+		s.persistProviderReasoning(input.Reasoning)
+	}
+}
+
+// persistProviderReasoning writes OpenRouter reasoning config to disk. Reasoning
+// lives in [llm.openrouter.reasoning], not in [[llm.providers]].
+func (s *Server) persistProviderReasoning(reasoning *config.OpenRouterReasoningCfg) {
+	r := make(map[string]any)
+	if reasoning.Enabled != nil {
+		r["enabled"] = *reasoning.Enabled
+	}
+	if reasoning.Effort != "" {
+		r["effort"] = reasoning.Effort
+	}
+	if reasoning.MaxTokens > 0 {
+		r["max_tokens"] = reasoning.MaxTokens
+	}
+	if reasoning.Exclude != nil {
+		r["exclude"] = *reasoning.Exclude
+	}
+	if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
+		s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
 	}
 }
 
