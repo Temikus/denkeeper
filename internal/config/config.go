@@ -1077,6 +1077,12 @@ func synthesizeLegacyProviders(cfg *Config) {
 // CLAUDE_CODE_OAUTH_TOKEN is the variable `claude setup-token` documents, so
 // users who already export it (e.g. for Claude Code) get it picked up for free;
 // DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN is the Denkeeper-namespaced alias.
+//
+// Ordering note: this runs before expandEnvVars in applyDefaults. That is
+// intentional — a token sourced from the environment here is a literal secret
+// and must NOT be fed back through ${VAR} expansion. A token written in TOML as
+// "${SOME_VAR}" is left untouched here (we only fill empties) and expanded later
+// by expandEnvVars. Do not reorder these two passes.
 func resolveProviderOAuthTokens(cfg *Config) {
 	token := os.Getenv("DENKEEPER_LLM_ANTHROPIC_OAUTH_TOKEN")
 	if token == "" {

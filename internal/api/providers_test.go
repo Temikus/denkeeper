@@ -16,14 +16,25 @@ import (
 )
 
 // modelListerProvider is a mock llm.Provider that also implements ModelLister,
-// used to exercise the provider connection-test endpoint.
+// used to exercise the provider connection-test endpoint. chatErr drives the
+// ChatCompletion probe used for OAuth providers; listErr drives ListModels /
+// HealthCheck used for API-key providers. chatModel records the model id the
+// probe was called with.
 type modelListerProvider struct {
-	models  []string
-	listErr error
+	models    []string
+	listErr   error
+	chatErr   error
+	chatCalls int
+	chatModel string
 }
 
 func (m *modelListerProvider) Name() string { return "anthropic" }
-func (m *modelListerProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *modelListerProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.chatCalls++
+	m.chatModel = req.Model
+	if m.chatErr != nil {
+		return nil, m.chatErr
+	}
 	return &llm.ChatResponse{}, nil
 }
 func (m *modelListerProvider) HealthCheck(_ context.Context) error { return m.listErr }
@@ -211,15 +222,17 @@ func TestPatchLLMProvider_OAuthOnNonAnthropicRejected(t *testing.T) {
 	}
 }
 
-func TestTestLLMProvider_Success(t *testing.T) {
+func TestTestLLMProvider_OAuthProbesMessagesAPI(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
+	deps.Config.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
 	deps.Config.LLM.Providers = []config.ProviderInstanceConfig{
 		{Name: "claude-sub", Type: "anthropic", Auth: config.AuthModeOAuth, OAuthToken: "tok"},
 	}
-	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider {
-		return &modelListerProvider{models: []string{"claude-opus-4-8", "claude-sonnet-4-6"}}
-	}
+	// ListModels would succeed with two models; the OAuth probe must NOT use it —
+	// it must exercise the Messages API (ChatCompletion) instead.
+	mock := &modelListerProvider{models: []string{"claude-opus-4-8", "claude-sonnet-4-6"}}
+	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider { return mock }
 	srv := New(cfg, deps, testLogger())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/llm/providers/claude-sub/test", bytes.NewReader([]byte("{}")))
@@ -235,8 +248,50 @@ func TestTestLLMProvider_Success(t *testing.T) {
 		Models int  `json:"models"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.OK {
+		t.Errorf("resp = %+v, want ok", resp)
+	}
+	if mock.chatCalls != 1 {
+		t.Errorf("ChatCompletion calls = %d, want 1 (OAuth must probe the Messages API)", mock.chatCalls)
+	}
+	// Router-style prefix must be stripped to a bare Anthropic model id.
+	if mock.chatModel != "claude-sonnet-4-20250514" {
+		t.Errorf("probe model = %q, want %q", mock.chatModel, "claude-sonnet-4-20250514")
+	}
+	// The /v1/models count must not be surfaced for an OAuth probe.
+	if resp.Models != 0 {
+		t.Errorf("models = %d, want 0 (not surfaced for OAuth probe)", resp.Models)
+	}
+}
+
+func TestTestLLMProvider_APIKeyUsesListModels(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Config.LLM.Providers = []config.ProviderInstanceConfig{
+		{Name: "claude-key", Type: "anthropic", APIKey: "sk-ant-x"},
+	}
+	mock := &modelListerProvider{models: []string{"claude-opus-4-8", "claude-sonnet-4-6"}}
+	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider { return mock }
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/llm/providers/claude-key/test", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK     bool `json:"ok"`
+		Models int  `json:"models"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if !resp.OK || resp.Models != 2 {
 		t.Errorf("resp = %+v, want ok with 2 models", resp)
+	}
+	if mock.chatCalls != 0 {
+		t.Errorf("ChatCompletion calls = %d, want 0 (API-key test must list models, not chat)", mock.chatCalls)
 	}
 }
 
@@ -247,7 +302,7 @@ func TestTestLLMProvider_Failure(t *testing.T) {
 		{Name: "claude-sub", Type: "anthropic", Auth: config.AuthModeOAuth, OAuthToken: "bad"},
 	}
 	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider {
-		return &modelListerProvider{listErr: &llm.LLMError{StatusCode: 401, Message: "invalid token"}}
+		return &modelListerProvider{chatErr: &llm.LLMError{StatusCode: 401, Message: "invalid token"}}
 	}
 	srv := New(cfg, deps, testLogger())
 

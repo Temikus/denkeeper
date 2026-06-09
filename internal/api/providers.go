@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
@@ -347,7 +348,7 @@ type providerTestInput struct {
 
 // handleTestLLMProvider godoc
 // @Summary Test LLM provider connection
-// @Description Verifies provider credentials by listing models. Accepts optional credential overrides to test before saving.
+// @Description Verifies provider credentials by listing models, or for OAuth providers by sending a minimal message (the path actual chat uses). Accepts optional credential overrides to test before saving.
 // @Tags providers
 // @Accept json
 // @Produce json
@@ -396,7 +397,7 @@ func (s *Server) handleTestLLMProvider(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	ok, models, err := testProviderConnection(ctx, provider)
+	ok, models, err := testProviderConnection(ctx, provider, test.IsOAuth(), anthropicProbeModel(s.deps.Config.LLM.DefaultModel))
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": providerTestError(err)})
 		return
@@ -425,10 +426,38 @@ func applyProviderTestOverrides(pc *config.ProviderInstanceConfig, in *providerT
 	}
 }
 
-// testProviderConnection probes a provider. It prefers ListModels (which both
-// validates credentials and yields a count); otherwise it falls back to
-// HealthCheck. The returned count is -1 when only a health check was performed.
-func testProviderConnection(ctx context.Context, provider llm.Provider) (ok bool, models int, err error) {
+// defaultProbeModel is the fallback model for an OAuth connection probe when no
+// global default model is configured.
+const defaultProbeModel = "claude-3-5-haiku-latest"
+
+// anthropicProbeModel returns a bare Anthropic model id suitable for a Messages
+// API probe, stripping any router-style "provider/" prefix from the configured
+// default model (e.g. "anthropic/claude-sonnet-4" → "claude-sonnet-4").
+func anthropicProbeModel(defaultModel string) string {
+	m := defaultModel
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+	if m == "" {
+		return defaultProbeModel
+	}
+	return m
+}
+
+// testProviderConnection probes a provider's credentials. OAuth providers are
+// probed against the Messages API with a minimal completion: a subscription
+// token accepted by /v1/models can still be rejected by /v1/messages, so listing
+// models alone would give false confidence. Non-OAuth providers prefer
+// ListModels (which both validates credentials and yields a count); otherwise
+// they fall back to HealthCheck. The returned count is -1 when no model list was
+// obtained.
+func testProviderConnection(ctx context.Context, provider llm.Provider, oauth bool, probeModel string) (ok bool, models int, err error) {
+	if oauth {
+		if cerr := testChatProbe(ctx, provider, probeModel); cerr != nil {
+			return false, 0, cerr
+		}
+		return true, -1, nil
+	}
 	if lister, isLister := provider.(llm.ModelLister); isLister {
 		list, lerr := lister.ListModels(ctx)
 		if lerr != nil {
@@ -440,6 +469,17 @@ func testProviderConnection(ctx context.Context, provider llm.Provider) (ok bool
 		return false, 0, herr
 	}
 	return true, -1, nil
+}
+
+// testChatProbe sends a 1-token completion to verify credentials are accepted by
+// the Messages API — the endpoint actual chat uses.
+func testChatProbe(ctx context.Context, provider llm.Provider, model string) error {
+	_, err := provider.ChatCompletion(ctx, llm.ChatRequest{
+		Model:     model,
+		Messages:  []llm.Message{{Role: "user", Content: "ping"}},
+		MaxTokens: 1,
+	})
+	return err
 }
 
 // providerTestError renders a user-facing message for a failed connection test,
