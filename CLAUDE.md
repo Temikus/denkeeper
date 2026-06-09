@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Development Commands
 
-This project uses [just](https://github.com/casey/just) as the user-facing command runner, [Task](https://taskfile.dev) (`Taskfile.yml`) underneath for per-target fingerprint caching, and [mise](https://mise.jdx.dev) for tool versioning (Go 1.26.2). `just` recipes for `build`, `test`, `lint`, `vet`, `fmt-check`, `lint-ui`, `build-ui`, `test-ui`, `openapi`, and `hook` delegate to `mise x -- task <name>`; Task skips any step whose declared sources/inputs haven't changed. Cache lives in `.task/` (gitignored). Bust a single step with `mise x -- task <name> --force`; bust the whole hook chain with `JUST_HOOK_FORCE=1 just hook`.
+**Always drive this project through `just`.** [just](https://github.com/casey/just) (`justfile`) is the command runner — every build/test/lint task has a `just <recipe>`, and that is the interface you should use. [Task](https://taskfile.dev) (`Taskfile.yml`) sits underneath providing per-target fingerprint caching, and [mise](https://mise.jdx.dev) handles tool versioning (Go 1.26.2), but you should not invoke `task` or `mise x -- task` directly — call the `just` recipe instead. `just` recipes for `build`, `test`, `lint`, `vet`, `fmt-check`, `lint-ui`, `build-ui`, `test-ui`, `openapi`, and `hook` skip any step whose declared sources/inputs haven't changed (cache in `.task/`, gitignored). Bust the whole hook chain with `JUST_HOOK_FORCE=1 just hook`. If a task you need isn't exposed as a recipe, add one to the `justfile` rather than reaching for `mise`/`task`.
 
 ```bash
 just build                    # Build binary → pkg/bin/denkeeper
