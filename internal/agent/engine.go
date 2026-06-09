@@ -965,7 +965,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
-		e.savePartialResponse(ctx, convID, streamedContent.String())
+		e.persistInterruptedProgress(ctx, convID, userMsgID, streamedContent.String(), toolRecords, msg, err)
 		return "", nil, convID, err
 	}
 
@@ -1098,6 +1098,41 @@ func wrapEventForPartialCapture(onEvent ChatEventFunc, buf *strings.Builder) Cha
 	}
 }
 
+// persistInterruptedProgress persists partial work when the LLM pipeline
+// fails mid-flight. Completed tool-call records are always persisted so
+// telemetry reflects the side effects that actually executed, anchored to an
+// assistant marker message that also keeps the conversation history honest
+// for the next turn. When no tool rounds completed, it falls back to
+// savePartialResponse's content-only semantics.
+func (e *Engine) persistInterruptedProgress(ctx context.Context, convID string, userMsgID int64, content string, toolRecords []ToolCallRecord, msg adapter.IncomingMessage, cause error) {
+	if len(toolRecords) == 0 {
+		e.savePartialResponse(ctx, convID, content)
+		return
+	}
+
+	reason := cause.Error()
+	if len(reason) > 200 {
+		reason = reason[:200] + "…"
+	}
+	marker := fmt.Sprintf("[Interrupted after %d tool call(s): %s]", len(toolRecords), reason)
+	if content != "" {
+		marker = content + "\n\n" + marker
+	}
+
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assistMsg := StoredMessage{Role: "assistant", Content: marker}
+	assistMsgID, err := e.memory.AddMessage(saveCtx, convID, assistMsg)
+	if err != nil {
+		e.logger.Warn("failed to save interrupted progress",
+			"error", err, "conversation", convID, "tool_records", len(toolRecords))
+		return
+	}
+	e.persistTelemetry(saveCtx, convID, userMsgID, assistMsgID, assistMsg, toolRecords, nil, msg)
+	e.logger.Info("saved interrupted tool-loop progress",
+		"conversation", convID, "tool_records", len(toolRecords), "partial_len", len(content))
+}
+
 // savePartialResponse persists partial streamed content when the caller's
 // context was cancelled (e.g. client disconnect) and some content was already
 // streamed. It uses a fresh background context so storage succeeds even though
@@ -1138,7 +1173,9 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
 // LLM produces a text response. Returns the response, messages, collected
-// tool call records for persistence, and any error.
+// tool call records for persistence, and any error. Tool call records are
+// returned even when the loop fails mid-flight so callers can persist the
+// work that already executed.
 func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
@@ -1163,7 +1200,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 
 	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
 	if err != nil {
-		return nil, llmMessages, nil, err
+		return nil, llmMessages, toolRecords, err
 	}
 
 	return resp, llmMessages, toolRecords, nil

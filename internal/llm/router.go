@@ -338,8 +338,10 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		return resp, nil
 	}
 
-	// 4. Non-retryable errors skip all fallbacks immediately.
-	if !isRetryable(err) {
+	// 4. Non-retryable errors skip all fallbacks immediately. A dead caller
+	// context also skips them regardless of the error's shape — any retry
+	// against an expired/cancelled context fails instantly.
+	if ctx.Err() != nil || !isRetryable(err) {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)

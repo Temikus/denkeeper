@@ -329,7 +329,11 @@ func (a *APIConfig) MCPServerSessionTimeout() time.Duration {
 	return d
 }
 
-// MCPServerChatTimeout parses and returns the MCP chat tool timeout duration.
+// MCPServerChatTimeout parses and returns the MCP chat tool idle timeout.
+// This bounds the gap between progress events (tool rounds, streamed
+// content), not the total turn duration — a turn that keeps making progress
+// may run longer. Note that a pending tool approval emits no events, so a
+// human approval wait longer than this timeout cancels the turn.
 // Returns 2m if the value is empty or unparseable.
 func (a *APIConfig) MCPServerChatTimeout() time.Duration {
 	if a.MCPServer.ChatTimeout == "" {

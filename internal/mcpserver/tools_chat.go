@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -23,7 +24,8 @@ func (s *Server) registerChatTools() {
 		Name: "chat",
 		Description: "Send a message to a Denkeeper agent and receive a text response. " +
 			"The agent processes the message through its LLM with persona, skills, and tools. " +
-			"Long-running calls emit progress notifications for tool executions. " +
+			"Long-running calls emit progress notifications for tool executions and are " +
+			"bounded by an idle timeout (no progress events), not total duration. " +
 			"Requires 'chat' scope.",
 	}, s.handleChat)
 }
@@ -47,10 +49,14 @@ func (s *Server) handleChat(ctx context.Context, req *mcp.CallToolRequest, input
 		convID = fmt.Sprintf("mcp:%s:%d", keyNameFromCtx(ctx), time.Now().UnixNano())
 	}
 
+	// Idle watchdog rather than a fixed deadline: the timeout bounds gaps
+	// between progress events (tool rounds, streamed content), not total
+	// turn duration — total work is already bounded by the engine's
+	// maxToolRounds and the providers' stream idle timeouts.
 	apiCfg := config.APIConfig{MCPServer: s.cfg}
 	chatTimeout := apiCfg.MCPServerChatTimeout()
-	ctx, cancel := context.WithTimeout(ctx, chatTimeout)
-	defer cancel()
+	ctx, watchdog := newIdleWatchdog(ctx, chatTimeout)
+	defer watchdog.Stop()
 
 	msg := adapter.IncomingMessage{
 		Adapter:        "mcp",
@@ -62,6 +68,10 @@ func (s *Server) handleChat(ctx context.Context, req *mcp.CallToolRequest, input
 
 	var progress atomic.Int64
 	onEvent := func(ev agent.ChatEvent) {
+		// Every engine event counts as progress — including content_delta/
+		// thinking_delta, which fall through the switch below. Touch before
+		// any early return.
+		watchdog.Touch()
 		if req.Session == nil {
 			return
 		}
@@ -90,8 +100,17 @@ func (s *Server) handleChat(ctx context.Context, req *mcp.CallToolRequest, input
 
 	text, err := e.ChatWithEvents(ctx, msg, onEvent)
 	if err != nil {
-		return toolError("chat failed: " + err.Error()), nil, nil
+		return toolError(chatErrorMessage(ctx, err, chatTimeout)), nil, nil
 	}
 
 	return toolText(text), nil, nil
+}
+
+// chatErrorMessage maps a chat failure to a user-facing error string,
+// distinguishing the idle-watchdog timeout from other failures.
+func chatErrorMessage(ctx context.Context, err error, timeout time.Duration) string {
+	if errors.Is(context.Cause(ctx), errChatIdleTimeout) {
+		return fmt.Sprintf("chat timed out: no progress for %s (configurable via api.mcp_server chat_timeout)", timeout)
+	}
+	return "chat failed: " + err.Error()
 }

@@ -68,9 +68,18 @@ func (e *LLMError) Retryable() bool {
 }
 
 // isRetryable returns true if err is worth retrying.
-// Network/context errors are always considered retryable.
-// LLMErrors are retryable based on their status code.
+// Stream idle timeouts are retryable (the provider stalled; a fallback can
+// succeed). Context cancellation/deadline errors are not — the caller's
+// context is dead, so any retry against it fails instantly.
+// LLMErrors are retryable based on their status code; other network/unknown
+// errors are assumed retryable.
 func isRetryable(err error) bool {
+	if errors.Is(err, ErrStreamIdleTimeout) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var llmErr *LLMError
 	if errors.As(err, &llmErr) {
 		return llmErr.Retryable()
