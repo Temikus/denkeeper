@@ -397,7 +397,7 @@ func (s *Server) handleTestLLMProvider(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	ok, models, err := testProviderConnection(ctx, provider, test.IsOAuth(), anthropicProbeModel(s.deps.Config.LLM.DefaultModel))
+	ok, models, err := testProviderConnection(ctx, provider, test.IsOAuth())
 	if !ok {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": providerTestError(err)})
 		return
@@ -426,23 +426,11 @@ func applyProviderTestOverrides(pc *config.ProviderInstanceConfig, in *providerT
 	}
 }
 
-// defaultProbeModel is the fallback model for an OAuth connection probe when no
-// global default model is configured.
+// defaultProbeModel is a small, broadly-available model used for an OAuth
+// connection probe only when the credential's model list can't be enumerated.
+// The Messages API requires a model field, so a model-less probe isn't possible;
+// probeModelFor prefers a model the credential actually advertises over this.
 const defaultProbeModel = "claude-3-5-haiku-latest"
-
-// anthropicProbeModel returns a bare Anthropic model id suitable for a Messages
-// API probe, stripping any router-style "provider/" prefix from the configured
-// default model (e.g. "anthropic/claude-sonnet-4" → "claude-sonnet-4").
-func anthropicProbeModel(defaultModel string) string {
-	m := defaultModel
-	if idx := strings.LastIndex(m, "/"); idx >= 0 {
-		m = m[idx+1:]
-	}
-	if m == "" {
-		return defaultProbeModel
-	}
-	return m
-}
 
 // testProviderConnection probes a provider's credentials. OAuth providers are
 // probed against the Messages API with a minimal completion: a subscription
@@ -451,9 +439,9 @@ func anthropicProbeModel(defaultModel string) string {
 // ListModels (which both validates credentials and yields a count); otherwise
 // they fall back to HealthCheck. The returned count is -1 when no model list was
 // obtained.
-func testProviderConnection(ctx context.Context, provider llm.Provider, oauth bool, probeModel string) (ok bool, models int, err error) {
+func testProviderConnection(ctx context.Context, provider llm.Provider, oauth bool) (ok bool, models int, err error) {
 	if oauth {
-		if cerr := testChatProbe(ctx, provider, probeModel); cerr != nil {
+		if cerr := testChatProbe(ctx, provider, probeModelFor(ctx, provider)); cerr != nil {
 			return false, 0, cerr
 		}
 		return true, -1, nil
@@ -469,6 +457,28 @@ func testProviderConnection(ctx context.Context, provider llm.Provider, oauth bo
 		return false, 0, herr
 	}
 	return true, -1, nil
+}
+
+// probeModelFor picks a model for an OAuth Messages-API probe. It asks the
+// provider which models the credential can access and prefers the cheapest
+// (haiku) tier, so the probe never depends on the configured default model —
+// which may be an OpenRouter-style id or a model this subscription can't reach.
+// Falls back to a small default model only when the list can't be retrieved.
+func probeModelFor(ctx context.Context, provider llm.Provider) string {
+	lister, ok := provider.(llm.ModelLister)
+	if !ok {
+		return defaultProbeModel
+	}
+	list, err := lister.ListModels(ctx)
+	if err != nil || len(list) == 0 {
+		return defaultProbeModel
+	}
+	for _, m := range list {
+		if strings.Contains(strings.ToLower(m), "haiku") {
+			return m
+		}
+	}
+	return list[0]
 }
 
 // testChatProbe sends a 1-token completion to verify credentials are accepted by

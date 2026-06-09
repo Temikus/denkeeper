@@ -225,13 +225,15 @@ func TestPatchLLMProvider_OAuthOnNonAnthropicRejected(t *testing.T) {
 func TestTestLLMProvider_OAuthProbesMessagesAPI(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	deps.Config.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
+	// A default model the subscription may not have access to — the probe must
+	// not depend on it.
+	deps.Config.LLM.DefaultModel = "anthropic/claude-opus-4-1-20250805"
 	deps.Config.LLM.Providers = []config.ProviderInstanceConfig{
 		{Name: "claude-sub", Type: "anthropic", Auth: config.AuthModeOAuth, OAuthToken: "tok"},
 	}
-	// ListModels would succeed with two models; the OAuth probe must NOT use it —
-	// it must exercise the Messages API (ChatCompletion) instead.
-	mock := &modelListerProvider{models: []string{"claude-opus-4-8", "claude-sonnet-4-6"}}
+	// The OAuth probe must exercise the Messages API (ChatCompletion), picking a
+	// model the credential advertises (cheapest haiku tier), not the default.
+	mock := &modelListerProvider{models: []string{"claude-opus-4-8", "claude-haiku-4-5", "claude-sonnet-4-6"}}
 	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider { return mock }
 	srv := New(cfg, deps, testLogger())
 
@@ -254,13 +256,39 @@ func TestTestLLMProvider_OAuthProbesMessagesAPI(t *testing.T) {
 	if mock.chatCalls != 1 {
 		t.Errorf("ChatCompletion calls = %d, want 1 (OAuth must probe the Messages API)", mock.chatCalls)
 	}
-	// Router-style prefix must be stripped to a bare Anthropic model id.
-	if mock.chatModel != "claude-sonnet-4-20250514" {
-		t.Errorf("probe model = %q, want %q", mock.chatModel, "claude-sonnet-4-20250514")
+	// Probe must use a credential-advertised model, preferring the haiku tier —
+	// never the configured default.
+	if mock.chatModel != "claude-haiku-4-5" {
+		t.Errorf("probe model = %q, want %q (cheapest advertised, not the default)", mock.chatModel, "claude-haiku-4-5")
 	}
 	// The /v1/models count must not be surfaced for an OAuth probe.
 	if resp.Models != 0 {
 		t.Errorf("models = %d, want 0 (not surfaced for OAuth probe)", resp.Models)
+	}
+}
+
+func TestTestLLMProvider_OAuthProbeFallsBackWhenNoModelList(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.Config.LLM.Providers = []config.ProviderInstanceConfig{
+		{Name: "claude-sub", Type: "anthropic", Auth: config.AuthModeOAuth, OAuthToken: "tok"},
+	}
+	// Empty model list — the probe falls back to a small default model rather
+	// than failing or depending on config.
+	mock := &modelListerProvider{models: nil}
+	deps.ProviderFactory = func(config.ProviderInstanceConfig) llm.Provider { return mock }
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/llm/providers/claude-sub/test", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if mock.chatModel != defaultProbeModel {
+		t.Errorf("probe model = %q, want fallback %q", mock.chatModel, defaultProbeModel)
 	}
 }
 
