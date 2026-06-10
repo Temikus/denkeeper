@@ -256,6 +256,7 @@
       case 'approved': return '\u2713'
       case 'supervisor_denied': return '\u2717'
       case 'denied': return '\u2717'
+      case 'auto_denied': return '\u2717'
       case 'supervisor_escalated': return '\u2191'
       case 'supervisor_error': return '\u26a0'
       default: return '\u25cb'
@@ -269,6 +270,7 @@
       case 'approved': return 'approved'
       case 'supervisor_denied': return 'supervisor denied'
       case 'denied': return 'denied'
+      case 'auto_denied': return 'auto-denied'
       case 'supervisor_escalated': return 'escalated to you'
       case 'supervisor_error': return 'supervisor unavailable'
       default: return 'pending'
@@ -458,7 +460,7 @@
             {#if msg.approvals?.length > 0}
               <div class="approval-cards">
                 {#each msg.approvals as appr}
-                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
+                  <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied' || appr.status === 'auto_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
                     <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
                     <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status)}</span>
                     <span class="tool-name">{appr.tool}</span>

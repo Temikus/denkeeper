@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -81,6 +82,11 @@ type Deps struct {
 	// CostSummary returns a snapshot of cost tracking data. If nil,
 	// get_cost_summary is disabled.
 	CostSummary func() CostSummaryData
+
+	// TelemetrySummary returns aggregated per-tool/per-skill telemetry,
+	// optionally restricted to events after since. If nil, get_cost_summary
+	// returns cost data only.
+	TelemetrySummary func(ctx context.Context, since *time.Time) (*agent.TelemetrySummary, error)
 
 	// SetFallbacks replaces the LLM router's fallback rule list. If nil,
 	// set_fallback is disabled.
@@ -153,6 +159,13 @@ type CostSummaryData struct {
 	GlobalCost    float64            `json:"global_cost"`
 	MaxPerSession float64            `json:"max_per_session"`
 	SessionCosts  map[string]float64 `json:"session_costs"`
+
+	// ByTool and BySkill are populated from TelemetrySummary when available.
+	ByTool  []agent.ToolUsageSummary  `json:"by_tool,omitempty"`
+	BySkill []agent.SkillUsageSummary `json:"by_skill,omitempty"`
+	// TelemetryError is set when the telemetry lookup failed; cost fields
+	// above are still valid.
+	TelemetryError string `json:"telemetry_error,omitempty"`
 }
 
 // FallbackRuleInput describes a single fallback rule as provided by the agent.

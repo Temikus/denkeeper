@@ -286,10 +286,15 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		FinishReason:    result.FinishReason,
 	}
 	if result.Usage != nil {
+		var cachedPrompt int
+		if result.Usage.PromptTokensDetails != nil {
+			cachedPrompt = result.Usage.PromptTokensDetails.CachedTokens
+		}
 		chatResp.TokensUsed = llm.TokenUsage{
-			Prompt:     result.Usage.PromptTokens,
-			Completion: result.Usage.CompletionTokens,
-			Total:      result.Usage.TotalTokens,
+			Prompt:       result.Usage.PromptTokens - cachedPrompt,
+			Completion:   result.Usage.CompletionTokens,
+			CachedPrompt: cachedPrompt,
+			Total:        result.Usage.TotalTokens,
 		}
 		chatResp.CostUSD = result.Usage.Cost
 	}
@@ -317,6 +322,11 @@ func buildChatResponse(apiResp *apiResponse) *llm.ChatResponse {
 		)
 	}
 
+	var cachedPrompt int
+	if apiResp.Usage.PromptTokensDetails != nil {
+		cachedPrompt = apiResp.Usage.PromptTokensDetails.CachedTokens
+	}
+
 	return &llm.ChatResponse{
 		Content:         content,
 		ThinkingContent: choice.Message.ReasoningContent,
@@ -324,9 +334,12 @@ func buildChatResponse(apiResp *apiResponse) *llm.ChatResponse {
 		Model:           apiResp.Model,
 		FinishReason:    choice.FinishReason,
 		TokensUsed: llm.TokenUsage{
-			Prompt:     apiResp.Usage.PromptTokens,
-			Completion: apiResp.Usage.CompletionTokens,
-			Total:      apiResp.Usage.TotalTokens,
+			// OpenRouter follows the OpenAI format: cached tokens are a
+			// subset of prompt_tokens, so split them out.
+			Prompt:       apiResp.Usage.PromptTokens - cachedPrompt,
+			Completion:   apiResp.Usage.CompletionTokens,
+			CachedPrompt: cachedPrompt,
+			Total:        apiResp.Usage.TotalTokens,
 		},
 		CostUSD: apiResp.Usage.Cost,
 	}
@@ -700,10 +713,11 @@ type apiChoice struct {
 }
 
 type apiUsage struct {
-	PromptTokens     int     `json:"prompt_tokens"`
-	CompletionTokens int     `json:"completion_tokens"`
-	TotalTokens      int     `json:"total_tokens"`
-	Cost             float64 `json:"cost"` // real cost reported by OpenRouter
+	PromptTokens        int                       `json:"prompt_tokens"`
+	CompletionTokens    int                       `json:"completion_tokens"`
+	TotalTokens         int                       `json:"total_tokens"`
+	PromptTokensDetails *llm.OAIPromptTokenDetail `json:"prompt_tokens_details,omitempty"`
+	Cost                float64                   `json:"cost"` // real cost reported by OpenRouter
 }
 
 // Streaming request type.

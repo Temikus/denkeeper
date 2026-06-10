@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pelletier/go-toml/v2"
@@ -1260,13 +1261,38 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 func (s *Server) registerCostTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_cost_summary",
-		Description: "Return current cost tracking data: global cost, per-session costs, and budget limit.",
-		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+		Description: "Return current cost tracking data: global cost, per-session costs, budget limit, and per-tool/per-skill usage stats (call counts, error counts, average duration). Optional 'days' restricts the tool/skill stats to the last N days.",
+		InputSchema: json.RawMessage(`{"type": "object", "properties": {"days": {"type": "integer", "description": "Restrict per-tool/per-skill stats to the last N days (0 or absent = all time)"}}}`),
 	}, s.handleGetCostSummary)
 }
 
-func (s *Server) handleGetCostSummary(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleGetCostSummary(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		Days int `json:"days"`
+	}
+	if len(req.Params.Arguments) > 0 {
+		if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+			return toolError("invalid arguments: " + err.Error()), nil
+		}
+	}
+
 	data := s.deps.CostSummary()
+	if s.deps.TelemetrySummary != nil {
+		var since *time.Time
+		if input.Days > 0 {
+			t := time.Now().AddDate(0, 0, -input.Days)
+			since = &t
+		}
+		summary, err := s.deps.TelemetrySummary(ctx, since)
+		if err != nil {
+			// Cost data is still useful on its own — report the failure inline.
+			data.TelemetryError = err.Error()
+		} else {
+			data.ByTool = summary.ByTool
+			data.BySkill = summary.BySkill
+		}
+	}
+
 	out, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return toolError("marshaling cost summary: " + err.Error()), nil

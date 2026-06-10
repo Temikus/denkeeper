@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3425,6 +3426,267 @@ func TestEngine_SupervisorDeny(t *testing.T) {
 	}
 	if !found {
 		t.Error("no supervisor_denied event found")
+	}
+}
+
+func TestEngine_SupervisorDeny_RepeatAutoDenied(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Primary agent retries the identical denied call in round 2; the Engine
+	// must auto-deny it without a second supervisor review.
+	identicalCall := llm.ToolCall{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "dangerous_tool", Arguments: `{"cmd":"rm -rf /"}`}}
+	retryCall := identicalCall
+	retryCall.ID = "call_2"
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{ToolCalls: []llm.ToolCall{identicalCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{ToolCalls: []llm.ToolCall{retryCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{Content: "Understood, I will not retry.", TokensUsed: llm.TokenUsage{Total: 15}, FinishReason: "stop"},
+		},
+	}
+
+	// Supervisor has exactly ONE response: a second review attempt would fail
+	// with "no more mock responses" and surface as supervisor_error.
+	supervisorProv := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "DENY: dangerous operation", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var events []ChatEvent
+	_, chatErr := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-deny-repeat",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "delete everything",
+		Timestamp:  time.Now(),
+	}, func(evt ChatEvent) { events = append(events, evt) })
+	if chatErr != nil {
+		t.Fatalf("ChatWithEvents: %v", chatErr)
+	}
+
+	if supervisorProv.callIndex != 1 {
+		t.Errorf("supervisor LLM called %d times, want 1", supervisorProv.callIndex)
+	}
+	var supervisorDenied, autoDenied int
+	for _, evt := range events {
+		if evt.Type != "tool_approval" {
+			continue
+		}
+		switch evt.ApprovalStatus {
+		case "supervisor_denied":
+			supervisorDenied++
+		case "auto_denied":
+			autoDenied++
+		case "supervisor_error":
+			t.Errorf("unexpected supervisor_error event: %q", evt.Text)
+		}
+	}
+	if supervisorDenied != 1 {
+		t.Errorf("supervisor_denied events = %d, want 1", supervisorDenied)
+	}
+	if autoDenied != 1 {
+		t.Errorf("auto_denied events = %d, want 1", autoDenied)
+	}
+}
+
+func TestEngine_SupervisorDeny_DifferentArgsReviewedAgain(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Same tool, different arguments: dedup must NOT trigger and the
+	// supervisor must review the second call.
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "dangerous_tool", Arguments: `{"cmd":"rm -rf /"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "call_2", Type: "function", Function: llm.FunctionCall{Name: "dangerous_tool", Arguments: `{"cmd":"rm -rf /tmp"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{Content: "Both denied, giving up.", TokensUsed: llm.TokenUsage{Total: 15}, FinishReason: "stop"},
+		},
+	}
+
+	supervisorProv := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "DENY: dangerous operation", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+			{Content: "DENY: still dangerous", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var events []ChatEvent
+	_, chatErr := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-deny-diffargs",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "delete everything",
+		Timestamp:  time.Now(),
+	}, func(evt ChatEvent) { events = append(events, evt) })
+	if chatErr != nil {
+		t.Fatalf("ChatWithEvents: %v", chatErr)
+	}
+
+	if supervisorProv.callIndex != 2 {
+		t.Errorf("supervisor LLM called %d times, want 2", supervisorProv.callIndex)
+	}
+	for _, evt := range events {
+		if evt.Type == "tool_approval" && evt.ApprovalStatus == "auto_denied" {
+			t.Errorf("unexpected auto_denied event for different arguments: %q", evt.Text)
+		}
+	}
+}
+
+func TestEngine_HumanDeny_RepeatAutoDenied(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	identicalCall := llm.ToolCall{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"test"}`}}
+	retryCall := identicalCall
+	retryCall.ID = "call_2"
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{ToolCalls: []llm.ToolCall{identicalCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{ToolCalls: []llm.ToolCall{retryCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
+			{Content: "Understood, I will not retry.", TokensUsed: llm.TokenUsage{Total: 15}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	defer func() { _ = approvalStore.Close() }()
+	mgr := approval.NewManager(approvalStore, testLogger())
+
+	sent := &sentMessages{}
+	permissions, _ := security.NewPermissionEngine("supervised")
+	toolMgr := tool.NewManager(testLogger())
+
+	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	var events []ChatEvent
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.HandleMessageWithEvents(ctx, adapter.IncomingMessage{
+			Adapter:    "test",
+			ExternalID: "chat-human-deny-repeat",
+			UserID:     "user-1",
+			UserName:   "testuser",
+			Text:       "search for test",
+			Timestamp:  time.Now(),
+		}, func(evt ChatEvent) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		})
+	}()
+
+	// Deny the first (and only) approval request. The identical retry must be
+	// auto-denied without a second pending approval — if dedup fails, the run
+	// blocks on an unresolved approval and the context times out.
+	time.Sleep(100 * time.Millisecond)
+	approvals, _ := mgr.List(ctx, approval.StatusPending)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", len(approvals))
+	}
+	_, _ = mgr.Resolve(ctx, approvals[0].ID, false, "test-operator")
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("HandleMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for HandleMessage — identical retry likely submitted a second approval")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	autoDenied := 0
+	for _, evt := range events {
+		if evt.Type == "tool_approval" && evt.ApprovalStatus == "auto_denied" {
+			autoDenied++
+		}
+	}
+	if autoDenied != 1 {
+		t.Errorf("auto_denied events = %d, want 1", autoDenied)
 	}
 }
 
