@@ -2,6 +2,9 @@
 go = "1.26.4"
 hugo-extended = "latest"
 "golangci-lint" = "latest"
-swag = "latest"
+# Pinned: swag's JSON output formatting is version-sensitive, and the committed
+# OpenAPI spec (checked by TestOpenAPISpecMatchesAnnotations) must regenerate
+# byte-identically in CI. Bump deliberately, then run `just openapi` + commit.
+swag = "1.16.6"
 task = "3"
 "go:github.com/air-verse/air" = "latest"

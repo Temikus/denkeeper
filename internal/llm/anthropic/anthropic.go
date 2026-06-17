@@ -27,14 +27,37 @@ const (
 	defaultBaseURL   = "https://api.anthropic.com"
 	anthropicVersion = "2023-06-01"
 	messagesEndpoint = "/v1/messages"
+
+	// AuthAPIKey authenticates with a static API key via the X-Api-Key header.
+	AuthAPIKey = "api_key"
+	// AuthOAuth authenticates with a Claude subscription OAuth token (minted by
+	// `claude setup-token`) via the Authorization: Bearer header.
+	AuthOAuth = "oauth"
+
+	// oauthBeta is the anthropic-beta value required when authenticating with a
+	// subscription OAuth token. Centralized so it can be bumped in one place.
+	oauthBeta = "oauth-2025-04-20"
 )
 
 // Client implements llm.Provider against the Anthropic Messages API.
 type Client struct {
-	name    string
-	apiKey  string
-	baseURL string
-	http    *http.Client
+	name     string
+	apiKey   string
+	authMode string // AuthAPIKey (default) or AuthOAuth
+	oauth    string // OAuth subscription token, used when authMode == AuthOAuth
+	baseURL  string
+	http     *http.Client
+}
+
+// Options configures a Client. Used by NewWithOptions for callers that need to
+// select the authentication mode (e.g. subscription OAuth).
+type Options struct {
+	Name       string
+	APIKey     string
+	BaseURL    string
+	Auth       string // AuthAPIKey (default) or AuthOAuth
+	OAuthToken string // required when Auth == AuthOAuth
+	HTTPClient *http.Client
 }
 
 // New creates a Client with the given API key and default base URL.
@@ -69,10 +92,41 @@ func NewWithHTTPClient(apiKey, baseURL string, httpClient *http.Client) *Client 
 		baseURL = defaultBaseURL
 	}
 	return &Client{
-		name:    "anthropic",
-		apiKey:  apiKey,
-		baseURL: baseURL,
-		http:    httpClient,
+		name:     "anthropic",
+		apiKey:   apiKey,
+		authMode: AuthAPIKey,
+		baseURL:  baseURL,
+		http:     httpClient,
+	}
+}
+
+// NewWithOptions creates a Client from an Options struct, allowing the caller to
+// select the authentication mode. This is the constructor used for subscription
+// OAuth; the simpler New/NewFull constructors cover the common API-key case.
+func NewWithOptions(opts Options) *Client {
+	name := opts.Name
+	if name == "" {
+		name = "anthropic"
+	}
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	auth := opts.Auth
+	if auth == "" {
+		auth = AuthAPIKey
+	}
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &Client{
+		name:     name,
+		apiKey:   opts.APIKey,
+		authMode: auth,
+		oauth:    opts.OAuthToken,
+		baseURL:  baseURL,
+		http:     httpClient,
 	}
 }
 
@@ -394,10 +448,18 @@ func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback,
 }
 
 // setHeaders attaches the required Anthropic authentication and versioning headers.
+// In OAuth mode the subscription token is sent as a Bearer credential alongside
+// the required anthropic-beta opt-in; otherwise the static API key is sent via
+// the X-Api-Key header.
 func (c *Client) setHeaders(r *http.Request) {
-	r.Header.Set("x-api-key", c.apiKey)
 	r.Header.Set("anthropic-version", anthropicVersion)
 	r.Header.Set("content-type", "application/json")
+	if c.authMode == AuthOAuth {
+		r.Header.Set("authorization", "Bearer "+c.oauth)
+		r.Header.Set("anthropic-beta", oauthBeta)
+		return
+	}
+	r.Header.Set("x-api-key", c.apiKey)
 }
 
 // buildRequest converts an llm.ChatRequest into the Anthropic API wire format.

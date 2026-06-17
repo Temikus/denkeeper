@@ -2316,26 +2316,21 @@
                 }
             }
         },
-        "/costs": {
+        "/health": {
             "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns cost tracking data with per-agent and per-session breakdown",
+                "description": "Returns server health status. When ready=true is set, also verifies that at least one agent is registered and returns 503 if not.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "costs"
+                    "health"
                 ],
-                "summary": "Get cost tracking data",
+                "summary": "Health check",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter by agent name",
-                        "name": "agent",
+                        "description": "Set to 'true' to check agent readiness",
+                        "name": "ready",
                         "in": "query"
                     }
                 ],
@@ -2346,23 +2341,9 @@
                             "type": "object",
                             "additionalProperties": true
                         }
-                    }
-                }
-            }
-        },
-        "/health": {
-            "get": {
-                "description": "Returns server health status",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "health"
-                ],
-                "summary": "Health check",
-                "responses": {
-                    "200": {
-                        "description": "OK",
+                    },
+                    "503": {
+                        "description": "No agents registered (only when ready=true)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -3157,6 +3138,68 @@
                 }
             }
         },
+        "/llm/providers/{name}/test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Verifies provider credentials by listing models, or for OAuth providers by sending a minimal message (the path actual chat uses). Accepts optional credential overrides to test before saving.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Test LLM provider connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional credential overrides",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.providerTestInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/models": {
             "get": {
                 "security": [
@@ -3296,6 +3339,55 @@
                 "responses": {
                     "204": {
                         "description": "Onboarding dismissed"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden — requires admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to persist",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/wizard-complete": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Persists wizard_completed=true to the TOML config so the post-auth setup wizard is not shown again.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Mark setup wizard complete",
+                "responses": {
+                    "204": {
+                        "description": "Wizard marked complete"
                     },
                     "401": {
                         "description": "Unauthorized",
@@ -5519,6 +5611,192 @@
                 }
             }
         },
+        "/tools/{name}/disable": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Stops an MCP tool server and marks it as disabled.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "Disable a tool server",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tool server name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Disabled tool server",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_tool.ServerStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Disable failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Tool not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tool management not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/{name}/disabled-tools": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Updates the set of disabled MCP tools for a specific tool server. Disabled tools are excluded from the LLM tool payload. No MCP server reconnect is performed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "Update disabled tools",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tool server name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Disabled tools list",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Updated server status",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_tool.ServerStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tool management not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/{name}/enable": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Starts a previously disabled MCP tool server and persists the change.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "Enable a tool server",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tool server name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Enabled tool server",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_tool.ServerStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Enable failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Tool not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tool management not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/tools/{name}/health": {
             "get": {
                 "security": [
@@ -5782,7 +6060,16 @@
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Tool not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Restart failed",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6078,6 +6365,20 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_config.ModelPriceConfig": {
+            "type": "object",
+            "properties": {
+                "cached_input": {
+                    "type": "number"
+                },
+                "input": {
+                    "type": "number"
+                },
+                "output": {
+                    "type": "number"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_config.OpenRouterReasoningCfg": {
             "type": "object",
             "properties": {
@@ -6102,6 +6403,9 @@
         "github_com_Temikus_denkeeper_internal_configmcp.ScheduleUpdateInput": {
             "type": "object",
             "properties": {
+                "agent": {
+                    "type": "string"
+                },
                 "channel": {
                     "type": "string"
                 },
@@ -6194,6 +6498,21 @@
                 "command": {
                     "type": "string"
                 },
+                "config_error": {
+                    "type": "string"
+                },
+                "disabled_tools": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "enabled_count": {
+                    "type": "integer"
+                },
                 "last_error": {
                     "type": "string"
                 },
@@ -6215,6 +6534,9 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "total_tool_count": {
+                    "type": "integer"
                 },
                 "transport": {
                     "type": "string"
@@ -6336,6 +6658,24 @@
                 "name": {
                     "type": "string"
                 },
+                "nudge_memory_interval": {
+                    "type": "integer"
+                },
+                "nudge_skill_interval": {
+                    "type": "integer"
+                },
+                "review_max_iterations": {
+                    "type": "integer"
+                },
+                "review_timeout": {
+                    "type": "string"
+                },
+                "reviewer_model": {
+                    "type": "string"
+                },
+                "reviewer_provider": {
+                    "type": "string"
+                },
                 "session_tier": {
                     "type": "string"
                 },
@@ -6343,17 +6683,26 @@
                     "description": "empty string to clear",
                     "type": "string"
                 },
+                "supervisor_body_excerpt_len": {
+                    "type": "integer"
+                },
                 "supervisor_context_messages": {
                     "type": "integer"
                 },
                 "supervisor_timeout": {
                     "type": "string"
+                },
+                "supervisor_tool_desc_len": {
+                    "type": "integer"
                 }
             }
         },
         "internal_api.agentCreateInput": {
             "type": "object",
             "properties": {
+                "create_supervisor": {
+                    "$ref": "#/definitions/internal_api.companionSupervisorInput"
+                },
                 "description": {
                     "type": "string"
                 },
@@ -6433,7 +6782,7 @@
             "type": "object",
             "properties": {
                 "agent": {
-                    "description": "optional; defaults to \"default\"",
+                    "description": "optional; defaults to fallback agent",
                     "type": "string"
                 },
                 "channel": {
@@ -6465,6 +6814,23 @@
                     "type": "string"
                 },
                 "session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.companionSupervisorInput": {
+            "type": "object",
+            "properties": {
+                "context_messages": {
+                    "type": "integer"
+                },
+                "llm_model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "timeout": {
                     "type": "string"
                 }
             }
@@ -6523,6 +6889,9 @@
                     "items": {
                         "$ref": "#/definitions/internal_api.onboardingStep"
                     }
+                },
+                "wizard_completed": {
+                    "type": "boolean"
                 }
             }
         },
@@ -6546,10 +6915,31 @@
                 "api_key": {
                     "type": "string"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
                     "type": "string"
                 },
+                "cost_limit_hard": {
+                    "type": "number"
+                },
+                "cost_limit_soft": {
+                    "type": "number"
+                },
+                "default_rate_per_1k_tokens": {
+                    "type": "number"
+                },
+                "model_prices": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_config.ModelPriceConfig"
+                    }
+                },
                 "name": {
+                    "type": "string"
+                },
+                "oauth_token": {
                     "type": "string"
                 },
                 "organization": {
@@ -6566,14 +6956,35 @@
                 "api_key_set": {
                     "type": "boolean"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
                     "type": "string"
+                },
+                "cost_limit_hard": {
+                    "type": "number"
+                },
+                "cost_limit_soft": {
+                    "type": "number"
+                },
+                "default_rate_per_1k_tokens": {
+                    "type": "number"
                 },
                 "enabled": {
                     "type": "boolean"
                 },
+                "model_prices": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_config.ModelPriceConfig"
+                    }
+                },
                 "name": {
                     "type": "string"
+                },
+                "oauth_token_set": {
+                    "type": "boolean"
                 },
                 "organization": {
                     "type": "string"
@@ -6586,13 +6997,51 @@
                 }
             }
         },
+        "internal_api.providerTestInput": {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string"
+                },
+                "auth": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "oauth_token": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.providerUpdateInput": {
             "type": "object",
             "properties": {
                 "api_key": {
                     "type": "string"
                 },
+                "auth": {
+                    "type": "string"
+                },
                 "base_url": {
+                    "type": "string"
+                },
+                "cost_limit_hard": {
+                    "type": "number"
+                },
+                "cost_limit_soft": {
+                    "type": "number"
+                },
+                "default_rate_per_1k_tokens": {
+                    "type": "number"
+                },
+                "model_prices": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_config.ModelPriceConfig"
+                    }
+                },
+                "oauth_token": {
                     "type": "string"
                 },
                 "organization": {
@@ -6662,6 +7111,24 @@
                 "listen": {
                     "type": "string"
                 },
+                "mcp_server_chat_timeout": {
+                    "type": "string"
+                },
+                "mcp_server_enabled": {
+                    "type": "boolean"
+                },
+                "mcp_server_endpoint": {
+                    "type": "string"
+                },
+                "mcp_server_session_timeout": {
+                    "type": "string"
+                },
+                "mcp_server_stateless": {
+                    "type": "boolean"
+                },
+                "mcp_server_transport": {
+                    "type": "string"
+                },
                 "rate_limit": {
                     "type": "number"
                 },
@@ -6689,6 +7156,21 @@
             "type": "object",
             "properties": {
                 "external_url": {
+                    "type": "string"
+                },
+                "mcp_server_chat_timeout": {
+                    "type": "string"
+                },
+                "mcp_server_enabled": {
+                    "type": "boolean"
+                },
+                "mcp_server_session_timeout": {
+                    "type": "string"
+                },
+                "mcp_server_stateless": {
+                    "type": "boolean"
+                },
+                "mcp_server_transport": {
                     "type": "string"
                 },
                 "timezone": {

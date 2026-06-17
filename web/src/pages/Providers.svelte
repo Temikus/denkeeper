@@ -98,6 +98,8 @@
     const p = data.providers.find(x => x.name === name)
     providerDraft = {
       api_key: '',
+      auth: p?.auth || 'api_key',
+      oauth_token: '',
       base_url: p?.base_url || '',
       organization: p?.organization || '',
       reasoning_enabled: !!(p?.reasoning?.enabled),
@@ -122,6 +124,19 @@
     try {
       const p = data.providers.find(x => x.name === editingProvider)
       const patch = {}
+
+      // Auth mode (anthropic only). When switching to/within OAuth, carry the
+      // token; switching back to API key clears the stored token.
+      if (p?.type === 'anthropic') {
+        const oldAuth = p?.auth || 'api_key'
+        if (providerDraft.auth !== oldAuth) {
+          patch.auth = providerDraft.auth
+          if (providerDraft.auth === 'api_key') patch.oauth_token = ''
+        }
+        if (providerDraft.auth === 'oauth' && providerDraft.oauth_token) {
+          patch.oauth_token = providerDraft.oauth_token
+        }
+      }
 
       if (providerDraft.api_key) {
         patch.api_key = providerDraft.api_key
@@ -173,6 +188,9 @@
         if (p) {
           if (patch.api_key) p.api_key_set = true
           if (patch.api_key) p.enabled = true
+          if (patch.auth !== undefined) p.auth = patch.auth
+          if (patch.oauth_token) { p.oauth_token_set = true; p.enabled = true }
+          if (patch.oauth_token === '') p.oauth_token_set = false
           if (patch.base_url !== undefined) p.base_url = patch.base_url
           if (patch.organization !== undefined) p.organization = patch.organization
           if (patch.reasoning) p.reasoning = patch.reasoning
@@ -205,15 +223,22 @@
   let formName = $state('')
   let formType = $state('openai')
   let formAPIKey = $state('')
+  let formAuth = $state('api_key')
+  let formOAuthToken = $state('')
   let formBaseURL = $state('')
   let formOrganization = $state('')
   let formSaving = $state(false)
   let formError = $state('')
 
+  // True when the add form / draft is configured for Claude subscription OAuth.
+  let formIsOAuth = $derived(formType === 'anthropic' && formAuth === 'oauth')
+
   function openAddForm() {
     formName = ''
     formType = 'openai'
     formAPIKey = ''
+    formAuth = 'api_key'
+    formOAuthToken = ''
     formBaseURL = ''
     formOrganization = ''
     formError = ''
@@ -233,10 +258,19 @@
       formError = 'Name must be lowercase alphanumeric with hyphens only'
       return
     }
+    if (formIsOAuth && !formOAuthToken.trim()) {
+      formError = 'Paste a subscription token, or switch to API key authentication'
+      return
+    }
     formSaving = true
     try {
       const body = { name, type: formType }
-      if (formAPIKey) body.api_key = formAPIKey
+      if (formIsOAuth) {
+        body.auth = 'oauth'
+        body.oauth_token = formOAuthToken.trim()
+      } else if (formAPIKey) {
+        body.api_key = formAPIKey
+      }
       if (formBaseURL) body.base_url = formBaseURL
       if (formOrganization && formType === 'openai') body.organization = formOrganization
       await api.createLLMProvider(body)
@@ -270,6 +304,38 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Connection test
+  // ---------------------------------------------------------------------------
+  let testing = $state(null)      // name of provider currently being tested
+  let testResult = $state(null)   // { name, ok, message }
+
+  async function testProvider(name) {
+    testing = name
+    testResult = null
+    try {
+      const p = data.providers.find(x => x.name === name)
+      // When editing, send the draft credentials as overrides so an unsaved
+      // token can be verified before committing it.
+      const body = {}
+      if (editingProvider === name) {
+        if (p?.type === 'anthropic') body.auth = providerDraft.auth
+        if (providerDraft.api_key) body.api_key = providerDraft.api_key
+        if (providerDraft.oauth_token) body.oauth_token = providerDraft.oauth_token
+        if (providerDraft.base_url !== (p?.base_url || '')) body.base_url = providerDraft.base_url
+      }
+      const res = await api.testLLMProvider(name, body)
+      const msg = (res && res.models != null)
+        ? `Connected — ${res.models} model${res.models === 1 ? '' : 's'} available`
+        : 'Connected'
+      testResult = { name, ok: true, message: msg }
+    } catch (e) {
+      testResult = { name, ok: false, message: e.message }
+    } finally {
+      testing = null
+    }
+  }
+
   onMount(fetchData)
 </script>
 
@@ -278,6 +344,22 @@
   <button class="btn btn-sm btn-primary" onclick={openAddForm} data-testid="add-provider-btn">+ Add Provider</button>
 </div>
 <ErrorBanner message={error} />
+
+{#snippet oauthHelp()}
+  <div class="oauth-help">
+    <p class="oauth-step">
+      Generate a token by running <code>claude setup-token</code> in your terminal
+      (requires Claude Code and a Pro, Max, Team, or Enterprise plan), then paste it above.
+    </p>
+    <div class="oauth-banner" role="note">
+      <strong>Subscription billing.</strong> Usage authenticated this way draws from your plan's
+      monthly Agent&nbsp;SDK credit (e.g. Max&nbsp;5× = $100/mo), separate from your interactive
+      chat limits. When the credit is exhausted, usage bills at standard API rates.
+      Effective June&nbsp;15,&nbsp;2026.
+      <a href="https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan" target="_blank" rel="noopener noreferrer">Learn more ↗</a>
+    </div>
+  </div>
+{/snippet}
 
 {#if showAddForm}
 <div class="inline-panel" data-testid="provider-form">
@@ -297,11 +379,27 @@
       {/each}
     </select>
   </div>
-  {#if formType !== 'ollama'}
+  {#if formType === 'anthropic'}
+    <div class="form-row">
+      <span class="form-label" id="new-provider-auth-label">Authentication</span>
+      <div class="auth-toggle" role="radiogroup" aria-labelledby="new-provider-auth-label">
+        <label class="auth-option"><input type="radio" bind:group={formAuth} value="api_key" disabled={formSaving} /> API key</label>
+        <label class="auth-option"><input type="radio" bind:group={formAuth} value="oauth" disabled={formSaving} /> Claude subscription (OAuth)</label>
+      </div>
+    </div>
+  {/if}
+  {#if formType !== 'ollama' && !formIsOAuth}
     <div class="form-row">
       <label class="form-label" for="new-provider-apikey">API Key</label>
       <input id="new-provider-apikey" type="password" class="input" bind:value={formAPIKey} disabled={formSaving} placeholder="Enter API key" />
     </div>
+  {/if}
+  {#if formIsOAuth}
+    <div class="form-row">
+      <label class="form-label" for="new-provider-oauth">Subscription token</label>
+      <input id="new-provider-oauth" type="password" class="input" bind:value={formOAuthToken} disabled={formSaving} placeholder="sk-ant-oat..." data-testid="provider-oauth-input" />
+    </div>
+    {@render oauthHelp()}
   {/if}
   {#if formType !== 'openrouter'}
     <div class="form-row">
@@ -387,7 +485,18 @@
 
       {#if editingProvider !== p.name}
         <div class="provider-fields">
-          {#if p.type !== 'ollama'}
+          {#if p.type === 'anthropic'}
+            <div class="field-row">
+              <span class="field-label">Auth Method</span>
+              <span class="field-value">{p.auth === 'oauth' ? 'Claude subscription (OAuth)' : 'API key'}</span>
+            </div>
+          {/if}
+          {#if p.type === 'anthropic' && p.auth === 'oauth'}
+            <div class="field-row">
+              <span class="field-label">Token</span>
+              <span class="field-value">{p.oauth_token_set ? 'Configured' : 'Not set'}</span>
+            </div>
+          {:else if p.type !== 'ollama'}
             <div class="field-row">
               <span class="field-label">API Key</span>
               <span class="field-value">{p.api_key_set ? 'Configured' : 'Not set'}</span>
@@ -447,9 +556,17 @@
           </div>
         {/if}
         <div class="card-actions">
+          <button class="btn btn-sm" onclick={() => testProvider(p.name)} disabled={testing === p.name} data-testid="test-provider-btn">
+            {testing === p.name ? 'Testing…' : 'Test connection'}
+          </button>
           <button class="btn btn-sm" onclick={() => startEditProvider(p.name)}>Edit</button>
           <button class="btn btn-sm btn-danger-text" onclick={() => { confirmDelete = p.name; deleteError = '' }} data-testid="delete-provider-btn">Delete</button>
         </div>
+        {#if testResult && testResult.name === p.name}
+          <div class="test-result" class:ok={testResult.ok} class:fail={!testResult.ok} role="status">
+            {testResult.ok ? '✓' : '✗'} {testResult.message}
+          </div>
+        {/if}
         {#if confirmDelete === p.name}
           <div class="delete-confirm" data-testid="delete-confirm">
             <span>Delete provider <strong>{p.name}</strong>?</span>
@@ -466,7 +583,16 @@
         {/if}
       {:else}
         <div class="edit-form">
-          {#if p.type !== 'ollama'}
+          {#if p.type === 'anthropic'}
+            <div class="form-row">
+              <span class="form-label" id="auth-label-{p.name}">Authentication</span>
+              <div class="auth-toggle" role="radiogroup" aria-labelledby="auth-label-{p.name}">
+                <label class="auth-option"><input type="radio" bind:group={providerDraft.auth} value="api_key" /> API key</label>
+                <label class="auth-option"><input type="radio" bind:group={providerDraft.auth} value="oauth" /> Claude subscription (OAuth)</label>
+              </div>
+            </div>
+          {/if}
+          {#if p.type !== 'ollama' && !(p.type === 'anthropic' && providerDraft.auth === 'oauth')}
             <div class="form-row">
               <label class="form-label" for="api-key-{p.name}">API Key</label>
               <input
@@ -477,6 +603,20 @@
                 placeholder={p.api_key_set ? '(leave blank to keep current)' : 'Enter API key'}
               />
             </div>
+          {/if}
+          {#if p.type === 'anthropic' && providerDraft.auth === 'oauth'}
+            <div class="form-row">
+              <label class="form-label" for="oauth-{p.name}">Subscription token</label>
+              <input
+                id="oauth-{p.name}"
+                type="password"
+                class="input"
+                bind:value={providerDraft.oauth_token}
+                placeholder={p.oauth_token_set ? '(leave blank to keep current)' : 'sk-ant-oat...'}
+                data-testid="provider-oauth-edit-input"
+              />
+            </div>
+            {@render oauthHelp()}
           {/if}
           {#if hasEditableBaseURL(p)}
             <div class="form-row">
@@ -566,9 +706,17 @@
             <button class="btn btn-sm" onclick={() => { providerDraft.model_prices = [...providerDraft.model_prices, { model: '', input: '', output: '', cached_input: '' }] }}>Add Override</button>
           </div>
           <div class="restart-note">Changes to provider settings require a restart to take effect.</div>
+          {#if testResult && testResult.name === p.name}
+            <div class="test-result" class:ok={testResult.ok} class:fail={!testResult.ok} role="status">
+              {testResult.ok ? '✓' : '✗'} {testResult.message}
+            </div>
+          {/if}
           <div class="config-actions">
             <button class="btn btn-primary" onclick={saveProvider} disabled={savingProvider}>
               {savingProvider ? 'Saving...' : 'Save'}
+            </button>
+            <button class="btn" onclick={() => testProvider(p.name)} disabled={testing === p.name || savingProvider} data-testid="test-provider-edit-btn">
+              {testing === p.name ? 'Testing…' : 'Test connection'}
             </button>
             <button class="btn" onclick={cancelEditProvider} disabled={savingProvider}>Cancel</button>
           </div>
@@ -896,4 +1044,64 @@
   .model-prices-row + .model-prices-row {
     border-top: 1px solid var(--border);
   }
+
+  /* Auth method toggle */
+  .auth-toggle {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .auth-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .auth-option input[type="radio"] {
+    cursor: pointer;
+  }
+
+  /* OAuth setup help + billing banner */
+  .oauth-help {
+    margin-bottom: 10px;
+  }
+  .oauth-step {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0 0 8px;
+  }
+  .oauth-step code {
+    font-family: monospace;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .oauth-banner {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+  .oauth-banner a {
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  /* Connection test result */
+  .test-result {
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .test-result.ok { color: var(--success); }
+  .test-result.fail { color: var(--danger, #d32f2f); }
 </style>

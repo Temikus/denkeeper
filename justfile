@@ -234,6 +234,10 @@ scan tool="all":
 llms-check:
     @mise x -- go test ./internal/config/ -run TestLLMsFullTxt -race -count=1
 
+# Check the committed OpenAPI spec matches the swag annotations (regenerate + diff)
+openapi-check:
+    @mise x -- go test ./internal/api/ -run TestOpenAPISpecMatchesAnnotations -count=1
+
 # Count lines of Go code (source and test separately)
 loc:
     @echo "Source:"

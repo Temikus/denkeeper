@@ -344,6 +344,87 @@ func TestName(t *testing.T) {
 	}
 }
 
+func TestSetHeaders_OAuthMode_UsesBearerAndBeta(t *testing.T) {
+	var gotAuth, gotBeta, gotAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("authorization")
+		gotBeta = r.Header.Get("anthropic-beta")
+		gotAPIKey = r.Header.Get("x-api-key")
+		resp := apiResponse{Content: []contentBlock{{Type: "text", Text: "ok"}}, Usage: apiUsage{InputTokens: 1, OutputTokens: 1}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(Options{
+		Name:       "sub",
+		Auth:       AuthOAuth,
+		OAuthToken: "sk-ant-oat01-secret",
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if _, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-opus-4-8",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotAuth != "Bearer sk-ant-oat01-secret" {
+		t.Errorf("authorization = %q, want Bearer sk-ant-oat01-secret", gotAuth)
+	}
+	if gotBeta != oauthBeta {
+		t.Errorf("anthropic-beta = %q, want %q", gotBeta, oauthBeta)
+	}
+	if gotAPIKey != "" {
+		t.Errorf("x-api-key = %q, want empty in OAuth mode", gotAPIKey)
+	}
+}
+
+func TestSetHeaders_APIKeyMode_UsesXApiKey(t *testing.T) {
+	var gotAuth, gotBeta, gotAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("authorization")
+		gotBeta = r.Header.Get("anthropic-beta")
+		gotAPIKey = r.Header.Get("x-api-key")
+		resp := apiResponse{Content: []contentBlock{{Type: "text", Text: "ok"}}, Usage: apiUsage{InputTokens: 1, OutputTokens: 1}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithOptions(Options{APIKey: "test-key", BaseURL: server.URL, HTTPClient: server.Client()})
+	if _, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-opus-4-8",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotAPIKey != "test-key" {
+		t.Errorf("x-api-key = %q, want test-key", gotAPIKey)
+	}
+	if gotAuth != "" {
+		t.Errorf("authorization = %q, want empty in API-key mode", gotAuth)
+	}
+	if gotBeta != "" {
+		t.Errorf("anthropic-beta = %q, want empty in API-key mode", gotBeta)
+	}
+}
+
+func TestNewWithOptions_Defaults(t *testing.T) {
+	c := NewWithOptions(Options{})
+	if c.Name() != "anthropic" {
+		t.Errorf("Name() = %q, want anthropic", c.Name())
+	}
+	if c.authMode != AuthAPIKey {
+		t.Errorf("authMode = %q, want %q", c.authMode, AuthAPIKey)
+	}
+	if c.baseURL != defaultBaseURL {
+		t.Errorf("baseURL = %q, want %q", c.baseURL, defaultBaseURL)
+	}
+}
+
 func TestChatCompletion_TextAndToolUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := apiResponse{

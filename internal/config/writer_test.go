@@ -763,6 +763,87 @@ func TestRemoveAgentFromConfig_LastEntry(t *testing.T) {
 // LLM provider config persistence
 // ---------------------------------------------------------------------------
 
+func TestAddLLMProviderToConfig_OAuthRoundTrip(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "claude-sub"
+`)
+
+	err := AddLLMProviderToConfig(path, ProviderInstanceConfig{
+		Name:       "claude-sub",
+		Type:       "anthropic",
+		Auth:       AuthModeOAuth,
+		OAuthToken: "sk-ant-oat01-token",
+	})
+	if err != nil {
+		t.Fatalf("AddLLMProviderToConfig: %v", err)
+	}
+
+	content := readTestConfig(t, path)
+	if !strings.Contains(content, "auth") || !strings.Contains(content, "oauth") {
+		t.Errorf("expected auth key persisted; content:\n%s", content)
+	}
+	if !strings.Contains(content, "sk-ant-oat01-token") {
+		t.Errorf("expected oauth_token persisted; content:\n%s", content)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	p := cfg.LLM.Providers[0]
+	if !p.IsOAuth() || p.OAuthToken != "sk-ant-oat01-token" {
+		t.Errorf("round-tripped provider = %+v, want oauth with token", p)
+	}
+}
+
+func TestAddLLMProviderToConfig_APIKeyOmitsAuth(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "anthropic"
+`)
+	err := AddLLMProviderToConfig(path, ProviderInstanceConfig{
+		Name:   "anthropic",
+		Type:   "anthropic",
+		APIKey: "sk-ant-key",
+	})
+	if err != nil {
+		t.Fatalf("AddLLMProviderToConfig: %v", err)
+	}
+	content := readTestConfig(t, path)
+	if strings.Contains(content, "auth") {
+		t.Errorf("auth key should be omitted for default api_key mode; content:\n%s", content)
+	}
+}
+
+func TestUpdateLLMProviderInstanceConfig_OAuthTokenDeleted(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "claude-sub"
+
+[[llm.providers]]
+name = "claude-sub"
+type = "anthropic"
+auth = "oauth"
+oauth_token = "sk-ant-oat01-old"
+`)
+	changes := map[string]any{
+		"auth":        nil,
+		"oauth_token": nil,
+		"api_key":     "sk-ant-newkey",
+	}
+	if err := UpdateLLMProviderInstanceConfig(path, "claude-sub", changes); err != nil {
+		t.Fatalf("UpdateLLMProviderInstanceConfig: %v", err)
+	}
+	content := readTestConfig(t, path)
+	if strings.Contains(content, "oauth_token") {
+		t.Errorf("oauth_token should be deleted; content:\n%s", content)
+	}
+	if strings.Contains(content, "oauth") {
+		t.Errorf("auth should be deleted; content:\n%s", content)
+	}
+	if !strings.Contains(content, "sk-ant-newkey") {
+		t.Errorf("api_key should be set; content:\n%s", content)
+	}
+}
+
 func TestUpdateLLMProviderInstanceConfig_NilDeletesKey(t *testing.T) {
 	path := writeTestConfig(t, `[llm]
 default_provider = "mycloud"
