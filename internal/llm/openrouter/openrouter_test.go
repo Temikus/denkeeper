@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/llm"
 )
@@ -761,5 +764,209 @@ func TestChatCompletion_ReasoningContentInHistory(t *testing.T) {
 	assistMsg := capturedReq.Messages[1]
 	if assistMsg.ReasoningContent != "I should greet the user." {
 		t.Errorf("reasoning_content = %q, want %q", assistMsg.ReasoningContent, "I should greet the user.")
+	}
+}
+
+// ─── Provider routing & sticky caching ──────────────────────────────────────
+
+func okResponseWithProvider(provider string) apiResponse {
+	return apiResponse{
+		ID:       "chatcmpl-1",
+		Model:    "test-model",
+		Provider: provider,
+		Choices: []apiChoice{{
+			Message:      apiMessage{Role: "assistant", Content: "ok"},
+			FinishReason: "stop",
+		}},
+		Usage: apiUsage{PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11},
+	}
+}
+
+func simpleReq() llm.ChatRequest {
+	return llm.ChatRequest{Model: "test-model", Messages: []llm.Message{{Role: "user", Content: "Hi"}}}
+}
+
+func TestProviderRouting_ExplicitOrderOmittedWhenUnset(t *testing.T) {
+	c := New("k")
+	if p := c.buildProviderParam(); p != nil {
+		t.Fatalf("expected nil provider param when nothing configured, got %+v", p)
+	}
+}
+
+func TestProviderRouting_ExplicitOrderWinsOverSticky(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting([]string{"moonshotai"}, nil, time.Hour)
+	c.recordProvider("Some Other Provider") // sticky present...
+	p := c.buildProviderParam()
+	if p == nil || len(p.Order) != 1 || p.Order[0] != "moonshotai" {
+		t.Fatalf("explicit order should win, got %+v", p)
+	}
+}
+
+func TestStickyRouting_RecordsAndPrefersServedProvider(t *testing.T) {
+	var bodies []apiRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req apiRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		bodies = append(bodies, req)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okResponseWithProvider("Moonshot AI"))
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+		t.Fatalf("call 1: %v", err)
+	}
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+		t.Fatalf("call 2: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 captured requests, got %d", len(bodies))
+	}
+	if bodies[0].Provider != nil {
+		t.Errorf("call 1 should carry no provider routing, got %+v", bodies[0].Provider)
+	}
+	p := bodies[1].Provider
+	if p == nil || len(p.Order) != 1 || p.Order[0] != "Moonshot AI" {
+		t.Fatalf("call 2 should prefer the served provider, got %+v", p)
+	}
+	if p.AllowFallbacks == nil || !*p.AllowFallbacks {
+		t.Errorf("sticky routing must allow fallbacks, got %+v", p.AllowFallbacks)
+	}
+}
+
+func TestStickyRouting_ExpiresAfterTTL(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+	c.recordProvider("Moonshot AI")
+
+	c.now = func() time.Time { return base.Add(59 * time.Minute) }
+	if p := c.buildProviderParam(); p == nil || p.Order[0] != "Moonshot AI" {
+		t.Fatalf("within TTL should still prefer, got %+v", p)
+	}
+	c.now = func() time.Time { return base.Add(61 * time.Minute) }
+	if p := c.buildProviderParam(); p != nil {
+		t.Fatalf("past TTL should drop the preference, got %+v", p)
+	}
+}
+
+func TestStickyRouting_ResetsOnError(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 2 { // second call fails
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okResponseWithProvider("Moonshot AI"))
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+		t.Fatalf("call 1: %v", err)
+	}
+	if c.buildProviderParam() == nil {
+		t.Fatal("preference should be set after a success")
+	}
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err == nil {
+		t.Fatal("call 2 should have errored")
+	}
+	if p := c.buildProviderParam(); p != nil {
+		t.Fatalf("error must reset sticky preference, got %+v", p)
+	}
+}
+
+func TestStickyRouting_DisabledWhenTTLZero(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting(nil, nil, 0)
+	c.recordProvider("Moonshot AI")
+	if p := c.buildProviderParam(); p != nil {
+		t.Fatalf("sticky disabled (ttl=0) should never route, got %+v", p)
+	}
+}
+
+// failingBody yields a partial SSE payload and then a non-EOF read error,
+// simulating a stream that drops mid-flight after a successful HTTP 200.
+type failingBody struct{ r io.Reader }
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		return n, errors.New("connection reset mid-stream")
+	}
+	return n, err
+}
+
+func (b *failingBody) Close() error { return nil }
+
+// seqRoundTripper returns a queued response per call (round-robin exhausted to
+// the last entry), so one client can see a success then a mid-stream failure.
+type seqRoundTripper struct {
+	resps []func() *http.Response
+	calls int
+}
+
+func (rt *seqRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	i := rt.calls
+	if i >= len(rt.resps) {
+		i = len(rt.resps) - 1
+	}
+	rt.calls++
+	return rt.resps[i](), nil
+}
+
+func TestStickyRouting_StreamMidStreamErrorResets(t *testing.T) {
+	okStream := func() *http.Response {
+		body := `data: {"id":"1","model":"m","provider":"Moonshot AI","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n" +
+			`data: {"id":"1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}` + "\n\n" +
+			"data: [DONE]\n\n"
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(body))}
+	}
+	brokenStream := func() *http.Response {
+		// Valid header, 200 OK, but the body errors partway through.
+		partial := `data: {"id":"2","model":"m","provider":"Moonshot AI","choices":[{"delta":{"content":"par`
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: &failingBody{r: strings.NewReader(partial)}}
+	}
+
+	rt := &seqRoundTripper{resps: []func() *http.Response{okStream, brokenStream}}
+	c := NewWithHTTPClient("k", "http://example.invalid", &http.Client{Transport: rt})
+	c.SetProviderRouting(nil, nil, time.Hour)
+
+	// Call 1 succeeds and records the served provider.
+	if _, err := c.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "m", Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(_ llm.StreamChunk) {},
+	}); err != nil {
+		t.Fatalf("call 1 (stream) should succeed: %v", err)
+	}
+	if c.buildProviderParam() == nil {
+		t.Fatal("preference should be set after a successful stream")
+	}
+
+	// Call 2 fails mid-stream (after HTTP 200) — the preference must reset.
+	if _, err := c.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "m", Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(_ llm.StreamChunk) {},
+	}); err == nil {
+		t.Fatal("call 2 should error on the mid-stream failure")
+	}
+	if p := c.buildProviderParam(); p != nil {
+		t.Fatalf("mid-stream error must reset sticky preference, got %+v", p)
 	}
 }

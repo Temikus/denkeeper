@@ -340,6 +340,11 @@ func createProvider(pc config.ProviderInstanceConfig, cfg *config.Config) llm.Pr
 		client := openrouter.NewFull(pc.Name, pc.APIKey)
 		r := &cfg.LLM.OpenRouter.Reasoning
 		client.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
+		client.SetProviderRouting(
+			cfg.LLM.OpenRouter.ProviderOrder,
+			cfg.LLM.OpenRouter.ProviderAllowFallbacks,
+			cfg.LLM.OpenRouter.ResolveStickyTTL(),
+		)
 		return client
 	case "ollama":
 		return ollama.NewFull(pc.Name, pc.BaseURL)

@@ -20,6 +20,9 @@ type OAIStreamResult struct {
 	Usage        *OAIStreamUsage
 	// ReasoningContent captures reasoning_content deltas (OpenRouter).
 	ReasoningContent string
+	// Provider is the upstream provider that served the response, when the
+	// gateway reports it (OpenRouter sets a top-level "provider" field).
+	Provider string
 }
 
 // OAIStreamUsage mirrors the usage block in the final SSE chunk.
@@ -56,6 +59,9 @@ type oaiToolAccum struct {
 func (a *oaiStreamAccumulator) processChunk(chunk *oaiStreamChunk) {
 	if chunk.Model != "" {
 		a.result.Model = chunk.Model
+	}
+	if chunk.Provider != "" {
+		a.result.Provider = chunk.Provider
 	}
 	if len(chunk.Choices) > 0 {
 		a.processChoice(&chunk.Choices[0])
@@ -192,10 +198,11 @@ func ReadOAIStream(body io.Reader, onStream StreamCallback, idle *StreamIdleConf
 // OpenAI streaming wire types.
 
 type oaiStreamChunk struct {
-	ID      string            `json:"id"`
-	Model   string            `json:"model"`
-	Choices []oaiStreamChoice `json:"choices"`
-	Usage   *OAIStreamUsage   `json:"usage,omitempty"`
+	ID       string            `json:"id"`
+	Model    string            `json:"model"`
+	Provider string            `json:"provider,omitempty"`
+	Choices  []oaiStreamChoice `json:"choices"`
+	Usage    *OAIStreamUsage   `json:"usage,omitempty"`
 }
 
 type oaiStreamChoice struct {

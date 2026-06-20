@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParse_ValidConfig(t *testing.T) {
@@ -4425,5 +4426,37 @@ cached_input = 1.5
 	_, err := Parse(tomlData)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveStickyTTL_DefaultsToOneHour(t *testing.T) {
+	o := OpenRouterConfig{}
+	if got := o.ResolveStickyTTL(); got != time.Hour {
+		t.Fatalf("default = %v, want 1h", got)
+	}
+}
+
+func TestResolveStickyTTL_DisabledReturnsZero(t *testing.T) {
+	off := false
+	o := OpenRouterConfig{ProviderSticky: &off, ProviderStickyTTL: "30m"}
+	if got := o.ResolveStickyTTL(); got != 0 {
+		t.Fatalf("disabled = %v, want 0", got)
+	}
+}
+
+func TestResolveStickyTTL_CustomDuration(t *testing.T) {
+	o := OpenRouterConfig{ProviderStickyTTL: "45m"}
+	if got := o.ResolveStickyTTL(); got != 45*time.Minute {
+		t.Fatalf("custom = %v, want 45m", got)
+	}
+}
+
+func TestValidate_RejectsBadStickyTTL(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[llm.openrouter]
+provider_sticky_ttl = "not-a-duration"
+`)
+	if _, err := Parse(tomlData); err == nil {
+		t.Fatal("expected validation error for bad provider_sticky_ttl")
 	}
 }

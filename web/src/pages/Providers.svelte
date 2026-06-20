@@ -102,6 +102,8 @@
       organization: p?.organization || '',
       reasoning_enabled: !!(p?.reasoning?.enabled),
       reasoning_effort: p?.reasoning?.effort || '',
+      provider_sticky: p?.routing?.sticky ?? true,
+      provider_sticky_ttl: p?.routing?.sticky_ttl || '',
       cost_limit_soft: p?.cost_limit_soft ?? '',
       cost_limit_hard: p?.cost_limit_hard ?? '',
       default_rate_per_1k_tokens: p?.default_rate_per_1k_tokens ?? '',
@@ -143,6 +145,18 @@
             effort: providerDraft.reasoning_effort || undefined,
           }
         }
+
+        const oldSticky = p?.routing?.sticky ?? true
+        const oldTtl = p?.routing?.sticky_ttl || ''
+        if (providerDraft.provider_sticky !== oldSticky || providerDraft.provider_sticky_ttl !== oldTtl) {
+          // Preserve any advanced order/fallback settings configured via TOML.
+          patch.routing = {
+            sticky: providerDraft.provider_sticky,
+            sticky_ttl: providerDraft.provider_sticky_ttl || undefined,
+            order: p?.routing?.order,
+            allow_fallbacks: p?.routing?.allow_fallbacks,
+          }
+        }
       }
 
       // Cost fields.
@@ -176,6 +190,7 @@
           if (patch.base_url !== undefined) p.base_url = patch.base_url
           if (patch.organization !== undefined) p.organization = patch.organization
           if (patch.reasoning) p.reasoning = patch.reasoning
+          if (patch.routing) p.routing = patch.routing
           if (patch.cost_limit_soft !== undefined) p.cost_limit_soft = patch.cost_limit_soft
           if (patch.cost_limit_hard !== undefined) p.cost_limit_hard = patch.cost_limit_hard
           if (patch.default_rate_per_1k_tokens !== undefined) p.default_rate_per_1k_tokens = patch.default_rate_per_1k_tokens
@@ -416,6 +431,16 @@
                 {/if}
               </span>
             </div>
+            <div class="field-row">
+              <span class="field-label">Caching</span>
+              <span class="field-value">
+                {#if (p.routing?.sticky ?? true)}
+                  Sticky{#if p.routing?.sticky_ttl} · {p.routing.sticky_ttl}{/if}
+                {:else}
+                  Off
+                {/if}
+              </span>
+            </div>
           {/if}
         </div>
         {#if p.cost_limit_soft != null || p.cost_limit_hard != null || p.default_rate_per_1k_tokens != null || (p.model_prices && Object.keys(p.model_prices).length > 0)}
@@ -521,6 +546,22 @@
                       <option value="low">Low</option>
                       <option value="minimal">Minimal</option>
                     </select>
+                  </div>
+                {/if}
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Provider caching</label>
+              <div class="reasoning-controls">
+                <label class="toggle-label">
+                  <input type="checkbox" bind:checked={providerDraft.provider_sticky} />
+                  Sticky provider routing
+                </label>
+                <p class="hint">Prefer the upstream provider that last served a response, so its automatic prompt cache keeps hitting. Resets on any error.</p>
+                {#if providerDraft.provider_sticky}
+                  <div class="reasoning-effort">
+                    <label class="form-label-sm" for="sticky-ttl-{p.name}">Window</label>
+                    <input id="sticky-ttl-{p.name}" type="text" class="input input-sm" bind:value={providerDraft.provider_sticky_ttl} placeholder="1h" />
                   </div>
                 {/if}
               </div>
@@ -734,6 +775,9 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  .reasoning-controls .hint {
+    margin: 0;
   }
   .toggle-label {
     display: flex;

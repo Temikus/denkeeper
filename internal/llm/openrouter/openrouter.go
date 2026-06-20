@@ -44,8 +44,29 @@ type Client struct {
 	reasoningMaxTokens int
 	reasoningExclude   *bool
 
+	providerOrder          []string
+	providerAllowFallbacks *bool
+
+	// Sticky provider routing: after a successful response, prefer the upstream
+	// provider that served it for stickyTTL, so the upstream's automatic prompt
+	// caching keeps hitting instead of being scattered across providers. Reset
+	// on any error. Disabled when stickyTTL <= 0.
+	stickyTTL      time.Duration
+	stickyMu       sync.Mutex
+	stickyProvider string
+	stickyExpiry   time.Time
+	now            func() time.Time // injectable clock; nil → time.Now
+
 	detailsMu    sync.Mutex
 	detailsCache *modelDetailsCache
+}
+
+// clock returns the current time, honoring an injected clock for tests.
+func (c *Client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 func New(apiKey string) *Client {
@@ -115,6 +136,63 @@ func (c *Client) buildReasoningParam() *reasoningParam {
 	return p
 }
 
+// SetProviderRouting configures OpenRouter upstream provider routing. order is
+// an explicit preference list of provider slugs/names (e.g. "moonshotai") that
+// always wins when set; allowFallbacks (when non-nil) controls whether
+// OpenRouter may fall back to providers outside that list. stickyTTL (> 0)
+// enables sticky routing: after a success the served provider is preferred for
+// that duration so the upstream's automatic prompt caching keeps hitting
+// instead of being scattered across providers. Errors reset the preference.
+func (c *Client) SetProviderRouting(order []string, allowFallbacks *bool, stickyTTL time.Duration) {
+	c.providerOrder = order
+	c.providerAllowFallbacks = allowFallbacks
+	c.stickyTTL = stickyTTL
+}
+
+// buildProviderParam constructs the provider routing parameter for the request.
+// Explicit config order wins; otherwise an active sticky preference is applied
+// (always with fallbacks, so a now-unavailable provider degrades gracefully).
+// Returns nil when nothing is configured (the field is then omitted entirely).
+func (c *Client) buildProviderParam() *providerParam {
+	if len(c.providerOrder) > 0 {
+		return &providerParam{Order: c.providerOrder, AllowFallbacks: c.providerAllowFallbacks}
+	}
+	if c.stickyTTL > 0 {
+		c.stickyMu.Lock()
+		prov, exp := c.stickyProvider, c.stickyExpiry
+		c.stickyMu.Unlock()
+		if prov != "" && c.clock().Before(exp) {
+			allow := true
+			return &providerParam{Order: []string{prov}, AllowFallbacks: &allow}
+		}
+	}
+	if c.providerAllowFallbacks != nil {
+		return &providerParam{AllowFallbacks: c.providerAllowFallbacks}
+	}
+	return nil
+}
+
+// recordProvider remembers the provider that served a successful response,
+// extending the sticky window. No-op when stickiness is off or name is empty.
+func (c *Client) recordProvider(name string) {
+	if c.stickyTTL <= 0 || name == "" {
+		return
+	}
+	c.stickyMu.Lock()
+	c.stickyProvider = name
+	c.stickyExpiry = c.clock().Add(c.stickyTTL)
+	c.stickyMu.Unlock()
+}
+
+// resetSticky clears the sticky preference so the next request lets OpenRouter
+// route freshly. Called on any request error.
+func (c *Client) resetSticky() {
+	c.stickyMu.Lock()
+	c.stickyProvider = ""
+	c.stickyExpiry = time.Time{}
+	c.stickyMu.Unlock()
+}
+
 func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
@@ -141,16 +219,24 @@ func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.
 	return resp, nil
 }
 
-func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (out *llm.ChatResponse, retErr error) {
 	if req.OnStream != nil {
 		return c.chatCompletionStream(ctx, req)
 	}
+	// Sticky routing: any error on this request clears the preference so the
+	// next call routes freshly (success records the served provider below).
+	defer func() {
+		if retErr != nil {
+			c.resetSticky()
+		}
+	}()
 
 	body := apiRequest{
 		Model:     req.Model,
 		Messages:  make([]apiMessage, len(req.Messages)),
 		Tools:     req.Tools,
 		Reasoning: c.buildReasoningParam(),
+		Provider:  c.buildProviderParam(),
 	}
 	if req.MaxTokens > 0 {
 		body.MaxTokens = &req.MaxTokens
@@ -210,16 +296,26 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 		return nil, fmt.Errorf("no choices in response")
 	}
 
+	c.recordProvider(apiResp.Provider)
 	return buildChatResponse(&apiResp), nil
 }
 
 // chatCompletionStream handles the streaming path using the shared OAI helper.
-func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (out *llm.ChatResponse, retErr error) {
+	// Sticky routing: any error clears the preference; success records the
+	// served provider (captured from the stream below).
+	defer func() {
+		if retErr != nil {
+			c.resetSticky()
+		}
+	}()
+
 	body := apiStreamRequest{
 		Model:         req.Model,
 		Messages:      make([]apiMessage, len(req.Messages)),
 		Tools:         req.Tools,
 		Reasoning:     c.buildReasoningParam(),
+		Provider:      c.buildProviderParam(),
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
@@ -298,6 +394,7 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		}
 		chatResp.CostUSD = result.Usage.Cost
 	}
+	c.recordProvider(result.Provider)
 	return chatResp, nil
 }
 
@@ -608,6 +705,7 @@ type apiRequest struct {
 	Temperature *float64        `json:"temperature,omitempty"`
 	Tools       []llm.ToolDef   `json:"tools,omitempty"`
 	Reasoning   *reasoningParam `json:"reasoning,omitempty"`
+	Provider    *providerParam  `json:"provider,omitempty"`
 }
 
 type reasoningParam struct {
@@ -615,6 +713,13 @@ type reasoningParam struct {
 	Effort    string `json:"effort,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	Exclude   *bool  `json:"exclude,omitempty"`
+}
+
+// providerParam is OpenRouter's upstream provider routing preference.
+// See https://openrouter.ai/docs/features/provider-routing
+type providerParam struct {
+	Order          []string `json:"order,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
 }
 
 // apiMessage handles both outgoing requests (content as string) and incoming
@@ -701,10 +806,11 @@ func (m *apiMessage) UnmarshalJSON(data []byte) error {
 }
 
 type apiResponse struct {
-	ID      string      `json:"id"`
-	Model   string      `json:"model"`
-	Choices []apiChoice `json:"choices"`
-	Usage   apiUsage    `json:"usage"`
+	ID       string      `json:"id"`
+	Model    string      `json:"model"`
+	Provider string      `json:"provider"`
+	Choices  []apiChoice `json:"choices"`
+	Usage    apiUsage    `json:"usage"`
 }
 
 type apiChoice struct {
@@ -728,6 +834,7 @@ type apiStreamRequest struct {
 	Temperature   *float64        `json:"temperature,omitempty"`
 	Tools         []llm.ToolDef   `json:"tools,omitempty"`
 	Reasoning     *reasoningParam `json:"reasoning,omitempty"`
+	Provider      *providerParam  `json:"provider,omitempty"`
 	Stream        bool            `json:"stream"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
