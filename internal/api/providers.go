@@ -219,10 +219,14 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 // providerUpdateInput holds the mutable fields for PATCH /api/v1/llm/providers/{name}.
 type providerUpdateInput struct {
-	APIKey                *string                            `json:"api_key,omitempty"`
-	BaseURL               *string                            `json:"base_url,omitempty"`
-	Organization          *string                            `json:"organization,omitempty"`
-	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
+	APIKey       *string                        `json:"api_key,omitempty"`
+	BaseURL      *string                        `json:"base_url,omitempty"`
+	Organization *string                        `json:"organization,omitempty"`
+	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
+	// Routing is a full replace, not a merge: a present routing object carries
+	// the complete desired state, so any field it omits is cleared (both
+	// in-memory via applyOpenRouterUpdate and in TOML via persistOpenRouterRouting).
+	// Callers must send the full snapshot, not a delta.
 	Routing               *providerRoutingCfg                `json:"routing,omitempty"`
 	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
 	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
