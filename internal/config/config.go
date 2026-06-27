@@ -789,6 +789,43 @@ type FallbackConfig struct {
 type OpenRouterConfig struct {
 	APIKey    string                 `toml:"api_key"`
 	Reasoning OpenRouterReasoningCfg `toml:"reasoning"`
+
+	// ProviderOrder is an explicit preference list of OpenRouter upstream
+	// provider slugs/names (e.g. "moonshotai") that overrides sticky routing
+	// when set. Usually unnecessary — sticky routing (below) discovers the
+	// right provider automatically.
+	// See https://openrouter.ai/docs/features/provider-routing
+	ProviderOrder []string `toml:"provider_order" json:"provider_order,omitempty"`
+	// ProviderAllowFallbacks, when non-nil, controls whether OpenRouter may fall
+	// back to providers outside ProviderOrder. Leave unset (nil) to keep
+	// OpenRouter's default (fallbacks allowed) — preferred for resilience.
+	ProviderAllowFallbacks *bool `toml:"provider_allow_fallbacks" json:"provider_allow_fallbacks,omitempty"`
+	// ProviderSticky enables sticky provider routing (default ON). After a
+	// successful response the served upstream provider is preferred for
+	// ProviderStickyTTL, so the upstream's automatic prompt caching keeps
+	// hitting instead of being scattered across providers. Upstream errors
+	// (429/5xx/network) reset the preference; caller cancellation and 4xx
+	// client errors leave it intact.
+	ProviderSticky *bool `toml:"provider_sticky" json:"provider_sticky,omitempty"`
+	// ProviderStickyTTL is how long to prefer the last-served provider, as a Go
+	// duration string (e.g. "1h", "30m"). Defaults to "1h" when sticky is on.
+	ProviderStickyTTL string `toml:"provider_sticky_ttl" json:"provider_sticky_ttl,omitempty"`
+}
+
+// ResolveStickyTTL returns the effective sticky-routing window: zero when
+// sticky routing is disabled, otherwise ProviderStickyTTL (default 1h). The
+// duration string is validated at config-load time, so parse errors here fall
+// back to the default rather than failing.
+func (o OpenRouterConfig) ResolveStickyTTL() time.Duration {
+	if o.ProviderSticky != nil && !*o.ProviderSticky {
+		return 0
+	}
+	if o.ProviderStickyTTL != "" {
+		if d, err := time.ParseDuration(o.ProviderStickyTTL); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Hour
 }
 
 // OpenRouterReasoningCfg controls the reasoning parameter sent to OpenRouter.
@@ -1743,8 +1780,26 @@ func validate(cfg *Config) error {
 	if err := validateMemory(&cfg.Memory); err != nil {
 		return fmt.Errorf("validate memory: %w", err)
 	}
-	if err := ValidateOpenRouterReasoning(&cfg.LLM.OpenRouter.Reasoning); err != nil {
-		return fmt.Errorf("validate openrouter reasoning: %w", err)
+	if err := validateOpenRouter(&cfg.LLM.OpenRouter); err != nil {
+		return fmt.Errorf("validate openrouter: %w", err)
+	}
+	return nil
+}
+
+// validateOpenRouter validates the OpenRouter provider config (reasoning plus
+// provider routing fields).
+func validateOpenRouter(o *OpenRouterConfig) error {
+	if err := ValidateOpenRouterReasoning(&o.Reasoning); err != nil {
+		return fmt.Errorf("reasoning: %w", err)
+	}
+	if ttl := o.ProviderStickyTTL; ttl != "" {
+		d, err := time.ParseDuration(ttl)
+		if err != nil {
+			return fmt.Errorf("provider_sticky_ttl %q is not a valid duration: %w", ttl, err)
+		}
+		if d < 0 {
+			return fmt.Errorf("provider_sticky_ttl must not be negative")
+		}
 	}
 	return nil
 }

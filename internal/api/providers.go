@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
@@ -143,10 +144,20 @@ type providerInfo struct {
 	BaseURL               string                             `json:"base_url,omitempty"`
 	Organization          string                             `json:"organization,omitempty"`
 	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
+	Routing               *providerRoutingCfg                `json:"routing,omitempty"`
 	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
 	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
 	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
 	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
+}
+
+// providerRoutingCfg is the API shape for OpenRouter upstream provider routing,
+// including sticky caching. Backed by the flat fields in [llm.openrouter].
+type providerRoutingCfg struct {
+	Order          []string `json:"order,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
+	Sticky         *bool    `json:"sticky,omitempty"`
+	StickyTTL      string   `json:"sticky_ttl,omitempty"`
 }
 
 type llmProvidersResponse struct {
@@ -181,6 +192,12 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 		if pc.Type == "openrouter" {
 			r := cfg.OpenRouter.Reasoning
 			pi.Reasoning = &r
+			pi.Routing = &providerRoutingCfg{
+				Order:          cfg.OpenRouter.ProviderOrder,
+				AllowFallbacks: cfg.OpenRouter.ProviderAllowFallbacks,
+				Sticky:         cfg.OpenRouter.ProviderSticky,
+				StickyTTL:      cfg.OpenRouter.ProviderStickyTTL,
+			}
 		}
 		pi.CostLimitSoft = pc.CostLimitSoft
 		pi.CostLimitHard = pc.CostLimitHard
@@ -202,10 +219,15 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 // providerUpdateInput holds the mutable fields for PATCH /api/v1/llm/providers/{name}.
 type providerUpdateInput struct {
-	APIKey                *string                            `json:"api_key,omitempty"`
-	BaseURL               *string                            `json:"base_url,omitempty"`
-	Organization          *string                            `json:"organization,omitempty"`
-	Reasoning             *config.OpenRouterReasoningCfg     `json:"reasoning,omitempty"`
+	APIKey       *string                        `json:"api_key,omitempty"`
+	BaseURL      *string                        `json:"base_url,omitempty"`
+	Organization *string                        `json:"organization,omitempty"`
+	Reasoning    *config.OpenRouterReasoningCfg `json:"reasoning,omitempty"`
+	// Routing is a full replace, not a merge: a present routing object carries
+	// the complete desired state, so any field it omits is cleared (both
+	// in-memory via applyOpenRouterUpdate and in TOML via persistOpenRouterRouting).
+	// Callers must send the full snapshot, not a delta.
+	Routing               *providerRoutingCfg                `json:"routing,omitempty"`
 	CostLimitSoft         *float64                           `json:"cost_limit_soft,omitempty"`
 	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
 	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
@@ -265,20 +287,10 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Reasoning is only valid for OpenRouter-type providers.
-	if input.Reasoning != nil {
-		if pc.Type != "openrouter" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "reasoning is only supported for openrouter-type providers",
-			})
-			return
-		}
-		if err := config.ValidateOpenRouterReasoning(input.Reasoning); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid reasoning config: " + err.Error(),
-			})
-			return
-		}
+	// Reasoning and routing are only valid for OpenRouter-type providers.
+	if msg := validateOpenRouterUpdate(&input, pc.Type); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
 	}
 
 	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
@@ -291,6 +303,30 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 	s.persistLLMProvider(name, &input, nullCosts)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// validateOpenRouterUpdate checks the OpenRouter-only fields (reasoning,
+// routing) of a provider update. Returns an error message, or "" if valid.
+func validateOpenRouterUpdate(input *providerUpdateInput, providerType string) string {
+	if input.Reasoning != nil {
+		if providerType != "openrouter" {
+			return "reasoning is only supported for openrouter-type providers"
+		}
+		if err := config.ValidateOpenRouterReasoning(input.Reasoning); err != nil {
+			return "invalid reasoning config: " + err.Error()
+		}
+	}
+	if input.Routing != nil {
+		if providerType != "openrouter" {
+			return "routing is only supported for openrouter-type providers"
+		}
+		if ttl := input.Routing.StickyTTL; ttl != "" {
+			if d, err := time.ParseDuration(ttl); err != nil || d < 0 {
+				return `invalid routing config: sticky_ttl must be a non-negative duration (e.g. "1h")`
+			}
+		}
+	}
+	return ""
 }
 
 // findProviderInstance returns a pointer to the named provider in config, or nil.
@@ -318,8 +354,8 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 		pc.Organization = *input.Organization
 	}
 
-	if input.Reasoning != nil && pc.Type == "openrouter" {
-		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
+	if pc.Type == "openrouter" {
+		s.applyOpenRouterUpdate(input)
 	}
 
 	if nulls.Soft {
@@ -345,6 +381,22 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 
 	// Keep legacy structs in sync for backward compat.
 	s.syncLegacyProviderConfig(name, pc)
+}
+
+// applyOpenRouterUpdate applies reasoning and routing config (both under
+// [llm.openrouter]) from a provider update. Caller ensures the provider is
+// OpenRouter-typed.
+func (s *Server) applyOpenRouterUpdate(input *providerUpdateInput) {
+	if input.Reasoning != nil {
+		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
+	}
+	if input.Routing != nil {
+		or := &s.deps.Config.LLM.OpenRouter
+		or.ProviderOrder = input.Routing.Order
+		or.ProviderAllowFallbacks = input.Routing.AllowFallbacks
+		or.ProviderSticky = input.Routing.Sticky
+		or.ProviderStickyTTL = input.Routing.StickyTTL
+	}
 }
 
 // syncLegacyProviderConfig mirrors changes from a ProviderInstanceConfig back
@@ -391,24 +443,65 @@ func (s *Server) persistLLMProvider(name string, input *providerUpdateInput, nul
 		}
 	}
 
-	// Reasoning config lives in [llm.openrouter.reasoning], not in [[llm.providers]].
-	if input.Reasoning != nil {
-		r := make(map[string]any)
-		if input.Reasoning.Enabled != nil {
-			r["enabled"] = *input.Reasoning.Enabled
-		}
-		if input.Reasoning.Effort != "" {
-			r["effort"] = input.Reasoning.Effort
-		}
-		if input.Reasoning.MaxTokens > 0 {
-			r["max_tokens"] = input.Reasoning.MaxTokens
-		}
-		if input.Reasoning.Exclude != nil {
-			r["exclude"] = *input.Reasoning.Exclude
-		}
-		if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
-			s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
-		}
+	// Reasoning and routing config live under [llm.openrouter], not in
+	// [[llm.providers]].
+	s.persistOpenRouterReasoning(input)
+	s.persistOpenRouterRouting(input)
+}
+
+// persistOpenRouterReasoning writes reasoning config to [llm.openrouter.reasoning].
+func (s *Server) persistOpenRouterReasoning(input *providerUpdateInput) {
+	if input.Reasoning == nil {
+		return
+	}
+	r := make(map[string]any)
+	if input.Reasoning.Enabled != nil {
+		r["enabled"] = *input.Reasoning.Enabled
+	}
+	if input.Reasoning.Effort != "" {
+		r["effort"] = input.Reasoning.Effort
+	}
+	if input.Reasoning.MaxTokens > 0 {
+		r["max_tokens"] = input.Reasoning.MaxTokens
+	}
+	if input.Reasoning.Exclude != nil {
+		r["exclude"] = *input.Reasoning.Exclude
+	}
+	if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", map[string]any{"reasoning": r}); err != nil {
+		s.logger.Warn("failed to persist OpenRouter reasoning config", "error", err)
+	}
+}
+
+// persistOpenRouterRouting writes routing config (flat keys) to [llm.openrouter].
+// It mirrors applyOpenRouterUpdate's full replace: a routing PATCH carries the
+// complete desired state, so a zero-value field is persisted as a deletion
+// (nil) rather than skipped. Skipping would leave a stale TOML value that
+// diverges from the in-memory config and resurrects on restart.
+func (s *Server) persistOpenRouterRouting(input *providerUpdateInput) {
+	if input.Routing == nil {
+		return
+	}
+	// Default every key to nil (delete); set the ones the PATCH provides.
+	r := map[string]any{
+		"provider_order":           nil,
+		"provider_sticky_ttl":      nil,
+		"provider_allow_fallbacks": nil,
+		"provider_sticky":          nil,
+	}
+	if len(input.Routing.Order) > 0 {
+		r["provider_order"] = input.Routing.Order
+	}
+	if input.Routing.StickyTTL != "" {
+		r["provider_sticky_ttl"] = input.Routing.StickyTTL
+	}
+	if input.Routing.AllowFallbacks != nil {
+		r["provider_allow_fallbacks"] = *input.Routing.AllowFallbacks
+	}
+	if input.Routing.Sticky != nil {
+		r["provider_sticky"] = *input.Routing.Sticky
+	}
+	if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", r); err != nil {
+		s.logger.Warn("failed to persist OpenRouter routing config", "error", err)
 	}
 }
 

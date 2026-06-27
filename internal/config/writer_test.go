@@ -866,6 +866,88 @@ cost_limit_hard = 5.0
 	}
 }
 
+// A nil value clears a flat key under [llm.<provider>] (e.g. the OpenRouter
+// routing keys) rather than leaving a stale value to resurrect on restart.
+func TestUpdateLLMProviderConfig_NilDeletesKey(t *testing.T) {
+	path := writeTestConfig(t, `[llm.openrouter]
+api_key = "sk-or"
+provider_sticky = true
+provider_sticky_ttl = "45m"
+provider_order = ["moonshotai"]
+`)
+
+	changes := map[string]any{
+		"provider_sticky":     true,
+		"provider_sticky_ttl": nil,
+		"provider_order":      nil,
+	}
+	if err := UpdateLLMProviderConfig(path, "openrouter", changes); err != nil {
+		t.Fatalf("UpdateLLMProviderConfig: %v", err)
+	}
+
+	content := readTestConfig(t, path)
+	if strings.Contains(content, "45m") {
+		t.Errorf("provider_sticky_ttl should be deleted; content:\n%s", content)
+	}
+	if strings.Contains(content, "moonshotai") {
+		t.Errorf("provider_order should be deleted; content:\n%s", content)
+	}
+	if !strings.Contains(content, "provider_sticky") {
+		t.Errorf("provider_sticky should be preserved; content:\n%s", content)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	or := cfg.LLM.OpenRouter
+	if or.ProviderStickyTTL != "" {
+		t.Errorf("ProviderStickyTTL = %q, want empty", or.ProviderStickyTTL)
+	}
+	if len(or.ProviderOrder) != 0 {
+		t.Errorf("ProviderOrder = %v, want empty", or.ProviderOrder)
+	}
+	if or.ProviderSticky == nil || !*or.ProviderSticky {
+		t.Errorf("ProviderSticky = %v, want true", or.ProviderSticky)
+	}
+}
+
+// A nil value clears a top-level [llm] key rather than leaving it behind.
+func TestUpdateLLMConfig_NilDeletesKey(t *testing.T) {
+	path := writeTestConfig(t, `[llm]
+default_provider = "mycloud"
+default_model = "gpt-4"
+
+[[llm.providers]]
+name = "mycloud"
+type = "openai"
+api_key = "sk-test"
+`)
+
+	changes := map[string]any{
+		"default_model":    nil,
+		"default_provider": "mycloud",
+	}
+	if err := UpdateLLMConfig(path, changes); err != nil {
+		t.Fatalf("UpdateLLMConfig: %v", err)
+	}
+
+	// The key itself must be gone from TOML (Load would otherwise re-apply a
+	// built-in default model, masking whether the key was actually deleted).
+	content := readTestConfig(t, path)
+	if strings.Contains(content, "default_model") || strings.Contains(content, "gpt-4") {
+		t.Errorf("default_model should be deleted; content:\n%s", content)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "mycloud" {
+		t.Errorf("DefaultProvider = %q, want mycloud", cfg.LLM.DefaultProvider)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Config writer hardening (backup + concurrency)
 // ---------------------------------------------------------------------------

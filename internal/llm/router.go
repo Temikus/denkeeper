@@ -341,7 +341,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	// 4. Non-retryable errors skip all fallbacks immediately. A dead caller
 	// context also skips them regardless of the error's shape — any retry
 	// against an expired/cancelled context fails instantly.
-	if ctx.Err() != nil || !isRetryable(err) {
+	if ctx.Err() != nil || !IsRetryable(err) {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)
 		return nil, fmt.Errorf("chat completion: %w", err)
@@ -483,9 +483,9 @@ func (r *Router) applyErrorFallbacks(ctx context.Context, sessionID string, acti
 func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
 	switch rule.Trigger {
 	case "rate_limit":
-		return isRateLimit(err)
+		return IsRateLimit(err)
 	case "error":
-		return !isRateLimit(err) && isRetryable(err)
+		return !IsRateLimit(err) && IsRetryable(err)
 	}
 	return false
 }
@@ -569,7 +569,7 @@ func doWaitAndRetry(ctx context.Context, maxRetries int, backoff string, fn func
 			}
 		}
 		err = fn()
-		if err == nil || !isRateLimit(err) {
+		if err == nil || !IsRateLimit(err) {
 			return err // success, or a different error type — stop retrying
 		}
 	}

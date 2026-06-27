@@ -973,8 +973,8 @@ func TestIsRetryable_ContextErrors(t *testing.T) {
 		{"plain network error", errors.New("connection refused"), true},
 	}
 	for _, c := range cases {
-		if got := isRetryable(c.err); got != c.want {
-			t.Errorf("%s: isRetryable = %v, want %v", c.name, got, c.want)
+		if got := IsRetryable(c.err); got != c.want {
+			t.Errorf("%s: IsRetryable = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
