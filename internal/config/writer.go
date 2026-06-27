@@ -560,7 +560,9 @@ func updateLLMProviderConfigLocked(path, provider string, changes map[string]any
 
 // UpdateLLMConfig persists changes to top-level [llm] keys (default_provider,
 // default_model, cost_limit_soft, cost_limit_hard). Only keys present in
-// changes are applied (partial update).
+// changes are applied (partial update); a key mapped to a nil value is deleted,
+// so a cleared field doesn't linger in TOML (consistent with
+// UpdateLLMProviderConfig / UpdateLLMProviderInstanceConfig).
 func UpdateLLMConfig(path string, changes map[string]any) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
@@ -575,7 +577,11 @@ func UpdateLLMConfig(path string, changes map[string]any) error {
 		llmSection = map[string]any{}
 	}
 	for k, v := range changes {
-		llmSection[k] = v
+		if v == nil {
+			delete(llmSection, k)
+		} else {
+			llmSection[k] = v
+		}
 	}
 	raw["llm"] = llmSection
 

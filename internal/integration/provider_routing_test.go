@@ -164,3 +164,41 @@ func TestProviderPatch_Routing_ClearRemovesStaleTOML(t *testing.T) {
 		t.Errorf("ProviderSticky = %v, want true", or.ProviderSticky)
 	}
 }
+
+// Reasoning persists as a single nested [llm.openrouter.reasoning] table that
+// is replaced wholesale, so clearing a sub-field (here: effort) drops it from
+// TOML rather than leaving a stale value — unlike the flat routing keys, which
+// needed explicit deletion. This locks in that structural safety property.
+func TestProviderPatch_Reasoning_ClearRemovesStaleTOML(t *testing.T) {
+	h := providerCrudHarness(t)
+	withOpenRouterProvider(h)
+
+	// Set reasoning with an explicit effort level.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-or",
+		map[string]any{"reasoning": map[string]any{"enabled": true, "effort": "high"}}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+	content, _ := os.ReadFile(h.ConfigPath())
+	if !strings.Contains(string(content), "high") {
+		t.Fatalf("setup did not persist effort:\n%s", string(content))
+	}
+
+	// Clear effort (enabled stays on, effort omitted).
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-or",
+		map[string]any{"reasoning": map[string]any{"enabled": true}}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading TOML: %v", err)
+	}
+	if strings.Contains(string(content), "high") {
+		t.Errorf("stale reasoning effort survived clear:\n%s", string(content))
+	}
+	if got := h.Config().LLM.OpenRouter.Reasoning.Effort; got != "" {
+		t.Errorf("in-memory Effort = %q, want empty", got)
+	}
+}
