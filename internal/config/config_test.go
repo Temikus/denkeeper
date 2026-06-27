@@ -2348,6 +2348,47 @@ api_key = "sk-or-test-key"
 	}
 }
 
+func TestParse_SyntaxError_ReturnsCleanError(t *testing.T) {
+	// A genuine TOML syntax error must surface a normal parse error and must
+	// not be masked or wrapped by the float→int normalisation fallback, which
+	// runs unconditionally on any unmarshal failure.
+	tomlData := []byte(`
+[telegram
+token = "broken"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for malformed TOML, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing config") {
+		t.Errorf("error = %q, want it wrapped with 'parsing config'", err)
+	}
+	if strings.Contains(err.Error(), "normalisation") {
+		t.Errorf("error = %q, should not mention normalisation for a syntax error", err)
+	}
+}
+
+func TestParse_NonFloatTypeMismatch_ReturnsOriginalError(t *testing.T) {
+	// A type mismatch unrelated to float→int (here a string in an int64 list)
+	// is not something normaliseFloatsToInts can fix. Parse must still return
+	// the original decode error rather than swallowing it or succeeding.
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = ["not-a-number"]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for string in int64 field, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing config") {
+		t.Errorf("error = %q, want it wrapped with 'parsing config'", err)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: synthesizeDefaultAgent backward compatibility
 // --------------------------------------------------------------------------
