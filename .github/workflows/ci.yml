@@ -11,7 +11,7 @@ jobs:
     name: Build Web UI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -30,7 +30,7 @@ jobs:
     name: Web UI Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -58,7 +58,7 @@ jobs:
     needs: build-ui
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download web UI
         uses: actions/download-artifact@v8
         with:
@@ -83,7 +83,7 @@ jobs:
     needs: build-ui
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download web UI
         uses: actions/download-artifact@v8
         with:
@@ -113,7 +113,7 @@ jobs:
     needs: build-ui
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download web UI
         uses: actions/download-artifact@v8
         with:
@@ -146,7 +146,7 @@ jobs:
           - goos: darwin
             goarch: arm64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download web UI
         uses: actions/download-artifact@v8
         with:
@@ -180,7 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
