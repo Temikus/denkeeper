@@ -50,7 +50,8 @@ type Client struct {
 	// Sticky provider routing: after a successful response, prefer the upstream
 	// provider that served it for stickyTTL, so the upstream's automatic prompt
 	// caching keeps hitting instead of being scattered across providers. Reset
-	// on any error. Disabled when stickyTTL <= 0.
+	// on errors that implicate the upstream (429/5xx/network), not on caller
+	// cancellation or 4xx client errors. Disabled when stickyTTL <= 0.
 	stickyTTL      time.Duration
 	stickyMu       sync.Mutex
 	stickyProvider string

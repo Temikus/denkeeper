@@ -557,7 +557,7 @@
                   <input type="checkbox" bind:checked={providerDraft.provider_sticky} />
                   Sticky provider routing
                 </label>
-                <p class="hint">Prefer the upstream provider that last served a response, so its automatic prompt cache keeps hitting. Resets on any error.</p>
+                <p class="hint">Prefer the upstream provider that last served a response, so its automatic prompt cache keeps hitting. Resets on upstream errors (rate limits, 5xx, network); preserved on cancellation and client errors.</p>
                 {#if providerDraft.provider_sticky}
                   <div class="reasoning-effort">
                     <label class="form-label-sm" for="sticky-ttl-{p.name}">Window</label>
