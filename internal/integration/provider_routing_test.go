@@ -110,3 +110,57 @@ func TestProviderPatch_Routing_PersistsToTOML(t *testing.T) {
 		t.Errorf("provider_sticky_ttl=45m not found in TOML:\n%s", toml)
 	}
 }
+
+// Clearing a previously-set routing field through PATCH must remove it from
+// the TOML too, not just from memory — otherwise the stale value resurrects on
+// the next restart/reload. Regression test for the zero-value-skip persistence
+// bug.
+func TestProviderPatch_Routing_ClearRemovesStaleTOML(t *testing.T) {
+	h := providerCrudHarness(t)
+	withOpenRouterProvider(h)
+
+	// Set an explicit order + custom TTL.
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-or",
+		map[string]any{"routing": map[string]any{
+			"sticky": true, "sticky_ttl": "45m", "order": []string{"moonshotai"},
+		}}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+	content, _ := os.ReadFile(h.ConfigPath())
+	if toml := string(content); !strings.Contains(toml, "moonshotai") || !strings.Contains(toml, "45m") {
+		t.Fatalf("setup did not persist order/ttl:\n%s", toml)
+	}
+
+	// Now clear the TTL and order (sticky stays on, others omitted/empty).
+	rec = h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-or",
+		map[string]any{"routing": map[string]any{"sticky": true}}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// TOML must no longer carry the stale order/ttl values.
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading TOML: %v", err)
+	}
+	toml := string(content)
+	if strings.Contains(toml, "moonshotai") {
+		t.Errorf("stale provider_order survived clear:\n%s", toml)
+	}
+	if strings.Contains(toml, "45m") {
+		t.Errorf("stale provider_sticky_ttl survived clear:\n%s", toml)
+	}
+
+	// In-memory config must agree: order and TTL cleared, sticky still on.
+	or := h.Config().LLM.OpenRouter
+	if len(or.ProviderOrder) != 0 {
+		t.Errorf("ProviderOrder = %v, want empty", or.ProviderOrder)
+	}
+	if or.ProviderStickyTTL != "" {
+		t.Errorf("ProviderStickyTTL = %q, want empty", or.ProviderStickyTTL)
+	}
+	if or.ProviderSticky == nil || !*or.ProviderSticky {
+		t.Errorf("ProviderSticky = %v, want true", or.ProviderSticky)
+	}
+}

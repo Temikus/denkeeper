@@ -469,13 +469,21 @@ func (s *Server) persistOpenRouterReasoning(input *providerUpdateInput) {
 }
 
 // persistOpenRouterRouting writes routing config (flat keys) to [llm.openrouter].
-// Only non-zero-value fields are written to avoid cluttering the TOML with
-// empty keys when the user hasn't configured them.
+// It mirrors applyOpenRouterUpdate's full replace: a routing PATCH carries the
+// complete desired state, so a zero-value field is persisted as a deletion
+// (nil) rather than skipped. Skipping would leave a stale TOML value that
+// diverges from the in-memory config and resurrects on restart.
 func (s *Server) persistOpenRouterRouting(input *providerUpdateInput) {
 	if input.Routing == nil {
 		return
 	}
-	r := make(map[string]any)
+	// Default every key to nil (delete); set the ones the PATCH provides.
+	r := map[string]any{
+		"provider_order":           nil,
+		"provider_sticky_ttl":      nil,
+		"provider_allow_fallbacks": nil,
+		"provider_sticky":          nil,
+	}
 	if len(input.Routing.Order) > 0 {
 		r["provider_order"] = input.Routing.Order
 	}
@@ -487,9 +495,6 @@ func (s *Server) persistOpenRouterRouting(input *providerUpdateInput) {
 	}
 	if input.Routing.Sticky != nil {
 		r["provider_sticky"] = *input.Routing.Sticky
-	}
-	if len(r) == 0 {
-		return
 	}
 	if err := config.UpdateLLMProviderConfig(s.deps.ConfigPath, "openrouter", r); err != nil {
 		s.logger.Warn("failed to persist OpenRouter routing config", "error", err)
