@@ -185,7 +185,8 @@ func (c *Client) recordProvider(name string) {
 }
 
 // resetSticky clears the sticky preference so the next request lets OpenRouter
-// route freshly. Called on any request error.
+// route freshly. Called on errors that implicate the upstream provider
+// (429/5xx/network), not on caller cancellation or 4xx client errors.
 func (c *Client) resetSticky() {
 	c.stickyMu.Lock()
 	c.stickyProvider = ""
@@ -223,10 +224,13 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 	if req.OnStream != nil {
 		return c.chatCompletionStream(ctx, req)
 	}
-	// Sticky routing: any error on this request clears the preference so the
-	// next call routes freshly (success records the served provider below).
+	// Sticky routing: clear the preference only when the error implicates the
+	// upstream (429/5xx/network) so the next call routes freshly; a success
+	// records the served provider below. Caller cancellation and 4xx client
+	// errors leave the pin intact — the provider is healthy, so discarding its
+	// warm cache affinity would needlessly scatter subsequent requests.
 	defer func() {
-		if retErr != nil {
+		if retErr != nil && llm.IsRetryable(retErr) {
 			c.resetSticky()
 		}
 	}()
@@ -302,10 +306,12 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 
 // chatCompletionStream handles the streaming path using the shared OAI helper.
 func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) (out *llm.ChatResponse, retErr error) {
-	// Sticky routing: any error clears the preference; success records the
-	// served provider (captured from the stream below).
+	// Sticky routing: clear the preference only when the error implicates the
+	// upstream (429/5xx/network, including a mid-stream drop); success records
+	// the served provider (captured from the stream below). Caller cancellation
+	// and 4xx client errors leave the pin intact.
 	defer func() {
-		if retErr != nil {
+		if retErr != nil && llm.IsRetryable(retErr) {
 			c.resetSticky()
 		}
 	}()

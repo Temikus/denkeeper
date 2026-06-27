@@ -67,13 +67,18 @@ func (e *LLMError) Retryable() bool {
 	}
 }
 
-// isRetryable returns true if err is worth retrying.
+// IsRetryable returns true if err is worth retrying.
 // Stream idle timeouts are retryable (the provider stalled; a fallback can
 // succeed). Context cancellation/deadline errors are not — the caller's
 // context is dead, so any retry against it fails instantly.
 // LLMErrors are retryable based on their status code; other network/unknown
 // errors are assumed retryable.
-func isRetryable(err error) bool {
+//
+// It doubles as the test for whether an error implicates the upstream
+// provider's health (429/5xx/network) versus the caller or request itself
+// (cancellation, 4xx client errors) — provider-internal state such as
+// sticky-routing preferences should only be discarded for the former.
+func IsRetryable(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) {
 		return true
 	}
@@ -87,8 +92,8 @@ func isRetryable(err error) bool {
 	return true // network error or unknown — assume retryable
 }
 
-// isRateLimit returns true if err is specifically a 429 rate-limit error.
-func isRateLimit(err error) bool {
+// IsRateLimit returns true if err is specifically a 429 rate-limit error.
+func IsRateLimit(err error) bool {
 	var llmErr *LLMError
 	return errors.As(err, &llmErr) && llmErr.StatusCode == 429
 }

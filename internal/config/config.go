@@ -803,7 +803,9 @@ type OpenRouterConfig struct {
 	// ProviderSticky enables sticky provider routing (default ON). After a
 	// successful response the served upstream provider is preferred for
 	// ProviderStickyTTL, so the upstream's automatic prompt caching keeps
-	// hitting instead of being scattered across providers. Errors reset it.
+	// hitting instead of being scattered across providers. Upstream errors
+	// (429/5xx/network) reset the preference; caller cancellation and 4xx
+	// client errors leave it intact.
 	ProviderSticky *bool `toml:"provider_sticky" json:"provider_sticky,omitempty"`
 	// ProviderStickyTTL is how long to prefer the last-served provider, as a Go
 	// duration string (e.g. "1h", "30m"). Defaults to "1h" when sticky is on.

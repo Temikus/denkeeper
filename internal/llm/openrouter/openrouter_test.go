@@ -890,6 +890,69 @@ func TestStickyRouting_ResetsOnError(t *testing.T) {
 	}
 }
 
+// A 4xx client error (bad request) does not implicate the upstream provider's
+// health, so the sticky preference must survive — discarding it would scatter
+// subsequent requests off a perfectly healthy, cache-warm provider.
+func TestStickyRouting_PreservedOnClientError(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 2 { // second call is a client error
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"bad request"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okResponseWithProvider("Moonshot AI"))
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+		t.Fatalf("call 1: %v", err)
+	}
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err == nil {
+		t.Fatal("call 2 should have errored")
+	}
+	p := c.buildProviderParam()
+	if p == nil || len(p.Order) != 1 || p.Order[0] != "Moonshot AI" {
+		t.Fatalf("4xx client error must preserve sticky preference, got %+v", p)
+	}
+}
+
+// Caller cancellation does not implicate the upstream, so the sticky
+// preference must survive.
+func TestStickyRouting_PreservedOnContextCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okResponseWithProvider("Moonshot AI"))
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+
+	if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+		t.Fatalf("call 1: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already-dead context — the call fails with context.Canceled
+	if _, err := c.ChatCompletion(ctx, simpleReq()); err == nil {
+		t.Fatal("call 2 should have errored on the cancelled context")
+	}
+	p := c.buildProviderParam()
+	if p == nil || len(p.Order) != 1 || p.Order[0] != "Moonshot AI" {
+		t.Fatalf("cancellation must preserve sticky preference, got %+v", p)
+	}
+}
+
 func TestStickyRouting_DisabledWhenTTLZero(t *testing.T) {
 	c := New("k")
 	c.SetProviderRouting(nil, nil, 0)
