@@ -48,13 +48,14 @@ type serverConn struct {
 	session   *mcp.ClientSession
 
 	// Health monitoring state.
-	connectedAt  time.Time // when the server was last successfully connected
-	restartCount int       // consecutive restart attempts
-	lastError    string    // most recent failure message
-	disabled     bool      // true when restarts exhausted
-	connecting   bool      // true while background init retries are in progress
-	userDisabled bool      // true when explicitly disabled by user
-	configError  string    // non-empty when auto-disabled due to config validation error
+	connectedAt   time.Time // when the server was last successfully connected
+	restartCount  int       // consecutive restart attempts
+	probeFailures int       // consecutive health-probe failures (reset on healthy probe)
+	lastError     string    // most recent failure message
+	disabled      bool      // true when restarts exhausted
+	connecting    bool      // true while background init retries are in progress
+	userDisabled  bool      // true when explicitly disabled by user
+	configError   string    // non-empty when auto-disabled due to config validation error
 
 	// Tool filtering — tools in disabledSet are excluded from the LLM payload.
 	disabledSet map[string]bool
@@ -1145,6 +1146,10 @@ func (m *Manager) StartHealthChecker(ctx context.Context, interval time.Duration
 	if maxAttempts == 0 {
 		maxAttempts = 3
 	}
+	failThreshold := m.mcpCfg.HealthFailThreshold
+	if failThreshold == 0 {
+		failThreshold = 3
+	}
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -1154,14 +1159,16 @@ func (m *Manager) StartHealthChecker(ctx context.Context, interval time.Duration
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.checkServers(ctx, maxAttempts, cooldown)
+				m.checkServers(ctx, maxAttempts, cooldown, failThreshold)
 			}
 		}
 	}()
 }
 
 // checkServers probes each registered server and restarts any that are unresponsive.
-func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown time.Duration) {
+// failThreshold is the number of consecutive probe failures before a health_fail
+// audit event is emitted for remote servers (stdio servers emit immediately).
+func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown time.Duration, failThreshold int) {
 	m.mu.RLock()
 	names := make([]string, 0, len(m.servers))
 	for name := range m.servers {
@@ -1185,17 +1192,7 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		if err := m.probeServer(probeCtx, sc); err != nil {
 			probeSpan.RecordError(err)
 			probeSpan.SetStatus(codes.Error, err.Error())
-			m.logger.Warn("MCP server health check failed", "server", name, "error", err)
-			if m.Auditor != nil {
-				m.Auditor.Emit(probeCtx, audit.Event{
-					Category: audit.CategoryMCP,
-					Action:   "health_fail",
-					Summary:  fmt.Sprintf("MCP server %s health check failed", name),
-					Detail:   fmt.Sprintf(`{"server":"%s"}`, name),
-					Status:   audit.StatusError,
-					Source:   "health_checker",
-				})
-			}
+			m.auditProbeFailure(probeCtx, sc, name, failThreshold, err)
 			m.handleServerFailure(probeCtx, sc, maxAttempts, cooldown, err.Error())
 			probeSpan.End()
 		} else {
@@ -1210,9 +1207,33 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 			if sc.restartCount > 0 && !sc.connectedAt.IsZero() && time.Since(sc.connectedAt) > cooldown {
 				sc.restartCount = 0
 			}
+			sc.probeFailures = 0
 			sc.lastError = ""
 			m.mu.Unlock()
 		}
+	}
+}
+
+// auditProbeFailure bumps the consecutive-failure counter and emits a
+// health_fail audit event. Emission is debounced for remote servers —
+// transient network drops shouldn't pollute the error view until
+// failThreshold consecutive failures — while a dead local stdio subprocess
+// is meaningful immediately.
+func (m *Manager) auditProbeFailure(ctx context.Context, sc *serverConn, name string, failThreshold int, err error) {
+	m.logger.Warn("MCP server health check failed", "server", name, "error", err)
+	m.mu.Lock()
+	sc.probeFailures++
+	probeFailures := sc.probeFailures
+	m.mu.Unlock()
+	if m.Auditor != nil && (sc.transport == "stdio" || probeFailures >= failThreshold) {
+		m.Auditor.Emit(ctx, audit.Event{
+			Category: audit.CategoryMCP,
+			Action:   "health_fail",
+			Summary:  fmt.Sprintf("MCP server %s health check failed", name),
+			Detail:   fmt.Sprintf(`{"server":"%s","consecutive_failures":%d}`, name, probeFailures),
+			Status:   audit.StatusError,
+			Source:   "health_checker",
+		})
 	}
 }
 

@@ -814,6 +814,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 				SessionCosts:  costTracker.AllSessionCosts(),
 			}
 		},
+		TelemetrySummary: buildTelemetrySummary(abc.memory),
 		SetFallbacks: func(rules []configmcp.FallbackRuleInput) {
 			converted := make([]llm.FallbackRule, len(rules))
 			for i, r := range rules {
@@ -864,6 +865,16 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	}
 	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
 	return nil
+}
+
+func buildTelemetrySummary(memory agent.MemoryStore) func(ctx context.Context, since *time.Time) (*agent.TelemetrySummary, error) {
+	ts, ok := memory.(agent.TelemetryStore)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, since *time.Time) (*agent.TelemetrySummary, error) {
+		return ts.GetTelemetrySummary(ctx, since, nil)
+	}
 }
 
 func buildIsSkillPinned(agentName string, memory agent.MemoryStore) func(name string) (bool, error) {

@@ -329,7 +329,11 @@ func (a *APIConfig) MCPServerSessionTimeout() time.Duration {
 	return d
 }
 
-// MCPServerChatTimeout parses and returns the MCP chat tool timeout duration.
+// MCPServerChatTimeout parses and returns the MCP chat tool idle timeout.
+// This bounds the gap between progress events (tool rounds, streamed
+// content), not the total turn duration — a turn that keeps making progress
+// may run longer. Note that a pending tool approval emits no events, so a
+// human approval wait longer than this timeout cancels the turn.
 // Returns 2m if the value is empty or unparseable.
 func (a *APIConfig) MCPServerChatTimeout() time.Duration {
 	if a.MCPServer.ChatTimeout == "" {
@@ -600,6 +604,11 @@ type MCPConfig struct {
 	// RestartCooldown is the duration a server must stay connected before its
 	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
 	RestartCooldown string `toml:"restart_cooldown"`
+	// HealthFailThreshold is the number of consecutive health-probe failures
+	// required before a health_fail audit event is emitted for remote
+	// (sse/http) servers, so transient network drops don't pollute the audit
+	// log. Local stdio servers always emit on the first failure. Default: 3.
+	HealthFailThreshold int `toml:"health_fail_threshold"`
 	// InitRetryAttempts is the number of times to retry the initial connection
 	// to a remote MCP server at startup before giving up. Applies only to
 	// sse/http transports. Default: 5. Set to 1 to disable retries.
@@ -1142,6 +1151,9 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.RestartCooldown == "" {
 		mcp.RestartCooldown = "5m"
+	}
+	if mcp.HealthFailThreshold == 0 {
+		mcp.HealthFailThreshold = 3
 	}
 	if mcp.InitRetryAttempts == 0 {
 		mcp.InitRetryAttempts = 5

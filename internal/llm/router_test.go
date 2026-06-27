@@ -952,3 +952,87 @@ func TestModelSupportsTools(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Retry classification: context errors
+// ---------------------------------------------------------------------------
+
+func TestIsRetryable_ContextErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"bare canceled", context.Canceled, false},
+		{"bare deadline", context.DeadlineExceeded, false},
+		{"wrapped canceled", fmt.Errorf("sending request: %w", context.Canceled), false},
+		{"wrapped deadline", fmt.Errorf("sending stream request: %w", context.DeadlineExceeded), false},
+		{"wrapped idle timeout", fmt.Errorf("reading stream: %w", ErrStreamIdleTimeout), true},
+		{"llm 503", &LLMError{StatusCode: 503, Message: "down"}, true},
+		{"llm 401", &LLMError{StatusCode: 401, Message: "unauthorized"}, false},
+		{"plain network error", errors.New("connection refused"), true},
+	}
+	for _, c := range cases {
+		if got := isRetryable(c.err); got != c.want {
+			t.Errorf("%s: isRetryable = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRouter_Fallback_ContextErrorSkipsFallbacks(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	fallback := &countingMockProvider{
+		mockProvider: mockProvider{name: "fallback", response: &ChatResponse{Content: "should not reach", TokensUsed: TokenUsage{Total: 5}}},
+	}
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{name: "primary", err: fmt.Errorf("sending stream request: %w", context.DeadlineExceeded)})
+	r.RegisterProvider(fallback)
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "fallback"}})
+
+	_, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err == nil {
+		t.Fatal("expected error for context deadline")
+	}
+	if fallback.calls != 0 {
+		t.Errorf("fallback invoked %d times, want 0", fallback.calls)
+	}
+}
+
+func TestRouter_Fallback_DeadContextSkipsFallbacks(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	fallback := &countingMockProvider{
+		mockProvider: mockProvider{name: "fallback", response: &ChatResponse{Content: "should not reach", TokensUsed: TokenUsage{Total: 5}}},
+	}
+	r := NewRouter("primary", "model", ct)
+	// Retryable error shape, but the caller's context is already cancelled —
+	// the liveness guard must skip fallbacks regardless of error shape.
+	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
+	r.RegisterProvider(fallback)
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "fallback"}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := r.Complete(ctx, "s1", []Message{{Role: "user", Content: "hi"}})
+	if err == nil {
+		t.Fatal("expected error with dead context")
+	}
+	if fallback.calls != 0 {
+		t.Errorf("fallback invoked %d times, want 0", fallback.calls)
+	}
+}
+
+func TestRouter_Fallback_IdleTimeoutStillTriggersFallback(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{name: "primary", err: fmt.Errorf("reading stream: %w", ErrStreamIdleTimeout)})
+	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "fallback ok", TokensUsed: TokenUsage{Total: 5}}})
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "fallback"}})
+
+	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "fallback ok" {
+		t.Errorf("content = %q, want fallback ok", resp.Content)
+	}
+}

@@ -2,11 +2,43 @@ package tool
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 )
+
+// captureEmitter records audit events for assertions.
+type captureEmitter struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (c *captureEmitter) Emit(_ context.Context, event audit.Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+}
+
+func (c *captureEmitter) byAction(action string) []audit.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []audit.Event
+	for _, e := range c.events {
+		if e.Action == action {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 func TestServerStatus_Connected(t *testing.T) {
 	m := NewManager(testLogger())
@@ -197,7 +229,7 @@ func TestCheckServers_ResetsRestartCountAfterCooldown(t *testing.T) {
 	sc.lastError = ""
 	m.mu.Unlock()
 
-	m.checkServers(context.Background(), 3, 5*time.Minute)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
 
 	m.mu.RLock()
 	got := sc.restartCount
@@ -228,13 +260,140 @@ func TestCheckServers_DoesNotResetWithinCooldown(t *testing.T) {
 	sc.lastError = ""
 	m.mu.Unlock()
 
-	m.checkServers(context.Background(), 3, 5*time.Minute)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
 
 	m.mu.RLock()
 	got := sc.restartCount
 	m.mu.RUnlock()
 	if got != 1 {
 		t.Errorf("restartCount = %d after healthy probe within cooldown, want 1 (reset too eagerly)", got)
+	}
+}
+
+// startFlakyStreamableServer starts a streamable MCP server whose handler can
+// be switched to return 500s, making health probes fail without closing the
+// httptest server (mid-test Close would block on the persistent MCP stream).
+func startFlakyStreamableServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
+	t.Helper()
+	server := newTestMCPServer()
+	inner := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	var failing atomic.Bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing.Load() {
+			http.Error(w, "injected failure", http.StatusInternalServerError)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return ts, &failing
+}
+
+// failingSSEServer registers an SSE server, attaches a capture emitter, then
+// makes the upstream fail so health probes error. restartCount is pre-set past
+// maxAttempts so handleServerFailure disables instead of sleeping on backoff.
+func failingSSEServer(t *testing.T) (*Manager, *serverConn, *captureEmitter) {
+	t.Helper()
+	ts, failing := startFlakyStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 2})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+	if err := m.RegisterServer(context.Background(), "test-sse", cfg); err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	auditor := &captureEmitter{}
+	m.Auditor = auditor
+
+	failing.Store(true) // probes now fail with HTTP 500
+
+	m.mu.Lock()
+	sc := m.servers["test-sse"]
+	sc.restartCount = 3
+	m.mu.Unlock()
+	return m, sc, auditor
+}
+
+func TestCheckServers_RemoteFailureBelowThreshold_NoAudit(t *testing.T) {
+	m, sc, auditor := failingSSEServer(t)
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	m.mu.RLock()
+	failures := sc.probeFailures
+	m.mu.RUnlock()
+	if failures != 1 {
+		t.Errorf("probeFailures = %d, want 1", failures)
+	}
+	if events := auditor.byAction("health_fail"); len(events) != 0 {
+		t.Errorf("expected no health_fail audit below threshold, got %d", len(events))
+	}
+}
+
+func TestCheckServers_RemoteFailureAtThreshold_Audits(t *testing.T) {
+	m, sc, auditor := failingSSEServer(t)
+
+	m.mu.Lock()
+	sc.probeFailures = 2 // this probe is the 3rd consecutive failure
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	events := auditor.byAction("health_fail")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 health_fail audit at threshold, got %d", len(events))
+	}
+	if !strings.Contains(events[0].Detail, `"consecutive_failures":3`) {
+		t.Errorf("Detail = %q, want consecutive_failures:3", events[0].Detail)
+	}
+}
+
+func TestCheckServers_StdioFailureAuditsImmediately(t *testing.T) {
+	m, sc, auditor := failingSSEServer(t)
+
+	// Reuse the failing SSE session but mark the server as stdio: a dead
+	// local subprocess is meaningful on the first failure.
+	m.mu.Lock()
+	sc.transport = "stdio"
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	if events := auditor.byAction("health_fail"); len(events) != 1 {
+		t.Fatalf("expected health_fail audit on first stdio failure, got %d", len(events))
+	}
+}
+
+func TestCheckServers_HealthyProbeResetsProbeFailures(t *testing.T) {
+	ts := startStreamableServer(t)
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	cfg := config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+	}
+	if err := m.RegisterServer(context.Background(), "test-sse", cfg); err != nil {
+		t.Fatalf("initial registration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	m.mu.Lock()
+	sc := m.servers["test-sse"]
+	sc.probeFailures = 2
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	m.mu.RLock()
+	got := sc.probeFailures
+	m.mu.RUnlock()
+	if got != 0 {
+		t.Errorf("probeFailures = %d after healthy probe, want 0", got)
 	}
 }
 

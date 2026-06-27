@@ -1332,11 +1332,17 @@ var supervisorStatusRenders = map[string]supervisorStatusRender{
 		},
 		alogLine: func(_ ChatEvent) string { return "⚠ supervisor unavailable — awaiting your review" },
 	},
+	"auto_denied": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Tool **%s** auto-denied: identical call was denied earlier this turn", evt.Tool)
+		},
+		alogLine: func(_ ChatEvent) string { return "❌ auto-denied (repeat of denied call)" },
+	},
 }
 
 // routeApprovalStatus handles non-pending approval statuses (auto_approved,
-// denied, supervisor_approved, supervisor_denied, supervisor_escalated,
-// supervisor_error). Returns true when the event was handled.
+// denied, auto_denied, supervisor_approved, supervisor_denied,
+// supervisor_escalated, supervisor_error). Returns true when the event was handled.
 func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent, debug bool, alog *activityLog) bool {
 	switch evt.ApprovalStatus {
 	case "auto_approved":

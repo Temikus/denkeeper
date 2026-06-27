@@ -1437,6 +1437,115 @@ func TestGetCostSummary_RestrictedTier(t *testing.T) {
 	}
 }
 
+func TestGetCostSummary_WithTelemetry(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 1.23}
+		}
+		d.TelemetrySummary = func(_ context.Context, since *time.Time) (*agent.TelemetrySummary, error) {
+			if since != nil {
+				t.Errorf("since = %v, want nil when days is absent", since)
+			}
+			return &agent.TelemetrySummary{
+				ByTool: []agent.ToolUsageSummary{
+					{ToolName: "web_search", ServerName: "web", CallCount: 42, ErrorCount: 3, AvgDuration: 120.5},
+				},
+				BySkill: []agent.SkillUsageSummary{
+					{SkillName: "self-audit", MatchCount: 7, MatchTypes: "command"},
+				},
+			}, nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result configmcp.CostSummaryData
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if len(result.ByTool) != 1 || result.ByTool[0].ToolName != "web_search" || result.ByTool[0].ErrorCount != 3 {
+		t.Errorf("ByTool = %+v, want web_search with 3 errors", result.ByTool)
+	}
+	if len(result.BySkill) != 1 || result.BySkill[0].SkillName != "self-audit" {
+		t.Errorf("BySkill = %+v, want self-audit", result.BySkill)
+	}
+	if result.TelemetryError != "" {
+		t.Errorf("TelemetryError = %q, want empty", result.TelemetryError)
+	}
+}
+
+func TestGetCostSummary_DaysFilter(t *testing.T) {
+	var gotSince *time.Time
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{}
+		}
+		d.TelemetrySummary = func(_ context.Context, since *time.Time) (*agent.TelemetrySummary, error) {
+			gotSince = since
+			return &agent.TelemetrySummary{}, nil
+		}
+	})
+
+	_, isErr := callTool(t, session, "get_cost_summary", map[string]any{"days": 7})
+	if isErr {
+		t.Fatal("get_cost_summary error")
+	}
+
+	if gotSince == nil {
+		t.Fatal("since = nil, want ~7 days ago")
+	}
+	want := time.Now().AddDate(0, 0, -7)
+	if diff := gotSince.Sub(want); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("since = %v, want within a minute of %v", gotSince, want)
+	}
+}
+
+func TestGetCostSummary_TelemetryErrorIsNonFatal(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 0.5}
+		}
+		d.TelemetrySummary = func(_ context.Context, _ *time.Time) (*agent.TelemetrySummary, error) {
+			return nil, context.DeadlineExceeded
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary should not fail on telemetry error: %s", text)
+	}
+
+	var result configmcp.CostSummaryData
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result.GlobalCost != 0.5 {
+		t.Errorf("GlobalCost = %v, want 0.5 (cost data must survive telemetry failure)", result.GlobalCost)
+	}
+	if result.TelemetryError == "" {
+		t.Error("TelemetryError empty, want the lookup error")
+	}
+}
+
+func TestGetCostSummary_NoTelemetryDep(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 1.0}
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+	if strings.Contains(text, "by_tool") || strings.Contains(text, "telemetry_error") {
+		t.Errorf("expected no telemetry keys without TelemetrySummary dep, got: %s", text)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: supervised tier approvals for new tools
 // --------------------------------------------------------------------------

@@ -837,6 +837,7 @@ type ChatEvent struct {
 
 	// ApprovalStatus distinguishes pending approvals from auto-approved ones.
 	// Values: "" (pending, needs user action), "auto_approved" (rule matched),
+	// "auto_denied" (identical call was denied earlier this turn),
 	// "supervisor_approved", "supervisor_denied", "supervisor_escalated",
 	// "supervisor_error" (supervisor LLM call failed; falls through to human).
 	ApprovalStatus string `json:"approval_status,omitempty"`
@@ -965,7 +966,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
 	if err != nil {
-		e.savePartialResponse(ctx, convID, streamedContent.String())
+		e.persistInterruptedProgress(ctx, convID, userMsgID, streamedContent.String(), toolRecords, msg, err)
 		return "", nil, convID, err
 	}
 
@@ -1098,6 +1099,41 @@ func wrapEventForPartialCapture(onEvent ChatEventFunc, buf *strings.Builder) Cha
 	}
 }
 
+// persistInterruptedProgress persists partial work when the LLM pipeline
+// fails mid-flight. Completed tool-call records are always persisted so
+// telemetry reflects the side effects that actually executed, anchored to an
+// assistant marker message that also keeps the conversation history honest
+// for the next turn. When no tool rounds completed, it falls back to
+// savePartialResponse's content-only semantics.
+func (e *Engine) persistInterruptedProgress(ctx context.Context, convID string, userMsgID int64, content string, toolRecords []ToolCallRecord, msg adapter.IncomingMessage, cause error) {
+	if len(toolRecords) == 0 {
+		e.savePartialResponse(ctx, convID, content)
+		return
+	}
+
+	reason := cause.Error()
+	if len(reason) > 200 {
+		reason = reason[:200] + "…"
+	}
+	marker := fmt.Sprintf("[Interrupted after %d tool call(s): %s]", len(toolRecords), reason)
+	if content != "" {
+		marker = content + "\n\n" + marker
+	}
+
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assistMsg := StoredMessage{Role: "assistant", Content: marker}
+	assistMsgID, err := e.memory.AddMessage(saveCtx, convID, assistMsg)
+	if err != nil {
+		e.logger.Warn("failed to save interrupted progress",
+			"error", err, "conversation", convID, "tool_records", len(toolRecords))
+		return
+	}
+	e.persistTelemetry(saveCtx, convID, userMsgID, assistMsgID, assistMsg, toolRecords, nil, msg)
+	e.logger.Info("saved interrupted tool-loop progress",
+		"conversation", convID, "tool_records", len(toolRecords), "partial_len", len(content))
+}
+
 // savePartialResponse persists partial streamed content when the caller's
 // context was cancelled (e.g. client disconnect) and some content was already
 // streamed. It uses a fresh background context so storage succeeds even though
@@ -1138,7 +1174,9 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
 // LLM produces a text response. Returns the response, messages, collected
-// tool call records for persistence, and any error.
+// tool call records for persistence, and any error. Tool call records are
+// returned even when the loop fails mid-flight so callers can persist the
+// work that already executed.
 func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
@@ -1163,7 +1201,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 
 	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
 	if err != nil {
-		return nil, llmMessages, nil, err
+		return nil, llmMessages, toolRecords, err
 	}
 
 	return resp, llmMessages, toolRecords, nil
@@ -1187,6 +1225,11 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	var toolRecords []ToolCallRecord
 	var accumulatedContent strings.Builder
 	detector := newRepeatDetector(defaultRepeatDetectionThreshold)
+	// deniedCalls remembers tool calls denied earlier in this turn (by the
+	// supervisor or a human) keyed by name+args, so identical retries are
+	// auto-denied without burning another approval round-trip. Scoped to one
+	// turn: a new user message gives the approval chain a fresh look.
+	deniedCalls := make(map[string]string)
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		toolRounds++
 		if round >= e.maxToolRounds {
@@ -1216,7 +1259,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("agent", e.name),
 				attribute.String("tool_name", tc.Function.Name)))
-			result, record := e.executeToolCall(ctx, tc, round+1, convID, supervised, onEvent)
+			result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, deniedCalls)
 			toolRecords = append(toolRecords, record)
 			llmMessages = append(llmMessages, llm.Message{
 				Role: "tool", Content: result, ToolCallID: tc.ID,
@@ -1325,6 +1368,44 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 	}
 	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{nudgeRetry: true})
 	return nudgeResp, llmMessages, nil
+}
+
+// executeToolCallDeduped wraps executeToolCall with per-turn denial dedup:
+// a tool call whose name+args match one denied earlier in the same turn is
+// auto-denied without another supervisor/human approval round-trip. New
+// denials are recorded in deniedCalls for subsequent rounds of this turn.
+func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, deniedCalls map[string]string) (string, ToolCallRecord) {
+	denialKey := tc.Function.Name + "\x00" + tc.Function.Arguments
+	if denyText, deniedBefore := deniedCalls[denialKey]; deniedBefore {
+		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
+			"tool", tc.Function.Name, "round", round, "conversation", convID)
+		if onEvent != nil {
+			onEvent(ChatEvent{
+				Type:           "tool_approval",
+				Tool:           tc.Function.Name,
+				Round:          round,
+				Text:           "Auto-denied: identical call was denied earlier this turn",
+				ApprovalStatus: "auto_denied",
+			})
+		}
+		result := denyText + " (This identical call was already denied this turn — do not retry it with the same arguments.)"
+		record := ToolCallRecord{
+			ToolName: tc.Function.Name,
+			Round:    round,
+			Success:  false,
+			ErrorMsg: "denied (repeat)",
+		}
+		if e.tools != nil {
+			record.ServerName = e.tools.ToolServer(tc.Function.Name)
+		}
+		return result, record
+	}
+
+	result, record := e.executeToolCall(ctx, tc, round, convID, supervised, onEvent)
+	if !record.Success && record.ErrorMsg == "denied" {
+		deniedCalls[denialKey] = result
+	}
+	return result, record
 }
 
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),

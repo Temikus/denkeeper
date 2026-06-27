@@ -408,6 +408,104 @@ func TestChatCompletion_CostUSD_FromUsage(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_CachedPromptTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := apiResponse{
+			ID:    "chatcmpl-cache",
+			Model: "moonshotai/kimi-k2",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{
+				PromptTokens:        100,
+				CompletionTokens:    50,
+				TotalTokens:         150,
+				PromptTokensDetails: &llm.OAIPromptTokenDetail{CachedTokens: 80},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "moonshotai/kimi-k2",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Cached tokens are a subset of prompt_tokens and must be split out.
+	if resp.TokensUsed.CachedPrompt != 80 {
+		t.Errorf("CachedPrompt = %d, want 80", resp.TokensUsed.CachedPrompt)
+	}
+	if resp.TokensUsed.Prompt != 20 {
+		t.Errorf("Prompt = %d, want 20 (100 prompt - 80 cached)", resp.TokensUsed.Prompt)
+	}
+	if resp.TokensUsed.Total != 150 {
+		t.Errorf("Total = %d, want 150", resp.TokensUsed.Total)
+	}
+}
+
+func TestChatCompletion_NoPromptTokensDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := apiResponse{
+			ID:    "chatcmpl-nocache",
+			Model: "test-model",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "test-model",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.TokensUsed.CachedPrompt != 0 {
+		t.Errorf("CachedPrompt = %d, want 0", resp.TokensUsed.CachedPrompt)
+	}
+	if resp.TokensUsed.Prompt != 100 {
+		t.Errorf("Prompt = %d, want 100", resp.TokensUsed.Prompt)
+	}
+}
+
+func TestChatCompletionStream_CachedPromptTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			`data: {"id":"1","model":"moonshotai/kimi-k2","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n" +
+				`data: {"id":"1","model":"moonshotai/kimi-k2","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":80}}}` + "\n\n" +
+				"data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "moonshotai/kimi-k2",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(_ llm.StreamChunk) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.TokensUsed.CachedPrompt != 80 {
+		t.Errorf("CachedPrompt = %d, want 80", resp.TokensUsed.CachedPrompt)
+	}
+	if resp.TokensUsed.Prompt != 20 {
+		t.Errorf("Prompt = %d, want 20 (100 prompt - 80 cached)", resp.TokensUsed.Prompt)
+	}
+}
+
 // TestChatCompletion_NullContent verifies that a null content field is handled
 // gracefully, returning an empty content string rather than an error.
 func TestChatCompletion_NullContent(t *testing.T) {
