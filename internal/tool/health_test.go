@@ -40,6 +40,99 @@ func (c *captureEmitter) byAction(action string) []audit.Event {
 	return out
 }
 
+// fakeOAuthHandler is a minimal oauthHandler whose token state can be toggled
+// to simulate authorization completing (or breaking) between health ticks.
+type fakeOAuthHandler struct {
+	hasToken atomic.Bool
+}
+
+func (f *fakeOAuthHandler) ToolName() string                                { return "fake-oauth" }
+func (f *fakeOAuthHandler) HasToken() bool                                  { return f.hasToken.Load() }
+func (f *fakeOAuthHandler) ClearToken() error                               { return nil }
+func (f *fakeOAuthHandler) Close()                                          {}
+func (f *fakeOAuthHandler) InitiateOAuth(_ context.Context, _ string) error { return nil }
+
+func TestCheckServers_OAuthPending_WarnsOnceAcrossTicks(t *testing.T) {
+	m := NewManager(testLogger())
+	auditor := &captureEmitter{}
+	m.Auditor = auditor
+	m.servers["fastmail"] = &serverConn{
+		name:      "fastmail",
+		transport: "sse",
+		cfg:       config.ToolConfig{Auth: "oauth"},
+		// session nil + no oauthHandler => pending_auth (tokenless).
+	}
+
+	// Three ticks: the debounce should hold at exactly one audit event.
+	for i := 0; i < 3; i++ {
+		m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	}
+
+	events := auditor.byAction("oauth_pending")
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 oauth_pending audit across ticks, got %d", len(events))
+	}
+	if events[0].Category != audit.CategoryMCP || events[0].Source != "health_checker" {
+		t.Errorf("event metadata = {category:%q source:%q}, want {mcp health_checker}",
+			events[0].Category, events[0].Source)
+	}
+	if !strings.Contains(events[0].Detail, `"server":"fastmail"`) {
+		t.Errorf("Detail = %q, want server fastmail", events[0].Detail)
+	}
+}
+
+func TestCheckServers_OAuthPending_ResetsAndRewarnsAfterTokenCycles(t *testing.T) {
+	m := NewManager(testLogger())
+	auditor := &captureEmitter{}
+	m.Auditor = auditor
+	handler := &fakeOAuthHandler{}
+	m.servers["fastmail"] = &serverConn{
+		name:         "fastmail",
+		transport:    "sse",
+		cfg:          config.ToolConfig{Auth: "oauth"},
+		oauthHandler: handler,
+	}
+
+	// Tokenless: first tick warns, second tick is debounced.
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	if got := len(auditor.byAction("oauth_pending")); got != 1 {
+		t.Fatalf("after initial pending ticks, oauth_pending count = %d, want 1", got)
+	}
+
+	// Token appears (authorization completed): tick clears the warned flag.
+	handler.hasToken.Store(true)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	if got := len(auditor.byAction("oauth_pending")); got != 1 {
+		t.Fatalf("after token appears, oauth_pending count = %d, want 1 (no new warn)", got)
+	}
+
+	// Token disappears again (tool broke): the tool re-warns exactly once.
+	handler.hasToken.Store(false)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+	if got := len(auditor.byAction("oauth_pending")); got != 2 {
+		t.Fatalf("after token disappears, oauth_pending count = %d, want 2 (re-warned once)", got)
+	}
+}
+
+func TestCheckServers_NonOAuthSessionNil_NoWarn(t *testing.T) {
+	m := NewManager(testLogger())
+	auditor := &captureEmitter{}
+	m.Auditor = auditor
+	// In-process server: session nil, transport "", not an OAuth tool.
+	m.servers["in-process"] = &serverConn{
+		name: "in-process",
+		cfg:  config.ToolConfig{},
+	}
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	if got := len(auditor.byAction("oauth_pending")); got != 0 {
+		t.Errorf("non-OAuth session==nil server emitted %d oauth_pending events, want 0", got)
+	}
+}
+
 func TestServerStatus_Connected(t *testing.T) {
 	m := NewManager(testLogger())
 	m.servers["test"] = &serverConn{

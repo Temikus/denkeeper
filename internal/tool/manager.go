@@ -51,6 +51,7 @@ type serverConn struct {
 	connectedAt   time.Time // when the server was last successfully connected
 	restartCount  int       // consecutive restart attempts
 	probeFailures int       // consecutive health-probe failures (reset on healthy probe)
+	oauthWarned   bool      // true once a pending_auth OAuth warning has been emitted (reset when a token/session appears)
 	lastError     string    // most recent failure message
 	disabled      bool      // true when restarts exhausted
 	connecting    bool      // true while background init retries are in progress
@@ -1180,8 +1181,19 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		m.mu.RLock()
 		sc, ok := m.servers[name]
 		m.mu.RUnlock()
-		if !ok || sc.disabled || sc.userDisabled || sc.configError != "" || sc.transport == "" || sc.session == nil {
-			// Skip in-process, disabled, config-error, and OAuth-pending servers.
+		if !ok || sc.disabled || sc.userDisabled || sc.configError != "" {
+			// Skip disabled and config-error servers.
+			continue
+		}
+		// OAuth tools that never completed authorization sit with session==nil
+		// and are invisible to the probe path below (we deliberately do not
+		// ListTools-probe a tokenless server). Surface them in the audit log
+		// once, debounced, so a dead OAuth tool doesn't fail silently for days.
+		if sc.cfg.Auth == "oauth" {
+			m.auditOAuthPending(ctx, sc, name)
+		}
+		if sc.transport == "" || sc.session == nil {
+			// Skip in-process and not-yet-connected (incl. OAuth-pending) servers.
 			continue
 		}
 
@@ -1231,6 +1243,41 @@ func (m *Manager) auditProbeFailure(ctx context.Context, sc *serverConn, name st
 			Action:   "health_fail",
 			Summary:  fmt.Sprintf("MCP server %s health check failed", name),
 			Detail:   fmt.Sprintf(`{"server":"%s","consecutive_failures":%d}`, name, probeFailures),
+			Status:   audit.StatusError,
+			Source:   "health_checker",
+		})
+	}
+}
+
+// auditOAuthPending emits a single audit warning when an OAuth tool is stuck in
+// pending_auth (no session and no token). Emission is debounced via a
+// per-serverConn oauthWarned flag so a tool that never authorizes doesn't warn
+// on every 30s tick. The flag resets once a token/session appears so a tool
+// that later breaks again will re-warn.
+func (m *Manager) auditOAuthPending(ctx context.Context, sc *serverConn, name string) {
+	hasToken := sc.oauthHandler != nil && sc.oauthHandler.HasToken()
+
+	m.mu.Lock()
+	if sc.session != nil || hasToken {
+		// Authorization completed — clear the flag so a future breakage re-warns.
+		sc.oauthWarned = false
+		m.mu.Unlock()
+		return
+	}
+	if sc.oauthWarned {
+		m.mu.Unlock()
+		return
+	}
+	sc.oauthWarned = true
+	m.mu.Unlock()
+
+	m.logger.Warn("OAuth MCP tool stuck in pending_auth", "server", name)
+	if m.Auditor != nil {
+		m.Auditor.Emit(ctx, audit.Event{
+			Category: audit.CategoryMCP,
+			Action:   "oauth_pending",
+			Summary:  fmt.Sprintf("OAuth MCP tool %s is stuck awaiting authorization", name),
+			Detail:   fmt.Sprintf(`{"server":"%s","needs_reauth":true}`, name),
 			Status:   audit.StatusError,
 			Source:   "health_checker",
 		})
