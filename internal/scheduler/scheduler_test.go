@@ -275,6 +275,34 @@ func TestScheduler_EntriesByType(t *testing.T) {
 	}
 }
 
+func TestScheduler_EntriesByAgent(t *testing.T) {
+	s := New(discardLogger(), nil)
+
+	_ = s.Register(Config{Name: "sys1", Type: "system", Schedule: "@hourly", Enabled: true, Agent: "alice"}, func(Entry) {})
+	_ = s.Register(Config{Name: "a1", Type: "agent", Schedule: "@daily", Enabled: true, Agent: "alice"}, func(Entry) {})
+	_ = s.Register(Config{Name: "a2", Type: "agent", Schedule: "@weekly", Enabled: true, Agent: "alice"}, func(Entry) {})
+	_ = s.Register(Config{Name: "b1", Type: "agent", Schedule: "@daily", Enabled: true, Agent: "bob"}, func(Entry) {})
+
+	alice := s.EntriesByAgent("alice")
+	if len(alice) != 2 {
+		t.Errorf("EntriesByAgent(alice) = %d, want 2 (system entries excluded)", len(alice))
+	}
+	for _, e := range alice {
+		if e.Agent != "alice" || e.Type != ScheduleTypeAgent {
+			t.Errorf("EntriesByAgent(alice) returned %q (agent=%q type=%q)", e.Name, e.Agent, e.Type)
+		}
+	}
+
+	bob := s.EntriesByAgent("bob")
+	if len(bob) != 1 || bob[0].Name != "b1" {
+		t.Errorf("EntriesByAgent(bob) = %v, want [{Name:b1}]", bob)
+	}
+
+	if got := s.EntriesByAgent("nobody"); len(got) != 0 {
+		t.Errorf("EntriesByAgent(nobody) = %v, want []", got)
+	}
+}
+
 func TestScheduler_EntriesByTag(t *testing.T) {
 	s := New(discardLogger(), nil)
 

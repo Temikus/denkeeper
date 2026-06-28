@@ -403,6 +403,21 @@ func (s *Scheduler) AgentEntries() []Entry {
 	return out
 }
 
+// EntriesByAgent returns a snapshot of agent-type entries owned by the given
+// agent. Used to scope schedule listings so an agent sees only its own
+// schedules.
+func (s *Scheduler) EntriesByAgent(agent string) []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Entry
+	for _, e := range s.entries {
+		if e.Type == ScheduleTypeAgent && e.Agent == agent {
+			out = append(out, e.Entry)
+		}
+	}
+	return out
+}
+
 // EntriesByTag returns entries that carry the given tag.
 func (s *Scheduler) EntriesByTag(tag string) []Entry {
 	s.mu.RLock()

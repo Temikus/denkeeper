@@ -320,3 +320,33 @@ func TestScheduleEndpoints_RequiresScope(t *testing.T) {
 		t.Errorf("expected 403 for missing schedules:write scope, got %d", rec.Code)
 	}
 }
+
+func TestListSchedules_AgentFilter(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	for _, sc := range []scheduler.Config{
+		{Name: "alice-1", Type: "agent", Schedule: "@daily", Agent: "alice", Enabled: true},
+		{Name: "bob-1", Type: "agent", Schedule: "@daily", Agent: "bob", Enabled: true},
+	} {
+		if err := deps.Scheduler.Register(sc, func(scheduler.Entry) {}); err != nil {
+			t.Fatalf("register %s: %v", sc.Name, err)
+		}
+	}
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/schedules?agent=alice", nil)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "alice-1") {
+		t.Errorf("filtered list missing alice's schedule: %s", body)
+	}
+	if strings.Contains(body, "bob-1") {
+		t.Errorf("filtered list leaked bob's schedule: %s", body)
+	}
+}

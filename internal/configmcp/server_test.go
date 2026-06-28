@@ -438,6 +438,89 @@ func TestScheduleList_AfterAdd(t *testing.T) {
 	}
 }
 
+// registerForeignSchedule registers an agent-type schedule owned by another
+// agent directly on the shared scheduler, bypassing the per-agent tools.
+func registerForeignSchedule(t *testing.T, deps *configmcp.Deps, name, owner string) {
+	t.Helper()
+	err := deps.Sched.Register(scheduler.Config{
+		Name:     name,
+		Type:     string(scheduler.ScheduleTypeAgent),
+		Agent:    owner,
+		Schedule: "@daily",
+		Enabled:  true,
+	}, func(scheduler.Entry) {})
+	if err != nil {
+		t.Fatalf("registering foreign schedule: %v", err)
+	}
+}
+
+func TestScheduleList_ExcludesOtherAgents(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+
+	registerForeignSchedule(t, deps, "other-sched", "other-agent")
+
+	_, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name":     "mine",
+		"schedule": "@daily",
+		"channel":  "telegram:99",
+	})
+	if isErr {
+		t.Fatal("unexpected error adding own schedule")
+	}
+
+	listText, isErr := callTool(t, session, "schedule_list", map[string]any{})
+	if isErr {
+		t.Fatalf("schedule_list error: %s", listText)
+	}
+
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("parsing schedule_list: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected only own schedule, got %d: %s", len(listed), listText)
+	}
+	if listed[0]["name"] != "mine" {
+		t.Errorf("expected own schedule, got %v", listed[0]["name"])
+	}
+}
+
+func TestScheduleDelete_OtherAgentNotFound(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+	registerForeignSchedule(t, deps, "other-sched", "other-agent")
+
+	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
+		"name": "other-sched",
+	})
+	if !isErr {
+		t.Fatalf("expected not-found error deleting another agent's schedule, got: %s", text)
+	}
+	if !strings.Contains(text, "not found") {
+		t.Errorf("expected %q to mention not found", text)
+	}
+
+	// The foreign schedule must remain registered.
+	if _, ok := deps.Sched.GetEntry("other-sched"); !ok {
+		t.Error("foreign schedule was deleted across agent boundary")
+	}
+}
+
+func TestScheduleUpdate_OtherAgentNotFound(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+	registerForeignSchedule(t, deps, "other-sched", "other-agent")
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name":     "other-sched",
+		"schedule": "@hourly",
+	})
+	if !isErr {
+		t.Fatalf("expected not-found error updating another agent's schedule, got: %s", text)
+	}
+	if !strings.Contains(text, "not found") {
+		t.Errorf("expected %q to mention not found", text)
+	}
+}
+
 // --------------------------------------------------------------------------
 // Tests: tool discovery includes new tools
 // --------------------------------------------------------------------------
@@ -1712,9 +1795,11 @@ func TestScheduleUpdate_CrossAgentReassign(t *testing.T) {
 		t.Fatalf("schedule_update error: %s", text)
 	}
 
+	// After handing the schedule off to another agent it is owned by that agent
+	// and must no longer appear in this agent's owner-scoped listing.
 	listText, _ := callTool(t, session, "schedule_list", map[string]any{})
-	if !strings.Contains(listText, "other-agent") {
-		t.Errorf("expected agent to be updated to other-agent in list, got: %s", listText)
+	if strings.Contains(listText, "reassign-me") {
+		t.Errorf("reassigned schedule should leave this agent's list, got: %s", listText)
 	}
 	_ = otherHandlerCalled
 }

@@ -857,14 +857,18 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 
 // handleSchedules godoc
 // @Summary List all schedules
-// @Description Returns all registered schedule entries with their configuration, last run time, and next run time.
+// @Description Returns registered schedule entries with their configuration, last run time, and next run time. Optionally filter by owning agent via the `agent` query parameter.
 // @Tags schedules
 // @Produce json
+// @Param agent query string false "Filter to schedules owned by this agent"
 // @Security BearerAuth
 // @Success 200 {array} object "Array of schedule entries"
 // @Router /schedules [get]
-func (s *Server) handleSchedules(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	entries := s.deps.Scheduler.Entries()
+	if agent := strings.TrimSpace(r.URL.Query().Get("agent")); agent != "" {
+		entries = s.deps.Scheduler.EntriesByAgent(agent)
+	}
 
 	type scheduleInfo struct {
 		Name        string   `json:"name"`

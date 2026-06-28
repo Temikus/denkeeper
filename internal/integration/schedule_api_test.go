@@ -73,6 +73,62 @@ func TestScheduleAPI_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestScheduleAPI_ListAgentFilter(t *testing.T) {
+	h := scheduleHarness(t)
+
+	createRec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name":     "owned",
+		"schedule": "@daily",
+		"channel":  "telegram:12345",
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+
+	// Register a schedule owned by a different agent directly on the scheduler
+	// so the filter has something to exclude (the API would reject an unknown
+	// agent, so we seed it out-of-band).
+	if err := h.Scheduler.Register(scheduler.Config{
+		Name:     "foreign",
+		Type:     string(scheduler.ScheduleTypeAgent),
+		Agent:    "someone-else",
+		Schedule: "@daily",
+		Enabled:  true,
+	}, func(scheduler.Entry) {}); err != nil {
+		t.Fatalf("seeding foreign schedule: %v", err)
+	}
+
+	// Unfiltered: both agents' schedules are present.
+	allRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/schedules", nil))
+	var all []map[string]any
+	DecodeJSON(t, allRec, &all)
+	if len(all) != 2 {
+		t.Fatalf("unfiltered list = %d entries, want 2: %v", len(all), all)
+	}
+
+	// Filter to the owning agent ("default") — includes "owned", excludes "foreign".
+	ownRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/schedules?agent=default", nil))
+	if ownRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", ownRec.Code)
+	}
+	var owned []map[string]any
+	DecodeJSON(t, ownRec, &owned)
+	if len(owned) != 1 || owned[0]["name"] != "owned" {
+		t.Fatalf("?agent=default = %v, want exactly [owned] (foreign excluded)", owned)
+	}
+
+	// Filter to the other agent — returns only its schedule.
+	otherRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/schedules?agent=someone-else", nil))
+	if otherRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", otherRec.Code)
+	}
+	var other []map[string]any
+	DecodeJSON(t, otherRec, &other)
+	if len(other) != 1 || other[0]["name"] != "foreign" {
+		t.Errorf("?agent=someone-else = %v, want exactly [foreign]", other)
+	}
+}
+
 func TestScheduleAPI_CreateDuplicate_Returns409(t *testing.T) {
 	h := scheduleHarness(t)
 

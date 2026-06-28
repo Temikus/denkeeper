@@ -150,7 +150,7 @@ func (s *Server) registerTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_list",
-		Description: "Return all registered agent schedules.",
+		Description: "Return the schedules owned by you (this agent).",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, s.handleScheduleList)
 
@@ -916,7 +916,7 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 		Enabled     bool   `json:"enabled"`
 	}
 
-	entries := s.deps.Sched.AgentEntries()
+	entries := s.deps.Sched.EntriesByAgent(s.deps.AgentName)
 	summaries := make([]entrySummary, len(entries))
 	for i, e := range entries {
 		summaries[i] = entrySummary{
@@ -996,8 +996,11 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 		tags = input.Tags
 	}
 
+	// An explicitly empty agent means "keep the current owner", not "clear the
+	// owner stamp" — a schedule must always carry a concrete owning agent so it
+	// stays visible in that agent's owner-scoped listing.
 	agentName := existing.Agent
-	if input.Agent != nil {
+	if input.Agent != nil && *input.Agent != "" {
 		agentName = *input.Agent
 	}
 
@@ -1013,6 +1016,19 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 		Tags:        tags,
 		Enabled:     enabled,
 	}, ""
+}
+
+// ownsSchedule reports whether the named schedule exists and is owned by this
+// agent. Returns the entry when owned. When the schedule does not exist or
+// belongs to another agent, ok is false so callers can return an identical
+// "not found" response without leaking the existence of other agents'
+// schedules.
+func (s *Server) ownsSchedule(name string) (scheduler.Entry, bool) {
+	e, ok := s.deps.Sched.GetEntry(name)
+	if !ok || e.Agent != s.deps.AgentName {
+		return scheduler.Entry{}, false
+	}
+	return e, true
 }
 
 // resolveScheduleHandler returns the message handler for the given agent name.
@@ -1060,7 +1076,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		return toolError("name is required"), nil
 	}
 
-	existing, ok := s.deps.Sched.GetEntry(input.Name)
+	existing, ok := s.ownsSchedule(input.Name)
 	if !ok {
 		return toolError(fmt.Sprintf("schedule %q not found", input.Name)), nil
 	}
@@ -1178,7 +1194,7 @@ func (s *Server) handleScheduleDelete(ctx context.Context, req *mcp.CallToolRequ
 		return toolError("name is required"), nil
 	}
 
-	if _, ok := s.deps.Sched.GetEntry(input.Name); !ok {
+	if _, ok := s.ownsSchedule(input.Name); !ok {
 		return toolError(fmt.Sprintf("schedule %q not found", input.Name)), nil
 	}
 

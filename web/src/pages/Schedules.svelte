@@ -13,6 +13,15 @@
   let agents = []
   let loadWarning = ''
 
+  // List filter (operator view): '' = all agents. The filter drives a
+  // server-side fetch (GET /api/v1/schedules?agent=). knownAgents and
+  // hasSchedules are captured from the last unfiltered load so the filter
+  // control stays stable even when a filtered fetch returns nothing.
+  let filterAgent = ''
+  let knownAgents = []
+  let hasSchedules = false
+  let listLoading = false
+
   // Inline add/edit panel
   let showForm = false
   let editingName = null // null = add mode, string = edit mode
@@ -45,6 +54,10 @@
         api.agents().catch(() => { agErr = true; return [] }),
       ])
       schedules = sched || []
+      // Capture the full picture from this unfiltered load.
+      filterAgent = ''
+      hasSchedules = schedules.length > 0
+      knownAgents = [...new Set(schedules.map(s => s.agent || '').filter(Boolean))].sort()
       timezone = cfg?.timezone || 'UTC'
       channels = (ch || []).filter(c => !c.implicit)
       agents = ag || []
@@ -56,6 +69,19 @@
       error = e.message
     } finally {
       loading = false
+    }
+  }
+
+  // Refetch the list scoped to the selected agent via the API filter.
+  async function applyFilter() {
+    listLoading = true
+    error = ''
+    try {
+      schedules = (await api.schedules(filterAgent || undefined)) || []
+    } catch (e) {
+      error = e.message
+    } finally {
+      listLoading = false
     }
   }
 
@@ -260,13 +286,27 @@
 
   {#if loading}
     <p class="muted">Loading...</p>
-  {:else if schedules.length === 0 && !error}
+  {:else if !hasSchedules && !error}
     <p class="muted">No schedules configured. Add one to automate recurring tasks.</p>
   {:else}
+    {#if knownAgents.length > 1}
+      <div class="filter-bar">
+        <label class="filter-label">
+          Agent
+          <select bind:value={filterAgent} onchange={applyFilter} disabled={listLoading} data-testid="agent-filter">
+            <option value="">All agents</option>
+            {#each knownAgents as a}
+              <option value={a}>{a}</option>
+            {/each}
+          </select>
+        </label>
+        {#if listLoading}<span class="filter-loading">Loading…</span>{/if}
+      </div>
+    {/if}
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th><th>Expression</th><th>Skill</th>
+          <th>Name</th><th>Expression</th><th>Skill</th><th>Agent</th>
           <th>Channel</th><th>Tier</th><th>Enabled</th>
           <th>Last Run</th><th>Next Run</th><th>Actions</th>
         </tr>
@@ -277,6 +317,7 @@
             <td class="name">{s.name}</td>
             <td class="expr">{s.expression}</td>
             <td>{s.skill || '—'}</td>
+            <td>{s.agent || '—'}</td>
             <td class="expr">{s.channel || '—'}</td>
             <td>{s.session_tier || '—'}</td>
             <td>
@@ -291,6 +332,11 @@
             </td>
           </tr>
         {/each}
+        {#if schedules.length === 0 && !listLoading}
+          <tr>
+            <td colspan="10" class="muted">No schedules for {filterAgent}.</td>
+          </tr>
+        {/if}
       </tbody>
     </table>
   {/if}
@@ -325,5 +371,9 @@
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--border); margin-right: 4px; vertical-align: middle; }
   .dot.on { background: var(--success); }
   .actions { white-space: nowrap; }
+  .filter-bar { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  .filter-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+  .filter-label select { font-size: 13px; }
+  .filter-loading { font-size: 12px; color: var(--text-muted); }
   .load-warning { font-size: 12px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
 </style>

@@ -79,7 +79,7 @@ export const api = {
   deleteSkill: (agent, name) => apiFetch(`/api/v1/skills/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   // Schedules
-  schedules: () => apiFetch('/api/v1/schedules'),
+  schedules: (agent) => apiFetch(`/api/v1/schedules${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`),
   addSchedule: data => apiFetch('/api/v1/schedules', {
     method: 'POST',
     body: JSON.stringify(data),
