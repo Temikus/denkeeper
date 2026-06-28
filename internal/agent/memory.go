@@ -910,12 +910,14 @@ type ToolUsageSummary struct {
 	ServerName string `db:"server_name"   json:"server_name"`
 	CallCount  int    `db:"call_count"    json:"call_count"`
 	// ErrorCount is the total of non-ok outcomes (rejected + failed + denied),
-	// kept for backward compatibility. RejectionCount and FailureCount split it
-	// into app-level rejections (healthy tool, bad args) vs transport/exec
-	// failures so a "healthy but argued-with" tool isn't reported as broken.
+	// kept for backward compatibility. RejectionCount, FailureCount, and
+	// DenialCount split it into app-level rejections (healthy tool, bad args),
+	// transport/exec failures, and approval denials, so a "healthy but
+	// argued-with" tool isn't reported as broken.
 	ErrorCount     int     `db:"error_count"     json:"error_count"`
 	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int     `db:"failure_count"   json:"failure_count"`
+	DenialCount    int     `db:"denial_count"    json:"denial_count"`
 	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
 }
 
@@ -967,6 +969,7 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
+	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
 	              AVG(duration_ms) AS avg_duration
 	              FROM tool_calls WHERE 1=1` + timeFilter + `
 	              GROUP BY tool_name, server_name ORDER BY call_count DESC`

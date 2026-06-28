@@ -1249,13 +1249,15 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
 	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "hi"})
 
-	// Same tool: 1 ok, 3 rejected (bad args), 1 failed (transport).
+	// Same tool: 1 ok, 3 rejected (bad args), 1 failed (transport), 2 denied (approval).
 	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
 		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: true, Outcome: "ok"},
 		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
 		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
 		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
 		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "failed"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "denied"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "denied"},
 	})
 
 	summary, err := store.GetTelemetrySummary(ctx, nil, nil)
@@ -1266,8 +1268,8 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 		t.Fatalf("expected 1 tool summary, got %d", len(summary.ByTool))
 	}
 	ts := summary.ByTool[0]
-	if ts.CallCount != 5 {
-		t.Errorf("CallCount = %d, want 5", ts.CallCount)
+	if ts.CallCount != 7 {
+		t.Errorf("CallCount = %d, want 7", ts.CallCount)
 	}
 	if ts.RejectionCount != 3 {
 		t.Errorf("RejectionCount = %d, want 3", ts.RejectionCount)
@@ -1275,13 +1277,16 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 	if ts.FailureCount != 1 {
 		t.Errorf("FailureCount = %d, want 1", ts.FailureCount)
 	}
-	// ErrorCount stays the total of non-ok rows (backward compat): rejected+failed = 4.
-	if ts.ErrorCount != 4 {
-		t.Errorf("ErrorCount = %d, want 4 (rejected+failed)", ts.ErrorCount)
+	if ts.DenialCount != 2 {
+		t.Errorf("DenialCount = %d, want 2", ts.DenialCount)
 	}
-	if ts.ErrorCount != ts.RejectionCount+ts.FailureCount {
-		t.Errorf("ErrorCount (%d) should equal RejectionCount (%d) + FailureCount (%d)",
-			ts.ErrorCount, ts.RejectionCount, ts.FailureCount)
+	// ErrorCount stays the total of non-ok rows (backward compat): rejected+failed+denied = 6.
+	if ts.ErrorCount != 6 {
+		t.Errorf("ErrorCount = %d, want 6 (rejected+failed+denied)", ts.ErrorCount)
+	}
+	if ts.ErrorCount != ts.RejectionCount+ts.FailureCount+ts.DenialCount {
+		t.Errorf("ErrorCount (%d) should equal RejectionCount (%d) + FailureCount (%d) + DenialCount (%d)",
+			ts.ErrorCount, ts.RejectionCount, ts.FailureCount, ts.DenialCount)
 	}
 }
 
