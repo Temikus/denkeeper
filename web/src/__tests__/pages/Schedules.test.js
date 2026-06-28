@@ -59,6 +59,88 @@ describe('Schedules page', () => {
     })
   })
 
+  test('agent filter refetches the list scoped to one agent via the API', async () => {
+    const all = [
+      { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+      { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+    ]
+    let lastAgentParam = '__unset__'
+    server.use(
+      // Mirror the backend: honour the ?agent= query parameter.
+      http.get('/api/v1/schedules', ({ request }) => {
+        const agent = new URL(request.url).searchParams.get('agent')
+        lastAgentParam = agent
+        return HttpResponse.json(agent ? all.filter(s => s.agent === agent) : all)
+      })
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByText('alice-job')).toBeInTheDocument()
+      expect(screen.getByText('bob-job')).toBeInTheDocument()
+    })
+
+    // Filter dropdown appears because there is more than one owning agent.
+    const filter = screen.getByTestId('agent-filter')
+    await fireEvent.change(filter, { target: { value: 'alice' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('alice-job')).toBeInTheDocument()
+      expect(screen.queryByText('bob-job')).not.toBeInTheDocument()
+    })
+    // The narrowing came from a server round-trip carrying ?agent=alice.
+    expect(lastAgentParam).toBe('alice')
+
+    // Switching back to "All agents" refetches without the filter.
+    await fireEvent.change(filter, { target: { value: '' } })
+    await waitFor(() => {
+      expect(screen.getByText('bob-job')).toBeInTheDocument()
+    })
+    expect(lastAgentParam).toBeNull()
+  })
+
+  test('filter control survives an empty filtered result', async () => {
+    const all = [
+      { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+      { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+    ]
+    server.use(
+      http.get('/api/v1/schedules', ({ request }) => {
+        const agent = new URL(request.url).searchParams.get('agent')
+        // Simulate an agent with no schedules.
+        return HttpResponse.json(agent === 'alice' ? [] : all)
+      })
+    )
+
+    render(Schedules)
+    await waitFor(() => expect(screen.getByText('bob-job')).toBeInTheDocument())
+
+    const filter = screen.getByTestId('agent-filter')
+    await fireEvent.change(filter, { target: { value: 'alice' } })
+
+    await waitFor(() => {
+      expect(screen.getByText(/No schedules for alice/)).toBeInTheDocument()
+    })
+    // The filter dropdown must remain so the user can recover.
+    expect(screen.getByTestId('agent-filter')).toBeInTheDocument()
+  })
+
+  test('no agent filter shown for a single-agent list', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'solo', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+        ])
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByText('solo')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('agent-filter')).not.toBeInTheDocument()
+  })
+
   test('edit button opens pre-filled form', async () => {
     server.use(
       http.get('/api/v1/schedules', () =>

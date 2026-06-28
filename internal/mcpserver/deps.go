@@ -26,6 +26,7 @@ import (
 // server. Using an interface allows tests to inject failures.
 type ScheduleManager interface {
 	AgentEntries() []scheduler.Entry
+	EntriesByAgent(agent string) []scheduler.Entry
 	RegisterAndStart(cfg scheduler.Config, job scheduler.JobFunc) error
 	GetEntry(name string) (scheduler.Entry, bool)
 	Unregister(name string) error

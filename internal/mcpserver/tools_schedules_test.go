@@ -287,3 +287,55 @@ func TestHandleScheduleUpdate_RollbackDoubleFail(t *testing.T) {
 		t.Errorf("expected schedule name in error, got: %s", tc.Text)
 	}
 }
+
+func TestHandleScheduleList_AgentFilter(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	sched := scheduler.New(logger, time.UTC)
+
+	for _, sc := range []scheduler.Config{
+		{Name: "alice-1", Type: string(scheduler.ScheduleTypeAgent), Schedule: "0 9 * * *", Agent: "alice", Enabled: true},
+		{Name: "alice-2", Type: string(scheduler.ScheduleTypeAgent), Schedule: "0 10 * * *", Agent: "alice", Enabled: true},
+		{Name: "bob-1", Type: string(scheduler.ScheduleTypeAgent), Schedule: "0 11 * * *", Agent: "bob", Enabled: true},
+	} {
+		if err := sched.RegisterAndStart(sc, func(scheduler.Entry) {}); err != nil {
+			t.Fatalf("seed %s: %v", sc.Name, err)
+		}
+	}
+
+	s := &Server{deps: Deps{Scheduler: sched, Logger: logger}}
+	ctx := withScopes(context.Background(), []string{"admin"})
+
+	textOf := func(r *mcp.CallToolResult) string {
+		t.Helper()
+		tc, ok := r.Content[0].(*mcp.TextContent)
+		if !ok {
+			t.Fatalf("expected TextContent, got %T", r.Content[0])
+		}
+		return tc.Text
+	}
+
+	// No filter: all agents' schedules.
+	all, _, err := s.handleScheduleList(ctx, nil, scheduleListInput{})
+	if err != nil || all.IsError {
+		t.Fatalf("list all: err=%v result=%v", err, all)
+	}
+	allText := textOf(all)
+	for _, want := range []string{"alice-1", "alice-2", "bob-1"} {
+		if !strings.Contains(allText, want) {
+			t.Errorf("unfiltered list missing %q: %s", want, allText)
+		}
+	}
+
+	// Filtered to alice.
+	filtered, _, err := s.handleScheduleList(ctx, nil, scheduleListInput{Agent: "alice"})
+	if err != nil || filtered.IsError {
+		t.Fatalf("list alice: err=%v result=%v", err, filtered)
+	}
+	aliceText := textOf(filtered)
+	if !strings.Contains(aliceText, "alice-1") || !strings.Contains(aliceText, "alice-2") {
+		t.Errorf("alice list missing own schedules: %s", aliceText)
+	}
+	if strings.Contains(aliceText, "bob-1") {
+		t.Errorf("alice list leaked bob's schedule: %s", aliceText)
+	}
+}

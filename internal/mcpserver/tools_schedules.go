@@ -12,7 +12,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type scheduleListInput struct{}
+type scheduleListInput struct {
+	Agent string `json:"agent,omitempty" jsonschema:"Filter to schedules owned by this agent. Omit to list all agents' schedules."`
+}
 
 type scheduleCreateInput struct {
 	Name        string   `json:"name" jsonschema:"Schedule name"`
@@ -45,8 +47,9 @@ type scheduleDeleteInput struct {
 func (s *Server) registerScheduleTools() {
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "schedule_list",
-		Description: "List all schedules with name, cron expression, skill, agent, status, " +
-			"and last/next run times. Requires 'schedules:read' scope.",
+		Description: "List schedules with name, cron expression, skill, agent, status, " +
+			"and last/next run times. Optionally filter by owning agent via 'agent'. " +
+			"Requires 'schedules:read' scope.",
 	}, s.handleScheduleList)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -68,7 +71,7 @@ func (s *Server) registerScheduleTools() {
 	}, s.handleScheduleDelete)
 }
 
-func (s *Server) handleScheduleList(ctx context.Context, _ *mcp.CallToolRequest, _ scheduleListInput) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleScheduleList(ctx context.Context, _ *mcp.CallToolRequest, input scheduleListInput) (*mcp.CallToolResult, any, error) {
 	if err := requireScope(ctx, "schedules:read"); err != nil {
 		return err, nil, nil
 	}
@@ -89,6 +92,9 @@ func (s *Server) handleScheduleList(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 
 	entries := s.deps.Scheduler.AgentEntries()
+	if agent := strings.TrimSpace(input.Agent); agent != "" {
+		entries = s.deps.Scheduler.EntriesByAgent(agent)
+	}
 	result := make([]schedInfo, len(entries))
 	for i, e := range entries {
 		si := schedInfo{

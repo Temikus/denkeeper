@@ -73,6 +73,41 @@ func TestScheduleAPI_CreateAndList(t *testing.T) {
 	}
 }
 
+func TestScheduleAPI_ListAgentFilter(t *testing.T) {
+	h := scheduleHarness(t)
+
+	createRec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name":     "owned",
+		"schedule": "@daily",
+		"channel":  "telegram:12345",
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+
+	// Filter to the owning agent ("default") — should include the schedule.
+	ownRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/schedules?agent=default", nil))
+	if ownRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", ownRec.Code)
+	}
+	var owned []map[string]any
+	DecodeJSON(t, ownRec, &owned)
+	if len(owned) != 1 || owned[0]["name"] != "owned" {
+		t.Fatalf("?agent=default = %v, want [owned]", owned)
+	}
+
+	// Filter to another agent — should be empty.
+	otherRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/schedules?agent=someone-else", nil))
+	if otherRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", otherRec.Code)
+	}
+	var other []map[string]any
+	DecodeJSON(t, otherRec, &other)
+	if len(other) != 0 {
+		t.Errorf("?agent=someone-else = %v, want []", other)
+	}
+}
+
 func TestScheduleAPI_CreateDuplicate_Returns409(t *testing.T) {
 	h := scheduleHarness(t)
 
