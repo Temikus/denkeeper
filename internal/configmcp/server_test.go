@@ -1477,6 +1477,78 @@ func TestGetCostSummary_WithTelemetry(t *testing.T) {
 	}
 }
 
+func TestGetCostSummary_SurfacesLifetimeCost(t *testing.T) {
+	// Regression: the persistent lifetime spend (sum of ByModel costs) must be
+	// surfaced separately from the transient in-memory GlobalCost. The bug was
+	// that the handler fetched ByModel but discarded it, so the agent only saw
+	// the since-restart number.
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 0.49}
+		}
+		d.TelemetrySummary = func(_ context.Context, _ *time.Time) (*agent.TelemetrySummary, error) {
+			return &agent.TelemetrySummary{
+				ByModel: []agent.ModelCostSummary{
+					{Model: "claude-opus", Provider: "anthropic", TotalCost: 4.00},
+					{Model: "claude-haiku", Provider: "anthropic", TotalCost: 1.28},
+				},
+			}, nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result configmcp.CostSummaryData
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result.LifetimeCost != 5.28 {
+		t.Errorf("LifetimeCost = %v, want 5.28", result.LifetimeCost)
+	}
+	if result.LifetimeCost == result.GlobalCost {
+		t.Errorf("LifetimeCost (%v) must differ from transient GlobalCost (%v)",
+			result.LifetimeCost, result.GlobalCost)
+	}
+	if result.GlobalCost != 0.49 {
+		t.Errorf("GlobalCost = %v, want 0.49 (live budget number preserved)", result.GlobalCost)
+	}
+}
+
+func TestGetCostSummary_IncludesByModel(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 0.1}
+		}
+		d.TelemetrySummary = func(_ context.Context, _ *time.Time) (*agent.TelemetrySummary, error) {
+			return &agent.TelemetrySummary{
+				ByModel: []agent.ModelCostSummary{
+					{Model: "gpt-4o", Provider: "openai", TotalCost: 2.5, MessageCount: 11, TotalPrompt: 100},
+				},
+			}, nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result configmcp.CostSummaryData
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if len(result.ByModel) != 1 {
+		t.Fatalf("ByModel len = %d, want 1", len(result.ByModel))
+	}
+	got := result.ByModel[0]
+	if got.Model != "gpt-4o" || got.Provider != "openai" || got.TotalCost != 2.5 || got.MessageCount != 11 {
+		t.Errorf("ByModel[0] = %+v, want gpt-4o/openai/2.5/11", got)
+	}
+}
+
 func TestGetCostSummary_DaysFilter(t *testing.T) {
 	var gotSince *time.Time
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
@@ -1528,6 +1600,12 @@ func TestGetCostSummary_TelemetryErrorIsNonFatal(t *testing.T) {
 	if result.TelemetryError == "" {
 		t.Error("TelemetryError empty, want the lookup error")
 	}
+	if result.LifetimeCost != 0 {
+		t.Errorf("LifetimeCost = %v, want 0 on telemetry failure", result.LifetimeCost)
+	}
+	if result.ByModel != nil {
+		t.Errorf("ByModel = %+v, want nil on telemetry failure", result.ByModel)
+	}
 }
 
 func TestGetCostSummary_NoTelemetryDep(t *testing.T) {
@@ -1543,6 +1621,9 @@ func TestGetCostSummary_NoTelemetryDep(t *testing.T) {
 	}
 	if strings.Contains(text, "by_tool") || strings.Contains(text, "telemetry_error") {
 		t.Errorf("expected no telemetry keys without TelemetrySummary dep, got: %s", text)
+	}
+	if strings.Contains(text, "lifetime_cost") || strings.Contains(text, "by_model") {
+		t.Errorf("expected lifetime_cost/by_model omitted without TelemetrySummary dep, got: %s", text)
 	}
 }
 

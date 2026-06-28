@@ -1261,7 +1261,7 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 func (s *Server) registerCostTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_cost_summary",
-		Description: "Return current cost tracking data: global cost, per-session costs, budget limit, and per-tool/per-skill usage stats (call counts, error counts, average duration). Optional 'days' restricts the tool/skill stats to the last N days.",
+		Description: "Return cost tracking data. global_cost/session_costs come from the in-memory tracker — spend since the last restart, and they drive live budget enforcement. lifetime_cost/by_model/by_tool/by_skill come from persistent storage (lifetime, or the last N days when 'days' is set, and are global across all agents). by_model carries per-model cost/token totals; by_tool/by_skill carry call counts, error counts, and average duration.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {"days": {"type": "integer", "description": "Restrict per-tool/per-skill stats to the last N days (0 or absent = all time)"}}}`),
 	}, s.handleGetCostSummary)
 }
@@ -1288,6 +1288,8 @@ func (s *Server) handleGetCostSummary(ctx context.Context, req *mcp.CallToolRequ
 			// Cost data is still useful on its own — report the failure inline.
 			data.TelemetryError = err.Error()
 		} else {
+			data.ByModel = summary.ByModel
+			data.LifetimeCost = sumModelCost(summary.ByModel)
 			data.ByTool = summary.ByTool
 			data.BySkill = summary.BySkill
 		}
@@ -1298,6 +1300,15 @@ func (s *Server) handleGetCostSummary(ctx context.Context, req *mcp.CallToolRequ
 		return toolError("marshaling cost summary: " + err.Error()), nil
 	}
 	return toolText(string(out)), nil
+}
+
+// sumModelCost returns the total persistent spend across all per-model entries.
+func sumModelCost(models []agent.ModelCostSummary) float64 {
+	var total float64
+	for i := range models {
+		total += models[i].TotalCost
+	}
+	return total
 }
 
 // --------------------------------------------------------------------------
