@@ -156,11 +156,20 @@ type Deps struct {
 
 // CostSummaryData holds the data returned by the get_cost_summary tool.
 type CostSummaryData struct {
+	// GlobalCost and SessionCosts come from the in-memory CostTracker and
+	// reflect spend since the last restart only — they drive live budget
+	// enforcement. For persistent lifetime spend, use LifetimeCost/ByModel.
 	GlobalCost    float64            `json:"global_cost"`
 	MaxPerSession float64            `json:"max_per_session"`
 	SessionCosts  map[string]float64 `json:"session_costs"`
 
-	// ByTool and BySkill are populated from TelemetrySummary when available.
+	// LifetimeCost is the persistent total spend (sum of ByModel costs),
+	// lifetime or last-N-days when the 'days' filter is set. Unlike
+	// GlobalCost it survives restarts.
+	LifetimeCost float64 `json:"lifetime_cost,omitempty"`
+	// ByModel, ByTool and BySkill are populated from TelemetrySummary when
+	// available and reflect persistent storage (global across agents).
+	ByModel []agent.ModelCostSummary  `json:"by_model,omitempty"`
 	ByTool  []agent.ToolUsageSummary  `json:"by_tool,omitempty"`
 	BySkill []agent.SkillUsageSummary `json:"by_skill,omitempty"`
 	// TelemetryError is set when the telemetry lookup failed; cost fields
