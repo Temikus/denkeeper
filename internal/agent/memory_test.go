@@ -589,6 +589,72 @@ func TestAddToolCalls_Empty(t *testing.T) {
 	}
 }
 
+func TestAddToolCalls_OutcomeRoundTrip(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "used tools"})
+
+	calls := []ToolCallRecord{
+		{ToolName: "ok_tool", Round: 1, Success: true, Outcome: "ok"},
+		{ToolName: "rejected_tool", Round: 1, Success: false, Outcome: "rejected", ErrorMsg: "bad args"},
+		{ToolName: "failed_tool", Round: 1, Success: false, Outcome: "failed", ErrorMsg: "server down"},
+		{ToolName: "denied_tool", Round: 1, Success: false, Outcome: "denied", ErrorMsg: "denied"},
+	}
+	if err := store.AddToolCalls(ctx, "test:1", msgID, calls); err != nil {
+		t.Fatalf("AddToolCalls: %v", err)
+	}
+
+	got, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 tool calls, got %d", len(got))
+	}
+	want := map[string]string{
+		"ok_tool":       "ok",
+		"rejected_tool": "rejected",
+		"failed_tool":   "failed",
+		"denied_tool":   "denied",
+	}
+	for _, r := range got {
+		if want[r.ToolName] != r.Outcome {
+			t.Errorf("tool %q outcome = %q, want %q", r.ToolName, r.Outcome, want[r.ToolName])
+		}
+	}
+}
+
+func TestAddToolCalls_EmptyOutcomeDefaultsToOk(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+
+	// Outcome left empty (e.g. legacy caller).
+	if err := store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "legacy_tool", Round: 1, Success: true},
+	}); err != nil {
+		t.Fatalf("AddToolCalls: %v", err)
+	}
+
+	got, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	if len(got) != 1 || got[0].Outcome != "ok" {
+		t.Fatalf("empty Outcome should default to 'ok', got %+v", got)
+	}
+}
+
 func TestAddSkillUsages_RoundTrip(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
@@ -1169,6 +1235,100 @@ func TestGetTelemetrySummary(t *testing.T) {
 	}
 	if len(summary.BySkill) != 1 || summary.BySkill[0].SkillName != "greeting" {
 		t.Errorf("by_skill: %+v", summary.BySkill)
+	}
+}
+
+func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "hi"})
+
+	// Same tool: 1 ok, 3 rejected (bad args), 1 failed (transport).
+	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: true, Outcome: "ok"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "rejected"},
+		{ToolName: "schedule_update", ServerName: "cfg", Round: 1, Success: false, Outcome: "failed"},
+	})
+
+	summary, err := store.GetTelemetrySummary(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if len(summary.ByTool) != 1 {
+		t.Fatalf("expected 1 tool summary, got %d", len(summary.ByTool))
+	}
+	ts := summary.ByTool[0]
+	if ts.CallCount != 5 {
+		t.Errorf("CallCount = %d, want 5", ts.CallCount)
+	}
+	if ts.RejectionCount != 3 {
+		t.Errorf("RejectionCount = %d, want 3", ts.RejectionCount)
+	}
+	if ts.FailureCount != 1 {
+		t.Errorf("FailureCount = %d, want 1", ts.FailureCount)
+	}
+	// ErrorCount stays the total of non-ok rows (backward compat): rejected+failed = 4.
+	if ts.ErrorCount != 4 {
+		t.Errorf("ErrorCount = %d, want 4 (rejected+failed)", ts.ErrorCount)
+	}
+	if ts.ErrorCount != ts.RejectionCount+ts.FailureCount {
+		t.Errorf("ErrorCount (%d) should equal RejectionCount (%d) + FailureCount (%d)",
+			ts.ErrorCount, ts.RejectionCount, ts.FailureCount)
+	}
+}
+
+func TestToolCallMigration_BackfillsLegacyAndIsIdempotent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+
+	// Simulate a legacy failed row (success=0) whose outcome was defaulted to 'ok'
+	// by the ALTER, plus an already-classified 'rejected' row that must be preserved.
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg)
+		 VALUES (?, ?, 'legacy', '', 1, 0, 0, 'ok', 'old error')`, msgID, "test:1"); err != nil {
+		t.Fatalf("inserting legacy row: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg)
+		 VALUES (?, ?, 'already', '', 1, 0, 0, 'rejected', 'bad args')`, msgID, "test:1"); err != nil {
+		t.Fatalf("inserting rejected row: %v", err)
+	}
+
+	// Run migrations again (idempotency).
+	for _, m := range toolCallMigrations {
+		if _, err := store.db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			t.Fatalf("re-running migration %q: %v", m, err)
+		}
+	}
+
+	outcomes := map[string]string{}
+	rows, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	for _, r := range rows {
+		outcomes[r.ToolName] = r.Outcome
+	}
+	if outcomes["legacy"] != "failed" {
+		t.Errorf("legacy success=0 row should backfill to 'failed', got %q", outcomes["legacy"])
+	}
+	if outcomes["already"] != "rejected" {
+		t.Errorf("already-classified 'rejected' row must be preserved, got %q", outcomes["already"])
 	}
 }
 

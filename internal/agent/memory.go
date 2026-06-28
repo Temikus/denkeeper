@@ -42,16 +42,19 @@ type ConversationInfo struct {
 
 // ToolCallRecord represents a persisted tool call linked to an assistant message.
 type ToolCallRecord struct {
-	ID             int64     `db:"id"              json:"id"`
-	MessageID      int64     `db:"message_id"      json:"message_id"`
-	ConversationID string    `db:"conversation_id" json:"conversation_id"`
-	ToolName       string    `db:"tool_name"       json:"tool_name"`
-	ServerName     string    `db:"server_name"     json:"server_name"`
-	Round          int       `db:"round"           json:"round"`
-	DurationMs     int64     `db:"duration_ms"     json:"duration_ms"`
-	Success        bool      `db:"success"         json:"success"`
-	ErrorMsg       string    `db:"error_msg"       json:"error_msg,omitempty"`
-	CreatedAt      time.Time `db:"created_at"      json:"created_at"`
+	ID             int64  `db:"id"              json:"id"`
+	MessageID      int64  `db:"message_id"      json:"message_id"`
+	ConversationID string `db:"conversation_id" json:"conversation_id"`
+	ToolName       string `db:"tool_name"       json:"tool_name"`
+	ServerName     string `db:"server_name"     json:"server_name"`
+	Round          int    `db:"round"           json:"round"`
+	DurationMs     int64  `db:"duration_ms"     json:"duration_ms"`
+	Success        bool   `db:"success"         json:"success"`
+	// Outcome refines Success: "ok", "rejected" (healthy tool, bad args),
+	// "failed" (transport/exec failure), or "denied" (approval denied).
+	Outcome   string    `db:"outcome"    json:"outcome"`
+	ErrorMsg  string    `db:"error_msg"  json:"error_msg,omitempty"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
 // SkillUsageRecord represents a skill matched for a user message.
@@ -224,6 +227,16 @@ var statsMigrations = []string{
 	`ALTER TABLE conversation_stats ADD COLUMN agent TEXT NOT NULL DEFAULT ''`,
 }
 
+// toolCallMigrations adds columns to tool_calls. These run after
+// telemetryTablesSchema creates the table. The ALTER is guarded by
+// isDuplicateColumn; the UPDATE's `AND outcome='ok'` predicate makes the
+// legacy backfill idempotent so a second run never clobbers a row that has
+// already been classified (e.g. 'rejected').
+var toolCallMigrations = []string{
+	`ALTER TABLE tool_calls ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok'`,
+	`UPDATE tool_calls SET outcome='failed' WHERE success=0 AND outcome='ok'`,
+}
+
 const telemetryTablesSchema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,6 +353,11 @@ func initDB(db *sqlx.DB) error {
 		return fmt.Errorf("initializing telemetry schema: %w", err)
 	}
 	for _, m := range statsMigrations {
+		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			return fmt.Errorf("migrating schema: %w", err)
+		}
+	}
+	for _, m := range toolCallMigrations {
 		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
 			return fmt.Errorf("migrating schema: %w", err)
 		}
@@ -635,8 +653,8 @@ func (s *SQLiteMemoryStore) AddToolCalls(ctx context.Context, convID string, mes
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, error_msg)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing tool call insert: %w", err)
 	}
@@ -647,7 +665,11 @@ func (s *SQLiteMemoryStore) AddToolCalls(ctx context.Context, convID string, mes
 		if !tc.Success {
 			successInt = 0
 		}
-		if _, err := stmt.ExecContext(ctx, messageID, convID, tc.ToolName, tc.ServerName, tc.Round, tc.DurationMs, successInt, tc.ErrorMsg); err != nil {
+		outcome := tc.Outcome
+		if outcome == "" {
+			outcome = "ok"
+		}
+		if _, err := stmt.ExecContext(ctx, messageID, convID, tc.ToolName, tc.ServerName, tc.Round, tc.DurationMs, successInt, outcome, tc.ErrorMsg); err != nil {
 			return fmt.Errorf("inserting tool call %q: %w", tc.ToolName, err)
 		}
 	}
@@ -777,6 +799,7 @@ type toolCallRow struct {
 	Round          int       `db:"round"`
 	DurationMs     int64     `db:"duration_ms"`
 	Success        int       `db:"success"`
+	Outcome        string    `db:"outcome"`
 	ErrorMsg       string    `db:"error_msg"`
 	CreatedAt      time.Time `db:"created_at"`
 }
@@ -785,7 +808,7 @@ type toolCallRow struct {
 func (s *SQLiteMemoryStore) GetToolCalls(ctx context.Context, convID string) ([]ToolCallRecord, error) {
 	var rows []toolCallRow
 	err := s.db.SelectContext(ctx, &rows,
-		`SELECT id, message_id, conversation_id, tool_name, server_name, round, duration_ms, success, error_msg, created_at
+		`SELECT id, message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg, created_at
 		 FROM tool_calls WHERE conversation_id = ?
 		 ORDER BY created_at ASC`, convID)
 	if err != nil {
@@ -796,8 +819,8 @@ func (s *SQLiteMemoryStore) GetToolCalls(ctx context.Context, convID string) ([]
 		records[i] = ToolCallRecord{
 			ID: r.ID, MessageID: r.MessageID, ConversationID: r.ConversationID,
 			ToolName: r.ToolName, ServerName: r.ServerName, Round: r.Round,
-			DurationMs: r.DurationMs, Success: r.Success != 0, ErrorMsg: r.ErrorMsg,
-			CreatedAt: r.CreatedAt,
+			DurationMs: r.DurationMs, Success: r.Success != 0, Outcome: r.Outcome,
+			ErrorMsg: r.ErrorMsg, CreatedAt: r.CreatedAt,
 		}
 	}
 	return records, nil
@@ -883,11 +906,17 @@ type ModelCostSummary struct {
 
 // ToolUsageSummary aggregates tool call data per tool.
 type ToolUsageSummary struct {
-	ToolName    string  `db:"tool_name"     json:"tool_name"`
-	ServerName  string  `db:"server_name"   json:"server_name"`
-	CallCount   int     `db:"call_count"    json:"call_count"`
-	ErrorCount  int     `db:"error_count"   json:"error_count"`
-	AvgDuration float64 `db:"avg_duration"  json:"avg_duration_ms"`
+	ToolName   string `db:"tool_name"     json:"tool_name"`
+	ServerName string `db:"server_name"   json:"server_name"`
+	CallCount  int    `db:"call_count"    json:"call_count"`
+	// ErrorCount is the total of non-ok outcomes (rejected + failed + denied),
+	// kept for backward compatibility. RejectionCount and FailureCount split it
+	// into app-level rejections (healthy tool, bad args) vs transport/exec
+	// failures so a "healthy but argued-with" tool isn't reported as broken.
+	ErrorCount     int     `db:"error_count"     json:"error_count"`
+	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
+	FailureCount   int     `db:"failure_count"   json:"failure_count"`
+	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
 }
 
 // SkillUsageSummary aggregates skill usage data per skill.
@@ -936,6 +965,8 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	// Tool call frequency.
 	toolQuery := `SELECT tool_name, server_name, COUNT(*) AS call_count,
 	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
+	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
+	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              AVG(duration_ms) AS avg_duration
 	              FROM tool_calls WHERE 1=1` + timeFilter + `
 	              GROUP BY tool_name, server_name ORDER BY call_count DESC`

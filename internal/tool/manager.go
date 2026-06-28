@@ -31,6 +31,21 @@ var (
 	toolDuration metric.Float64Histogram
 )
 
+// RejectionError indicates a tool ran successfully at the transport level but
+// returned an application-level error result (IsError=true) — typically because
+// the model passed invalid or unusable arguments. It is distinct from genuine
+// execution/transport failures (server unreachable, crashed, timed out), which
+// surface as plain errors. Callers can use errors.As to classify a tool-call
+// telemetry outcome as "rejected" (healthy tool, bad args) vs "failed".
+type RejectionError struct {
+	Tool string // tool/function name that returned the error result
+	Text string // the error text the tool returned
+}
+
+func (e *RejectionError) Error() string {
+	return fmt.Sprintf("tool %q returned error: %s", e.Tool, e.Text)
+}
+
 func init() {
 	toolDuration, _ = toolMeter.Float64Histogram("denkeeper.tool.duration",
 		metric.WithDescription("Tool execution latency in seconds"),
@@ -778,6 +793,8 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 
 	var arguments map[string]any
 	if call.Function.Arguments != "" {
+		// Arg-parse failure is arguably a model-driven rejection, but we keep it
+		// as a plain "failed" error for now to keep this change tightly scoped.
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
 			err = fmt.Errorf("parsing tool arguments: %w", err)
 			span.RecordError(err)
@@ -811,7 +828,10 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	span.SetAttributes(attribute.Int("tool.result.size_bytes", len(text)))
 
 	if result.IsError {
-		err = fmt.Errorf("tool %q returned error: %s", call.Function.Name, text)
+		// App-level rejection: the tool is healthy but returned an error result
+		// (typically bad/unusable args). Surface as a typed RejectionError so
+		// telemetry can distinguish this from transport/exec failures above.
+		err = &RejectionError{Tool: call.Function.Name, Text: text}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return text, err

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -1393,6 +1394,7 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 			ToolName: tc.Function.Name,
 			Round:    round,
 			Success:  false,
+			Outcome:  "denied",
 			ErrorMsg: "denied (repeat)",
 		}
 		if e.tools != nil {
@@ -1416,6 +1418,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		ToolName: tc.Function.Name,
 		Round:    round,
 		Success:  true,
+		Outcome:  "ok",
 	}
 	if e.tools != nil {
 		record.ServerName = e.tools.ToolServer(tc.Function.Name)
@@ -1426,6 +1429,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	if supervised {
 		if outcome := e.resolveSupervisedApproval(ctx, tc, round, convID, onEvent); outcome.denied {
 			record.Success = false
+			record.Outcome = "denied"
 			record.ErrorMsg = "denied"
 			return outcome.denyText, record
 		}
@@ -1454,6 +1458,14 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		result = fmt.Sprintf("Tool error: %v", execErr)
 		record.Success = false
 		record.ErrorMsg = execErr.Error()
+		// Classify: a healthy tool that returned an error result (bad args) is a
+		// "rejected" outcome; a transport/exec failure is "failed".
+		var re *tool.RejectionError
+		if errors.As(execErr, &re) {
+			record.Outcome = "rejected"
+		} else {
+			record.Outcome = "failed"
+		}
 	} else {
 		e.logger.Info("tool execution complete", "tool", tc.Function.Name, "round", round,
 			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
