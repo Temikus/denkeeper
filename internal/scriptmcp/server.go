@@ -23,10 +23,28 @@ type Deps struct {
 	MaxOutputChars int
 	// MaxInputBytes caps the accepted input payload size.
 	MaxInputBytes int
+	// Sem bounds simultaneous VM executions. It is shared across all per-agent
+	// Script servers so the cap is process-global, protecting the shared goja
+	// heap. A nil semaphore means unbounded concurrency. Use NewSemaphore.
+	Sem chan struct{}
+	// AgentSem additionally bounds simultaneous VM executions for this one agent,
+	// so a single agent can't monopolize the global pool. Not shared between
+	// agents. A nil semaphore means no per-agent limit. Use NewSemaphore.
+	AgentSem chan struct{}
 	// PermissionTier returns the current effective tier for the agent.
 	PermissionTier func() string
 
 	Logger *slog.Logger
+}
+
+// NewSemaphore returns a concurrency semaphore bounding simultaneous VM
+// executions to n. A non-positive n returns nil, meaning unbounded. Construct
+// one per process and share it across every agent's Deps so the cap is global.
+func NewSemaphore(n int) chan struct{} {
+	if n <= 0 {
+		return nil
+	}
+	return make(chan struct{}, n)
 }
 
 // Server is the in-process Script MCP server for a single agent.

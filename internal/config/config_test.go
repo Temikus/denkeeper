@@ -2708,6 +2708,29 @@ func TestParse_ScriptEnabledByDefault(t *testing.T) {
 	if cfg.Script.MaxInputBytes != 262144 {
 		t.Errorf("max_input_bytes = %d, want 262144", cfg.Script.MaxInputBytes)
 	}
+	if cfg.Script.MaxConcurrent != 4 {
+		t.Errorf("max_concurrent = %d, want 4", cfg.Script.MaxConcurrent)
+	}
+	if cfg.Script.MaxConcurrentPerAgent != 0 {
+		t.Errorf("max_concurrent_per_agent = %d, want 0 (off)", cfg.Script.MaxConcurrentPerAgent)
+	}
+}
+
+func TestParse_ScriptMaxConcurrentExplicit(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[script]
+max_concurrent = 8
+max_concurrent_per_agent = 2
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Script.MaxConcurrent != 8 {
+		t.Errorf("max_concurrent = %d, want 8", cfg.Script.MaxConcurrent)
+	}
+	if cfg.Script.MaxConcurrentPerAgent != 2 {
+		t.Errorf("max_concurrent_per_agent = %d, want 2", cfg.Script.MaxConcurrentPerAgent)
+	}
 }
 
 func TestParse_ScriptDisabledExplicit(t *testing.T) {

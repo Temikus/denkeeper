@@ -2,6 +2,7 @@ package scriptmcp
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,107 @@ func TestRunJavaScript_DisabledNotRegistered(t *testing.T) {
 	}
 	if len(tools.Tools) != 0 {
 		t.Fatalf("expected 0 tools when disabled, got %d", len(tools.Tools))
+	}
+}
+
+func TestNewSemaphore(t *testing.T) {
+	if NewSemaphore(0) != nil {
+		t.Error("NewSemaphore(0) should be nil (unbounded)")
+	}
+	if NewSemaphore(-1) != nil {
+		t.Error("NewSemaphore(-1) should be nil (unbounded)")
+	}
+	sem := NewSemaphore(3)
+	if cap(sem) != 3 {
+		t.Errorf("cap = %d, want 3", cap(sem))
+	}
+}
+
+func TestRunJavaScript_SemaphoreBlocksWhenFull(t *testing.T) {
+	deps := defaultDeps()
+	deps.Sem = NewSemaphore(1)
+	deps.Sem <- struct{}{} // occupy the only slot so the call must wait
+
+	// Call the handler directly: passing a cancelled context through the MCP
+	// session would be rejected by the transport before reaching the handler.
+	srv := New(deps)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: the call can never acquire a slot
+
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Name:      "run_javascript",
+		Arguments: json.RawMessage(`{"code":"return 1;"}`),
+	}}
+	result, err := srv.handleRunJavaScript(ctx, req)
+	if err != nil {
+		t.Fatalf("handler returned err: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error when waiting on a full semaphore with cancelled context")
+	}
+	if !strings.Contains(extractText(result), "concurrency slot") {
+		t.Errorf("error should mention the concurrency slot: %s", extractText(result))
+	}
+}
+
+func TestRunJavaScript_AgentSemaphoreBlocksWhenFull(t *testing.T) {
+	deps := defaultDeps()
+	deps.Sem = NewSemaphore(8)      // global pool has room
+	deps.AgentSem = NewSemaphore(1) // but this agent's slot is taken
+	deps.AgentSem <- struct{}{}
+
+	srv := New(deps)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Name:      "run_javascript",
+		Arguments: json.RawMessage(`{"code":"return 1;"}`),
+	}}
+	result, err := srv.handleRunJavaScript(ctx, req)
+	if err != nil {
+		t.Fatalf("handler returned err: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error when the per-agent semaphore is full")
+	}
+	// The global slot must not have been consumed when the per-agent cap blocks.
+	if len(deps.Sem) != 0 {
+		t.Errorf("global semaphore should be untouched, len = %d", len(deps.Sem))
+	}
+}
+
+func TestRunJavaScript_BothSemaphoresReleased(t *testing.T) {
+	deps := defaultDeps()
+	deps.Sem = NewSemaphore(2)
+	deps.AgentSem = NewSemaphore(1)
+	session := newTestServer(t, deps)
+
+	for i := 0; i < 3; i++ {
+		result := callTool(t, session, "run_javascript", map[string]any{"code": `return 1;`})
+		if result.IsError {
+			t.Fatalf("call %d errored: %s", i, extractText(result))
+		}
+	}
+	if len(deps.Sem) != 0 || len(deps.AgentSem) != 0 {
+		t.Errorf("semaphores should be empty: global=%d agent=%d", len(deps.Sem), len(deps.AgentSem))
+	}
+}
+
+func TestRunJavaScript_SemaphoreSlotReleased(t *testing.T) {
+	deps := defaultDeps()
+	deps.Sem = NewSemaphore(1)
+	session := newTestServer(t, deps)
+
+	// Two sequential calls must both succeed: the first must release its slot.
+	for i := 0; i < 2; i++ {
+		result := callTool(t, session, "run_javascript", map[string]any{"code": `return 1;`})
+		if result.IsError {
+			t.Fatalf("call %d errored: %s", i, extractText(result))
+		}
+	}
+	if len(deps.Sem) != 0 {
+		t.Errorf("semaphore should be empty after calls, len = %d", len(deps.Sem))
 	}
 }
 
