@@ -38,6 +38,7 @@ type Config struct {
 	Sandbox   SandboxConfig           `toml:"sandbox"`
 	Web       WebConfig               `toml:"web"`
 	Script    ScriptConfig            `toml:"script"`
+	Skills    SkillsConfig            `toml:"skills"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
 	MCP       MCPConfig               `toml:"mcp"`
@@ -127,6 +128,15 @@ func (c *ScriptConfig) ScriptEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// SkillsConfig controls skill management (create/update via API, MCP, config MCP).
+type SkillsConfig struct {
+	// MaxBytes caps the size of a single persisted skill file (frontmatter +
+	// body). Skill content is written verbatim, so without a bound an authorized
+	// caller could exhaust disk. Default: 1048576 (1 MiB). Set negative for no
+	// limit.
+	MaxBytes int `toml:"max_bytes"`
 }
 
 // WebConfig controls built-in web search and URL fetching tools.
@@ -1486,6 +1496,9 @@ func applyScriptDefaults(cfg *Config) {
 	}
 	if cfg.Script.MaxConcurrent == 0 {
 		cfg.Script.MaxConcurrent = 4
+	}
+	if cfg.Skills.MaxBytes == 0 {
+		cfg.Skills.MaxBytes = 1048576 // 1 MiB
 	}
 }
 

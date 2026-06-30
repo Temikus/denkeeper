@@ -13,6 +13,15 @@ import (
 // Skill CRUD handlers
 // ---------------------------------------------------------------------------
 
+// skillMaxBytes returns the configured per-skill size cap, or 0 (no limit) when
+// no config is wired (e.g. in tests).
+func (s *Server) skillMaxBytes() int {
+	if s.deps.Config == nil {
+		return 0
+	}
+	return s.deps.Config.Skills.MaxBytes
+}
+
 // handleGetSkill godoc
 // @Summary Get a skill by name
 // @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent.
@@ -115,7 +124,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 
 	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body)
 
-	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.logger, payload); err != nil {
+	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.logger, payload, s.skillMaxBytes()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
 		return
 	}
@@ -199,13 +208,13 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
 
 	if isRename {
-		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.logger, skillName, payload); err != nil {
+		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.logger, skillName, payload, s.skillMaxBytes()); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
 			return
 		}
 		s.logger.Info("skill renamed via API", "agent", agentName, "old", skillName, "new", newName)
 	} else {
-		if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.logger, skillName, payload); err != nil {
+		if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.logger, skillName, payload, s.skillMaxBytes()); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("updating skill: %v", err)})
 			return
 		}

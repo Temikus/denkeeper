@@ -56,7 +56,7 @@ func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 
 		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body")
 		// Error or success are both fine; the invariant below is what matters.
-		_ = configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload)
+		_ = configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload, 0)
 
 		// Invariant 1: no regular file exists anywhere under base except the
 		// canary and files inside skillsDir.

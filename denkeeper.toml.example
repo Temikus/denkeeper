@@ -250,6 +250,16 @@ format = "text"
 # max_concurrent_per_agent = 0     # per-agent cap so one agent can't monopolize the pool (0 = off; negative = unbounded)
 
 # ---------------------------------------------------------------------------
+# Skill management
+# ---------------------------------------------------------------------------
+# Bounds skill files created/updated via the API, MCP, or config MCP. Skill
+# content is written to disk verbatim, so a size cap prevents an authorized
+# caller from exhausting disk in a single write.
+
+# [skills]
+# max_bytes = 1048576              # cap on one skill file (frontmatter + body); 1 MiB default, negative = unlimited
+
+# ---------------------------------------------------------------------------
 # Browser Automation (Docker)
 # ---------------------------------------------------------------------------
 # Full Playwright-based browser control in a hardened Docker container.

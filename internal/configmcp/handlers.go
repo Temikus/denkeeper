@@ -2,6 +2,8 @@ package configmcp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -389,7 +391,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 
 	deps := s.deps
 	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p); err != nil {
+		if err := ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p, deps.MaxSkillBytes); err != nil {
 			return err
 		}
 		if deps.SetSkillOrigin != nil {
@@ -550,7 +552,7 @@ func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename 
 	deps := s.deps
 	if isRename {
 		fn := approval.ActionFunc(func(_ context.Context, p string) error {
-			if err := ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p); err != nil {
+			if err := ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p, deps.MaxSkillBytes); err != nil {
 				return err
 			}
 			if deps.BumpSkillPatch != nil {
@@ -564,7 +566,7 @@ func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename 
 		return fn, fmt.Sprintf("Rename skill: %s → %s", oldName, effectiveName)
 	}
 	fn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, oldName, p); err != nil {
+		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, oldName, p, deps.MaxSkillBytes); err != nil {
 			return err
 		}
 		if deps.BumpSkillPatch != nil {
@@ -628,7 +630,7 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 	deps := s.deps
 	skillName := input.Name
 	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, skillName, p); err != nil {
+		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, skillName, p, deps.MaxSkillBytes); err != nil {
 			return err
 		}
 		if deps.BumpSkillPatch != nil {
@@ -1653,15 +1655,53 @@ func openSkillRoot(agentSkillsDir string) (*os.Root, error) {
 	return root, nil
 }
 
+// checkSkillPayloadSize rejects a payload larger than maxBytes. maxBytes <= 0
+// disables the check. Skill content is written verbatim, so this bounds the
+// per-file disk an authorized caller can consume in one write.
+func checkSkillPayloadSize(payload string, maxBytes int) error {
+	if maxBytes > 0 && len(payload) > maxBytes {
+		return fmt.Errorf("skill content is %d bytes, exceeds the %d-byte limit", len(payload), maxBytes)
+	}
+	return nil
+}
+
 // writeSkillFileAtomic writes payload to "<name>.md" within root via a
-// temp-file + rename, so a partial write never replaces a good file. Both
-// operations are confined to root and reject names that escape it.
+// randomized temp-file + rename, so a partial write never replaces a good file
+// and two concurrent writers to the same skill name cannot share (and corrupt)
+// one temp file. Both operations are confined to root and reject names that
+// escape it.
 func writeSkillFileAtomic(root *os.Root, name, payload string) error {
-	tmp := name + ".md.tmp"
 	final := name + ".md"
-	if err := root.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
+
+	// Unique temp name within root, created O_EXCL so it can never collide with
+	// a concurrent writer's temp file. Loader ignores it (not a *.md file).
+	var f *os.File
+	var tmp string
+	for attempt := 0; ; attempt++ {
+		var rnd [8]byte
+		if _, err := rand.Read(rnd[:]); err != nil {
+			return fmt.Errorf("generating temp skill name: %w", err)
+		}
+		tmp = ".skill-" + hex.EncodeToString(rnd[:]) + ".tmp"
+		var err error
+		f, err = root.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			break
+		}
+		if os.IsExist(err) && attempt < 8 {
+			continue
+		}
+		return fmt.Errorf("creating temp skill file: %w", err)
+	}
+
+	if _, err := f.WriteString(payload + "\n"); err != nil {
+		_ = f.Close()
 		_ = root.Remove(tmp)
 		return fmt.Errorf("writing skill file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = root.Remove(tmp)
+		return fmt.Errorf("flushing skill file: %w", err)
 	}
 	if err := root.Rename(tmp, final); err != nil {
 		_ = root.Remove(tmp)
@@ -1672,7 +1712,10 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 
 // ApplySkillCreate writes the skill file to disk and appends it to the
 // in-memory skill list.
-func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string) error {
+func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
+	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
+		return err
+	}
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
@@ -1698,7 +1741,10 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 
 // ApplySkillUpdate writes the updated skill file to disk and replaces it in
 // the in-memory skill list.
-func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skill) bool, logger skillLogger, name string, payload string) error {
+func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skill) bool, logger skillLogger, name string, payload string, maxBytes int) error {
+	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
+		return err
+	}
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
@@ -1724,7 +1770,10 @@ func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skil
 
 // ApplySkillRename writes the skill under its new name, removes the old file,
 // and updates the in-memory skill list (remove old + append new).
-func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appendSkill func(skill.Skill), logger skillLogger, oldName string, payload string) error {
+func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appendSkill func(skill.Skill), logger skillLogger, oldName string, payload string, maxBytes int) error {
+	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
+		return err
+	}
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
