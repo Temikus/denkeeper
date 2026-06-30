@@ -3,10 +3,13 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/skill"
 )
 
 // testDepsWithSkillsDir returns deps with the default engine's SkillsDir set.
@@ -345,6 +348,38 @@ func TestDeleteSkill_Success(t *testing.T) {
 
 	if rec3.Code != http.StatusNotFound {
 		t.Errorf("GET after delete: status = %d, want %d", rec3.Code, http.StatusNotFound)
+	}
+}
+
+func TestDeleteSkill_FileRemovalFailure(t *testing.T) {
+	deps := testDepsWithSkillsDir(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	e := deps.Dispatcher.Agent("default")
+	dir := e.SkillsDir()
+
+	// Seed the skill in memory and place a NON-EMPTY directory where its file
+	// would be, so the confined Remove fails with a real (non-NotExist) error.
+	e.AppendSkill(skill.Skill{Name: "stuck", Body: "x"})
+	clash := filepath.Join(dir, "stuck.md")
+	if err := os.Mkdir(clash, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clash, "child"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/default/stuck", nil)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	// Disk-first: a real file-removal error is fatal (500), not a silent 204.
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	// ... and the skill must remain in memory.
+	if _, ok := e.GetSkill("stuck"); !ok {
+		t.Error("skill must remain in memory when file removal fails")
 	}
 }
 
