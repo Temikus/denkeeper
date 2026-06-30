@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -247,8 +246,7 @@ func (s *Server) handleSkillDelete(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError(fmt.Sprintf("skill %q not found on agent %q", input.Name, input.Agent)), nil, nil
 	}
 
-	filename := filepath.Join(skillsDir, input.Name+".md")
-	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) { // #nosec G703 -- skill file path from persona_dir config
+	if err := configmcp.RemoveSkillFile(skillsDir, input.Name); err != nil {
 		s.deps.Logger.Error("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
 		return toolError("deleting skill file: " + err.Error()), nil, nil
 	}

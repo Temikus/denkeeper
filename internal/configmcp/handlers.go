@@ -1162,8 +1162,7 @@ func (s *Server) handleSkillDelete(ctx context.Context, req *mcp.CallToolRequest
 		if !deps.RemoveSkill(input.Name) {
 			return fmt.Errorf("skill %q not found", input.Name)
 		}
-		filename := filepath.Join(deps.AgentSkillsDir, input.Name+".md")
-		if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
+		if err := RemoveSkillFile(deps.AgentSkillsDir, input.Name); err != nil {
 			deps.Logger.Info("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
 		}
 		deps.Logger.Info("skill deleted via config MCP", "name", input.Name)
@@ -1604,11 +1603,49 @@ func applyOrSubmit(
 	return toolText("Done: " + summary), nil
 }
 
+// skillLogger is the minimal logging surface the skill-file helpers need.
+// *slog.Logger satisfies it.
+type skillLogger interface {
+	Info(string, ...any)
+}
+
+// openSkillRoot creates the agent skills directory if needed and returns an
+// os.Root confined to it. All skill-file IO goes through the returned root, so
+// the OS-level path resolution refuses any write or remove that escapes the
+// directory — be it ".." traversal or a symlink pointing outside. This is a
+// hard boundary enforced by the kernel/runtime, independent of (and a backstop
+// for) whatever name validation a caller may perform.
+func openSkillRoot(agentSkillsDir string) (*os.Root, error) {
+	if err := os.MkdirAll(agentSkillsDir, 0750); err != nil {
+		return nil, fmt.Errorf("creating skills directory: %w", err)
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		return nil, fmt.Errorf("opening skills directory: %w", err)
+	}
+	return root, nil
+}
+
+// writeSkillFileAtomic writes payload to "<name>.md" within root via a
+// temp-file + rename, so a partial write never replaces a good file. Both
+// operations are confined to root and reject names that escape it.
+func writeSkillFileAtomic(root *os.Root, name, payload string) error {
+	tmp := name + ".md.tmp"
+	final := name + ".md"
+	if err := root.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
+		_ = root.Remove(tmp)
+		return fmt.Errorf("writing skill file: %w", err)
+	}
+	if err := root.Rename(tmp, final); err != nil {
+		_ = root.Remove(tmp)
+		return fmt.Errorf("committing skill file: %w", err)
+	}
+	return nil
+}
+
 // ApplySkillCreate writes the skill file to disk and appends it to the
 // in-memory skill list.
-func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger interface {
-	Info(string, ...any)
-}, payload string) error {
+func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string) error {
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
@@ -1617,84 +1654,92 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 		return fmt.Errorf("skill name is required")
 	}
 
-	if err := os.MkdirAll(agentSkillsDir, 0750); err != nil {
-		return fmt.Errorf("creating skills directory: %w", err)
+	root, err := openSkillRoot(agentSkillsDir)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = root.Close() }()
 
-	filename := filepath.Join(agentSkillsDir, s.Name+".md")
-	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("writing skill file: %w", err)
-	}
-	if err := os.Rename(tmp, filename); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("committing skill file: %w", err)
+	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
+		return err
 	}
 
 	appendSkill(*s)
-	logger.Info("skill created via config MCP", "name", s.Name, "file", filename)
+	logger.Info("skill created via config MCP", "name", s.Name, "file", filepath.Join(agentSkillsDir, s.Name+".md"))
 	return nil
 }
 
 // ApplySkillUpdate writes the updated skill file to disk and replaces it in
 // the in-memory skill list.
-func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skill) bool, logger interface {
-	Info(string, ...any)
-}, name string, payload string) error {
+func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skill) bool, logger skillLogger, name string, payload string) error {
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
 
-	filename := filepath.Join(agentSkillsDir, name+".md")
-	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("writing skill file: %w", err)
+	root, err := openSkillRoot(agentSkillsDir)
+	if err != nil {
+		return err
 	}
-	if err := os.Rename(tmp, filename); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("committing skill file: %w", err)
+	defer func() { _ = root.Close() }()
+
+	if err := writeSkillFileAtomic(root, name, payload); err != nil {
+		return err
 	}
 
 	updateSkill(name, *s)
-	logger.Info("skill updated via config MCP", "name", name, "file", filename)
+	logger.Info("skill updated via config MCP", "name", name, "file", filepath.Join(agentSkillsDir, name+".md"))
 	return nil
 }
 
 // ApplySkillRename writes the skill under its new name, removes the old file,
 // and updates the in-memory skill list (remove old + append new).
-func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appendSkill func(skill.Skill), logger interface {
-	Info(string, ...any)
-}, oldName string, payload string) error {
+func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appendSkill func(skill.Skill), logger skillLogger, oldName string, payload string) error {
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
 
-	// Write new file first (crash-safe: worst case both files exist).
-	newFilename := filepath.Join(agentSkillsDir, s.Name+".md")
-	tmp := newFilename + ".tmp"
-	if err := os.WriteFile(tmp, []byte(payload+"\n"), 0600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("writing skill file: %w", err)
+	root, err := openSkillRoot(agentSkillsDir)
+	if err != nil {
+		return err
 	}
-	if err := os.Rename(tmp, newFilename); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("committing skill file: %w", err)
+	defer func() { _ = root.Close() }()
+
+	// Write new file first (crash-safe: worst case both files exist).
+	if err := writeSkillFileAtomic(root, s.Name, payload); err != nil {
+		return err
 	}
 
-	// Remove old file.
-	oldFilename := filepath.Join(agentSkillsDir, oldName+".md")
-	if err := os.Remove(oldFilename); err != nil && !os.IsNotExist(err) {
+	// Remove old file (confined to root).
+	if err := root.Remove(oldName + ".md"); err != nil && !os.IsNotExist(err) {
 		logger.Info("old skill file removal failed (new file written successfully)", "old", oldName, "new", s.Name, "error", err)
 	}
 
 	// Update in-memory: remove old, append new.
 	removeSkill(oldName)
 	appendSkill(*s)
-	logger.Info("skill renamed via config MCP", "old", oldName, "new", s.Name, "file", newFilename)
+	logger.Info("skill renamed via config MCP", "old", oldName, "new", s.Name, "file", filepath.Join(agentSkillsDir, s.Name+".md"))
+	return nil
+}
+
+// RemoveSkillFile deletes "<name>.md" from the agent's skills directory through
+// an os.Root, so the removal is confined to that directory and cannot escape it
+// via traversal or symlink. A missing file or missing directory is not an
+// error. Callers handle the in-memory removal separately.
+func RemoveSkillFile(agentSkillsDir, name string) error {
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("opening skills directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	if err := root.Remove(name + ".md"); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing skill file: %w", err)
+	}
 	return nil
 }
 

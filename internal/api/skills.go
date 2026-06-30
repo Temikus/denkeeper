@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/configmcp"
@@ -255,8 +253,7 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := filepath.Join(skillsDir, skillName+".md")
-	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) { // #nosec G703 -- skill file path from persona_dir config
+	if err := configmcp.RemoveSkillFile(skillsDir, skillName); err != nil {
 		s.logger.Error("skill removed from memory but file deletion failed", "name", skillName, "error", err)
 	}
 

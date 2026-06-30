@@ -282,9 +282,13 @@ func TestSkillUpdate_NoSkillsDir(t *testing.T) {
 }
 
 func TestSkillUpdate_PersistFailure(t *testing.T) {
-	// Point the skills dir at a path whose parent does not exist, so the
-	// disk-first write fails before any in-memory mutation happens.
-	badDir := filepath.Join(t.TempDir(), "missing", "subdir")
+	// Point the skills dir at a path that is actually a regular file, so
+	// MkdirAll/OpenRoot fail and the disk-first write errors before any
+	// in-memory mutation happens.
+	badDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badDir, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	s, e := skillServer(t, badDir)
 
 	// Seed the skill in memory only (bypassing disk).
