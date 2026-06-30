@@ -110,6 +110,15 @@ type ScriptConfig struct {
 	MaxOutputChars int `toml:"max_output_chars"`
 	// MaxInputBytes caps the accepted input payload. Default: 262144 (256 KiB).
 	MaxInputBytes int `toml:"max_input_bytes"`
+	// MaxConcurrent bounds simultaneous VM executions across all agents (the
+	// goja heap is shared with the host process, so concurrent snippets multiply
+	// allocation). 0 (or omitted) applies the default of 4; set negative for
+	// unlimited.
+	MaxConcurrent int `toml:"max_concurrent"`
+	// MaxConcurrentPerAgent additionally bounds simultaneous VM executions for a
+	// single agent, so no one agent can monopolize the global pool. Default: 0
+	// (no per-agent limit; only the global cap applies).
+	MaxConcurrentPerAgent int `toml:"max_concurrent_per_agent"`
 }
 
 // ScriptEnabled returns whether the run_javascript tool is enabled (default true).
@@ -1474,6 +1483,9 @@ func applyScriptDefaults(cfg *Config) {
 	}
 	if cfg.Script.MaxInputBytes == 0 {
 		cfg.Script.MaxInputBytes = 262144 // 256 KiB
+	}
+	if cfg.Script.MaxConcurrent == 0 {
+		cfg.Script.MaxConcurrent = 4
 	}
 }
 

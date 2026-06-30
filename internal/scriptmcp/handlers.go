@@ -55,6 +55,12 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 		input.Input = json.RawMessage("null")
 	}
 
+	release, errResult := s.acquireSlot(ctx)
+	if errResult != nil {
+		return errResult, nil
+	}
+	defer release()
+
 	vm := goja.New()
 	// Bind the raw JSON as a string and parse it inside the VM, which keeps
 	// nested data predictable rather than relying on Go→JS value coercion.
@@ -88,6 +94,40 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 		out = out[:s.deps.MaxOutputChars]
 	}
 	return toolText(out), nil
+}
+
+// acquireSlot bounds concurrency before a VM is allocated. A fresh goja VM has
+// no heap cap and shares the host process heap, so without this N concurrent
+// snippets multiply allocation toward an OOM that would take down the whole
+// single-process binary. It acquires the per-agent slot then the global slot
+// (fixed order across all callers, so no deadlock; released in reverse),
+// blocking until both free or ctx is cancelled. Returns a release func (call
+// when done) or, on cancellation, an error result.
+func (s *Server) acquireSlot(ctx context.Context) (func(), *mcp.CallToolResult) {
+	relAgent, errResult := acquireOne(ctx, s.deps.AgentSem)
+	if errResult != nil {
+		return nil, errResult
+	}
+	relGlobal, errResult := acquireOne(ctx, s.deps.Sem)
+	if errResult != nil {
+		relAgent() // release the per-agent slot already held
+		return nil, errResult
+	}
+	return func() { relGlobal(); relAgent() }, nil
+}
+
+// acquireOne blocks for a single semaphore slot or returns an error result if
+// ctx is cancelled first. A nil semaphore is treated as unbounded.
+func acquireOne(ctx context.Context, sem chan struct{}) (func(), *mcp.CallToolResult) {
+	if sem == nil {
+		return func() {}, nil
+	}
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, toolError("run_javascript cancelled while waiting for a concurrency slot: " + ctx.Err().Error())
+	}
 }
 
 // exportResult renders a goja value: strings pass through as-is; everything else is JSON.

@@ -786,6 +786,7 @@ type agentBuildCtx struct {
 	adapters        []adapter.Adapter
 	dispatcher      *agent.Dispatcher
 	auditor         audit.Emitter
+	scriptSem       chan struct{}
 	logger          *slog.Logger
 }
 
@@ -1001,7 +1002,7 @@ func connectWebMCP(ctx context.Context, agentName string, cfg *config.Config, pe
 // connectScriptMCP creates the per-agent Script MCP server (run_javascript) and
 // registers it with the agent's tool manager. The tool runs short JS snippets in
 // a sandboxed goja runtime to move deterministic formatting off the token path.
-func connectScriptMCP(ctx context.Context, agentName string, cfg *config.Config, permTier func() string, toolMgr *tool.Manager, logger *slog.Logger) error {
+func connectScriptMCP(ctx context.Context, agentName string, cfg *config.Config, permTier func() string, sem chan struct{}, toolMgr *tool.Manager, logger *slog.Logger) error {
 	if !cfg.Script.ScriptEnabled() {
 		return nil
 	}
@@ -1014,6 +1015,8 @@ func connectScriptMCP(ctx context.Context, agentName string, cfg *config.Config,
 		Timeout:        timeout,
 		MaxOutputChars: cfg.Script.MaxOutputChars,
 		MaxInputBytes:  cfg.Script.MaxInputBytes,
+		Sem:            sem,
+		AgentSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrentPerAgent),
 		PermissionTier: permTier,
 		Logger:         logger,
 	})
@@ -1290,7 +1293,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		return nil, nil, err
 	}
 
-	if err := connectScriptMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
+	if err := connectScriptMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, abc.scriptSem, agentToolMgr, abc.logger); err != nil {
 		return nil, nil, err
 	}
 
@@ -1820,6 +1823,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		adapters:        adapters,
 		dispatcher:      dispatcher,
 		auditor:         auditor,
+		scriptSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrent),
 		logger:          logger,
 	}
 
