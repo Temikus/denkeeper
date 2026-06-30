@@ -309,6 +309,13 @@ Global MCP settings.
     [web.fetch.jina]
     enabled = false                  # enable Jina Reader fallback for JS-heavy pages
 
+### [script]
+
+    enabled = true                   # enable run_javascript deterministic-compute tool
+    timeout = "2s"                   # per-call wall-clock limit
+    max_output_chars = 16000         # cap on returned result length
+    max_input_bytes = 262144         # cap on accepted input payload (256 KiB)
+
 ### [browser]
 
     enabled = false                  # enable browser automation

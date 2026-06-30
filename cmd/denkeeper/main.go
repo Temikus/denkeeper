@@ -42,6 +42,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/plugin"
 	"github.com/Temikus/denkeeper/internal/sandbox"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/scriptmcp"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -997,6 +998,36 @@ func connectWebMCP(ctx context.Context, agentName string, cfg *config.Config, pe
 	return nil
 }
 
+// connectScriptMCP creates the per-agent Script MCP server (run_javascript) and
+// registers it with the agent's tool manager. The tool runs short JS snippets in
+// a sandboxed goja runtime to move deterministic formatting off the token path.
+func connectScriptMCP(ctx context.Context, agentName string, cfg *config.Config, permTier func() string, toolMgr *tool.Manager, logger *slog.Logger) error {
+	if !cfg.Script.ScriptEnabled() {
+		return nil
+	}
+	timeout, err := time.ParseDuration(cfg.Script.Timeout)
+	if err != nil {
+		timeout = 2 * time.Second
+	}
+	srv := scriptmcp.New(scriptmcp.Deps{
+		Enabled:        cfg.Script.ScriptEnabled(),
+		Timeout:        timeout,
+		MaxOutputChars: cfg.Script.MaxOutputChars,
+		MaxInputBytes:  cfg.Script.MaxInputBytes,
+		PermissionTier: permTier,
+		Logger:         logger,
+	})
+	session, err := srv.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("starting script MCP for agent %q: %w", agentName, err)
+	}
+	if err := toolMgr.RegisterSession(ctx, "script-"+agentName, session); err != nil {
+		return fmt.Errorf("registering script MCP for agent %q: %w", agentName, err)
+	}
+	logger.Info("script MCP registered", "agent", agentName)
+	return nil
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
@@ -1256,6 +1287,10 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	seedSkillProvenance(ctx, ac.Name, sr.skills, abc.memory, abc.logger)
 
 	if err := connectWebMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
+		return nil, nil, err
+	}
+
+	if err := connectScriptMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
 		return nil, nil, err
 	}
 

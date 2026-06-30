@@ -37,6 +37,7 @@ type Config struct {
 	KV        KVConfig                `toml:"kv"`
 	Sandbox   SandboxConfig           `toml:"sandbox"`
 	Web       WebConfig               `toml:"web"`
+	Script    ScriptConfig            `toml:"script"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
 	MCP       MCPConfig               `toml:"mcp"`
@@ -92,6 +93,27 @@ type AuditConfig struct {
 
 // AuditEnabled returns whether audit logging is enabled (default: true).
 func (c *AuditConfig) AuditEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// ScriptConfig controls the in-process JavaScript execution tool (run_javascript).
+type ScriptConfig struct {
+	// Enabled controls whether run_javascript is available. Default: true.
+	// Pointer so an omitted field is distinguishable from explicit false.
+	Enabled *bool `toml:"enabled"`
+	// Timeout is the per-call wall-clock limit (Go duration). Default: "2s".
+	Timeout string `toml:"timeout"`
+	// MaxOutputChars caps the returned result length. Default: 16000.
+	MaxOutputChars int `toml:"max_output_chars"`
+	// MaxInputBytes caps the accepted input payload. Default: 262144 (256 KiB).
+	MaxInputBytes int `toml:"max_input_bytes"`
+}
+
+// ScriptEnabled returns whether the run_javascript tool is enabled (default true).
+func (c *ScriptConfig) ScriptEnabled() bool {
 	if c.Enabled == nil {
 		return true
 	}
@@ -1435,7 +1457,24 @@ func applyMiscDefaults(cfg *Config) {
 	}
 	applyAuthDefaults(cfg)
 	applyWebDefaults(cfg)
+	applyScriptDefaults(cfg)
 	applyBrowserDefaults(cfg)
+}
+
+func applyScriptDefaults(cfg *Config) {
+	if cfg.Script.Enabled == nil {
+		trueVal := true
+		cfg.Script.Enabled = &trueVal
+	}
+	if cfg.Script.Timeout == "" {
+		cfg.Script.Timeout = "2s"
+	}
+	if cfg.Script.MaxOutputChars == 0 {
+		cfg.Script.MaxOutputChars = 16000
+	}
+	if cfg.Script.MaxInputBytes == 0 {
+		cfg.Script.MaxInputBytes = 262144 // 256 KiB
+	}
 }
 
 func applyAuthDefaults(cfg *Config) {
