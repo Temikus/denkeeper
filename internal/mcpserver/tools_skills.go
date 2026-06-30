@@ -241,14 +241,16 @@ func (s *Server) handleSkillDelete(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError("skill management is not available for this agent"), nil, nil
 	}
 
-	if !e.RemoveSkill(input.Name) {
+	if _, ok := e.GetSkill(input.Name); !ok {
 		return toolError(fmt.Sprintf("skill %q not found on agent %q", input.Name, input.Agent)), nil, nil
 	}
 
+	// Disk-first: remove the file before mutating memory, so a real IO error
+	// leaves the skill intact (matching create/update/rename's semantics).
 	if err := configmcp.RemoveSkillFile(skillsDir, input.Name); err != nil {
-		s.deps.Logger.Error("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
 		return toolError("deleting skill file: " + err.Error()), nil, nil
 	}
+	e.RemoveSkill(input.Name)
 
 	return toolText("skill deleted: " + input.Name), nil, nil
 }

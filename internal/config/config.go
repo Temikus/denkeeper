@@ -1477,6 +1477,7 @@ func applyMiscDefaults(cfg *Config) {
 	applyAuthDefaults(cfg)
 	applyWebDefaults(cfg)
 	applyScriptDefaults(cfg)
+	applySkillsDefaults(cfg)
 	applyBrowserDefaults(cfg)
 }
 
@@ -1497,6 +1498,9 @@ func applyScriptDefaults(cfg *Config) {
 	if cfg.Script.MaxConcurrent == 0 {
 		cfg.Script.MaxConcurrent = 4
 	}
+}
+
+func applySkillsDefaults(cfg *Config) {
 	if cfg.Skills.MaxBytes == 0 {
 		cfg.Skills.MaxBytes = 1048576 // 1 MiB
 	}
