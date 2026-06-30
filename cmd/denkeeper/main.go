@@ -797,6 +797,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	cmcpSrv := configmcp.New(configmcp.Deps{
 		AgentName:      agentName,
 		AgentSkillsDir: skillsDir,
+		MaxSkillBytes:  abc.cfg.Skills.MaxBytes,
 		GetSkills:      e.Skills,
 		AppendSkill:    e.AppendSkill,
 		GetSkill:       e.GetSkill,

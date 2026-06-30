@@ -50,6 +50,15 @@ func validSkillName(name string) error {
 	return configmcp.ValidateSkillName(name)
 }
 
+// skillMaxBytes returns the configured per-skill size cap, or 0 (no limit) when
+// no config is wired.
+func (s *Server) skillMaxBytes() int {
+	if s.deps.Config == nil {
+		return 0
+	}
+	return s.deps.Config.Skills.MaxBytes
+}
+
 func (s *Server) registerSkillTools() {
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "skill_list",
@@ -152,7 +161,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body)
-	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.deps.Logger, payload); err != nil {
+	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.deps.Logger, payload, s.skillMaxBytes()); err != nil {
 		return toolError("creating skill: " + err.Error()), nil, nil
 	}
 
@@ -200,13 +209,13 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
 
 	if isRename {
-		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.deps.Logger, input.Name, payload); err != nil {
+		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.deps.Logger, input.Name, payload, s.skillMaxBytes()); err != nil {
 			return toolError("renaming skill: " + err.Error()), nil, nil
 		}
 		return toolText("skill renamed: " + input.Name + " → " + newName), nil, nil
 	}
 
-	if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.deps.Logger, input.Name, payload); err != nil {
+	if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.deps.Logger, input.Name, payload, s.skillMaxBytes()); err != nil {
 		return toolError("updating skill: " + err.Error()), nil, nil
 	}
 

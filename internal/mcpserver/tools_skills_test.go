@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -261,6 +262,34 @@ func TestSkillName_RejectsPathTraversal(t *testing.T) {
 	// No stray files were written above the skills directory.
 	if _, err := os.Stat(filepath.Join(dir, "..", "escape.md")); !os.IsNotExist(err) {
 		t.Error("traversal write escaped the skills directory")
+	}
+}
+
+func TestSkillCreate_SizeCapRejects(t *testing.T) {
+	dir := t.TempDir()
+	e := testEngine(t)
+	e.SetSkillDirs(dir, "")
+	dispatcher := agent.NewDispatcher(map[string]*agent.Engine{"test-agent": e}, nil, nil, testLogger())
+	s := &Server{deps: Deps{
+		Dispatcher: dispatcher,
+		Logger:     testLogger(),
+		Config:     &config.Config{Skills: config.SkillsConfig{MaxBytes: 512}},
+	}}
+
+	res, _, err := s.handleSkillCreate(writeScope(t), nil, skillCreateInput{
+		Agent: "test-agent", Name: "greet", Body: strings.Repeat("x", 2000),
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected tool error for over-cap skill body")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "greet.md")); !os.IsNotExist(statErr) {
+		t.Error("over-cap skill must not be written to disk")
+	}
+	if _, ok := e.GetSkill("greet"); ok {
+		t.Error("over-cap skill must not be registered in memory")
 	}
 }
 

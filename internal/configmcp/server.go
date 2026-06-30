@@ -36,6 +36,10 @@ type Deps struct {
 	// If empty, skill_create is disabled.
 	AgentSkillsDir string
 
+	// MaxSkillBytes caps the size of a persisted skill file. 0 or negative
+	// disables the check. Sourced from [skills] max_bytes.
+	MaxSkillBytes int
+
 	// GetSkills returns the agent's current in-memory skill list.
 	GetSkills func() []skill.Skill
 

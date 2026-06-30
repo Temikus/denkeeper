@@ -318,6 +318,10 @@ Global MCP settings.
     max_concurrent = 4               # process-global cap on simultaneous VM executions (0 = use default 4; negative = unbounded)
     max_concurrent_per_agent = 0     # per-agent cap so one agent can't monopolize the pool (0 = off; negative = unbounded)
 
+### [skills]
+
+    max_bytes = 1048576              # cap on a single persisted skill file (frontmatter + body); 1 MiB default, negative = unlimited
+
 ### [browser]
 
     enabled = false                  # enable browser automation

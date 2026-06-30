@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/configmcp"
@@ -21,11 +23,63 @@ func TestApplySkillCreate_PersistsInsideRoot(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
 	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body")
 
-	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload); err != nil {
+	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "greet.md")); err != nil {
 		t.Errorf("expected skill file inside skills dir: %v", err)
+	}
+}
+
+// TestApplySkillCreate_SizeCapRejects proves an over-limit payload is rejected
+// before any write, and the in-memory append callback is not invoked.
+func TestApplySkillCreate_SizeCapRejects(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	big := strings.Repeat("x", 5000)
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, big)
+
+	err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {
+		t.Error("appendSkill must not be called when the payload is over the cap")
+	}, ioTestLogger(), payload, 1024)
+	if err == nil {
+		t.Fatal("expected error for over-limit payload")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "greet.md")); !os.IsNotExist(statErr) {
+		t.Error("no file should be written when the payload is rejected")
+	}
+}
+
+// TestApplySkillCreate_SizeCapAllowsUnderLimit confirms a payload under the cap
+// (and the unlimited maxBytes<=0 case) is written normally.
+func TestApplySkillCreate_SizeCapAllowsUnderLimit(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "small body")
+
+	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 1<<20); err != nil {
+		t.Fatalf("under-limit create failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "greet.md")); err != nil {
+		t.Errorf("expected skill file: %v", err)
+	}
+}
+
+// TestApplySkillCreate_NoTempLeftBehind confirms the randomized temp file is
+// renamed away (or cleaned up), leaving only the final "<name>.md".
+func TestApplySkillCreate_NoTempLeftBehind(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "body")
+	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "greet.md" {
+			t.Errorf("unexpected leftover file in skills dir: %s", e.Name())
+		}
 	}
 }
 
@@ -42,7 +96,7 @@ func TestApplySkillCreate_ConfinedToRoot(t *testing.T) {
 
 	err := configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {
 		t.Error("appendSkill must not be called when the disk write is rejected")
-	}, ioTestLogger(), payload)
+	}, ioTestLogger(), payload, 0)
 	if err == nil {
 		t.Fatal("expected error: traversal write should be rejected by os.Root")
 	}
@@ -51,6 +105,51 @@ func TestApplySkillCreate_ConfinedToRoot(t *testing.T) {
 	for _, name := range []string{"escape.md", "escape.md.tmp"} {
 		if _, statErr := os.Stat(filepath.Join(base, name)); !os.IsNotExist(statErr) {
 			t.Errorf("traversal write escaped the skills directory: %s exists", name)
+		}
+	}
+}
+
+// TestApplySkillUpdate_ConcurrentSameNameNoCorruption stresses the randomized
+// temp file: many writers updating the same skill concurrently must each end
+// with a fully-written file (one of the payloads), never a torn/interleaved one.
+// Run with -race.
+func TestApplySkillUpdate_ConcurrentSameNameNoCorruption(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	const writers = 16
+
+	var wg sync.WaitGroup
+	valid := make(map[string]struct{}, writers)
+	for i := 0; i < writers; i++ {
+		body := "body-" + strings.Repeat(string(rune('a'+i)), 2000)
+		valid[body] = struct{}{}
+		payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, body)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = configmcp.ApplySkillUpdate(dir, func(string, skill.Skill) bool { return true }, ioTestLogger(), "greet", payload, 0)
+		}()
+	}
+	wg.Wait()
+
+	// The surviving file must parse and its body must be exactly one of the
+	// payloads written — proving no two writers interleaved into one file.
+	data, err := os.ReadFile(filepath.Join(dir, "greet.md"))
+	if err != nil {
+		t.Fatalf("reading final skill: %v", err)
+	}
+	parsed, err := skill.ParseFile("greet.md", data)
+	if err != nil {
+		t.Fatalf("final skill file is corrupt / unparseable: %v", err)
+	}
+	if _, ok := valid[parsed.Body]; !ok {
+		t.Errorf("final body is not any single writer's payload (torn write?): %q", parsed.Body)
+	}
+
+	// No temp files left behind.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "greet.md" {
+			t.Errorf("leftover temp file: %s", e.Name())
 		}
 	}
 }
