@@ -220,6 +220,7 @@ Every user-facing feature must include thoughtful UX treatment.
 | Audit Log | `internal/audit/` | `[audit]` |
 | Channels | `internal/agent/channel.go`, `dispatcher.go` | `[[channels]]` |
 | MCP Server | `internal/mcpserver/` | `[api.mcp_server]` |
+| Script MCP | `internal/scriptmcp/` | `[script]` |
 
 ## Non-obvious Defaults & Invariants
 
@@ -240,6 +241,7 @@ Things you can't infer by reading the code at a glance:
 - **MCP server health**: `StartHealthChecker` polls via `ListTools` every 30s. Restart defaults: `auto_restart=true`, `max_restart_attempts=3`, `restart_cooldown=5m`. `health_fail` audit events for remote (sse/http) servers are debounced: emitted only after `health_fail_threshold` consecutive probe failures (default 3); stdio servers emit on the first failure. Restart/log behavior is not debounced.
 - **Tool `enabled` field**: `ToolConfig.Enabled *bool` — `nil` (absent in TOML) defaults to `true` via `applyToolDefaults`. Explicit `enabled = false` disables without removing the config. `IsEnabled()` helper method. Config writer omits the key when true (backward compat).
 - **Graceful tool validation**: `validateTools` is non-fatal — invalid tools are auto-disabled with `Enabled = &false` and their validation error is stored in `Config.ToolWarnings`. The server starts and runs with the remaining valid tools. Invalid tools appear in the tools list with `config_error` status.
+- **`run_javascript` (Script MCP)**: in-process per-agent tool that runs a short JS snippet (goja, pure-Go ES5.1) against JSON `input` to move deterministic formatting/classification off the completion-token path. Fresh VM per call with no host globals (no network/fs/require). Bounded by `[script]` `timeout` (default `2s`, enforced via `vm.Interrupt` + ctx cancel), `max_output_chars` (16000, truncates), `max_input_bytes` (262144, rejects). Disabled in `restricted` tier. Residual risk: goja has no hard heap cap, so a runaway allocator grows process memory until the timeout fires.
 - **Supervisor config validation**: supervisor must exist, must not itself be supervised (no chaining), must not use `supervised` tier (would deadlock), and `supervisor` is only valid on supervised agents. Delete guard rejects removing an agent referenced as a supervisor. `supervisor_timeout` is a Go duration string (e.g. `"30s"`, `"1m"`); `supervisor_context_messages` is an int (0 = use default of 5).
 - **Config MCP tools** (the in-process per-agent set, not the REST API): `schedule_update`, `schedule_delete`, `set_fallback`, `get_cost_summary`, `skill_delete`, `channel_list`, `channel_switch`, `channel_info`.
 - **Shared validators** (in `internal/config`): `ValidResourceName`, `ValidProviderType`, `IsProviderReferenced` — use these when adding new CRUD endpoints to keep validation consistent.

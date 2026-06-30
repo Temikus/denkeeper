@@ -134,6 +134,7 @@ cosign verify \
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
 - **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
+- **Deterministic compute (`run_javascript`)** — per-agent in-process tool that runs a short JavaScript snippet (sandboxed goja runtime, no network/filesystem) against JSON input to transform, format, classify, or bucket data off the completion-token path; bounded by `[script]` timeout and input/output size caps (default `timeout = "2s"`, `max_output_chars = 16000`, `max_input_bytes = 262144`); disabled in restricted tier
 - **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with real-time token streaming (SSE + WebSocket), session management, approval CRUD, tool/plugin CRUD, LLM provider management, server reload/restart, and API key management
 - **Dashboard authentication** — password login (bcrypt), OAuth2/OIDC SSO (PKCE), session cookies (AES-256-GCM)
 - **OpenTelemetry observability** — Prometheus `/metrics` endpoint and optional OTLP trace export
@@ -220,6 +221,7 @@ Key sections:
 | `[otel]` | OpenTelemetry observability (Prometheus metrics, OTLP trace export) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
+| `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
 

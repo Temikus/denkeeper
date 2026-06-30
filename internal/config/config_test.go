@@ -2690,6 +2690,51 @@ func TestParse_WebEnabledByDefault(t *testing.T) {
 	}
 }
 
+func TestParse_ScriptEnabledByDefault(t *testing.T) {
+	// run_javascript should be enabled even without an explicit [script] section.
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Script.ScriptEnabled() {
+		t.Error("script.enabled should default to true")
+	}
+	if cfg.Script.Timeout != "2s" {
+		t.Errorf("timeout = %q, want %q", cfg.Script.Timeout, "2s")
+	}
+	if cfg.Script.MaxOutputChars != 16000 {
+		t.Errorf("max_output_chars = %d, want 16000", cfg.Script.MaxOutputChars)
+	}
+	if cfg.Script.MaxInputBytes != 262144 {
+		t.Errorf("max_input_bytes = %d, want 262144", cfg.Script.MaxInputBytes)
+	}
+}
+
+func TestParse_ScriptDisabledExplicit(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[script]
+enabled = false
+timeout = "5s"
+max_output_chars = 100
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Script.ScriptEnabled() {
+		t.Error("script.enabled = false should disable the tool")
+	}
+	if cfg.Script.Timeout != "5s" {
+		t.Errorf("timeout = %q, want %q", cfg.Script.Timeout, "5s")
+	}
+	if cfg.Script.MaxOutputChars != 100 {
+		t.Errorf("max_output_chars = %d, want 100", cfg.Script.MaxOutputChars)
+	}
+	// Unset field still gets its default.
+	if cfg.Script.MaxInputBytes != 262144 {
+		t.Errorf("max_input_bytes = %d, want default 262144", cfg.Script.MaxInputBytes)
+	}
+}
+
 func TestParse_WebTavilyRequiresAPIKey(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [web]

@@ -233,6 +233,21 @@ format = "text"
 # enabled = false                  # Enable Jina Reader fallback for JS-heavy pages
 
 # ---------------------------------------------------------------------------
+# Deterministic Compute — run_javascript (ENABLED BY DEFAULT)
+# ---------------------------------------------------------------------------
+# Adds the run_javascript MCP tool to every agent. Runs a short JavaScript
+# snippet (sandboxed goja runtime — no network, filesystem, or subprocess)
+# against JSON input to transform, format, classify, count, or bucket data
+# deterministically, instead of computing it in completion tokens. Useful for
+# skills that build formatted digests. Disabled in the "restricted" tier.
+
+# [script]
+# enabled          = true          # default: true (set to false to disable)
+# timeout          = "2s"          # per-call wall-clock limit
+# max_output_chars = 16000         # cap on returned result length
+# max_input_bytes  = 262144        # cap on accepted input payload (256 KiB)
+
+# ---------------------------------------------------------------------------
 # Browser Automation (Docker)
 # ---------------------------------------------------------------------------
 # Full Playwright-based browser control in a hardened Docker container.
