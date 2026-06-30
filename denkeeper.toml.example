@@ -246,6 +246,8 @@ format = "text"
 # timeout          = "2s"          # per-call wall-clock limit
 # max_output_chars = 16000         # cap on returned result length
 # max_input_bytes  = 262144        # cap on accepted input payload (256 KiB)
+# max_concurrent   = 4             # process-global cap on simultaneous VM executions (0 = default 4; negative = unbounded)
+# max_concurrent_per_agent = 0     # per-agent cap so one agent can't monopolize the pool (0 = off; negative = unbounded)
 
 # ---------------------------------------------------------------------------
 # Browser Automation (Docker)
