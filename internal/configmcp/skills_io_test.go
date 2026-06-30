@@ -29,9 +29,11 @@ func TestApplySkillCreate_PersistsInsideRoot(t *testing.T) {
 	}
 }
 
-// TestApplySkillCreate_ConfinedToRoot proves the os.Root boundary blocks a
-// traversal name at the IO layer even when name validation is bypassed (here
-// the malicious name is injected directly into the payload frontmatter).
+// TestApplySkillCreate_ConfinedToRoot proves the end-to-end invariant: a
+// traversal name injected directly into the payload frontmatter is rejected
+// (by ValidateSkillName and/or the os.Root boundary) and nothing escapes the
+// skills directory. See TestWriteSkillFileAtomic_RootBackstop (white-box) for
+// the proof that os.Root alone confines it when validation is bypassed.
 func TestApplySkillCreate_ConfinedToRoot(t *testing.T) {
 	base := t.TempDir()
 	skillsDir := filepath.Join(base, "skills")

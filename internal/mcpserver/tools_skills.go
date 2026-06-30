@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/configmcp"
@@ -43,21 +42,12 @@ type skillDeleteInput struct {
 	Name  string `json:"name" jsonschema:"Skill name to delete"`
 }
 
-// validSkillName rejects names that would escape the skills directory once
-// joined into a filesystem path. Skill names are used directly to build
-// "<skillsDir>/<name>.md", so a name containing path separators or ".." could
-// write to or delete files outside the agent's skills directory.
+// validSkillName delegates to the shared validator in configmcp so the same
+// path-safety rule applies on every surface. It runs here too for an early,
+// friendly error before any payload is built; configmcp re-checks the exact
+// name used for IO.
 func validSkillName(name string) error {
-	if name == "" || name == "." || name == ".." {
-		return fmt.Errorf("invalid skill name %q", name)
-	}
-	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		return fmt.Errorf("skill name %q must not contain path separators or %q", name, "..")
-	}
-	if filepath.Base(name) != name {
-		return fmt.Errorf("invalid skill name %q", name)
-	}
-	return nil
+	return configmcp.ValidateSkillName(name)
 }
 
 func (s *Server) registerSkillTools() {

@@ -1609,6 +1609,33 @@ type skillLogger interface {
 	Info(string, ...any)
 }
 
+// ValidateSkillName rejects names that are unsafe to use as the "<name>.md"
+// filename a skill is persisted to. It is enforced inside the shared write
+// helpers below — so every caller (REST, in-process config MCP, external MCP)
+// gets the check on the exact name used for IO, independent of any validation
+// the caller layer may also do. os.Root is the hard kernel-level backstop; this
+// is the readable first line of defence with clearer error messages.
+//
+// The check is a deliberately lenient path-safety denylist (not an allowlist of
+// permitted characters) so it never rejects an otherwise-legitimate skill name
+// that already exists on disk — it only blocks names that could escape the
+// skills directory.
+func ValidateSkillName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return fmt.Errorf("skill name %q must not contain path separators or %q", name, "..")
+	}
+	if strings.ContainsRune(name, 0) {
+		return fmt.Errorf("skill name must not contain NUL")
+	}
+	if filepath.Base(name) != name {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	return nil
+}
+
 // openSkillRoot creates the agent skills directory if needed and returns an
 // os.Root confined to it. All skill-file IO goes through the returned root, so
 // the OS-level path resolution refuses any write or remove that escapes the
@@ -1650,8 +1677,8 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
-	if s.Name == "" {
-		return fmt.Errorf("skill name is required")
+	if err := ValidateSkillName(s.Name); err != nil {
+		return err
 	}
 
 	root, err := openSkillRoot(agentSkillsDir)
@@ -1676,6 +1703,9 @@ func ApplySkillUpdate(agentSkillsDir string, updateSkill func(string, skill.Skil
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
+	if err := ValidateSkillName(name); err != nil {
+		return err
+	}
 
 	root, err := openSkillRoot(agentSkillsDir)
 	if err != nil {
@@ -1698,6 +1728,12 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 	s, err := skill.ParseFile("(runtime)", []byte(payload))
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
+	}
+	if err := ValidateSkillName(s.Name); err != nil {
+		return err
+	}
+	if err := ValidateSkillName(oldName); err != nil {
+		return err
 	}
 
 	root, err := openSkillRoot(agentSkillsDir)
@@ -1728,6 +1764,9 @@ func ApplySkillRename(agentSkillsDir string, removeSkill func(string) bool, appe
 // via traversal or symlink. A missing file or missing directory is not an
 // error. Callers handle the in-memory removal separately.
 func RemoveSkillFile(agentSkillsDir, name string) error {
+	if err := ValidateSkillName(name); err != nil {
+		return err
+	}
 	root, err := os.OpenRoot(agentSkillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
