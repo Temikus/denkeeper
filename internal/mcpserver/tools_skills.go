@@ -3,9 +3,11 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,6 +24,7 @@ type skillCreateInput struct {
 	Agent       string   `json:"agent" jsonschema:"Agent name"`
 	Name        string   `json:"name" jsonschema:"Skill name"`
 	Description string   `json:"description,omitempty" jsonschema:"Skill description"`
+	Version     string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
 	Triggers    []string `json:"triggers,omitempty" jsonschema:"Trigger keywords"`
 	Body        string   `json:"body" jsonschema:"Skill content/instructions"`
 }
@@ -29,7 +32,9 @@ type skillCreateInput struct {
 type skillUpdateInput struct {
 	Agent       string   `json:"agent" jsonschema:"Agent name"`
 	Name        string   `json:"name" jsonschema:"Skill name to update"`
+	NewName     *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
 	Description *string  `json:"description,omitempty" jsonschema:"New description"`
+	Version     *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
 	Triggers    []string `json:"triggers,omitempty" jsonschema:"New triggers"`
 	Body        *string  `json:"body,omitempty" jsonschema:"New content"`
 }
@@ -37,6 +42,23 @@ type skillUpdateInput struct {
 type skillDeleteInput struct {
 	Agent string `json:"agent" jsonschema:"Agent name"`
 	Name  string `json:"name" jsonschema:"Skill name to delete"`
+}
+
+// validSkillName rejects names that would escape the skills directory once
+// joined into a filesystem path. Skill names are used directly to build
+// "<skillsDir>/<name>.md", so a name containing path separators or ".." could
+// write to or delete files outside the agent's skills directory.
+func validSkillName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return fmt.Errorf("skill name %q must not contain path separators or %q", name, "..")
+	}
+	if filepath.Base(name) != name {
+		return fmt.Errorf("invalid skill name %q", name)
+	}
+	return nil
 }
 
 func (s *Server) registerSkillTools() {
@@ -122,23 +144,28 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Body) == "" {
 		return toolError("name and body are required"), nil, nil
 	}
+	if err := validSkillName(input.Name); err != nil {
+		return toolError(err.Error()), nil, nil
+	}
 
 	e := s.deps.Dispatcher.Agent(input.Agent)
 	if e == nil {
 		return toolError("agent not found: " + input.Agent), nil, nil
 	}
 
+	skillsDir := e.SkillsDir()
+	if skillsDir == "" {
+		return toolError("skill management is not available for this agent"), nil, nil
+	}
+
 	if _, exists := e.GetSkill(input.Name); exists {
 		return toolError(fmt.Sprintf("skill %q already exists", input.Name)), nil, nil
 	}
 
-	sk := skill.Skill{
-		Name:        input.Name,
-		Description: input.Description,
-		Triggers:    input.Triggers,
-		Body:        input.Body,
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body)
+	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.deps.Logger, payload); err != nil {
+		return toolError("creating skill: " + err.Error()), nil, nil
 	}
-	e.AppendSkill(sk)
 
 	return toolText("skill created: " + input.Name), nil, nil
 }
@@ -153,23 +180,45 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError("agent not found: " + input.Agent), nil, nil
 	}
 
+	skillsDir := e.SkillsDir()
+	if skillsDir == "" {
+		return toolError("skill management is not available for this agent"), nil, nil
+	}
+
+	if err := validSkillName(input.Name); err != nil {
+		return toolError(err.Error()), nil, nil
+	}
+
 	existing, found := e.GetSkill(input.Name)
 	if !found {
 		return toolError(fmt.Sprintf("skill %q not found on agent %q", input.Name, input.Agent)), nil, nil
 	}
 
-	if input.Description != nil {
-		existing.Description = *input.Description
-	}
-	if input.Triggers != nil {
-		existing.Triggers = input.Triggers
-	}
-	if input.Body != nil {
-		existing.Body = *input.Body
+	// Determine effective name (rename or keep).
+	newName := input.Name
+	isRename := false
+	if input.NewName != nil && strings.TrimSpace(*input.NewName) != "" && *input.NewName != input.Name {
+		newName = strings.TrimSpace(*input.NewName)
+		if err := validSkillName(newName); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
+		isRename = true
+		if _, exists := e.GetSkill(newName); exists {
+			return toolError(fmt.Sprintf("skill %q already exists", newName)), nil, nil
+		}
 	}
 
-	if !e.UpdateSkill(input.Name, existing) {
-		return toolError("update failed"), nil, nil
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
+
+	if isRename {
+		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.deps.Logger, input.Name, payload); err != nil {
+			return toolError("renaming skill: " + err.Error()), nil, nil
+		}
+		return toolText("skill renamed: " + input.Name + " → " + newName), nil, nil
+	}
+
+	if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.deps.Logger, input.Name, payload); err != nil {
+		return toolError("updating skill: " + err.Error()), nil, nil
 	}
 
 	return toolText("skill updated: " + input.Name), nil, nil
@@ -180,13 +229,28 @@ func (s *Server) handleSkillDelete(ctx context.Context, _ *mcp.CallToolRequest, 
 		return err, nil, nil
 	}
 
+	if err := validSkillName(input.Name); err != nil {
+		return toolError(err.Error()), nil, nil
+	}
+
 	e := s.deps.Dispatcher.Agent(input.Agent)
 	if e == nil {
 		return toolError("agent not found: " + input.Agent), nil, nil
 	}
 
+	skillsDir := e.SkillsDir()
+	if skillsDir == "" {
+		return toolError("skill management is not available for this agent"), nil, nil
+	}
+
 	if !e.RemoveSkill(input.Name) {
 		return toolError(fmt.Sprintf("skill %q not found on agent %q", input.Name, input.Agent)), nil, nil
+	}
+
+	filename := filepath.Join(skillsDir, input.Name+".md")
+	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) { // #nosec G703 -- skill file path from persona_dir config
+		s.deps.Logger.Error("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
+		return toolError("deleting skill file: " + err.Error()), nil, nil
 	}
 
 	return toolText("skill deleted: " + input.Name), nil, nil
