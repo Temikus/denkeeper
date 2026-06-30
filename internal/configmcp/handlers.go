@@ -1161,11 +1161,14 @@ func (s *Server) handleSkillDelete(ctx context.Context, req *mcp.CallToolRequest
 
 	deps := s.deps
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		if !deps.RemoveSkill(input.Name) {
-			return fmt.Errorf("skill %q not found", input.Name)
-		}
+		// Disk-first: remove the file before mutating memory, so a real IO
+		// error leaves the skill intact in memory and on the next reload
+		// (matching create/update/rename's persist-failure semantics).
 		if err := RemoveSkillFile(deps.AgentSkillsDir, input.Name); err != nil {
-			deps.Logger.Info("skill removed from memory but file deletion failed", "name", input.Name, "error", err)
+			return fmt.Errorf("deleting skill file: %w", err)
+		}
+		if !deps.RemoveSkill(input.Name) {
+			deps.Logger.Info("skill file removed; skill was not present in memory", "name", input.Name)
 		}
 		deps.Logger.Info("skill deleted via config MCP", "name", input.Name)
 		return nil
@@ -1655,12 +1658,17 @@ func openSkillRoot(agentSkillsDir string) (*os.Root, error) {
 	return root, nil
 }
 
-// checkSkillPayloadSize rejects a payload larger than maxBytes. maxBytes <= 0
-// disables the check. Skill content is written verbatim, so this bounds the
-// per-file disk an authorized caller can consume in one write.
+// skillFileTrailer is appended to every persisted skill file. Shared between
+// the size check and the writer so the cap reflects the exact bytes written.
+const skillFileTrailer = "\n"
+
+// checkSkillPayloadSize rejects a payload whose on-disk form (payload +
+// trailer) would exceed maxBytes. maxBytes <= 0 disables the check. Skill
+// content is written verbatim, so this bounds the per-file disk an authorized
+// caller can consume in one write.
 func checkSkillPayloadSize(payload string, maxBytes int) error {
-	if maxBytes > 0 && len(payload) > maxBytes {
-		return fmt.Errorf("skill content is %d bytes, exceeds the %d-byte limit", len(payload), maxBytes)
+	if size := len(payload) + len(skillFileTrailer); maxBytes > 0 && size > maxBytes {
+		return fmt.Errorf("skill content is %d bytes, exceeds the %d-byte limit", size, maxBytes)
 	}
 	return nil
 }
@@ -1694,7 +1702,7 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 		return fmt.Errorf("creating temp skill file: %w", err)
 	}
 
-	if _, err := f.WriteString(payload + "\n"); err != nil {
+	if _, err := f.WriteString(payload + skillFileTrailer); err != nil {
 		_ = f.Close()
 		_ = root.Remove(tmp)
 		return fmt.Errorf("writing skill file: %w", err)

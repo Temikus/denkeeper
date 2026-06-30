@@ -2716,6 +2716,27 @@ func TestParse_ScriptEnabledByDefault(t *testing.T) {
 	}
 }
 
+func TestParse_SkillsMaxBytesDefault(t *testing.T) {
+	// [skills] max_bytes should default to 1 MiB without an explicit section.
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Skills.MaxBytes != 1048576 {
+		t.Errorf("skills.max_bytes = %d, want 1048576 (1 MiB)", cfg.Skills.MaxBytes)
+	}
+}
+
+func TestParse_SkillsMaxBytesExplicit(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + "\n[skills]\nmax_bytes = -1\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Skills.MaxBytes != -1 {
+		t.Errorf("skills.max_bytes = %d, want -1 (explicit, unlimited)", cfg.Skills.MaxBytes)
+	}
+}
+
 func TestParse_ScriptMaxConcurrentExplicit(t *testing.T) {
 	cfg, err := Parse([]byte(baseConfig + `
 [script]

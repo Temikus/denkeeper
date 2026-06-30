@@ -265,6 +265,36 @@ func TestSkillName_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestSkillDelete_FileRemovalFailure_MemoryIntact(t *testing.T) {
+	dir := t.TempDir()
+	s, e := skillServer(t, dir)
+
+	// Seed the skill in memory, and place a NON-EMPTY directory where its file
+	// would be so the confined Remove fails with a real (non-NotExist) IO error.
+	e.AppendSkill(skill.Skill{Name: "greet", Body: "body"})
+	clash := filepath.Join(dir, "greet.md")
+	if err := os.Mkdir(clash, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clash, "child"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := s.handleSkillDelete(writeScope(t), nil, skillDeleteInput{
+		Agent: "test-agent", Name: "greet",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Error("expected tool error when the file removal fails")
+	}
+	// Disk-first: memory must still hold the skill.
+	if _, ok := e.GetSkill("greet"); !ok {
+		t.Error("skill must remain in memory when file removal fails")
+	}
+}
+
 func TestSkillCreate_SizeCapRejects(t *testing.T) {
 	dir := t.TempDir()
 	e := testEngine(t)

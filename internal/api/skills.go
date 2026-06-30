@@ -237,6 +237,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 // @Param name path string true "Skill name"
 // @Success 204 "Skill deleted"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
+// @Failure 500 {object} map[string]string "File deletion failed"
 // @Failure 503 {object} map[string]string "Skill management unavailable"
 // @Router /skills/{agent}/{name} [delete]
 func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
@@ -257,14 +258,20 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !e.RemoveSkill(skillName) {
+	if _, ok := e.GetSkill(skillName); !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("skill %q not found", skillName)})
 		return
 	}
 
+	// Disk-first: remove the file before mutating memory, so a real IO error
+	// leaves the skill intact in memory and on the next reload (matching
+	// create/update, which return 500 and leave state unchanged on persist
+	// failure).
 	if err := configmcp.RemoveSkillFile(skillsDir, skillName); err != nil {
-		s.logger.Error("skill removed from memory but file deletion failed", "name", skillName, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("deleting skill file: %v", err)})
+		return
 	}
+	e.RemoveSkill(skillName)
 
 	s.logger.Info("skill deleted via API", "agent", agentName, "name", skillName)
 	w.WriteHeader(http.StatusNoContent)
