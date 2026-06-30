@@ -58,7 +58,9 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	vm := goja.New()
 	// Bind the raw JSON as a string and parse it inside the VM, which keeps
 	// nested data predictable rather than relying on Go→JS value coercion.
-	vm.Set("__denkeeper_input_json", string(input.Input)) //nolint:errcheck
+	if err := vm.Set("__denkeeper_input_json", string(input.Input)); err != nil {
+		return toolError("failed to bind input: " + err.Error()), nil
+	}
 
 	// Wall-clock guard: interrupt the VM after the timeout. Honors ctx cancellation too.
 	done := make(chan struct{})
