@@ -759,11 +759,17 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 		return
 	}
 
-	// Persist tool call records.
+	// Persist tool call records. Attribute each to the owning skill+version
+	// when the turn has a single unambiguous owner (see attributeSkill).
 	toolErrors := 0
-	for _, r := range toolRecords {
-		if !r.Success {
+	skillName, skillVersion, attributed := attributeSkill(matched, msg)
+	for i := range toolRecords {
+		if !toolRecords[i].Success {
 			toolErrors++
+		}
+		if attributed {
+			toolRecords[i].SkillName = skillName
+			toolRecords[i].SkillVersion = skillVersion
 		}
 	}
 	if err := store.AddToolCalls(ctx, convID, assistMsgID, toolRecords); err != nil {
@@ -775,8 +781,9 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 		records := make([]SkillUsageRecord, len(matched))
 		for i, s := range matched {
 			records[i] = SkillUsageRecord{
-				SkillName: s.Name,
-				MatchType: classifySkillMatch(s, msg),
+				SkillName:    s.Name,
+				SkillVersion: s.Version,
+				MatchType:    classifySkillMatch(s, msg),
 			}
 		}
 		if err := store.AddSkillUsages(ctx, convID, userMsgID, records); err != nil {
@@ -806,6 +813,27 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 	if err := store.UpdateConversationStats(ctx, convID, e.name, assistMsg, len(toolRecords), toolErrors); err != nil {
 		e.logger.Warn("failed to update conversation stats", "error", err, "conversation", convID)
 	}
+}
+
+// attributeSkill picks the single skill that owns a turn's tool calls, so
+// tool telemetry can be keyed by (skill, version). Ownership must be
+// unambiguous: an explicit invocation (scheduled run or command, msg.SkillName)
+// wins; otherwise a lone matched skill is used. When zero or multiple skills
+// matched an interactive turn, ownership is ambiguous and the calls are left
+// unattributed (ok=false) rather than guessed at.
+func attributeSkill(matched []skill.Skill, msg adapter.IncomingMessage) (name, version string, ok bool) {
+	if msg.SkillName != "" {
+		for _, s := range matched {
+			if s.Name == msg.SkillName {
+				return s.Name, s.Version, true
+			}
+		}
+		return "", "", false
+	}
+	if len(matched) == 1 {
+		return matched[0].Name, matched[0].Version, true
+	}
+	return "", "", false
 }
 
 // classifySkillMatch determines the match type for a skill.

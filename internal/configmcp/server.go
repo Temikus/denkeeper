@@ -176,6 +176,9 @@ type CostSummaryData struct {
 	ByModel []agent.ModelCostSummary  `json:"by_model,omitempty"`
 	ByTool  []agent.ToolUsageSummary  `json:"by_tool,omitempty"`
 	BySkill []agent.SkillUsageSummary `json:"by_skill,omitempty"`
+	// ByToolSkill breaks tool reliability down per owning (skill, version) so a
+	// skill's tool behaviour can be compared across versions.
+	ByToolSkill []agent.ToolSkillUsageSummary `json:"by_tool_skill,omitempty"`
 	// TelemetryError is set when the telemetry lookup failed; cost fields
 	// above are still valid.
 	TelemetryError string `json:"telemetry_error,omitempty"`

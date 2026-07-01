@@ -4437,3 +4437,38 @@ func TestReview_TimeoutBounded(t *testing.T) {
 	e.maybeRunReview("conv-1", true, false)
 	time.Sleep(200 * time.Millisecond) // let goroutine finish
 }
+
+func TestAttributeSkill_ScheduledInvocationWins(t *testing.T) {
+	matched := []skill.Skill{
+		{Name: "heartbeat", Version: "1.5.2"},
+		{Name: "always-on", Version: "0.1.0"},
+	}
+	name, version, ok := attributeSkill(matched, adapter.IncomingMessage{SkillName: "heartbeat"})
+	if !ok || name != "heartbeat" || version != "1.5.2" {
+		t.Errorf("got (%q, %q, %v), want (heartbeat, 1.5.2, true)", name, version, ok)
+	}
+}
+
+func TestAttributeSkill_ScheduledButNotMatched(t *testing.T) {
+	// Explicit invocation but the named skill isn't in matched — don't guess.
+	_, _, ok := attributeSkill([]skill.Skill{{Name: "other", Version: "1.0.0"}}, adapter.IncomingMessage{SkillName: "heartbeat"})
+	if ok {
+		t.Error("ok = true, want false when named skill absent from matched")
+	}
+}
+
+func TestAttributeSkill_SingleMatch(t *testing.T) {
+	name, version, ok := attributeSkill([]skill.Skill{{Name: "self-audit", Version: "1.2.0"}}, adapter.IncomingMessage{})
+	if !ok || name != "self-audit" || version != "1.2.0" {
+		t.Errorf("got (%q, %q, %v), want (self-audit, 1.2.0, true)", name, version, ok)
+	}
+}
+
+func TestAttributeSkill_AmbiguousAndEmpty(t *testing.T) {
+	if _, _, ok := attributeSkill([]skill.Skill{{Name: "a"}, {Name: "b"}}, adapter.IncomingMessage{}); ok {
+		t.Error("multi-match interactive turn should be unattributed (ok=false)")
+	}
+	if _, _, ok := attributeSkill(nil, adapter.IncomingMessage{}); ok {
+		t.Error("zero-match turn should be unattributed (ok=false)")
+	}
+}

@@ -52,9 +52,14 @@ type ToolCallRecord struct {
 	Success        bool   `db:"success"         json:"success"`
 	// Outcome refines Success: "ok", "rejected" (healthy tool, bad args),
 	// "failed" (transport/exec failure), or "denied" (approval denied).
-	Outcome   string    `db:"outcome"    json:"outcome"`
-	ErrorMsg  string    `db:"error_msg"  json:"error_msg,omitempty"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	Outcome string `db:"outcome"    json:"outcome"`
+	// SkillName / SkillVersion identify the skill that owned the turn this
+	// call ran under, when ownership is unambiguous (single-skill/scheduled
+	// turns). Blank for interactive multi-match or unmatched turns.
+	SkillName    string    `db:"skill_name"    json:"skill_name,omitempty"`
+	SkillVersion string    `db:"skill_version" json:"skill_version,omitempty"`
+	ErrorMsg     string    `db:"error_msg"  json:"error_msg,omitempty"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 }
 
 // SkillUsageRecord represents a skill matched for a user message.
@@ -63,6 +68,7 @@ type SkillUsageRecord struct {
 	MessageID      int64     `db:"message_id"      json:"message_id"`
 	ConversationID string    `db:"conversation_id" json:"conversation_id"`
 	SkillName      string    `db:"skill_name"      json:"skill_name"`
+	SkillVersion   string    `db:"skill_version"   json:"skill_version,omitempty"`
 	MatchType      string    `db:"match_type"      json:"match_type"`
 	CreatedAt      time.Time `db:"created_at"      json:"created_at"`
 }
@@ -235,6 +241,15 @@ var statsMigrations = []string{
 var toolCallMigrations = []string{
 	`ALTER TABLE tool_calls ADD COLUMN outcome TEXT NOT NULL DEFAULT 'ok'`,
 	`UPDATE tool_calls SET outcome='failed' WHERE success=0 AND outcome='ok'`,
+	`ALTER TABLE tool_calls ADD COLUMN skill_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tool_calls ADD COLUMN skill_version TEXT NOT NULL DEFAULT ''`,
+}
+
+// messageSkillsMigrations adds columns to message_skills. Guarded by
+// isDuplicateColumn like the others. Historical rows get ” (unknown version);
+// attribution is forward-looking only.
+var messageSkillsMigrations = []string{
+	`ALTER TABLE message_skills ADD COLUMN skill_version TEXT NOT NULL DEFAULT ''`,
 }
 
 const telemetryTablesSchema = `
@@ -248,6 +263,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     duration_ms INTEGER DEFAULT 0,
     success INTEGER NOT NULL DEFAULT 1,
     error_msg TEXT NOT NULL DEFAULT '',
+    skill_name TEXT NOT NULL DEFAULT '',
+    skill_version TEXT NOT NULL DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_msg ON tool_calls(message_id);
@@ -258,6 +275,7 @@ CREATE TABLE IF NOT EXISTS message_skills (
     message_id INTEGER NOT NULL REFERENCES messages(id),
     conversation_id TEXT NOT NULL,
     skill_name TEXT NOT NULL,
+    skill_version TEXT NOT NULL DEFAULT '',
     match_type TEXT NOT NULL DEFAULT 'always',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -339,28 +357,36 @@ SELECT id, content, role, conversation_id FROM messages
 WHERE id NOT IN (SELECT rowid FROM messages_fts)
 `
 
+// applyMigrations runs a set of idempotent ALTER/UPDATE statements, tolerating
+// duplicate-column errors so re-running against a migrated DB is safe.
+func applyMigrations(db *sqlx.DB, migrations []string) error {
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			return fmt.Errorf("migrating schema: %w", err)
+		}
+	}
+	return nil
+}
+
 // initDB runs the base schema then applies telemetry migrations.
 func initDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
 	}
-	for _, m := range telemetryMigrations {
-		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
-			return fmt.Errorf("migrating schema: %w", err)
-		}
+	if err := applyMigrations(db, telemetryMigrations); err != nil {
+		return err
 	}
 	if _, err := db.Exec(telemetryTablesSchema); err != nil {
 		return fmt.Errorf("initializing telemetry schema: %w", err)
 	}
-	for _, m := range statsMigrations {
-		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
-			return fmt.Errorf("migrating schema: %w", err)
-		}
+	if err := applyMigrations(db, statsMigrations); err != nil {
+		return err
 	}
-	for _, m := range toolCallMigrations {
-		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
-			return fmt.Errorf("migrating schema: %w", err)
-		}
+	if err := applyMigrations(db, toolCallMigrations); err != nil {
+		return err
+	}
+	if err := applyMigrations(db, messageSkillsMigrations); err != nil {
+		return err
 	}
 	if _, err := db.Exec(channelSchema); err != nil {
 		return fmt.Errorf("initializing channel schema: %w", err)
@@ -653,8 +679,8 @@ func (s *SQLiteMemoryStore) AddToolCalls(ctx context.Context, convID string, mes
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, skill_name, skill_version, error_msg)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing tool call insert: %w", err)
 	}
@@ -669,7 +695,7 @@ func (s *SQLiteMemoryStore) AddToolCalls(ctx context.Context, convID string, mes
 		if outcome == "" {
 			outcome = "ok"
 		}
-		if _, err := stmt.ExecContext(ctx, messageID, convID, tc.ToolName, tc.ServerName, tc.Round, tc.DurationMs, successInt, outcome, tc.ErrorMsg); err != nil {
+		if _, err := stmt.ExecContext(ctx, messageID, convID, tc.ToolName, tc.ServerName, tc.Round, tc.DurationMs, successInt, outcome, tc.SkillName, tc.SkillVersion, tc.ErrorMsg); err != nil {
 			return fmt.Errorf("inserting tool call %q: %w", tc.ToolName, err)
 		}
 	}
@@ -688,15 +714,15 @@ func (s *SQLiteMemoryStore) AddSkillUsages(ctx context.Context, convID string, m
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO message_skills (message_id, conversation_id, skill_name, match_type)
-		 VALUES (?, ?, ?, ?)`)
+		`INSERT INTO message_skills (message_id, conversation_id, skill_name, skill_version, match_type)
+		 VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing skill usage insert: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
 	for _, su := range skills {
-		if _, err := stmt.ExecContext(ctx, messageID, convID, su.SkillName, su.MatchType); err != nil {
+		if _, err := stmt.ExecContext(ctx, messageID, convID, su.SkillName, su.SkillVersion, su.MatchType); err != nil {
 			return fmt.Errorf("inserting skill usage %q: %w", su.SkillName, err)
 		}
 	}
@@ -800,6 +826,8 @@ type toolCallRow struct {
 	DurationMs     int64     `db:"duration_ms"`
 	Success        int       `db:"success"`
 	Outcome        string    `db:"outcome"`
+	SkillName      string    `db:"skill_name"`
+	SkillVersion   string    `db:"skill_version"`
 	ErrorMsg       string    `db:"error_msg"`
 	CreatedAt      time.Time `db:"created_at"`
 }
@@ -808,7 +836,7 @@ type toolCallRow struct {
 func (s *SQLiteMemoryStore) GetToolCalls(ctx context.Context, convID string) ([]ToolCallRecord, error) {
 	var rows []toolCallRow
 	err := s.db.SelectContext(ctx, &rows,
-		`SELECT id, message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, error_msg, created_at
+		`SELECT id, message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, skill_name, skill_version, error_msg, created_at
 		 FROM tool_calls WHERE conversation_id = ?
 		 ORDER BY created_at ASC`, convID)
 	if err != nil {
@@ -820,6 +848,7 @@ func (s *SQLiteMemoryStore) GetToolCalls(ctx context.Context, convID string) ([]
 			ID: r.ID, MessageID: r.MessageID, ConversationID: r.ConversationID,
 			ToolName: r.ToolName, ServerName: r.ServerName, Round: r.Round,
 			DurationMs: r.DurationMs, Success: r.Success != 0, Outcome: r.Outcome,
+			SkillName: r.SkillName, SkillVersion: r.SkillVersion,
 			ErrorMsg: r.ErrorMsg, CreatedAt: r.CreatedAt,
 		}
 	}
@@ -891,6 +920,10 @@ type TelemetrySummary struct {
 	ByModel []ModelCostSummary  `json:"by_model"`
 	ByTool  []ToolUsageSummary  `json:"by_tool"`
 	BySkill []SkillUsageSummary `json:"by_skill"`
+	// ByToolSkill breaks tool reliability down per owning (skill, version) so
+	// callers can compare a skill's tool behaviour across versions (e.g. did an
+	// edit reduce failures?). Only attributed tool calls appear here.
+	ByToolSkill []ToolSkillUsageSummary `json:"by_tool_skill"`
 }
 
 // ModelCostSummary aggregates cost/token data per model.
@@ -914,6 +947,23 @@ type ToolUsageSummary struct {
 	// DenialCount split it into app-level rejections (healthy tool, bad args),
 	// transport/exec failures, and approval denials, so a "healthy but
 	// argued-with" tool isn't reported as broken.
+	ErrorCount     int     `db:"error_count"     json:"error_count"`
+	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
+	FailureCount   int     `db:"failure_count"   json:"failure_count"`
+	DenialCount    int     `db:"denial_count"    json:"denial_count"`
+	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
+}
+
+// ToolSkillUsageSummary aggregates tool call data per owning (skill, version).
+// The outcome split mirrors ToolUsageSummary; ErrorCount is the legacy combined
+// total (rejected + failed + denied) — prefer FailureCount for a "broken tool"
+// signal and read DenialCount separately (approval denials aren't faults).
+type ToolSkillUsageSummary struct {
+	SkillName      string  `db:"skill_name"      json:"skill_name"`
+	SkillVersion   string  `db:"skill_version"   json:"skill_version"`
+	ToolName       string  `db:"tool_name"       json:"tool_name"`
+	ServerName     string  `db:"server_name"     json:"server_name"`
+	CallCount      int     `db:"call_count"      json:"call_count"`
 	ErrorCount     int     `db:"error_count"     json:"error_count"`
 	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int     `db:"failure_count"   json:"failure_count"`
@@ -984,6 +1034,22 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	               GROUP BY skill_name ORDER BY match_count DESC`
 	if err := s.db.SelectContext(ctx, &summary.BySkill, skillQuery, args...); err != nil {
 		return nil, fmt.Errorf("querying skill summary: %w", err)
+	}
+
+	// Tool reliability per owning (skill, version). Same outcome split as the
+	// global by_tool query, restricted to attributed calls so unowned
+	// (interactive multi-match) calls don't pollute per-version comparisons.
+	toolSkillQuery := `SELECT skill_name, skill_version, tool_name, server_name, COUNT(*) AS call_count,
+	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
+	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
+	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
+	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
+	              AVG(duration_ms) AS avg_duration
+	              FROM tool_calls WHERE skill_name != ''` + timeFilter + `
+	              GROUP BY skill_name, skill_version, tool_name, server_name
+	              ORDER BY skill_name, skill_version, call_count DESC`
+	if err := s.db.SelectContext(ctx, &summary.ByToolSkill, toolSkillQuery, args...); err != nil {
+		return nil, fmt.Errorf("querying tool-skill summary: %w", err)
 	}
 
 	return summary, nil

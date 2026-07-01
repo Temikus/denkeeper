@@ -1290,6 +1290,136 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 	}
 }
 
+func TestAddToolCalls_SkillAttributionRoundTrip(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+
+	if err := store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "schedule_update", Round: 1, Success: true, Outcome: "ok", SkillName: "heartbeat", SkillVersion: "1.5.2"},
+		{ToolName: "kv_set", Round: 1, Success: true, Outcome: "ok"}, // unattributed
+	}); err != nil {
+		t.Fatalf("AddToolCalls: %v", err)
+	}
+
+	got, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	byTool := map[string]ToolCallRecord{}
+	for _, r := range got {
+		byTool[r.ToolName] = r
+	}
+	if r := byTool["schedule_update"]; r.SkillName != "heartbeat" || r.SkillVersion != "1.5.2" {
+		t.Errorf("attributed row = (%q, %q), want (heartbeat, 1.5.2)", r.SkillName, r.SkillVersion)
+	}
+	if r := byTool["kv_set"]; r.SkillName != "" || r.SkillVersion != "" {
+		t.Errorf("unattributed row should have empty skill fields, got (%q, %q)", r.SkillName, r.SkillVersion)
+	}
+}
+
+func TestGetTelemetrySummary_ByToolSkill(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+
+	// heartbeat v1: schedule_update denied twice (supervisor) — NOT a failure.
+	// heartbeat v2: schedule_update ok once. Plus one unattributed call that
+	// must be excluded from the per-skill breakdown.
+	_ = store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "schedule_update", Round: 1, Success: false, Outcome: "denied", SkillName: "heartbeat", SkillVersion: "1.0.0"},
+		{ToolName: "schedule_update", Round: 1, Success: false, Outcome: "denied", SkillName: "heartbeat", SkillVersion: "1.0.0"},
+		{ToolName: "schedule_update", Round: 1, Success: true, Outcome: "ok", SkillName: "heartbeat", SkillVersion: "2.0.0"},
+		{ToolName: "kv_set", Round: 1, Success: false, Outcome: "failed"}, // unattributed
+	})
+
+	summary, err := store.GetTelemetrySummary(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if len(summary.ByToolSkill) != 2 {
+		t.Fatalf("expected 2 (skill,version) rows, got %d: %+v", len(summary.ByToolSkill), summary.ByToolSkill)
+	}
+
+	byVer := map[string]ToolSkillUsageSummary{}
+	for _, r := range summary.ByToolSkill {
+		if r.SkillName != "heartbeat" || r.ToolName != "schedule_update" {
+			t.Errorf("unexpected row %+v", r)
+		}
+		byVer[r.SkillVersion] = r
+	}
+	v1 := byVer["1.0.0"]
+	if v1.CallCount != 2 || v1.DenialCount != 2 || v1.FailureCount != 0 {
+		t.Errorf("v1.0.0 = calls %d denials %d failures %d, want 2/2/0", v1.CallCount, v1.DenialCount, v1.FailureCount)
+	}
+	v2 := byVer["2.0.0"]
+	if v2.CallCount != 1 || v2.DenialCount != 0 || v2.FailureCount != 0 {
+		t.Errorf("v2.0.0 = calls %d denials %d failures %d, want 1/0/0", v2.CallCount, v2.DenialCount, v2.FailureCount)
+	}
+}
+
+func TestGetTelemetrySummary_ByToolSkill_TimeFilter(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+
+	// Insert an attributed row dated well in the past.
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO tool_calls (message_id, conversation_id, tool_name, server_name, round, duration_ms, success, outcome, skill_name, skill_version, error_msg, created_at)
+		 VALUES (?, ?, 'schedule_update', '', 1, 0, 1, 'ok', 'heartbeat', '1.0.0', '', '2000-01-01 00:00:00')`, msgID, "test:1"); err != nil {
+		t.Fatalf("inserting old row: %v", err)
+	}
+
+	since := time.Now().AddDate(0, 0, -1)
+	summary, err := store.GetTelemetrySummary(ctx, &since, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if len(summary.ByToolSkill) != 0 {
+		t.Errorf("time filter should exclude old rows, got %+v", summary.ByToolSkill)
+	}
+}
+
+func TestSkillVersionColumns_MigrationIdempotent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Re-running the skill-version ALTERs must not error (guarded by isDuplicateColumn).
+	for _, m := range append(append([]string{}, toolCallMigrations...), messageSkillsMigrations...) {
+		if _, err := store.db.Exec(m); err != nil && !isDuplicateColumn(err) {
+			t.Fatalf("re-running migration %q: %v", m, err)
+		}
+	}
+
+	ctx := context.Background()
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	msgID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "x"})
+	// Columns still usable after re-migration.
+	if err := store.AddToolCalls(ctx, "test:1", msgID, []ToolCallRecord{
+		{ToolName: "t", Round: 1, Success: true, Outcome: "ok", SkillName: "s", SkillVersion: "1.0.0"},
+	}); err != nil {
+		t.Fatalf("AddToolCalls after re-migration: %v", err)
+	}
+}
+
 func TestToolCallMigration_BackfillsLegacyAndIsIdempotent(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
