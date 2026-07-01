@@ -70,3 +70,27 @@ func TestServeCallbackHTML_CSPHashMatchesScript(t *testing.T) {
 		t.Errorf("inline script hash = %q, but callbackAutoCloseScriptHash = %q (update the constant)", got, callbackAutoCloseScriptHash)
 	}
 }
+
+// TestServeCallbackHTML_EscapesErrorMessage guards the reflected-XSS sink on the
+// OAuth failure page: errMsg is built from the callback's `error`/
+// `error_description` query params (externally controllable) and is embedded in
+// HTML. It must be HTML-escaped so an attacker-supplied error cannot inject
+// markup into the page.
+func TestServeCallbackHTML_EscapesErrorMessage(t *testing.T) {
+	srv := newHeaderTestServer()
+	rec := httptest.NewRecorder()
+
+	payload := `<script>alert(1)</script>"><img src=x onerror=alert(2)>`
+	srv.serveCallbackHTML(rec, false, payload)
+
+	body := rec.Body.String()
+	for _, raw := range []string{"<script>alert(1)", "<img src=x onerror"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("failure page contains unescaped payload %q; body=%s", raw, body)
+		}
+	}
+	// The escaped form must be present (proves the message was rendered, escaped).
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("expected HTML-escaped error message in body; got %s", body)
+	}
+}
