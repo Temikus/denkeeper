@@ -1658,6 +1658,51 @@ func TestGetCostSummary_DaysFilter(t *testing.T) {
 	}
 }
 
+func TestGetCostSummary_WindowCostWhenDaysSet(t *testing.T) {
+	// A bounded 'days' query must route the persistent total to window_cost
+	// (+ window_days), leaving lifetime_cost omitted so it never carries a
+	// windowed number. This is the restart-proof figure self-audit diffs
+	// week-over-week — the trap was that a windowed total used to surface under
+	// the "lifetime_cost" name, nudging callers toward the transient global_cost.
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.CostSummary = func() configmcp.CostSummaryData {
+			return configmcp.CostSummaryData{GlobalCost: 0.61}
+		}
+		d.TelemetrySummary = func(_ context.Context, _ *time.Time) (*agent.TelemetrySummary, error) {
+			return &agent.TelemetrySummary{
+				ByModel: []agent.ModelCostSummary{
+					{Model: "kimi-k2", Provider: "moonshotai", TotalCost: 2.03},
+				},
+			}, nil
+		}
+	})
+
+	text, isErr := callTool(t, session, "get_cost_summary", map[string]any{"days": 7})
+	if isErr {
+		t.Fatalf("get_cost_summary error: %s", text)
+	}
+
+	var result configmcp.CostSummaryData
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if result.WindowCost != 2.03 {
+		t.Errorf("WindowCost = %v, want 2.03", result.WindowCost)
+	}
+	if result.WindowDays != 7 {
+		t.Errorf("WindowDays = %v, want 7", result.WindowDays)
+	}
+	if result.LifetimeCost != 0 {
+		t.Errorf("LifetimeCost = %v, want 0 (windowed total must not reuse the lifetime field)", result.LifetimeCost)
+	}
+	if strings.Contains(text, "lifetime_cost") {
+		t.Errorf("windowed query must omit lifetime_cost, got: %s", text)
+	}
+	if result.GlobalCost != 0.61 {
+		t.Errorf("GlobalCost = %v, want 0.61 (transient number preserved)", result.GlobalCost)
+	}
+}
+
 func TestGetCostSummary_TelemetryErrorIsNonFatal(t *testing.T) {
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
 		d.CostSummary = func() configmcp.CostSummaryData {

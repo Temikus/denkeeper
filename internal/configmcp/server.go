@@ -167,10 +167,19 @@ type CostSummaryData struct {
 	MaxPerSession float64            `json:"max_per_session"`
 	SessionCosts  map[string]float64 `json:"session_costs"`
 
-	// LifetimeCost is the persistent total spend (sum of ByModel costs),
-	// lifetime or last-N-days when the 'days' filter is set. Unlike
-	// GlobalCost it survives restarts.
+	// LifetimeCost is the persistent all-time spend (sum of ByModel costs).
+	// Unlike GlobalCost it survives restarts. It is populated only for an
+	// all-time query; when the 'days' filter is set the bounded figure goes to
+	// WindowCost instead, so lifetime_cost never carries a windowed number.
 	LifetimeCost float64 `json:"lifetime_cost,omitempty"`
+	// WindowCost is the persistent spend over the last WindowDays days, set only
+	// when the 'days' filter is provided. Like LifetimeCost it survives restarts,
+	// but it is a bounded window — use it (not GlobalCost) for restart-proof
+	// week-over-week trend comparisons. LifetimeCost and WindowCost are mutually
+	// exclusive: one carries the all-time total, the other the windowed total.
+	WindowCost float64 `json:"window_cost,omitempty"`
+	// WindowDays echoes the 'days' filter that produced WindowCost.
+	WindowDays int `json:"window_days,omitempty"`
 	// ByModel, ByTool and BySkill are populated from TelemetrySummary when
 	// available and reflect persistent storage (global across agents).
 	ByModel []agent.ModelCostSummary  `json:"by_model,omitempty"`
