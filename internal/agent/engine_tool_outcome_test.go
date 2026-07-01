@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -124,5 +125,55 @@ func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 	}
 	if record.Outcome != "denied" {
 		t.Errorf("Outcome = %q, want denied", record.Outcome)
+	}
+}
+
+func TestToolBudgetHint(t *testing.T) {
+	if got, want := toolBudgetHint(50, 1), "\n\n[engine: 49 of 50 tool-call rounds remaining this turn]"; got != want {
+		t.Errorf("toolBudgetHint(50, 1) = %q, want %q", got, want)
+	}
+	// Final round reports zero remaining, not a negative number.
+	if got := toolBudgetHint(10, 10); !strings.Contains(got, "0 of 10") {
+		t.Errorf("toolBudgetHint(10, 10) = %q, want to contain %q", got, "0 of 10")
+	}
+	// Clamp guards against an over-count (should never go negative).
+	if got := toolBudgetHint(5, 8); !strings.Contains(got, "0 of 5") {
+		t.Errorf("toolBudgetHint(5, 8) = %q, want to contain %q", got, "0 of 5")
+	}
+}
+
+// TestExecuteToolRounds_AppendsBudgetHint verifies the tool-call loop annotates
+// the final tool result of a round with an authoritative remaining-rounds hint,
+// so the model reads its budget instead of counting calls by hand.
+func TestExecuteToolRounds_AppendsBudgetHint(t *testing.T) {
+	e := newOutcomeTestEngine(t)
+	perms, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	resp := &llm.ChatResponse{
+		FinishReason: "tool_calls",
+		ToolCalls: []llm.ToolCall{
+			{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`}},
+		},
+	}
+	_, msgs, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, nil)
+	if err != nil {
+		t.Fatalf("executeToolRounds: %v", err)
+	}
+
+	var toolMsg string
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			toolMsg = m.Content
+		}
+	}
+	if !strings.Contains(toolMsg, "did the thing") {
+		t.Errorf("tool message missing tool result: %q", toolMsg)
+	}
+	// Default cap is 50; after round 1, 49 remain.
+	if !strings.Contains(toolMsg, "49 of 50 tool-call rounds remaining this turn") {
+		t.Errorf("tool message missing budget hint: %q", toolMsg)
 	}
 }

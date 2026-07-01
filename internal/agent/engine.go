@@ -1272,26 +1272,10 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		}
 
 		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
-		for _, tc := range resp.ToolCalls {
-			if detector.observe(tc.Function.Name, tc.Function.Arguments) {
-				e.logger.Warn("repetitive tool call detected, aborting tool loop",
-					"tool", tc.Function.Name,
-					"consecutive_count", defaultRepeatDetectionThreshold,
-					"round", round+1,
-					"conversation", convID,
-				)
-				return nil, llmMessages, toolRecords, fmt.Errorf(
-					"tool %q called with identical arguments %d consecutive times",
-					tc.Function.Name, defaultRepeatDetectionThreshold)
-			}
-			e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
-				attribute.String("agent", e.name),
-				attribute.String("tool_name", tc.Function.Name)))
-			result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, deniedCalls)
-			toolRecords = append(toolRecords, record)
-			llmMessages = append(llmMessages, llm.Message{
-				Role: "tool", Content: result, ToolCallID: tc.ID,
-			})
+		var roundErr error
+		llmMessages, toolRecords, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, deniedCalls, llmMessages, toolRecords)
+		if roundErr != nil {
+			return nil, llmMessages, toolRecords, roundErr
 		}
 
 		if onEvent != nil {
@@ -1358,6 +1342,53 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 	}
 	e.logger.Warn("soft cost limit reached, breaking tool loop", "conversation", convID)
 	return true
+}
+
+// runRoundToolCalls executes every tool call in one round, appending each result
+// as a tool message and the collected records. The final tool result of the
+// round carries an authoritative remaining-rounds budget hint (see
+// toolBudgetHint) so the model never has to count calls by hand. It aborts the
+// loop with an error if a tool is called with identical arguments too many
+// consecutive times (runaway detection).
+func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, deniedCalls map[string]string, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, error) {
+	for i, tc := range toolCalls {
+		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
+			e.logger.Warn("repetitive tool call detected, aborting tool loop",
+				"tool", tc.Function.Name,
+				"consecutive_count", defaultRepeatDetectionThreshold,
+				"round", round+1,
+				"conversation", convID,
+			)
+			return llmMessages, toolRecords, fmt.Errorf(
+				"tool %q called with identical arguments %d consecutive times",
+				tc.Function.Name, defaultRepeatDetectionThreshold)
+		}
+		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("agent", e.name),
+			attribute.String("tool_name", tc.Function.Name)))
+		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, deniedCalls)
+		toolRecords = append(toolRecords, record)
+		content := result
+		if i == len(toolCalls)-1 {
+			content += toolBudgetHint(e.maxToolRounds, round+1)
+		}
+		llmMessages = append(llmMessages, llm.Message{
+			Role: "tool", Content: content, ToolCallID: tc.ID,
+		})
+	}
+	return llmMessages, toolRecords, nil
+}
+
+// toolBudgetHint returns a short authoritative note telling the model how many
+// tool-call rounds remain this turn, so it never has to reconstruct the count
+// from its own history. currentRound is 1-based; the returned count is the
+// number of rounds still available after the current one completes.
+func toolBudgetHint(maxRounds, currentRound int) string {
+	remaining := maxRounds - currentRound
+	if remaining < 0 {
+		remaining = 0
+	}
+	return fmt.Sprintf("\n\n[engine: %d of %d tool-call rounds remaining this turn]", remaining, maxRounds)
 }
 
 // recordToolRoundEvent adds a span event for a tool-call round.
