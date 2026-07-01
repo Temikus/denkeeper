@@ -302,4 +302,62 @@ describe('AuditDetail', () => {
     }})
     expect(screen.getByText('truncated')).toBeInTheDocument()
   })
+
+  // ─── XSS sanitisation of rendered LLM output (P0-1) ──────────────────────
+  // LLM/audit output is attacker-influenceable (indirect prompt injection), so
+  // the {@html}-injected OUTPUT must be sanitised. These assert the dangerous
+  // vectors the old 3-regex sanitiser missed are stripped by DOMPurify.
+  function renderOutput(responseText) {
+    render(AuditDetail, { props: {
+      event: makeEvent({
+        category: 'llm',
+        detail: JSON.stringify({ model: 'claude-3', tokens: 10, cost: 0.01, response_text: responseText }),
+      }),
+    }})
+    return document.querySelector('.output-rendered')
+  }
+
+  test('strips javascript: URIs from markdown links', () => {
+    const el = renderOutput('[click me](javascript:alert(document.cookie))')
+    expect(el.innerHTML).not.toMatch(/javascript:/i)
+    const link = el.querySelector('a')
+    if (link) expect(link.getAttribute('href') || '').not.toMatch(/javascript:/i)
+  })
+
+  test('strips data: URIs from markdown links', () => {
+    const el = renderOutput('[x](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)')
+    expect(el.innerHTML).not.toMatch(/data:text\/html/i)
+  })
+
+  test('strips inline event handlers from raw HTML', () => {
+    const el = renderOutput('<img src=x onerror="alert(1)"> text')
+    expect(el.innerHTML).not.toMatch(/onerror/i)
+    expect(el.querySelector('img[onerror]')).toBeNull()
+  })
+
+  test('strips svg-based onload vector', () => {
+    const el = renderOutput('<svg><g onload="alert(1)"></g></svg>')
+    expect(el.innerHTML).not.toMatch(/onload/i)
+  })
+
+  test('strips <base> tag (base-uri hijack vector)', () => {
+    const el = renderOutput('<base href="//evil.example.com/">text')
+    expect(el.querySelector('base')).toBeNull()
+  })
+
+  test('strips <script> content including malformed/unclosed tags', () => {
+    const el = renderOutput('before <script>alert(1)</script> after <script src="//evil.example/x.js">')
+    expect(el.querySelector('script')).toBeNull()
+    expect(el.innerHTML).not.toMatch(/alert\(1\)/)
+  })
+
+  test('preserves safe markdown and hardens surviving links', () => {
+    const el = renderOutput('**bold** and a [safe link](https://example.com) with `code`')
+    expect(el.querySelector('strong')).not.toBeNull()
+    expect(el.querySelector('code')).not.toBeNull()
+    const link = el.querySelector('a')
+    expect(link).not.toBeNull()
+    expect(link.getAttribute('href')).toBe('https://example.com')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+  })
 })

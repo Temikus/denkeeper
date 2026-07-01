@@ -1,5 +1,15 @@
 <script>
   import { marked } from 'marked'
+  import DOMPurify from 'dompurify'
+
+  // Force external links opened from rendered LLM/audit output to be
+  // isolated from the dashboard (no window.opener back-reference).
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && node.hasAttribute('href')) {
+      node.setAttribute('rel', 'noopener noreferrer')
+      node.setAttribute('target', '_blank')
+    }
+  })
 
   let { event } = $props()
 
@@ -15,12 +25,17 @@
     try { return JSON.parse(detail) } catch { return null }
   }
 
-  // Strip dangerous HTML from rendered markdown (scripts, event handlers)
+  // Sanitize rendered markdown with DOMPurify — a real HTML parser that strips
+  // scripts, event handlers, javascript:/data: URIs, and mutation-XSS vectors
+  // (<svg>, <base>, unclosed tags) that a regex-based filter cannot catch.
+  // LLM/audit output is attacker-influenceable (indirect prompt injection), so
+  // it is treated as untrusted before {@html} injection.
   function sanitizeHTML(html) {
-    return html
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/<iframe\b[^>]*>/gi, '')
-      .replace(/\bon\w+\s*=/gi, 'data-removed=')
+    return DOMPurify.sanitize(html, {
+      ALLOWED_URI_REGEXP: /^(?:https?|mailto):/i, // block javascript:, data:, vbscript:
+      FORBID_TAGS: ['style', 'base', 'form'],
+      FORBID_ATTR: ['style'],
+    })
   }
 
   let detail = $derived(parseDetail(event.detail))
