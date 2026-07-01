@@ -1281,7 +1281,7 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 func (s *Server) registerCostTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_cost_summary",
-		Description: "Return cost tracking data. global_cost/session_costs come from the in-memory tracker — spend since the last restart, and they drive live budget enforcement. lifetime_cost/by_model/by_tool/by_skill come from persistent storage (lifetime, or the last N days when 'days' is set, and are global across all agents). by_model carries per-model cost/token totals; by_tool/by_skill carry call counts, error counts, and average duration.",
+		Description: "Return cost tracking data. global_cost/session_costs come from the in-memory tracker — spend since the last restart, and they drive live budget enforcement. lifetime_cost/by_model/by_tool/by_skill/by_tool_skill come from persistent storage (lifetime, or the last N days when 'days' is set, and are global across all agents). by_model carries per-model cost/token totals; by_tool/by_skill carry call counts, error counts, and average duration. Each by_tool/by_tool_skill entry splits outcomes into failure_count (transport/exec failure — the real broken-tool signal), rejection_count (bad args), and denial_count (approval denied — not a fault); error_count is the legacy combined total. by_tool_skill keys those per owning (skill_name, skill_version) so a skill's tool reliability can be compared across versions.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {"days": {"type": "integer", "description": "Restrict per-tool/per-skill stats to the last N days (0 or absent = all time)"}}}`),
 	}, s.handleGetCostSummary)
 }
@@ -1312,6 +1312,7 @@ func (s *Server) handleGetCostSummary(ctx context.Context, req *mcp.CallToolRequ
 			data.LifetimeCost = sumModelCost(summary.ByModel)
 			data.ByTool = summary.ByTool
 			data.BySkill = summary.BySkill
+			data.ByToolSkill = summary.ByToolSkill
 		}
 	}
 
