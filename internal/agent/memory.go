@@ -1027,6 +1027,13 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	// Tool reliability per owning (skill, version). Same outcome split as the
 	// global by_tool query, restricted to attributed calls so unowned
 	// (interactive multi-match) calls don't pollute per-version comparisons.
+	//
+	// Cardinality is (skills x versions x tools). It's not explicitly capped:
+	// old versions age out because tool_calls rows are pruned with their
+	// conversations (max_conversations retention), and callers can pass a
+	// since/days window. TODO: if a fast-churning skill ever bloats the
+	// get_cost_summary payload, cap to the last N versions per skill (window
+	// over MAX(created_at) — not the version string, which sorts lexically).
 	toolSkillQuery := `SELECT skill_name, skill_version, tool_name, server_name, COUNT(*) AS call_count,
 	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
