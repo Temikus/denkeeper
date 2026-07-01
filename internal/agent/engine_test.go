@@ -4438,6 +4438,69 @@ func TestReview_TimeoutBounded(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let goroutine finish
 }
 
+// TestPersistTelemetry_StampsSkillAttribution exercises the wired path: the
+// persistTelemetry loop must copy the owning skill name+version onto each tool
+// record before persisting (single-owner turn), and leave them blank on an
+// ambiguous multi-match turn.
+func TestPersistTelemetry_StampsSkillAttribution(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, perms, nil, "sys", nil, nil, nil, testLogger())
+
+	// Scheduled/command invocation (msg.SkillName set): unambiguous owner.
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	userID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "user", Content: "hi"})
+	assistID, _ := store.AddMessage(ctx, "test:1", StoredMessage{Role: "assistant", Content: "ok"})
+	matched := []skill.Skill{{Name: "heartbeat", Version: "1.5.2"}}
+	records := []ToolCallRecord{
+		{ToolName: "schedule_update", Round: 1, Success: false, Outcome: "denied"},
+		{ToolName: "kv_set", Round: 1, Success: true, Outcome: "ok"},
+	}
+	engine.persistTelemetry(ctx, "test:1", userID, assistID, StoredMessage{Role: "assistant"},
+		records, matched, adapter.IncomingMessage{SkillName: "heartbeat"})
+
+	got, err := store.GetToolCalls(ctx, "test:1")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(got))
+	}
+	for _, r := range got {
+		if r.SkillName != "heartbeat" || r.SkillVersion != "1.5.2" {
+			t.Errorf("tool %q not attributed: got (%q, %q), want (heartbeat, 1.5.2)", r.ToolName, r.SkillName, r.SkillVersion)
+		}
+	}
+
+	// Ambiguous interactive turn (>1 matched, no msg.SkillName): unattributed.
+	_, _ = store.GetOrCreateConversation(ctx, "test", "2")
+	uID2, _ := store.AddMessage(ctx, "test:2", StoredMessage{Role: "user", Content: "hi"})
+	aID2, _ := store.AddMessage(ctx, "test:2", StoredMessage{Role: "assistant", Content: "ok"})
+	engine.persistTelemetry(ctx, "test:2", uID2, aID2, StoredMessage{Role: "assistant"},
+		[]ToolCallRecord{{ToolName: "web_search", Round: 1, Success: true, Outcome: "ok"}},
+		[]skill.Skill{{Name: "a"}, {Name: "b"}}, adapter.IncomingMessage{})
+
+	got2, err := store.GetToolCalls(ctx, "test:2")
+	if err != nil {
+		t.Fatalf("GetToolCalls: %v", err)
+	}
+	if len(got2) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(got2))
+	}
+	if got2[0].SkillName != "" || got2[0].SkillVersion != "" {
+		t.Errorf("ambiguous turn should be unattributed, got (%q, %q)", got2[0].SkillName, got2[0].SkillVersion)
+	}
+}
+
 func TestAttributeSkill_ScheduledInvocationWins(t *testing.T) {
 	matched := []skill.Skill{
 		{Name: "heartbeat", Version: "1.5.2"},

@@ -781,9 +781,8 @@ func (e *Engine) persistTelemetry(ctx context.Context, convID string, userMsgID,
 		records := make([]SkillUsageRecord, len(matched))
 		for i, s := range matched {
 			records[i] = SkillUsageRecord{
-				SkillName:    s.Name,
-				SkillVersion: s.Version,
-				MatchType:    classifySkillMatch(s, msg),
+				SkillName: s.Name,
+				MatchType: classifySkillMatch(s, msg),
 			}
 		}
 		if err := store.AddSkillUsages(ctx, convID, userMsgID, records); err != nil {

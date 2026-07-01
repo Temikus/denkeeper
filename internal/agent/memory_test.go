@@ -1402,8 +1402,8 @@ func TestSkillVersionColumns_MigrationIdempotent(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	// Re-running the skill-version ALTERs must not error (guarded by isDuplicateColumn).
-	for _, m := range append(append([]string{}, toolCallMigrations...), messageSkillsMigrations...) {
+	// Re-running the tool_calls skill-version ALTERs must not error (guarded by isDuplicateColumn).
+	for _, m := range toolCallMigrations {
 		if _, err := store.db.Exec(m); err != nil && !isDuplicateColumn(err) {
 			t.Fatalf("re-running migration %q: %v", m, err)
 		}

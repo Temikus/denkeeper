@@ -68,7 +68,6 @@ type SkillUsageRecord struct {
 	MessageID      int64     `db:"message_id"      json:"message_id"`
 	ConversationID string    `db:"conversation_id" json:"conversation_id"`
 	SkillName      string    `db:"skill_name"      json:"skill_name"`
-	SkillVersion   string    `db:"skill_version"   json:"skill_version,omitempty"`
 	MatchType      string    `db:"match_type"      json:"match_type"`
 	CreatedAt      time.Time `db:"created_at"      json:"created_at"`
 }
@@ -245,13 +244,6 @@ var toolCallMigrations = []string{
 	`ALTER TABLE tool_calls ADD COLUMN skill_version TEXT NOT NULL DEFAULT ''`,
 }
 
-// messageSkillsMigrations adds columns to message_skills. Guarded by
-// isDuplicateColumn like the others. Historical rows get ” (unknown version);
-// attribution is forward-looking only.
-var messageSkillsMigrations = []string{
-	`ALTER TABLE message_skills ADD COLUMN skill_version TEXT NOT NULL DEFAULT ''`,
-}
-
 const telemetryTablesSchema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,7 +267,6 @@ CREATE TABLE IF NOT EXISTS message_skills (
     message_id INTEGER NOT NULL REFERENCES messages(id),
     conversation_id TEXT NOT NULL,
     skill_name TEXT NOT NULL,
-    skill_version TEXT NOT NULL DEFAULT '',
     match_type TEXT NOT NULL DEFAULT 'always',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -383,9 +374,6 @@ func initDB(db *sqlx.DB) error {
 		return err
 	}
 	if err := applyMigrations(db, toolCallMigrations); err != nil {
-		return err
-	}
-	if err := applyMigrations(db, messageSkillsMigrations); err != nil {
 		return err
 	}
 	if _, err := db.Exec(channelSchema); err != nil {
@@ -714,15 +702,15 @@ func (s *SQLiteMemoryStore) AddSkillUsages(ctx context.Context, convID string, m
 	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO message_skills (message_id, conversation_id, skill_name, skill_version, match_type)
-		 VALUES (?, ?, ?, ?, ?)`)
+		`INSERT INTO message_skills (message_id, conversation_id, skill_name, match_type)
+		 VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing skill usage insert: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 
 	for _, su := range skills {
-		if _, err := stmt.ExecContext(ctx, messageID, convID, su.SkillName, su.SkillVersion, su.MatchType); err != nil {
+		if _, err := stmt.ExecContext(ctx, messageID, convID, su.SkillName, su.MatchType); err != nil {
 			return fmt.Errorf("inserting skill usage %q: %w", su.SkillName, err)
 		}
 	}
