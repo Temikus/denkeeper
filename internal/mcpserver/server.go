@@ -130,4 +130,5 @@ func (s *Server) registerTools() {
 	s.registerKVTools()
 	s.registerApprovalTools()
 	s.registerToolMgmtTools()
+	s.registerAuditTools()
 }

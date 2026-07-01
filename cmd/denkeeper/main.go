@@ -1533,6 +1533,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		KVStore:         a.kvStore,
 		ChannelResolver: buildChannelResolver(a.dispatcher),
 		Auditor:         a.auditor,
+		AuditStore:      a.auditStore,
 		ConfigPath:      a.path,
 		Version:         version,
 		Logger:          a.logger,

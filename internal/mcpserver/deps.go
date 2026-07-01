@@ -46,6 +46,7 @@ type Deps struct {
 	KVStore         kv.Store
 	ChannelResolver configmcp.ChannelResolver
 	Auditor         audit.Emitter
+	AuditStore      audit.Store
 	ConfigPath      string
 	Version         string
 	Logger          *slog.Logger
