@@ -345,6 +345,12 @@ describe('AuditDetail', () => {
     expect(el.querySelector('base')).toBeNull()
   })
 
+  test('strips <iframe> (regression: old sanitiser had a dedicated iframe regex)', () => {
+    const el = renderOutput('<iframe src="javascript:alert(1)"></iframe>text')
+    expect(el.querySelector('iframe')).toBeNull()
+    expect(el.innerHTML).not.toMatch(/javascript:/i)
+  })
+
   test('strips <script> content including malformed/unclosed tags', () => {
     const el = renderOutput('before <script>alert(1)</script> after <script src="//evil.example/x.js">')
     expect(el.querySelector('script')).toBeNull()
