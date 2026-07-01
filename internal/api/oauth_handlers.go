@@ -320,9 +320,22 @@ func (s *Server) handleListPendingOAuth(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, pending)
 }
 
+// callbackAutoCloseScriptHash is the CSP sha256 hash of the inline auto-close
+// script in the OAuth success page below. If that script's bytes change, this
+// hash must be updated — TestServeCallbackHTML_CSPHashMatchesScript guards it.
+const callbackAutoCloseScriptHash = "sha256-Hp5+GtpXGYNgDBbEx0x8wNHWLHjmBDIKDmK4A2m9l34="
+
+// callbackCSP is a page-scoped Content-Security-Policy for the self-contained
+// OAuth callback pages. It overrides the strict dashboard policy: the pages
+// load no external resources ('none' default), carry inline <style> blocks
+// ('unsafe-inline' styles cannot execute script), and the success page uses one
+// static inline auto-close script permitted by its exact hash.
+var callbackCSP = "default-src 'none'; style-src 'unsafe-inline'; script-src '" + callbackAutoCloseScriptHash + "'"
+
 // serveCallbackHTML serves a simple HTML page after OAuth callback.
 func (s *Server) serveCallbackHTML(w http.ResponseWriter, success bool, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", callbackCSP)
 
 	if success {
 		w.WriteHeader(http.StatusOK)

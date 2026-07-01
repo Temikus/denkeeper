@@ -3118,10 +3118,31 @@ func (s *Server) middlewareCORS(next http.Handler) http.Handler {
 	})
 }
 
+// dashboardCSP is the Content-Security-Policy applied to the dashboard SPA and
+// all other responses by default. `script-src 'self'` is the primary control:
+// it neutralises any script an attacker manages to inject into rendered
+// LLM/audit output, so a stored-XSS payload cannot pivot to same-origin API
+// calls (e.g. POST /api/v1/tools). `style-src` allows 'unsafe-inline' because
+// the SPA uses dynamic inline `style=` attributes (which cannot execute
+// script); `base-uri`/`object-src`/`frame-ancestors` close the <base>, plugin,
+// and clickjacking vectors. The OAuth callback page overrides this with its own
+// page-scoped policy (see serveCallbackHTML).
+const dashboardCSP = "default-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data:; " +
+	"font-src 'self'; " +
+	"connect-src 'self'; " +
+	"object-src 'none'; " +
+	"base-uri 'self'; " +
+	"frame-ancestors 'none'; " +
+	"form-action 'self'"
+
 func (s *Server) middlewareSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", dashboardCSP)
 		// Set Cache-Control on API routes only (not static assets served by the web handler).
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
