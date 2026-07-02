@@ -331,7 +331,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		cost, source := TokenCost(resp, r.pricing, activeProvider.Name())
 		r.recordOTelSuccess(start, resp, cost, source, attrs)
 		r.setSpanResponseAttrs(span, resp, cost)
-		r.costTracker.RecordWithProvider(sessionID, activeProvider.Name(), cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
+		r.costTracker.RecordWithProvider(sessionID, activeProvider.Name(), cost, resp.TokensUsed, source)
 		if source == "unknown" {
 			slog.Warn("no pricing data for model", "model", resp.Model)
 		}
@@ -359,7 +359,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	cost, source := TokenCost(resp, r.pricing, resolvedProvider)
 	r.recordOTelSuccess(start, resp, cost, source, attrs)
 	r.setSpanResponseAttrs(span, resp, cost)
-	r.costTracker.RecordWithProvider(sessionID, resolvedProvider, cost, resp.TokensUsed.Prompt, resp.TokensUsed.Completion, source)
+	r.costTracker.RecordWithProvider(sessionID, resolvedProvider, cost, resp.TokensUsed, source)
 	if source == "unknown" {
 		slog.Warn("no pricing data for model", "model", resp.Model)
 	}

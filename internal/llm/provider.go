@@ -159,6 +159,17 @@ type TokenUsage struct {
 	Total        int
 }
 
+// Add accumulates u into t field-by-field. Keeping accumulation in one place
+// means new TokenUsage fields get summed by updating this method rather than
+// every hand-rolled call site (the omission of CachedPrompt from the tool-round
+// accumulator is exactly the bug this guards against).
+func (t *TokenUsage) Add(u TokenUsage) {
+	t.Prompt += u.Prompt
+	t.Completion += u.Completion
+	t.CachedPrompt += u.CachedPrompt
+	t.Total += u.Total
+}
+
 type ProviderMetadata struct {
 	Name    string
 	BaseURL string

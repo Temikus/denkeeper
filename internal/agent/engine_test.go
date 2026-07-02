@@ -4535,3 +4535,311 @@ func TestAttributeSkill_AmbiguousAndEmpty(t *testing.T) {
 		t.Error("zero-match turn should be unattributed (ok=false)")
 	}
 }
+
+// TestExecuteToolRounds_AccumulatesCachedTokens verifies that cached prompt
+// tokens are summed across all tool-call rounds into the stored assistant
+// message, rather than being zeroed by the accumulator overwrite (the bug this
+// change fixes). It also cross-checks that the sum of per-round audit-event
+// tokens_cached equals the stored message's TokensCached — precisely the
+// discrepancy that revealed the bug.
+func TestExecuteToolRounds_AccumulatesCachedTokens(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				Content:      "step 1",
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 2, CachedPrompt: 100, Total: 112},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "step 2",
+				ToolCalls:    []llm.ToolCall{{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"b"}`}}},
+				TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 3, CachedPrompt: 200, Total: 223},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "All done.",
+				TokensUsed:   llm.TokenUsage{Prompt: 30, Completion: 4, CachedPrompt: 300, Total: 334},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	auditor := &collectingAuditor{}
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	ctx := context.Background()
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-cached",
+		UserID:     "user-1",
+		Text:       "Process",
+		Timestamp:  time.Now(),
+	}, nil); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	msgs, err := store.GetMessages(ctx, "default:test:chat-cached", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	assistant := lastAssistant(t, msgs)
+
+	if assistant.TokensCached != 600 {
+		t.Errorf("TokensCached = %d, want 600 (100+200+300)", assistant.TokensCached)
+	}
+	// Regression guards: the pre-existing sums must be unchanged.
+	if assistant.TokensPrompt != 60 {
+		t.Errorf("TokensPrompt = %d, want 60", assistant.TokensPrompt)
+	}
+	if assistant.TokensCompletion != 9 {
+		t.Errorf("TokensCompletion = %d, want 9", assistant.TokensCompletion)
+	}
+	if assistant.TokensUsed != 669 {
+		t.Errorf("TokensUsed = %d, want 669", assistant.TokensUsed)
+	}
+
+	// Cross-check: sum of per-round audit tokens_cached == stored TokensCached.
+	if got := sumAuditCachedTokens(t, auditor.events); got != assistant.TokensCached {
+		t.Errorf("sum of audit tokens_cached = %d, want %d (stored TokensCached)", got, assistant.TokensCached)
+	}
+}
+
+// TestExecuteToolRounds_SingleRoundKeepsCachedTokens covers the 0-tool-round
+// path: even with no tool calls the accumulator overwrite ran, so cached tokens
+// were being zeroed there too.
+func TestExecuteToolRounds_SingleRoundKeepsCachedTokens(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				Content:      "No tools needed.",
+				TokensUsed:   llm.TokenUsage{Prompt: 40, Completion: 10, CachedPrompt: 500, Total: 550},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, nil, nil, testLogger())
+
+	ctx := context.Background()
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-single",
+		UserID:     "user-1",
+		Text:       "Hi",
+		Timestamp:  time.Now(),
+	}, nil); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	msgs, err := store.GetMessages(ctx, "default:test:chat-single", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	assistant := lastAssistant(t, msgs)
+	if assistant.TokensCached != 500 {
+		t.Errorf("TokensCached = %d, want 500", assistant.TokensCached)
+	}
+}
+
+// TestExecuteToolRounds_NudgeRecoveryAccumulatesCachedTokens forces the empty-
+// content nudge recovery path and asserts the nudge response's cached tokens
+// are included in the accumulated total.
+func TestExecuteToolRounds_NudgeRecoveryAccumulatesCachedTokens(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				// No content alongside the tool call, so there is no accumulated
+				// intermediate content to fall back on.
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{CachedPrompt: 100, Total: 100},
+				FinishReason: "tool_calls",
+			},
+			{
+				// Empty final content forces the nudge path.
+				Content:      "",
+				TokensUsed:   llm.TokenUsage{CachedPrompt: 200, Total: 200},
+				FinishReason: "stop",
+			},
+			{
+				// Nudge recovery response.
+				Content:      "Recovered response.",
+				TokensUsed:   llm.TokenUsage{CachedPrompt: 300, Total: 300},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+
+	ctx := context.Background()
+	text, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-nudge",
+		UserID:     "user-1",
+		Text:       "Process",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+	if text != "Recovered response." {
+		t.Fatalf("response = %q, want %q (nudge path not taken)", text, "Recovered response.")
+	}
+
+	msgs, err := store.GetMessages(ctx, "default:test:chat-nudge", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	assistant := lastAssistant(t, msgs)
+	if assistant.TokensCached != 600 {
+		t.Errorf("TokensCached = %d, want 600 (100+200+300 incl. nudge)", assistant.TokensCached)
+	}
+}
+
+// TestChatWithEvents_UsageEventCarriesCachedTokens verifies the user-facing
+// "usage" ChatEvent (consumed by the web chat ticker) surfaces cached prompt
+// tokens accumulated across tool rounds, not just the total.
+func TestChatWithEvents_UsageEventCarriesCachedTokens(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{CachedPrompt: 100, Total: 110},
+				FinishReason: "tool_calls",
+			},
+			{
+				Content:      "Done.",
+				TokensUsed:   llm.TokenUsage{CachedPrompt: 200, Total: 220},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+
+	var usage *ChatEvent
+	collect := func(ev ChatEvent) {
+		if ev.Type == "usage" {
+			e := ev
+			usage = &e
+		}
+	}
+
+	if _, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-usage",
+		UserID:     "user-1",
+		Text:       "Process",
+		Timestamp:  time.Now(),
+	}, collect); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	if usage == nil {
+		t.Fatal("no usage event emitted")
+	}
+	if usage.TokensCached != 300 {
+		t.Errorf("usage event TokensCached = %d, want 300 (100+200)", usage.TokensCached)
+	}
+	if usage.Tokens != 330 {
+		t.Errorf("usage event Tokens = %d, want 330 (110+220)", usage.Tokens)
+	}
+}
+
+// lastAssistant returns the last stored assistant message, failing the test if
+// none is present.
+func lastAssistant(t *testing.T, msgs []StoredMessage) StoredMessage {
+	t.Helper()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" {
+			return msgs[i]
+		}
+	}
+	t.Fatal("no assistant message stored")
+	return StoredMessage{}
+}
+
+// sumAuditCachedTokens parses tokens_cached out of every llm.complete audit
+// event's JSON detail and returns their sum.
+func sumAuditCachedTokens(t *testing.T, events []audit.Event) int {
+	t.Helper()
+	total := 0
+	for _, ev := range events {
+		if ev.Category != audit.CategoryLLM {
+			continue
+		}
+		var detail map[string]any
+		if err := json.Unmarshal([]byte(ev.Detail), &detail); err != nil {
+			t.Fatalf("unmarshal audit detail %q: %v", ev.Detail, err)
+		}
+		if v, ok := detail["tokens_cached"].(float64); ok {
+			total += int(v)
+		}
+	}
+	return total
+}
