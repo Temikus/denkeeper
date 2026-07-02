@@ -848,15 +848,16 @@ func classifySkillMatch(s skill.Skill, msg adapter.IncomingMessage) string {
 
 // ChatEvent describes an intermediate pipeline event streamed to SSE clients.
 type ChatEvent struct {
-	Type     string  `json:"type"`                  // "tool_start", "tool_end", "thinking", "usage", "tool_approval", "content_delta", "thinking_delta"
-	Tool     string  `json:"tool,omitempty"`        // tool name
-	ToolID   string  `json:"tool_id,omitempty"`     // unique tool call ID (from LLM response)
-	Round    int     `json:"round,omitempty"`       // 1-based tool round
-	Duration int64   `json:"duration_ms,omitempty"` // tool execution time
-	Error    string  `json:"error,omitempty"`       // tool error (if any)
-	Text     string  `json:"text,omitempty"`        // human-readable status message / content delta
-	Tokens   int     `json:"tokens,omitempty"`      // total tokens used (usage event)
-	CostUSD  float64 `json:"cost_usd,omitempty"`    // estimated cost in USD (usage event)
+	Type         string  `json:"type"`                    // "tool_start", "tool_end", "thinking", "usage", "tool_approval", "content_delta", "thinking_delta"
+	Tool         string  `json:"tool,omitempty"`          // tool name
+	ToolID       string  `json:"tool_id,omitempty"`       // unique tool call ID (from LLM response)
+	Round        int     `json:"round,omitempty"`         // 1-based tool round
+	Duration     int64   `json:"duration_ms,omitempty"`   // tool execution time
+	Error        string  `json:"error,omitempty"`         // tool error (if any)
+	Text         string  `json:"text,omitempty"`          // human-readable status message / content delta
+	Tokens       int     `json:"tokens,omitempty"`        // total tokens used (usage event)
+	TokensCached int     `json:"tokens_cached,omitempty"` // cached prompt tokens (usage event)
+	CostUSD      float64 `json:"cost_usd,omitempty"`      // estimated cost in USD (usage event)
 
 	// ApprovalID and ApprovalCallback are set on "tool_approval" events so
 	// the adapter can render inline approve/deny buttons.
@@ -1000,9 +1001,10 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	if onEvent != nil {
 		onEvent(ChatEvent{
-			Type:    "usage",
-			Tokens:  resp.TokensUsed.Total,
-			CostUSD: resp.CostUSD,
+			Type:         "usage",
+			Tokens:       resp.TokensUsed.Total,
+			TokensCached: resp.TokensUsed.CachedPrompt,
+			CostUSD:      resp.CostUSD,
 		})
 	}
 
@@ -1242,9 +1244,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
-	totalUsage.Prompt += resp.TokensUsed.Prompt
-	totalUsage.Completion += resp.TokensUsed.Completion
-	totalUsage.Total += resp.TokensUsed.Total
+	totalUsage.Add(resp.TokensUsed)
 	totalCost += resp.CostUSD
 
 	supervised := perms.Tier() == "supervised" && e.approvals != nil
@@ -1290,9 +1290,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		}
 		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: round + 1})
 
-		totalUsage.Prompt += resp.TokensUsed.Prompt
-		totalUsage.Completion += resp.TokensUsed.Completion
-		totalUsage.Total += resp.TokensUsed.Total
+		totalUsage.Add(resp.TokensUsed)
 		totalCost += resp.CostUSD
 
 		e.logger.Info("tool round complete",
@@ -1319,9 +1317,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		if err != nil {
 			return nil, llmMessages, toolRecords, err
 		}
-		totalUsage.Prompt += resp.TokensUsed.Prompt
-		totalUsage.Completion += resp.TokensUsed.Completion
-		totalUsage.Total += resp.TokensUsed.Total
+		totalUsage.Add(resp.TokensUsed)
 		totalCost += resp.CostUSD
 	}
 

@@ -740,6 +740,9 @@ func TestUpdateConversationStats_Incremental(t *testing.T) {
 	if stats.TotalPrompt != 300 || stats.TotalCompletion != 150 {
 		t.Errorf("prompt=%d completion=%d", stats.TotalPrompt, stats.TotalCompletion)
 	}
+	if stats.TotalCached != 10 {
+		t.Errorf("total_tokens_cached = %d, want 10 (10+0)", stats.TotalCached)
+	}
 }
 
 func TestUpdateConversationStats_PersistsAgent(t *testing.T) {
@@ -1235,6 +1238,34 @@ func TestGetTelemetrySummary(t *testing.T) {
 	}
 	if len(summary.BySkill) != 1 || summary.BySkill[0].SkillName != "greeting" {
 		t.Errorf("by_skill: %+v", summary.BySkill)
+	}
+}
+
+func TestGetTelemetrySummary_CachedTokensRollUp(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	_, _ = store.GetOrCreateConversation(ctx, "test", "1")
+	for _, cached := range []int{100, 200, 300} {
+		_, _ = store.AddMessage(ctx, "test:1", StoredMessage{
+			Role: "assistant", Content: "hi", Model: "kimi", Provider: "openrouter",
+			Cost: 0.01, TokensPrompt: 100, TokensCompletion: 50, TokensCached: cached,
+		})
+	}
+
+	summary, err := store.GetTelemetrySummary(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if len(summary.ByModel) != 1 {
+		t.Fatalf("by_model: %+v, want 1 model", summary.ByModel)
+	}
+	if summary.ByModel[0].TotalCached != 600 {
+		t.Errorf("by_model total_tokens_cached = %d, want 600 (100+200+300)", summary.ByModel[0].TotalCached)
 	}
 }
 

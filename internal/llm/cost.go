@@ -24,6 +24,7 @@ type SessionStats struct {
 	Cost           float64        `json:"cost"`
 	InputTokens    int            `json:"input_tokens"`
 	OutputTokens   int            `json:"output_tokens"`
+	CachedTokens   int            `json:"cached_tokens"`
 	Messages       int            `json:"messages"`
 	PricingSources map[string]int `json:"pricing_sources,omitempty"`
 }
@@ -34,6 +35,7 @@ type AgentStats struct {
 	Cost         float64 `json:"cost"`
 	InputTokens  int     `json:"input_tokens"`
 	OutputTokens int     `json:"output_tokens"`
+	CachedTokens int     `json:"cached_tokens"`
 	Messages     int     `json:"messages"`
 	Sessions     int     `json:"sessions"`
 }
@@ -221,6 +223,7 @@ func (ct *CostTracker) AgentCosts() []AgentStats {
 		a.Cost += s.Cost
 		a.InputTokens += s.InputTokens
 		a.OutputTokens += s.OutputTokens
+		a.CachedTokens += s.CachedTokens
 		a.Messages += s.Messages
 		a.Sessions++
 	}
@@ -261,8 +264,12 @@ func (ct *CostTracker) ProviderLimits(provider string) SessionLimits {
 }
 
 // RecordWithProvider adds cost, token usage, and provider attribution for a session.
-// Returns true if within hard budget.
-func (ct *CostTracker) RecordWithProvider(sessionID, provider string, cost float64, inputTokens, outputTokens int, pricingSource string) bool {
+// Returns true if within hard budget. usage carries the full token breakdown;
+// its CachedPrompt is the cache-read portion of the prompt, reported separately
+// by providers (never included in Prompt). Taking TokenUsage whole (rather than
+// positional counts) means new token fields are threaded through without a
+// signature change on every call site.
+func (ct *CostTracker) RecordWithProvider(sessionID, provider string, cost float64, usage TokenUsage, pricingSource string) bool {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
 
@@ -275,8 +282,9 @@ func (ct *CostTracker) RecordWithProvider(sessionID, provider string, cost float
 
 	s := ct.getOrCreateStats(sessionID)
 	s.Cost += cost
-	s.InputTokens += inputTokens
-	s.OutputTokens += outputTokens
+	s.InputTokens += usage.Prompt
+	s.OutputTokens += usage.Completion
+	s.CachedTokens += usage.CachedPrompt
 	s.Messages++
 
 	if pricingSource != "" {
