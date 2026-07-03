@@ -158,6 +158,21 @@ describe('sendMessage', () => {
 })
 
 describe('handleToolEvent via SSE path', () => {
+  test('stream_rollback discards partial deltas before the retry replays', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'content_delta', text: 'partial from failed attempt' })
+      onToolEvent({ type: 'thinking_delta', text: 'stale reasoning' })
+      onToolEvent({ type: 'stream_rollback', text: 'Stream interrupted — retrying...' })
+      onToolEvent({ type: 'content_delta', text: 'replayed answer' })
+      onDone('sess-1')
+    })
+
+    await sendMessage('hello')
+    const agentMsg = get(chatState).messages[1]
+    expect(agentMsg.text).toBe('replayed answer')
+    expect(agentMsg.thinking).toBe('')
+  })
+
   test('tool_start adds to toolCalls array', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })

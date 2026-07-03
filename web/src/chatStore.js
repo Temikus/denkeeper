@@ -142,6 +142,15 @@ function handleToolEvent(agentMsg, evt) {
     touchMessagesThrottled()
     return
   }
+  if (evt.type === 'stream_rollback') {
+    // A provider retry is replaying the stream — discard the partial deltas
+    // from the failed attempt so the replay doesn't render duplicated text.
+    agentMsg.text = ''
+    agentMsg.thinking = ''
+    agentMsg.status = evt.text || 'Retrying...'
+    touchMessages()
+    return
+  }
   if (evt.type === 'thinking') {
     agentMsg.status = evt.text || 'Thinking...'
     touchMessages()

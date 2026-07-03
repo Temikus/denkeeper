@@ -18,6 +18,10 @@ type Provider interface {
 type StreamChunk struct {
 	ContentDelta  string // incremental text content
 	ThinkingDelta string // incremental thinking/reasoning content
+	// Reset signals that a failed attempt is being retried and any deltas
+	// already delivered for this completion must be discarded — the retry
+	// replays the turn from the start. No other field is set alongside it.
+	Reset bool
 }
 
 // StreamCallback is invoked for each chunk during a streaming LLM call.
@@ -80,6 +84,13 @@ func (e *LLMError) Retryable() bool {
 // sticky-routing preferences should only be discarded for the former.
 func IsRetryable(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) {
+		return true
+	}
+	// A truncated stream (upstream cut before finish_reason) is worth retrying:
+	// a fallback provider — or a fresh upstream via sticky-routing reset — can
+	// complete the turn. The default "unknown → retryable" branch below already
+	// covers it, but the explicit check pins the behavior in tests.
+	if errors.Is(err, ErrStreamTruncated) {
 		return true
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

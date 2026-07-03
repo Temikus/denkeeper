@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// ErrStreamTruncated indicates an SSE stream ended (EOF) before delivering a
+// terminal chunk (finish_reason). The response is partial and must not be
+// treated as a completed turn.
+var ErrStreamTruncated = errors.New("stream ended before completion (no finish_reason)")
+
 // OAIStreamResult holds the accumulated data from an OpenAI-compatible
 // streaming response. Providers call ReadOAIStream to parse the SSE body
 // and then convert this into an llm.ChatResponse.
@@ -190,6 +195,14 @@ func ReadOAIStream(body io.Reader, onStream StreamCallback, idle *StreamIdleConf
 			return nil, ErrStreamIdleTimeout
 		}
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+
+	// A stream that ends cleanly (EOF, no scanner error) but never delivered a
+	// finish_reason chunk is a truncated/premature close — the accumulated
+	// result is partial and must not be treated as a completed turn.
+	if acc.result.FinishReason == "" {
+		return nil, fmt.Errorf("%w (content=%dB reasoning=%dB tool_calls=%d)",
+			ErrStreamTruncated, acc.contentBuf.Len(), acc.reasoningBuf.Len(), len(acc.toolAccum))
 	}
 
 	return acc.finish(), nil

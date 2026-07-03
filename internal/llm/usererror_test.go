@@ -56,6 +56,14 @@ func TestUserFacingError_StreamIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestUserFacingError_StreamTruncated(t *testing.T) {
+	err := fmt.Errorf("LLM completion: %w", ErrStreamTruncated)
+	got := UserFacingError(err)
+	if !strings.Contains(got, "prematurely") {
+		t.Errorf("UserFacingError(ErrStreamTruncated) = %q, want substring %q", got, "prematurely")
+	}
+}
+
 func TestHTTPStatusForError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -65,6 +73,7 @@ func TestHTTPStatusForError(t *testing.T) {
 		{"canceled", context.Canceled, 499},
 		{"deadline exceeded", context.DeadlineExceeded, 504},
 		{"stream idle timeout", ErrStreamIdleTimeout, 504},
+		{"stream truncated", ErrStreamTruncated, 502},
 		{"429 rate limit", &LLMError{StatusCode: 429, Message: "slow down"}, 429},
 		{"401 auth", &LLMError{StatusCode: 401, Message: "bad key"}, 502},
 		{"402 credits", &LLMError{StatusCode: 402, Message: "no credits"}, 502},
