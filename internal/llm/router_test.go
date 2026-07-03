@@ -968,6 +968,8 @@ func TestIsRetryable_ContextErrors(t *testing.T) {
 		{"wrapped canceled", fmt.Errorf("sending request: %w", context.Canceled), false},
 		{"wrapped deadline", fmt.Errorf("sending stream request: %w", context.DeadlineExceeded), false},
 		{"wrapped idle timeout", fmt.Errorf("reading stream: %w", ErrStreamIdleTimeout), true},
+		{"bare stream truncated", ErrStreamTruncated, true},
+		{"wrapped stream truncated", fmt.Errorf("LLM completion: %w", ErrStreamTruncated), true},
 		{"llm 503", &LLMError{StatusCode: 503, Message: "down"}, true},
 		{"llm 401", &LLMError{StatusCode: 401, Message: "unauthorized"}, false},
 		{"plain network error", errors.New("connection refused"), true},
@@ -1034,5 +1036,49 @@ func TestRouter_Fallback_IdleTimeoutStillTriggersFallback(t *testing.T) {
 	}
 	if resp.Content != "fallback ok" {
 		t.Errorf("content = %q, want fallback ok", resp.Content)
+	}
+}
+
+func TestRouter_TruncatedStreamUsesFallback(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{name: "primary", err: fmt.Errorf("LLM completion: %w", ErrStreamTruncated)})
+	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "fallback ok", TokensUsed: TokenUsage{Total: 5}}})
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "fallback"}})
+
+	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "fallback ok" {
+		t.Errorf("content = %q, want fallback ok", resp.Content)
+	}
+}
+
+func TestRouter_FallbackEmitsStreamReset(t *testing.T) {
+	// A fallback retry must signal the stream consumer to discard the deltas
+	// already streamed by the failed attempt (one Reset chunk per attempt),
+	// even when the fallback provider itself does not stream.
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("primary", "model", ct)
+	r.RegisterProvider(&mockProvider{name: "primary", err: fmt.Errorf("LLM completion: %w", ErrStreamTruncated)})
+	r.RegisterProvider(&mockProvider{name: "fallback", response: &ChatResponse{Content: "fallback ok", TokensUsed: TokenUsage{Total: 5}}})
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "fallback"}})
+
+	var resets int
+	onStream := func(chunk StreamChunk) {
+		if chunk.Reset {
+			resets++
+		}
+	}
+	resp, err := r.CompleteStream(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}, onStream)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "fallback ok" {
+		t.Errorf("content = %q, want fallback ok", resp.Content)
+	}
+	if resets != 1 {
+		t.Errorf("reset chunks = %d, want 1 (one per fallback attempt)", resets)
 	}
 }

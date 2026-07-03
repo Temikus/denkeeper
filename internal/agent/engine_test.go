@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -4742,6 +4743,234 @@ func TestExecuteToolRounds_NudgeRecoveryAccumulatesCachedTokens(t *testing.T) {
 	assistant := lastAssistant(t, msgs)
 	if assistant.TokensCached != 600 {
 		t.Errorf("TokensCached = %d, want 600 (100+200+300 incl. nudge)", assistant.TokensCached)
+	}
+}
+
+// TestExecuteToolRounds_WhitespaceFinalContentTriggersNudge verifies that a
+// final round which finishes cleanly ("stop") but with whitespace-only content
+// still triggers the nudge-retry recovery path (kimi-k2.6 emits " " content
+// alongside reasoning). Before the trim fix this passed through as the answer.
+func TestExecuteToolRounds_WhitespaceFinalContentTriggersNudge(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				// Tool call with no accompanying content, so nothing accumulates.
+				ToolCalls:    []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_get", Arguments: `{"name":"a"}`}}},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{
+				// Clean finish, but whitespace-only visible content.
+				Content:      "   ",
+				TokensUsed:   llm.TokenUsage{Total: 5},
+				FinishReason: "stop",
+			},
+			{
+				// Nudge recovery response.
+				Content:      "Here is the actual answer.",
+				TokensUsed:   llm.TokenUsage{Total: 8},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	toolMgr := tool.NewManager(testLogger())
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
+
+	ctx := context.Background()
+	text, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-ws-nudge",
+		UserID:     "user-1",
+		Text:       "Process",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+	if text != "Here is the actual answer." {
+		t.Fatalf("response = %q, want nudge recovery response (whitespace not treated as final)", text)
+	}
+}
+
+// TestExecuteToolRounds_TruncatedFinalErrors covers Layer 3: a final response
+// with no finish_reason, no tool calls, and blank content (a provider that
+// bypasses ReadOAIStream and silently truncates) must surface as an error, not
+// a clean completion. Interrupted progress is persisted and the audit trail
+// carries an error-status LLM event.
+func TestExecuteToolRounds_TruncatedFinalErrors(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				// Truncated: empty finish_reason, no content, no tool calls.
+				Content:      "",
+				TokensUsed:   llm.TokenUsage{Total: 0},
+				FinishReason: "",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+
+	auditor := &collectingAuditor{}
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, nil, nil, testLogger())
+	engine.SetAuditor(auditor)
+
+	ctx := context.Background()
+	_, err = engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-truncated",
+		UserID:     "user-1",
+		Text:       "Do the thing",
+		Timestamp:  time.Now(),
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for truncated final response, got nil")
+	}
+	if !errors.Is(err, llm.ErrStreamTruncated) {
+		t.Errorf("error = %v, want wrapped ErrStreamTruncated", err)
+	}
+
+	// Exactly one LLM audit event for the truncated round-trip: the error one.
+	// The ok-status event is suppressed when the Layer-3 guard fires, so the
+	// trail doesn't read "ok then error" for a single round.
+	var okCount, errCount int
+	for _, ev := range auditor.events {
+		if ev.Category != audit.CategoryLLM {
+			continue
+		}
+		switch ev.Status {
+		case audit.StatusOK:
+			okCount++
+		case audit.StatusError:
+			errCount++
+		}
+	}
+	if errCount != 1 {
+		t.Errorf("error-status LLM audit events = %d, want exactly 1", errCount)
+	}
+	if okCount != 0 {
+		t.Errorf("ok-status LLM audit events = %d, want 0 for a truncated round", okCount)
+	}
+
+	// Interrupted progress persisted: the user message is stored even though the
+	// turn failed (conversation history stays consistent).
+	msgs, err := store.GetMessages(ctx, "default:test:chat-truncated", 100)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Error("expected interrupted progress to persist at least the user message")
+	}
+}
+
+// TestRecoverEmptyToolResponse_WhitespaceAccumulatedFallsThroughToNudge verifies
+// that whitespace-only accumulated content is not reused as the answer; recovery
+// must fall through to the nudge retry instead.
+func TestRecoverEmptyToolResponse_WhitespaceAccumulatedFallsThroughToNudge(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				Content:      "Nudged answer.",
+				TokensUsed:   llm.TokenUsage{Total: 7},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, nil, nil, testLogger())
+
+	resp := &llm.ChatResponse{Content: "", FinishReason: "stop"}
+	llmMessages := []llm.Message{{Role: "user", Content: "hi"}}
+
+	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp, llmMessages, "   \n  ")
+	if err != nil {
+		t.Fatalf("recoverEmptyToolResponse: %v", err)
+	}
+	if got.Content != "Nudged answer." {
+		t.Errorf("content = %q, want nudge response (whitespace accumulated not reused)", got.Content)
+	}
+}
+
+// TestStreamCallbackFor_ResetEmitsRollback verifies a Reset stream chunk is
+// translated into a stream_rollback ChatEvent (and nothing else).
+func TestStreamCallbackFor_ResetEmitsRollback(t *testing.T) {
+	var events []ChatEvent
+	cb := streamCallbackFor(func(evt ChatEvent) { events = append(events, evt) })
+
+	cb(llm.StreamChunk{ContentDelta: "abc"})
+	cb(llm.StreamChunk{Reset: true})
+
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if events[0].Type != "content_delta" {
+		t.Errorf("first event type = %q, want content_delta", events[0].Type)
+	}
+	if events[1].Type != "stream_rollback" {
+		t.Errorf("second event type = %q, want stream_rollback", events[1].Type)
+	}
+}
+
+// TestWrapEventForPartialCapture_RollbackClearsBuffer verifies that a
+// stream_rollback event resets the partial-capture buffer so interrupted-
+// progress persistence doesn't store the failed attempt's deltas twice.
+func TestWrapEventForPartialCapture_RollbackClearsBuffer(t *testing.T) {
+	var buf strings.Builder
+	var forwarded []string
+	wrapped := wrapEventForPartialCapture(func(evt ChatEvent) { forwarded = append(forwarded, evt.Type) }, &buf)
+
+	wrapped(ChatEvent{Type: "content_delta", Text: "stale partial "})
+	wrapped(ChatEvent{Type: "stream_rollback"})
+	wrapped(ChatEvent{Type: "content_delta", Text: "replayed"})
+
+	if got := buf.String(); got != "replayed" {
+		t.Errorf("buffer = %q, want %q (rollback must clear captured partial)", got, "replayed")
+	}
+	if len(forwarded) != 3 {
+		t.Errorf("forwarded events = %d, want 3 (rollback still forwarded)", len(forwarded))
 	}
 }
 

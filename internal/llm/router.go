@@ -503,6 +503,14 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		}
 		return req
 	}
+	// resetStream tells the consumer to discard deltas already streamed by the
+	// failed attempt before the retry replays the turn. Emitted even when the
+	// next provider doesn't stream — the stale partial output must go either way.
+	resetStream := func() {
+		if onStream != nil {
+			onStream(StreamChunk{Reset: true})
+		}
+	}
 
 	switch rule.Action {
 	case "wait_and_retry":
@@ -510,6 +518,7 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		var callErr error
 		req := buildReq(activeProvider, activeModel)
 		retryErr := doWaitAndRetry(ctx, rule.MaxRetries, rule.Backoff, func() error {
+			resetStream()
 			resp, callErr = activeProvider.ChatCompletion(ctx, req)
 			return callErr
 		})
@@ -525,10 +534,12 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		if rule.Model != "" {
 			model = rule.Model
 		}
+		resetStream()
 		resp, err := fp.ChatCompletion(ctx, buildReq(fp, model))
 		return resp, fp.Name(), err
 
 	case "switch_model":
+		resetStream()
 		resp, err := activeProvider.ChatCompletion(ctx, buildReq(activeProvider, rule.Model))
 		return resp, activeProvider.Name(), err
 	}

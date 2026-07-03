@@ -224,3 +224,57 @@ func TestReadOAIStream_MalformedChunksSkipped(t *testing.T) {
 		t.Errorf("content = %q, want hi", result.Content)
 	}
 }
+
+func TestReadOAIStream_TruncatedStreamReturnsError(t *testing.T) {
+	// Content and reasoning deltas arrive, then the stream ends (EOF) before any
+	// finish_reason chunk — a premature upstream close. No [DONE] sentinel.
+	body := "data: {\"id\":\"1\",\"model\":\"kimi-k2.6\",\"choices\":[{\"delta\":{\"reasoning\":\"planning...\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"id\":\"1\",\"model\":\"kimi-k2.6\",\"choices\":[{\"delta\":{\"content\":\"   \"},\"finish_reason\":null}]}\n\n"
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
+	if err == nil {
+		t.Fatalf("expected error, got result: %+v", result)
+	}
+	if !errors.Is(err, ErrStreamTruncated) {
+		t.Errorf("error = %v, want ErrStreamTruncated", err)
+	}
+	if result != nil {
+		t.Errorf("result = %+v, want nil on truncation", result)
+	}
+}
+
+func TestReadOAIStream_CompleteStreamNoUsage(t *testing.T) {
+	// finish_reason present but no usage chunk (stream_options.include_usage off)
+	// — the guard must gate on finish_reason alone, not usage.
+	body := "data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n"
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FinishReason != "stop" {
+		t.Errorf("finish_reason = %q, want stop", result.FinishReason)
+	}
+	if result.Usage != nil {
+		t.Errorf("usage = %+v, want nil", result.Usage)
+	}
+	if result.Content != "done" {
+		t.Errorf("content = %q, want done", result.Content)
+	}
+}
+
+func TestReadOAIStream_ToolCallsFinish(t *testing.T) {
+	// Regression: a normal tool_calls finish is unaffected by the truncation guard.
+	body := sseBody(
+		`{"id":"1","model":"gpt-4o","choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","type":"function","function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{"id":"1","model":"gpt-4o","choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	result, err := ReadOAIStream(strings.NewReader(body), nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %q, want tool_calls", result.FinishReason)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Function.Name != "search" {
+		t.Errorf("tool calls = %+v, want one search call", result.ToolCalls)
+	}
+}

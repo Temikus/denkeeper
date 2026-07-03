@@ -1022,11 +1022,15 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	responseText := sanitizeStaleDirectives(resp.Content, e.logger)
 	var pendingApproval *approval.Request
 
-	if responseText == "" {
+	// A blank (or whitespace-only) final turn is stored for history consistency
+	// but must not pass silently: surface it in the audit log as an error so a
+	// run that accomplished nothing is visible beyond slog.
+	if strings.TrimSpace(responseText) == "" {
 		e.logger.Warn("llm returned empty response",
 			"finish_reason", resp.FinishReason,
 			"conversation", convID,
 		)
+		e.emitLLMAudit(ctx, convID, resp, "LLM returned an empty final response", llmAuditOpts{round: 0})
 	}
 
 	// Use a background context for storing the assistant response so it
@@ -1122,8 +1126,13 @@ func wrapEventForPartialCapture(onEvent ChatEventFunc, buf *strings.Builder) Cha
 		return nil
 	}
 	return func(evt ChatEvent) {
-		if evt.Type == "content_delta" {
+		switch evt.Type {
+		case "content_delta":
 			buf.WriteString(evt.Text)
+		case "stream_rollback":
+			// A retry is replaying the stream; drop the captured partial text so
+			// interrupted-progress persistence doesn't store duplicated content.
+			buf.Reset()
 		}
 		onEvent(evt)
 	}
@@ -1193,6 +1202,12 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 		return nil
 	}
 	return func(chunk llm.StreamChunk) {
+		if chunk.Reset {
+			// The router is retrying a failed attempt; consumers must discard
+			// the deltas already streamed for this turn before the replay.
+			onEvent(ChatEvent{Type: "stream_rollback", Text: "Stream interrupted — retrying..."})
+			return
+		}
 		if chunk.ContentDelta != "" {
 			onEvent(ChatEvent{Type: "content_delta", Text: chunk.ContentDelta})
 		}
@@ -1217,7 +1232,12 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: 0})
 		return nil, llmMessages, nil, fmt.Errorf("LLM completion: %w", err)
 	}
-	e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: 0})
+	// A truncated final skips the ok-status event: executeToolRounds' Layer-3
+	// guard emits the single error-status event for this round-trip instead of
+	// an "ok then error" pair.
+	if !isTruncatedFinal(resp) {
+		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: 0})
+	}
 
 	// Validate tool execution preconditions before entering the loop.
 	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
@@ -1283,23 +1303,13 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		}
 
 		var err error
-		resp, err = e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+		resp, err = e.completeToolRound(ctx, convID, round+1, llmMessages, onEvent)
 		if err != nil {
-			e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: round + 1})
-			return nil, llmMessages, toolRecords, fmt.Errorf("LLM completion (tool round %d): %w", round+1, err)
+			return nil, llmMessages, toolRecords, err
 		}
-		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: round + 1})
 
 		totalUsage.Add(resp.TokensUsed)
 		totalCost += resp.CostUSD
-
-		e.logger.Info("tool round complete",
-			"round", round+1,
-			"finish_reason", resp.FinishReason,
-			"content_len", len(resp.Content),
-			"tool_calls_next", len(resp.ToolCalls),
-			"tokens_total", resp.TokensUsed.Total,
-		)
 
 		if e.softCostLimitReached(convID, onEvent) {
 			break
@@ -1310,8 +1320,22 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		parentSpan.SetAttributes(attribute.Int("agent.tool_rounds", toolRounds))
 	}
 
-	// If the model returned empty content after tool rounds, try to recover.
-	if resp.Content == "" && toolRounds > 0 {
+	// Layer 3 (belt-and-braces): reject a final response that never received an
+	// explicit finish reason and carries no tool calls or visible content. For
+	// OAI-path providers Layer 1 (ErrStreamTruncated) already turns this into an
+	// error upstream, so this only fires for providers that bypass
+	// ReadOAIStream. A turn must complete on an explicit finish reason or
+	// non-empty content — never on a silently truncated stream.
+	if isTruncatedFinal(resp) {
+		e.emitLLMAudit(ctx, convID, resp, "truncated final response (no finish_reason)", llmAuditOpts{round: toolRounds})
+		return nil, llmMessages, toolRecords, fmt.Errorf("LLM returned truncated final response (no finish_reason): %w", llm.ErrStreamTruncated)
+	}
+
+	// If the model returned empty (or whitespace-only) content after tool
+	// rounds, try to recover. kimi-k2.6 routinely emits whitespace-only content
+	// (" ", "   ") alongside reasoning even on cleanly-finished streams, so the
+	// trim is required for recovery to fire.
+	if strings.TrimSpace(resp.Content) == "" && toolRounds > 0 {
 		var err error
 		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, accumulatedContent.String())
 		if err != nil {
@@ -1325,6 +1349,38 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
 	return resp, llmMessages, toolRecords, nil
+}
+
+// completeToolRound issues the follow-up completion after one round of tool
+// calls and emits its audit event. A truncated final skips the ok-status
+// event: the Layer-3 guard in executeToolRounds emits the single error-status
+// event for that round-trip instead of an "ok then error" pair.
+func (e *Engine) completeToolRound(ctx context.Context, convID string, round int, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, error) {
+	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+	if err != nil {
+		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: round})
+		return nil, fmt.Errorf("LLM completion (tool round %d): %w", round, err)
+	}
+	if !isTruncatedFinal(resp) {
+		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: round})
+	}
+
+	e.logger.Info("tool round complete",
+		"round", round,
+		"finish_reason", resp.FinishReason,
+		"content_len", len(resp.Content),
+		"tool_calls_next", len(resp.ToolCalls),
+		"tokens_total", resp.TokensUsed.Total,
+	)
+	return resp, nil
+}
+
+// isTruncatedFinal reports whether resp looks like a silently truncated final
+// turn: no explicit finish reason, no tool calls, and no visible content. Such
+// a response must be surfaced as an error rather than stored as a completed
+// turn (see Layer 3 in design/truncated-stream-failed-round.md).
+func isTruncatedFinal(resp *llm.ChatResponse) bool {
+	return resp.FinishReason == "" && len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Content) == ""
 }
 
 // softCostLimitReached checks the soft cost limit between tool rounds.
@@ -1404,7 +1460,7 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 // content after tool rounds. It first checks for accumulated intermediate
 // content, then falls back to nudging the model for a response.
 func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string) (*llm.ChatResponse, []llm.Message, error) {
-	if accumulated != "" {
+	if strings.TrimSpace(accumulated) != "" {
 		e.logger.Info("using accumulated content from intermediate tool rounds",
 			"accumulated_len", len(accumulated))
 		resp.Content = accumulated

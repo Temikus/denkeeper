@@ -16,6 +16,9 @@ func HTTPStatusForError(err error) int {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrStreamIdleTimeout) {
 		return 504 // Gateway Timeout
 	}
+	if errors.Is(err, ErrStreamTruncated) {
+		return 502 // Bad Gateway: upstream cut the stream short
+	}
 
 	var llmErr *LLMError
 	if errors.As(err, &llmErr) {
@@ -39,6 +42,9 @@ func UserFacingError(err error) string {
 	}
 	if errors.Is(err, ErrStreamIdleTimeout) {
 		return "The LLM provider stopped responding. Please try again."
+	}
+	if errors.Is(err, ErrStreamTruncated) {
+		return "The LLM provider ended the response prematurely. Please try again."
 	}
 
 	var llmErr *LLMError

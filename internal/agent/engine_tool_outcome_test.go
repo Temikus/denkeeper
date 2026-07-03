@@ -61,7 +61,10 @@ func newOutcomeTestEngine(t *testing.T) *Engine {
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
-	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{}})
+	// Post-tool-round follow-up completions return a valid final response
+	// (explicit finish_reason) so the tool loop terminates cleanly rather than
+	// tripping the truncated-final guard.
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "done", FinishReason: "stop"}})
 
 	permissions, err := security.NewPermissionEngine("autonomous")
 	if err != nil {
