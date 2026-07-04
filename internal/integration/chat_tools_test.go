@@ -200,3 +200,70 @@ func TestChat_ToolError(t *testing.T) {
 		t.Error("expected a tool result message in the second LLM request")
 	}
 }
+
+// TestChat_RepeatedToolCalls_WrapUp reproduces the 2026-07-04 heartbeat
+// failure shape: the model calls the same tool with identical arguments
+// three times in a row. Instead of delivering a blank interruption marker,
+// the engine must run a tools-stripped wrap-up completion and deliver its
+// summary (plus the early-end honesty marker).
+func TestChat_RepeatedToolCalls_WrapUp(t *testing.T) {
+	sameCall := llm.ToolCall{
+		ID:   "call_1",
+		Type: "function",
+		Function: llm.FunctionCall{
+			Name:      "echo",
+			Arguments: `{"input":"again"}`,
+		},
+	}
+	repeat := func() *llm.ChatResponse {
+		return &llm.ChatResponse{
+			FinishReason: "tool_calls",
+			ToolCalls:    []llm.ToolCall{sameCall},
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+		}
+	}
+	h := chatToolHarness(t, []*llm.ChatResponse{
+		repeat(), repeat(), repeat(),
+		{
+			Content:      "Summary: echo returned 'again' twice; nothing further to do.",
+			FinishReason: "stop",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+		},
+	})
+
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", map[string]string{
+		"message": "check my tasks",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Summary: echo returned 'again' twice") {
+		t.Errorf("response missing wrap-up summary, got: %s", body)
+	}
+	if !strings.Contains(body, "turn ended early") {
+		t.Errorf("response missing early-end marker, got: %s", body)
+	}
+	if strings.Contains(body, "[Interrupted after") {
+		t.Errorf("response contains the old interruption marker, got: %s", body)
+	}
+
+	// Initial + 2 round completions + wrap-up = 4 LLM calls.
+	if h.MockLLM.CallCount() != 4 {
+		t.Errorf("expected 4 LLM calls, got %d", h.MockLLM.CallCount())
+	}
+
+	// The wrap-up request must carry no tool definitions and must end with
+	// the engine's wrap-up instruction.
+	lastReq := h.MockLLM.LastRequest()
+	if len(lastReq.Tools) != 0 {
+		t.Errorf("wrap-up request carries %d tool definitions, want 0", len(lastReq.Tools))
+	}
+	lastMsg := lastReq.Messages[len(lastReq.Messages)-1]
+	if lastMsg.Role != "user" || !strings.Contains(lastMsg.Content, "tool loop stopped") {
+		t.Errorf("last message = [%s] %q, want the wrap-up instruction", lastMsg.Role, lastMsg.Content)
+	}
+}

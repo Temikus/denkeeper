@@ -616,6 +616,36 @@ func TestRouter_SetTools_NilSource(t *testing.T) {
 	}
 }
 
+func TestRouter_CompleteFinal_OmitsTools(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "model", ct)
+	cap := &toolCapturingProvider{}
+	cap.name = "mock"
+	cap.response = &ChatResponse{Content: "ok", TokensUsed: TokenUsage{Total: 5}}
+	r.RegisterProvider(cap)
+
+	r.SetTools(func() []ToolDef {
+		return []ToolDef{{Type: "function", Function: FunctionDef{Name: "some_tool"}}}
+	})
+
+	// Regular Complete carries the tool definitions.
+	if _, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cap.lastTools) != 1 {
+		t.Fatalf("Complete tools count = %d, want 1", len(cap.lastTools))
+	}
+
+	// CompleteFinal strips them even though the source is set, so the
+	// provider cannot return further tool calls in a wrap-up round.
+	if _, err := r.CompleteFinal(context.Background(), "s1", []Message{{Role: "user", Content: "wrap up"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cap.lastTools) != 0 {
+		t.Errorf("CompleteFinal tools count = %d, want 0", len(cap.lastTools))
+	}
+}
+
 func TestRouter_SetDefaultModel(t *testing.T) {
 	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "original-model", ct)

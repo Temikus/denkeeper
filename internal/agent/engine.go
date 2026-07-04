@@ -78,6 +78,30 @@ func (d *repeatDetector) observe(name, args string) bool {
 	return d.consecutiveN >= d.threshold
 }
 
+// loopStopReason classifies model-behavior faults that stop the tool loop
+// while the LLM context is still healthy and full of executed tool results.
+// Unlike transport faults (which surface as errors and take the
+// persistInterruptedProgress path), these are eligible for a wrap-up round:
+// one final tools-stripped completion that summarizes the work done so far.
+type loopStopReason int
+
+const (
+	stopNone loopStopReason = iota
+	stopRepeatedCalls
+	stopMaxRounds
+)
+
+func (r loopStopReason) String() string {
+	switch r {
+	case stopRepeatedCalls:
+		return "repeated identical tool calls"
+	case stopMaxRounds:
+		return "tool-call round budget exhausted"
+	default:
+		return "none"
+	}
+}
+
 // SendFunc is a callback for sending a response back to the originating adapter.
 // The Dispatcher sets this when constructing each Engine.
 type SendFunc func(ctx context.Context, msg adapter.OutgoingMessage) error
@@ -396,13 +420,16 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 }
 
 // llmAuditOpts carries optional fields for emitLLMAudit. Exactly one of
-// {round, nudgeRetry=true} should be set — round labels a numbered LLM
-// round-trip (0 = pre-loop, 1..N = after tool round N), while nudgeRetry
-// labels the synthetic re-prompt in recoverEmptyToolResponse and emits no
-// round field so audit queries that filter on round see only real rounds.
+// {round, nudgeRetry=true, wrapUp=true} should be set — round labels a
+// numbered LLM round-trip (0 = pre-loop, 1..N = after tool round N),
+// nudgeRetry labels the synthetic re-prompt in recoverEmptyToolResponse, and
+// wrapUp labels the tools-stripped completion issued after a model-behavior
+// loop stop (wrapUpToolLoop). The latter two emit no round field so audit
+// queries that filter on round see only real rounds.
 type llmAuditOpts struct {
 	round      int
 	nudgeRetry bool
+	wrapUp     bool
 }
 
 // emitLLMAudit emits a single audit event for one LLM round-trip. On the
@@ -430,9 +457,12 @@ func (e *Engine) emitLLMAudit(ctx context.Context, convID string, resp *llm.Chat
 		detail = buildLLMAuditDetail(resp, provider)
 		content = resp.Content
 	}
-	if opts.nudgeRetry {
+	switch {
+	case opts.nudgeRetry:
 		detail["nudge_retry"] = true
-	} else {
+	case opts.wrapUp:
+		detail["wrap_up"] = true
+	default:
 		detail["round"] = opts.round
 	}
 	fallback := "complete"
@@ -1257,67 +1287,49 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	return resp, llmMessages, toolRecords, nil
 }
 
+// toolLoopOutcome carries the state produced by runToolLoop: the last LLM
+// response, the evolved message list, executed tool records, round count,
+// why the loop ended (stopNone = normal exit), and any intermediate text
+// content the model produced alongside tool calls.
+type toolLoopOutcome struct {
+	resp        *llm.ChatResponse
+	llmMessages []llm.Message
+	toolRecords []ToolCallRecord
+	toolRounds  int
+	stopReason  loopStopReason
+	accumulated string
+}
+
 // executeToolRounds runs the tool-call loop, accumulating tokens/cost across
 // all rounds. Returns the final response, messages, collected tool call records,
-// and any error. If the model returns empty content after completing tool rounds,
-// it attempts to recover by using intermediate content or nudging the model.
+// and any error. Model-behavior loop stops (repeated calls, round budget)
+// degrade to a wrap-up round; if the model returns empty content after
+// completing tool rounds, it attempts to recover by using intermediate
+// content or nudging the model.
 func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Add(resp.TokensUsed)
 	totalCost += resp.CostUSD
 
-	supervised := perms.Tier() == "supervised" && e.approvals != nil
 	parentSpan := trace.SpanFromContext(ctx)
-	var toolRounds int
-	var toolRecords []ToolCallRecord
-	var accumulatedContent strings.Builder
-	detector := newRepeatDetector(defaultRepeatDetectionThreshold)
-	// deniedCalls remembers tool calls denied earlier in this turn (by the
-	// supervisor or a human) keyed by name+args, so identical retries are
-	// auto-denied without burning another approval round-trip. Scoped to one
-	// turn: a new user message gives the approval chain a fresh look.
-	deniedCalls := make(map[string]string)
-	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
-		toolRounds++
-		if round >= e.maxToolRounds {
-			return nil, llmMessages, toolRecords, fmt.Errorf("exceeded maximum tool call rounds (%d)", e.maxToolRounds)
-		}
+	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, onEvent, &totalUsage, &totalCost)
+	if err != nil {
+		return nil, out.llmMessages, out.toolRecords, err
+	}
+	resp, llmMessages = out.resp, out.llmMessages
 
-		recordToolRoundEvent(parentSpan, round+1, resp.ToolCalls)
-
-		// Preserve any text content the model produced alongside tool calls.
-		if resp.Content != "" {
-			accumulatedContent.WriteString(resp.Content)
-		}
-
-		llmMessages = append(llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
-		var roundErr error
-		llmMessages, toolRecords, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, deniedCalls, llmMessages, toolRecords)
-		if roundErr != nil {
-			return nil, llmMessages, toolRecords, roundErr
-		}
-
-		if onEvent != nil {
-			onEvent(ChatEvent{Type: "thinking", Round: round + 1, Text: "Processing tool results..."})
-		}
-
-		var err error
-		resp, err = e.completeToolRound(ctx, convID, round+1, llmMessages, onEvent)
-		if err != nil {
-			return nil, llmMessages, toolRecords, err
-		}
-
-		totalUsage.Add(resp.TokensUsed)
-		totalCost += resp.CostUSD
-
-		if e.softCostLimitReached(convID, onEvent) {
-			break
-		}
+	if out.toolRounds > 0 {
+		parentSpan.SetAttributes(attribute.Int("agent.tool_rounds", out.toolRounds))
 	}
 
-	if toolRounds > 0 {
-		parentSpan.SetAttributes(attribute.Int("agent.tool_rounds", toolRounds))
+	// Model-behavior loop stop: the context is healthy and full of executed
+	// tool results, so degrade to a wrap-up round instead of discarding the
+	// turn.
+	if out.stopReason != stopNone {
+		parentSpan.SetAttributes(attribute.String("agent.tool_loop_stop", out.stopReason.String()))
+		resp, llmMessages, err := e.finishStoppedToolLoop(ctx, convID, out, &totalUsage, &totalCost, onEvent)
+		return resp, llmMessages, out.toolRecords, err
 	}
 
 	// Layer 3 (belt-and-braces): reject a final response that never received an
@@ -1327,19 +1339,19 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// ReadOAIStream. A turn must complete on an explicit finish reason or
 	// non-empty content — never on a silently truncated stream.
 	if isTruncatedFinal(resp) {
-		e.emitLLMAudit(ctx, convID, resp, "truncated final response (no finish_reason)", llmAuditOpts{round: toolRounds})
-		return nil, llmMessages, toolRecords, fmt.Errorf("LLM returned truncated final response (no finish_reason): %w", llm.ErrStreamTruncated)
+		e.emitLLMAudit(ctx, convID, resp, "truncated final response (no finish_reason)", llmAuditOpts{round: out.toolRounds})
+		return nil, llmMessages, out.toolRecords, fmt.Errorf("LLM returned truncated final response (no finish_reason): %w", llm.ErrStreamTruncated)
 	}
 
 	// If the model returned empty (or whitespace-only) content after tool
 	// rounds, try to recover. kimi-k2.6 routinely emits whitespace-only content
 	// (" ", "   ") alongside reasoning even on cleanly-finished streams, so the
 	// trim is required for recovery to fire.
-	if strings.TrimSpace(resp.Content) == "" && toolRounds > 0 {
+	if strings.TrimSpace(resp.Content) == "" && out.toolRounds > 0 {
 		var err error
-		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, accumulatedContent.String())
+		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, out.accumulated)
 		if err != nil {
-			return nil, llmMessages, toolRecords, err
+			return nil, llmMessages, out.toolRecords, err
 		}
 		totalUsage.Add(resp.TokensUsed)
 		totalCost += resp.CostUSD
@@ -1348,7 +1360,72 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// Replace per-round usage with accumulated totals.
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
-	return resp, llmMessages, toolRecords, nil
+	return resp, llmMessages, out.toolRecords, nil
+}
+
+// runToolLoop executes tool-call rounds until the model stops requesting
+// tools, a model-behavior stop fires (recorded in the outcome's stopReason),
+// the soft cost limit is reached, or a transport error occurs (returned as
+// err with the partial outcome for persistence).
+func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
+	supervised := perms.Tier() == "supervised" && e.approvals != nil
+	parentSpan := trace.SpanFromContext(ctx)
+	out := toolLoopOutcome{llmMessages: llmMessages}
+	var accumulatedContent strings.Builder
+	detector := newRepeatDetector(defaultRepeatDetectionThreshold)
+	// deniedCalls remembers tool calls denied earlier in this turn (by the
+	// supervisor or a human) keyed by name+args, so identical retries are
+	// auto-denied without burning another approval round-trip. Scoped to one
+	// turn: a new user message gives the approval chain a fresh look.
+	deniedCalls := make(map[string]string)
+	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
+		if round >= e.maxToolRounds {
+			// Round budget exhausted with the model still requesting tools.
+			// The pending assistant tool_calls message is NOT appended, so the
+			// message list ends on the previous round's tool results — a valid
+			// state for the wrap-up completion.
+			out.stopReason = stopMaxRounds
+			break
+		}
+		out.toolRounds++
+
+		recordToolRoundEvent(parentSpan, round+1, resp.ToolCalls)
+
+		// Preserve any text content the model produced alongside tool calls.
+		if resp.Content != "" {
+			accumulatedContent.WriteString(resp.Content)
+		}
+
+		out.llmMessages = append(out.llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
+		var roundErr error
+		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, deniedCalls, out.llmMessages, out.toolRecords)
+		if roundErr != nil {
+			return out, roundErr
+		}
+		if out.stopReason != stopNone {
+			break
+		}
+
+		if onEvent != nil {
+			onEvent(ChatEvent{Type: "thinking", Round: round + 1, Text: "Processing tool results..."})
+		}
+
+		var err error
+		resp, err = e.completeToolRound(ctx, convID, round+1, out.llmMessages, onEvent)
+		if err != nil {
+			return out, err
+		}
+
+		totalUsage.Add(resp.TokensUsed)
+		*totalCost += resp.CostUSD
+
+		if e.softCostLimitReached(convID, onEvent) {
+			break
+		}
+	}
+	out.resp = resp
+	out.accumulated = accumulatedContent.String()
+	return out, nil
 }
 
 // completeToolRound issues the follow-up completion after one round of tool
@@ -1399,21 +1476,29 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 // runRoundToolCalls executes every tool call in one round, appending each result
 // as a tool message and the collected records. The final tool result of the
 // round carries an authoritative remaining-rounds budget hint (see
-// toolBudgetHint) so the model never has to count calls by hand. It aborts the
-// loop with an error if a tool is called with identical arguments too many
-// consecutive times (runaway detection).
-func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, deniedCalls map[string]string, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, error) {
+// toolBudgetHint) so the model never has to count calls by hand. If a tool is
+// called with identical arguments too many consecutive times (runaway
+// detection), it stops executing, appends synthetic results for the offending
+// and remaining calls (keeping the tool-message protocol valid), and returns
+// stopRepeatedCalls so the caller can run a wrap-up round.
+func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, deniedCalls map[string]string, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
 	for i, tc := range toolCalls {
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
-			e.logger.Warn("repetitive tool call detected, aborting tool loop",
+			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
 				"tool", tc.Function.Name,
 				"consecutive_count", defaultRepeatDetectionThreshold,
 				"round", round+1,
 				"conversation", convID,
 			)
-			return llmMessages, toolRecords, fmt.Errorf(
-				"tool %q called with identical arguments %d consecutive times",
+			synthetic := fmt.Sprintf(
+				"[engine: call not executed — %q was called with identical arguments %d consecutive times; the tool loop is stopping]",
 				tc.Function.Name, defaultRepeatDetectionThreshold)
+			for _, skipped := range toolCalls[i:] {
+				llmMessages = append(llmMessages, llm.Message{
+					Role: "tool", Content: synthetic, ToolCallID: skipped.ID,
+				})
+			}
+			return llmMessages, toolRecords, stopRepeatedCalls, nil
 		}
 		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("agent", e.name),
@@ -1428,7 +1513,7 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			Role: "tool", Content: content, ToolCallID: tc.ID,
 		})
 	}
-	return llmMessages, toolRecords, nil
+	return llmMessages, toolRecords, stopNone, nil
 }
 
 // toolBudgetHint returns a short authoritative note telling the model how many
@@ -1437,8 +1522,8 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 // number of rounds still available after the current one completes.
 func toolBudgetHint(maxRounds, currentRound int) string {
 	remaining := maxRounds - currentRound
-	if remaining < 0 {
-		remaining = 0
+	if remaining <= 0 {
+		return fmt.Sprintf("\n\n[engine: 0 of %d tool-call rounds remaining — your next response must be the final answer, without tool calls]", maxRounds)
 	}
 	return fmt.Sprintf("\n\n[engine: %d of %d tool-call rounds remaining this turn]", remaining, maxRounds)
 }
@@ -1454,6 +1539,71 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 		attribute.Int("tool_call_count", len(toolCalls)),
 		attribute.StringSlice("tool_names", names),
 	))
+}
+
+// finishStoppedToolLoop finalizes a turn after a model-behavior loop stop.
+// Fallback ordering: wrap-up text → accumulated intermediate content → error
+// (which routes to persistInterruptedProgress upstream, i.e. exactly the
+// pre-wrap-up behavior). On success the returned response carries the
+// accumulated usage totals and a compact honesty marker so conversation
+// history (and the user) records that the turn was cut short.
+func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+	stopReason := out.stopReason
+	if len(out.toolRecords) == 0 {
+		// Nothing executed — there is no work to summarize, so skip the
+		// wrap-up completion and take the plain-error path (upstream persists
+		// the interruption marker). Defensive: unreachable through the public
+		// path today, because a repeat trip at threshold 3 only fires after
+		// ≥2 calls executed, and a max-rounds stop requires ≥1 completed
+		// round (each recording ≥1 call). It becomes live if the repeat
+		// threshold ever becomes configurable below 3 — keep it tested.
+		return nil, out.llmMessages, fmt.Errorf("tool loop stopped (%s) with no completed tool calls", stopReason)
+	}
+	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, stopReason, out.llmMessages, out.toolRounds, onEvent)
+	if err != nil {
+		return nil, llmMessages, fmt.Errorf("tool loop stopped (%s); wrap-up failed: %w", stopReason, err)
+	}
+	totalUsage.Add(resp.TokensUsed)
+	*totalCost += resp.CostUSD
+	if strings.TrimSpace(resp.Content) == "" {
+		// Do not nudge a second time — the wrap-up was already the nudge.
+		if strings.TrimSpace(out.accumulated) == "" {
+			return nil, llmMessages, fmt.Errorf("tool loop stopped (%s); wrap-up returned empty content", stopReason)
+		}
+		resp.Content = out.accumulated
+	}
+	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", stopReason)
+	resp.TokensUsed = *totalUsage
+	resp.CostUSD = *totalCost
+	return resp, llmMessages, nil
+}
+
+// wrapUpToolLoop issues one final tools-stripped completion after a
+// model-behavior loop stop (repeated identical calls, round budget
+// exhausted) so the turn ends with a useful summary of the executed work
+// instead of a bare interruption marker. The request carries no tool
+// definitions (Router.CompleteFinal), so the provider cannot return further
+// tool calls — the "no more tools" contract is enforced by request shape,
+// not prompt prose.
+func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopStopReason, llmMessages []llm.Message, toolRounds int, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+	e.logger.Warn("tool loop stopped, attempting wrap-up round",
+		"reason", reason.String(), "conversation", convID, "tool_rounds", toolRounds)
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "thinking", Round: toolRounds, Text: fmt.Sprintf("Wrapping up (tool loop stopped: %s)...", reason)})
+	}
+	llmMessages = append(llmMessages, llm.Message{
+		Role: "user",
+		Content: fmt.Sprintf("[engine: tool loop stopped (%s). Tools are no longer available this turn. "+
+			"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
+			"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason),
+	})
+	resp, err := e.router.CompleteFinal(ctx, convID, llmMessages)
+	if err != nil {
+		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{wrapUp: true})
+		return nil, llmMessages, fmt.Errorf("LLM completion (wrap-up): %w", err)
+	}
+	e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{wrapUp: true})
+	return resp, llmMessages, nil
 }
 
 // recoverEmptyToolResponse attempts to recover when the LLM returns empty

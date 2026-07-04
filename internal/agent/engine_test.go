@@ -2745,7 +2745,7 @@ func TestEngine_ConfigurableMaxToolRounds(t *testing.T) {
 	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
 	engine.SetMaxToolRounds(3)
 
-	_, err = engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+	result, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
 		ExternalID: "chat-maxrounds",
 		UserID:     "user-1",
@@ -2753,17 +2753,23 @@ func TestEngine_ConfigurableMaxToolRounds(t *testing.T) {
 		Timestamp:  time.Now(),
 	}, nil)
 
-	if err == nil {
-		t.Fatal("expected error for exceeding max tool rounds")
+	// Exhausting the round budget is a model-behavior stop, not a transport
+	// fault: the engine runs a tools-stripped wrap-up round instead of erroring.
+	if err != nil {
+		t.Fatalf("expected wrap-up success after exceeding max tool rounds, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "exceeded maximum tool call rounds (3)") {
-		t.Errorf("error = %q, want contains 'exceeded maximum tool call rounds (3)'", err.Error())
+	if !strings.Contains(result, "Final.") {
+		t.Errorf("result = %q, want it to contain the wrap-up text 'Final.'", result)
+	}
+	if !strings.Contains(result, "[engine: turn ended early — tool-call round budget exhausted]") {
+		t.Errorf("result = %q, want it to contain the early-end marker", result)
 	}
 
-	// Initial call + 3 tool rounds = 4 provider calls. The 4th response triggers round 3
-	// which exceeds the limit check (round >= 3).
-	if provider.callIndex != 4 {
-		t.Errorf("provider called %d times, want 4", provider.callIndex)
+	// Initial call + 3 tool rounds = 4 provider calls; the 4th response would
+	// start round 3 which exceeds the limit (round >= 3), triggering the
+	// wrap-up as the 5th call.
+	if provider.callIndex != 5 {
+		t.Errorf("provider called %d times, want 5 (4 rounds + wrap-up)", provider.callIndex)
 	}
 }
 
@@ -2778,7 +2784,6 @@ func TestEngine_RepeatDetection_IdenticalToolCalls(t *testing.T) {
 	sameCall := llm.ToolCall{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "skill_update", Arguments: `{"name":"test","content":"x"}`}}
 	provider := &sequentialProvider{
 		responses: []*llm.ChatResponse{
-			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
 			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
 			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
 			{ToolCalls: []llm.ToolCall{sameCall}, TokensUsed: llm.TokenUsage{Total: 10}, FinishReason: "tool_calls"},
@@ -2798,7 +2803,7 @@ func TestEngine_RepeatDetection_IdenticalToolCalls(t *testing.T) {
 	toolMgr := tool.NewManager(testLogger())
 	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, toolMgr, nil, testLogger())
 
-	_, err = engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
+	result, err := engine.ChatWithEvents(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
 		ExternalID: "chat-repeat",
 		UserID:     "user-1",
@@ -2806,21 +2811,24 @@ func TestEngine_RepeatDetection_IdenticalToolCalls(t *testing.T) {
 		Timestamp:  time.Now(),
 	}, nil)
 
-	if err == nil {
-		t.Fatal("expected error for repetitive tool calls")
+	// Repeated identical calls are a model-behavior stop: two calls executed
+	// successfully, so the engine wraps up with a tools-stripped completion
+	// instead of discarding the turn.
+	if err != nil {
+		t.Fatalf("expected wrap-up success after repeat detection, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "identical arguments 3 consecutive times") {
-		t.Errorf("error = %q, want contains 'identical arguments 3 consecutive times'", err.Error())
+	if !strings.Contains(result, "Done.") {
+		t.Errorf("result = %q, want it to contain the wrap-up text 'Done.'", result)
 	}
-	if !strings.Contains(err.Error(), "skill_update") {
-		t.Errorf("error should mention tool name, got: %q", err.Error())
+	if !strings.Contains(result, "[engine: turn ended early — repeated identical tool calls]") {
+		t.Errorf("result = %q, want it to contain the early-end marker", result)
 	}
 
 	// Round 0: executes call #1 (consecutiveN=1). Round 1: executes call #2 (consecutiveN=2).
-	// Round 2: detects call #3 (consecutiveN=3) before execution → abort.
-	// Provider: initial + round 0 completion + round 1 completion = 3 calls.
-	if provider.callIndex != 3 {
-		t.Errorf("provider called %d times, want 3 (abort before 3rd tool execution)", provider.callIndex)
+	// Round 2: detects call #3 (consecutiveN=3) before execution → stop + wrap-up.
+	// Provider: initial + round 0 completion + round 1 completion + wrap-up = 4 calls.
+	if provider.callIndex != 4 {
+		t.Errorf("provider called %d times, want 4 (3 rounds + wrap-up)", provider.callIndex)
 	}
 }
 
