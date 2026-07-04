@@ -269,17 +269,25 @@ func (r *Router) currentTools() []ToolDef {
 }
 
 func (r *Router) Complete(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
-	return r.completeInternal(ctx, sessionID, messages, nil)
+	return r.completeInternal(ctx, sessionID, messages, nil, false)
 }
 
 // CompleteStream is like Complete but enables real-time streaming of content
 // chunks via the onStream callback. If the active provider does not support
 // streaming, it falls back to the non-streaming path transparently.
 func (r *Router) CompleteStream(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback) (*ChatResponse, error) {
-	return r.completeInternal(ctx, sessionID, messages, onStream)
+	return r.completeInternal(ctx, sessionID, messages, onStream, false)
 }
 
-func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback) (*ChatResponse, error) {
+// CompleteFinal is like Complete but omits all tool definitions from the
+// request, so the provider cannot return further tool calls. Used for
+// wrap-up completions that must terminate a turn (the "no more tools"
+// contract is enforced by request shape, not prompt instructions).
+func (r *Router) CompleteFinal(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
+	return r.completeInternal(ctx, sessionID, messages, nil, true)
+}
+
+func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback, omitTools bool) (*ChatResponse, error) {
 	provider, ok := r.providers[r.defaultProvider]
 	if !ok {
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
@@ -311,7 +319,10 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	}
 
 	// 3. Make the primary call — enable streaming if the provider supports it.
-	currentTools := r.currentTools()
+	var currentTools []ToolDef
+	if !omitTools {
+		currentTools = r.currentTools()
+	}
 	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
 	if onStream != nil {
 		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
