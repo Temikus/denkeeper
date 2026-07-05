@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
@@ -17,11 +17,11 @@ describe('Schedules page', () => {
     expect(screen.getByText('+ Add Schedule')).toBeInTheDocument()
   })
 
-  test('renders schedule table with data', async () => {
+  test('renders grouped schedule table with data', async () => {
     server.use(
       http.get('/api/v1/schedules', () =>
         HttpResponse.json([
-          { name: 'daily-check', expression: '0 9 * * *', skill: 'report', channel: 'telegram:123', enabled: true },
+          { name: 'daily-check', expression: '0 9 * * *', skill: 'report', agent: 'default', channel: 'telegram:123', enabled: true },
         ])
       )
     )
@@ -30,8 +30,90 @@ describe('Schedules page', () => {
     await waitFor(() => {
       expect(screen.getByText('daily-check')).toBeInTheDocument()
       expect(screen.getByText('0 9 * * *')).toBeInTheDocument()
-      expect(screen.getByText('yes')).toBeInTheDocument()
+      expect(screen.getByText('skill: report')).toBeInTheDocument()
     })
+    expect(screen.getByTestId('agent-section-default')).toBeInTheDocument()
+    expect(screen.getByLabelText('Toggle daily-check')).toBeChecked()
+  })
+
+  test('groups schedules into one section per agent, no Agent column', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+        ])
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-section-alice')).toBeInTheDocument()
+      expect(screen.getByTestId('agent-section-bob')).toBeInTheDocument()
+    })
+    expect(within(screen.getByTestId('agent-section-alice')).getByText('alice-job')).toBeInTheDocument()
+    expect(within(screen.getByTestId('agent-section-bob')).getByText('bob-job')).toBeInTheDocument()
+    expect(within(screen.getByTestId('agent-section-alice')).getByText('1 schedule')).toBeInTheDocument()
+    // Agent ownership lives in section headers now — no Agent table column.
+    expect(screen.queryByRole('columnheader', { name: 'Agent' })).not.toBeInTheDocument()
+  })
+
+  test('section header shows the agent tier badge from the agents list', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+        ])
+      ),
+      http.get('/api/v1/agents', () =>
+        HttpResponse.json([{ name: 'alice', permission_tier: 'supervised' }])
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-section-alice')).toBeInTheDocument()
+    })
+    const header = screen.getByTestId('agent-section-alice').querySelector('.section-header')
+    expect(header.textContent).toContain('supervised')
+  })
+
+  test('sections render without tier badges when agents fail to load', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+        ])
+      ),
+      http.get('/api/v1/agents', () =>
+        HttpResponse.json({ error: 'forbidden' }, { status: 403 })
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-section-alice')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('agent-section-alice').querySelector('.tier-badge')).toBeNull()
+  })
+
+  test('row shows a tier badge only for a session_tier override', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'plain', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'override', expression: '@daily', agent: 'alice', channel: 'telegram:1', session_tier: 'restricted', enabled: true },
+        ])
+      ),
+      http.get('/api/v1/agents', () => HttpResponse.json([]))
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('schedule-row-override')).toBeInTheDocument()
+    })
+    expect(within(screen.getByTestId('schedule-row-override')).getByText('restricted')).toBeInTheDocument()
+    expect(screen.getByTestId('schedule-row-plain').querySelector('.tier-badge')).toBeNull()
   })
 
   test('shows empty state when no schedules', async () => {
@@ -59,18 +141,15 @@ describe('Schedules page', () => {
     })
   })
 
-  test('agent filter refetches the list scoped to one agent via the API', async () => {
-    const all = [
-      { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
-      { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
-    ]
-    let lastAgentParam = '__unset__'
+  test('agent chips filter sections client-side without a refetch', async () => {
+    let getCount = 0
     server.use(
-      // Mirror the backend: honour the ?agent= query parameter.
-      http.get('/api/v1/schedules', ({ request }) => {
-        const agent = new URL(request.url).searchParams.get('agent')
-        lastAgentParam = agent
-        return HttpResponse.json(agent ? all.filter(s => s.agent === agent) : all)
+      http.get('/api/v1/schedules', () => {
+        getCount++
+        return HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+        ])
       })
     )
 
@@ -79,50 +158,40 @@ describe('Schedules page', () => {
       expect(screen.getByText('alice-job')).toBeInTheDocument()
       expect(screen.getByText('bob-job')).toBeInTheDocument()
     })
+    expect(getCount).toBe(1)
 
-    // Filter dropdown appears because there is more than one owning agent.
-    const filter = screen.getByTestId('agent-filter')
-    await fireEvent.change(filter, { target: { value: 'alice' } })
-
+    await fireEvent.click(screen.getByTestId('agent-chip-alice'))
     await waitFor(() => {
       expect(screen.getByText('alice-job')).toBeInTheDocument()
       expect(screen.queryByText('bob-job')).not.toBeInTheDocument()
     })
-    // The narrowing came from a server round-trip carrying ?agent=alice.
-    expect(lastAgentParam).toBe('alice')
 
-    // Switching back to "All agents" refetches without the filter.
-    await fireEvent.change(filter, { target: { value: '' } })
+    await fireEvent.click(screen.getByText(/All agents/))
     await waitFor(() => {
       expect(screen.getByText('bob-job')).toBeInTheDocument()
     })
-    expect(lastAgentParam).toBeNull()
+    // Narrowing never went back to the server.
+    expect(getCount).toBe(1)
   })
 
-  test('filter control survives an empty filtered result', async () => {
-    const all = [
-      { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
-      { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
-    ]
+  test('chips show per-agent schedule counts', async () => {
     server.use(
-      http.get('/api/v1/schedules', ({ request }) => {
-        const agent = new URL(request.url).searchParams.get('agent')
-        // Simulate an agent with no schedules.
-        return HttpResponse.json(agent === 'alice' ? [] : all)
-      })
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'alice-job-2', expression: '@hourly', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+        ])
+      )
     )
 
     render(Schedules)
-    await waitFor(() => expect(screen.getByText('bob-job')).toBeInTheDocument())
-
-    const filter = screen.getByTestId('agent-filter')
-    await fireEvent.change(filter, { target: { value: 'alice' } })
-
     await waitFor(() => {
-      expect(screen.getByText(/No schedules for alice/)).toBeInTheDocument()
+      expect(screen.getByTestId('agent-filter')).toBeInTheDocument()
     })
-    // The filter dropdown must remain so the user can recover.
-    expect(screen.getByTestId('agent-filter')).toBeInTheDocument()
+    expect(screen.getByText('All agents (3)')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-chip-alice').textContent).toContain('alice (2)')
+    expect(screen.getByTestId('agent-chip-bob').textContent).toContain('bob (1)')
   })
 
   test('no agent filter shown for a single-agent list', async () => {
@@ -141,6 +210,54 @@ describe('Schedules page', () => {
     expect(screen.queryByTestId('agent-filter')).not.toBeInTheDocument()
   })
 
+  test('toggle PATCHes enabled and reflects the refetched state', async () => {
+    let patchBody = null
+    let toggled = false
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'daily-check', expression: '0 9 * * *', agent: 'default', channel: 'telegram:123', enabled: !toggled },
+        ])
+      ),
+      http.patch('/api/v1/schedules/:name', async ({ request }) => {
+        patchBody = await request.json()
+        toggled = true
+        return HttpResponse.json({ ok: true })
+      })
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Toggle daily-check')).toBeChecked()
+    })
+
+    await fireEvent.click(screen.getByLabelText('Toggle daily-check'))
+    await waitFor(() => {
+      expect(patchBody).toEqual({ enabled: false })
+      expect(screen.getByLabelText('Toggle daily-check')).not.toBeChecked()
+    })
+  })
+
+  test('disabled schedule renders paused and dimmed, missing last run as Never', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'sleepy', expression: '@daily', agent: 'default', channel: 'telegram:1', enabled: false },
+        ])
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('schedule-row-sleepy')).toBeInTheDocument()
+    })
+    const row = screen.getByTestId('schedule-row-sleepy')
+    expect(row.classList.contains('paused')).toBe(true)
+    expect(within(row).getByText('Paused')).toBeInTheDocument()
+    expect(within(row).getByText('Never')).toBeInTheDocument()
+    expect(screen.getByLabelText('Toggle sleepy')).not.toBeChecked()
+  })
+
   test('edit button opens pre-filled form', async () => {
     server.use(
       http.get('/api/v1/schedules', () =>
@@ -152,10 +269,10 @@ describe('Schedules page', () => {
 
     render(Schedules)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getByLabelText('Edit daily-check')).toBeInTheDocument()
     })
 
-    await fireEvent.click(screen.getByText('Edit'))
+    await fireEvent.click(screen.getByLabelText('Edit daily-check'))
     await waitFor(() => {
       expect(screen.getByText('Edit Schedule')).toBeInTheDocument()
     })
@@ -172,13 +289,10 @@ describe('Schedules page', () => {
 
     render(Schedules)
     await waitFor(() => {
-      // Find the delete button in the actions column
-      const deleteBtn = document.querySelector('.btn-sm.danger')
-      expect(deleteBtn).toBeInTheDocument()
+      expect(screen.getByLabelText('Delete daily-check')).toBeInTheDocument()
     })
 
-    const deleteBtn = document.querySelector('.btn-sm.danger')
-    await fireEvent.click(deleteBtn)
+    await fireEvent.click(screen.getByLabelText('Delete daily-check'))
     await waitFor(() => {
       expect(screen.getByText('Delete Schedule')).toBeInTheDocument()
     })
@@ -303,10 +417,10 @@ describe('Schedules page', () => {
 
     render(Schedules)
     await waitFor(() => {
-      expect(screen.getByText('Edit')).toBeInTheDocument()
+      expect(screen.getByLabelText('Edit sched-known')).toBeInTheDocument()
     })
 
-    await fireEvent.click(screen.getByText('Edit'))
+    await fireEvent.click(screen.getByLabelText('Edit sched-known'))
     await waitFor(() => {
       expect(screen.getByText('Edit Schedule')).toBeInTheDocument()
     })

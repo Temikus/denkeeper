@@ -55,7 +55,15 @@ export const skills = [
 ]
 
 export const schedules = [
-  { name: 'daily-check', agent: 'default', cron: '0 9 * * *', message: 'Good morning', enabled: true },
+  {
+    name: 'daily-check', agent: 'default', expression: '0 9 * * *', skill: 'report',
+    channel: 'telegram:123', session_mode: 'isolated', enabled: true,
+    last_run: '2026-01-01T09:00:00Z', next_run: '2026-01-02T09:00:00Z',
+  },
+  {
+    name: 'helper-sync', agent: 'helper', expression: '@hourly', channel: 'discord:99',
+    session_tier: 'restricted', enabled: false,
+  },
 ]
 
 export const tools = [
