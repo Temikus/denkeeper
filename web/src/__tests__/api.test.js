@@ -541,7 +541,7 @@ describe('API method smoke tests', () => {
   test('schedules() returns schedule list', async () => {
     token.set('key')
     const result = await api.schedules()
-    expect(result).toHaveLength(1)
+    expect(result).toHaveLength(2)
     expect(result[0].name).toBe('daily-check')
   })
 
