@@ -84,15 +84,15 @@ export class SchedulesPage {
     return this.page.locator(`[data-testid="schedule-row-${name}"]`)
   }
 
-  /** Click the Edit button on a schedule row. */
+  /** Click the Edit icon button on a schedule row. */
   async editRow(name) {
-    await this.row(name).locator('button:has-text("Edit")').click()
+    await this.row(name).getByRole('button', { name: `Edit ${name}` }).click()
     await this.page.locator('.inline-panel.open').waitFor({ state: 'visible' })
   }
 
-  /** Click the Delete button on a schedule row. */
+  /** Click the Delete icon button on a schedule row. */
   async deleteRow(name) {
-    await this.row(name).locator('button:has-text("Delete")').click()
+    await this.row(name).getByRole('button', { name: `Delete ${name}` }).click()
     await this.page.locator('[data-testid="delete-confirm"]').waitFor({ state: 'visible' })
   }
 
