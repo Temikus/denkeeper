@@ -1,7 +1,9 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { api } from '../api.js'
+  import { isMobile } from '../store.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import KebabMenu from '../components/KebabMenu.svelte'
   import { agentColor } from '../agentColor.js'
   import { relativeTime, shortAbsolute } from '../relativeTime.js'
 
@@ -43,6 +45,15 @@
 
   // In-flight enable/disable toggle (schedule name)
   let togglingName = $state(null)
+
+  let panelEl = $state(null)
+
+  // The inline panel sits above the sections; on mobile, opening it from a
+  // card deep in the list would otherwise expand off-screen with no feedback.
+  function revealForm() {
+    showForm = true
+    if ($isMobile) tick().then(() => panelEl?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }))
+  }
 
   const tierByAgent = $derived(new Map(agents.map(a => [a.name, a.permission_tier])))
 
@@ -127,7 +138,7 @@
     formAgentCustom = ''
     formTags = ''
     formEnabled = true
-    showForm = true
+    revealForm()
   }
 
   function openEdit(s) {
@@ -145,7 +156,7 @@
     formAgentCustom = formAgent === '__custom__' ? (s.agent || '') : ''
     formTags = (s.tags || []).join(', ')
     formEnabled = s.enabled
-    showForm = true
+    revealForm()
   }
 
   function closeForm() {
@@ -213,7 +224,8 @@
 <div class="page">
   <div class="page-header">
     <h1 class="page-title">Schedules</h1>
-    <button class="btn-primary" onclick={openAdd} data-testid="add-schedule-btn">+ Add Schedule</button>
+    <button class="btn-primary" class:mobile-fab={$isMobile} onclick={openAdd}
+      data-testid="add-schedule-btn" aria-label="Add schedule">{$isMobile ? '+' : '+ Add Schedule'}</button>
   </div>
 
   <p class="tz-note">Cron schedules run in <strong>{timezone}</strong> time. <a href="#/server">Change</a></p>
@@ -225,7 +237,7 @@
   {/if}
 
   <!-- Inline Add/Edit Panel -->
-  <div class="inline-panel" class:open={showForm}>
+  <div class="inline-panel" class:open={showForm} bind:this={panelEl}>
     <div class="inline-panel-inner">
       <div class="inline-form" data-testid="schedule-form">
         <h2 class="form-title">{editingName ? 'Edit Schedule' : 'Add Schedule'}</h2>
@@ -329,8 +341,43 @@
           {#if g.tier}
             <span class="tier-badge tier-{g.tier}">{g.tier}</span>
           {/if}
-          <span class="count">{g.schedules.length} schedule{g.schedules.length === 1 ? '' : 's'}</span>
+          <span class="count">{$isMobile ? g.schedules.length : `${g.schedules.length} schedule${g.schedules.length === 1 ? '' : 's'}`}</span>
         </header>
+        {#if $isMobile}
+          <ul class="cell-list">
+            {#each g.schedules as s (s.name)}
+              <li class="cell" class:paused={!s.enabled} data-testid="schedule-row-{s.name}">
+                <div class="cell-top">
+                  <span class="name">{s.name}</span>
+                  {#if s.session_tier}
+                    <span class="tier-badge tier-{s.session_tier}">{s.session_tier}</span>
+                  {/if}
+                  <label class="switch">
+                    <input type="checkbox" checked={s.enabled} disabled={togglingName === s.name}
+                      onchange={() => toggleEnabled(s)} aria-label="Toggle {s.name}" />
+                    <span class="switch-slider"></span>
+                  </label>
+                  <KebabMenu items={[
+                    { label: 'Edit', onclick: () => openEdit(s) },
+                    { label: 'Delete', danger: true, onclick: () => { confirmDelete = s.name } },
+                  ]} />
+                </div>
+                {#if s.skill}
+                  <div class="subline">skill: {s.skill}</div>
+                {/if}
+                <div class="cell-bottom">
+                  <span class="cron">{s.expression}</span>
+                  {#if !s.enabled}
+                    <span class="paused-label">Paused</span>
+                  {:else if s.next_run}
+                    <span class="rel">{relativeTime(s.next_run)}</span>
+                    <span class="abs">{shortAbsolute(s.next_run)}</span>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {:else}
         <div class="table-wrap">
           <table class="table">
             <thead>
@@ -384,6 +431,7 @@
             </tbody>
           </table>
         </div>
+        {/if}
       </section>
     {/each}
   {/if}
@@ -461,7 +509,34 @@
   .rel { color: var(--text); font-weight: 500; }
   .abs { display: block; color: var(--text-muted); font-size: 11px; }
   .paused-label { color: var(--text-muted); }
-  tr.paused .name, tr.paused .cron { opacity: 0.55; }
+  tr.paused .name, tr.paused .cron,
+  .cell.paused .name, .cell.paused .cron { opacity: 0.55; }
+
+  /* Round add-FAB when the header button renders in mobile mode */
+  .mobile-fab {
+    width: 36px; height: 36px; border-radius: 50%;
+    padding: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 20px; line-height: 1;
+  }
+
+  /* Mobile card list — replaces the per-section table under isMobile */
+  .cell-list { list-style: none; margin: 0; padding: 0; }
+  .cell { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; }
+  .cell + .cell { border-top: 1px solid var(--border); }
+  .cell-top { display: flex; align-items: center; gap: 8px; }
+  .cell-top .name {
+    flex: 1; min-width: 0; font-weight: 600; font-size: 13px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cell .subline { color: var(--text-muted); font-size: 11px; }
+  .cell-bottom { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+  .cell-bottom .cron {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    font-family: monospace;
+  }
+  .cell-bottom .rel { font-size: 11px; }
+  .cell-bottom .abs { display: inline; white-space: nowrap; }
+  .cell-bottom .paused-label { font-size: 11px; }
 
   /* Pill toggle switch — Tools-style, compact for table rows; green = enabled status */
   .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
