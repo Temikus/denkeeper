@@ -28,6 +28,8 @@ github.com/dlclark/regexp2/v2 v2.2.1 h1:mf4KkFUj0gJuarK8P+LgiS+Lit7m9N1yAwEfPbee
 github.com/dlclark/regexp2/v2 v2.2.1/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
 github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d h1:IrTLEhqeFRChlRwzmMvNeXbP9ELyB1c6Xbc/ObpzZ3c=
 github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
+github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9 h1:q33zakIx+wEp1Ko5NpDyDBICuXL4JeHUaHbhPowcMEk=
+github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/emicklei/go-restful/v3 v3.13.0 h1:C4Bl2xDndpU6nJ4bc1jXd+uTmYPVUwkD6bFY/oTyCes=
