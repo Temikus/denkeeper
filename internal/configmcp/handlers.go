@@ -887,7 +887,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	agentName := s.deps.AgentName
 
 	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor})); err != nil {
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor, Location: s.locationFor(agentName)})); err != nil {
 			return err
 		}
 		if configPath != "" {
@@ -1115,7 +1115,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		if err := schedRef.Unregister(input.Name); err != nil {
 			return fmt.Errorf("unregistering old schedule: %w", err)
 		}
-		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor})); err != nil {
+		if err := schedRef.RegisterAndStart(cfg, BuildScheduleJob(cfg, handleMsg, logger, chResolver, BuildScheduleJobOpts{Auditor: s.deps.Auditor, Location: s.locationFor(agentName)})); err != nil {
 			return err
 		}
 		if configPath != "" {
@@ -1911,6 +1911,24 @@ type ChannelResolver func(name string) *ChannelResolveResult
 type BuildScheduleJobOpts struct {
 	// Auditor emits audit events for broadcast delivery outcomes. May be nil.
 	Auditor audit.Emitter
+
+	// Location is the timezone rendered into the scheduled-message header.
+	// Nil defaults to UTC.
+	Location *time.Location
+}
+
+// locationFor resolves the header timezone for a schedule targeting the
+// given agent: Deps.AgentLocation > scheduler location > UTC.
+func (s *Server) locationFor(agentName string) *time.Location {
+	if s.deps.AgentLocation != nil {
+		if loc := s.deps.AgentLocation(agentName); loc != nil {
+			return loc
+		}
+	}
+	if s.deps.Sched != nil {
+		return s.deps.Sched.Location()
+	}
+	return time.UTC
 }
 
 // BuildScheduleJob returns a JobFunc that dispatches a message when the
@@ -1937,14 +1955,11 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 		}
 	}
 
-	text := "[Scheduled trigger: " + cfg.Name + "]"
-	if cfg.Skill != "" {
-		text = "[Scheduled: " + cfg.Skill + "]"
-	}
-
 	return func(entry scheduler.Entry) {
 		var failed, succeeded int
 		var lastErr string
+		now := time.Now()
+		text := scheduler.FormatScheduledText(cfg.Name, cfg.Skill, now, opts.Location)
 		for _, target := range targets {
 			msg := adapter.IncomingMessage{
 				Adapter:        target.Adapter,
@@ -1953,7 +1968,11 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 				UserName:       "scheduler",
 				Text:           text,
 				SkillName:      cfg.Skill,
+				ScheduleName:   cfg.Name,
+				ScheduleCron:   cfg.Schedule,
+				IsScheduled:    true,
 				SessionTier:    cfg.SessionTier,
+				Timestamp:      now,
 			}
 			if entry.SessionMode == "isolated" {
 				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())

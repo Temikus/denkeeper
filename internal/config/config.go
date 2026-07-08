@@ -304,8 +304,11 @@ type APIConfig struct {
 	ExternalURL string `toml:"external_url"`
 
 	// Timezone is the IANA timezone name used for evaluating cron schedule
-	// expressions (e.g. "America/New_York", "Europe/London"). Default: "UTC".
-	// Changes take effect after restart.
+	// expressions (e.g. "America/New_York", "Europe/London") and as the
+	// default timezone for injected date metadata (system-prompt date line,
+	// scheduled-message headers); agents may override the latter via their
+	// own timezone field. Default: "UTC". Cron evaluation changes take
+	// effect after restart; date-metadata changes apply on hot-reload.
 	Timezone string `toml:"timezone"`
 
 	// OnboardingDismissed hides the onboarding checklist on the Overview page.
@@ -507,6 +510,12 @@ type AgentInstanceConfig struct {
 
 	// SessionTier overrides the global session.tier for this agent.
 	SessionTier string `toml:"session_tier"`
+
+	// Timezone overrides api.timezone for this agent's injected date metadata
+	// (the system-prompt date line and scheduled-message headers). IANA name,
+	// e.g. "Australia/Sydney". Precedence: agent > api.timezone > UTC.
+	// Does not affect cron evaluation (that remains api.timezone, restart-only).
+	Timezone string `toml:"timezone"`
 
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
@@ -2062,6 +2071,10 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 			return nil, fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
 		}
 
+		if err := validateTimezone(a.Timezone, fmt.Sprintf("agent %q: timezone", a.Name)); err != nil {
+			return nil, err
+		}
+
 		if err := validateAgentBindings(a, wildcards); err != nil {
 			return nil, err
 		}
@@ -2447,7 +2460,7 @@ func validateAPI(api *APIConfig) error {
 			return fmt.Errorf("config: api.websocket_replay_buffer_ttl: invalid duration %q: %w", api.WebSocketReplayBufferTTL, err)
 		}
 	}
-	if err := validateTimezone(api.Timezone); err != nil {
+	if err := validateTimezone(api.Timezone, "api.timezone"); err != nil {
 		return err
 	}
 	if err := validateAuth(&api.Auth); err != nil {
@@ -2503,12 +2516,12 @@ func validateAPIKeys(keys []APIKeyConfig) error {
 	return nil
 }
 
-func validateTimezone(tz string) error {
+func validateTimezone(tz, field string) error {
 	if tz == "" {
 		return nil
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
-		return fmt.Errorf("config: api.timezone: invalid IANA timezone %q: %w", tz, err)
+		return fmt.Errorf("config: %s: invalid IANA timezone %q: %w", field, tz, err)
 	}
 	return nil
 }

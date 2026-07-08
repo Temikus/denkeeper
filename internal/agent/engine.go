@@ -136,6 +136,12 @@ type Engine struct {
 	globalSkillsDir string               // base global skills dir (for merge on reload)
 	sched           *scheduler.Scheduler // nil = scheduling disabled
 
+	// loc is the timezone for the system-prompt date line and scheduled-message
+	// header resolution (set via SetLocation; default UTC). now is the clock,
+	// overridable in tests.
+	loc *time.Location
+	now func() time.Time
+
 	// adapterCtx stores the current message's adapter routing info so that
 	// in-process MCP servers (configmcp) can retrieve it. The MCP JSON-RPC
 	// boundary prevents context.Context propagation, so we bridge via this
@@ -233,6 +239,8 @@ func NewEngine(
 		supervisorToolDescLen:     defaultSupervisorToolDescLen,
 		reviewMaxIter:             defaultReviewMaxIter,
 		reviewTimeout:             defaultReviewTimeout,
+		loc:                       time.UTC,
+		now:                       time.Now,
 		nudgeCounters:             make(map[string]*nudgeState),
 		logger:                    logger.With("agent", name),
 		tracer:                    tracer,
@@ -249,6 +257,20 @@ func (e *Engine) SetMaxContextMessages(n int) {
 	if n > 0 {
 		e.maxContextMessages = n
 	}
+}
+
+// SetLocation sets the timezone used for the system-prompt date line.
+// Nil is ignored (location stays at its current value; default UTC).
+// Call after NewEngine; also re-applied on config hot-reload.
+func (e *Engine) SetLocation(loc *time.Location) {
+	if loc != nil {
+		e.loc = loc
+	}
+}
+
+// Location returns the engine's effective timezone for date metadata.
+func (e *Engine) Location() *time.Location {
+	return e.loc
 }
 
 // MaxToolRounds returns the current tool round limit.
@@ -749,6 +771,17 @@ You are currently connected via the %q adapter. Your delivery channel is: %s:%s
 When creating or updating schedules, use this channel value unless the user specifies otherwise.`,
 			msg.Adapter, msg.Adapter, msg.ExternalID)
 	}
+
+	// Day resolution only: the system prompt is the prompt-cache prefix, so
+	// the date busts the cache once per day; a clock time would bust it every turn.
+	today := e.now().In(e.loc)
+	isoYear, isoWeek := today.ISOWeek()
+	base += fmt.Sprintf(`
+
+## Current Date
+
+Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never infer the date from conversation history. Scheduled runs carry the exact fire time in their message header; derive dated keys and week buckets from these injected values.`,
+		today.Weekday(), today.Format("2006-01-02"), isoYear, isoWeek, e.loc)
 
 	e.skillsMu.RLock()
 	skills := e.skills

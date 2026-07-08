@@ -167,7 +167,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		Enabled:     enabled,
 	}
 
-	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
+	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor, Location: e.Location()})
 	if err := s.deps.Scheduler.RegisterAndStart(cfg, job); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -256,7 +256,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor})
+	job := configmcp.BuildScheduleJob(cfg, e.HandleMessage, s.logger, s.channelResolver(), configmcp.BuildScheduleJobOpts{Auditor: s.deps.Auditor, Location: e.Location()})
 	if err := s.deps.Scheduler.RegisterAndStart(cfg, job); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("re-registering schedule: %v", err)})
 		return

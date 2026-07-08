@@ -812,6 +812,12 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 			}
 			return eng.HandleMessage
 		},
+		AgentLocation: func(name string) *time.Location {
+			if eng := abc.dispatcher.Agent(name); eng != nil {
+				return eng.Location()
+			}
+			return nil
+		},
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
 		KVStore:        abc.kvStore,
@@ -1283,6 +1289,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	e.SetApprovalConfig(approvalTimeout, abc.cfg.Session.ApprovalRetries)
 
 	applySupervisorKnobs(e, ac)
+	e.SetLocation(agentLocation(abc.cfg, ac))
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -1376,6 +1383,7 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 		nil,
 		revLogger,
 	)
+	revEngine.SetLocation(agentLocation(abc.cfg, ac))
 
 	revCMCP := configmcp.New(configmcp.Deps{
 		AgentName:          ac.Name,
@@ -1407,15 +1415,18 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler.Scheduler, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) error {
 	for _, sc := range cfg.Schedules {
 		sc := sc // capture loop variable
-		text := "[Scheduled trigger: " + sc.Name + "]"
-		if sc.Skill != "" {
-			text = "[Scheduled: " + sc.Skill + "]"
-		}
 
 		resolved, chanErr := resolveScheduleChannel(sc.Channel, dispatcher)
 		if chanErr != nil {
 			logger.Warn("schedule has invalid channel, skipping", "name", sc.Name, "channel", sc.Channel, "error", chanErr)
 			continue
+		}
+
+		// The header timestamp renders in the target agent's timezone;
+		// fall back to the scheduler's cron-evaluation timezone.
+		loc := sched.Location()
+		if eng := dispatcher.Agent(sc.Agent); eng != nil {
+			loc = eng.Location()
 		}
 
 		// Unknown agent = broken config → hard error. Missing skill = stale
@@ -1454,25 +1465,9 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			}
 			var failed, succeeded int
 			var lastErr string
+			now := time.Now()
 			for _, target := range targets {
-				msg := adapter.IncomingMessage{
-					Adapter:        target.Adapter,
-					ExternalID:     target.ExternalID,
-					ConversationID: conversationID,
-					UserName:       "scheduler",
-					Text:           text,
-					SkillName:      sc.Skill,
-					ScheduleName:   sc.Name,
-					ScheduleCron:   sc.Schedule,
-					IsScheduled:    true,
-					Timestamp:      time.Now(),
-				}
-				if entry.SessionMode == "isolated" {
-					msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, time.Now().UnixNano())
-				}
-				if entry.SessionTier != "" {
-					msg.SessionTier = entry.SessionTier
-				}
+				msg := buildScheduledMessage(sc, entry, target, conversationID, loc, now)
 				if err := dispatcher.Dispatch(ctx, targetAgent, msg); err != nil {
 					failed++
 					lastErr = err.Error()
@@ -1488,6 +1483,31 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 		}
 	}
 	return nil
+}
+
+// buildScheduledMessage assembles the synthetic message dispatched when a
+// schedule fires. now is the fire time — it feeds both the rendered header
+// text and Timestamp so the two can never disagree.
+func buildScheduledMessage(sc config.ScheduleConfig, entry scheduler.Entry, target agent.AdapterBinding, conversationID string, loc *time.Location, now time.Time) adapter.IncomingMessage {
+	msg := adapter.IncomingMessage{
+		Adapter:        target.Adapter,
+		ExternalID:     target.ExternalID,
+		ConversationID: conversationID,
+		UserName:       "scheduler",
+		Text:           scheduler.FormatScheduledText(entry.Name, entry.Skill, now, loc),
+		SkillName:      sc.Skill,
+		ScheduleName:   sc.Name,
+		ScheduleCron:   sc.Schedule,
+		IsScheduled:    true,
+		Timestamp:      now,
+	}
+	if entry.SessionMode == "isolated" {
+		msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, now.UnixNano())
+	}
+	if entry.SessionTier != "" {
+		msg.SessionTier = entry.SessionTier
+	}
+	return msg
 }
 
 func otelMetricsHandler(cfg *config.Config) http.Handler {
@@ -1947,6 +1967,7 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
 			applySupervisorKnobs(e, ac)
+			e.SetLocation(agentLocation(cfg, ac))
 		}
 
 		logger.Info("config reloaded from disk", "path", path)
@@ -1964,6 +1985,21 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	if ac.SupervisorBodyExcerptLen > 0 || ac.SupervisorToolDescLen > 0 {
 		e.SetSupervisorExcerptConfig(ac.SupervisorBodyExcerptLen, ac.SupervisorToolDescLen)
 	}
+}
+
+// agentLocation resolves the effective timezone for an agent's injected date
+// metadata: agent timezone > api.timezone > UTC. Both values are validated by
+// config.Load, so LoadLocation cannot fail here; UTC is a defensive fallback.
+func agentLocation(cfg *config.Config, ac config.AgentInstanceConfig) *time.Location {
+	tz := cfg.API.Timezone
+	if ac.Timezone != "" {
+		tz = ac.Timezone
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 // selfRestartFunc sends SIGTERM to the current process so that a process

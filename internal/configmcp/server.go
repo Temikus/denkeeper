@@ -72,6 +72,11 @@ type Deps struct {
 	// is not supported via Config MCP.
 	ResolveAgentHandler func(name string) func(context.Context, adapter.IncomingMessage) error
 
+	// AgentLocation resolves the effective timezone for a target agent's
+	// scheduled-message headers (agent override > global). May be nil or
+	// return nil; the scheduler's location is used as the fallback.
+	AgentLocation func(name string) *time.Location
+
 	// PermissionTier returns the current effective tier for the agent
 	// ("autonomous", "supervised", or "restricted").
 	PermissionTier func() string

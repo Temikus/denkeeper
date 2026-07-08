@@ -132,6 +132,10 @@ type internalEntry struct {
 	cancel context.CancelFunc
 }
 
+// Location returns the time.Location cron expressions are evaluated in.
+// Set once in New (nil defaults to UTC); safe to read without locking.
+func (s *Scheduler) Location() *time.Location { return s.loc }
+
 // New creates a Scheduler. Cron expressions are evaluated in the given
 // time.Location. If loc is nil it defaults to UTC.
 func New(logger *slog.Logger, loc *time.Location) *Scheduler {

@@ -4590,3 +4590,61 @@ provider_sticky_ttl = "not-a-duration"
 		t.Fatal("expected validation error for bad provider_sticky_ttl")
 	}
 }
+
+func TestValidateTimezone_Valid(t *testing.T) {
+	if err := validateTimezone("Australia/Sydney", "api.timezone"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTimezone_Invalid(t *testing.T) {
+	err := validateTimezone("Sydney/Australia", "api.timezone")
+	if err == nil {
+		t.Fatal("expected error for invalid IANA name")
+	}
+	if !strings.Contains(err.Error(), "api.timezone") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestValidateTimezone_EmptyAllowed(t *testing.T) {
+	if err := validateTimezone("", "api.timezone"); err != nil {
+		t.Errorf("empty timezone should be allowed (defaults apply): %v", err)
+	}
+}
+
+func TestParse_Agents_Timezone(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+timezone = "Australia/Sydney"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents[0].Timezone != "Australia/Sydney" {
+		t.Errorf("Agents[0].Timezone = %q, want Australia/Sydney", cfg.Agents[0].Timezone)
+	}
+}
+
+func TestParse_Agents_InvalidTimezoneRejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+timezone = "not-a-zone"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid agent timezone")
+	}
+	if !strings.Contains(err.Error(), `agent "default"`) || !strings.Contains(err.Error(), "timezone") {
+		t.Errorf("error should name the agent and field: %v", err)
+	}
+}
