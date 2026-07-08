@@ -1968,6 +1968,9 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 				UserName:       "scheduler",
 				Text:           text,
 				SkillName:      cfg.Skill,
+				ScheduleName:   cfg.Name,
+				ScheduleCron:   cfg.Schedule,
+				IsScheduled:    true,
 				SessionTier:    cfg.SessionTier,
 				Timestamp:      now,
 			}

@@ -24,7 +24,7 @@ func TestBuildScheduleJob_TextIncludesDateHeader(t *testing.T) {
 		return nil
 	}
 
-	cfg := scheduler.Config{Name: "heartbeat", Skill: "heartbeat", Channel: "telegram:123"}
+	cfg := scheduler.Config{Name: "heartbeat", Schedule: "30 8 * * *", Skill: "heartbeat", Channel: "telegram:123"}
 	job := BuildScheduleJob(cfg, handleMsg, slog.Default(), nil, BuildScheduleJobOpts{Location: sydney})
 
 	before := time.Now()
@@ -41,6 +41,12 @@ func TestBuildScheduleJob_TextIncludesDateHeader(t *testing.T) {
 	}
 	if captured.Timestamp.Before(before) {
 		t.Errorf("Timestamp = %v, should be set to the fire time (>= %v)", captured.Timestamp, before)
+	}
+	if !captured.IsScheduled {
+		t.Error("IsScheduled should be true — gates audit trigger_source and supervisor eval framing")
+	}
+	if captured.ScheduleName != "heartbeat" || captured.ScheduleCron != "30 8 * * *" {
+		t.Errorf("schedule metadata not propagated: name=%q cron=%q", captured.ScheduleName, captured.ScheduleCron)
 	}
 }
 
