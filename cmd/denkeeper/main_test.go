@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
@@ -445,5 +447,81 @@ func TestRegisterSchedules_MixedValidAndInvalid(t *testing.T) {
 	}
 	if _, ok := sched.GetEntry("good-one"); !ok {
 		t.Error("valid schedule should still be registered")
+	}
+}
+
+func TestAgentLocation_AgentOverride(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Timezone = "UTC"
+	ac := config.AgentInstanceConfig{Name: "default", Timezone: "Australia/Sydney"}
+
+	loc := agentLocation(cfg, ac)
+	if loc.String() != "Australia/Sydney" {
+		t.Errorf("loc = %v, want Australia/Sydney", loc)
+	}
+}
+
+func TestAgentLocation_GlobalFallback(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.Timezone = "Europe/London"
+	ac := config.AgentInstanceConfig{Name: "default"}
+
+	loc := agentLocation(cfg, ac)
+	if loc.String() != "Europe/London" {
+		t.Errorf("loc = %v, want Europe/London", loc)
+	}
+}
+
+func TestAgentLocation_DefaultUTC(t *testing.T) {
+	loc := agentLocation(&config.Config{}, config.AgentInstanceConfig{Name: "default"})
+	if loc != time.UTC {
+		t.Errorf("loc = %v, want UTC", loc)
+	}
+}
+
+func TestBuildScheduledMessage_TextIncludesDateHeader(t *testing.T) {
+	sydney, err := time.LoadLocation("Australia/Sydney")
+	if err != nil {
+		t.Fatalf("loading Australia/Sydney: %v", err)
+	}
+	sc := config.ScheduleConfig{Name: "heartbeat", Schedule: "30 8 * * *", Skill: "heartbeat"}
+	entry := scheduler.Entry{Name: "heartbeat", Skill: "heartbeat"}
+	target := agent.AdapterBinding{Adapter: "telegram", ExternalID: "123"}
+	now := time.Date(2026, 7, 7, 10, 45, 0, 0, sydney)
+
+	msg := buildScheduledMessage(sc, entry, target, "chan:main", sydney, now)
+
+	wantText := "[Scheduled: heartbeat | 2026-07-07T10:45:00+10:00 Australia/Sydney | 2026-W28]"
+	if msg.Text != wantText {
+		t.Errorf("Text = %q, want %q", msg.Text, wantText)
+	}
+	if !msg.Timestamp.Equal(now) {
+		t.Errorf("Timestamp = %v, want %v (must match the rendered header)", msg.Timestamp, now)
+	}
+	if !msg.IsScheduled {
+		t.Error("IsScheduled should be true")
+	}
+	if msg.ConversationID != "chan:main" {
+		t.Errorf("ConversationID = %q, want chan:main", msg.ConversationID)
+	}
+	if msg.ScheduleName != "heartbeat" || msg.ScheduleCron != "30 8 * * *" {
+		t.Errorf("schedule metadata not propagated: %q %q", msg.ScheduleName, msg.ScheduleCron)
+	}
+}
+
+func TestBuildScheduledMessage_IsolatedConversationID(t *testing.T) {
+	sc := config.ScheduleConfig{Name: "oneshot", Skill: "oneshot"}
+	entry := scheduler.Entry{Name: "oneshot", Skill: "oneshot", SessionMode: "isolated", SessionTier: "restricted"}
+	target := agent.AdapterBinding{Adapter: "telegram", ExternalID: "123"}
+	now := time.Date(2026, 7, 7, 0, 45, 0, 0, time.UTC)
+
+	msg := buildScheduledMessage(sc, entry, target, "chan:main", time.UTC, now)
+
+	wantConv := fmt.Sprintf("sched:oneshot:%d", now.UnixNano())
+	if msg.ConversationID != wantConv {
+		t.Errorf("ConversationID = %q, want %q", msg.ConversationID, wantConv)
+	}
+	if msg.SessionTier != "restricted" {
+		t.Errorf("SessionTier = %q, want restricted (entry override)", msg.SessionTier)
 	}
 }

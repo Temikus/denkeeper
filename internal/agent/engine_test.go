@@ -1324,6 +1324,61 @@ func TestBuildSystemPrompt_NoAdapterOmitsContext(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_IncludesCurrentDate(t *testing.T) {
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	sydney, err := time.LoadLocation("Australia/Sydney")
+	if err != nil {
+		t.Fatalf("loading Australia/Sydney: %v", err)
+	}
+	engine.SetLocation(sydney)
+	// Monday 2026-07-06 09:15 Sydney.
+	engine.now = func() time.Time { return time.Date(2026, 7, 6, 9, 15, 0, 0, sydney) }
+
+	// Date line must appear even with no adapter (unlike Session Context).
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	if !strings.Contains(result.prompt, "## Current Date") {
+		t.Error("system prompt should contain the Current Date section")
+	}
+	want := "Today is Monday 2026-07-06 (ISO week 2026-W28, Australia/Sydney)."
+	if !strings.Contains(result.prompt, want) {
+		t.Errorf("system prompt should contain %q", want)
+	}
+}
+
+func TestBuildSystemPrompt_DateLineDayResolution(t *testing.T) {
+	// Two builds hours apart on the same day must produce byte-identical
+	// prompts — the date line is the prompt-cache prefix and may only
+	// change once per day.
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	engine.now = func() time.Time { return time.Date(2026, 7, 6, 0, 5, 0, 0, time.UTC) }
+	morning := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+
+	engine.now = func() time.Time { return time.Date(2026, 7, 6, 23, 55, 0, 0, time.UTC) }
+	evening := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+
+	if morning.prompt != evening.prompt {
+		t.Error("prompts built at different times on the same day should be identical")
+	}
+}
+
+func TestBuildSystemPrompt_DefaultLocationUTC(t *testing.T) {
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
+
+	engine.now = func() time.Time { return time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC) }
+	engine.SetLocation(nil) // nil must be ignored, not panic or clear the default
+
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	want := "Today is Monday 2026-07-06 (ISO week 2026-W28, UTC)."
+	if !strings.Contains(result.prompt, want) {
+		t.Errorf("system prompt should contain %q", want)
+	}
+}
+
 func TestBuildSystemPrompt_IncludesKVGuidanceWhenPersonaSet(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("You are helpful."), 0600); err != nil {
