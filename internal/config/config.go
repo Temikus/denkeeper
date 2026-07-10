@@ -150,6 +150,15 @@ type WebConfig struct {
 	Fetch   WebFetchConfig  `toml:"fetch"`
 }
 
+// WebEnabled returns whether the built-in web tools (web_search / web_fetch)
+// are enabled. An omitted field defaults to true.
+func (c *WebConfig) WebEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
 // WebSearchConfig configures the web search provider.
 type WebSearchConfig struct {
 	// Provider selects the search backend: "duckduckgo" (default) or "tavily".

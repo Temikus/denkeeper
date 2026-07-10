@@ -27,6 +27,8 @@ type serverConfigResponse struct {
 	MCPServerChatTimeout     string   `json:"mcp_server_chat_timeout"`
 	MCPServerStateless       bool     `json:"mcp_server_stateless"`
 	MCPServerEndpoint        string   `json:"mcp_server_endpoint"`
+	WebToolsEnabled          bool     `json:"web_tools_enabled"`
+	ScriptEnabled            bool     `json:"script_enabled"`
 	Version                  string   `json:"version"`
 	Commit                   string   `json:"commit"`
 	BuildDate                string   `json:"build_date"`
@@ -42,6 +44,8 @@ type serverConfigUpdateInput struct {
 	MCPServerSessionTimeout *string `json:"mcp_server_session_timeout,omitempty"`
 	MCPServerChatTimeout    *string `json:"mcp_server_chat_timeout,omitempty"`
 	MCPServerStateless      *bool   `json:"mcp_server_stateless,omitempty"`
+	WebToolsEnabled         *bool   `json:"web_tools_enabled,omitempty"`
+	ScriptEnabled           *bool   `json:"script_enabled,omitempty"`
 }
 
 // handleGetServerConfig godoc
@@ -72,6 +76,8 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		MCPServerChatTimeout:     cfg.MCPServer.ChatTimeout,
 		MCPServerStateless:       cfg.MCPServer.Stateless,
 		MCPServerEndpoint:        s.mcpServerEndpoint(),
+		WebToolsEnabled:          s.deps.Config.Web.WebEnabled(),
+		ScriptEnabled:            s.deps.Config.Script.ScriptEnabled(),
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -85,7 +91,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePatchServerConfig godoc
 // @Summary      Update server configuration
-// @Description  Partially updates server configuration (external_url, timezone). Changes are applied in-memory and persisted to the TOML config file.
+// @Description  Partially updates server configuration (external_url, timezone, MCP server, and the in-process web_tools_enabled / script_enabled toggles). Changes are applied in-memory and persisted to the TOML config file. Toggling web_tools_enabled or script_enabled returns restart_required: true, since the in-process MCP tools are (de)registered only at process start.
 // @Tags         server
 // @Accept       json
 // @Produce      json
@@ -109,8 +115,38 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	applyServerConfigInput(&s.deps.Config.API, &input)
+	restartRequired := applyInProcessToolInput(s.deps.Config, &input)
 	s.persistServerConfig(&input)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+
+	resp := map[string]any{"status": "updated"}
+	if restartRequired {
+		// The [web]/[script] in-process MCP sessions are registered once at
+		// agent-build time; the hot-reload path does not re-register them, so
+		// the operator must restart the process for the toggle to take effect.
+		resp["restart_required"] = true
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// applyInProcessToolInput applies the [web]/[script] enabled toggles to the
+// in-memory config and reports whether either effective value changed. A change
+// needs a process restart to (de)register the in-process MCP tools, since the
+// hot-reload path does not re-run connectWebMCP/connectScriptMCP.
+func applyInProcessToolInput(cfg *config.Config, input *serverConfigUpdateInput) bool {
+	changed := false
+	if input.WebToolsEnabled != nil {
+		if cfg.Web.WebEnabled() != *input.WebToolsEnabled {
+			changed = true
+		}
+		cfg.Web.Enabled = input.WebToolsEnabled
+	}
+	if input.ScriptEnabled != nil {
+		if cfg.Script.ScriptEnabled() != *input.ScriptEnabled {
+			changed = true
+		}
+		cfg.Script.Enabled = input.ScriptEnabled
+	}
+	return changed
 }
 
 func validateServerConfigInput(input *serverConfigUpdateInput) string {
@@ -234,6 +270,8 @@ func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 		return
 	}
 
+	s.persistInProcessToolConfig(input)
+
 	changes := make(map[string]any)
 	if input.ExternalURL != nil {
 		changes["external_url"] = *input.ExternalURL
@@ -265,6 +303,22 @@ func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 	if len(changes) > 0 {
 		if err := config.UpdateAPIConfig(s.deps.ConfigPath, changes); err != nil {
 			s.logger.Warn("failed to persist server config", "error", err)
+		}
+	}
+}
+
+// persistInProcessToolConfig writes the [web]/[script] enabled toggles to their
+// top-level TOML sections. Persisted separately from the [api] changes because
+// they live in distinct tables.
+func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
+	if input.WebToolsEnabled != nil {
+		if err := config.UpdateWebConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.WebToolsEnabled}); err != nil {
+			s.logger.Warn("failed to persist web config", "error", err)
+		}
+	}
+	if input.ScriptEnabled != nil {
+		if err := config.UpdateScriptConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.ScriptEnabled}); err != nil {
+			s.logger.Warn("failed to persist script config", "error", err)
 		}
 	}
 }

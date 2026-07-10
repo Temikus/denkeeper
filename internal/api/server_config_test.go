@@ -211,6 +211,164 @@ func TestUpdateAPIConfig_Persistence(t *testing.T) {
 	}
 }
 
+func TestGetServerConfig_InProcessToolsDefaultEnabled(t *testing.T) {
+	// Web.Enabled and Script.Enabled are nil (omitted from TOML) → default true.
+	deps := testDepsWithServerConfig()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/server/config")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp serverConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.WebToolsEnabled {
+		t.Error("web_tools_enabled = false, want true (nil-pointer default)")
+	}
+	if !resp.ScriptEnabled {
+		t.Error("script_enabled = false, want true (nil-pointer default)")
+	}
+}
+
+func TestGetServerConfig_InProcessToolsExplicitDisabled(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	deps.Config.Web.Enabled = boolPtr(false)
+	deps.Config.Script.Enabled = boolPtr(false)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/server/config")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	var resp serverConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.WebToolsEnabled {
+		t.Error("web_tools_enabled = true, want false")
+	}
+	if resp.ScriptEnabled {
+		t.Error("script_enabled = true, want false")
+	}
+}
+
+func TestPatchServerConfig_DisableScript_PersistsAndRequestsRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[script]\ntimeout = \"2s\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := testDepsWithServerConfig()
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"script_enabled": false})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["restart_required"] != true {
+		t.Errorf("restart_required = %v, want true", resp["restart_required"])
+	}
+
+	if deps.Config.Script.ScriptEnabled() {
+		t.Error("in-memory Script still enabled, want disabled")
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("enabled = false")) {
+		t.Errorf("persisted config missing enabled = false; got:\n%s", data)
+	}
+	if !bytes.Contains(data, []byte("timeout")) {
+		t.Errorf("persisted config lost script sibling; got:\n%s", data)
+	}
+}
+
+func TestPatchServerConfig_DisableWebTools_Persists(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[web.search]\nprovider = \"duckduckgo\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := testDepsWithServerConfig()
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_tools_enabled": false})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if deps.Config.Web.WebEnabled() {
+		t.Error("in-memory Web still enabled, want disabled")
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("enabled = false")) {
+		t.Errorf("persisted config missing enabled = false; got:\n%s", data)
+	}
+	if !bytes.Contains(data, []byte("duckduckgo")) {
+		t.Errorf("persisted config lost web.search sibling; got:\n%s", data)
+	}
+}
+
+func TestPatchServerConfig_NoChangeOmitsRestartRequired(t *testing.T) {
+	// Setting web_tools_enabled=true when it is already effectively true (nil
+	// default) is not a change, so no restart is required.
+	deps := testDepsWithServerConfig()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_tools_enabled": true})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["restart_required"]; ok {
+		t.Errorf("restart_required present, want omitted when value unchanged: %v", resp)
+	}
+}
+
 func TestReloadConfig_Success(t *testing.T) {
 	deps := testDepsWithServerConfig()
 	called := false

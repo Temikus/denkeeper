@@ -33,6 +33,11 @@
   let saveMcpOk = $state(false)
   let mcpCopied = $state(false)
 
+  // In-process tools (web / script)
+  let savingWeb = $state(false)
+  let savingScript = $state(false)
+  let toolsRestartHint = $state(false)
+
   async function fetchConfig() {
     loading = true
     error = ''
@@ -133,6 +138,36 @@
       error = e.message
     } finally {
       savingMcp = false
+    }
+  }
+
+  async function toggleWebTools() {
+    savingWeb = true
+    error = ''
+    try {
+      const enabled = !config.web_tools_enabled
+      const res = await api.updateServerConfig({ web_tools_enabled: enabled })
+      config.web_tools_enabled = enabled
+      if (res?.restart_required) toolsRestartHint = true
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingWeb = false
+    }
+  }
+
+  async function toggleScript() {
+    savingScript = true
+    error = ''
+    try {
+      const enabled = !config.script_enabled
+      const res = await api.updateServerConfig({ script_enabled: enabled })
+      config.script_enabled = enabled
+      if (res?.restart_required) toolsRestartHint = true
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingScript = false
     }
   }
 
@@ -288,7 +323,7 @@
         <span class="status-dot" class:status-on={config.mcp_server_enabled} class:status-off={!config.mcp_server_enabled}></span>
         <span class="config-value">{config.mcp_server_enabled ? 'Enabled' : 'Disabled'}</span>
         <label class="switch">
-          <input type="checkbox" checked={config.mcp_server_enabled} onchange={toggleMcp} disabled={savingMcp} />
+          <input type="checkbox" aria-label="MCP server" checked={config.mcp_server_enabled} onchange={toggleMcp} disabled={savingMcp} />
           <span class="slider"></span>
         </label>
       </div>
@@ -376,6 +411,53 @@
   {/if}
   {#if saveMcpOk}
     <div class="save-ok">Saved</div>
+  {/if}
+
+  <h2 class="section-title">In-Process Tools</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Web tools (web_search / web_fetch)</div>
+        <div class="config-desc">
+          Built-in tools that let agents search the web and fetch page content.
+          Disable to remove them from every agent's toolset.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <span class="status-dot" class:status-on={config.web_tools_enabled} class:status-off={!config.web_tools_enabled}></span>
+        <span class="config-value">{config.web_tools_enabled ? 'Enabled' : 'Disabled'}</span>
+        <label class="switch">
+          <input type="checkbox" aria-label="Web tools" checked={config.web_tools_enabled} onchange={toggleWebTools} disabled={savingWeb} />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="config-card" style="margin-top: 14px;">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Deterministic compute (run_javascript)</div>
+        <div class="config-desc">
+          In-process sandboxed JavaScript tool for deterministic formatting and
+          classification off the token path. Disable to remove it from every agent's toolset.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <span class="status-dot" class:status-on={config.script_enabled} class:status-off={!config.script_enabled}></span>
+        <span class="config-value">{config.script_enabled ? 'Enabled' : 'Disabled'}</span>
+        <label class="switch">
+          <input type="checkbox" aria-label="Deterministic compute" checked={config.script_enabled} onchange={toggleScript} disabled={savingScript} />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  {#if toolsRestartHint}
+    <div class="mcp-hint">
+      Saved. Restart the server (Process Control below) for the change to take effect.
+    </div>
   {/if}
 
   <h2 class="section-title">External Access</h2>

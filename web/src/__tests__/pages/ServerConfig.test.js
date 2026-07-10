@@ -35,7 +35,7 @@ describe('ServerConfig page', () => {
     await waitFor(() => {
       expect(screen.getByText('WebSocket')).toBeInTheDocument()
     })
-    expect(screen.getByText('Enabled')).toBeInTheDocument()
+    expect(screen.getAllByText('Enabled').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('50')).toBeInTheDocument()
     expect(screen.getByText('5m')).toBeInTheDocument()
   })
@@ -416,10 +416,88 @@ describe('ServerConfig page', () => {
     await waitFor(() => {
       expect(screen.getByText('MCP Server')).toBeInTheDocument()
     })
-    const checkbox = screen.getByRole('checkbox')
+    const checkbox = screen.getByRole('checkbox', { name: 'MCP server' })
     await fireEvent.change(checkbox, { target: { checked: true } })
     await waitFor(() => {
       expect(patchCalled).toBe(true)
+    })
+  })
+
+  test('In-Process Tools section shows web and script toggles enabled', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Web tools (web_search / web_fetch)')).toBeInTheDocument()
+    expect(screen.getByText('Deterministic compute (run_javascript)')).toBeInTheDocument()
+
+    const webToggle = screen.getByRole('checkbox', { name: 'Web tools' })
+    const scriptToggle = screen.getByRole('checkbox', { name: 'Deterministic compute' })
+    expect(webToggle.checked).toBe(true)
+    expect(scriptToggle.checked).toBe(true)
+  })
+
+  test('Web tools toggle PATCHes web_tools_enabled and shows restart hint', async () => {
+    let body = null
+    server.use(
+      http.patch('/api/v1/server/config', async ({ request }) => {
+        body = await request.json()
+        return HttpResponse.json({ status: 'updated', restart_required: true })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const webToggle = screen.getByRole('checkbox', { name: 'Web tools' })
+    await fireEvent.change(webToggle, { target: { checked: false } })
+
+    await waitFor(() => {
+      expect(body).toEqual({ web_tools_enabled: false })
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Restart the server/)).toBeInTheDocument()
+    })
+  })
+
+  test('Deterministic compute toggle PATCHes script_enabled', async () => {
+    let body = null
+    server.use(
+      http.patch('/api/v1/server/config', async ({ request }) => {
+        body = await request.json()
+        return HttpResponse.json({ status: 'updated', restart_required: true })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const scriptToggle = screen.getByRole('checkbox', { name: 'Deterministic compute' })
+    await fireEvent.change(scriptToggle, { target: { checked: false } })
+
+    await waitFor(() => {
+      expect(body).toEqual({ script_enabled: false })
+    })
+  })
+
+  test('In-process tool toggle error shows ErrorBanner', async () => {
+    server.use(
+      http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'Toggle failed' }, { status: 500 })
+      ),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const webToggle = screen.getByRole('checkbox', { name: 'Web tools' })
+    await fireEvent.change(webToggle, { target: { checked: false } })
+
+    await waitFor(() => {
+      expect(screen.getByText('Toggle failed')).toBeInTheDocument()
     })
   })
 })
