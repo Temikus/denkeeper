@@ -127,6 +127,67 @@ allowed_users = [111222333]
 	}
 }
 
+func TestParse_APIOnlySynthesizesDefaultAgent(t *testing.T) {
+	// API-only mode: LLM provider + api.enabled=true, no [[agents]], no adapter
+	// tokens. The full pipeline must synthesize exactly one "default" agent with
+	// no adapter bindings (delivery flows over the REST/WS API).
+	tomlData := []byte(`
+[llm]
+default_provider = "openrouter"
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[api]
+enabled = true
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected exactly 1 synthesized agent, got %d", len(cfg.Agents))
+	}
+	a := cfg.Agents[0]
+	if a.Name != "default" {
+		t.Errorf("Name = %q, want %q", a.Name, "default")
+	}
+	if len(a.Adapters) != 0 {
+		t.Errorf("Adapters = %v, want empty for API-only mode", a.Adapters)
+	}
+	if !cfg.API.IsEnabled() {
+		t.Error("API should be enabled")
+	}
+}
+
+func TestParse_EnvAPIEnabledSynthesizesDefaultAgent(t *testing.T) {
+	// Env-only api.enabled must be honored: applyEnvOverrides runs before
+	// synthesis, so DENKEEPER_API_ENABLED=true triggers the default agent even
+	// when the TOML has no [api] section and no adapter tokens.
+	t.Setenv("DENKEEPER_API_ENABLED", "true")
+	tomlData := []byte(`
+[llm]
+default_provider = "openrouter"
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "default" {
+		t.Fatalf("expected 1 synthesized default agent, got %v", cfg.Agents)
+	}
+	if len(cfg.Agents[0].Adapters) != 0 {
+		t.Errorf("Adapters = %v, want empty for API-only mode", cfg.Agents[0].Adapters)
+	}
+}
+
 func TestParse_AgentDefaults(t *testing.T) {
 	tomlData := []byte(baseConfig)
 
@@ -2441,6 +2502,42 @@ func TestSynthesizeDefaultAgent_ExplicitAgentsNotOverridden(t *testing.T) {
 
 	if len(cfg.Agents) != 1 || cfg.Agents[0].Name != "custom" {
 		t.Errorf("explicit agents should not be overridden, got %v", cfg.Agents)
+	}
+}
+
+func TestSynthesizeDefaultAgent_APIEnabledNoAdapters(t *testing.T) {
+	enabled := true
+	cfg := &Config{
+		API:     APIConfig{Enabled: &enabled},
+		Session: SessionConfig{Tier: "autonomous"},
+	}
+	synthesizeDefaultAgent(cfg)
+
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+	}
+	a := cfg.Agents[0]
+	if a.Name != "default" {
+		t.Errorf("Name = %q, want %q", a.Name, "default")
+	}
+	if len(a.Adapters) != 0 {
+		t.Errorf("Adapters = %v, want empty (API-only delivery needs no bindings)", a.Adapters)
+	}
+	if a.SessionTier != "autonomous" {
+		t.Errorf("SessionTier = %q, want %q", a.SessionTier, "autonomous")
+	}
+}
+
+func TestSynthesizeDefaultAgent_NothingConfigured(t *testing.T) {
+	// No adapter tokens and no explicit api.enabled (nil pointer): nothing is
+	// synthesized so the web setup wizard can guide agent creation.
+	cfg := &Config{
+		Session: SessionConfig{Tier: "autonomous"},
+	}
+	synthesizeDefaultAgent(cfg)
+
+	if len(cfg.Agents) != 0 {
+		t.Fatalf("expected 0 agents when nothing is configured, got %d", len(cfg.Agents))
 	}
 }
 
