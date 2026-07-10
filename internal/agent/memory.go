@@ -930,12 +930,13 @@ type ToolUsageSummary struct {
 	ToolName   string `db:"tool_name"     json:"tool_name"`
 	ServerName string `db:"server_name"   json:"server_name"`
 	CallCount  int    `db:"call_count"    json:"call_count"`
-	// ErrorCount is the total of non-ok outcomes (rejected + failed + denied),
-	// kept for backward compatibility. RejectionCount, FailureCount, and
-	// DenialCount split it into app-level rejections (healthy tool, bad args),
-	// transport/exec failures, and approval denials, so a "healthy but
-	// argued-with" tool isn't reported as broken.
-	ErrorCount     int     `db:"error_count"     json:"error_count"`
+	// The non-ok outcomes are split into RejectionCount (healthy tool, bad
+	// args), FailureCount (transport/exec failures), and DenialCount (approval
+	// denials), so a "healthy but argued-with" or denied tool isn't reported as
+	// broken. The legacy combined error_count field (rejected + failed + denied)
+	// was removed from the payload — it conflated denials with real failures and
+	// was misread as a "broken tool" signal (see issue #215). Reconstruct the old
+	// total as RejectionCount + FailureCount + DenialCount if needed.
 	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int     `db:"failure_count"   json:"failure_count"`
 	DenialCount    int     `db:"denial_count"    json:"denial_count"`
@@ -943,16 +944,16 @@ type ToolUsageSummary struct {
 }
 
 // ToolSkillUsageSummary aggregates tool call data per owning (skill, version).
-// The outcome split mirrors ToolUsageSummary; ErrorCount is the legacy combined
-// total (rejected + failed + denied) — prefer FailureCount for a "broken tool"
-// signal and read DenialCount separately (approval denials aren't faults).
+// The outcome split mirrors ToolUsageSummary; the legacy combined error_count
+// field was removed from the payload (issue #215) — prefer FailureCount for a
+// "broken tool" signal and read DenialCount separately (approval denials aren't
+// faults).
 type ToolSkillUsageSummary struct {
 	SkillName      string  `db:"skill_name"      json:"skill_name"`
 	SkillVersion   string  `db:"skill_version"   json:"skill_version"`
 	ToolName       string  `db:"tool_name"       json:"tool_name"`
 	ServerName     string  `db:"server_name"     json:"server_name"`
 	CallCount      int     `db:"call_count"      json:"call_count"`
-	ErrorCount     int     `db:"error_count"     json:"error_count"`
 	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int     `db:"failure_count"   json:"failure_count"`
 	DenialCount    int     `db:"denial_count"    json:"denial_count"`
@@ -1004,7 +1005,6 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 
 	// Tool call frequency.
 	toolQuery := `SELECT tool_name, server_name, COUNT(*) AS call_count,
-	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
@@ -1035,7 +1035,6 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	// get_cost_summary payload, cap to the last N versions per skill (window
 	// over MAX(created_at) — not the version string, which sorts lexically).
 	toolSkillQuery := `SELECT skill_name, skill_version, tool_name, server_name, COUNT(*) AS call_count,
-	              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS error_count,
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
