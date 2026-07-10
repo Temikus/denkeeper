@@ -1082,8 +1082,12 @@ func applyDefaults(cfg *Config) {
 	synthesizeLegacyProviders(cfg)
 	migrateCostsToProviders(cfg, userSetSoft, userCostSoft, userSetHard, userCostHard)
 	expandEnvVars(cfg)
-	applyMiscDefaults(cfg)
+	// synthesizeDefaultAgent must run before applyMiscDefaults: the latter
+	// defaults api.enabled to true, which would erase the distinction between
+	// "user explicitly enabled the API" and "API on by default". Env overrides
+	// (applyEnvOverrides) have already run, so env-only api.enabled is honored.
 	synthesizeDefaultAgent(cfg)
+	applyMiscDefaults(cfg)
 	applyAgentDefaults(cfg)
 	synthesizeChannels(cfg)
 	applyScheduleDefaults(cfg)
@@ -1574,9 +1578,16 @@ func applyBrowserDefaults(cfg *Config) {
 }
 
 // synthesizeDefaultAgent provides backward-compatible multi-agent support:
-// if no [[agents]] defined AND at least one adapter token is configured
-// (headless mode), synthesize a single "default" agent. When no adapters
-// are configured the user is expected to create agents via the web wizard.
+// if no [[agents]] are defined, synthesize a single "default" agent when either
+//   - at least one adapter token is configured (headless mode), or
+//   - the API server is explicitly enabled (API-only / WebSocket mode), in which
+//     case the agent has no adapter bindings — delivery flows over the REST/WS API.
+//
+// When nothing is configured (no adapter tokens and no explicit api.enabled) the
+// user is expected to create agents via the web wizard, so nothing is synthesized.
+// This relies on running before applyMiscDefaults defaults api.enabled to true;
+// otherwise the "explicitly enabled" signal (a non-nil, true API.Enabled) would be
+// indistinguishable from the default.
 func synthesizeDefaultAgent(cfg *Config) {
 	if len(cfg.Agents) != 0 {
 		return
@@ -1588,7 +1599,11 @@ func synthesizeDefaultAgent(cfg *Config) {
 	if cfg.Discord.Token != "" {
 		defaultAdapters = append(defaultAdapters, "discord")
 	}
-	if len(defaultAdapters) == 0 {
+	// apiExplicitlyEnabled is true only when the user (via TOML) or an env
+	// override set api.enabled = true. A nil pointer means "not set" (the misc
+	// defaults will turn it on later, but that must not trigger synthesis).
+	apiExplicitlyEnabled := cfg.API.Enabled != nil && *cfg.API.Enabled
+	if len(defaultAdapters) == 0 && !apiExplicitlyEnabled {
 		return
 	}
 	cfg.Agents = []AgentInstanceConfig{{

@@ -50,7 +50,7 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 - `llm.Provider` — LLM backends (Anthropic, OpenRouter, OpenAI, Ollama)
 - `agent.MemoryStore` — conversation persistence (SQLite)
 
-**Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters`, `llm_provider`, `llm_model`, `session_tier`. If no `[[agents]]` section exists, a single `"default"` agent is synthesized. `llm_provider` overrides the global `default_provider` for that agent, enabling different agents to use different LLM backends.
+**Multi-agent config**: `[[agents]]` in TOML. Each agent has `name`, `persona_dir`, `adapters`, `llm_provider`, `llm_model`, `session_tier`. If no `[[agents]]` section exists, a single `"default"` agent is synthesized when at least one adapter token is set (headless mode, bound to those adapters) **or** `api.enabled` is explicitly true (API-only/WebSocket mode, with no adapter bindings). When nothing is configured (no tokens, no explicit `api.enabled`), no agent is synthesized so the web setup wizard can guide creation — synthesis runs before `api.enabled` is defaulted to true so it can tell "explicitly enabled" apart from the default. `llm_provider` overrides the global `default_provider` for that agent, enabling different agents to use different LLM backends.
 
 **Named provider instances**: `[[llm.providers]]` array allows multiple instances of the same provider type (e.g. two OpenAI-compatible endpoints). Each entry has `name`, `type` (`anthropic`/`openai`/`openrouter`/`ollama`), `api_key`, `base_url`, `organization`. Legacy `[llm.openai]` single-slot syntax is still supported and auto-converted. Per-agent `llm_provider` references instances by name.
 

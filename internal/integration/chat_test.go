@@ -35,6 +35,33 @@ func TestChat_JSONResponse(t *testing.T) {
 	}
 }
 
+// TestChat_APIOnlyDefaultAgent mirrors the API-only deployment shape from issue
+// #230: a single synthesized "default" agent with no adapter bindings. Chat must
+// resolve it via the fallback path and succeed rather than returning
+// "agent not found".
+func TestChat_APIOnlyDefaultAgent(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "default", Tier: "autonomous", Adapters: nil},
+		},
+	})
+
+	req := h.AuthedRequest(http.MethodPost, "/api/v1/chat", map[string]any{
+		"message": "hello",
+	})
+	rec := h.Do(req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]any
+	DecodeJSON(t, rec, &resp)
+	if resp["response"] != "Hello from mock!" {
+		t.Errorf("response = %v, want 'Hello from mock!'", resp["response"])
+	}
+}
+
 func TestChat_ExplicitSessionID(t *testing.T) {
 	h := NewHarness(t, nil)
 
