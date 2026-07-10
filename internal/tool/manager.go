@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -269,11 +268,11 @@ func (m *Manager) RegisterServer(ctx context.Context, name string, cfg config.To
 // registerStdio spawns an MCP server subprocess and connects over stdio.
 func (m *Manager) registerStdio(ctx context.Context, name string, cfg config.ToolConfig) error {
 	cmd := exec.Command(cfg.Command, cfg.Args...) // #nosec G204 -- MCP tool servers are spawned from config-declared commands
-	// Inherit the current process environment and overlay tool-specific vars.
-	cmd.Env = os.Environ()
-	for k, v := range cfg.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	// Scope the subprocess environment to a non-secret allowlist plus any
+	// explicit passthrough vars, rather than inheriting the full secret-bearing
+	// parent environment. See buildStdioEnv (internal/tool/env.go).
+	passthrough := append(append([]string(nil), m.mcpCfg.EnvPassthrough...), cfg.EnvPassthrough...)
+	cmd.Env = buildStdioEnv(cfg.Env, passthrough, m.logger)
 
 	// Capture stderr so we can surface diagnostic output when the server
 	// fails to start (e.g. missing deps, bad config, crash on init).

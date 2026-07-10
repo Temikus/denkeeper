@@ -255,6 +255,7 @@ MCP tool server definitions.
     scopes = []                      # OAuth scopes
     allow_loopback = false           # bypass SSRF loopback block
     disabled_tools = []              # MCP tool names to exclude from LLM
+    env_passthrough = []             # extra parent env vars to forward (stdio); DENKEEPER_* always filtered
 
 ### [mcp]
 
@@ -269,6 +270,7 @@ Global MCP settings.
     init_retry_attempts = 5          # initial connection retries
     init_retry_backoff = "2s"        # backoff between retries
     url_allowlist = []               # allowed hosts for SSE servers
+    env_passthrough = []             # extra parent env vars to forward into all stdio subprocesses; DENKEEPER_* always filtered
 
 ### [[schedules]]
 
