@@ -743,6 +743,47 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 	return WriteRawConfig(path, raw)
 }
 
+// updateTopLevelSection applies partial updates to a top-level TOML table
+// (e.g. [web], [script]). Only keys present in changes are written; a key
+// mapped to a nil value is deleted so callers can restore the omitted-field
+// default. Existing sibling keys are preserved.
+func updateTopLevelSection(path, section string, changes map[string]any) error {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		return err
+	}
+
+	sec, ok := raw[section].(map[string]any)
+	if !ok {
+		sec = map[string]any{}
+	}
+	for k, v := range changes {
+		if v == nil {
+			delete(sec, k)
+		} else {
+			sec[k] = v
+		}
+	}
+	raw[section] = sec
+
+	return WriteRawConfig(path, raw)
+}
+
+// UpdateWebConfig persists partial updates to the top-level [web] section (the
+// built-in web_search / web_fetch tools).
+func UpdateWebConfig(path string, changes map[string]any) error {
+	return updateTopLevelSection(path, "web", changes)
+}
+
+// UpdateScriptConfig persists partial updates to the top-level [script] section
+// (the in-process run_javascript tool).
+func UpdateScriptConfig(path string, changes map[string]any) error {
+	return updateTopLevelSection(path, "script", changes)
+}
+
 // ---------------------------------------------------------------------------
 // Auth config persistence
 // ---------------------------------------------------------------------------

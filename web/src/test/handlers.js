@@ -301,6 +301,8 @@ export const handlers = [
     mcp_server_chat_timeout: '2m',
     mcp_server_stateless: false,
     mcp_server_endpoint: 'http://:8080/api/v1/mcp',
+    web_tools_enabled: true,
+    script_enabled: true,
     external_url: 'https://den.example.com',
     timezone: 'UTC',
     version: 'v0.25.0',

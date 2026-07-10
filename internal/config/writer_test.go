@@ -1003,3 +1003,83 @@ func TestConcurrentConfigWrites(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// In-process tool (web / script) config persistence
+// ---------------------------------------------------------------------------
+
+func TestUpdateWebConfig_DisablePreservesSiblings(t *testing.T) {
+	path := writeTestConfig(t, "[web.search]\nprovider = \"duckduckgo\"\n")
+
+	if err := UpdateWebConfig(path, map[string]any{"enabled": false}); err != nil {
+		t.Fatalf("UpdateWebConfig: %v", err)
+	}
+
+	got := readTestConfig(t, path)
+	if !strings.Contains(got, "enabled = false") {
+		t.Errorf("persisted config missing enabled = false; got:\n%s", got)
+	}
+	if !strings.Contains(got, "duckduckgo") {
+		t.Errorf("persisted config lost web.search sibling; got:\n%s", got)
+	}
+
+	// Assert the persisted value via the raw round-trip rather than Load(), which
+	// would apply full cross-section validation unrelated to this write.
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	web, _ := raw["web"].(map[string]any)
+	if web["enabled"] != false {
+		t.Errorf("raw [web].enabled = %v, want false", web["enabled"])
+	}
+}
+
+func TestUpdateWebConfig_ReEnable(t *testing.T) {
+	path := writeTestConfig(t, "[web]\nenabled = false\n")
+
+	if err := UpdateWebConfig(path, map[string]any{"enabled": true}); err != nil {
+		t.Fatalf("UpdateWebConfig: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	web, _ := raw["web"].(map[string]any)
+	if web["enabled"] != true {
+		t.Errorf("raw [web].enabled = %v, want true", web["enabled"])
+	}
+}
+
+func TestUpdateScriptConfig_DisablePreservesSiblings(t *testing.T) {
+	path := writeTestConfig(t, "[script]\ntimeout = \"2s\"\nmax_concurrent = 4\n")
+
+	if err := UpdateScriptConfig(path, map[string]any{"enabled": false}); err != nil {
+		t.Fatalf("UpdateScriptConfig: %v", err)
+	}
+
+	got := readTestConfig(t, path)
+	if !strings.Contains(got, "enabled = false") {
+		t.Errorf("persisted config missing enabled = false; got:\n%s", got)
+	}
+	if !strings.Contains(got, "max_concurrent") {
+		t.Errorf("persisted config lost script sibling; got:\n%s", got)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	script, _ := raw["script"].(map[string]any)
+	if script["enabled"] != false {
+		t.Errorf("raw [script].enabled = %v, want false", script["enabled"])
+	}
+}
+
+func TestWebEnabled_NilDefaultsTrue(t *testing.T) {
+	var wc WebConfig
+	if !wc.WebEnabled() {
+		t.Error("WebEnabled() with nil pointer = false, want true")
+	}
+}
