@@ -122,6 +122,8 @@ cached_input = 0.5 # per million cached input tokens (0 = same as input)
 
 **Security**: SSRF protection, header injection prevention, env var denylist, URL/arg redaction in API responses.
 
+**Stdio subprocess env scoping** (`internal/tool/env.go`, `buildStdioEnv`): stdio MCP servers do NOT inherit the full parent environment — that would leak every `DENKEEPER_*` secret (API keys, tokens, session/OIDC secrets) into any tool subprocess. Instead the child gets a minimal explicit env: a built-in non-secret allowlist (`PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*` prefix, `TZ`, `TERM`; runtime vars `NODE_PATH`/`NODE_OPTIONS`/`PYTHONPATH`/`VIRTUAL_ENV`/`GOPATH`; Windows equivalents `SYSTEMROOT`/`COMSPEC`/`PATHEXT`/`TEMP`/`TMP`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA`/`PROGRAMFILES`) plus the tool's own `env` (appended last, wins). Escape hatch: `env_passthrough = ["VAR", ...]` on `[mcp]` (global) and/or `[tools.*]` (per-tool) forwards extra parent vars. A hard exclusion filter (`isExcludedEnvVar`: any `DENKEEPER_*` name or the `forbiddenEnvPatterns` denylist) is applied to every forwarded name — allowlist hits AND passthrough — so a secret can never reach the child even if allowlisted or passed through by accident (a passthrough attempt on a protected var is logged and dropped). Only spawn site affected: `registerStdio`.
+
 ## External REST API
 
 `internal/api/` — HTTP API server (enabled by default). Auth via Bearer token (API keys) or session cookies (password/OIDC).

@@ -669,6 +669,11 @@ type MCPConfig struct {
 	// URLAllowlist restricts which hosts SSE tool servers may connect to.
 	// Supports wildcards (e.g. "*.internal.corp"). Empty = all non-blocked hosts allowed.
 	URLAllowlist []string `toml:"url_allowlist"`
+	// EnvPassthrough names additional parent-process environment variables to
+	// forward into every stdio MCP subprocess, on top of the built-in non-secret
+	// allowlist. Secret-bearing names (DENKEEPER_* and the forbidden-pattern
+	// denylist) are always filtered out even if listed here.
+	EnvPassthrough []string `toml:"env_passthrough"`
 }
 
 // ToolConfig defines an MCP tool server to spawn.
@@ -691,6 +696,13 @@ type ToolConfig struct {
 
 	// Tool filtering — MCP tool names to exclude from the LLM tool payload.
 	DisabledTools []string `toml:"disabled_tools"`
+
+	// EnvPassthrough names additional parent-process environment variables to
+	// forward into this stdio server's subprocess, on top of the built-in
+	// non-secret allowlist and the global [mcp] env_passthrough. Secret-bearing
+	// names (DENKEEPER_* and the forbidden-pattern denylist) are always filtered
+	// out even if listed here.
+	EnvPassthrough []string `toml:"env_passthrough"`
 
 	// Unsafe options.
 	AllowLoopback bool `toml:"allow_loopback"` // bypass SSRF loopback block (localhost/127.x/::1)
