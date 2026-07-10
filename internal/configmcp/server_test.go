@@ -1531,7 +1531,7 @@ func TestGetCostSummary_WithTelemetry(t *testing.T) {
 			}
 			return &agent.TelemetrySummary{
 				ByTool: []agent.ToolUsageSummary{
-					{ToolName: "web_search", ServerName: "web", CallCount: 42, ErrorCount: 3, AvgDuration: 120.5},
+					{ToolName: "web_search", ServerName: "web", CallCount: 42, FailureCount: 3, AvgDuration: 120.5},
 				},
 				BySkill: []agent.SkillUsageSummary{
 					{SkillName: "self-audit", MatchCount: 7, MatchTypes: "command"},
@@ -1549,8 +1549,12 @@ func TestGetCostSummary_WithTelemetry(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
 		t.Fatalf("parsing result: %v", err)
 	}
-	if len(result.ByTool) != 1 || result.ByTool[0].ToolName != "web_search" || result.ByTool[0].ErrorCount != 3 {
-		t.Errorf("ByTool = %+v, want web_search with 3 errors", result.ByTool)
+	if len(result.ByTool) != 1 || result.ByTool[0].ToolName != "web_search" || result.ByTool[0].FailureCount != 3 {
+		t.Errorf("ByTool = %+v, want web_search with 3 failures", result.ByTool)
+	}
+	// The legacy combined error_count field must not appear in the payload (issue #215).
+	if strings.Contains(text, "error_count") {
+		t.Errorf("get_cost_summary payload must not contain error_count: %s", text)
 	}
 	if len(result.BySkill) != 1 || result.BySkill[0].SkillName != "self-audit" {
 		t.Errorf("BySkill = %+v, want self-audit", result.BySkill)

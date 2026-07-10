@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -1311,13 +1313,38 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 	if ts.DenialCount != 2 {
 		t.Errorf("DenialCount = %d, want 2", ts.DenialCount)
 	}
-	// ErrorCount stays the total of non-ok rows (backward compat): rejected+failed+denied = 6.
-	if ts.ErrorCount != 6 {
-		t.Errorf("ErrorCount = %d, want 6 (rejected+failed+denied)", ts.ErrorCount)
+	// FailureCount is the "broken tool" signal — it must count only 'failed'
+	// rows, never the 3 rejections or 2 denials (issue #215).
+	if ts.FailureCount == ts.RejectionCount+ts.FailureCount+ts.DenialCount {
+		t.Errorf("FailureCount (%d) must not include rejections/denials", ts.FailureCount)
 	}
-	if ts.ErrorCount != ts.RejectionCount+ts.FailureCount+ts.DenialCount {
-		t.Errorf("ErrorCount (%d) should equal RejectionCount (%d) + FailureCount (%d) + DenialCount (%d)",
-			ts.ErrorCount, ts.RejectionCount, ts.FailureCount, ts.DenialCount)
+}
+
+// The legacy combined error_count field was removed from the payload (issue
+// #215): it conflated approval denials (a healthy outcome) with real failures.
+func TestToolUsageSummary_JSONHasNoErrorCount(t *testing.T) {
+	blob, err := json.Marshal(ToolUsageSummary{
+		ToolName: "schedule_update", CallCount: 7,
+		RejectionCount: 3, FailureCount: 1, DenialCount: 2,
+	})
+	if err != nil {
+		t.Fatalf("marshal ToolUsageSummary: %v", err)
+	}
+	if bytes.Contains(blob, []byte("error_count")) {
+		t.Errorf("ToolUsageSummary JSON must not contain error_count: %s", blob)
+	}
+}
+
+func TestToolSkillUsageSummary_JSONHasNoErrorCount(t *testing.T) {
+	blob, err := json.Marshal(ToolSkillUsageSummary{
+		SkillName: "heartbeat", SkillVersion: "1.5.2", ToolName: "schedule_update",
+		CallCount: 7, RejectionCount: 3, FailureCount: 1, DenialCount: 2,
+	})
+	if err != nil {
+		t.Fatalf("marshal ToolSkillUsageSummary: %v", err)
+	}
+	if bytes.Contains(blob, []byte("error_count")) {
+		t.Errorf("ToolSkillUsageSummary JSON must not contain error_count: %s", blob)
 	}
 }
 
