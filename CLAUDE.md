@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Development Commands
 
-This project uses [just](https://github.com/casey/just) as the user-facing command runner, [Task](https://taskfile.dev) (`Taskfile.yml`) underneath for per-target fingerprint caching, and [mise](https://mise.jdx.dev) for tool versioning (Go 1.26.2). `just` recipes for `build`, `test`, `lint`, `vet`, `fmt-check`, `lint-ui`, `build-ui`, `test-ui`, `openapi`, and `hook` delegate to `mise x -- task <name>`; Task skips any step whose declared sources/inputs haven't changed. Cache lives in `.task/` (gitignored). Bust a single step with `mise x -- task <name> --force`; bust the whole hook chain with `JUST_HOOK_FORCE=1 just hook`.
+This project uses [just](https://github.com/casey/just) as the user-facing command runner, [Task](https://taskfile.dev) (`Taskfile.yml`) underneath for per-target fingerprint caching, and [mise](https://mise.jdx.dev) for tool versioning (Go pinned in `.mise.toml`, currently 1.26.5). `just` recipes for `build`, `test`, `lint`, `vet`, `fmt-check`, `lint-ui`, `build-ui`, `test-ui`, `openapi`, and `hook` delegate to `mise x -- task <name>`; Task skips any step whose declared sources/inputs haven't changed. Cache lives in `.task/` (gitignored). Bust a single step with `mise x -- task <name> --force`; bust the whole hook chain with `JUST_HOOK_FORCE=1 just hook`.
 
 ```bash
 just build                    # Build binary → pkg/bin/denkeeper
