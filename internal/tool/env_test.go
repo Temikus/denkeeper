@@ -99,6 +99,60 @@ func TestBuildStdioEnv_LCPrefixMatching(t *testing.T) {
 	}
 }
 
+func TestBuildStdioEnv_WindowsMixedCaseNames(t *testing.T) {
+	// Windows env var names are case-insensitive and conventionally mixed-case.
+	// They must match the (uppercase) allowlist and be forwarded with their
+	// original spelling intact.
+	t.Setenv("Path", `C:\Windows\System32`)
+	t.Setenv("SystemRoot", `C:\Windows`)
+	t.Setenv("ComSpec", `C:\Windows\System32\cmd.exe`)
+	t.Setenv("windir", `C:\Windows`) // lowercase; not in allowlist, must be dropped
+
+	got := envToMap(t, buildStdioEnv(nil, nil, testLogger()))
+
+	if got["Path"] != `C:\Windows\System32` {
+		t.Errorf("Path (mixed-case) not forwarded with original spelling: got %q", got["Path"])
+	}
+	if got["SystemRoot"] != `C:\Windows` {
+		t.Errorf("SystemRoot (mixed-case) not forwarded with original spelling: got %q", got["SystemRoot"])
+	}
+	if got["ComSpec"] != `C:\Windows\System32\cmd.exe` {
+		t.Errorf("ComSpec (mixed-case) not forwarded with original spelling: got %q", got["ComSpec"])
+	}
+	// Forwarded entries carry the parent's original spelling, never a
+	// normalized/uppercased key. (Assert the exact key we set is present,
+	// which the equality checks above already establish.)
+	// windir is not in the allowlist, so it must not leak.
+	if _, ok := got["windir"]; ok {
+		t.Error("windir is not allowlisted and must not be forwarded")
+	}
+}
+
+func TestBuildStdioEnv_MixedCaseSecretStillExcluded(t *testing.T) {
+	// The exclusion filter must be case-insensitive too: a mixed-case
+	// DENKEEPER_* name must never reach the child, whether inherited or passed.
+	t.Setenv("Denkeeper_Api_Key", "sk-secret")
+
+	got := envToMap(t, buildStdioEnv(nil, []string{"Denkeeper_Api_Key"}, testLogger()))
+
+	if _, ok := got["Denkeeper_Api_Key"]; ok {
+		t.Error("mixed-case Denkeeper_Api_Key leaked despite the exclusion filter")
+	}
+}
+
+func TestBuildStdioEnv_PassthroughCaseInsensitive(t *testing.T) {
+	// Operator lists the passthrough name in a different case than the parent
+	// env spelling; it must still match and forward with the parent's spelling.
+	t.Setenv("My_Custom_Var", "value1")
+
+	env := buildStdioEnv(nil, []string{"MY_CUSTOM_VAR"}, testLogger())
+	got := envToMap(t, env)
+
+	if got["My_Custom_Var"] != "value1" {
+		t.Errorf("case-insensitive passthrough failed: got %q", got["My_Custom_Var"])
+	}
+}
+
 func TestBuildStdioEnv_CfgEnvOverridesAllowlistedParent(t *testing.T) {
 	t.Setenv("PATH", "/parent/bin")
 
