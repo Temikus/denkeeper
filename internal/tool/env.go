@@ -41,12 +41,16 @@ var stdioEnvAllowlist = map[string]struct{}{
 }
 
 // isAllowlistedEnvVar reports whether an env var name is in the built-in
-// non-secret allowlist. LC_* locale vars are matched by prefix.
+// non-secret allowlist. LC_* locale vars are matched by prefix. Matching is
+// case-insensitive (uppercase-normalized, mirroring isExcludedEnvVar) because
+// Windows env var names are case-insensitive and conventionally mixed-case
+// (Path, SystemRoot, ComSpec) — an exact match would silently drop them.
 func isAllowlistedEnvVar(name string) bool {
-	if _, ok := stdioEnvAllowlist[name]; ok {
+	upper := strings.ToUpper(name)
+	if _, ok := stdioEnvAllowlist[upper]; ok {
 		return true
 	}
-	return strings.HasPrefix(name, "LC_")
+	return strings.HasPrefix(upper, "LC_")
 }
 
 // isExcludedEnvVar reports whether an env var name must never reach a
@@ -75,6 +79,8 @@ func isExcludedEnvVar(name string) bool {
 // The tool's own cfg.Env (explicit, already placeholder-resolved) is appended
 // last so it wins over any inherited value.
 func buildStdioEnv(cfgEnv map[string]string, passthrough []string, logger *slog.Logger) []string {
+	// Keyed by uppercase name so passthrough matching is case-insensitive,
+	// consistent with the allowlist and exclusion filter (Windows names).
 	passSet := make(map[string]struct{}, len(passthrough))
 	for _, name := range passthrough {
 		if name == "" {
@@ -86,7 +92,7 @@ func buildStdioEnv(cfgEnv map[string]string, passthrough []string, logger *slog.
 			}
 			continue
 		}
-		passSet[name] = struct{}{}
+		passSet[strings.ToUpper(name)] = struct{}{}
 	}
 
 	env := make([]string, 0, len(passSet)+len(cfgEnv)+16)
@@ -97,7 +103,7 @@ func buildStdioEnv(cfgEnv map[string]string, passthrough []string, logger *slog.
 		}
 		name := kv[:eq]
 
-		_, passed := passSet[name]
+		_, passed := passSet[strings.ToUpper(name)]
 		if !passed && !isAllowlistedEnvVar(name) {
 			continue
 		}
