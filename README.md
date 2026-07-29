@@ -160,7 +160,7 @@ The Dispatcher routes incoming messages to named agent Engines based on adapter 
 
 ### Prerequisites
 
-- Go 1.25+ (managed via [mise](https://mise.jdx.dev) — see `mise.toml`)
+- Go 1.26+ (managed via [mise](https://mise.jdx.dev) — see `.mise.toml`)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - An API key for your chosen LLM provider: [OpenRouter](https://openrouter.ai/keys), [Anthropic](https://console.anthropic.com/settings/keys), or a local [Ollama](https://ollama.com) instance
 - Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
