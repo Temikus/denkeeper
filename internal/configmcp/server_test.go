@@ -19,6 +19,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 )
 
 // --------------------------------------------------------------------------
@@ -1987,13 +1988,8 @@ func TestSkillGet_Success(t *testing.T) {
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
 		d.GetSkill = func(name string) (skill.Skill, bool) {
 			if name == "greet" {
-				return skill.Skill{
-					Name:        "greet",
-					Description: "Greeting skill",
-					Version:     "1.0",
-					Triggers:    []string{"command:hello"},
-					Body:        "# Hello\nSay hello!",
-				}, true
+				return skilltest.NewVersioned("greet", "Greeting skill", "1.0",
+					[]string{"command:hello"}, "# Hello\nSay hello!"), true
 			}
 			return skill.Skill{}, false
 		}
@@ -2042,13 +2038,8 @@ func TestSkillUpdate_Success(t *testing.T) {
 			mu.RLock()
 			defer mu.RUnlock()
 			if name == "greet" {
-				return skill.Skill{
-					Name:        "greet",
-					Description: "Greeting skill",
-					Version:     "1.0",
-					Triggers:    []string{"command:hello"},
-					Body:        "# Hello\nSay hello!",
-				}, true
+				return skilltest.NewVersioned("greet", "Greeting skill", "1.0",
+					[]string{"command:hello"}, "# Hello\nSay hello!"), true
 			}
 			return skill.Skill{}, false
 		}

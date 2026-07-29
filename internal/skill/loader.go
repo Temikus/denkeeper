@@ -25,8 +25,8 @@ type Skill struct {
 	Name           string
 	Description    string
 	Version        string
-	Triggers       []string  // raw trigger strings from frontmatter
-	ParsedTriggers []Trigger // parsed at load time for efficient matching
+	Triggers       []string  // raw trigger strings from frontmatter — informational only
+	ParsedTriggers []Trigger // parsed at load time; the sole input to MatchSkills
 	Requires       SkillRequires
 	Body           string // markdown body — everything after the closing +++
 	Source         string // file path, for logging/debugging
