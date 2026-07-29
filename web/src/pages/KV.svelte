@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { inert } from '../inert.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
   let agents = $state([])
@@ -117,7 +118,7 @@
 
 <div class="page-header">
   <h1 class="page-title">KV Store</h1>
-  <button class="btn-primary" onclick={() => showSetForm = !showSetForm} aria-expanded={showSetForm} disabled={!selectedAgent}>
+  <button class="btn-primary" onclick={() => showSetForm = !showSetForm} aria-expanded={showSetForm} aria-controls="kv-set-panel" disabled={!selectedAgent}>
     {showSetForm ? 'Cancel' : 'Set Key'}
   </button>
 </div>
@@ -142,7 +143,7 @@
   </label>
 </div>
 
-<div class="inline-panel" class:open={showSetForm}>
+<div class="inline-panel" id="kv-set-panel" class:open={showSetForm} use:inert={!showSetForm}>
   <div class="inline-panel-inner">
     <form class="inline-form" onsubmit={(e) => { e.preventDefault(); doSet() }}>
       <h2 class="form-title">Set Key</h2>

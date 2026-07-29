@@ -488,7 +488,8 @@
 {#if !($isMobile && mobileShowDetail)}
   <div class="page-header">
     <h1 class="page-title">Agents</h1>
-    <button class="btn-primary btn-sm mobile-fab" onclick={openAddForm} data-testid="add-agent-btn">+ Add Agent</button>
+    <button class="btn-primary btn-sm mobile-fab" onclick={openAddForm} data-testid="add-agent-btn"
+      aria-label="Add agent">{$isMobile ? '+' : '+ Add Agent'}</button>
   </div>
 {/if}
 <ErrorBanner message={error} />
@@ -1327,12 +1328,6 @@
     .list { width: 100%; }
     .list.mobile-cards { display: flex; flex-direction: column; gap: 12px; }
     .stat-cards { grid-template-columns: repeat(2, 1fr); }
-
-    .mobile-fab {
-      width: 36px; height: 36px; border-radius: 50%;
-      padding: 0; display: flex; align-items: center; justify-content: center;
-      font-size: 20px; line-height: 1;
-    }
   }
 
   /* Mobile agent cards */

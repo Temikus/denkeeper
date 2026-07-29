@@ -295,7 +295,7 @@
 <ErrorBanner message={error} />
 
 {#if showAddForm}
-<div class="inline-panel" data-testid="provider-form">
+<div class="form-card" data-testid="provider-form">
   <h3 class="form-title">Add Provider</h3>
   {#if formError}
     <div class="inline-error" role="alert">{formError}</div>
@@ -847,8 +847,8 @@
     font-weight: 500;
   }
 
-  /* Inline add form */
-  .inline-panel {
+  /* Inline add form (own card; not the collapsible .inline-panel pattern) */
+  .form-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);

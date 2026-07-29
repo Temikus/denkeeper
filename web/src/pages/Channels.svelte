@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { inert } from '../inert.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
 
   let channels = $state([])
@@ -131,11 +132,12 @@
 
 <div class="page-header">
   <h1 class="page-title">Channels</h1>
-  <button class="btn-primary btn-sm" onclick={openAdd} data-testid="add-channel-btn">+ Add Channel</button>
+  <button class="btn-primary btn-sm" onclick={openAdd} data-testid="add-channel-btn"
+    aria-expanded={showForm} aria-controls="channel-form-panel">+ Add Channel</button>
 </div>
 <ErrorBanner message={error} />
 
-<div class="inline-panel" class:open={showForm}>
+<div class="inline-panel" id="channel-form-panel" class:open={showForm} use:inert={!showForm}>
   <div class="inline-panel-inner">
     <div class="inline-form" data-testid="channel-form">
       <h2 class="form-title">{editingName ? 'Edit Channel' : 'Add Channel'}</h2>

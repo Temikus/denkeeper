@@ -51,6 +51,7 @@
   }
 
   .kebab-trigger {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -64,10 +65,28 @@
     cursor: pointer;
     transition: all 0.12s ease;
   }
+  /* WCAG 2.5.5 / Apple HIG: 44x44 tap zone around the 32px visual button.
+     Touch input only — with a mouse the invisible overlay would overhang the
+     controls packed next to it in dense rows. */
+  @media (pointer: coarse) {
+    .kebab-trigger::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+    }
+  }
   .kebab-trigger:hover {
     background: var(--hover-overlay);
     border-color: var(--border);
     color: var(--text);
+  }
+  .kebab-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .kebab-dropdown {

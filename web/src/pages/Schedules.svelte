@@ -1,9 +1,11 @@
 <script>
   import { onMount, tick } from 'svelte'
   import { api } from '../api.js'
+  import { inert } from '../inert.js'
   import { isMobile } from '../store.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import KebabMenu from '../components/KebabMenu.svelte'
+  import FilterChips from '../components/FilterChips.svelte'
   import { agentColor } from '../agentColor.js'
   import { relativeTime, shortAbsolute } from '../relativeTime.js'
 
@@ -73,6 +75,16 @@
   })
 
   const visibleGroups = $derived(filterAgent ? groups.filter(g => g.agent === filterAgent) : groups)
+
+  const agentChips = $derived([
+    { value: '', label: `All agents (${schedules.length})` },
+    ...groups.map(g => ({
+      value: g.agent,
+      label: `${g.agent} (${g.schedules.length})`,
+      dot: agentColor(g.agent),
+      testid: `agent-chip-${g.agent}`,
+    })),
+  ])
 
   async function loadData() {
     loading = true
@@ -225,7 +237,8 @@
   <div class="page-header">
     <h1 class="page-title">Schedules</h1>
     <button class="btn-primary" class:mobile-fab={$isMobile} onclick={openAdd}
-      data-testid="add-schedule-btn" aria-label="Add schedule">{$isMobile ? '+' : '+ Add Schedule'}</button>
+      data-testid="add-schedule-btn" aria-label="Add schedule"
+      aria-expanded={showForm} aria-controls="schedule-form-panel">{$isMobile ? '+' : '+ Add Schedule'}</button>
   </div>
 
   <p class="tz-note">Cron schedules run in <strong>{timezone}</strong> time. <a href="#/server">Change</a></p>
@@ -237,7 +250,7 @@
   {/if}
 
   <!-- Inline Add/Edit Panel -->
-  <div class="inline-panel" class:open={showForm} bind:this={panelEl}>
+  <div class="inline-panel" id="schedule-form-panel" class:open={showForm} use:inert={!showForm} bind:this={panelEl}>
     <div class="inline-panel-inner">
       <div class="inline-form" data-testid="schedule-form">
         <h2 class="form-title">{editingName ? 'Edit Schedule' : 'Add Schedule'}</h2>
@@ -321,15 +334,9 @@
     <p class="muted">No schedules configured. Add one to automate recurring tasks.</p>
   {:else}
     {#if groups.length > 1}
-      <div class="filter-chips" role="radiogroup" aria-label="Filter by agent" data-testid="agent-filter">
-        <button class="chip" class:active={filterAgent === ''} role="radio" aria-checked={filterAgent === ''}
-          onclick={() => filterAgent = ''}>All agents ({schedules.length})</button>
-        {#each groups as g (g.agent)}
-          <button class="chip" class:active={filterAgent === g.agent} role="radio" aria-checked={filterAgent === g.agent}
-            data-testid="agent-chip-{g.agent}" onclick={() => filterAgent = g.agent}>
-            <span class="chip-dot" style="background: {agentColor(g.agent)}"></span>{g.agent} ({g.schedules.length})
-          </button>
-        {/each}
+      <div class="filter-bar">
+        <FilterChips items={agentChips} value={filterAgent} label="Filter by agent"
+          testid="agent-filter" onselect={(v) => filterAgent = v} />
       </div>
     {/if}
 
@@ -352,7 +359,7 @@
                   {#if s.session_tier}
                     <span class="tier-badge tier-{s.session_tier}">{s.session_tier}</span>
                   {/if}
-                  <label class="switch">
+                  <label class="switch switch-sm">
                     <input type="checkbox" checked={s.enabled} disabled={togglingName === s.name}
                       onchange={() => toggleEnabled(s)} aria-label="Toggle {s.name}" />
                     <span class="switch-slider"></span>
@@ -412,7 +419,7 @@
                     {/if}
                   </td>
                   <td>
-                    <label class="switch">
+                    <label class="switch switch-sm">
                       <input type="checkbox" checked={s.enabled} disabled={togglingName === s.name}
                         onchange={() => toggleEnabled(s)} aria-label="Toggle {s.name}" />
                       <span class="switch-slider"></span>
@@ -462,18 +469,8 @@
   .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   .load-warning { font-size: 12px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
 
-  /* Agent filter chips */
-  .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 11px; background: transparent;
-    border: 1px solid var(--border); border-radius: 999px;
-    font-size: 12px; color: var(--text); cursor: pointer; transition: all 0.1s;
-  }
-  .chip:hover { border-color: var(--accent); }
-  .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .chip.active { background: var(--accent); color: white; border-color: var(--accent); }
-  .chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  /* Agent filter chips (styling + keyboard behaviour: FilterChips/shared.css) */
+  .filter-bar { margin-bottom: 16px; }
 
   /* Agent sections */
   .agent-section {
@@ -512,13 +509,6 @@
   tr.paused .name, tr.paused .cron,
   .cell.paused .name, .cell.paused .cron { opacity: 0.55; }
 
-  /* Round add-FAB when the header button renders in mobile mode */
-  .mobile-fab {
-    width: 36px; height: 36px; border-radius: 50%;
-    padding: 0; display: flex; align-items: center; justify-content: center;
-    font-size: 20px; line-height: 1;
-  }
-
   /* Mobile card list — replaces the per-section table under isMobile */
   .cell-list { list-style: none; margin: 0; padding: 0; }
   .cell { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; }
@@ -538,22 +528,9 @@
   .cell-bottom .abs { display: inline; white-space: nowrap; }
   .cell-bottom .paused-label { font-size: 11px; }
 
-  /* Pill toggle switch — Tools-style, compact for table rows; green = enabled status */
-  .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .switch-slider {
-    position: absolute; cursor: pointer; inset: 0;
-    background: var(--border); border-radius: 20px; transition: background 0.2s;
-  }
-  .switch-slider::before {
-    content: ""; position: absolute; height: 14px; width: 14px;
-    left: 3px; bottom: 3px; background: white; border-radius: 50%;
-    transition: transform 0.2s;
-  }
+  /* Pill toggle switch — base pattern lives in shared.css; here the "on"
+     state is green because it reads as enabled/disabled status, not accent. */
   .switch input:checked + .switch-slider { background: var(--success); }
-  .switch input:checked + .switch-slider::before { transform: translateX(16px); }
-  .switch input:disabled + .switch-slider { opacity: 0.6; cursor: wait; }
-  .switch input:focus-visible + .switch-slider { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* Icon action buttons */
   .actions { white-space: nowrap; }

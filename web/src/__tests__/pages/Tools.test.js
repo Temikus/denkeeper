@@ -302,10 +302,25 @@ describe('Tools add form', () => {
     const cancelBtn = document.querySelector('.form-actions .btn-ghost')
     await fireEvent.click(cancelBtn)
 
-    // The inline panel should close (CSS hides it via class:open)
+    // The inline panel should close (CSS hides it via class:open) and go
+    // inert so its inputs drop out of the keyboard tab order.
     await waitFor(() => {
       const panel = document.querySelector('.inline-panel')
       expect(panel.classList.contains('open')).toBe(false)
+      expect(panel).toHaveAttribute('inert')
+    })
+  })
+
+  test('inline tool form is inert until it is opened', async () => {
+    render(Tools)
+    await waitFor(() => screen.getByText('+ Add Tool'))
+
+    const panel = document.querySelector('.inline-panel')
+    expect(panel).toHaveAttribute('inert')
+
+    await fireEvent.click(screen.getByText('+ Add Tool'))
+    await waitFor(() => {
+      expect(panel).not.toHaveAttribute('inert')
     })
   })
 })

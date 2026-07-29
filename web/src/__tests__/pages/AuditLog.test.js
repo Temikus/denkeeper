@@ -170,6 +170,64 @@ describe('AuditLog page', () => {
     expect(toolsChip.getAttribute('aria-checked')).toBe('true')
   })
 
+  test('each chip bar is a single tab stop with arrow-key navigation', async () => {
+    render(AuditLog)
+    await waitFor(() => {
+      expect(screen.getByText('Audit log')).toBeInTheDocument()
+    })
+
+    const group = screen.getByRole('radiogroup', { name: 'Category filter' })
+    const chips = [...group.querySelectorAll('[role="radio"]')]
+    // "All" is selected on load, so it owns the group's single tab stop.
+    expect(chips[0]).toHaveAttribute('tabindex', '0')
+    expect(chips.slice(1).every(c => c.getAttribute('tabindex') === '-1')).toBe(true)
+
+    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
+    await waitFor(() => {
+      expect(chips[1]).toHaveAttribute('aria-checked', 'true')
+    })
+    expect(chips[1]).toHaveAttribute('tabindex', '0')
+    expect(chips[0]).toHaveAttribute('tabindex', '-1')
+
+    await fireEvent.keyDown(chips[1], { key: 'Home' })
+    await waitFor(() => {
+      expect(chips[0]).toHaveAttribute('aria-checked', 'true')
+    })
+  })
+
+  test('arrow-keying across chips coalesces into a single refetch', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/v1/audit', () => {
+        calls++
+        return HttpResponse.json({ events: [], total: 0 })
+      }),
+    )
+    render(AuditLog)
+    await waitFor(() => expect(calls).toBe(1))
+
+    const group = screen.getByRole('radiogroup', { name: 'Category filter' })
+    const chips = [...group.querySelectorAll('[role="radio"]')]
+    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
+    await fireEvent.keyDown(chips[1], { key: 'ArrowRight' })
+    await fireEvent.keyDown(chips[2], { key: 'ArrowRight' })
+
+    // Selection follows focus, so all three chips changed the filter; the
+    // page must not fire one request per keypress.
+    expect(chips[3]).toHaveAttribute('aria-checked', 'true')
+    await waitFor(() => expect(calls).toBeGreaterThan(1))
+    expect(calls).toBeLessThanOrEqual(2)
+  })
+
+  test('status and range chip bars are labelled radiogroups', async () => {
+    render(AuditLog)
+    await waitFor(() => {
+      expect(screen.getByText('Audit log')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('radiogroup', { name: 'Status filter' })).toBeInTheDocument()
+    expect(screen.getByRole('radiogroup', { name: 'Time range' })).toBeInTheDocument()
+  })
+
   test('shows load more button when events < total', async () => {
     server.use(
       http.get('/api/v1/audit', () => HttpResponse.json({ events: auditEvents, total: 100 })),

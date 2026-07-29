@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { inert } from '../inert.js'
   import KebabMenu from '../components/KebabMenu.svelte'
 
   let tools = []
@@ -593,7 +594,8 @@
   <div class="section">
     <div class="page-header">
       <h1>MCP Tools</h1>
-      <button class="btn-primary" onclick={openAddToolForm}>+ Add Tool</button>
+      <button class="btn-primary" onclick={openAddToolForm}
+        aria-expanded={showToolForm && !editingToolName} aria-controls="tool-form-panel">+ Add Tool</button>
     </div>
 
     {#snippet toolFormFields()}
@@ -774,7 +776,7 @@
     {/snippet}
 
     <!-- Add tool panel (top-level, only for adding new tools) -->
-    <div class="inline-panel" class:open={showToolForm && !editingToolName}>
+    <div class="inline-panel" id="tool-form-panel" class:open={showToolForm && !editingToolName} use:inert={!(showToolForm && !editingToolName)}>
       <div class="inline-panel-inner">
         <div class="inline-form">
           <h2 class="form-title">Add MCP Tool</h2>
@@ -952,11 +954,12 @@
   <div class="section">
     <div class="page-header">
       <h1>Plugins</h1>
-      <button class="btn-primary" onclick={() => { showPluginForm = !showPluginForm }}>+ Add Plugin</button>
+      <button class="btn-primary" onclick={() => { showPluginForm = !showPluginForm }}
+        aria-expanded={showPluginForm} aria-controls="plugin-form-panel">+ Add Plugin</button>
     </div>
 
     <!-- Inline form -->
-    <div class="inline-panel" class:open={showPluginForm}>
+    <div class="inline-panel" id="plugin-form-panel" class:open={showPluginForm} use:inert={!showPluginForm}>
       <div class="inline-panel-inner">
         <div class="inline-form">
           <h2 class="form-title">Add Plugin</h2>
@@ -1376,44 +1379,8 @@
     color: var(--text-muted);
   }
 
-  /* Pill toggle switch */
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 44px;
-    height: 24px;
-    flex-shrink: 0;
-  }
-  .switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  .switch-slider {
-    position: absolute;
-    cursor: pointer;
-    inset: 0;
-    background: var(--border);
-    border-radius: 24px;
-    transition: background 0.2s;
-  }
-  .switch-slider::before {
-    content: "";
-    position: absolute;
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background: white;
-    border-radius: 50%;
-    transition: transform 0.2s;
-  }
-  .switch input:checked + .switch-slider {
-    background: var(--accent);
-  }
-  .switch input:checked + .switch-slider::before {
-    transform: translateX(20px);
-  }
+  /* Pill toggle switch — pattern (sizes, focus ring, 44px tap zone)
+     lives in shared.css. */
 
   /* Collapsible toggle row inside settings cards */
   .settings-card-toggle {
@@ -1805,17 +1772,9 @@
     gap: 8px;
   }
 
+  /* Nudges the compact switch onto the baseline of the row title. */
   .switch-sm {
-    width: 36px;
-    height: 20px;
     margin-top: 4px;
-  }
-  .switch-sm .switch-slider::before {
-    height: 14px;
-    width: 14px;
-  }
-  .switch-sm input:checked + .switch-slider::before {
-    transform: translateX(16px);
   }
 
   /* Unsafe options section (inside connection settings) */

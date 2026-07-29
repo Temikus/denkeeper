@@ -257,8 +257,9 @@ Remember you're a guest. You have access to someone's life — treat it with res
       <input type="url" class="input" bind:value={providerBaseURL} disabled={providerSaving} placeholder={providerType === 'ollama' ? 'http://localhost:11434' : `https://api.${providerType}.com`} data-testid="wizard-provider-baseurl" />
 
       <label class="toggle-row">
-        <span class="toggle-switch" class:on={providerSetDefault} role="switch" aria-checked={providerSetDefault} tabindex="0" onclick={() => providerSetDefault = !providerSetDefault} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); providerSetDefault = !providerSetDefault } }}>
-          <span class="toggle-knob"></span>
+        <span class="switch switch-sm">
+          <input type="checkbox" bind:checked={providerSetDefault} />
+          <span class="switch-slider"></span>
         </span>
         <span>Set as default provider</span>
       </label>
@@ -469,7 +470,7 @@ Remember you're a guest. You have access to someone's life — treat it with res
     background: var(--bg);
   }
 
-  /* Toggle switch */
+  /* Toggle switch — pill pattern (.switch / .switch-slider) lives in shared.css */
   .toggle-row {
     display: flex;
     align-items: center;
@@ -477,27 +478,6 @@ Remember you're a guest. You have access to someone's life — treat it with res
     font-size: 13px;
     cursor: pointer;
   }
-  .toggle-switch {
-    display: inline-flex;
-    align-items: center;
-    width: 36px;
-    height: 20px;
-    border-radius: 10px;
-    background: var(--border);
-    padding: 2px;
-    cursor: pointer;
-    transition: background 0.15s;
-    flex-shrink: 0;
-  }
-  .toggle-switch.on { background: var(--accent); }
-  .toggle-knob {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #fff;
-    transition: transform 0.15s;
-  }
-  .toggle-switch.on .toggle-knob { transform: translateX(16px); }
 
   /* Permission tier radio buttons */
   .tier-options {

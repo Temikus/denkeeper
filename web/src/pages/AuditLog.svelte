@@ -4,6 +4,7 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import AuditSession from '../components/AuditSession.svelte'
   import AuditRow from '../components/AuditRow.svelte'
+  import FilterChips from '../components/FilterChips.svelte'
 
   let events = $state([])
   let stats = $state(null)
@@ -56,17 +57,26 @@
     return new Date(now - (offsets[range] || 86400000)).toISOString()
   }
 
+  // Guards against out-of-order responses: filters can change faster than the
+  // API answers (arrow-keying across the chips), and a stale reply would
+  // otherwise repaint the list with a filter the user has already left.
+  let loadSeq = 0
+
   async function load(append = false) {
+    const seq = ++loadSeq
     try {
       error = ''
       if (!append) refreshing = true
       const since = sinceFromRange(timeRange)
       const res = await api.auditEvents({ category, status, search, since, limit: String(limit), offset: String(append ? offset : 0) })
+      if (seq !== loadSeq) return
       if (append) { events = [...events, ...res.events] }
       else { events = res.events; offset = 0 }
       total = res.total
-    } catch (e) { error = e.message }
-    finally { loading = false; refreshing = false }
+    } catch (e) {
+      if (seq === loadSeq) error = e.message
+    }
+    finally { if (seq === loadSeq) { loading = false; refreshing = false } }
   }
 
   async function loadStats() {
@@ -75,11 +85,17 @@
 
   function refresh() { load(); loadStats() }
   function loadMore() { offset += limit; load(true) }
+
+  // Chips select on arrow-key focus, so a keyboard user sweeping the bar would
+  // fire one request per chip. Coalesce them the way the search box does.
+  let filterTimeout
   function setFilter(key, value) {
     if (key === 'category') category = value
     else if (key === 'status') status = value
     else if (key === 'timeRange') timeRange = value
-    refresh()
+    refreshing = true
+    clearTimeout(filterTimeout)
+    filterTimeout = setTimeout(refresh, 120)
   }
   function toggleFollow() {
     follow = !follow
@@ -192,7 +208,7 @@
   }
 
   onMount(() => { refresh() })
-  onDestroy(() => { clearInterval(refreshTimer); clearTimeout(searchTimeout) })
+  onDestroy(() => { clearInterval(refreshTimer); clearTimeout(searchTimeout); clearTimeout(filterTimeout) })
 </script>
 
 <div class="audit-page">
@@ -242,23 +258,14 @@
   <!-- Filters -->
   <div class="filters">
     <span class="filter-label">Type</span>
-    <div class="filter-chips" role="radiogroup" aria-label="Category filter">
-      {#each categories as c}
-        <button class="chip" class:active={category === c.value} role="radio" aria-checked={category === c.value} onclick={() => setFilter('category', c.value)}>{c.label}</button>
-      {/each}
-    </div>
+    <FilterChips items={categories} value={category} label="Category filter" size="sm"
+      onselect={(v) => setFilter('category', v)} />
     <span class="filter-label">Status</span>
-    <div class="filter-chips" role="radiogroup" aria-label="Status filter">
-      {#each statuses as s}
-        <button class="chip" class:active={status === s.value} role="radio" aria-checked={status === s.value} onclick={() => setFilter('status', s.value)}>{s.label}</button>
-      {/each}
-    </div>
+    <FilterChips items={statuses} value={status} label="Status filter" size="sm"
+      onselect={(v) => setFilter('status', v)} />
     <span class="filter-label">Range</span>
-    <div class="filter-chips" role="radiogroup" aria-label="Time range">
-      {#each timeRanges as t}
-        <button class="chip" class:active={timeRange === t.value} role="radio" aria-checked={timeRange === t.value} onclick={() => setFilter('timeRange', t.value)}>{t.label}</button>
-      {/each}
-    </div>
+    <FilterChips items={timeRanges} value={timeRange} label="Time range" size="sm"
+      onselect={(v) => setFilter('timeRange', v)} />
   </div>
 
   <!-- Search -->
@@ -354,14 +361,6 @@
     gap: 6px 10px; margin-bottom: 8px; font-size: 11px; align-items: center;
   }
   .filter-label { color: var(--text-muted); font-weight: 500; }
-  .filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .chip {
-    padding: 3px 9px; background: transparent;
-    border: 0.5px solid rgba(44,24,16,0.2); border-radius: 999px;
-    font-size: 11px; color: var(--text); cursor: pointer; transition: all 0.1s;
-  }
-  .chip:hover { border-color: var(--accent); }
-  .chip.active { background: var(--accent); color: white; border-color: var(--accent); }
 
   /* Search card */
   .search-card {

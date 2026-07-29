@@ -141,6 +141,55 @@ describe('Schedules page', () => {
     })
   })
 
+  test('collapsed add form is inert so its fields stay out of the tab order', async () => {
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByText('+ Add Schedule')).toBeInTheDocument()
+    })
+
+    const panel = document.querySelector('.inline-panel')
+    expect(panel).not.toHaveClass('open')
+    expect(panel).toHaveAttribute('inert')
+
+    await fireEvent.click(screen.getByText('+ Add Schedule'))
+    await waitFor(() => {
+      expect(panel).toHaveClass('open')
+    })
+    expect(panel).not.toHaveAttribute('inert')
+
+    await fireEvent.click(screen.getByText('Cancel'))
+    await waitFor(() => {
+      expect(panel).toHaveAttribute('inert')
+    })
+  })
+
+  test('agent chips are a single tab stop with arrow-key navigation', async () => {
+    server.use(
+      http.get('/api/v1/schedules', () =>
+        HttpResponse.json([
+          { name: 'alice-job', expression: '@daily', agent: 'alice', channel: 'telegram:1', enabled: true },
+          { name: 'bob-job', expression: '@daily', agent: 'bob', channel: 'telegram:2', enabled: true },
+        ])
+      )
+    )
+
+    render(Schedules)
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-filter')).toBeInTheDocument()
+    })
+
+    const chips = [...screen.getByTestId('agent-filter').querySelectorAll('[role="radio"]')]
+    // Only the selected ("All agents") chip is reachable with Tab.
+    expect(chips.map(c => c.getAttribute('tabindex'))).toEqual(['0', '-1', '-1'])
+
+    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
+    await waitFor(() => {
+      expect(screen.queryByText('bob-job')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('agent-chip-alice')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('agent-chip-alice')).toHaveAttribute('tabindex', '0')
+  })
+
   test('agent chips filter sections client-side without a refetch', async () => {
     let getCount = 0
     server.use(

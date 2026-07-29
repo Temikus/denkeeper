@@ -322,9 +322,9 @@
       <div class="config-value-row">
         <span class="status-dot" class:status-on={config.mcp_server_enabled} class:status-off={!config.mcp_server_enabled}></span>
         <span class="config-value">{config.mcp_server_enabled ? 'Enabled' : 'Disabled'}</span>
-        <label class="switch">
+        <label class="switch switch-sm">
           <input type="checkbox" aria-label="MCP server" checked={config.mcp_server_enabled} onchange={toggleMcp} disabled={savingMcp} />
-          <span class="slider"></span>
+          <span class="switch-slider"></span>
         </label>
       </div>
     </div>
@@ -426,9 +426,9 @@
       <div class="config-value-row">
         <span class="status-dot" class:status-on={config.web_tools_enabled} class:status-off={!config.web_tools_enabled}></span>
         <span class="config-value">{config.web_tools_enabled ? 'Enabled' : 'Disabled'}</span>
-        <label class="switch">
+        <label class="switch switch-sm">
           <input type="checkbox" aria-label="Web tools" checked={config.web_tools_enabled} onchange={toggleWebTools} disabled={savingWeb} />
-          <span class="slider"></span>
+          <span class="switch-slider"></span>
         </label>
       </div>
     </div>
@@ -446,9 +446,9 @@
       <div class="config-value-row">
         <span class="status-dot" class:status-on={config.script_enabled} class:status-off={!config.script_enabled}></span>
         <span class="config-value">{config.script_enabled ? 'Enabled' : 'Disabled'}</span>
-        <label class="switch">
+        <label class="switch switch-sm">
           <input type="checkbox" aria-label="Deterministic compute" checked={config.script_enabled} onchange={toggleScript} disabled={savingScript} />
-          <span class="slider"></span>
+          <span class="switch-slider"></span>
         </label>
       </div>
     </div>
@@ -682,36 +682,7 @@
   .status-on { background: var(--success); }
   .status-off { background: var(--text-muted); }
 
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 36px;
-    height: 20px;
-    flex-shrink: 0;
-  }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .slider {
-    position: absolute;
-    cursor: pointer;
-    inset: 0;
-    background: var(--border);
-    border-radius: 20px;
-    transition: background 0.2s;
-  }
-  .slider::before {
-    content: '';
-    position: absolute;
-    width: 14px;
-    height: 14px;
-    left: 3px;
-    bottom: 3px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform 0.2s;
-  }
-  .switch input:checked + .slider { background: var(--accent); }
-  .switch input:checked + .slider::before { transform: translateX(16px); }
-  .switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+  /* Pill toggle switch — shared pattern (.switch / .switch-slider) in shared.css. */
 
   .inline-select {
     width: auto;
