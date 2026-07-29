@@ -218,7 +218,7 @@ release bump:
     git push origin "$tag"
     echo "Released ${tag}"
 
-# Run security scans (cached via Task; usage: just scan [gosec|govulncheck], default: all).
+# Run security scans (cached via Task; usage: just scan [gosec|govulncheck|grype], default: all).
 # Pass --force to a specific scan (e.g. `mise x -- task scan:govulncheck --force`)
 # to re-check against a fresh vulnerability database when sources are unchanged.
 scan tool="all":
@@ -228,8 +228,9 @@ scan tool="all":
         all)         mise x -- task scan ;;
         gosec)       mise x -- task scan:gosec ;;
         govulncheck) mise x -- task scan:govulncheck ;;
+        grype)       mise x -- task scan:grype ;;
         *)
-            echo "Unknown scan: {{tool}}. Available: gosec, govulncheck"
+            echo "Unknown scan: {{tool}}. Available: gosec, govulncheck, grype"
             exit 1
             ;;
     esac

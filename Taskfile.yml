@@ -202,9 +202,23 @@ tasks:
     cmds:
       - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  scan:grype:
+    desc: Filesystem vulnerability scan (matches CI's Grype job; uses .grype.yaml)
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - web/package.json
+      - web/package-lock.json
+      - .grype.yaml
+      - exclude: web/node_modules/**
+      - exclude: pkg/**
+    cmds:
+      - mise x -- grype dir:. --fail-on high --only-fixed
+
   scan:
-    desc: Run all security scans (gosec + govulncheck)
-    deps: [scan:gosec, scan:govulncheck]
+    desc: Run all security scans (gosec + govulncheck + grype)
+    deps: [scan:gosec, scan:govulncheck, scan:grype]
 
   # ---- Documentation website ------------------------------------------
   website:install:
