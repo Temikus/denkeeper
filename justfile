@@ -93,7 +93,7 @@ vet:
     @mise x -- task vet
 
 # Run all checks (fmt, vet, lint, test)
-check: fmt-check vet lint lint-ui test test-ui llms-check
+check: fmt-check vet lint lint-ui test test-ui llms-check openapi-check
 
 # Run all checks with minimal output (for agent hooks).
 # Per-step caching via Task: each step skips when its declared sources are
@@ -105,8 +105,8 @@ hook:
     if [ "${JUST_HOOK_FORCE:-}" = "1" ]; then
         force_flag="--force"
     fi
-    steps=("fmt-check" "vet" "lint" "ui:lint" "test" "ui:test")
-    labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui")
+    steps=("fmt-check" "vet" "lint" "ui:lint" "test" "ui:test" "openapi:check")
+    labels=("fmt-check" "vet" "lint" "lint-ui" "test" "test-ui" "openapi-check")
     tmpfile=$(mktemp "${TMPDIR:-/tmp}/just-hook.XXXXXX")
     trap 'rm -f "$tmpfile"' EXIT
     for i in "${!steps[@]}"; do
@@ -156,6 +156,10 @@ build-full: build-ui build
 # Generate OpenAPI spec from Go annotations (cached via Task)
 openapi:
     @mise x -- task openapi
+
+# Fail if the committed OpenAPI spec is stale (uncached; same gate as CI)
+openapi-check:
+    @mise x -- task openapi:check
 
 # Run the Vite dev server (proxies /api to localhost:8080)
 dev-ui:
