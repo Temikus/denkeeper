@@ -2169,6 +2169,74 @@ func TestRestartTool_NilLifecycleMgr_Returns503(t *testing.T) {
 	}
 }
 
+func TestEnableTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/tools/nonexistent/enable"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestDisableTool_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/tools/nonexistent/disable"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestUpdateDisabledTools_NotFound(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/nonexistent/disabled-tools",
+		strings.NewReader(`{"disabled_tools":["echo"]}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// A malformed body stays a 400 even for an unknown tool name — the decode
+// failure is checked before the tool is looked up.
+func TestUpdateDisabledTools_InvalidJSON_Returns400(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(cfg, deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/nonexistent/disabled-tools",
+		strings.NewReader("{not json"))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 func TestGetPlugin_NotFound(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()

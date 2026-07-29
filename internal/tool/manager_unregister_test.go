@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -11,6 +12,11 @@ func TestUnregisterServer_NotRegistered(t *testing.T) {
 	err := m.UnregisterServer("no-such-server")
 	if err == nil {
 		t.Fatal("expected error for unregistered server, got nil")
+	}
+	// Callers (LifecycleManager.RemoveTool → the REST layer) classify this as
+	// HTTP 404 rather than a generic failure.
+	if !errors.Is(err, ErrToolNotFound) {
+		t.Errorf("error = %v, want wrapped ErrToolNotFound", err)
 	}
 }
 

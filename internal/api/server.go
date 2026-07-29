@@ -2154,7 +2154,8 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param name path string true "Tool server name"
 // @Success 204 "Tool removed"
-// @Failure 404 {object} map[string]string
+// @Failure 404 {object} map[string]string "Tool not found"
+// @Failure 500 {object} map[string]string "Removal failed"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name} [delete]
 func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
@@ -2163,7 +2164,12 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	if err := s.deps.LifecycleMgr.RemoveTool(r.Context(), name); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		s.logger.Error("removing tool", "name", name, "error", err)
+		if errors.Is(err, tool.ErrToolNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -2179,7 +2185,8 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 // @Param name path string true "Tool server name"
 // @Param body body object true "Disabled tools list" SchemaExample({"disabled_tools": ["tool-a", "tool-b"]})
 // @Success 200 {object} tool.ServerStatus "Updated server status"
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} map[string]string "Invalid request body or update failed"
+// @Failure 404 {object} map[string]string "Tool not found"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name}/disabled-tools [put]
 func (s *Server) handleUpdateDisabledTools(w http.ResponseWriter, r *http.Request) {
@@ -2198,7 +2205,11 @@ func (s *Server) handleUpdateDisabledTools(w http.ResponseWriter, r *http.Reques
 
 	if err := s.deps.LifecycleMgr.UpdateDisabledTools(name, body.DisabledTools); err != nil {
 		s.logger.Error("updating disabled tools", "name", name, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		if errors.Is(err, tool.ErrToolNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 
