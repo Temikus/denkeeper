@@ -2,6 +2,6 @@
 go = "1.26.5"
 hugo-extended = "latest"
 "golangci-lint" = "latest"
-swag = "latest"
+swag = "1.16.6"
 task = "3"
 "go:github.com/air-verse/air" = "latest"

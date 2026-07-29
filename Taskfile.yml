@@ -146,6 +146,24 @@ tasks:
       - mise x -- swag init -g internal/api/server.go -o internal/api/docs --parseDependency --parseInternal
       - rm -f internal/api/docs/docs.go internal/api/docs/swagger.yaml
 
+  # Freshness gate for the committed spec. Deliberately uncached (no sources/
+  # generates): a stale fingerprint must never let a stale spec through.
+  # Generates into a throwaway directory so the working tree is untouched.
+  openapi:check:
+    desc: Fail if the committed OpenAPI spec is stale relative to the handler annotations
+    cmds:
+      - |
+        outdir=.task/openapi-check
+        rm -rf "$outdir"
+        mkdir -p "$outdir"
+        mise x -- swag init -g internal/api/server.go -o "$outdir" --outputTypes json --parseDependency --parseInternal --quiet
+        if ! diff -u internal/api/docs/swagger.json "$outdir/swagger.json"; then
+          echo ""
+          echo "ERROR: internal/api/docs/swagger.json is out of date (diff above)."
+          echo "Run 'just openapi' and commit the regenerated spec."
+          exit 1
+        fi
+
   test:integration:
     desc: Run integration tests (requires -tags integration)
     deps: [ui:build]

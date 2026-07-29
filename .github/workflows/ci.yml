@@ -53,6 +53,26 @@ jobs:
           path: web/coverage/
           retention-days: 7
 
+  openapi:
+    name: OpenAPI Spec Freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - name: Cache Go modules and build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
+      - name: Download Go modules
+        run: go mod download
+      - name: Check committed spec is up to date
+        run: mise x -- task openapi:check
+
   lint:
     name: Lint
     needs: build-ui

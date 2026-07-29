@@ -128,7 +128,7 @@ cosign verify \
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
 - **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
 - **Session history management** — `/clear` removes all messages from a session, `/compact` summarises via LLM and replaces all messages with a single summary; available in Telegram, Discord, web UI, and REST API
-- **OpenAPI spec** — generated via `swaggo/swag`, served at `GET /api/v1/openapi.json` (no auth required)
+- **OpenAPI spec** — generated via `swaggo/swag`, served at `GET /api/v1/openapi.json` (no auth required); the committed spec is kept in sync with the handler annotations by a CI freshness gate
 - **Web dashboard** — embedded Svelte UI (served via the API server) with 17 pages: overview, chat, sessions, approvals, schedules, skills, tools, browser, KV store, costs, agents, API keys, providers, server config, settings, audit log, and channels; includes dark mode toggle and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
@@ -534,8 +534,9 @@ just lint-fix        # Lint with auto-fix
 just fmt             # Format all Go files
 just fmt-check       # CI-friendly format check
 just vet             # Run go vet
-just check           # Run all checks (fmt + vet + lint + test)
+just check           # Run all checks (fmt + vet + lint + test + openapi-check)
 just openapi         # Generate OpenAPI spec (requires swag CLI)
+just openapi-check   # Fail if the committed OpenAPI spec is stale (same gate as CI)
 just tidy            # go mod tidy
 just clean           # Remove build artifacts
 just loc             # Count lines of source vs test code
