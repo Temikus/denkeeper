@@ -41,6 +41,24 @@ Denkeeper registers commands with Telegram's command picker:
 
 Skills with `command:` triggers (e.g., `triggers = ["command:briefing"]`) are automatically registered as `/briefing` in Telegram's command menu.
 
+### Message formatting
+
+Agent replies are written as Markdown and delivered with Telegram's `parse_mode=HTML`. Denkeeper parses the reply as CommonMark — the same dialect the web dashboard renders — and re-emits it using the tags Telegram supports:
+
+| Markdown | Telegram |
+|---|---|
+| `**bold**`, `*italic*`, `~~strike~~` | bold, italic, strikethrough |
+| `` `code` ``, fenced blocks | monospace, syntax-highlighted block |
+| `[label](url)`, bare URLs | clickable links |
+| `# Heading` | bold line |
+| `- item`, `1. item` | `•` / numbered lines (Telegram has no list markup) |
+| `> quote` | block quote |
+| tables | left as plain pipe-delimited text |
+
+Every character that is not markup is HTML-escaped before sending, so underscores in URLs, `snake_case` identifiers, asterisks and brackets reach the reader exactly as the agent wrote them. Earlier releases used Telegram's legacy `Markdown` parse mode, which silently deleted such characters and mis-applied italics across a message ([#243](https://github.com/Temikus/denkeeper/issues/243)).
+
+If Telegram rejects the formatted message for any reason, the adapter automatically resends the reply as unformatted plain text rather than dropping it.
+
 ### Voice messages
 
 With the `[voice]` section configured, the bot transcribes incoming voice messages to text using OpenAI's Whisper API, and can optionally reply with synthesized speech.

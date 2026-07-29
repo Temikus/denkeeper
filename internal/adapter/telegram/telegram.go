@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -322,25 +323,48 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	}
 
-	// Use explicit parse mode if set, otherwise try Markdown with plain-text
-	// fallback for LLM responses that may break Telegram's parser.
-	if msg.ParseMode != "" {
-		tgMsg.ParseMode = msg.ParseMode
-		_, err = a.bot.Send(tgMsg)
-	} else {
-		tgMsg.ParseMode = "Markdown"
-		_, err = a.bot.Send(tgMsg)
-		if err != nil {
-			a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
-			tgMsg.ParseMode = ""
-			_, err = a.bot.Send(tgMsg)
-		}
-	}
-	if err != nil {
+	tgMsg.Text, tgMsg.ParseMode = prepareOutgoingText(msg)
+	if _, err = a.sendWithFallback(tgMsg, msg); err != nil {
 		return fmt.Errorf("sending telegram message: %w", err)
 	}
 
 	return nil
+}
+
+// maxMessageChars is Telegram's per-message text limit. HTML escaping can
+// lengthen a message, so a render that crosses the cap is discarded in favour
+// of the unformatted source rather than failing the delivery.
+const maxMessageChars = 4096
+
+// prepareOutgoingText resolves the wire text and parse mode for an outgoing
+// message. A caller-supplied parse mode means the caller owns its own markup
+// (the dispatcher's activity log and approval prompts) and is passed through
+// untouched. Otherwise the text is LLM-authored CommonMark, which is rendered
+// to Telegram's HTML subset with every text node escaped — the legacy Markdown
+// parse mode silently deleted characters such as underscores inside URLs.
+func prepareOutgoingText(msg adapter.OutgoingMessage) (text, parseMode string) {
+	if msg.ParseMode != "" {
+		return msg.Text, msg.ParseMode
+	}
+	rendered := renderTelegramHTML(msg.Text)
+	if rendered == "" || utf8.RuneCountInString(rendered) > maxMessageChars {
+		return msg.Text, ""
+	}
+	return rendered, tgbotapi.ModeHTML
+}
+
+// sendWithFallback sends tgMsg, retrying once with the unformatted source text
+// when the formatted attempt is rejected and the caller did not pin a parse
+// mode. A caller-supplied parse mode is never second-guessed.
+func (a *Adapter) sendWithFallback(tgMsg tgbotapi.MessageConfig, msg adapter.OutgoingMessage) (tgbotapi.Message, error) {
+	sent, err := a.bot.Send(tgMsg)
+	if err != nil && msg.ParseMode == "" {
+		a.logger.Debug("formatted send failed, retrying as plain text", "error", err)
+		tgMsg.Text = msg.Text
+		tgMsg.ParseMode = ""
+		sent, err = a.bot.Send(tgMsg)
+	}
+	return sent, err
 }
 
 // handleCallbackQuery processes an inline keyboard button click. It answers
@@ -534,24 +558,14 @@ func (a *Adapter) SendAndGetID(ctx context.Context, msg adapter.OutgoingMessage)
 
 	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
 	tgMsg.DisableNotification = msg.Silent
-	if msg.ParseMode != "" {
-		tgMsg.ParseMode = msg.ParseMode
-	} else {
-		tgMsg.ParseMode = "Markdown"
-	}
+	tgMsg.Text, tgMsg.ParseMode = prepareOutgoingText(msg)
 
 	if len(msg.Buttons) > 0 {
 		rows := buildButtonRows(msg.Buttons, msg.ButtonLayout)
 		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	}
 
-	sent, err := a.bot.Send(tgMsg)
-	if err != nil && msg.ParseMode == "" {
-		// Markdown failed, retry plain text.
-		a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
-		tgMsg.ParseMode = ""
-		sent, err = a.bot.Send(tgMsg)
-	}
+	sent, err := a.sendWithFallback(tgMsg, msg)
 	if err != nil {
 		return "", fmt.Errorf("sending telegram message: %w", err)
 	}
