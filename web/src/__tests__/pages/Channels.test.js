@@ -389,9 +389,11 @@ describe('Channels page', () => {
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => {
-      // The inline-panel collapses (loses .open class) rather than unmounting.
+      // The inline-panel collapses (loses .open class) rather than unmounting,
+      // and goes inert so its fields leave the tab order.
       const panel = document.querySelector('.inline-panel')
       expect(panel).not.toHaveClass('open')
+      expect(panel).toHaveAttribute('inert')
     })
   })
 

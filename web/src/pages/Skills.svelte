@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../api.js'
+  import { inert } from '../inert.js'
   import { pendingSkillTest } from '../chatStore.js'
   import { navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
@@ -153,7 +154,8 @@
 <div class="page">
   <div class="page-header">
     <h1 class="page-title">Skills</h1>
-    <button class="btn-primary" onclick={openAdd}>+ Add Skill</button>
+    <button class="btn-primary" onclick={openAdd}
+      aria-expanded={showForm} aria-controls="skill-form-panel">+ Add Skill</button>
   </div>
 
   <div class="toolbar">
@@ -168,7 +170,7 @@
   <ErrorBanner message={error} />
 
   <!-- Inline Add/Edit Panel -->
-  <div class="inline-panel" class:open={showForm}>
+  <div class="inline-panel" id="skill-form-panel" class:open={showForm} use:inert={!showForm}>
     <div class="inline-panel-inner">
       <div class="inline-form">
         {#if editingSkill}
