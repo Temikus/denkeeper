@@ -8,6 +8,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 )
 
 func TestMultiAgent_DefaultAgentUsed(t *testing.T) {
@@ -89,7 +90,7 @@ func TestMultiAgent_AgentDetail(t *testing.T) {
 				Tier:     "autonomous",
 				Adapters: []string{"telegram"},
 				Skills: []skill.Skill{
-					{Name: "test-skill", Description: "A test skill"},
+					skilltest.New("test-skill", "A test skill", nil, ""),
 				},
 			},
 		},

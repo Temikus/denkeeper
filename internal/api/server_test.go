@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -89,8 +90,8 @@ func testDeps() Deps {
 	approvalMgr := approval.NewManager(approvalStore, logger)
 
 	e := agent.NewEngine("default", router, mem, nil, perms, nil, "test", []skill.Skill{
-		{Name: "greet", Description: "Greeting skill", Version: "1.0", Triggers: []string{"command:hello"}},
-		{Name: "help", Description: "Help system"},
+		skilltest.NewVersioned("greet", "Greeting skill", "1.0", []string{"command:hello"}, ""),
+		skilltest.New("help", "Help system", nil, ""),
 	}, nil, approvalMgr, logger)
 
 	dispatcher := agent.NewDispatcher(

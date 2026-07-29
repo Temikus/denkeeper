@@ -21,6 +21,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -4048,15 +4049,12 @@ func TestEngine_SupervisorReview_ScheduledSkillContext(t *testing.T) {
 	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, toolMgr, mgr, testLogger())
 
 	// Load a skill so it can be matched by SkillName.
-	engine.AppendSkill(skill.Skill{
-		Name:        "heartbeat",
-		Description: "Periodic health check and cache cleanup.\nAlso updates status logs in KV store.",
-		Body:        "This is your periodic check-in.\n\n1. Check your Pamela project — review My TODOs and act on anything actionable.",
-		Triggers:    []string{"schedule:heartbeat"},
-		ParsedTriggers: []skill.Trigger{
-			{Type: skill.TriggerSchedule, Raw: "schedule:heartbeat"},
-		},
-	})
+	engine.AppendSkill(skilltest.New(
+		"heartbeat",
+		"Periodic health check and cache cleanup.\nAlso updates status logs in KV store.",
+		[]string{"schedule:heartbeat"},
+		"This is your periodic check-in.\n\n1. Check your Pamela project — review My TODOs and act on anything actionable.",
+	))
 
 	supPerms, _ := security.NewPermissionEngine("autonomous")
 	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())

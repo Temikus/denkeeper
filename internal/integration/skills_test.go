@@ -17,14 +17,14 @@ func TestSkills_ListAll(t *testing.T) {
 			{
 				Name: "default", Tier: "supervised", Adapters: []string{"telegram"},
 				Skills: []skill.Skill{
-					{Name: "greet", Description: "Greeting skill"},
-					{Name: "help", Description: "Help system"},
+					skilltest.New("greet", "Greeting skill", nil, ""),
+					skilltest.New("help", "Help system", nil, ""),
 				},
 			},
 			{
 				Name: "work", Tier: "autonomous", Adapters: []string{"discord"},
 				Skills: []skill.Skill{
-					{Name: "summarize", Description: "Summarize text"},
+					skilltest.New("summarize", "Summarize text", nil, ""),
 				},
 			},
 		},
@@ -56,13 +56,13 @@ func TestSkills_ListByAgent(t *testing.T) {
 			{
 				Name: "default", Tier: "supervised", Adapters: []string{"telegram"},
 				Skills: []skill.Skill{
-					{Name: "greet", Description: "Greeting skill"},
+					skilltest.New("greet", "Greeting skill", nil, ""),
 				},
 			},
 			{
 				Name: "work", Tier: "autonomous", Adapters: []string{"discord"},
 				Skills: []skill.Skill{
-					{Name: "summarize", Description: "Summarize text"},
+					skilltest.New("summarize", "Summarize text", nil, ""),
 				},
 			},
 		},
@@ -89,7 +89,7 @@ func TestSkills_GetByName(t *testing.T) {
 			{
 				Name: "default", Tier: "supervised", Adapters: []string{"telegram"},
 				Skills: []skill.Skill{
-					{Name: "greet", Description: "Greeting skill", Version: "2.0", Triggers: []string{"command:hello"}},
+					skilltest.NewVersioned("greet", "Greeting skill", "2.0", []string{"command:hello"}, ""),
 				},
 			},
 		},

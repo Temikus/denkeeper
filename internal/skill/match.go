@@ -13,6 +13,14 @@ type MatchContext struct {
 // MatchSkills returns the subset of skills that should be injected for this message.
 // Skills with no triggers are always included. Otherwise, a skill is included if
 // any of its triggers match the context.
+//
+// Matching keys off ParsedTriggers, never the raw Triggers strings. Every Skill
+// reaching this function is expected to have come from ParseFile, which fills
+// ParsedTriggers whenever Triggers is non-empty (and rejects the skill outright
+// if a trigger fails to parse). A hand-built Skill that sets Triggers but leaves
+// ParsedTriggers nil therefore looks trigger-less and is injected into *every*
+// message — construct such values with skill/skilltest rather than a bare
+// literal. See TestMatchSkills_RawTriggersAreNotHonoured.
 func MatchSkills(skills []Skill, ctx MatchContext) []Skill {
 	var matched []Skill
 	for _, s := range skills {
