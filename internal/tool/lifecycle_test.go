@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,5 +225,20 @@ func TestUpdateDisabledTools_ServerNotFound(t *testing.T) {
 	err := lm.UpdateDisabledTools("nonexistent", []string{"x"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent server")
+	}
+	// The API layer maps this sentinel to HTTP 404.
+	if !errors.Is(err, ErrToolNotFound) {
+		t.Errorf("error = %v, want wrapped ErrToolNotFound", err)
+	}
+}
+
+func TestRemoveTool_ServerNotFound(t *testing.T) {
+	lm, _ := newTestLifecycleMgr(t)
+	err := lm.RemoveTool(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent server")
+	}
+	if !errors.Is(err, ErrToolNotFound) {
+		t.Errorf("error = %v, want wrapped ErrToolNotFound", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -376,6 +377,20 @@ func TestTools_UpdateDisabledTools_NotFound(t *testing.T) {
 	rec := h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/nonexistent/disabled-tools", map[string]any{
 		"disabled_tools": []string{"x"},
 	}))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// A malformed body is a client error even though an unknown tool name is a
+// 404 — the decode failure is checked before the tool is looked up.
+func TestTools_UpdateDisabledTools_InvalidJSON_Returns400(t *testing.T) {
+	h := toolHarness(t)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/nonexistent/disabled-tools", strings.NewReader("{not json"))
+	req.Header.Set("Authorization", "Bearer "+h.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec := h.Do(req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}

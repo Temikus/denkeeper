@@ -889,7 +889,7 @@ func (m *Manager) UnregisterServer(name string) error {
 
 	sc, ok := m.servers[name]
 	if !ok {
-		return fmt.Errorf("server %q is not registered", name)
+		return fmt.Errorf("server %q: %w", name, ErrToolNotFound)
 	}
 
 	// Remove tool definitions contributed by this server.

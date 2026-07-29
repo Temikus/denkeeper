@@ -205,7 +205,7 @@ func (lm *LifecycleManager) UpdateDisabledTools(serverName string, disabledTools
 	defer lm.mu.Unlock()
 
 	if _, ok := lm.toolMgr.ServerInfo(serverName); !ok {
-		return fmt.Errorf("tool %q not found", serverName)
+		return fmt.Errorf("tool %q: %w", serverName, ErrToolNotFound)
 	}
 
 	if err := lm.toolMgr.SetDisabledTools(serverName, disabledTools); err != nil {
