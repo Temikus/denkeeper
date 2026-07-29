@@ -604,16 +604,6 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleCosts godoc
-// @Summary Get cost tracking data
-// @Description Returns cost tracking data with per-agent and per-session breakdown
-// @Tags costs
-// @Produce json
-// @Security BearerAuth
-// @Param agent query string false "Filter by agent name"
-// @Success 200 {object} map[string]any
-// @Router /costs [get]
-
 type providerCostEntry struct {
 	Provider string   `json:"provider"`
 	Cost     float64  `json:"cost"`
@@ -656,6 +646,15 @@ func (s *Server) buildPerProviderCosts(ctx context.Context) []providerCostEntry 
 //     so they survive server restarts. Pre-migration rows with empty agent are excluded.
 //   - session_costs, session_stats: from the in-memory CostTracker for current-process
 //     session detail and drill-down. These reset on restart.
+//
+// @Summary Get cost tracking data
+// @Description Returns cost tracking data with per-agent and per-session breakdown
+// @Tags costs
+// @Produce json
+// @Security BearerAuth
+// @Param agent query string false "Filter by agent name"
+// @Success 200 {object} map[string]any
+// @Router /costs [get]
 func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 	sessions := s.deps.CostTracker.AllSessionStats()
 	agentFilter := r.URL.Query().Get("agent")
