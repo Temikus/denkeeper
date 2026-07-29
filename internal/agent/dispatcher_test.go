@@ -1,8 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"html"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -195,6 +199,7 @@ func TestDispatcher_Dispatch_UnknownAgent(t *testing.T) {
 type mockAdapter struct {
 	name         string
 	sent         []adapter.OutgoingMessage
+	sendErr      error // returned by Send after recording the message
 	incoming     chan<- adapter.IncomingMessage
 	sendTypingFn func() // optional hook called by SendTyping
 }
@@ -206,7 +211,7 @@ func (m *mockAdapter) Start(_ context.Context, incoming chan<- adapter.IncomingM
 }
 func (m *mockAdapter) Send(_ context.Context, msg adapter.OutgoingMessage) error {
 	m.sent = append(m.sent, msg)
-	return nil
+	return m.sendErr
 }
 func (m *mockAdapter) SendTyping(_ context.Context, _ string) error {
 	if m.sendTypingFn != nil {
@@ -555,6 +560,7 @@ type mockMessageEditor struct {
 	editMsgs []editMsgCall
 	msgID    string // returned by the next SendAndGetID call
 	msgIDs   []string
+	sendErr  error // returned by SendAndGetID / EditMessage after recording
 }
 
 type editCall struct {
@@ -572,6 +578,9 @@ type editMsgCall struct {
 
 func (m *mockMessageEditor) SendAndGetID(_ context.Context, msg adapter.OutgoingMessage) (string, error) {
 	m.sends = append(m.sends, msg)
+	if m.sendErr != nil {
+		return "", m.sendErr
+	}
 	if len(m.msgIDs) > 0 {
 		id := m.msgIDs[0]
 		m.msgIDs = m.msgIDs[1:]
@@ -587,7 +596,7 @@ func (m *mockMessageEditor) EditText(_ context.Context, externalID, messageID, t
 
 func (m *mockMessageEditor) EditMessage(_ context.Context, externalID, messageID string, msg adapter.OutgoingMessage) error {
 	m.editMsgs = append(m.editMsgs, editMsgCall{externalID, messageID, msg})
-	return nil
+	return m.sendErr
 }
 
 // lastSent returns the most recent message text sent or edited via the editor.
@@ -919,9 +928,8 @@ func TestActivityLog_TruncatesOversizedApprovalArgs(t *testing.T) {
 	if l.pending == nil {
 		t.Fatal("pending nil")
 	}
-	// Truncation is rune-based: argsMaxChars runes plus a single "…" rune.
-	if got := utf8.RuneCountInString(l.pending.args); got != approvalArgsMaxChars+1 {
-		t.Errorf("rune count = %d, want %d", got, approvalArgsMaxChars+1)
+	if got := len(html.EscapeString(l.pending.args)); got > approvalArgsMaxBytes {
+		t.Errorf("escaped args width = %d, want <= %d", got, approvalArgsMaxBytes)
 	}
 	if !strings.HasSuffix(l.pending.args, "…") {
 		t.Errorf("expected ellipsis suffix, got tail %q", l.pending.args[len(l.pending.args)-10:])
@@ -932,17 +940,337 @@ func TestActivityLog_TruncatesAtRuneBoundary(t *testing.T) {
 	me := &mockMessageEditor{msgID: "msg-1"}
 	l := newTestActivityLog(me)
 
-	// Build a payload of 3-byte UTF-8 runes that exceeds the rune cap.
+	// Build a payload of 3-byte UTF-8 runes that exceeds the budget.
 	// Byte-slice truncation would split a multi-byte sequence and produce
 	// invalid UTF-8; rune-based truncation must preserve every code point.
-	multibyte := strings.Repeat("☃", approvalArgsMaxChars+500)
+	multibyte := strings.Repeat("☃", approvalArgsMaxBytes)
 	l.setPending(context.Background(), "tool", multibyte, "cb-1")
 
 	if !utf8.ValidString(l.pending.args) {
 		t.Errorf("truncated args contain invalid UTF-8")
 	}
-	if got := utf8.RuneCountInString(l.pending.args); got != approvalArgsMaxChars+1 {
-		t.Errorf("rune count = %d, want %d", got, approvalArgsMaxChars+1)
+	if got := len(html.EscapeString(l.pending.args)); got > approvalArgsMaxBytes {
+		t.Errorf("escaped args width = %d, want <= %d", got, approvalArgsMaxBytes)
+	}
+}
+
+// --- message-cap budgeting (issue #252) ---
+
+// escapeExpanders are the characters html.EscapeString expands, which is what
+// makes a source-length budget under-count the rendered width.
+var escapeExpanders = []string{"&", "<", ">", `"`, "'"}
+
+func TestEscapedRuneWidth_MatchesHTMLEscapeString(t *testing.T) {
+	// escapedRuneWidth is the arithmetic behind every budget in this file; if
+	// it drifts from html.EscapeString the budgets silently under-count.
+	samples := []rune{'&', '<', '>', '"', '\'', 'a', '0', ' ', '\n', 'é', '☃', '🔧', utf8.RuneError}
+	for _, r := range samples {
+		want := len(html.EscapeString(string(r)))
+		if got := escapedRuneWidth(r); got != want {
+			t.Errorf("escapedRuneWidth(%q) = %d, want %d", r, got, want)
+		}
+	}
+}
+
+func TestTruncateEscaped_BudgetsEscapedWidth(t *testing.T) {
+	// A rune-counted budget would let "&" x N render five times over.
+	for _, ch := range escapeExpanders {
+		got := truncateEscaped(strings.Repeat(ch, 4000), 500)
+		if w := len(html.EscapeString(got)); w > 500 {
+			t.Errorf("truncateEscaped(%q x4000, 500): escaped width = %d, want <= 500", ch, w)
+		}
+		if !strings.HasSuffix(got, "…") {
+			t.Errorf("truncateEscaped(%q x4000, 500): expected ellipsis suffix", ch)
+		}
+	}
+}
+
+func TestTruncateEscaped_ShortInputUnchanged(t *testing.T) {
+	if got := truncateEscaped("a & b", 100); got != "a & b" {
+		t.Errorf("truncateEscaped = %q, want unchanged", got)
+	}
+}
+
+func TestTruncateEscaped_ExactBudgetUnchanged(t *testing.T) {
+	// "&&" escapes to 10 bytes; a budget of exactly 10 must not truncate.
+	if got := truncateEscaped("&&", 10); got != "&&" {
+		t.Errorf("truncateEscaped = %q, want %q", got, "&&")
+	}
+	if got := truncateEscaped("&&", 9); got == "&&" {
+		t.Errorf("truncateEscaped with budget 9 should have truncated")
+	}
+}
+
+func TestTruncateEscaped_ZeroBudget(t *testing.T) {
+	if got := truncateEscaped("anything", 0); got != "" {
+		t.Errorf("truncateEscaped with zero budget = %q, want empty", got)
+	}
+}
+
+// assertApprovalDelivered checks the invariant that matters for issue #252: the
+// message the adapter is handed fits Telegram's cap (so it is not rejected) and
+// still carries the approval keyboard.
+func assertApprovalDelivered(t *testing.T, me *mockMessageEditor) {
+	t.Helper()
+	if len(me.sends) == 0 {
+		t.Fatal("no message sent")
+	}
+	sent := me.sends[len(me.sends)-1]
+	if len(sent.Text) > telegramMessageMaxBytes {
+		t.Errorf("rendered approval message = %d bytes, want <= %d (Telegram rejects the message and the keyboard is lost)",
+			len(sent.Text), telegramMessageMaxBytes)
+	}
+	if len(sent.Buttons) != 4 {
+		t.Errorf("expected 4 approval buttons on the delivered message, got %d", len(sent.Buttons))
+	}
+}
+
+func TestActivityLog_ApprovalArgsWithAmpersands_StaysUnderCap(t *testing.T) {
+	// The reported repro: a URL query string or JSON payload of ampersands.
+	// html.EscapeString expands each '&' to "&amp;", so a 2000-rune budget
+	// rendered ~10KB and Telegram rejected the message outright.
+	me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2", "msg-3"}}
+	l := newTestActivityLog(me)
+
+	l.setPending(context.Background(), "fetch_url", strings.Repeat("&", 2000), "cb-1")
+
+	assertApprovalDelivered(t, me)
+}
+
+func TestActivityLog_ApprovalArgsWithAngleBrackets_StaysUnderCap(t *testing.T) {
+	// '<' and '>' expand fourfold — routine for XML or HTML payloads.
+	for _, ch := range []string{"<", ">"} {
+		me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2", "msg-3"}}
+		l := newTestActivityLog(me)
+
+		l.setPending(context.Background(), "fetch_url", strings.Repeat(ch, 2000), "cb-1")
+
+		assertApprovalDelivered(t, me)
+	}
+}
+
+func TestActivityLog_ApprovalArgsWithQuotes_StaysUnderCap(t *testing.T) {
+	me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2", "msg-3"}}
+	l := newTestActivityLog(me)
+
+	l.setPending(context.Background(), "write_file", strings.Repeat(`"'`, 1500), "cb-1")
+
+	assertApprovalDelivered(t, me)
+}
+
+func TestActivityLog_ApprovalSectionAloneExceedsBudget_GetsOwnChunk(t *testing.T) {
+	// A chunk whose bulk *is* the approval section: the old overflow check
+	// only rolled to a fresh chunk when it held more than one line, so a
+	// single oversized approval had nowhere to go.
+	me := &mockMessageEditor{msgIDs: []string{"msg-1", "msg-2"}}
+	l := newTestActivityLog(me)
+
+	l.setPending(context.Background(), strings.Repeat("&", 500), strings.Repeat("&", 5000), "cb-1")
+
+	assertApprovalDelivered(t, me)
+}
+
+func TestActivityLog_ApprovalOnUnsentChunkWithManyLines_StaysUnderCap(t *testing.T) {
+	// The no-escape-expansion variant: a chunk that accumulated many tool
+	// lines but was never assigned a message ID, so setPending's "already
+	// sent" test did not roll a fresh chunk and lines + approval shared one
+	// over-cap message.
+	me := &mockMessageEditor{msgID: ""} // SendAndGetID never returns an ID
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	// Fill the active chunk until its blockquote alone is well past the room
+	// an approval section needs. No escape expansion is involved here.
+	l.ensureChunk()
+	for i := 0; len(l.renderLines(l.chunks[len(l.chunks)-1])) < 2500; i++ {
+		l.autoApproved(ctx, "tool_with_a_fairly_long_name_"+strconv.Itoa(i))
+		if i > 10000 {
+			t.Fatal("chunk never filled — budget wiring changed?")
+		}
+	}
+	l.setPending(ctx, "read_file", strings.Repeat("a", 2000), "cb-1")
+
+	assertApprovalDelivered(t, me)
+	for i, s := range me.sends {
+		if len(s.Text) > telegramMessageMaxBytes {
+			t.Errorf("send[%d] = %d bytes, want <= %d", i, len(s.Text), telegramMessageMaxBytes)
+		}
+	}
+}
+
+func TestActivityLog_LinesAddedWhilePendingStayUnderCap(t *testing.T) {
+	// Parallel tool calls keep appending lines while an approval is pending;
+	// the blockquote budget must shrink to leave room for the approval.
+	me := &mockMessageEditor{msgID: ""}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	l.setPending(ctx, "read_file", strings.Repeat("&", 2000), "cb-1")
+	for i := 0; i < 200; i++ {
+		l.autoApproved(ctx, "concurrent_tool_with_long_name_"+strconv.Itoa(i))
+	}
+
+	for i, s := range me.sends {
+		if len(s.Text) > telegramMessageMaxBytes {
+			t.Errorf("send[%d] = %d bytes, want <= %d", i, len(s.Text), telegramMessageMaxBytes)
+		}
+	}
+	for i, e := range me.editMsgs {
+		if len(e.msg.Text) > telegramMessageMaxBytes {
+			t.Errorf("edit[%d] = %d bytes, want <= %d", i, len(e.msg.Text), telegramMessageMaxBytes)
+		}
+	}
+}
+
+func TestActivityLog_LongSupervisorReason_StaysUnderCap(t *testing.T) {
+	// A supervisor deny reason is free-form model output. It lands on a single
+	// line, and a lone line cannot be split onto another chunk — so the status
+	// itself has to be budgeted.
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+
+	l.supervisorLine(context.Background(), "fetch_url", "❌ denied: "+strings.Repeat("&", 5000))
+
+	if len(me.sends) == 0 {
+		t.Fatal("no message sent")
+	}
+	if got := len(me.sends[0].Text); got > telegramMessageMaxBytes {
+		t.Errorf("rendered supervisor line = %d bytes, want <= %d", got, telegramMessageMaxBytes)
+	}
+}
+
+func TestActivityLog_LongToolName_StaysUnderCap(t *testing.T) {
+	me := &mockMessageEditor{msgID: "msg-1"}
+	l := newTestActivityLog(me)
+	ctx := context.Background()
+
+	long := strings.Repeat("<", 4000)
+	l.toolStart(ctx, long)
+	l.toolEnd(ctx, long, 42, "")
+
+	if got := l.chunks[0].lines[0].status; got != "✅ 42ms" {
+		// Tool-name normalisation must be consistent between insert and
+		// lookup, otherwise toolEnd appends a duplicate row instead of
+		// updating the in-flight one.
+		t.Errorf("status = %q, want ✅ 42ms (toolIndex lookup missed after truncation)", got)
+	}
+	if got := len(l.chunks[0].lines); got != 1 {
+		t.Errorf("expected 1 line, got %d", got)
+	}
+	if got := len(me.lastRendered()); got > telegramMessageMaxBytes {
+		t.Errorf("rendered = %d bytes, want <= %d", got, telegramMessageMaxBytes)
+	}
+}
+
+func TestActivityLog_BudgetsSumUnderTelegramCap(t *testing.T) {
+	// The invariant the individual budgets exist to uphold.
+	if total := activityChunkWithApprovalMaxBytes + approvalSectionMaxBytes; total > telegramMessageMaxBytes {
+		t.Errorf("blockquote + approval budgets = %d, want <= %d", total, telegramMessageMaxBytes)
+	}
+	if activityChunkMaxBytes > telegramMessageMaxBytes-telegramMessageSafetyMargin {
+		t.Errorf("activityChunkMaxBytes = %d leaves no headroom under the cap", activityChunkMaxBytes)
+	}
+}
+
+func TestActivityLog_FlushErrorWithPendingApproval_LogsAtError(t *testing.T) {
+	// A failed send with an approval attached loses the inline keyboard and
+	// stalls the turn until the approval times out — it must be visible.
+	var buf bytes.Buffer
+	me := &mockMessageEditor{sendErr: errors.New("Bad Request: message is too long")}
+	l := newTestActivityLog(me)
+	l.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	l.setPending(context.Background(), "read_file", "{}", "cb-1")
+
+	if !strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("expected an ERROR log for a failed approval send, got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "pending_approval=true") {
+		t.Errorf("expected pending_approval context in the log, got: %s", buf.String())
+	}
+}
+
+func TestActivityLog_FlushErrorWithoutApproval_StaysQuiet(t *testing.T) {
+	// Without an approval attached the failure is cosmetic; keeping it at
+	// Debug avoids drowning the operator in routine edit noise.
+	var buf bytes.Buffer
+	me := &mockMessageEditor{sendErr: errors.New("transient")}
+	l := newTestActivityLog(me)
+	l.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	l.toolStart(context.Background(), "search")
+
+	if strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("non-approval send failure should not log at ERROR, got: %s", buf.String())
+	}
+}
+
+func TestDispatcher_StandaloneApprovalPrompt_StaysUnderCap(t *testing.T) {
+	// The MessageEditor-less fallback renders the same HTML and previously
+	// applied no budget at all.
+	a := &mockAdapter{name: "slack"}
+	d := &Dispatcher{adapters: map[string]adapter.Adapter{"slack": a}, logger: testLogger()}
+
+	d.sendStandaloneApprovalPrompt(context.Background(), a, adapter.IncomingMessage{
+		Adapter:    "slack",
+		ExternalID: "chat-1",
+	}, ChatEvent{
+		Tool:             "fetch_url",
+		Text:             strings.Repeat("&", 4000),
+		ApprovalCallback: "cb-1",
+	})
+
+	if len(a.sent) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(a.sent))
+	}
+	if got := len(a.sent[0].Text); got > telegramMessageMaxBytes {
+		t.Errorf("standalone approval = %d bytes, want <= %d", got, telegramMessageMaxBytes)
+	}
+	if len(a.sent[0].Buttons) != 4 {
+		t.Errorf("expected 4 buttons, got %d", len(a.sent[0].Buttons))
+	}
+}
+
+func TestDispatcher_DebugApprovalPrompt_StaysUnderCap(t *testing.T) {
+	a := &mockAdapter{name: "slack"}
+	d := &Dispatcher{adapters: map[string]adapter.Adapter{"slack": a}, logger: testLogger()}
+
+	d.sendDebugApprovalPrompt(context.Background(), a, adapter.IncomingMessage{
+		Adapter:    "slack",
+		ExternalID: "chat-1",
+	}, ChatEvent{
+		Tool:             "fetch_url",
+		Text:             strings.Repeat("x", 9000),
+		ApprovalCallback: "cb-1",
+	})
+
+	if len(a.sent) != 1 {
+		t.Fatalf("expected 1 send, got %d", len(a.sent))
+	}
+	if got := len(a.sent[0].Text); got > telegramMessageMaxBytes {
+		t.Errorf("debug approval = %d bytes, want <= %d", got, telegramMessageMaxBytes)
+	}
+}
+
+func TestDispatcher_ApprovalPromptSendFailure_LogsAtError(t *testing.T) {
+	var buf bytes.Buffer
+	a := &mockAdapter{name: "slack", sendErr: errors.New("Bad Request: message is too long")}
+	d := &Dispatcher{
+		adapters: map[string]adapter.Adapter{"slack": a},
+		logger:   slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	msg := adapter.IncomingMessage{Adapter: "slack", ExternalID: "chat-1"}
+	evt := ChatEvent{Tool: "fetch_url", Text: "{}", ApprovalCallback: "cb-1"}
+
+	d.sendStandaloneApprovalPrompt(context.Background(), a, msg, evt)
+	if !strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("standalone approval send failure must log at ERROR, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	d.sendDebugApprovalPrompt(context.Background(), a, msg, evt)
+	if !strings.Contains(buf.String(), "level=ERROR") {
+		t.Errorf("debug approval send failure must log at ERROR, got: %s", buf.String())
 	}
 }
 

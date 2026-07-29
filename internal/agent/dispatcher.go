@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/audit"
@@ -1378,9 +1379,17 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 	return true
 }
 
+// sendDebugApprovalPrompt renders the verbose (debug mode) approval prompt.
+// Tool name and payload are budgeted for the same reason as the activity-log
+// path: an over-cap message is rejected outright, taking the inline keyboard
+// with it. Send failures are logged at Error — unlike the other _ = a.Send
+// sites in this file, losing an approval prompt stalls the turn until the
+// approval times out.
 func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
-	_ = a.Send(ctx, adapter.OutgoingMessage{
-		Text:       fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?", evt.Tool, evt.Text),
+	err := a.Send(ctx, adapter.OutgoingMessage{
+		Text: fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?",
+			truncateEscaped(evt.Tool, toolNameMaxBytes),
+			truncateEscaped(evt.Text, approvalArgsMaxBytes)),
 		ExternalID: msg.ExternalID,
 		Adapter:    msg.Adapter,
 		Buttons: []adapter.KeyboardButton{
@@ -1390,17 +1399,22 @@ func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adap
 			{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
 		},
 	})
+	if err != nil {
+		d.logger.Error("failed to send approval prompt", "error", err,
+			"adapter", msg.Adapter, "external_id", msg.ExternalID, "tool", evt.Tool, "mode", "debug")
+	}
 }
 
 // sendStandaloneApprovalPrompt is the fallback used when the adapter does not
-// implement MessageEditor (no activity log available).
+// implement MessageEditor (no activity log available). See
+// sendDebugApprovalPrompt for why the payload is budgeted and the send error
+// is logged at Error.
 func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
-	text := fmt.Sprintf(
-		"🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
-		html.EscapeString(evt.Tool),
-		html.EscapeString(evt.Text),
+	text := renderApprovalSection(
+		truncateEscaped(evt.Tool, toolNameMaxBytes),
+		truncateEscaped(evt.Text, approvalArgsMaxBytes),
 	)
-	_ = a.Send(ctx, adapter.OutgoingMessage{
+	err := a.Send(ctx, adapter.OutgoingMessage{
 		Text:       text,
 		ParseMode:  "HTML",
 		ExternalID: msg.ExternalID,
@@ -1413,6 +1427,10 @@ func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter
 		},
 		ButtonLayout: []int{2, 2},
 	})
+	if err != nil {
+		d.logger.Error("failed to send approval prompt", "error", err,
+			"adapter", msg.Adapter, "external_id", msg.ExternalID, "tool", evt.Tool, "mode", "standalone")
+	}
 }
 
 // sendErrorFeedback attempts to notify the user that their message could not be
@@ -1484,42 +1502,158 @@ type pendingApproval struct {
 	callback string
 }
 
+// Message-size budgets for the Telegram activity log.
+//
+// Every budget below is expressed in bytes of the *rendered, HTML-escaped*
+// text — the exact string handed to the adapter. Byte length is a conservative
+// proxy for the characters Telegram meters (a UTF-8 byte count is never
+// smaller than the code-point count), so a message that fits its byte budget
+// always fits the platform cap.
+//
+// Budgeting the escaped width is the whole point: html.EscapeString expands
+// '&' to "&amp;" (5 bytes for 1) and '<'/'>' fourfold, so a budget counted on
+// the *source* text can render five times larger than intended. A rendered
+// message over the cap is rejected outright by Telegram, which for an approval
+// prompt means the inline keyboard never arrives and the approval hangs until
+// it times out.
+//
+// The two variable parts of a message are budgeted independently so their sum
+// is bounded by construction:
+//
+//	activity blockquote (chunkLinesBudget) + approval section ≤ cap - margin
 const (
-	// activityChunkMaxBytes leaves headroom under Telegram's 4096-char cap so
-	// the approval section can be appended without overflowing.
-	activityChunkMaxBytes = 3500
-	// approvalArgsMaxChars truncates oversized tool argument payloads so a
-	// single approval cannot blow past the message cap on its own. Counted in
-	// Unicode code points so multi-byte characters aren't split mid-sequence.
-	approvalArgsMaxChars = 2000
+	// telegramMessageMaxBytes is Telegram's hard per-message cap.
+	telegramMessageMaxBytes = 4096
+	// telegramMessageSafetyMargin keeps the computed budgets clear of the hard
+	// cap so rounding in the platform's own accounting can't tip a message over.
+	telegramMessageSafetyMargin = 128
+
+	// toolNameMaxBytes caps the escaped width of a tool name wherever one is
+	// rendered. Tool names come from MCP servers, so they are not trusted to
+	// be short.
+	toolNameMaxBytes = 128
+	// activityLineStatusMaxBytes caps the escaped width of an activity-log
+	// status. Statuses can carry free text (a supervisor's deny reason), so a
+	// single line must not be able to fill a message on its own — a lone line
+	// has no other chunk to move to.
+	activityLineStatusMaxBytes = 256
+
+	// approvalArgsMaxBytes caps the escaped width of a tool-argument payload
+	// rendered in an approval prompt.
+	approvalArgsMaxBytes = 2000
+	// approvalSectionOverheadBytes covers the approval section's fixed markup
+	// (header, expandable blockquote tags, separator newline) plus the
+	// ellipsis each truncated field may append.
+	approvalSectionOverheadBytes = 80
+	// approvalSectionMaxBytes is the resulting ceiling on a rendered approval
+	// section.
+	approvalSectionMaxBytes = approvalArgsMaxBytes + toolNameMaxBytes + approvalSectionOverheadBytes
+
+	// activityChunkMaxBytes caps a chunk's activity blockquote when no
+	// approval shares the message. The gap to telegramMessageMaxBytes is
+	// deliberate headroom: statuses are rewritten in place after a chunk was
+	// last measured ("⏳" → "✅ 1234ms"), so a chunk grows a little between
+	// budget checks.
+	activityChunkMaxBytes = 3000
+	// activityChunkWithApprovalMaxBytes is the tighter blockquote budget that
+	// applies while an approval section shares the message.
+	activityChunkWithApprovalMaxBytes = telegramMessageMaxBytes - approvalSectionMaxBytes - telegramMessageSafetyMargin
 )
+
+// escapedRuneWidth returns the number of bytes html.EscapeString emits for r.
+func escapedRuneWidth(r rune) int {
+	switch r {
+	case '&', '\'', '"':
+		return 5 // &amp; &#39; &#34;
+	case '<', '>':
+		return 4 // &lt; &gt;
+	}
+	if n := utf8.RuneLen(r); n > 0 {
+		return n
+	}
+	return utf8.RuneLen(utf8.RuneError)
+}
+
+// truncateEscaped truncates s so html.EscapeString(result) is at most maxBytes
+// bytes long, cutting on a rune boundary and appending an ellipsis (itself
+// inside the budget) when anything was dropped. Callers that render into
+// non-HTML markup can use it too: the escaped width is never smaller than the
+// raw width, so the raw result also fits maxBytes.
+func truncateEscaped(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	const ellipsis = "…" // 3 bytes, unaffected by HTML escaping
+	keepLimit := maxBytes - len(ellipsis)
+	if keepLimit < 0 {
+		keepLimit = 0
+	}
+
+	width, keepEnd := 0, 0
+	for i, r := range s {
+		// width is the escaped width of s[:i].
+		if width <= keepLimit {
+			keepEnd = i
+		}
+		width += escapedRuneWidth(r)
+		if width > maxBytes {
+			return s[:keepEnd] + ellipsis
+		}
+	}
+	return s
+}
+
+// renderApprovalSection builds the approval header plus the expandable args
+// block. tool and args must already be truncated to their escaped-width
+// budgets; the result is then bounded by approvalSectionMaxBytes.
+func renderApprovalSection(tool, args string) string {
+	return fmt.Sprintf("🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
+		html.EscapeString(tool), html.EscapeString(args))
+}
+
+// renderLines builds the activity blockquote for a chunk, without any approval
+// section. This is the quantity budgeted by chunkLinesBudget — measuring the
+// lines alone (rather than the whole message) is what lets an oversized
+// approval section be moved to a chunk of its own instead of being wedged onto
+// a chunk that has no room for it.
+func (l *activityLog) renderLines(c *logChunk) string {
+	if len(c.lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<blockquote expandable>📋 <b>Activity log</b>")
+	for _, line := range c.lines {
+		fmt.Fprintf(&b, "\n🔧 <b>%s</b> — %s",
+			html.EscapeString(line.tool), html.EscapeString(line.status))
+	}
+	b.WriteString("</blockquote>")
+	return b.String()
+}
 
 // renderChunk builds the HTML text for a single chunk. When isLast is true
 // and a pending approval is set, the approval section (header + args) is
 // appended below the activity blockquote. The approval buttons themselves
 // are attached separately via the OutgoingMessage when flushing.
 func (l *activityLog) renderChunk(c *logChunk, isLast bool) string {
-	var b strings.Builder
-
-	if len(c.lines) > 0 {
-		b.WriteString("<blockquote expandable>📋 <b>Activity log</b>")
-		for _, line := range c.lines {
-			fmt.Fprintf(&b, "\n🔧 <b>%s</b> — %s",
-				html.EscapeString(line.tool), html.EscapeString(line.status))
-		}
-		b.WriteString("</blockquote>")
+	lines := l.renderLines(c)
+	if !isLast || l.pending == nil {
+		return lines
 	}
-
-	if isLast && l.pending != nil {
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
-		fmt.Fprintf(&b, "🔧 <b>%s</b> — approve?\n<blockquote expandable>%s</blockquote>",
-			html.EscapeString(l.pending.tool),
-			html.EscapeString(l.pending.args))
+	approval := renderApprovalSection(l.pending.tool, l.pending.args)
+	if lines == "" {
+		return approval
 	}
+	return lines + "\n" + approval
+}
 
-	return b.String()
+// chunkLinesBudget returns the byte budget for a chunk's activity blockquote.
+// While a pending approval shares the message the budget shrinks to leave room
+// for the approval section under Telegram's cap.
+func (l *activityLog) chunkLinesBudget() int {
+	if l.pending != nil {
+		return activityChunkWithApprovalMaxBytes
+	}
+	return activityChunkMaxBytes
 }
 
 // flush sends or edits the active chunk's message with the current content.
@@ -1554,15 +1688,35 @@ func (l *activityLog) flush(ctx context.Context) {
 	if last.messageID == "" {
 		id, err := l.editor.SendAndGetID(ctx, msg)
 		if err != nil {
-			l.logger.Debug("activity log: failed to send initial message", "error", err)
+			l.logSendFailure(ctx, "activity log: failed to send initial message", err, len(text))
 			return
 		}
 		last.messageID = id
 		return
 	}
 	if err := l.editor.EditMessage(ctx, l.externalID, last.messageID, msg); err != nil {
-		l.logger.Debug("activity log: failed to edit message", "error", err)
+		l.logSendFailure(ctx, "activity log: failed to edit message", err, len(text))
 	}
+}
+
+// logSendFailure reports a failed activity-log delivery. A failure while an
+// approval is attached is functional, not cosmetic — the inline keyboard never
+// reaches the user and the approval hangs until it times out — so it is logged
+// at Error. Without a pending approval the message is informational and stays
+// at Debug, keeping the routine edit noise (e.g. "message is not modified")
+// out of the operator's log.
+func (l *activityLog) logSendFailure(ctx context.Context, msg string, err error, textBytes int) {
+	level := slog.LevelDebug
+	if l.pending != nil {
+		level = slog.LevelError
+	}
+	l.logger.Log(ctx, level, msg,
+		"error", err,
+		"adapter", l.adapter,
+		"external_id", l.externalID,
+		"text_bytes", textBytes,
+		"pending_approval", l.pending != nil,
+	)
 }
 
 // ensureChunk returns the active chunk, allocating an empty one if needed.
@@ -1573,13 +1727,21 @@ func (l *activityLog) ensureChunk() *logChunk {
 	return l.chunks[len(l.chunks)-1]
 }
 
-// addLine appends a line to the active chunk. If the chunk would overflow
-// Telegram's message cap, the chunk is frozen (will not be edited again) and
-// a fresh chunk is started; the line goes onto the new chunk.
+// addLine appends a line to the active chunk. If the chunk would overflow its
+// blockquote budget, the chunk is frozen (will not be edited again) and a
+// fresh chunk is started; the line goes onto the new chunk.
+//
+// Only the blockquote is measured — a pending approval section is budgeted
+// separately (chunkLinesBudget already reserves room for it), so a large
+// approval can never make an ordinary line unplaceable. The status is capped
+// first because it may carry free text, which keeps a single line small enough
+// that the len(c.lines) > 1 guard (a lone line has nowhere to move to) can
+// never leave an over-cap chunk behind.
 func (l *activityLog) addLine(line activityLine) {
+	line.status = truncateEscaped(line.status, activityLineStatusMaxBytes)
 	c := l.ensureChunk()
 	c.lines = append(c.lines, line)
-	if len(l.renderChunk(c, true)) > activityChunkMaxBytes && len(c.lines) > 1 {
+	if len(l.renderLines(c)) > l.chunkLinesBudget() && len(c.lines) > 1 {
 		// Roll back the last line, start a new chunk, and place the line there.
 		c.lines = c.lines[:len(c.lines)-1]
 		fresh := &logChunk{toolIndex: map[string]int{}}
@@ -1614,7 +1776,7 @@ func (l *activityLog) updateActiveLine(tool, status string, removeFromIndex bool
 	if !ok {
 		return false
 	}
-	c.lines[idx].status = status
+	c.lines[idx].status = truncateEscaped(status, activityLineStatusMaxBytes)
 	if removeFromIndex {
 		delete(c.toolIndex, tool)
 	}
@@ -1622,11 +1784,14 @@ func (l *activityLog) updateActiveLine(tool, status string, removeFromIndex bool
 }
 
 func (l *activityLog) autoApproved(ctx context.Context, tool string) {
-	l.addLine(activityLine{tool: tool, status: "auto-approved"})
+	l.addLine(activityLine{tool: truncateEscaped(tool, toolNameMaxBytes), status: "auto-approved"})
 	l.flush(ctx)
 }
 
 func (l *activityLog) toolStart(ctx context.Context, tool string) {
+	// Normalise up front so the toolIndex key, the pending comparison below
+	// and the rendered line all agree on the same (possibly truncated) name.
+	tool = truncateEscaped(tool, toolNameMaxBytes)
 	// A tool_start for the pending approval's tool means the user approved
 	// it — clear the pending state so the buttons disappear.
 	if l.pending != nil && l.pending.tool == tool {
@@ -1643,6 +1808,7 @@ func (l *activityLog) toolStart(ctx context.Context, tool string) {
 }
 
 func (l *activityLog) toolEnd(ctx context.Context, tool string, durationMS int64, errMsg string) {
+	tool = truncateEscaped(tool, toolNameMaxBytes)
 	status := fmt.Sprintf("✅ %dms", durationMS)
 	if errMsg != "" {
 		status = "❌"
@@ -1660,6 +1826,7 @@ func (l *activityLog) toolEnd(ctx context.Context, tool string, durationMS int64
 // pending state so the buttons disappear, and prefers updating an existing
 // line for the tool in-place over appending a duplicate (mirrors toolEnd).
 func (l *activityLog) toolDenied(ctx context.Context, tool string) {
+	tool = truncateEscaped(tool, toolNameMaxBytes)
 	if l.pending != nil && l.pending.tool == tool {
 		l.pending = nil
 	}
@@ -1671,15 +1838,24 @@ func (l *activityLog) toolDenied(ctx context.Context, tool string) {
 	l.flush(ctx)
 }
 
-// setPending records a pending approval. If the current chunk was already
-// sent, it is frozen and a fresh chunk is started so the approval is
-// delivered as a new message — edits don't trigger push notifications.
+// setPending records a pending approval, truncating the tool name and argument
+// payload to their escaped-width budgets so the rendered section cannot exceed
+// approvalSectionMaxBytes.
+//
+// A fresh chunk is started when the current one was already sent (edits don't
+// trigger push notifications, and an approval must notify) or when the chunk's
+// accumulated lines leave no room for the approval section. Without the second
+// case a long-but-unsent activity log and an approval would share one message
+// and push it over Telegram's cap, which drops the message — and with it the
+// inline keyboard — entirely.
 func (l *activityLog) setPending(ctx context.Context, tool, args, callback string) {
-	if runes := []rune(args); len(runes) > approvalArgsMaxChars {
-		args = string(runes[:approvalArgsMaxChars]) + "…"
+	l.pending = &pendingApproval{
+		tool:     truncateEscaped(tool, toolNameMaxBytes),
+		args:     truncateEscaped(args, approvalArgsMaxBytes),
+		callback: callback,
 	}
-	l.pending = &pendingApproval{tool: tool, args: args, callback: callback}
-	if c := l.ensureChunk(); c.messageID != "" {
+	c := l.ensureChunk()
+	if c.messageID != "" || len(l.renderLines(c)) > activityChunkWithApprovalMaxBytes {
 		l.chunks = append(l.chunks, &logChunk{toolIndex: map[string]int{}})
 	}
 	l.flush(ctx)
@@ -1687,6 +1863,7 @@ func (l *activityLog) setPending(ctx context.Context, tool, args, callback strin
 
 // supervisorLine appends a non-button line for supervisor decisions.
 func (l *activityLog) supervisorLine(ctx context.Context, tool, status string) {
+	tool = truncateEscaped(tool, toolNameMaxBytes)
 	l.addTerminalLine(activityLine{tool: tool + " (supervisor)", status: status})
 	l.flush(ctx)
 }
