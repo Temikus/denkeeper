@@ -5527,7 +5527,16 @@
                         "description": "Tool removed"
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Tool not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Removal failed",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5705,7 +5714,16 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid request body or update failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Tool not found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
