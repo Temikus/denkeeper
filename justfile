@@ -218,9 +218,10 @@ release bump:
     git push origin "$tag"
     echo "Released ${tag}"
 
-# Run security scans (cached via Task; usage: just scan [gosec|govulncheck|grype], default: all).
+# Run security scans (cached via Task; usage: just scan [gosec|govulncheck|grype|secrets], default: all).
 # Pass --force to a specific scan (e.g. `mise x -- task scan:govulncheck --force`)
 # to re-check against a fresh vulnerability database when sources are unchanged.
+# `secrets` scans git history and is always uncached.
 scan tool="all":
     #!/usr/bin/env sh
     set -e
@@ -229,8 +230,9 @@ scan tool="all":
         gosec)       mise x -- task scan:gosec ;;
         govulncheck) mise x -- task scan:govulncheck ;;
         grype)       mise x -- task scan:grype ;;
+        secrets)     mise x -- task scan:secrets ;;
         *)
-            echo "Unknown scan: {{tool}}. Available: gosec, govulncheck, grype"
+            echo "Unknown scan: {{tool}}. Available: gosec, govulncheck, grype, secrets"
             exit 1
             ;;
     esac

@@ -7,3 +7,5 @@ task = "3.52.0"
 "go:github.com/air-verse/air" = "1.67.3"
 "aqua:casey/just" = "1.57.0"
 "aqua:anchore/grype" = "0.116.1"
+# Keep in sync with the betterleaks job in .github/workflows/security.yml.
+"aqua:betterleaks/betterleaks" = "1.1.2"

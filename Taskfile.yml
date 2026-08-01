@@ -216,9 +216,18 @@ tasks:
     cmds:
       - mise x -- grype dir:. --fail-on high --only-fixed
 
+  # Deliberately uncached (no sources): this scans git history, not the working
+  # tree, so a file fingerprint is the wrong cache key — a commit that touches
+  # no declared source would let a newly introduced secret through. Full history
+  # takes ~1s, so there is nothing to save.
+  scan:secrets:
+    desc: Scan git history for committed secrets (matches CI's betterleaks job; uses .betterleaks.toml)
+    cmds:
+      - mise x -- betterleaks git . --exit-code 1
+
   scan:
-    desc: Run all security scans (gosec + govulncheck + grype)
-    deps: [scan:gosec, scan:govulncheck, scan:grype]
+    desc: Run all security scans (gosec + govulncheck + grype + secrets)
+    deps: [scan:gosec, scan:govulncheck, scan:grype, scan:secrets]
 
   # ---- Documentation website ------------------------------------------
   website:install:
