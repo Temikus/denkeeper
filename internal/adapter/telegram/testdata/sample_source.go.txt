@@ -1,0 +1,280 @@
+// Frozen test fixture. Snapshot of internal/adapter/telegram/tghtml/block.go
+// taken for the Phase 6 reassembly test, and deliberately NOT kept in sync with
+// it — the test asserts byte equality against these exact bytes, and a fixture
+// that tracked a file still under change would alter its own chunk count from
+// one commit to the next.
+//
+// Nothing imports this. It is here because a reassembly test needs real source:
+// angle brackets and ampersands that have to survive as entities, long
+// identifier runs with nowhere natural to break, and blank lines whose loss a
+// word-level comparison would not notice.
+
+package tghtml
+
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// A block is a sequence of tokens rather than a rendered string, because the
+// chunker has to be able to split one.
+//
+// Rendering to a string first destroys the tag structure the renderer just
+// computed from the AST, and the chunker then has no way to tell markup from
+// text — a cut at an arbitrary byte can land inside a tag. Recovering the
+// structure would mean parsing the HTML back apart, which is the second parser
+// this package exists to avoid. Keeping tokens means a split is only ever taken
+// inside a text token, and tag balance is a property of the representation
+// instead of something a test has to check after the fact.
+
+// token is one piece of a block: a run of already-escaped text, or one tag
+// boundary.
+//
+// Text is stored escaped rather than raw so that a token's emitted length is
+// just len(text) — the chunker asks for it on every token — and so the renderer's
+// existing escaping is unchanged. The cost is that a split inside text must
+// avoid landing inside an entity as well as inside a rune; see textCut.
+type token struct {
+	// text is the escaped HTML text of a text token.
+	text string
+	// tag is the element name of a tag token, empty for a text token.
+	tag string
+	// attr is an opening tag's serialised attributes, including the leading
+	// space (` class="language-go"`).
+	attr string
+	// open distinguishes <tag> from </tag>.
+	open bool
+}
+
+func textToken(escaped string) token   { return token{text: escaped} }
+func openToken(tag, attr string) token { return token{tag: tag, attr: attr, open: true} }
+func closeToken(tag string) token      { return token{tag: tag} }
+func (t token) isText() bool           { return t.tag == "" }
+func (t token) closer() token          { return closeToken(t.tag) }
+
+// emitted returns the bytes this token puts on the wire.
+func (t token) emitted() string {
+	switch {
+	case t.isText():
+		return t.text
+	case t.open:
+		return "<" + t.tag + t.attr + ">"
+	default:
+		return "</" + t.tag + ">"
+	}
+}
+
+// size is len(emitted()) without building it.
+func (t token) size() int {
+	switch {
+	case t.isText():
+		return len(t.text)
+	case t.open:
+		return len(t.tag) + len(t.attr) + 2 // <tag attr>
+	default:
+		return len(t.tag) + 3 // </tag>
+	}
+}
+
+// Block is one unit of rendered output in which every opened element is closed.
+type Block struct {
+	tokens []token
+}
+
+// HTML returns the block's complete HTML.
+func (b Block) HTML() string {
+	var sb strings.Builder
+	sb.Grow(b.Len())
+	for _, t := range b.tokens {
+		sb.WriteString(t.emitted())
+	}
+	return sb.String()
+}
+
+// Len reports the byte length of the block's HTML, without building it.
+func (b Block) Len() int {
+	n := 0
+	for _, t := range b.tokens {
+		n += t.size()
+	}
+	return n
+}
+
+// BlockSeparator joins adjacent blocks. A blank line reproduces the paragraph
+// spacing a reader expects and is what upstream emitted between paragraphs.
+const BlockSeparator = "\n\n"
+
+// Join concatenates blocks in order, separated by BlockSeparator. The result is
+// tag-balanced because every block is.
+func Join(blocks []Block) string {
+	var out blockBuilder
+	for _, b := range blocks {
+		if b.Len() == 0 {
+			continue
+		}
+		if out.Len() > 0 {
+			out.writeSeparator(BlockSeparator)
+		}
+		out.appendTokens(b.tokens)
+	}
+	return out.String()
+}
+
+// blockBuilder accumulates tokens. It stands in for a strings.Builder
+// throughout the renderer: WriteString appends escaped text, and the tag
+// methods record structure the chunker would otherwise have to rediscover.
+type blockBuilder struct {
+	tokens []token
+	n      int
+}
+
+// WriteString appends already-escaped text, merging into the preceding text
+// token so a block does not accumulate one token per fragment.
+func (b *blockBuilder) WriteString(escaped string) {
+	if escaped == "" {
+		return
+	}
+	if k := len(b.tokens) - 1; k >= 0 && b.tokens[k].isText() {
+		b.tokens[k].text += escaped
+		b.n += len(escaped)
+		return
+	}
+	b.push(textToken(escaped))
+}
+
+func (b *blockBuilder) open(tag, attr string) { b.push(openToken(tag, attr)) }
+func (b *blockBuilder) close(tag string)      { b.push(closeToken(tag)) }
+
+func (b *blockBuilder) push(t token) {
+	b.tokens = append(b.tokens, t)
+	b.n += t.size()
+}
+
+// appendTokens splices another block's tokens in, merging adjacent text.
+func (b *blockBuilder) appendTokens(tokens []token) {
+	for _, t := range tokens {
+		if t.isText() {
+			b.WriteString(t.text)
+			continue
+		}
+		b.push(t)
+	}
+}
+
+// Len is the emitted byte length so far. The renderer uses it to test whether a
+// node produced anything at all.
+func (b *blockBuilder) Len() int { return b.n }
+
+func (b *blockBuilder) String() string { return b.block().HTML() }
+
+func (b *blockBuilder) block() Block { return Block{tokens: b.tokens} }
+
+// writeSeparator appends the part of sep not already supplied by the trailing
+// newlines of what is written.
+//
+// A block may end in a newline of its own — a heading does, because the line
+// break is part of the heading — and writing the full separator on top of it
+// would open a second blank line. sep is always a run of newlines.
+func (b *blockBuilder) writeSeparator(sep string) {
+	trailing := b.trailingNewlines()
+	if trailing > len(sep) {
+		trailing = len(sep)
+	}
+	b.WriteString(sep[trailing:])
+}
+
+// trailingNewlines counts the newlines at the end of the emitted text. A tag
+// boundary ends the run: markup is not whitespace.
+func (b *blockBuilder) trailingNewlines() int {
+	k := len(b.tokens) - 1
+	if k < 0 || !b.tokens[k].isText() {
+		return 0
+	}
+	s := b.tokens[k].text
+	return len(s) - len(strings.TrimRight(s, "\n"))
+}
+
+// maxEntityLen bounds how far back a scan looks for the '&' of an entity. Long
+// enough for any named reference the escaper emits, with headroom.
+const maxEntityLen = 12
+
+// textCut returns the largest prefix length of escaped text s that does not
+// exceed max and is safe to cut at.
+//
+// Safe means three things: on a rune boundary, outside an HTML entity, and — if
+// one is available — at a line or word break, so a split reads as a break in the
+// prose rather than mid-word. Returns 0 when nothing fits.
+func textCut(s string, max int) int {
+	if max >= len(s) {
+		return len(s)
+	}
+	if max <= 0 {
+		return 0
+	}
+
+	hard := max
+	for hard > 0 && !utf8.RuneStart(s[hard]) {
+		hard--
+	}
+	if start := entityStart(s, hard); start >= 0 {
+		hard = start
+	}
+	if hard <= 0 {
+		return 0
+	}
+
+	// Prefer a natural break, but never give back more than a quarter of the
+	// room to find one — a long unbroken run would otherwise chunk absurdly.
+	floor := hard - hard/4
+	if at := strings.LastIndexByte(s[:hard], '\n'); at >= floor {
+		return at + 1
+	}
+	if at := strings.LastIndexByte(s[:hard], ' '); at >= floor {
+		return at + 1
+	}
+	return hard
+}
+
+// minCut is the length of the smallest indivisible prefix of escaped text s.
+//
+// It is what a chunk emits when the limit cannot accommodate even that much:
+// going over the limit is recoverable, cutting inside a character or an entity
+// is not. An entity is one unit — "&amp;" split anywhere is four bytes of
+// nonsense — and otherwise the unit is a rune.
+func minCut(s string) int {
+	if s == "" {
+		return 0
+	}
+	if s[0] == '&' {
+		if end := strings.IndexByte(s, ';'); end > 0 && end <= maxEntityLen {
+			return end + 1
+		}
+	}
+	_, n := utf8.DecodeRuneInString(s)
+	return n
+}
+
+// entityStart reports the index of the '&' beginning an entity that spans cut,
+// or -1 when cut is not inside one.
+//
+// Text tokens hold escaped text, so a cut at an arbitrary byte can land inside
+// "&amp;" and emit a fragment Telegram would either show literally or reject.
+func entityStart(s string, cut int) int {
+	lo := cut - maxEntityLen
+	if lo < 0 {
+		lo = 0
+	}
+	for i := cut - 1; i >= lo; i-- {
+		switch s[i] {
+		case '&':
+			end := strings.IndexByte(s[i:], ';')
+			if end >= 0 && i+end >= cut {
+				return i
+			}
+			return -1
+		case ';':
+			return -1
+		}
+	}
+	return -1
+}

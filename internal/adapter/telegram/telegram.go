@@ -16,6 +16,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/voice"
+	"github.com/jamestelfer/telegold"
 )
 
 // VoiceOpts configures optional voice (STT/TTS) support for the adapter.
@@ -341,34 +342,312 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 	}
 
 	// Text reply (default path).
-	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
-	tgMsg.DisableNotification = msg.Silent
+	_, err = a.sendText(chatID, msg)
+	return err
+}
 
-	// Attach inline keyboard buttons if provided.
+// parseModeHTML is Telegram's HTML parse mode identifier.
+const parseModeHTML = "HTML"
+
+// MessageChunkLimit is the largest chunk the adapter will send, in bytes of
+// rendered HTML.
+//
+// Telegram's own cap is 4096 characters of the entity-stripped text, counted in
+// UTF-16 code units. Counting raw HTML bytes over-counts against that, which is
+// conservative and costs only the occasional extra message.
+//
+// Exported because the dispatcher's activity log builds Telegram HTML and chunks
+// it itself, against this same number. Sharing the constant keeps the two from
+// drifting apart, which is all it does — they previously carried the same literal
+// with nothing tying them together.
+//
+// It does not make the two budgets equivalent, and nothing here should be read as
+// saying the activity log is bounded because it shares this constant. That path
+// measures its accumulated lines, then appends an approval section budgeted in
+// unescaped runes which HTML escaping can expand several times over, and it
+// forwards the result with an explicit parse mode — which this adapter sends
+// unchunked by contract. A single message over Telegram's cap is the outcome, and
+// the fix belongs where the length is decided, not here.
+const MessageChunkLimit = 3500
+
+// telegramMessageCap is Telegram's own hard limit on a single message, in
+// characters of the entity-stripped text.
+//
+// Distinct from MessageChunkLimit, which is the deliberately conservative bound
+// the chunker splits on. This one is the API's documented ceiling, and it is
+// used to answer a different question: whether a given string has any chance of
+// going out as one message at all.
+const telegramMessageCap = 4096
+
+// plainChunkLimit is the largest plain-text message the adapter will send, in
+// characters — the unit telegramMessageCap is expressed in.
+//
+// The same headroom as MessageChunkLimit, applied to a different measure: that
+// one bounds raw HTML in bytes, where over-counting against Telegram's
+// entity-stripped cap is conservative. Plain text goes out as written, so
+// characters are what it has to be counted in.
+const plainChunkLimit = MessageChunkLimit
+
+// maxOutboundChunks bounds how many messages one reply may become.
+//
+// sendChunks issues one API call per chunk, and Telegram rate-limits per chat
+// at roughly twenty messages a minute. Ten keeps any single reply comfortably
+// inside that, and ten chunks is already 35 KB of rendered HTML — far more than
+// a reply that is merely long. Exceeding it means the chunker is producing
+// chunks that carry very little text each, which heavily-tagged content can do
+// because chunk length is counted in raw HTML bytes.
+const maxOutboundChunks = 10
+
+// maxRenderInput bounds how much text the adapter will parse as CommonMark, in
+// bytes.
+//
+// goldmark's parse cost is quadratic in nesting depth: 32 KB of nested
+// blockquote markers takes about half a second, 64 KB one and three quarter
+// seconds, 200 KB seventeen. The renderer's own walk is linear — the cost is all
+// in the parse — and the text is model output, so nothing upstream guarantees
+// its shape. Without a bound, one reply can occupy a core for that long.
+//
+// The bound is what a reply can actually be delivered as: maxOutboundChunks
+// messages of MessageChunkLimit each. Beyond it capChunks discards the surplus
+// anyway, so the extra parse buys output that is thrown away. Markup can shrink
+// under rendering — a page of link reference definitions renders to almost
+// nothing — so this is not a proof that nothing is lost, and such a reply
+// degrades to plain text. Bounded CPU on the send path is worth more than
+// formatting for a reply already ten times longer than one that can be sent.
+const maxRenderInput = maxOutboundChunks * MessageChunkLimit
+
+// truncationNotice is appended to the last message of a reply that was cut
+// short. Plain text: it rides on a chunk sent with HTML parse mode, so it must
+// carry nothing that needs escaping.
+const truncationNotice = "[reply truncated: too long to send]"
+
+// sendText renders msg's text and delivers it, returning the message ID of the
+// last message sent. It is the shared body of Send and SendAndGetID, so the two
+// cannot drift in how they render, chunk, fall back or abort.
+//
+// An ID of zero with no error means the text rendered to nothing and no message
+// was sent.
+func (a *Adapter) sendText(chatID int64, msg adapter.OutgoingMessage) (int, error) {
+	base := tgbotapi.NewMessage(chatID, msg.Text)
+	base.DisableNotification = msg.Silent
+
+	var markup interface{}
 	if len(msg.Buttons) > 0 {
 		rows := buildButtonRows(msg.Buttons, msg.ButtonLayout)
-		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+		markup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	}
 
-	// Use explicit parse mode if set, otherwise try Markdown with plain-text
-	// fallback for LLM responses that may break Telegram's parser.
+	// An explicit parse mode is the caller's own markup — the activity log
+	// builds pre-escaped HTML and chunks it itself — so it is forwarded
+	// unrendered, unchunked and unretried.
 	if msg.ParseMode != "" {
-		tgMsg.ParseMode = msg.ParseMode
-		_, err = a.sender.Send(tgMsg)
-	} else {
-		tgMsg.ParseMode = "Markdown"
-		_, err = a.sender.Send(tgMsg)
-		if err != nil {
-			a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
-			tgMsg.ParseMode = ""
-			_, err = a.sender.Send(tgMsg)
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("sending telegram message: %w", err)
+		base.ParseMode = msg.ParseMode
+		base.ReplyMarkup = markup
+		return a.sendOne(base)
 	}
 
-	return nil
+	// Past maxRenderInput the text is not parsed at all. This is the same exit
+	// R29 takes, for the same reason: the rendered form is not available, so the
+	// reply goes out as plain text rather than not at all.
+	if len(msg.Text) > maxRenderInput {
+		a.logger.Warn("reply too long to render, sending as plain text",
+			"bytes", len(msg.Text), "limit", maxRenderInput)
+		return a.sendPlain(base, markup)
+	}
+
+	// Default path: the text is CommonMark. Render it to Telegram's HTML subset
+	// locally rather than asking Telegram's legacy Markdown parser to do it.
+	chunks, renderErr := renderChunks(msg.Text)
+	if renderErr != nil {
+		a.logger.Debug("render failed, sending as plain text", "error", renderErr)
+		return a.sendPlain(base, markup)
+	}
+	// A render that produces nothing from a reply that has something in it is a
+	// message that would otherwise disappear: no send, no error, and callers that
+	// discard the error have no way to notice. It is the same predicament R29
+	// answers — the rendered form cannot carry the reply — so it takes the same
+	// exit rather than a silent one. A reply that is genuinely blank renders to
+	// nothing for the ordinary reason and is not a message at all.
+	if len(chunks) == 0 {
+		if strings.TrimSpace(msg.Text) == "" {
+			// A blank reply is not a message and nothing is lost by not sending
+			// it — unless it was carrying a keyboard. Buttons ride on a chunk, so
+			// with no chunk there is nowhere to put them, and Telegram rejects a
+			// message with empty text, so no send would deliver them either.
+			// Inventing text to carry them is not this layer's call to make, so
+			// the error is the remedy: an approval whose buttons never arrive
+			// waits for a click that cannot happen, and silence is what makes
+			// that undiagnosable.
+			if len(msg.Buttons) > 0 {
+				return 0, fmt.Errorf("telegram: refusing to drop %d button(s) on a blank message", len(msg.Buttons))
+			}
+			return 0, nil
+		}
+		a.logger.Debug("render produced no output, sending as plain text")
+		return a.sendPlain(base, markup)
+	}
+
+	chunks = a.capChunks(chunks)
+
+	html := base
+	html.ParseMode = parseModeHTML
+	id, delivered, err := a.sendChunks(html, markup, chunks)
+	if err == nil {
+		return id, nil
+	}
+
+	// Where R30's retry ends and R31 begins is decided by what already reached
+	// the chat, not by how many chunks the reply happened to split into. The
+	// retry re-sends the whole reply as one message, so it is only safe while
+	// nothing has landed: once a chunk has arrived, repeating it would leave the
+	// reader with a duplicated fragment, which reads worse than the visible
+	// failure R31 asks for.
+	//
+	// Length is no longer part of this decision. The retry splits the original
+	// markdown the same way the HTML attempt was split, so a source over
+	// Telegram's cap is no longer a certain rejection — it is simply a retry of
+	// several messages instead of one.
+	if delivered > 0 {
+		return 0, err
+	}
+
+	// Only a rejection is answered by dropping the parse mode. A timeout, a
+	// cancellation or a 429 says nothing about the markup, and re-sending the
+	// whole reply unformatted would spend its formatting permanently on a fault
+	// that was never about parsing — while issuing the calls a second time into a
+	// chat that, when the fault is a 429, is already over its limit.
+	if !isRejection(err) {
+		return 0, err
+	}
+
+	// Telegram rejected the HTML and nothing is on screen yet. Retry the original
+	// markdown once with no parse mode — never a half-rendered string.
+	a.logger.Debug("html send failed, retrying as plain text", "error", err)
+	return a.sendPlain(base, markup)
+}
+
+// isRejection reports whether err is Telegram refusing the request as malformed,
+// as opposed to failing to carry it out.
+//
+// A 400 is the API's answer to a bad request, which is what an HTML body it
+// cannot parse is. It is not exclusively a parse failure — "message is too long"
+// is also a 400 — but plain text is the right answer to both, and the chunker
+// makes the length case one the send path should no longer reach. Every other
+// class, including 429 and 5xx, is Telegram declining to act on a request it
+// understood.
+func isRejection(err error) bool {
+	var apiErr *tgbotapi.Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == http.StatusBadRequest
+}
+
+// capChunks bounds a reply to maxOutboundChunks messages, marking the last one
+// so the truncation is visible to the reader rather than silent.
+//
+// The notice is appended rather than sent as an extra message: an extra message
+// is one more call against the rate limit this cap exists to protect, and a
+// chunk has headroom for it — the chunker splits at MessageChunkLimit, well
+// under Telegram's own cap.
+func (a *Adapter) capChunks(chunks []string) []string {
+	if len(chunks) <= maxOutboundChunks {
+		return chunks
+	}
+	a.logger.Warn("reply truncated: too many chunks to send",
+		"chunks", len(chunks), "limit", maxOutboundChunks)
+
+	capped := chunks[:maxOutboundChunks]
+	last := len(capped) - 1
+	capped[last] += "\n\n" + truncationNotice
+	return capped
+}
+
+// sendChunks sends one Telegram message per chunk, in source order, and returns
+// the final chunk's message ID. The inline keyboard rides on the final chunk
+// only: buttons under a mid-message fragment read as a broken message.
+//
+// The parse mode comes from base and is not set here, so the same loop carries
+// the rendered HTML and the plain-text fallback. Each caller decides on its own
+// copy of base, which keeps the fallback structurally incapable of going out as
+// HTML.
+//
+// The second return is how many chunks actually reached the chat. On failure it
+// is what tells the caller whether the reply is still recoverable — a failure on
+// the first chunk left the conversation untouched, a later one did not — so the
+// error alone is not enough to decide.
+func (a *Adapter) sendChunks(base tgbotapi.MessageConfig, markup interface{}, chunks []string) (id, delivered int, err error) {
+	for i, chunk := range chunks {
+		out := base
+		out.Text = chunk
+		out.ReplyMarkup = nil
+		if i == len(chunks)-1 {
+			out.ReplyMarkup = markup
+		}
+		// Telegram notifies per message, but the reply is one event however many
+		// messages carry it. Only the first chunk announces it — a reply that
+		// split ten ways would otherwise ping ten times. Silencing the rest can
+		// only add silence, so a caller that asked for none still gets none.
+		if i > 0 {
+			out.DisableNotification = true
+		}
+		sent, sendErr := a.sender.Send(out)
+		if sendErr != nil {
+			return 0, i, fmt.Errorf("sending telegram message chunk %d of %d: %w", i+1, len(chunks), sendErr)
+		}
+		id = sent.MessageID
+	}
+	return id, len(chunks), nil
+}
+
+// sendPlain sends base with no parse mode — the fallback both R29 and R30 land
+// on — splitting it across messages when it is too long for one.
+//
+// The split is what makes this a fallback rather than a second failure. Without
+// it a reply over Telegram's cap was handed over whole and rejected on sight,
+// so the message the renderer could not format was not delivered at all. Prose
+// containing something CommonMark reads as raw HTML — `Vec<T>`, `<Enter>` —
+// takes this exit routinely, so the case is ordinary rather than exotic.
+//
+// base.Text is still the original markdown: sendText builds it from msg.Text
+// and sendChunks mutates only its own copy, so the fallback cannot carry a
+// half-rendered string.
+func (a *Adapter) sendPlain(base tgbotapi.MessageConfig, markup interface{}) (int, error) {
+	base.ParseMode = ""
+
+	chunks, err := telegold.ChunkPlain(base.Text, plainChunkLimit)
+	if err != nil {
+		return 0, fmt.Errorf("chunking telegram plain text: %w", err)
+	}
+	if len(chunks) <= 1 {
+		base.ReplyMarkup = markup
+		return a.sendOne(base)
+	}
+
+	id, _, err := a.sendChunks(base, markup, a.capChunks(chunks))
+	return id, err
+}
+
+func (a *Adapter) sendOne(out tgbotapi.MessageConfig) (int, error) {
+	sent, err := a.sender.Send(out)
+	if err != nil {
+		return 0, fmt.Errorf("sending telegram message: %w", err)
+	}
+	return sent.MessageID, nil
+}
+
+// renderChunks renders outgoing markdown to Telegram-HTML chunks, each within
+// the message limit and each independently tag-balanced.
+func renderChunks(text string) ([]string, error) {
+	blocks, err := telegold.Render([]byte(text))
+	if err != nil {
+		return nil, fmt.Errorf("rendering markdown to telegram html: %w", err)
+	}
+	chunks, err := telegold.Chunk(blocks, MessageChunkLimit)
+	if err != nil {
+		return nil, fmt.Errorf("chunking telegram html: %w", err)
+	}
+	return chunks, nil
 }
 
 // handleCallbackQuery processes an inline keyboard button click. It answers
@@ -560,30 +839,17 @@ func (a *Adapter) SendAndGetID(ctx context.Context, msg adapter.OutgoingMessage)
 		return "", fmt.Errorf("parsing chat ID: %w", err)
 	}
 
-	tgMsg := tgbotapi.NewMessage(chatID, msg.Text)
-	tgMsg.DisableNotification = msg.Silent
-	if msg.ParseMode != "" {
-		tgMsg.ParseMode = msg.ParseMode
-	} else {
-		tgMsg.ParseMode = "Markdown"
-	}
-
-	if len(msg.Buttons) > 0 {
-		rows := buildButtonRows(msg.Buttons, msg.ButtonLayout)
-		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
-	}
-
-	sent, err := a.sender.Send(tgMsg)
-	if err != nil && msg.ParseMode == "" {
-		// Markdown failed, retry plain text.
-		a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
-		tgMsg.ParseMode = ""
-		sent, err = a.sender.Send(tgMsg)
-	}
+	// Shared with Send: same rendering, chunking, fallback and abort behaviour.
+	// A multi-chunk reply returns the final chunk's ID, because callers edit the
+	// message they were handed and an edit must land on the tail of the reply.
+	id, err := a.sendText(chatID, msg)
 	if err != nil {
-		return "", fmt.Errorf("sending telegram message: %w", err)
+		return "", err
 	}
-	return strconv.Itoa(sent.MessageID), nil
+	if id == 0 {
+		return "", fmt.Errorf("telegram message %q rendered to no content", msg.ExternalID)
+	}
+	return strconv.Itoa(id), nil
 }
 
 // EditText edits an existing Telegram message. Implements adapter.MessageEditor.
