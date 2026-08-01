@@ -1,9 +1,10 @@
 package telegram
 
 import (
-	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -21,7 +22,12 @@ type fakeBot struct {
 
 	// failSendOn holds 1-based Send call indices that must return failErr.
 	failSendOn map[int]bool
-	failErr    error
+	// failErr is what an injected failure returns. It defaults to a rejection
+	// because that is what most injection sites mean: the adapter distinguishes
+	// Telegram refusing a request as malformed, which R30 answers by retrying
+	// without a parse mode, from Telegram failing to carry a request out, which
+	// it does not. A test about the second sets its own.
+	failErr error
 
 	// nextMessageID is the ID handed to the next successful Send. It starts
 	// well above zero so a real reply is distinguishable from a zero-value
@@ -36,7 +42,7 @@ const firstFakeMessageID = 9001
 func newFakeBot() *fakeBot {
 	return &fakeBot{
 		failSendOn:    make(map[int]bool),
-		failErr:       errors.New("telegram: fake send failure"),
+		failErr:       errRejected,
 		nextMessageID: firstFakeMessageID,
 	}
 }
@@ -58,10 +64,30 @@ func (f *fakeBot) Send(c tgbotapi.Chattable) (tgbotapi.Message, error) {
 	if f.failSendOn[len(f.sends)] {
 		return tgbotapi.Message{}, f.failErr
 	}
+	if msg, ok := c.(tgbotapi.MessageConfig); ok {
+		// Telegram rejects a message over its cap. Without this the fake accepts
+		// anything, so a send path that skipped chunking looked healthy in every
+		// test while losing the reply in production — which is exactly how the
+		// unchunked plain-text fallback survived a full phase.
+		if n := utf8.RuneCountInString(msg.Text); n > telegramMessageCap {
+			return tgbotapi.Message{}, errOverCap
+		}
+	}
 	id := f.nextMessageID
 	f.nextMessageID++
 	return tgbotapi.Message{MessageID: id}, nil
 }
+
+// errRejected is shaped like the API error Telegram returns for an HTML body it
+// cannot parse — the fault R30's retry exists to answer.
+var errRejected = &tgbotapi.Error{
+	Code:    400,
+	Message: "Bad Request: can't parse entities: Unsupported start tag",
+}
+
+// errOverCap is shaped like the API error Telegram returns for a message longer
+// than it accepts.
+var errOverCap = &tgbotapi.Error{Code: 400, Message: "Bad Request: message is too long"}
 
 func (f *fakeBot) Request(c tgbotapi.Chattable) (*tgbotapi.APIResponse, error) {
 	f.mu.Lock()
@@ -189,4 +215,25 @@ func (f *fakeBot) edits(t *testing.T) []tgbotapi.EditMessageTextConfig {
 		}
 	}
 	return out
+}
+
+// TestFakeBot_RejectsAMessageOverTelegramsCap guards the guard. A fake that
+// accepts anything makes every "the reply was delivered" assertion in this
+// package meaningless for long replies.
+func TestFakeBot_RejectsAMessageOverTelegramsCap(t *testing.T) {
+	bot := newFakeBot()
+
+	atCap, err := bot.Send(tgbotapi.NewMessage(1, strings.Repeat("é", telegramMessageCap)))
+	if err != nil {
+		t.Errorf("a message of exactly %d characters was rejected: %v", telegramMessageCap, err)
+	}
+	if atCap.MessageID == 0 {
+		t.Error("an accepted send returned the zero-value message")
+	}
+
+	// One character over, and multi-byte throughout — a byte count would have
+	// rejected the first message too.
+	if _, err := bot.Send(tgbotapi.NewMessage(1, strings.Repeat("é", telegramMessageCap+1))); err == nil {
+		t.Errorf("a message of %d characters was accepted", telegramMessageCap+1)
+	}
 }
