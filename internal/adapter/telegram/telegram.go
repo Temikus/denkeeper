@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,8 +26,42 @@ type VoiceOpts struct {
 	AutoVoiceReply bool
 }
 
+// botSender is the adapter's outbound seam over *tgbotapi.BotAPI. It covers
+// send and request only: update polling, file URLs and shutdown still go
+// through Adapter.bot directly, because widening this interface over all of
+// BotAPI would buy nothing and cost a large fake.
+type botSender interface {
+	Send(c tgbotapi.Chattable) (tgbotapi.Message, error)
+	Request(c tgbotapi.Chattable) (*tgbotapi.APIResponse, error)
+}
+
+// unavailableSender stands in for a missing bot. Assigning a nil
+// *tgbotapi.BotAPI to a botSender would produce a non-nil interface holding a
+// nil pointer, which panics on the first outbound call; failing with an error
+// instead keeps that hazard out of the send paths.
+type unavailableSender struct{}
+
+func (unavailableSender) Send(tgbotapi.Chattable) (tgbotapi.Message, error) {
+	return tgbotapi.Message{}, errNoBot
+}
+
+func (unavailableSender) Request(tgbotapi.Chattable) (*tgbotapi.APIResponse, error) {
+	return nil, errNoBot
+}
+
+var errNoBot = errors.New("telegram bot is not configured")
+
+// senderFor returns the outbound seam for a bot, tolerating a nil bot.
+func senderFor(bot *tgbotapi.BotAPI) botSender {
+	if bot == nil {
+		return unavailableSender{}
+	}
+	return bot
+}
+
 type Adapter struct {
 	bot              *tgbotapi.BotAPI
+	sender           botSender
 	allowedUsers     map[int64]bool
 	logger           *slog.Logger
 	stt              voice.STTProvider
@@ -44,11 +79,6 @@ func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *Voi
 		return nil, fmt.Errorf("creating telegram bot: %w", err)
 	}
 
-	allowed := make(map[int64]bool, len(allowedUsers))
-	for _, uid := range allowedUsers {
-		allowed[uid] = true
-	}
-
 	logger.Info("telegram bot authorized", "username", bot.Self.UserName)
 
 	// Register built-in slash commands so they appear in the Telegram command menu.
@@ -57,30 +87,28 @@ func New(token string, allowedUsers []int64, logger *slog.Logger, voiceOpts *Voi
 		logger.Warn("failed to register bot commands", "error", err)
 	}
 
-	a := &Adapter{
-		bot:          bot,
-		allowedUsers: allowed,
-		logger:       logger,
-		debugChats:   make(map[int64]bool),
-	}
-	if voiceOpts != nil {
-		a.stt = voiceOpts.STT
-		a.tts = voiceOpts.TTS
-		a.ttsVoice = voiceOpts.TTSVoice
-		a.autoVoiceReply = voiceOpts.AutoVoiceReply
-	}
+	a := newWithSender(bot, allowedUsers, logger, voiceOpts)
+	a.bot = bot
 
 	return a, nil
 }
 
 // newWithBot creates an adapter with a pre-configured bot (for testing).
 func newWithBot(bot *tgbotapi.BotAPI, allowedUsers []int64, logger *slog.Logger, voiceOpts *VoiceOpts) *Adapter {
+	a := newWithSender(senderFor(bot), allowedUsers, logger, voiceOpts)
+	a.bot = bot
+	return a
+}
+
+// newWithSender creates an adapter whose outbound calls go through the given
+// seam. Adapter.bot is left nil, so only the send/request paths are usable.
+func newWithSender(sender botSender, allowedUsers []int64, logger *slog.Logger, voiceOpts *VoiceOpts) *Adapter {
 	allowed := make(map[int64]bool, len(allowedUsers))
 	for _, uid := range allowedUsers {
 		allowed[uid] = true
 	}
 	a := &Adapter{
-		bot:          bot,
+		sender:       sender,
 		allowedUsers: allowed,
 		logger:       logger,
 		debugChats:   make(map[int64]bool),
@@ -120,7 +148,7 @@ func (a *Adapter) RegisterSkillCommands(skillCmds []SkillCommand) {
 		})
 	}
 	cmds := buildBotCommands(tgCmds)
-	if _, err := a.bot.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
+	if _, err := a.sender.Request(tgbotapi.NewSetMyCommands(cmds...)); err != nil {
 		a.logger.Warn("failed to register bot commands with skills", "error", err)
 	} else {
 		a.logger.Info("registered bot commands", "builtin", len(builtinCommands()), "skill", len(skillCmds), "total", len(cmds))
@@ -216,7 +244,7 @@ func (a *Adapter) Start(ctx context.Context, incoming chan<- adapter.IncomingMes
 
 			// Skip typing indicator for control commands handled by the dispatcher.
 			if !isControlCommand(update.Message.Text) {
-				_, _ = a.bot.Send(tgbotapi.NewChatAction(update.Message.Chat.ID, tgbotapi.ChatTyping))
+				_, _ = a.sender.Send(tgbotapi.NewChatAction(update.Message.Chat.ID, tgbotapi.ChatTyping))
 			}
 
 			msg, ok := a.buildIncomingMessage(ctx, update.Message)
@@ -238,7 +266,7 @@ func (a *Adapter) SendTyping(_ context.Context, externalID string) error {
 	if err != nil {
 		return fmt.Errorf("parsing chat ID: %w", err)
 	}
-	_, err = a.bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+	_, err = a.sender.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
 	return err
 }
 
@@ -254,14 +282,14 @@ func (a *Adapter) buildIncomingMessage(ctx context.Context, tgMsg *tgbotapi.Mess
 		if err != nil {
 			a.logger.Error("downloading voice file", "error", err)
 			reply := tgbotapi.NewMessage(tgMsg.Chat.ID, "Sorry, I couldn't download your voice message. Please try again.")
-			_, _ = a.bot.Send(reply)
+			_, _ = a.sender.Send(reply)
 			return adapter.IncomingMessage{}, false
 		}
 		transcribed, err := a.stt.Transcribe(ctx, audioData, "ogg")
 		if err != nil {
 			a.logger.Error("transcribing voice message", "error", err)
 			reply := tgbotapi.NewMessage(tgMsg.Chat.ID, "Sorry, I couldn't transcribe your voice message. Please try sending it as text.")
-			_, _ = a.bot.Send(reply)
+			_, _ = a.sender.Send(reply)
 			return adapter.IncomingMessage{}, false
 		}
 		text = transcribed
@@ -305,7 +333,7 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 				Name:  "response.ogg",
 				Bytes: audioData,
 			})
-			if _, sendErr := a.bot.Send(voiceMsg); sendErr != nil {
+			if _, sendErr := a.sender.Send(voiceMsg); sendErr != nil {
 				return fmt.Errorf("sending voice message: %w", sendErr)
 			}
 			return nil
@@ -326,14 +354,14 @@ func (a *Adapter) Send(ctx context.Context, msg adapter.OutgoingMessage) error {
 	// fallback for LLM responses that may break Telegram's parser.
 	if msg.ParseMode != "" {
 		tgMsg.ParseMode = msg.ParseMode
-		_, err = a.bot.Send(tgMsg)
+		_, err = a.sender.Send(tgMsg)
 	} else {
 		tgMsg.ParseMode = "Markdown"
-		_, err = a.bot.Send(tgMsg)
+		_, err = a.sender.Send(tgMsg)
 		if err != nil {
 			a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
 			tgMsg.ParseMode = ""
-			_, err = a.bot.Send(tgMsg)
+			_, err = a.sender.Send(tgMsg)
 		}
 	}
 	if err != nil {
@@ -359,12 +387,12 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 		a.logger.Error("resolving callback query", "data", cq.Data, "error", err)
 		// Still answer the callback to clear the loading spinner.
 		answer := tgbotapi.NewCallback(cq.ID, "")
-		_, _ = a.bot.Request(answer)
+		_, _ = a.sender.Request(answer)
 		return
 	}
 	if responseText == "" {
 		answer := tgbotapi.NewCallback(cq.ID, "")
-		_, _ = a.bot.Request(answer)
+		_, _ = a.sender.Request(answer)
 		return // unknown callback, silently ignore
 	}
 
@@ -374,7 +402,7 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 		// Debug mode: answer callback, strip keyboard, send separate message
 		// (original verbose behaviour).
 		answer := tgbotapi.NewCallback(cq.ID, "")
-		if _, err := a.bot.Request(answer); err != nil {
+		if _, err := a.sender.Request(answer); err != nil {
 			a.logger.Warn("failed to answer callback query", "error", err)
 		}
 
@@ -383,12 +411,12 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 			cq.Message.MessageID,
 			tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
 		)
-		if _, editErr := a.bot.Request(edit); editErr != nil {
+		if _, editErr := a.sender.Request(edit); editErr != nil {
 			a.logger.Debug("failed to remove inline keyboard from message", "error", editErr)
 		}
 
 		reply := tgbotapi.NewMessage(chatID, responseText)
-		if _, err := a.bot.Send(reply); err != nil {
+		if _, err := a.sender.Send(reply); err != nil {
 			a.logger.Warn("failed to send callback response", "chat_id", chatID, "error", err)
 		}
 		return
@@ -399,7 +427,7 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 	// enough — subsequent tool_start / tool_end / denied events from the
 	// engine will rewrite the message text via the activity log's edit path.
 	answer := tgbotapi.NewCallback(cq.ID, "")
-	if _, err := a.bot.Request(answer); err != nil {
+	if _, err := a.sender.Request(answer); err != nil {
 		a.logger.Warn("failed to answer callback query", "error", err)
 	}
 
@@ -408,7 +436,7 @@ func (a *Adapter) handleCallbackQuery(ctx context.Context, cq *tgbotapi.Callback
 		cq.Message.MessageID,
 		tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
 	)
-	if _, editErr := a.bot.Request(stripKeyboard); editErr != nil {
+	if _, editErr := a.sender.Request(stripKeyboard); editErr != nil {
 		a.logger.Debug("failed to strip inline keyboard from approval message", "error", editErr)
 	}
 }
@@ -478,7 +506,7 @@ func (a *Adapter) handleDebugCommand(chatID int64) {
 		text = "Debug mode disabled — approval messages are now compact."
 	}
 	reply := tgbotapi.NewMessage(chatID, text)
-	if _, err := a.bot.Send(reply); err != nil {
+	if _, err := a.sender.Send(reply); err != nil {
 		a.logger.Warn("failed to send debug toggle response", "chat_id", chatID, "error", err)
 	}
 }
@@ -545,12 +573,12 @@ func (a *Adapter) SendAndGetID(ctx context.Context, msg adapter.OutgoingMessage)
 		tgMsg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	}
 
-	sent, err := a.bot.Send(tgMsg)
+	sent, err := a.sender.Send(tgMsg)
 	if err != nil && msg.ParseMode == "" {
 		// Markdown failed, retry plain text.
 		a.logger.Debug("markdown send failed, retrying as plain text", "error", err)
 		tgMsg.ParseMode = ""
-		sent, err = a.bot.Send(tgMsg)
+		sent, err = a.sender.Send(tgMsg)
 	}
 	if err != nil {
 		return "", fmt.Errorf("sending telegram message: %w", err)
@@ -573,7 +601,7 @@ func (a *Adapter) EditText(_ context.Context, externalID, messageID, text, parse
 	if parseMode != "" {
 		edit.ParseMode = parseMode
 	}
-	if _, editErr := a.bot.Request(edit); editErr != nil {
+	if _, editErr := a.sender.Request(edit); editErr != nil {
 		return fmt.Errorf("editing telegram message: %w", editErr)
 	}
 	return nil
@@ -605,7 +633,7 @@ func (a *Adapter) EditMessage(_ context.Context, externalID, messageID string, m
 		empty := tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}}
 		edit.ReplyMarkup = &empty
 	}
-	if _, editErr := a.bot.Request(edit); editErr != nil {
+	if _, editErr := a.sender.Request(edit); editErr != nil {
 		return fmt.Errorf("editing telegram message: %w", editErr)
 	}
 	return nil
