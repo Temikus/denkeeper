@@ -1,0 +1,20 @@
+# betterleaks secret-scanning config.
+#
+# This file IS live: betterleaks resolves config from (target path)/.betterleaks.toml
+# when no --config/-c flag or BETTERLEAKS_CONFIG env var is set, which is how the
+# `betterleaks git . --exit-code 1` step in .github/workflows/security.yml runs.
+# Deleting it re-opens the false positives below and reds the Secret Detection job.
+
+title = "denkeeper betterleaks config"
+
+[extend]
+useDefault = true
+
+# Allowlist the placeholder *value*, not the files that contain it. Scoping by path
+# instead (README.md, website/**.md) would blind the scanner to a genuine key pasted
+# into the docs; matching on the secret keeps every file scanned and only forgives
+# strings that literally say "your"/"example"/"test".
+[[allowlists]]
+description = "Documentation placeholder API keys (dk-your-secret-key, dk_yourkey, ...)"
+regexTarget = "secret"
+regexes = ['''(?i)^dk[_-](your|example|test|placeholder|xxx)''']
