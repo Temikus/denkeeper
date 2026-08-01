@@ -181,3 +181,40 @@ jobs:
           subject-name: ghcr.io/temikus/denkeeper
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  stamp-prs:
+    name: Stamp Released PRs
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write # PR comments go through the issues API
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # Map every commit in this release back to its PR via the GitHub API rather
+      # than parsing commit subjects — history mixes squash merges, merge commits
+      # and direct pushes to main, so subject parsing would miss cases.
+      - name: Comment on PRs included in this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          PREV=$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)
+          RANGE="${PREV:+${PREV}..}${VERSION}"
+          echo "Release range: ${RANGE}"
+          PRS=$(git log --format='%H' "${RANGE}" \
+            | xargs -I{} gh api "repos/${GITHUB_REPOSITORY}/commits/{}/pulls" --jq '.[].number' \
+            | sort -un)
+          if [ -z "${PRS}" ]; then
+            echo "No PRs associated with this range."
+            exit 0
+          fi
+          while read -r pr; do
+            echo "Commenting on #${pr}"
+            gh pr comment "${pr}" --repo "${GITHUB_REPOSITORY}" \
+              --body "🚀 Released in [\`${VERSION}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION})"
+          done <<< "${PRS}"
