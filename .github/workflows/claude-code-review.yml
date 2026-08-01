@@ -12,7 +12,11 @@ on:
 
 jobs:
   claude-review:
-    if: github.actor != 'dependabot[bot]'
+    # Fork PRs get no secrets and no id-token from a `pull_request` event, so the
+    # action cannot authenticate and the job fails unconditionally. Skip them here;
+    # a maintainer can still trigger a review by commenting `@claude` (claude.yml
+    # runs on issue_comment in base-repo context, where both are available).
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
