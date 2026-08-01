@@ -260,6 +260,8 @@ Things you can't infer by reading the code at a glance:
 - **`internal/agentctx`**: context key package shared between `agent` and `configmcp` to avoid an import cycle. Use it when threading agent identity through MCP handlers.
 - **Date/week injection (two-point)**: the model never has to infer "today". (1) Scheduled messages render the fire time via `scheduler.FormatScheduledText` — `[Scheduled: heartbeat | 2026-07-07T10:45:00+10:00 Australia/Sydney | 2026-W28]` — computed inside the fire callback (both producers: `registerSchedules`/`buildScheduledMessage` in main.go and `configmcp.BuildScheduleJob`), with `msg.Timestamp` set from the same instant. (2) `buildSystemPrompt` appends a `## Current Date` section at **day resolution by design** — the system prompt is the prompt-cache prefix; a clock time would bust the cache every turn. Timezone precedence: agent `timezone` > `api.timezone` > UTC (`agentLocation` in main.go; engine knob `SetLocation`, hot-reloaded). Cron *evaluation* remains `api.timezone` and restart-only. Midnight-crossing runs can see header date ≠ prompt date — the fire-time header wins for dated keys (skill prose rule).
 
-CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs.
+- **Released-PR stamping** (`stamp-prs` in `release.yml`): comments the version on each PR in a release. Resolves commits to PRs via the GitHub API (`commits/{sha}/pulls`), not `(#N)` subject parsing — mixed merge strategies make parsing miss most of them.
+
+CI/CD: golangci-lint, gosec, govulncheck, Grype, Gitleaks, GoReleaser, Homebrew tap, Docker (ghcr.io) with cosign + SLSA, GitHub Pages docs, released-PR stamping.
 
 See `design/denkeeper-prd.md` for the full roadmap.
