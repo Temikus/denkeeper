@@ -734,6 +734,39 @@ func (m *Manager) ToolServer(toolName string) string {
 	return sc.name
 }
 
+// builtinIdempotentTools names in-process read-only tools whose results are
+// safe to memoize within one turn. Keyed by MCP tool name; consulted only for
+// session-registered (in-process) servers.
+var builtinIdempotentTools = map[string]bool{
+	"kv_get":     true,
+	"kv_list":    true,
+	"web_fetch":  true,
+	"web_search": true,
+}
+
+// IsIdempotent reports whether toolName's results may be memoized within a
+// single turn. In-process tools use the built-in allowlist; external MCP
+// tools default to false unless their [tools.*] config opts in via
+// idempotent / idempotent_tools.
+func (m *Manager) IsIdempotent(toolName string) bool {
+	m.mu.RLock()
+	sc, ok := m.toolMap[toolName]
+	parent := m.parent
+	m.mu.RUnlock()
+	if !ok {
+		if parent != nil {
+			return parent.IsIdempotent(toolName)
+		}
+		return false
+	}
+	// In-process sessions (RegisterSession) have no transport and no command;
+	// external servers always set one of them.
+	if sc.transport == "" && sc.command == "" {
+		return builtinIdempotentTools[toolName]
+	}
+	return sc.cfg.IsIdempotentTool(toolName)
+}
+
 // ToolDescription returns the MCP description for the named tool, or ""
 // if the tool is not found or has no description.
 func (m *Manager) ToolDescription(toolName string) string {

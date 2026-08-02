@@ -706,6 +706,17 @@ type ToolConfig struct {
 	// Tool filtering — MCP tool names to exclude from the LLM tool payload.
 	DisabledTools []string `toml:"disabled_tools"`
 
+	// Idempotent marks every tool on this server as safe to memoize within one
+	// turn (identical name+args returns the cached result instead of
+	// re-executing). nil = false (default): external tools are assumed to have
+	// side effects unless the operator says otherwise. Only set this on servers
+	// whose tools are ALL read-only.
+	Idempotent *bool `toml:"idempotent"`
+
+	// IdempotentTools names specific tools on this server that are safe to
+	// memoize, for servers that mix read and write tools. Union with Idempotent.
+	IdempotentTools []string `toml:"idempotent_tools"`
+
 	// EnvPassthrough names additional parent-process environment variables to
 	// forward into this stdio server's subprocess, on top of the built-in
 	// non-secret allowlist and the global [mcp] env_passthrough. Secret-bearing
@@ -720,6 +731,20 @@ type ToolConfig struct {
 // IsEnabled returns whether the tool server is enabled.
 func (tc ToolConfig) IsEnabled() bool {
 	return tc.Enabled == nil || *tc.Enabled
+}
+
+// IsIdempotentTool reports whether the named tool is declared idempotent,
+// either via the server-wide Idempotent flag or the per-tool IdempotentTools list.
+func (tc ToolConfig) IsIdempotentTool(name string) bool {
+	if tc.Idempotent != nil && *tc.Idempotent {
+		return true
+	}
+	for _, t := range tc.IdempotentTools {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 // PluginConfig defines a denkeeper plugin with explicit capability declarations.

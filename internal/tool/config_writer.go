@@ -79,10 +79,20 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	if cfg.AllowLoopback {
 		entry["allow_loopback"] = true
 	}
+	toolConfigFilteringToMap(cfg, entry)
+	return entry
+}
+
+func toolConfigFilteringToMap(cfg config.ToolConfig, entry map[string]any) {
 	if len(cfg.DisabledTools) > 0 {
 		entry["disabled_tools"] = cfg.DisabledTools
 	}
-	return entry
+	if cfg.Idempotent != nil && *cfg.Idempotent {
+		entry["idempotent"] = true
+	}
+	if len(cfg.IdempotentTools) > 0 {
+		entry["idempotent_tools"] = cfg.IdempotentTools
+	}
 }
 
 func toolConfigOAuthToMap(cfg config.ToolConfig, entry map[string]any) {

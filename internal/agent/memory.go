@@ -51,7 +51,9 @@ type ToolCallRecord struct {
 	DurationMs     int64  `db:"duration_ms"     json:"duration_ms"`
 	Success        bool   `db:"success"         json:"success"`
 	// Outcome refines Success: "ok", "rejected" (healthy tool, bad args),
-	// "failed" (transport/exec failure), or "denied" (approval denied).
+	// "failed" (transport/exec failure), "denied" (approval denied), or
+	// "cached" (identical idempotent call served from the within-turn cache;
+	// Success true, DurationMs 0, nothing executed).
 	Outcome string `db:"outcome"    json:"outcome"`
 	// SkillName / SkillVersion identify the skill that owned the turn this
 	// call ran under, when ownership is unambiguous (single-skill/scheduled
@@ -937,10 +939,14 @@ type ToolUsageSummary struct {
 	// was removed from the payload — it conflated denials with real failures and
 	// was misread as a "broken tool" signal (see issue #215). Reconstruct the old
 	// total as RejectionCount + FailureCount + DenialCount if needed.
-	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
-	FailureCount   int     `db:"failure_count"   json:"failure_count"`
-	DenialCount    int     `db:"denial_count"    json:"denial_count"`
-	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
+	RejectionCount int `db:"rejection_count" json:"rejection_count"`
+	FailureCount   int `db:"failure_count"   json:"failure_count"`
+	DenialCount    int `db:"denial_count"    json:"denial_count"`
+	// CachedCount counts calls served from the within-turn idempotent-result
+	// cache. Included in CallCount (the model did make the call) but excluded
+	// from AvgDuration (0ms hits would make a slow tool look fast).
+	CachedCount int     `db:"cached_count"    json:"cached_count"`
+	AvgDuration float64 `db:"avg_duration"    json:"avg_duration_ms"`
 }
 
 // ToolSkillUsageSummary aggregates tool call data per owning (skill, version).
@@ -957,6 +963,7 @@ type ToolSkillUsageSummary struct {
 	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int     `db:"failure_count"   json:"failure_count"`
 	DenialCount    int     `db:"denial_count"    json:"denial_count"`
+	CachedCount    int     `db:"cached_count"    json:"cached_count"`
 	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
 }
 
@@ -1008,7 +1015,8 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
-	              AVG(duration_ms) AS avg_duration
+	              SUM(CASE WHEN outcome = 'cached' THEN 1 ELSE 0 END) AS cached_count,
+	              COALESCE(AVG(CASE WHEN outcome != 'cached' THEN duration_ms END), 0) AS avg_duration
 	              FROM tool_calls WHERE 1=1` + timeFilter + `
 	              GROUP BY tool_name, server_name ORDER BY call_count DESC`
 	if err := s.db.SelectContext(ctx, &summary.ByTool, toolQuery, args...); err != nil {
@@ -1038,7 +1046,8 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
-	              AVG(duration_ms) AS avg_duration
+	              SUM(CASE WHEN outcome = 'cached' THEN 1 ELSE 0 END) AS cached_count,
+	              COALESCE(AVG(CASE WHEN outcome != 'cached' THEN duration_ms END), 0) AS avg_duration
 	              FROM tool_calls WHERE skill_name != ''` + timeFilter + `
 	              GROUP BY skill_name, skill_version, tool_name, server_name
 	              ORDER BY skill_name, skill_version, call_count DESC`

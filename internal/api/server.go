@@ -1964,6 +1964,12 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		if cfg.AllowLoopback {
 			resp["allow_loopback"] = true
 		}
+		if cfg.Idempotent != nil && *cfg.Idempotent {
+			resp["idempotent"] = true
+		}
+		if len(cfg.IdempotentTools) > 0 {
+			resp["idempotent_tools"] = cfg.IdempotentTools
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2046,6 +2052,8 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		ClientSecret       string            `json:"client_secret"`
 		Scopes             []string          `json:"scopes"`
 		AllowLoopback      bool              `json:"allow_loopback"`
+		Idempotent         *bool             `json:"idempotent"`
+		IdempotentTools    []string          `json:"idempotent_tools"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2070,6 +2078,8 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		ClientSecret:       body.ClientSecret,
 		Scopes:             body.Scopes,
 		AllowLoopback:      body.AllowLoopback,
+		Idempotent:         body.Idempotent,
+		IdempotentTools:    body.IdempotentTools,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -2114,6 +2124,8 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		ClientSecret       string            `json:"client_secret"`
 		Scopes             []string          `json:"scopes"`
 		AllowLoopback      bool              `json:"allow_loopback"`
+		Idempotent         *bool             `json:"idempotent"`
+		IdempotentTools    []string          `json:"idempotent_tools"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2134,6 +2146,8 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		ClientSecret:       body.ClientSecret,
 		Scopes:             body.Scopes,
 		AllowLoopback:      body.AllowLoopback,
+		Idempotent:         body.Idempotent,
+		IdempotentTools:    body.IdempotentTools,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {

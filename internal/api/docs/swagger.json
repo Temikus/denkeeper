@@ -6143,7 +6143,7 @@
                     "type": "integer"
                 },
                 "outcome": {
-                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), or \"denied\" (approval denied).",
+                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), \"denied\" (approval denied), or\n\"cached\" (identical idempotent call served from the within-turn cache;\nSuccess true, DurationMs 0, nothing executed).",
                     "type": "string"
                 },
                 "round": {

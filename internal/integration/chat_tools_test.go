@@ -267,3 +267,87 @@ func TestChat_RepeatedToolCalls_WrapUp(t *testing.T) {
 		t.Errorf("last message = [%s] %q, want the wrap-up instruction", lastMsg.Role, lastMsg.Content)
 	}
 }
+
+// TestChat_DuplicateIdempotentToolCall_Cached: the model repeats a
+// byte-identical call to an idempotent tool in two consecutive rounds (below
+// the repeat-abort threshold). The second is served from the within-turn
+// cache: the tool executes once, records persist as ok + cached, and the turn
+// finishes normally.
+func TestChat_DuplicateIdempotentToolCall_Cached(t *testing.T) {
+	ts := startTestMCPServer(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	toolMgr := tool.NewManager(logger)
+	idem := true
+	if err := toolMgr.RegisterServer(context.Background(), "echo-tool", config.ToolConfig{
+		Transport:     "sse",
+		URL:           ts.URL,
+		AllowLoopback: true,
+		Idempotent:    &idem,
+	}); err != nil {
+		t.Fatalf("registering test MCP server: %v", err)
+	}
+	t.Cleanup(func() { _ = toolMgr.Close() })
+
+	call := func(id string) llm.ToolCall {
+		return llm.ToolCall{ID: id, Type: "function",
+			Function: llm.FunctionCall{Name: "echo", Arguments: `{"input":"hello"}`}}
+	}
+	h := NewHarness(t, &HarnessOpts{
+		Responses: []*llm.ChatResponse{
+			{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{call("call_1")},
+				TokensUsed: llm.TokenUsage{Total: 15}, Model: "test-model"},
+			{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{call("call_2")},
+				TokensUsed: llm.TokenUsage{Total: 15}, Model: "test-model"},
+			{Content: "Echo said hello.", FinishReason: "stop",
+				TokensUsed: llm.TokenUsage{Total: 30}, Model: "test-model"},
+		},
+		Agents: []agentSetup{
+			{Name: "default", Tier: "autonomous", Adapters: []string{"api"}},
+		},
+		ToolManager: toolMgr,
+	})
+
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", map[string]string{
+		"message":    "echo hello twice",
+		"session_id": "cache-dup-test",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Echo said hello.") {
+		t.Errorf("response missing final text: %s", rec.Body.String())
+	}
+	// Round 2's identical result comes from cache, so the model still saw a
+	// tool result and issued the final completion: 3 LLM calls total.
+	if h.MockLLM.CallCount() != 3 {
+		t.Errorf("expected 3 LLM calls, got %d", h.MockLLM.CallCount())
+	}
+	// The cached round's tool message must disclose the cache hit to the model.
+	lastReq := h.MockLLM.LastRequest()
+	var sawDisclosure bool
+	for _, m := range lastReq.Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "[engine: identical call — cached result from round 1]") {
+			sawDisclosure = true
+		}
+	}
+	if !sawDisclosure {
+		t.Error("no tool message carries the cached-result disclosure prefix")
+	}
+
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/sessions/cache-dup-test/tool-calls", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tool-calls: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var calls []map[string]any
+	DecodeJSON(t, rec, &calls)
+	if len(calls) != 2 {
+		t.Fatalf("persisted %d tool calls, want 2; body: %s", len(calls), rec.Body.String())
+	}
+	outcomes := map[string]bool{}
+	for _, c := range calls {
+		outcomes[c["outcome"].(string)] = true
+	}
+	if !outcomes["ok"] || !outcomes["cached"] {
+		t.Errorf("outcomes = %v, want both ok and cached", outcomes)
+	}
+}

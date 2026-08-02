@@ -119,10 +119,10 @@ func TestExecuteToolCall_OutcomeFailed(t *testing.T) {
 func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 	e := newOutcomeTestEngine(t)
 	tc := llm.ToolCall{Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`}}
-	denialKey := tc.Function.Name + "\x00" + tc.Function.Arguments
-	deniedCalls := map[string]string{denialKey: "Tool call was denied by the operator."}
+	state := newTurnToolState()
+	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
 
-	_, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, nil, deniedCalls)
+	_, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, nil, state)
 	if record.Success {
 		t.Errorf("Success = true, want false")
 	}
