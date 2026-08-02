@@ -1350,6 +1350,51 @@ func wireNudgeAndReviewer(ctx context.Context, ac config.AgentInstanceConfig, e 
 	abc.logger.Info("post-turn reviewer configured", "agent", ac.Name, "reviewer_model", ac.ReviewerModel)
 }
 
+// reviewerTier is the permission tier the post-turn reviewer runs at. See the
+// comment in buildReviewerEngine for why it is neither autonomous nor
+// restricted.
+const reviewerTier = "supervised"
+
+// reviewerConfigDeps builds the Config MCP dependencies for a post-turn
+// reviewer engine. The reviewer is an unattended writer whose actions are
+// steered by LLM output shaped by conversation content — including messages
+// from external adapters — so this deliberately withholds every mutating
+// capability except appending to persona memory.
+//
+// configmcp has no approval path of its own (applyOrSubmit executes directly);
+// all approval gating lives in the Engine's supervised tool-call flow, which
+// the headless reviewer cannot use. Registration is nil-gated per dependency,
+// so the omissions below are what actually unregisters the tools:
+//
+//   - no UpdateSkill        → no skill_update / skill_patch / skill_write_file
+//   - no AgentSkillsDir,
+//     AppendSkill, RemoveSkill → no skill_create / skill_delete
+//   - no SavePersonaSection  → no persona_update (soul/identity/user are
+//     unreachable) and no memory "replace"
+//   - no RemoveMemoryEntry   → no memory "remove"
+//   - no Sched, HandleMessage, LifecycleMgr, ConfigPath, KVStore,
+//     SetFallbacks, BrowserProfiles → no schedule/tool/plugin/config surface
+//
+// The resulting tool set is exactly: skill_list, skill_get, skill_read_file,
+// persona_get, and append-only persona_memory_manage. Skill improvements are
+// reported as text for skill-forge's weekly pass to act on; the propose-only
+// KV path in design/heartbeat-improvements-2026-07.md Step 3.6 is a follow-up.
+//
+// Note the reviewer intentionally has no NudgeReset, so its memory appends do
+// not reset the parent's review counters. That is pre-existing behaviour.
+func reviewerConfigDeps(agentName string, parent *agent.Engine, tierFn func() string, memory agent.MemoryStore, logger *slog.Logger) configmcp.Deps {
+	return configmcp.Deps{
+		AgentName:         agentName,
+		GetSkills:         parent.Skills,
+		GetSkill:          parent.GetSkill,
+		PermissionTier:    tierFn,
+		GetPersonaSection: parent.PersonaSection,
+		AppendMemoryEntry: parent.AppendMemoryEntry,
+		BumpSkillView:     buildSkillBump(memory, logger, "view"),
+		Logger:            logger,
+	}
+}
+
 func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, parent *agent.Engine, p *persona.Persona, abc agentBuildCtx) (*agent.Engine, error) {
 	revProvider := ac.LLMProvider
 	if ac.ReviewerProvider != "" {
@@ -1360,7 +1405,21 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 	}
 	revRouter := buildAgentRouter(revProvider, ac.ReviewerModel, abc)
 
-	revPerms, err := security.NewPermissionEngine("autonomous")
+	// The reviewer is headless: it sends through noopSend, so an approval
+	// prompt it raised could never reach a human. Its safety boundary is
+	// therefore capability reduction (see reviewerConfigDeps), not
+	// supervision. "supervised" behaves identically to "autonomous" at the
+	// tool gate while the approval manager is nil (engine.go: supervised
+	// requires both), but withholds create_skill/modify_schedule/
+	// execute_shell/access_filesystem from the allowlist. "restricted" is not
+	// an option: it omits use_tools, which would block the append-only memory
+	// tool the reviewer is meant to keep.
+	//
+	// If a real approval manager is ever wired here, the supervised path will
+	// block in WaitForResolution on an undeliverable approval — map supervisor
+	// ESCALATE to DENY first, per design/heartbeat-improvements-2026-07.md
+	// Step 3.6.
+	revPerms, err := security.NewPermissionEngine(reviewerTier)
 	if err != nil {
 		return nil, fmt.Errorf("reviewer permissions: %w", err)
 	}
@@ -1385,21 +1444,7 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 	)
 	revEngine.SetLocation(agentLocation(abc.cfg, ac))
 
-	revCMCP := configmcp.New(configmcp.Deps{
-		AgentName:          ac.Name,
-		GetSkills:          parent.Skills,
-		GetSkill:           parent.GetSkill,
-		UpdateSkill:        parent.UpdateSkill,
-		PermissionTier:     func() string { return "autonomous" },
-		GetPersonaSection:  parent.PersonaSection,
-		SavePersonaSection: parent.SavePersonaSection,
-		AppendMemoryEntry:  parent.AppendMemoryEntry,
-		RemoveMemoryEntry:  parent.RemoveMemoryEntry,
-		IsSkillPinned:      buildIsSkillPinned(ac.Name, abc.memory),
-		BumpSkillView:      buildSkillBump(abc.memory, abc.logger, "view"),
-		BumpSkillPatch:     buildSkillBump(abc.memory, abc.logger, "patch"),
-		Logger:             revLogger,
-	})
+	revCMCP := configmcp.New(reviewerConfigDeps(ac.Name, parent, revEngine.PermissionTier, abc.memory, revLogger))
 	session, err := revCMCP.Connect(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reviewer config MCP: %w", err)
