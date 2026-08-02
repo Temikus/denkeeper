@@ -255,6 +255,8 @@ MCP tool server definitions.
     scopes = []                      # OAuth scopes
     allow_loopback = false           # bypass SSRF loopback block
     disabled_tools = []              # MCP tool names to exclude from LLM
+    idempotent = false               # memoize identical calls within one turn (only for all-read-only servers)
+    idempotent_tools = []            # per-tool memoization opt-in for mixed read/write servers
     env_passthrough = []             # extra parent env vars to forward (stdio); DENKEEPER_* always filtered
 
 ### [mcp]

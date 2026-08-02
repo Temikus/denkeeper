@@ -395,3 +395,57 @@ func TestTools_UpdateDisabledTools_InvalidJSON_Returns400(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
+
+// TestTools_IdempotentFieldsRoundTrip verifies idempotent / idempotent_tools
+// survive POST → GET → PUT → GET: in particular, that a PUT carrying the
+// fields does not drop them (UpdateTool round-trips the whole config).
+func TestTools_IdempotentFieldsRoundTrip(t *testing.T) {
+	ts := startTestMCPServer(t)
+	h := toolHarness(t)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools", map[string]any{
+		"name":             "echo-tool",
+		"transport":        "sse",
+		"url":              ts.URL,
+		"allow_loopback":   true,
+		"idempotent":       true,
+		"idempotent_tools": []string{"echo"},
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add tool: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	t.Cleanup(func() {
+		h.Do(h.AuthedRequest(http.MethodDelete, "/api/v1/tools/echo-tool", nil))
+	})
+
+	var resp map[string]any
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool", nil))
+	DecodeJSON(t, rec, &resp)
+	if resp["idempotent"] != true {
+		t.Errorf("idempotent after POST = %v, want true", resp["idempotent"])
+	}
+	if tools, ok := resp["idempotent_tools"].([]any); !ok || len(tools) != 1 || tools[0] != "echo" {
+		t.Errorf("idempotent_tools after POST = %v, want [echo]", resp["idempotent_tools"])
+	}
+
+	// PUT carrying the fields must preserve them.
+	rec = h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/echo-tool", map[string]any{
+		"transport":        "sse",
+		"url":              ts.URL,
+		"allow_loopback":   true,
+		"idempotent":       true,
+		"idempotent_tools": []string{"echo"},
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update tool: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	resp = map[string]any{}
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/tools/echo-tool", nil))
+	DecodeJSON(t, rec, &resp)
+	if resp["idempotent"] != true {
+		t.Errorf("idempotent after PUT = %v, want true", resp["idempotent"])
+	}
+	if tools, ok := resp["idempotent_tools"].([]any); !ok || len(tools) != 1 || tools[0] != "echo" {
+		t.Errorf("idempotent_tools after PUT = %v, want [echo]", resp["idempotent_tools"])
+	}
+}

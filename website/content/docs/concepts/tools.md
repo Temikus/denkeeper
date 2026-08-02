@@ -32,6 +32,12 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 4. When the LLM requests a tool call, Denkeeper executes it and returns the result
 5. This continues in an agentic loop until the LLM produces a final response
 
+### Within-turn memoization
+
+Models occasionally repeat a tool call with byte-identical arguments in the same turn. For tools declared *idempotent*, the second identical call returns the first call's cached result instead of re-executing — skipping the tool latency and, on supervised agents, the approval round-trip (the original call already passed approval, and a cache hit executes nothing). The cache lives for a single message turn.
+
+The built-in `web_fetch`, `web_search`, `kv_get`, and `kv_list` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry — never inferred from server-supplied MCP annotations. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
+
 ## Tool calls and permissions
 
 Tool execution respects the agent's permission tier:

@@ -28,6 +28,8 @@
   let showOAuthAdvanced = false
   let showConnSettings = false
   let toolAllowLoopback = false
+  let toolIdempotent = false
+  let toolIdempotentTools = [] // per-tool list (TOML-managed); preserved on edit so PUT doesn't drop it
   let addingTool = false
   let loadingToolConfig = false
 
@@ -270,6 +272,8 @@
     showOAuthAdvanced = false
     showConnSettings = false
     toolAllowLoopback = false
+    toolIdempotent = false
+    toolIdempotentTools = []
   }
 
   function openAddToolForm() {
@@ -303,6 +307,8 @@
       toolClientSecret = '' // never returned by API
       toolScopes = (info.scopes || []).join(', ')
       toolAllowLoopback = !!info.allow_loopback
+      toolIdempotent = !!info.idempotent
+      toolIdempotentTools = info.idempotent_tools || []
     } catch (e) {
       error = e.message
       showToolForm = false
@@ -345,6 +351,8 @@
       if (scopes.length > 0) cfg.scopes = scopes
     }
     if (toolAllowLoopback) cfg.allow_loopback = true
+    if (toolIdempotent) cfg.idempotent = true
+    if (toolIdempotentTools.length > 0) cfg.idempotent_tools = toolIdempotentTools
     return cfg
   }
 
@@ -640,6 +648,25 @@
               <button class="btn-sm danger" onclick={() => removeKVPair('tool-env', i)}>x</button>
             </div>
           {/each}
+        </div>
+        <div class="unsafe-toggle-row">
+          <div class="unsafe-toggle-text">
+            <span class="unsafe-toggle-title">Idempotent</span>
+            <span class="unsafe-toggle-desc">
+              Cache repeated identical calls within one turn. Only enable if every tool on this server is
+              read-only &mdash; a repeated write would be skipped and return the stale first result.
+            </span>
+            {#if toolIdempotentTools.length > 0}
+              <span class="unsafe-toggle-desc">
+                {toolIdempotentTools.length} tool{toolIdempotentTools.length === 1 ? '' : 's'} also cached
+                individually via idempotent_tools in the config file (unaffected by this switch).
+              </span>
+            {/if}
+          </div>
+          <label class="switch">
+            <input type="checkbox" bind:checked={toolIdempotent} aria-label="Idempotent" />
+            <span class="switch-slider"></span>
+          </label>
         </div>
         {#if toolTransport === 'sse'}
           <!-- OAuth card -->

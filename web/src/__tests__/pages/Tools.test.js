@@ -418,3 +418,54 @@ describe('Tools SSE transport fields', () => {
     })
   })
 })
+
+describe('Tools idempotent field', () => {
+  test('Idempotent toggle renders for stdio transport', async () => {
+    render(Tools)
+    await waitFor(() => screen.getByText('+ Add Tool'))
+    await fireEvent.click(screen.getByText('+ Add Tool'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Idempotent')).toBeInTheDocument()
+    })
+  })
+
+  test('editing preserves idempotent_tools even when the toggle is off', async () => {
+    // idempotent_tools is config-file-managed state with no form control: a
+    // web edit must round-trip it untouched or a PUT would silently drop it.
+    let putBody = null
+    server.use(
+      http.get('/api/v1/tools/:name', () =>
+        HttpResponse.json({
+          name: 'web_search',
+          transport: 'stdio',
+          command: 'search-cli',
+          idempotent_tools: ['search_web'],
+        })
+      ),
+      http.put('/api/v1/tools/:name', async ({ request }) => {
+        putBody = await request.json()
+        return HttpResponse.json({ name: 'web_search', status: 'connected' })
+      })
+    )
+
+    render(Tools)
+    await waitFor(() => screen.getByText('web_search'))
+
+    const kebabBtns = screen.getAllByTitle('More actions')
+    await fireEvent.click(kebabBtns[0])
+    await waitFor(() => screen.getByText('Edit'))
+    await fireEvent.click(screen.getByText('Edit'))
+    await waitFor(() => screen.getByText('Save Changes'))
+
+    // The invisible list is disclosed next to the toggle.
+    expect(screen.getByText(/also cached\s+individually/)).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByText('Save Changes'))
+    await waitFor(() => {
+      expect(putBody).not.toBeNull()
+    })
+    expect(putBody.idempotent_tools).toEqual(['search_web'])
+    expect(putBody.idempotent).toBeUndefined()
+  })
+})

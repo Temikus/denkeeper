@@ -54,6 +54,34 @@ type toolCallKey struct {
 	args string
 }
 
+// cachedToolResult is one memoized successful tool result for this turn.
+type cachedToolResult struct {
+	result string // raw tool result text (pre-budget-hint)
+	round  int    // 1-based round the original call executed in
+}
+
+// turnToolState carries per-turn tool-call dedup state: calls denied earlier
+// this turn (auto-denied on retry) and successful results of idempotent tools
+// (returned from cache on identical retry). Both keyed by name+"\x00"+args.
+// Scoped to one turn: a new user message resets both.
+type turnToolState struct {
+	denied map[string]string
+	cache  map[string]cachedToolResult
+}
+
+func newTurnToolState() *turnToolState {
+	return &turnToolState{
+		denied: make(map[string]string),
+		cache:  make(map[string]cachedToolResult),
+	}
+}
+
+// toolDedupeKey builds the per-turn dedup key shared by the denial map and
+// the idempotent-result cache.
+func toolDedupeKey(tc llm.ToolCall) string {
+	return tc.Function.Name + "\x00" + tc.Function.Arguments
+}
+
 // repeatDetector tracks consecutive identical tool calls and detects loops.
 type repeatDetector struct {
 	threshold    int
@@ -1406,11 +1434,12 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 	out := toolLoopOutcome{llmMessages: llmMessages}
 	var accumulatedContent strings.Builder
 	detector := newRepeatDetector(defaultRepeatDetectionThreshold)
-	// deniedCalls remembers tool calls denied earlier in this turn (by the
-	// supervisor or a human) keyed by name+args, so identical retries are
-	// auto-denied without burning another approval round-trip. Scoped to one
-	// turn: a new user message gives the approval chain a fresh look.
-	deniedCalls := make(map[string]string)
+	// state remembers tool calls denied earlier in this turn (auto-denied on
+	// identical retry without another approval round-trip) and successful
+	// results of idempotent tools (returned from cache on identical retry).
+	// Scoped to one turn: a new user message gives the approval chain a fresh
+	// look and re-executes every tool.
+	state := newTurnToolState()
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
 		if round >= e.maxToolRounds {
 			// Round budget exhausted with the model still requesting tools.
@@ -1431,7 +1460,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 
 		out.llmMessages = append(out.llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
 		var roundErr error
-		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, deniedCalls, out.llmMessages, out.toolRecords)
+		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, state, out.llmMessages, out.toolRecords)
 		if roundErr != nil {
 			return out, roundErr
 		}
@@ -1514,7 +1543,7 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 // detection), it stops executing, appends synthetic results for the offending
 // and remaining calls (keeping the tool-message protocol valid), and returns
 // stopRepeatedCalls so the caller can run a wrap-up round.
-func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, deniedCalls map[string]string, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
+func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
 	for i, tc := range toolCalls {
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
@@ -1536,7 +1565,7 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("agent", e.name),
 			attribute.String("tool_name", tc.Function.Name)))
-		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, deniedCalls)
+		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, state)
 		toolRecords = append(toolRecords, record)
 		content := result
 		if i == len(toolCalls)-1 {
@@ -1664,13 +1693,17 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 	return nudgeResp, llmMessages, nil
 }
 
-// executeToolCallDeduped wraps executeToolCall with per-turn denial dedup:
-// a tool call whose name+args match one denied earlier in the same turn is
-// auto-denied without another supervisor/human approval round-trip. New
-// denials are recorded in deniedCalls for subsequent rounds of this turn.
-func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, deniedCalls map[string]string) (string, ToolCallRecord) {
-	denialKey := tc.Function.Name + "\x00" + tc.Function.Arguments
-	if denyText, deniedBefore := deniedCalls[denialKey]; deniedBefore {
+// executeToolCallDeduped wraps executeToolCall with per-turn dedup in both
+// directions: a tool call whose name+args match one denied earlier in the same
+// turn is auto-denied without another supervisor/human approval round-trip,
+// and one matching a successful earlier call of an idempotent tool returns the
+// cached result without re-executing (and without re-entering the approval
+// chain — the original call already passed it, and a cache hit executes
+// nothing). New denials and new cacheable results are recorded in state for
+// subsequent rounds of this turn.
+func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord) {
+	key := toolDedupeKey(tc)
+	if denyText, deniedBefore := state.denied[key]; deniedBefore {
 		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
 			"tool", tc.Function.Name, "round", round, "conversation", convID)
 		if onEvent != nil {
@@ -1696,10 +1729,63 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 		return result, record
 	}
 
+	if hit, ok := state.cache[key]; ok && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
+		return e.cachedToolCallResult(ctx, tc, round, convID, onEvent, hit)
+	}
+
 	result, record := e.executeToolCall(ctx, tc, round, convID, supervised, onEvent)
 	if !record.Success && record.ErrorMsg == "denied" {
-		deniedCalls[denialKey] = result
+		state.denied[key] = result
 	}
+	if record.Outcome == "ok" && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
+		state.cache[key] = cachedToolResult{result: result, round: round}
+	}
+	return result, record
+}
+
+// cachedToolCallResult serves a within-turn cache hit for an idempotent tool:
+// no execution, no approval chain (the original call already passed it and a
+// hit executes nothing). It emits the standard tool_start/tool_end event pair
+// (tool_end discloses the cache hit), a cache_hit audit event without the
+// result body (the original execute event already stores it), and a record
+// with the dedicated "cached" outcome so telemetry can separate hits from
+// real executions.
+func (e *Engine) cachedToolCallResult(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc, hit cachedToolResult) (string, ToolCallRecord) {
+	e.logger.Info("serving cached result for identical tool call",
+		"tool", tc.Function.Name, "round", round, "cached_from_round", hit.round, "conversation", convID)
+	record := ToolCallRecord{
+		ToolName: tc.Function.Name,
+		Round:    round,
+		Success:  true,
+		Outcome:  "cached",
+	}
+	if e.tools != nil {
+		record.ServerName = e.tools.ToolServer(tc.Function.Name)
+	}
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
+		onEvent(ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round,
+			Duration: 0, Text: fmt.Sprintf("cached result from round %d", hit.round)})
+	}
+	detail := map[string]any{
+		"tool":              tc.Function.Name,
+		"server":            record.ServerName,
+		"round":             round,
+		"arguments":         tc.Function.Arguments,
+		"cached_from_round": hit.round,
+	}
+	detailJSON, _ := json.Marshal(detail)
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryToolCall,
+		Action:         "cache_hit",
+		Summary:        tc.Function.Name,
+		Detail:         string(detailJSON),
+		Status:         audit.StatusOK,
+		DurationMs:     0,
+		Source:         "engine",
+		ConversationID: convID,
+	})
+	result := fmt.Sprintf("[engine: identical call — cached result from round %d]\n\n%s", hit.round, hit.result)
 	return result, record
 }
 
