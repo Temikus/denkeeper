@@ -78,7 +78,8 @@ type Deps struct {
 	AgentLocation func(name string) *time.Location
 
 	// PermissionTier returns the current effective tier for the agent
-	// ("autonomous", "supervised", or "restricted").
+	// ("autonomous", "supervised", or "restricted"). If nil, handlers fall
+	// back to "restricted" — see Server.tier.
 	PermissionTier func() string
 
 	// LifecycleMgr is the shared tool/plugin lifecycle manager. If nil,
@@ -229,6 +230,17 @@ func New(deps Deps) *Server {
 	}
 	s.registerTools()
 	return s
+}
+
+// tier returns the agent's effective permission tier, falling back to the
+// most restrictive one when no reporter is wired. Minimal Deps are a
+// first-class case (read-mostly engines pass only what they need), so this
+// must never panic on a nil PermissionTier.
+func (s *Server) tier() string {
+	if s.deps.PermissionTier == nil {
+		return "restricted"
+	}
+	return s.deps.PermissionTier()
 }
 
 // Connect starts the in-process server goroutine and returns a

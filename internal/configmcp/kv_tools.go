@@ -101,7 +101,7 @@ func (s *Server) handleKVGet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("kv_set is not available in restricted mode"), nil
 	}
@@ -131,7 +131,7 @@ func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) handleKVDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("kv_delete is not available in restricted mode"), nil
 	}
@@ -191,7 +191,7 @@ func (s *Server) handleKVList(ctx context.Context, req *mcp.CallToolRequest) (*m
 }
 
 func (s *Server) handleKVSetNX(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("kv_set_nx is not available in restricted mode"), nil
 	}

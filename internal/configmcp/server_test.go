@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skill/skilltest"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // --------------------------------------------------------------------------
@@ -28,6 +29,39 @@ import (
 
 func newTestLogger(_ *testing.T) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+// newTestLifecycleMgr builds an empty lifecycle manager. Tool and plugin
+// tools are registration-gated on this dep, so the default Deps must carry
+// one for those tools to be listed at all.
+func newTestLifecycleMgr(t *testing.T, dir string) *tool.LifecycleManager {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, []byte("[telegram]\ntoken = \"test\"\n"), 0o644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	return tool.NewLifecycleManager(tool.NewManager(newTestLogger(t)), cfgPath, 5, newTestLogger(t))
+}
+
+// assertToolRegistered asserts a tool's presence in the session's tool list.
+// Registration is the capability boundary, so "absent" is a meaningful
+// assertion, not just "calling it errors".
+func assertToolRegistered(t *testing.T, session *mcp.ClientSession, name string, want bool) {
+	t.Helper()
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var found bool
+	for _, tl := range result.Tools {
+		if tl.Name == name {
+			found = true
+			break
+		}
+	}
+	if found != want {
+		t.Errorf("tool %q registered = %v, want %v", name, found, want)
+	}
 }
 
 func newTestServer(t *testing.T, overrides func(*configmcp.Deps)) (*mcp.ClientSession, *configmcp.Deps) {
@@ -55,6 +89,7 @@ func newTestServer(t *testing.T, overrides func(*configmcp.Deps)) (*mcp.ClientSe
 			return nil
 		},
 		PermissionTier: func() string { return "autonomous" },
+		LifecycleMgr:   newTestLifecycleMgr(t, dir),
 		Logger:         newTestLogger(t),
 	}
 
@@ -222,13 +257,7 @@ func TestSkillCreate_NoSkillsDir(t *testing.T) {
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
 		d.AgentSkillsDir = ""
 	})
-	text, isErr := callTool(t, session, "skill_create", map[string]any{
-		"name": "orphan",
-		"body": "no directory configured",
-	})
-	if !isErr {
-		t.Fatalf("expected error when skills dir is empty, got: %s", text)
-	}
+	assertToolRegistered(t, session, "skill_create", false)
 }
 
 // --------------------------------------------------------------------------
@@ -331,14 +360,7 @@ func TestScheduleAdd_NoScheduler(t *testing.T) {
 		d.Sched = nil
 		d.HandleMessage = nil
 	})
-	text, isErr := callTool(t, session, "schedule_add", map[string]any{
-		"name":     "no-sched",
-		"schedule": "@daily",
-		"channel":  "telegram:12345",
-	})
-	if !isErr {
-		t.Fatalf("expected error when scheduler is nil, got: %s", text)
-	}
+	assertToolRegistered(t, session, "schedule_add", false)
 }
 
 func TestScheduleAdd_RestrictedTier(t *testing.T) {
@@ -611,12 +633,8 @@ func TestToolAdd_NoLifecycleManager(t *testing.T) {
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
 		d.LifecycleMgr = nil
 	})
-	text, isErr := callTool(t, session, "tool_add", map[string]any{
-		"name":    "test",
-		"command": "/bin/test",
-	})
-	if !isErr {
-		t.Fatalf("expected error when lifecycle manager is nil, got: %s", text)
+	for _, name := range []string{"tool_list", "tool_add", "tool_remove", "tool_restart", "plugin_list", "plugin_add", "plugin_remove"} {
+		assertToolRegistered(t, session, name, false)
 	}
 }
 
@@ -1279,12 +1297,7 @@ func TestScheduleUpdate_NoScheduler(t *testing.T) {
 		d.Sched = nil
 		d.HandleMessage = nil
 	})
-	_, isErr := callTool(t, session, "schedule_update", map[string]any{
-		"name": "test",
-	})
-	if !isErr {
-		t.Fatal("expected error when scheduler is nil")
-	}
+	assertToolRegistered(t, session, "schedule_update", false)
 }
 
 func TestScheduleUpdate_EnableDisable(t *testing.T) {
@@ -2389,12 +2402,8 @@ func TestScheduleDelete_NoScheduler(t *testing.T) {
 		d.HandleMessage = nil
 	})
 
-	text, isErr := callTool(t, session, "schedule_delete", map[string]any{
-		"name": "any",
-	})
-	if !isErr {
-		t.Fatalf("expected error when scheduler is nil, got: %s", text)
-	}
+	assertToolRegistered(t, session, "schedule_delete", false)
+	assertToolRegistered(t, session, "schedule_list", false)
 }
 
 func TestScheduleDelete_RestrictedTier(t *testing.T) {

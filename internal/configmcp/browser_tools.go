@@ -76,7 +76,7 @@ func (s *Server) handleBrowserProfileInfo(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleBrowserProfileClear(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("browser_profile_clear is not available in restricted mode"), nil
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleBrowserProfileClear(ctx context.Context, req *mcp.CallToo
 }
 
 func (s *Server) handleBrowserProfileDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("browser_profile_delete is not available in restricted mode"), nil
 	}

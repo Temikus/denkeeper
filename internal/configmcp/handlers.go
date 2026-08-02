@@ -24,32 +24,87 @@ import (
 	"github.com/Temikus/denkeeper/internal/skill"
 )
 
-// registerTools registers all Config MCP tools. Each optional dependency is
-// nil-guarded here so registration helpers stay unconditional.
-//
-//nolint:gocyclo // dispatcher with one branch per optional dep; not reducible without hurting readability.
+// registerTools registers all Config MCP tools. Every tool is gated on the
+// dependency its handler needs: an absent dep means the tool is never
+// registered, rather than registered and failing at call time. Capability is
+// therefore a property of the Deps a caller passes — which is what lets
+// read-mostly engines (the post-turn reviewer) be constrained by construction.
 func (s *Server) registerTools() {
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "skill_create",
-		Description: "Create a new skill file for this agent. In supervised mode the tool call requires operator approval.",
-		InputSchema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"name":        {"type": "string",  "description": "Unique skill slug (e.g. send-daily-report)"},
-				"description":{"type": "string",  "description": "One-line description of what this skill does"},
-				"version":     {"type": "string",  "description": "Semver string, e.g. 1.0.0"},
-				"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\"]"},
-				"body":        {"type": "string",  "description": "Markdown body — the skill instructions"}
-			},
-			"required": ["name", "body"]
-		}`),
-	}, s.handleSkillCreate)
+	s.registerSkillTools()
+	s.registerScheduleTools()
 
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "skill_list",
-		Description: "Return the list of skills currently loaded for this agent.",
-		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
-	}, s.handleSkillList)
+	// Tool & plugin management (registered only when a lifecycle manager is wired).
+	if s.deps.LifecycleMgr != nil {
+		s.registerLifecycleTools()
+	}
+
+	// Fallback configuration tool.
+	if s.deps.SetFallbacks != nil {
+		s.registerFallbackTools()
+	}
+
+	// Cost summary tool.
+	if s.deps.CostSummary != nil {
+		s.registerCostTools()
+	}
+
+	// KV store tools (registered only when a KVStore is provided).
+	if s.deps.KVStore != nil {
+		s.registerKVTools()
+	}
+
+	// Browser profile tools (registered only when browser automation is enabled).
+	if s.deps.BrowserProfiles != nil {
+		s.registerBrowserTools()
+	}
+
+	// Persona tools (registered only when the section reader is provided).
+	// Write tools inside are gated separately on their own deps.
+	if s.deps.GetPersonaSection != nil {
+		s.registerPersonaTools()
+	}
+
+	// Channel tools (registered only when channel access is available).
+	if s.deps.GetChannels != nil {
+		s.registerChannelTools()
+	}
+
+	// Session search (registered only when SearchMessages is provided).
+	if s.deps.SearchMessages != nil {
+		s.registerSearchTools()
+	}
+}
+
+// registerSkillTools registers the skill_* tools, each gated on the deps its
+// handler dereferences.
+//
+//nolint:gocyclo // one branch per optional dep; splitting further would obscure the gate/tool pairing.
+func (s *Server) registerSkillTools() {
+	if s.deps.AgentSkillsDir != "" && s.deps.AppendSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_create",
+			Description: "Create a new skill file for this agent. In supervised mode the tool call requires operator approval.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name":        {"type": "string",  "description": "Unique skill slug (e.g. send-daily-report)"},
+					"description":{"type": "string",  "description": "One-line description of what this skill does"},
+					"version":     {"type": "string",  "description": "Semver string, e.g. 1.0.0"},
+					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\"]"},
+					"body":        {"type": "string",  "description": "Markdown body — the skill instructions"}
+				},
+				"required": ["name", "body"]
+			}`),
+		}, s.handleSkillCreate)
+	}
+
+	if s.deps.GetSkills != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_list",
+			Description: "Return the list of skills currently loaded for this agent.",
+			InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
+		}, s.handleSkillList)
+	}
 
 	if s.deps.GetSkill != nil {
 		s.mcpServer.AddTool(&mcp.Tool{
@@ -131,42 +186,74 @@ func (s *Server) registerTools() {
 		}, s.handleSkillWriteFile)
 	}
 
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "schedule_add",
-		Description: "Register a new recurring schedule for this agent. In supervised mode the tool call requires operator approval.",
-		InputSchema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"name":         {"type": "string",  "description": "Unique schedule identifier"},
-				"schedule":     {"type": "string",  "description": "Timing expression: @daily, @every 5m, or 5-field cron"},
-				"skill":        {"type": "string",  "description": "Skill name to invoke when the schedule fires"},
-				"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context."},
-				"session_mode": {"type": "string",  "description": "shared or isolated (default: isolated)"},
-				"session_tier": {"type": "string",  "description": "Permission tier override for this schedule"},
-				"tags":         {"type": "array", "items": {"type": "string"}, "description": "Freeform labels"},
-				"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"}
-			},
-			"required": ["name", "schedule", "channel"]
-		}`),
-	}, s.handleScheduleAdd)
+	if s.deps.AgentSkillsDir != "" && s.deps.RemoveSkill != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "skill_delete",
+			Description: "Delete an existing skill by name. Removes it from memory and deletes the skill file. In supervised mode the tool call requires operator approval.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Name of the skill to delete"}
+				},
+				"required": ["name"]
+			}`),
+		}, s.handleSkillDelete)
+	}
+}
+
+// registerScheduleTools registers the schedule_* tools. All of them need a
+// scheduler; the two that create or rewrite a job additionally need the
+// message handler the job fires into.
+func (s *Server) registerScheduleTools() {
+	if s.deps.Sched == nil {
+		return
+	}
+
+	if s.deps.HandleMessage != nil {
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "schedule_add",
+			Description: "Register a new recurring schedule for this agent. In supervised mode the tool call requires operator approval.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name":         {"type": "string",  "description": "Unique schedule identifier"},
+					"schedule":     {"type": "string",  "description": "Timing expression: @daily, @every 5m, or 5-field cron"},
+					"skill":        {"type": "string",  "description": "Skill name to invoke when the schedule fires"},
+					"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context."},
+					"session_mode": {"type": "string",  "description": "shared or isolated (default: isolated)"},
+					"session_tier": {"type": "string",  "description": "Permission tier override for this schedule"},
+					"tags":         {"type": "array", "items": {"type": "string"}, "description": "Freeform labels"},
+					"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"}
+				},
+				"required": ["name", "schedule", "channel"]
+			}`),
+		}, s.handleScheduleAdd)
+
+		s.mcpServer.AddTool(&mcp.Tool{
+			Name:        "schedule_update",
+			Description: "Update an existing schedule's properties. Only provided fields are changed; omitted fields keep their current values.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name":         {"type": "string",  "description": "Name of the schedule to update"},
+					"schedule":     {"type": "string",  "description": "New timing expression"},
+					"skill":        {"type": "string",  "description": "New skill name"},
+					"channel":      {"type": "string",  "description": "New delivery channel in adapter:externalID format (e.g. telegram:387956986). Use the channel from your Session Context."},
+					"session_mode": {"type": "string",  "description": "shared or isolated"},
+					"session_tier": {"type": "string",  "description": "Permission tier override"},
+					"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
+					"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"}
+				},
+				"required": ["name"]
+			}`),
+		}, s.handleScheduleUpdate)
+	}
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_list",
 		Description: "Return the schedules owned by you (this agent).",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, s.handleScheduleList)
-
-	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "skill_delete",
-		Description: "Delete an existing skill by name. Removes it from memory and deletes the skill file. In supervised mode the tool call requires operator approval.",
-		InputSchema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"name": {"type": "string", "description": "Name of the skill to delete"}
-			},
-			"required": ["name"]
-		}`),
-	}, s.handleSkillDelete)
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "schedule_delete",
@@ -179,8 +266,11 @@ func (s *Server) registerTools() {
 			"required": ["name"]
 		}`),
 	}, s.handleScheduleDelete)
+}
 
-	// Tool & plugin management tools.
+// registerLifecycleTools registers the MCP tool and plugin management tools.
+// Every handler here dereferences LifecycleMgr, so the caller gates on it.
+func (s *Server) registerLifecycleTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "tool_list",
 		Description: "List all MCP tools currently available to you, grouped by server.",
@@ -268,87 +358,37 @@ func (s *Server) registerTools() {
 			"required": ["name"]
 		}`),
 	}, s.handlePluginRemove)
+}
 
-	// Schedule update tool.
+// registerFallbackTools registers the LLM router fallback configuration tool.
+func (s *Server) registerFallbackTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "schedule_update",
-		Description: "Update an existing schedule's properties. Only provided fields are changed; omitted fields keep their current values.",
+		Name:        "set_fallback",
+		Description: "Replace the LLM router's fallback rules. Pass an empty array to clear all rules.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"name":         {"type": "string",  "description": "Name of the schedule to update"},
-				"schedule":     {"type": "string",  "description": "New timing expression"},
-				"skill":        {"type": "string",  "description": "New skill name"},
-				"channel":      {"type": "string",  "description": "New delivery channel in adapter:externalID format (e.g. telegram:387956986). Use the channel from your Session Context."},
-				"session_mode": {"type": "string",  "description": "shared or isolated"},
-				"session_tier": {"type": "string",  "description": "Permission tier override"},
-				"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
-				"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"}
-			},
-			"required": ["name"]
-		}`),
-	}, s.handleScheduleUpdate)
-
-	// Fallback configuration tool.
-	if s.deps.SetFallbacks != nil {
-		s.mcpServer.AddTool(&mcp.Tool{
-			Name:        "set_fallback",
-			Description: "Replace the LLM router's fallback rules. Pass an empty array to clear all rules.",
-			InputSchema: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"rules": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"trigger":     {"type": "string",  "enum": ["error", "rate_limit", "cost_limit", "low_funds"], "description": "low_funds is deprecated and auto-migrates to cost_limit/soft"},
-								"action":      {"type": "string",  "enum": ["switch_provider", "switch_model", "wait_and_retry"]},
-								"provider":    {"type": "string",  "description": "Target provider (for switch_provider, or scoping switch_model)"},
-								"model":       {"type": "string",  "description": "Target model (for switch_model)"},
-								"scope":       {"type": "string",  "enum": ["soft", "hard"], "description": "Cost limit scope (for cost_limit)"},
-								"max_retries": {"type": "integer", "description": "Retry count (for wait_and_retry)"},
-								"backoff":     {"type": "string",  "enum": ["exponential", "constant"]}
-							},
-							"required": ["trigger", "action"]
+				"rules": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"trigger":     {"type": "string",  "enum": ["error", "rate_limit", "cost_limit", "low_funds"], "description": "low_funds is deprecated and auto-migrates to cost_limit/soft"},
+							"action":      {"type": "string",  "enum": ["switch_provider", "switch_model", "wait_and_retry"]},
+							"provider":    {"type": "string",  "description": "Target provider (for switch_provider, or scoping switch_model)"},
+							"model":       {"type": "string",  "description": "Target model (for switch_model)"},
+							"scope":       {"type": "string",  "enum": ["soft", "hard"], "description": "Cost limit scope (for cost_limit)"},
+							"max_retries": {"type": "integer", "description": "Retry count (for wait_and_retry)"},
+							"backoff":     {"type": "string",  "enum": ["exponential", "constant"]}
 						},
-						"description": "Ordered list of fallback rules"
-					}
-				},
-				"required": ["rules"]
-			}`),
-		}, s.handleSetFallback)
-	}
-
-	// Cost summary tool.
-	if s.deps.CostSummary != nil {
-		s.registerCostTools()
-	}
-
-	// KV store tools (registered only when a KVStore is provided).
-	if s.deps.KVStore != nil {
-		s.registerKVTools()
-	}
-
-	// Browser profile tools (registered only when browser automation is enabled).
-	if s.deps.BrowserProfiles != nil {
-		s.registerBrowserTools()
-	}
-
-	// Persona tools (registered only when persona callbacks are provided).
-	if s.deps.GetPersonaSection != nil && s.deps.SavePersonaSection != nil {
-		s.registerPersonaTools()
-	}
-
-	// Channel tools (registered only when channel access is available).
-	if s.deps.GetChannels != nil {
-		s.registerChannelTools()
-	}
-
-	// Session search (registered only when SearchMessages is provided).
-	if s.deps.SearchMessages != nil {
-		s.registerSearchTools()
-	}
+						"required": ["trigger", "action"]
+					},
+					"description": "Ordered list of fallback rules"
+				}
+			},
+			"required": ["rules"]
+		}`),
+	}, s.handleSetFallback)
 }
 
 // --------------------------------------------------------------------------
@@ -360,7 +400,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("skill_create is not available: no agent skills directory configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("skill_create is not available in restricted mode"), nil
 	}
@@ -502,7 +542,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("skill_update is not available: no agent skills directory configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("skill_update is not available in restricted mode"), nil
 	}
@@ -584,7 +624,7 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 	if s.deps.AgentSkillsDir == "" {
 		return toolError("skill_patch is not available: no agent skills directory configured"), nil
 	}
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("skill_patch is not available in restricted mode"), nil
 	}
@@ -693,7 +733,7 @@ func (s *Server) handleSkillWriteFile(ctx context.Context, req *mcp.CallToolRequ
 	if s.deps.AgentSkillsDir == "" {
 		return toolError("skill_write_file is not available: no agent skills directory configured"), nil
 	}
-	if s.deps.PermissionTier() == "restricted" {
+	if s.tier() == "restricted" {
 		return toolError("skill_write_file is not available in restricted mode"), nil
 	}
 
@@ -834,7 +874,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("schedule_add is not available: no message handler configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("schedule_add is not available in restricted mode"), nil
 	}
@@ -1059,7 +1099,7 @@ func (s *Server) requireScheduleWrite() *mcp.CallToolResult {
 	if s.deps.HandleMessage == nil {
 		return toolError("schedule_update is not available: no message handler configured")
 	}
-	if s.deps.PermissionTier() == "restricted" {
+	if s.tier() == "restricted" {
 		return toolError("schedule_update is not available in restricted mode")
 	}
 	return nil
@@ -1138,7 +1178,7 @@ func (s *Server) handleSkillDelete(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("skill_delete is not available: no skill removal configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("skill_delete is not available in restricted mode"), nil
 	}
@@ -1183,7 +1223,7 @@ func (s *Server) handleScheduleDelete(ctx context.Context, req *mcp.CallToolRequ
 		return toolError("schedule_delete is not available: no scheduler configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("schedule_delete is not available in restricted mode"), nil
 	}
@@ -1224,7 +1264,7 @@ func (s *Server) handleScheduleDelete(ctx context.Context, req *mcp.CallToolRequ
 }
 
 func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("set_fallback is not available in restricted mode"), nil
 	}
@@ -1352,6 +1392,10 @@ func (s *Server) handleToolList(_ context.Context, _ *mcp.CallToolRequest) (*mcp
 	}
 
 	tools := s.deps.LifecycleMgr.ListTools()
+	if tools == nil {
+		// ListTools declares a nil slice; emit [] rather than null.
+		return toolText("[]"), nil
+	}
 	data, err := json.MarshalIndent(tools, "", "  ")
 	if err != nil {
 		return toolError("marshaling tools: " + err.Error()), nil
@@ -1364,7 +1408,7 @@ func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*
 		return toolError("tool_add is not available: no lifecycle manager configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("tool_add is not available in restricted mode"), nil
 	}
@@ -1425,7 +1469,7 @@ func (s *Server) handleToolRemove(ctx context.Context, req *mcp.CallToolRequest)
 		return toolError("tool_remove is not available: no lifecycle manager configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("tool_remove is not available in restricted mode"), nil
 	}
@@ -1456,7 +1500,7 @@ func (s *Server) handleToolRestart(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("tool_restart is not available: no lifecycle manager configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("tool_restart is not available in restricted mode"), nil
 	}
@@ -1500,7 +1544,7 @@ func (s *Server) handlePluginAdd(ctx context.Context, req *mcp.CallToolRequest) 
 		return toolError("plugin_add is not available: no lifecycle manager configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("plugin_add is not available in restricted mode"), nil
 	}
@@ -1560,7 +1604,7 @@ func (s *Server) handlePluginRemove(ctx context.Context, req *mcp.CallToolReques
 		return toolError("plugin_remove is not available: no lifecycle manager configured"), nil
 	}
 
-	tier := s.deps.PermissionTier()
+	tier := s.tier()
 	if tier == "restricted" {
 		return toolError("plugin_remove is not available in restricted mode"), nil
 	}
