@@ -307,6 +307,7 @@ Global MCP settings.
     [web.fetch]
     timeout = "30s"                  # HTTP timeout
     max_size_bytes = 5242880         # response size limit (5MB)
+    max_response_chars = 8000        # chars per web_fetch call (max 100000); 24000-32000 fits most articles in one call
     user_agent = ""                  # HTTP User-Agent header
     respect_robots_txt = false       # check robots.txt
     respect_agents_txt = false       # check agents.txt

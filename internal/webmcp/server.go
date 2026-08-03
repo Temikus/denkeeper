@@ -26,6 +26,10 @@ type Deps struct {
 	// PermissionTier returns the current effective tier for the agent.
 	PermissionTier func() string
 
+	// MaxResponseChars caps content characters returned per web_fetch call.
+	// Zero means the default (8000).
+	MaxResponseChars int
+
 	Logger *slog.Logger
 }
 
@@ -40,6 +44,9 @@ type Server struct {
 func New(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
+	}
+	if deps.MaxResponseChars <= 0 {
+		deps.MaxResponseChars = defaultMaxResponseChars
 	}
 
 	s := &Server{
