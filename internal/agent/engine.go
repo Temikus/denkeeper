@@ -1038,6 +1038,12 @@ type ChatEvent struct {
 	// "supervisor_approved", "supervisor_denied", "supervisor_escalated",
 	// "supervisor_error" (supervisor LLM call failed; falls through to human).
 	ApprovalStatus string `json:"approval_status,omitempty"`
+
+	// ApprovalScope names which auto-approve rule matched, machine-readable
+	// alongside the human-readable Text. Set only when ApprovalStatus is
+	// "auto_approved"; values are "config" (TOML-declared), "session" or
+	// "permanent". Consumers that only key on ApprovalStatus are unaffected.
+	ApprovalScope string `json:"approval_scope,omitempty"`
 }
 
 // ChatEventFunc is called for each intermediate pipeline event.
@@ -2009,8 +2015,10 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 				Round:          round,
 				Text:           fmt.Sprintf("Auto-approved (%s)", scope),
 				ApprovalStatus: "auto_approved",
+				ApprovalScope:  string(scope),
 			})
 		}
+		e.auditAutoApprove(ctx, tc.Function.Name, string(scope), round, convID)
 		return approvalApproved
 	}
 
@@ -2025,6 +2033,28 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 		return approvalDenied(result)
 	}
 	return approvalApproved
+}
+
+// auditAutoApprove records a Stage-1 auto-approval in the audit log. Emitted
+// for every scope, not just "config": before this, auto-approvals left only a
+// log line, so a rule quietly doing all the work (or quietly never being
+// created) was invisible in the audit trail. detail.scope makes config-blessed
+// calls distinguishable and filterable.
+func (e *Engine) auditAutoApprove(ctx context.Context, toolName, scope string, round int, convID string) {
+	detail, _ := json.Marshal(map[string]any{
+		"tool":  toolName,
+		"scope": scope,
+		"round": round,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryApproval,
+		Action:         "auto_approve",
+		Summary:        toolName,
+		Detail:         string(detail),
+		Status:         audit.StatusOK,
+		Source:         "engine",
+		ConversationID: convID,
+	})
 }
 
 // resolveSupervisorReview handles supervisor agent review of a tool call.

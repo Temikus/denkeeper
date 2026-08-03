@@ -25,6 +25,14 @@ import (
 // natively support the supervisor field.
 func supervisorHarness(t *testing.T, responses []*llm.ChatResponse) *Harness {
 	t.Helper()
+	return supervisorHarnessWithConfigRules(t, responses, nil)
+}
+
+// supervisorHarnessWithConfigRules is supervisorHarness plus config-scoped
+// ("config") auto-approve rules, as the TOML agents.auto_approve_tools field
+// would supply at startup.
+func supervisorHarnessWithConfigRules(t *testing.T, responses []*llm.ChatResponse, rules map[string][]string) *Harness {
+	t.Helper()
 
 	ts := startTestMCPServer(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -44,8 +52,9 @@ func supervisorHarness(t *testing.T, responses []*llm.ChatResponse) *Harness {
 			{Name: "default", Tier: "supervised"},
 			{Name: "guard", Tier: "autonomous"},
 		},
-		ToolManager: toolMgr,
-		Responses:   responses,
+		ToolManager:      toolMgr,
+		Responses:        responses,
+		AutoApproveTools: rules,
 	})
 
 	// Wire the supervisor relationship.
@@ -223,5 +232,54 @@ func TestSupervisor_Escalate(t *testing.T) {
 	// 3 LLM calls: primary (tool_calls) + supervisor (ESCALATE) + primary (final).
 	if h.MockLLM.CallCount() != 3 {
 		t.Errorf("expected 3 LLM calls, got %d", h.MockLLM.CallCount())
+	}
+}
+
+// TestSupervisor_ConfigRuleSkipsSupervisor pins the whole point of the config
+// scope: a TOML-blessed tool bypasses the supervisor entirely. The response
+// sequence deliberately has no supervisor verdict — 2 LLM calls (tool_call,
+// final) proves the supervisor LLM was never invoked, in contrast to the 3 of
+// TestSupervisor_Approve.
+func TestSupervisor_ConfigRuleSkipsSupervisor(t *testing.T) {
+	h := supervisorHarnessWithConfigRules(t, []*llm.ChatResponse{
+		{
+			Content:      "",
+			FinishReason: "tool_calls",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "echo",
+						Arguments: `{"input":"config-blessed"}`,
+					},
+				},
+			},
+			TokensUsed: llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:      "test-model",
+		},
+		{
+			Content:      "Tool returned: config-blessed",
+			FinishReason: "stop",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+		},
+	}, map[string][]string{"default": {"echo"}})
+
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat",
+		map[string]string{"message": "please call echo"}))
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var chatResp map[string]string
+	DecodeJSON(t, rec, &chatResp)
+	if !strings.Contains(chatResp["response"], "config-blessed") {
+		t.Fatalf("expected response to contain 'config-blessed', got: %s", chatResp["response"])
+	}
+
+	// 2 LLM calls: primary (tool_calls) + primary (final). No supervisor call.
+	if h.MockLLM.CallCount() != 2 {
+		t.Errorf("expected 2 LLM calls, got %d — the supervisor was invoked despite the config rule", h.MockLLM.CallCount())
 	}
 }

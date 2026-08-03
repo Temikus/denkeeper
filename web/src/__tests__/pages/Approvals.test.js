@@ -204,6 +204,28 @@ describe('Approvals page', () => {
     })
   })
 
+  test('config-scoped rule renders read-only (no Revoke)', async () => {
+    // Config rules come from the server TOML: the API returns them with no id
+    // and no created_at, and they cannot be revoked at runtime.
+    server.use(
+      http.get('/api/v1/auto-approve', () =>
+        HttpResponse.json([
+          { id: 'rule-1', agent_name: 'default', tool_name: 'web_search', scope: 'permanent', created_at: '2026-01-01T00:00:00Z', created_by: 'api' },
+          { id: '', agent_name: 'default', tool_name: 'run_javascript', scope: 'config', created_by: 'config' },
+        ])
+      )
+    )
+
+    render(Approvals)
+    await waitFor(() => {
+      expect(screen.getByText('run_javascript')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('TOML-managed')).toBeInTheDocument()
+    // Only the permanent rule is revocable.
+    expect(screen.getAllByText('Revoke')).toHaveLength(1)
+  })
+
   test('polling every 10s calls approvals endpoint', async () => {
     let callCount = 0
     server.use(

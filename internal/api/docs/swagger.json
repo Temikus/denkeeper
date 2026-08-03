@@ -1400,7 +1400,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all auto-approve rules, optionally filtered by agent name.",
+                "description": "Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API.",
                 "produces": [
                     "application/json"
                 ],
@@ -1452,7 +1452,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'.",
+                "description": "Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400.",
                 "consumes": [
                     "application/json"
                 ],

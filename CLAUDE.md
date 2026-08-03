@@ -72,7 +72,7 @@ Tiers: `autonomous` (all actions), `supervised` (chat + tools with approval), `r
 
 **Supervised tool calls**: each MCP call needs approval. Engine checks `Manager.ShouldAutoApprove()` first (match → immediate execution, `tool_approval` event with `auto_approved`), else blocks on `WaitForResolution`. Dispatcher sends four buttons: Approve, Deny, Auto (session), Auto (always). Denied calls feed "Tool call was denied by the operator." to the LLM. Within one turn, a name+args exact match against an already-denied call is auto-denied (status `auto_denied`); dedup map resets on next user message.
 
-**Auto-approve rules**: `session` scope (in-memory, conversation-scoped) and `permanent` (SQLite, agent-scoped); session checked first. Created from Telegram buttons (`:approve_session`/`:approve_always`), web UI Always Approve, or REST. `approval.ExtractToolName()` keys rules from the approval summary.
+**Auto-approve rules**: three scopes, checked `config` → `session` → `permanent`. `session` (in-memory, conversation-scoped, 15m TTL) and `permanent` (SQLite, agent-scoped) are created at runtime from Telegram buttons (`:approve_session`/`:approve_always`), web UI Always Approve, or REST; `approval.ExtractToolName()` keys them from the approval summary. `config` is declared per agent in TOML (`[[agents]] auto_approve_tools = [...]`), held in memory on the Manager, and **replaced wholesale** by `SetConfigRules` — the only writer, called from the config-load path (startup + `POST /server/reload`). It cannot be weakened at runtime: `POST /auto-approve` 400s on `scope: "config"`, config rules are listed with an empty `id` so DELETE has nothing to address, and `RemoveAutoApproveRule`/`ClearSessionRules` touch different state. Ordering cannot change an approve/deny outcome (all three answer the same question) — it fixes **attribution** (`scope=config` stays stable across sessions) and skips the SQLite lookup for the hottest calls. Newly-blessed pairs auto-resolve queued approvals, same as the other two scopes. Validation is syntax-only at load (non-empty, no whitespace, unique — `ValidResourceName` deliberately not applied, MCP names have hyphens); names not matching an advertised tool are **warned about at wiring/reload and kept**, never dropped (a late-connecting remote server must not silently weaken policy). Stage-1 auto-approvals emit an `audit.CategoryApproval` / `auto_approve` event with `detail.scope` for **all** scopes.
 
 **Supervisor agents**: `supervisor = "agent-name"` on a supervised agent inserts an LLM reviewer between auto-approve and human approval: APPROVE / DENY (reason fed to LLM) / ESCALATE (→ human). One-shot LLM call via the supervisor's Router with tool details + recent history — no storage/skills/tool loops. Emits `audit.CategorySupervisor` events and `tool_approval` statuses `supervisor_approved`/`_denied`/`_escalated`/`_error` (error falls through to human). Web UI: supervisor controls in Agents, statuses in Chat, filter chip in AuditLog.
 
@@ -102,7 +102,7 @@ Config: `[costs] default_rate_per_1k_tokens` (fallback when model unknown; 0 = $
 | `GET ws` | — | WebSocket upgrade; auth via `?token=` or session cookie |
 | `GET models`, `GET models/details` | `agents:read` | details includes pricing info |
 | `approvals` CRUD | — | `POST .../approve` accepts `?auto_approve=session\|permanent` to simultaneously create an auto-approve rule |
-| `auto-approve` CRUD | `approvals:read/write` | `GET` accepts `?agent=` filter |
+| `auto-approve` CRUD | `approvals:read/write` | `GET` accepts `?agent=` filter and includes TOML `config`-scoped rules (empty `id`); `POST` with `scope: "config"` → 400 |
 | `schedules` (PATCH edit), `skills` (PUT edit), `kv`, `GET/PUT agents/{name}/persona/{section}` | — | plain CRUD |
 | `POST agents` | `admin` | body `{name, llm_provider, llm_model, session_tier, description, create_supervisor}`; optional `create_supervisor: {name, llm_model, timeout, context_messages}` atomically creates a companion supervisor when `session_tier="supervised"`; creates persona dir, persists `[[agents]]` to TOML |
 | `PATCH agents/{name}` | — | mutable: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages` |
@@ -121,7 +121,7 @@ Config: `[costs] default_rate_per_1k_tokens` (fallback when model unknown; 0 = $
 | `tools` CRUD (PUT edit), `GET {name}/health`, `POST {name}/restart\|enable\|disable` | `tools:read`/`tools:write` | enable starts the MCP process, disable stops it; both persist to TOML; 404 convention in invariants |
 | `POST panic`, `POST resume`, `GET panic` | `admin` | emergency stop: cancel all in-flight requests + pause scheduler; resume clears; GET returns `{panicked, panic_time}` |
 
-Chat streaming events (SSE and WS): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`.
+Chat streaming events (SSE and WS): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`. `tool_approval` carries `approval_status` plus, on `auto_approved`, a machine-readable `approval_scope` (`config`/`session`/`permanent`) alongside the human-readable text.
 
 ## Web Dashboard & WebSocket Transport
 

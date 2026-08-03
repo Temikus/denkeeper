@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,13 @@ type Manager struct {
 
 	// sessionRules holds ephemeral auto-approve rules keyed by "agent\x00convID\x00tool".
 	sessionRules sync.Map
+
+	// configRules holds TOML-declared auto-approve rules (agent → set of tool
+	// names). Written only by SetConfigRules, which the config-load path calls
+	// at startup and on hot-reload; no incremental mutation API exists, so
+	// runtime rule management can never weaken this set.
+	configMu    sync.RWMutex
+	configRules map[string]map[string]struct{}
 }
 
 // NewManager creates a Manager backed by the given store.
@@ -479,10 +487,20 @@ func sessionRuleKey(agentName, conversationID, toolName string) string {
 }
 
 // ShouldAutoApprove checks whether the given tool call should be auto-approved.
-// It checks session rules (in-memory) first, then permanent rules (DB).
 // Returns (true, scope) on match, (false, "") on no match.
+//
+// All three scopes answer the same yes/no question, so the order cannot change
+// an approve/deny outcome — it decides scope attribution and cost. Config is
+// checked first so a TOML-blessed tool always reports scope=config in events
+// and audit (stable across sessions, never mis-attributed to a 15-minute
+// session rule) and so the hottest recurring calls skip the SQLite lookup.
 func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, conversationID string) (bool, AutoApproveScope) {
-	// 1. Session rules (in-memory, conversation-scoped, time-limited).
+	// 1. Config rules (TOML-declared, process-wide, replaced only by config load).
+	if m.matchConfigRule(agentName, toolName) {
+		return true, ScopeConfig
+	}
+
+	// 2. Session rules (in-memory, conversation-scoped, time-limited).
 	key := sessionRuleKey(agentName, conversationID, toolName)
 	if v, ok := m.sessionRules.Load(key); ok {
 		if expiresAt, isTime := v.(time.Time); isTime && time.Now().Before(expiresAt) {
@@ -492,16 +510,98 @@ func (m *Manager) ShouldAutoApprove(ctx context.Context, agentName, toolName, co
 		m.sessionRules.Delete(key)
 	}
 
-	// 2. Permanent rules (DB, agent-scoped).
+	// 3. Permanent rules (DB, agent-scoped).
 	if m.autoStore != nil {
 		if _, err := m.autoStore.MatchAutoApproveRule(ctx, agentName, toolName); err == nil {
 			return true, ScopePermanent
 		}
 	}
 
-	// 3. Future: config-based rules would be checked here.
-
 	return false, ""
+}
+
+// matchConfigRule reports whether a TOML-declared rule blesses agent+tool.
+func (m *Manager) matchConfigRule(agentName, toolName string) bool {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	tools, ok := m.configRules[agentName]
+	if !ok {
+		return false
+	}
+	_, ok = tools[toolName]
+	return ok
+}
+
+// SetConfigRules replaces the entire set of TOML-declared auto-approve rules
+// with the given agent → tool-names map. This is the only writer: the
+// config-load path calls it at startup and on hot-reload, both of which re-read
+// the TOML from disk. There is deliberately no incremental add/remove API, so
+// no runtime surface (REST, chat buttons, web UI) can weaken the config policy.
+//
+// Pairs that are newly present relative to the previous map auto-resolve any
+// approvals already queued for them, the same courtesy AddSessionRule and
+// AddPermanentRule extend.
+func (m *Manager) SetConfigRules(ctx context.Context, rules map[string][]string) {
+	next := make(map[string]map[string]struct{}, len(rules))
+	for agentName, tools := range rules {
+		if len(tools) == 0 {
+			continue
+		}
+		set := make(map[string]struct{}, len(tools))
+		for _, toolName := range tools {
+			if toolName == "" {
+				continue
+			}
+			set[toolName] = struct{}{}
+		}
+		if len(set) > 0 {
+			next[agentName] = set
+		}
+	}
+
+	m.configMu.Lock()
+	prev := m.configRules
+	m.configRules = next
+	m.configMu.Unlock()
+
+	// Collect newly-added pairs (sorted, so the resolve order is deterministic).
+	type pair struct{ agent, tool string }
+	var added []pair
+	for agentName, tools := range next {
+		m.logger.Info("config auto-approve rules applied", "agent", agentName, "tools", len(tools))
+		for toolName := range tools {
+			if _, existed := prev[agentName][toolName]; existed {
+				continue
+			}
+			added = append(added, pair{agentName, toolName})
+		}
+	}
+	sort.Slice(added, func(i, j int) bool {
+		if added[i].agent != added[j].agent {
+			return added[i].agent < added[j].agent
+		}
+		return added[i].tool < added[j].tool
+	})
+	for _, p := range added {
+		m.autoResolvePending(ctx, p.agent, p.tool)
+	}
+}
+
+// ConfigRuleTools returns the sorted tool names blessed by config for an agent.
+// Returns nil when the agent has no config rules.
+func (m *Manager) ConfigRuleTools(agentName string) []string {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	tools, ok := m.configRules[agentName]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	for toolName := range tools {
+		names = append(names, toolName)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // AddSessionRule creates a time-limited auto-approve rule for the current conversation.
@@ -579,7 +679,9 @@ func (m *Manager) RemoveAutoApproveRule(ctx context.Context, id string) error {
 }
 
 // ListAutoApproveRules returns all auto-approve rules for the given agent.
-// Pass "" for all agents. Combines permanent (DB) and session (in-memory) rules.
+// Pass "" for all agents. Combines permanent (DB), session (in-memory) and
+// config (TOML-declared) rules. Config rules carry no ID and no timestamps —
+// they are read-only at runtime and there is nothing for DELETE to address.
 func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([]AutoApproveRule, error) {
 	var rules []AutoApproveRule
 
@@ -622,7 +724,46 @@ func (m *Manager) ListAutoApproveRules(ctx context.Context, agentName string) ([
 		return true
 	})
 
+	// Config rules from memory. The source is a map, so sort by agent then
+	// tool — never emit unsorted.
+	rules = append(rules, m.listConfigRules(agentName)...)
+
 	return rules, nil
+}
+
+// listConfigRules renders the TOML-declared rules as AutoApproveRule values,
+// honoring the agent filter ("" = all agents), sorted by agent then tool.
+func (m *Manager) listConfigRules(agentName string) []AutoApproveRule {
+	m.configMu.RLock()
+	agents := make([]string, 0, len(m.configRules))
+	byAgent := make(map[string][]string, len(m.configRules))
+	for agent, tools := range m.configRules {
+		if agentName != "" && agent != agentName {
+			continue
+		}
+		names := make([]string, 0, len(tools))
+		for toolName := range tools {
+			names = append(names, toolName)
+		}
+		sort.Strings(names)
+		agents = append(agents, agent)
+		byAgent[agent] = names
+	}
+	m.configMu.RUnlock()
+
+	sort.Strings(agents)
+	var rules []AutoApproveRule
+	for _, agent := range agents {
+		for _, toolName := range byAgent[agent] {
+			rules = append(rules, AutoApproveRule{
+				AgentName: agent,
+				ToolName:  toolName,
+				Scope:     ScopeConfig,
+				CreatedBy: "config",
+			})
+		}
+	}
+	return rules
 }
 
 // ClearSessionRules removes all session-scoped auto-approve rules for a conversation.

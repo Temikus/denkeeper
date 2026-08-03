@@ -4,6 +4,7 @@ package integration
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -202,5 +203,67 @@ func TestAutoApprove_FilterByAgent(t *testing.T) {
 	}
 	if rules[0]["tool_name"] != "code_review" {
 		t.Errorf("tool = %v, want code_review", rules[0]["tool_name"])
+	}
+}
+
+func TestAutoApprove_ListIncludesConfigRule(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		AutoApproveTools: map[string][]string{"default": {"find-completed-tasks"}},
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/auto-approve", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var rules []map[string]any
+	DecodeJSON(t, rec, &rules)
+	if len(rules) != 1 {
+		t.Fatalf("rules count = %d, want 1", len(rules))
+	}
+	if rules[0]["scope"] != "config" {
+		t.Errorf("scope = %v, want config", rules[0]["scope"])
+	}
+	if rules[0]["tool_name"] != "find-completed-tasks" {
+		t.Errorf("tool = %v, want find-completed-tasks", rules[0]["tool_name"])
+	}
+	// Config rules carry no ID — there is nothing for DELETE to address.
+	if id, ok := rules[0]["id"].(string); !ok || id != "" {
+		t.Errorf("id = %v, want empty string", rules[0]["id"])
+	}
+	if rules[0]["created_by"] != "config" {
+		t.Errorf("created_by = %v, want config", rules[0]["created_by"])
+	}
+	// No creation timestamp — the field is omitted rather than reported as
+	// the year-1 zero time, so the UI renders a dash.
+	if _, present := rules[0]["created_at"]; present {
+		t.Errorf("created_at = %v, want the field to be omitted", rules[0]["created_at"])
+	}
+}
+
+func TestAutoApprove_CreateConfigScopeRejected(t *testing.T) {
+	h := NewHarness(t, nil)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/auto-approve", map[string]any{
+		"agent": "default",
+		"tool":  "web_search",
+		"scope": "config",
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var resp map[string]string
+	DecodeJSON(t, rec, &resp)
+	if !strings.Contains(resp["error"], "managed in TOML") {
+		t.Errorf("error = %q, want it to point at the TOML field", resp["error"])
+	}
+
+	// Nothing was created.
+	listRec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/auto-approve", nil))
+	var rules []map[string]any
+	DecodeJSON(t, listRec, &rules)
+	if len(rules) != 0 {
+		t.Errorf("rules count = %d, want 0", len(rules))
 	}
 }
