@@ -55,6 +55,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 | `version` | No | Semantic version |
 | `triggers` | No | When to activate (see below) |
 | `requires.tools` | No | MCP tools this skill needs |
+| `max_tool_rounds` | No | Cap on tool-call rounds for turns this skill drives (command or schedule trigger). Only lowers the agent's limit, never raises it; must be ≥ 0 |
 
 ## Trigger types
 

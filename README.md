@@ -117,8 +117,9 @@ cosign verify \
 - **Cost tracking** — per-session budgets with automatic cutoff
 - **Conversation memory** — SQLite-backed, persistent across restarts
 - **Scheduler** — cron expressions, named intervals, and `@daily`/`@hourly` shorthand; per-schedule agent targeting and session modes
-- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`) and per-agent skill merging
-- **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff; OAuth 2.1 authorization for remote MCP servers
+- **Skills** — flat markdown files with TOML frontmatter; trigger-based filtering (`command:`/`schedule:`), per-agent skill merging, and per-skill `max_tool_rounds` caps on the tool-call loop
+- **MCP tools** — spawn MCP servers via stdio (subprocess) or SSE/Streamable HTTP (remote), discover tools, and execute tool calls in an agentic loop; auto-restart on crash with configurable backoff; OAuth 2.1 authorization for remote MCP servers; within-turn memoization of identical calls to read-only tools (built-ins always eligible; external servers opt in via `idempotent`, `idempotent_tools`, or `trust_annotations`)
+- **Web tools** — built-in `web_search` (DuckDuckGo or Tavily) and `web_fetch` (HTML→Markdown conversion with configurable per-call page size, size/timeout caps, robots.txt/agents.txt respect, and optional Jina Reader fallback for JS-heavy pages)
 - **MCP security** — SSRF protection (blocks localhost, link-local, and cloud metadata endpoints), HTTP header injection prevention, redirect target validation, env var denylist for secrets, and URL/arg redaction in API responses
 - **Plugin system** — subprocess and Docker-sandboxed plugins with capability declarations and Ed25519 signature verification; tools capability wires plugin tools into the agent's LLM loop
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
@@ -132,7 +133,7 @@ cosign verify \
 - **Web dashboard** — embedded Svelte UI (served via the API server) with 17 pages: overview, chat, sessions, approvals, schedules, skills, tools, browser, KV store, costs, agents, API keys, providers, server config, settings, audit log, and channels; includes dark mode toggle and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
-- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API
+- **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API; auto-approve rules in three scopes: `config` (declared per agent in TOML via `auto_approve_tools`, immutable at runtime), `session` (in-memory, 15m TTL), and `permanent` (SQLite)
 - **Config MCP server** — per-agent in-process MCP tools let the LLM manage skills, schedules, tools, plugins, KV storage, and inspect its own permission tier at runtime
 - **Deterministic compute (`run_javascript`)** — per-agent in-process tool that runs a short JavaScript snippet (sandboxed goja runtime, no network/filesystem) against JSON input to transform, format, classify, or bucket data off the completion-token path; bounded by `[script]` timeout and input/output size caps (default `timeout = "2s"`, `max_output_chars = 16000`, `max_input_bytes = 262144`); disabled in restricted tier
 - **External REST API** — HTTP server with scoped API key auth, rate limiting, CORS, and TLS support; chat endpoint with real-time token streaming (SSE + WebSocket), session management, approval CRUD, tool/plugin CRUD, LLM provider management, server reload/restart, and API key management
@@ -222,6 +223,7 @@ Key sections:
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
 | `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
+| `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, `[web.fetch.jina]` fallback |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
 

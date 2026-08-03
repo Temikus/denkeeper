@@ -125,6 +125,7 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised) |
 | `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval. |
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context. |
+| `auto_approve_tools` | string[] | — | Tool names auto-approved for this agent without human sign-off (`config` scope). Declared in TOML only — cannot be created or removed at runtime; re-applied wholesale on config reload. Names not matching an advertised tool are warned about and kept |
 
 ## `[memory]`
 
@@ -153,6 +154,39 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `api_key` | string | *required* | OpenAI API key for STT/TTS |
+
+## `[web]`
+
+Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings are not hot-reloaded.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Enable web search/fetch tools for agents |
+
+## `[web.search]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `provider` | string | `"duckduckgo"` | Search backend: `"duckduckgo"` or `"tavily"` |
+| `api_key` | string | — | Provider API key (required for Tavily) |
+| `max_results` | int | `5` | Number of search results to return |
+
+## `[web.fetch]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `timeout` | string | `"30s"` | HTTP request timeout |
+| `max_size_bytes` | int | `5242880` | Raw response body size limit (5 MB) |
+| `max_response_chars` | int | `8000` | Characters of converted Markdown returned per `web_fetch` call (max `100000`); longer pages paginate via `start_index`. Each pagination round re-reads the full conversation context, so 24000–32000 usually serves a whole article in one call. Also editable in the Server Config dashboard page |
+| `user_agent` | string | `"Denkeeper/1.0 (+https://denkeeper.io)"` | HTTP User-Agent header |
+| `respect_robots_txt` | bool | `false` | Check robots.txt before fetching |
+| `respect_agents_txt` | bool | `false` | Check agents.txt before fetching |
+
+## `[web.fetch.jina]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable Jina Reader as a fallback fetcher for JS-heavy pages |
 
 ## `[api]`
 

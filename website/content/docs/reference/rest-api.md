@@ -357,7 +357,7 @@ Deny a pending request.
 
 **Scope:** `approvals:read`
 
-List all auto-approve rules. Filter by agent with `?agent=name`.
+List all auto-approve rules. Filter by agent with `?agent=name`. The list includes TOML-declared `config`-scoped rules (`auto_approve_tools` on `[[agents]]`); these are read-only and returned with an empty `id`.
 
 ### `POST /api/v1/auto-approve`
 
@@ -375,7 +375,7 @@ Create an auto-approve rule.
 }
 ```
 
-- `scope`: `"session"` (in-memory, cleared on restart) or `"permanent"` (persisted in SQLite).
+- `scope`: `"session"` (in-memory, cleared on restart) or `"permanent"` (persisted in SQLite). `"config"` is rejected with `400` — config-scoped rules can only be declared in TOML.
 
 ### `DELETE /api/v1/auto-approve/{id}`
 
