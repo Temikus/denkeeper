@@ -231,7 +231,7 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 	// errors leave the pin intact — the provider is healthy, so discarding its
 	// warm cache affinity would needlessly scatter subsequent requests.
 	defer func() {
-		if retErr != nil && llm.IsRetryable(retErr) {
+		if retErr != nil && llm.IsUpstreamError(retErr) {
 			c.resetSticky()
 		}
 	}()
@@ -312,7 +312,7 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 	// the served provider (captured from the stream below). Caller cancellation
 	// and 4xx client errors leave the pin intact.
 	defer func() {
-		if retErr != nil && llm.IsRetryable(retErr) {
+		if retErr != nil && llm.IsUpstreamError(retErr) {
 			c.resetSticky()
 		}
 	}()
