@@ -266,6 +266,7 @@ Global settings that apply to all MCP tool servers.
 | `scopes` | string[] | — | OAuth2 scopes to request (optional) |
 | `idempotent` | bool | `false` | Memoize identical calls to this server's tools within one message turn (identical name+args returns the cached result instead of re-executing). Only set on servers whose tools are **all** read-only — a cached write is a silently dropped side effect |
 | `idempotent_tools` | string[] | — | Per-tool memoization opt-in for servers that mix read and write tools; union with `idempotent` |
+| `trust_annotations` | bool | `false` | Also memoize tools this server marks read-only via the MCP `readOnlyHint` annotation. Annotations are self-declared by the server — enable only for servers you trust to describe their tools honestly |
 
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 

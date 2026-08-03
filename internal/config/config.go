@@ -717,6 +717,15 @@ type ToolConfig struct {
 	// memoize, for servers that mix read and write tools. Union with Idempotent.
 	IdempotentTools []string `toml:"idempotent_tools"`
 
+	// TrustAnnotations extends memoization eligibility to tools this server
+	// itself marks read-only via the MCP readOnlyHint annotation. Off by
+	// default: the MCP spec treats annotations as untrusted hints, so trusting
+	// them is an explicit per-server operator decision — "I trust this
+	// server's self-description". Union with Idempotent/IdempotentTools.
+	// Only readOnlyHint qualifies (idempotentHint still permits state-changing
+	// first calls, which memoization must never skip).
+	TrustAnnotations bool `toml:"trust_annotations"`
+
 	// EnvPassthrough names additional parent-process environment variables to
 	// forward into this stdio server's subprocess, on top of the built-in
 	// non-secret allowlist and the global [mcp] env_passthrough. Secret-bearing

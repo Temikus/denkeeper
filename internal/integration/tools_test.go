@@ -404,12 +404,13 @@ func TestTools_IdempotentFieldsRoundTrip(t *testing.T) {
 	h := toolHarness(t)
 
 	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools", map[string]any{
-		"name":             "echo-tool",
-		"transport":        "sse",
-		"url":              ts.URL,
-		"allow_loopback":   true,
-		"idempotent":       true,
-		"idempotent_tools": []string{"echo"},
+		"name":              "echo-tool",
+		"transport":         "sse",
+		"url":               ts.URL,
+		"allow_loopback":    true,
+		"idempotent":        true,
+		"idempotent_tools":  []string{"echo"},
+		"trust_annotations": true,
 	}))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("add tool: status = %d; body: %s", rec.Code, rec.Body.String())
@@ -427,14 +428,18 @@ func TestTools_IdempotentFieldsRoundTrip(t *testing.T) {
 	if tools, ok := resp["idempotent_tools"].([]any); !ok || len(tools) != 1 || tools[0] != "echo" {
 		t.Errorf("idempotent_tools after POST = %v, want [echo]", resp["idempotent_tools"])
 	}
+	if resp["trust_annotations"] != true {
+		t.Errorf("trust_annotations after POST = %v, want true", resp["trust_annotations"])
+	}
 
 	// PUT carrying the fields must preserve them.
 	rec = h.Do(h.AuthedRequest(http.MethodPut, "/api/v1/tools/echo-tool", map[string]any{
-		"transport":        "sse",
-		"url":              ts.URL,
-		"allow_loopback":   true,
-		"idempotent":       true,
-		"idempotent_tools": []string{"echo"},
+		"transport":         "sse",
+		"url":               ts.URL,
+		"allow_loopback":    true,
+		"idempotent":        true,
+		"idempotent_tools":  []string{"echo"},
+		"trust_annotations": true,
 	}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update tool: status = %d; body: %s", rec.Code, rec.Body.String())
@@ -447,5 +452,8 @@ func TestTools_IdempotentFieldsRoundTrip(t *testing.T) {
 	}
 	if tools, ok := resp["idempotent_tools"].([]any); !ok || len(tools) != 1 || tools[0] != "echo" {
 		t.Errorf("idempotent_tools after PUT = %v, want [echo]", resp["idempotent_tools"])
+	}
+	if resp["trust_annotations"] != true {
+		t.Errorf("trust_annotations after PUT = %v, want true", resp["trust_annotations"])
 	}
 }

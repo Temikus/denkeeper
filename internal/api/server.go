@@ -1970,6 +1970,9 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		if len(cfg.IdempotentTools) > 0 {
 			resp["idempotent_tools"] = cfg.IdempotentTools
 		}
+		if cfg.TrustAnnotations {
+			resp["trust_annotations"] = true
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2054,6 +2057,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		AllowLoopback      bool              `json:"allow_loopback"`
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
+		TrustAnnotations   bool              `json:"trust_annotations"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2080,6 +2084,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		AllowLoopback:      body.AllowLoopback,
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
+		TrustAnnotations:   body.TrustAnnotations,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -2126,6 +2131,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		AllowLoopback      bool              `json:"allow_loopback"`
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
+		TrustAnnotations   bool              `json:"trust_annotations"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2148,6 +2154,7 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		AllowLoopback:      body.AllowLoopback,
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
+		TrustAnnotations:   body.TrustAnnotations,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {

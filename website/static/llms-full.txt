@@ -257,6 +257,7 @@ MCP tool server definitions.
     disabled_tools = []              # MCP tool names to exclude from LLM
     idempotent = false               # memoize identical calls within one turn (only for all-read-only servers)
     idempotent_tools = []            # per-tool memoization opt-in for mixed read/write servers
+    trust_annotations = false        # also memoize tools the server marks readOnlyHint (trusts server self-description)
     env_passthrough = []             # extra parent env vars to forward (stdio); DENKEEPER_* always filtered
 
 ### [mcp]

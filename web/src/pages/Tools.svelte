@@ -30,6 +30,7 @@
   let toolAllowLoopback = false
   let toolIdempotent = false
   let toolIdempotentTools = [] // per-tool list (TOML-managed); preserved on edit so PUT doesn't drop it
+  let toolTrustAnnotations = false
   let addingTool = false
   let loadingToolConfig = false
 
@@ -274,6 +275,7 @@
     toolAllowLoopback = false
     toolIdempotent = false
     toolIdempotentTools = []
+    toolTrustAnnotations = false
   }
 
   function openAddToolForm() {
@@ -309,6 +311,7 @@
       toolAllowLoopback = !!info.allow_loopback
       toolIdempotent = !!info.idempotent
       toolIdempotentTools = info.idempotent_tools || []
+      toolTrustAnnotations = !!info.trust_annotations
     } catch (e) {
       error = e.message
       showToolForm = false
@@ -353,6 +356,7 @@
     if (toolAllowLoopback) cfg.allow_loopback = true
     if (toolIdempotent) cfg.idempotent = true
     if (toolIdempotentTools.length > 0) cfg.idempotent_tools = toolIdempotentTools
+    if (toolTrustAnnotations) cfg.trust_annotations = true
     return cfg
   }
 
@@ -665,6 +669,19 @@
           </div>
           <label class="switch">
             <input type="checkbox" bind:checked={toolIdempotent} aria-label="Idempotent" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+        <div class="unsafe-toggle-row">
+          <div class="unsafe-toggle-text">
+            <span class="unsafe-toggle-title">Trust server annotations</span>
+            <span class="unsafe-toggle-desc">
+              Also cache tools this server itself marks read-only (MCP readOnlyHint). Annotations are
+              self-declared by the server &mdash; only enable for servers you trust to describe their tools honestly.
+            </span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" bind:checked={toolTrustAnnotations} aria-label="Trust server annotations" />
             <span class="switch-slider"></span>
           </label>
         </div>

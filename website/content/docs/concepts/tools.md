@@ -36,7 +36,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 
 Models occasionally repeat a tool call with byte-identical arguments in the same turn. For tools declared *idempotent*, the second identical call returns the first call's cached result instead of re-executing — skipping the tool latency and, on supervised agents, the approval round-trip (the original call already passed approval, and a cache hit executes nothing). The cache lives for a single message turn.
 
-The built-in `web_fetch`, `web_search`, `kv_get`, and `kv_list` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry — never inferred from server-supplied MCP annotations. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
+The built-in `web_fetch`, `web_search`, `kv_get`, and `kv_list` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry. Server-supplied MCP annotations are never trusted by default, but `trust_annotations = true` extends eligibility to tools the server marks with `readOnlyHint` — an explicit per-server statement that you trust its self-description. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
 
 ## Tool calls and permissions
 
