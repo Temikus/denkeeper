@@ -78,10 +78,8 @@ func (e *LLMError) Retryable() bool {
 // LLMErrors are retryable based on their status code; other network/unknown
 // errors are assumed retryable.
 //
-// It doubles as the test for whether an error implicates the upstream
-// provider's health (429/5xx/network) versus the caller or request itself
-// (cancellation, 4xx client errors) — provider-internal state such as
-// sticky-routing preferences should only be discarded for the former.
+// For the distinct question of whether an error implicates the upstream
+// provider's health, use IsUpstreamError.
 func IsRetryable(err error) bool {
 	if errors.Is(err, ErrStreamIdleTimeout) {
 		return true
@@ -101,6 +99,21 @@ func IsRetryable(err error) bool {
 		return llmErr.Retryable()
 	}
 	return true // network error or unknown — assume retryable
+}
+
+// IsUpstreamError reports whether err implicates the upstream provider's
+// health — 429/5xx server errors, network faults, and stream stalls or
+// truncation — as opposed to the caller or the request itself (context
+// cancellation, 4xx client errors). Provider-internal state such as
+// sticky-routing preferences should only be discarded when this is true.
+//
+// It currently shares IsRetryable's truth table by delegation: every error
+// worth retrying today is also one that implicates the upstream. The two
+// questions are distinct (e.g. a 408 could be retryable without indicting
+// upstream health); when they diverge, inline the classification here and
+// update the truth-table tests — see issue #200.
+func IsUpstreamError(err error) bool {
+	return IsRetryable(err)
 }
 
 // IsRateLimit returns true if err is specifically a 429 rate-limit error.

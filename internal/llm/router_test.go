@@ -987,26 +987,44 @@ func TestModelSupportsTools(t *testing.T) {
 // Retry classification: context errors
 // ---------------------------------------------------------------------------
 
+// retryClassificationCases pins the truth table shared by IsRetryable and
+// IsUpstreamError. Both predicates answer every case identically today (see
+// IsUpstreamError's delegation), so one want column serves both — when they
+// diverge, split it into wantRetry/wantUpstream and the failing test forces
+// the divergence to be written down. Shared deliberately: a case added for
+// one predicate cannot silently skip the other.
+var retryClassificationCases = []struct {
+	name string
+	err  error
+	want bool
+}{
+	{"bare canceled", context.Canceled, false},
+	{"bare deadline", context.DeadlineExceeded, false},
+	{"wrapped canceled", fmt.Errorf("sending request: %w", context.Canceled), false},
+	{"wrapped deadline", fmt.Errorf("sending stream request: %w", context.DeadlineExceeded), false},
+	{"bare idle timeout", ErrStreamIdleTimeout, true},
+	{"wrapped idle timeout", fmt.Errorf("reading stream: %w", ErrStreamIdleTimeout), true},
+	{"bare stream truncated", ErrStreamTruncated, true},
+	{"wrapped stream truncated", fmt.Errorf("LLM completion: %w", ErrStreamTruncated), true},
+	{"llm 400", &LLMError{StatusCode: 400, Message: "bad request"}, false},
+	{"llm 401", &LLMError{StatusCode: 401, Message: "unauthorized"}, false},
+	{"llm 429", &LLMError{StatusCode: 429, Message: "rate limited"}, true},
+	{"llm 503", &LLMError{StatusCode: 503, Message: "down"}, true},
+	{"plain network error", errors.New("connection refused"), true},
+}
+
 func TestIsRetryable_ContextErrors(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"bare canceled", context.Canceled, false},
-		{"bare deadline", context.DeadlineExceeded, false},
-		{"wrapped canceled", fmt.Errorf("sending request: %w", context.Canceled), false},
-		{"wrapped deadline", fmt.Errorf("sending stream request: %w", context.DeadlineExceeded), false},
-		{"wrapped idle timeout", fmt.Errorf("reading stream: %w", ErrStreamIdleTimeout), true},
-		{"bare stream truncated", ErrStreamTruncated, true},
-		{"wrapped stream truncated", fmt.Errorf("LLM completion: %w", ErrStreamTruncated), true},
-		{"llm 503", &LLMError{StatusCode: 503, Message: "down"}, true},
-		{"llm 401", &LLMError{StatusCode: 401, Message: "unauthorized"}, false},
-		{"plain network error", errors.New("connection refused"), true},
-	}
-	for _, c := range cases {
+	for _, c := range retryClassificationCases {
 		if got := IsRetryable(c.err); got != c.want {
 			t.Errorf("%s: IsRetryable = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestIsUpstreamError_MatchesIsRetryable(t *testing.T) {
+	for _, c := range retryClassificationCases {
+		if got := IsUpstreamError(c.err); got != c.want {
+			t.Errorf("%s: IsUpstreamError = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
