@@ -19,22 +19,26 @@ type skillGetInput struct {
 }
 
 type skillCreateInput struct {
-	Agent       string   `json:"agent" jsonschema:"Agent name"`
-	Name        string   `json:"name" jsonschema:"Skill name"`
-	Description string   `json:"description,omitempty" jsonschema:"Skill description"`
-	Version     string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
-	Triggers    []string `json:"triggers,omitempty" jsonschema:"Trigger keywords"`
-	Body        string   `json:"body" jsonschema:"Skill content/instructions"`
+	Agent         string   `json:"agent" jsonschema:"Agent name"`
+	Name          string   `json:"name" jsonschema:"Skill name"`
+	Description   string   `json:"description,omitempty" jsonschema:"Skill description"`
+	Version       string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
+	Triggers      []string `json:"triggers,omitempty" jsonschema:"Trigger keywords"`
+	Body          string   `json:"body" jsonschema:"Skill content/instructions"`
+	MaxToolRounds int      `json:"max_tool_rounds,omitempty" jsonschema:"Optional cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 = no cap. Only lowers the agent's budget, never raises it."`
+	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"Optional tool names this skill depends on (frontmatter [requires] tools)."`
 }
 
 type skillUpdateInput struct {
-	Agent       string   `json:"agent" jsonschema:"Agent name"`
-	Name        string   `json:"name" jsonschema:"Skill name to update"`
-	NewName     *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
-	Description *string  `json:"description,omitempty" jsonschema:"New description"`
-	Version     *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
-	Triggers    []string `json:"triggers,omitempty" jsonschema:"New triggers"`
-	Body        *string  `json:"body,omitempty" jsonschema:"New content"`
+	Agent         string   `json:"agent" jsonschema:"Agent name"`
+	Name          string   `json:"name" jsonschema:"Skill name to update"`
+	NewName       *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
+	Description   *string  `json:"description,omitempty" jsonschema:"New description"`
+	Version       *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
+	Triggers      []string `json:"triggers,omitempty" jsonschema:"New triggers"`
+	Body          *string  `json:"body,omitempty" jsonschema:"New content"`
+	MaxToolRounds *int     `json:"max_tool_rounds,omitempty" jsonschema:"New cap on tool-call ROUNDS (not calls); 0 removes the cap. Omit to keep current."`
+	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"New required tool names; omit to keep current, pass [] to clear."`
 }
 
 type skillDeleteInput struct {
@@ -160,7 +164,7 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError(fmt.Sprintf("skill %q already exists", input.Name)), nil, nil
 	}
 
-	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body)
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.deps.Logger, payload, s.skillMaxBytes()); err != nil {
 		return toolError("creating skill: " + err.Error()), nil, nil
 	}
@@ -206,7 +210,7 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
 	if isRename {
 		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.deps.Logger, input.Name, payload, s.skillMaxBytes()); err != nil {

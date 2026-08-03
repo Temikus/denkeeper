@@ -24,7 +24,7 @@ func (s *Server) skillMaxBytes() int {
 
 // handleGetSkill godoc
 // @Summary Get a skill by name
-// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent.
+// @Description Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds and requires_tools are present only when the skill declares them.
 // @Tags skills
 // @Produce json
 // @Security BearerAuth
@@ -60,6 +60,14 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 	if len(sk.SubFileNames) > 0 {
 		resp["sub_files"] = sk.SubFileNames
 	}
+	// Present only on skills that declare them, where a read-modify-write must
+	// carry them back.
+	if sk.MaxToolRounds > 0 {
+		resp["max_tool_rounds"] = sk.MaxToolRounds
+	}
+	if len(sk.Requires.Tools) > 0 {
+		resp["requires_tools"] = sk.Requires.Tools
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -69,6 +77,12 @@ type skillCreateInput struct {
 	Version     string   `json:"version"`
 	Triggers    []string `json:"triggers"`
 	Body        string   `json:"body"`
+	// MaxToolRounds optionally caps tool-call ROUNDS (not calls) for turns this
+	// skill drives. 0 = no cap; it only lowers the agent's budget.
+	MaxToolRounds int `json:"max_tool_rounds"`
+	// RequiresTools declares the tool names this skill depends on (frontmatter
+	// [requires] tools).
+	RequiresTools []string `json:"requires_tools"`
 }
 
 // handleCreateSkill godoc
@@ -122,7 +136,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		version = "1.0.0"
 	}
 
-	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body)
+	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
 	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.logger, payload, s.skillMaxBytes()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
@@ -143,6 +157,12 @@ type skillUpdateInput struct {
 	Version     *string  `json:"version"`
 	Triggers    []string `json:"triggers"`
 	Body        *string  `json:"body"`
+	// MaxToolRounds sets the tool-call ROUND cap; 0 removes it. Omitted keeps
+	// whatever the skill already carries.
+	MaxToolRounds *int `json:"max_tool_rounds"`
+	// RequiresTools replaces the declared tool set; [] clears it. Omitted keeps
+	// whatever the skill already carries.
+	RequiresTools []string `json:"requires_tools"`
 }
 
 // handleUpdateSkill godoc
@@ -205,7 +225,7 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body)
+	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
 	if isRename {
 		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.logger, skillName, payload, s.skillMaxBytes()); err != nil {

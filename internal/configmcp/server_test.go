@@ -2168,7 +2168,7 @@ func TestSkillUpdate_Rename_Success(t *testing.T) {
 			t.Fatalf("creating skills dir: %v", err)
 		}
 		// Write the old skill file to disk so rename can remove it.
-		oldPayload := configmcp.BuildSkillPayload("old-skill", "Original", "1.0", nil, "# Old content")
+		oldPayload := configmcp.BuildSkillPayload("old-skill", "Original", "1.0", nil, "# Old content", 0, nil)
 		if err := os.WriteFile(filepath.Join(d.AgentSkillsDir, "old-skill.md"), []byte(oldPayload+"\n"), 0600); err != nil {
 			t.Fatalf("writing old skill file: %v", err)
 		}

@@ -21,7 +21,7 @@ func ioTestLogger() *slog.Logger {
 // name writes "<name>.md" inside the skills directory.
 func TestApplySkillCreate_PersistsInsideRoot(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
-	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body")
+	payload := configmcp.BuildSkillPayload("greet", "desc", "1.0.0", nil, "hello body", 0, nil)
 
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("create failed: %v", err)
@@ -36,7 +36,7 @@ func TestApplySkillCreate_PersistsInsideRoot(t *testing.T) {
 func TestApplySkillCreate_SizeCapRejects(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
 	big := strings.Repeat("x", 5000)
-	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, big)
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, big, 0, nil)
 
 	err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {
 		t.Error("appendSkill must not be called when the payload is over the cap")
@@ -53,7 +53,7 @@ func TestApplySkillCreate_SizeCapRejects(t *testing.T) {
 // (and the unlimited maxBytes<=0 case) is written normally.
 func TestApplySkillCreate_SizeCapAllowsUnderLimit(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
-	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "small body")
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "small body", 0, nil)
 
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 1<<20); err != nil {
 		t.Fatalf("under-limit create failed: %v", err)
@@ -67,7 +67,7 @@ func TestApplySkillCreate_SizeCapAllowsUnderLimit(t *testing.T) {
 // renamed away (or cleaned up), leaving only the final "<name>.md".
 func TestApplySkillCreate_NoTempLeftBehind(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "skills")
-	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "body")
+	payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, "body", 0, nil)
 	if err := configmcp.ApplySkillCreate(dir, func(skill.Skill) {}, ioTestLogger(), payload, 0); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestApplySkillCreate_ConfinedToRoot(t *testing.T) {
 	base := t.TempDir()
 	skillsDir := filepath.Join(base, "skills")
 
-	payload := configmcp.BuildSkillPayload("../escape", "", "", nil, "evil body")
+	payload := configmcp.BuildSkillPayload("../escape", "", "", nil, "evil body", 0, nil)
 
 	err := configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {
 		t.Error("appendSkill must not be called when the disk write is rejected")
@@ -122,7 +122,7 @@ func TestApplySkillUpdate_ConcurrentSameNameNoCorruption(t *testing.T) {
 	for i := 0; i < writers; i++ {
 		body := "body-" + strings.Repeat(string(rune('a'+i)), 2000)
 		valid[body] = struct{}{}
-		payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, body)
+		payload := configmcp.BuildSkillPayload("greet", "", "1.0.0", nil, body, 0, nil)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
