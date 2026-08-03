@@ -1653,7 +1653,7 @@ func (s *Server) handleResolveApproval(approved bool) http.HandlerFunc {
 
 // handleListAutoApprove godoc
 // @Summary List auto-approve rules
-// @Description Returns all auto-approve rules, optionally filtered by agent name.
+// @Description Returns all auto-approve rules (session, permanent and config scopes), optionally filtered by agent name. Config-scoped rules come from the server TOML and carry an empty id — they cannot be deleted via this API.
 // @Tags approvals
 // @Produce json
 // @Security BearerAuth
@@ -1679,7 +1679,7 @@ func (s *Server) handleListAutoApprove(w http.ResponseWriter, r *http.Request) {
 
 // handleCreateAutoApprove godoc
 // @Summary Create auto-approve rule
-// @Description Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'.
+// @Description Creates a new auto-approve rule for a specific agent and tool. Scope can be 'session' (requires conversation_id) or 'permanent'. The third scope, 'config', is declared in the server TOML (agents.auto_approve_tools) and is rejected here with 400.
 // @Tags approvals
 // @Accept json
 // @Produce json
@@ -1726,6 +1726,13 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		writeJSON(w, http.StatusCreated, rule)
+	case string(approval.ScopeConfig):
+		// Config rules are TOML-owned by design: keeping the write path
+		// file-only is what makes them code-reviewable and un-weakenable at
+		// runtime. Listing them is fine; creating one here is not.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "config scope is managed in TOML (agents.auto_approve_tools)",
+		})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope must be 'session' or 'permanent'"})
 	}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -529,6 +530,20 @@ type AgentInstanceConfig struct {
 	// BrowserURLAllowlist overrides the global browser URL allowlist for this agent.
 	// If set, only these domains are reachable. Supports wildcards: "*.example.com".
 	BrowserURLAllowlist []string `toml:"browser_url_allowlist"`
+
+	// AutoApproveTools lists MCP tool names this agent may call without any
+	// approval — the whole chain (auto-approve → supervisor → human) is
+	// skipped. These "config"-scoped rules are checked before session and
+	// permanent rules, survive DB resets, and ship with the agent definition.
+	// They are read-only at runtime: the REST API rejects scope "config" on
+	// create and config rules carry no ID to delete, so changing the list
+	// means editing this file and reloading.
+	//
+	// Only meaningful when session_tier = "supervised" (autonomous agents skip
+	// approval entirely, restricted agents have no tool loop). Setting it on
+	// another tier is allowed but inert, so the list need not be re-entered
+	// when a tier is flipped via PATCH /api/v1/agents/{name}.
+	AutoApproveTools []string `toml:"auto_approve_tools"`
 
 	// CostLimitSoft overrides the global cost_limit_soft for this agent.
 	// Nil means inherit global. 0 means disabled.
@@ -2145,6 +2160,10 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 			return nil, err
 		}
 
+		if err := validateAutoApproveTools(a); err != nil {
+			return nil, err
+		}
+
 		if err := validateAgentBindings(a, wildcards); err != nil {
 			return nil, err
 		}
@@ -2155,6 +2174,44 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 	}
 
 	return names, nil
+}
+
+// validateAutoApproveTools checks an agent's auto_approve_tools entries.
+//
+// Only syntax is checked: MCP tool names are known after servers connect, and
+// a remote server may connect late or be temporarily down, so config load
+// cannot verify that a name exists. Unknown names are reconciled against the
+// advertised tool set at wiring time and logged as warnings there — never
+// dropped from the rule set, never fatal. Note that ValidResourceName is
+// deliberately not applied: MCP tool names legitimately contain hyphens
+// (e.g. "find-completed-tasks").
+func validateAutoApproveTools(a AgentInstanceConfig) error {
+	if len(a.AutoApproveTools) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(a.AutoApproveTools))
+	for i, name := range a.AutoApproveTools {
+		if name == "" {
+			return fmt.Errorf("config: agent %q: auto_approve_tools[%d]: tool name must not be empty", a.Name, i)
+		}
+		if strings.ContainsFunc(name, unicode.IsSpace) {
+			return fmt.Errorf("config: agent %q: auto_approve_tools[%d]: tool name %q must not contain whitespace", a.Name, i, name)
+		}
+		if seen[name] {
+			return fmt.Errorf("config: agent %q: auto_approve_tools[%d]: duplicate tool name %q", a.Name, i, name)
+		}
+		seen[name] = true
+	}
+
+	// Only flag an explicitly-set non-supervised tier: an empty session_tier
+	// inherits the global [session] tier, which may well be "supervised".
+	if a.SessionTier != "" && a.SessionTier != "supervised" {
+		slog.Info("auto_approve_tools set on a non-supervised agent — the list is dormant until the tier is supervised",
+			"agent", a.Name, "session_tier", a.SessionTier, "tools", len(a.AutoApproveTools))
+	}
+
+	return nil
 }
 
 // validateAgentBindings checks adapter bindings for a single agent.

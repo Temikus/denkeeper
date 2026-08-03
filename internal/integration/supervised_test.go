@@ -25,6 +25,14 @@ import (
 // tool wired in, for testing the approval flow via direct chat (no channels).
 func supervisedHarness(t *testing.T, responses []*llm.ChatResponse) *Harness {
 	t.Helper()
+	return supervisedHarnessWithConfigRules(t, responses, nil)
+}
+
+// supervisedHarnessWithConfigRules is supervisedHarness plus config-scoped
+// ("config") auto-approve rules, as the TOML agents.auto_approve_tools field
+// would supply at startup.
+func supervisedHarnessWithConfigRules(t *testing.T, responses []*llm.ChatResponse, rules map[string][]string) *Harness {
+	t.Helper()
 
 	ts := startTestMCPServer(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -43,8 +51,9 @@ func supervisedHarness(t *testing.T, responses []*llm.ChatResponse) *Harness {
 		Agents: []agentSetup{
 			{Name: "default", Tier: "supervised"},
 		},
-		ToolManager: toolMgr,
-		Responses:   responses,
+		ToolManager:      toolMgr,
+		Responses:        responses,
+		AutoApproveTools: rules,
 	})
 }
 
@@ -195,6 +204,36 @@ func TestSupervised_AutoApprovePermanent(t *testing.T) {
 	}
 
 	// Chat — tool should execute immediately without manual approval.
+	chatRec := h.Do(h.AuthedRequest("POST", "/api/v1/chat",
+		map[string]string{"message": "please call echo"}))
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
+	}
+
+	var chatResp map[string]string
+	DecodeJSON(t, chatRec, &chatResp)
+	if !strings.Contains(chatResp["response"], "supervised-test") {
+		t.Fatalf("expected response to contain 'supervised-test', got: %s", chatResp["response"])
+	}
+
+	// No pending approvals should remain.
+	listRec := h.Do(h.AuthedRequest("GET", "/api/v1/approvals?status=pending", nil))
+	var pending []map[string]any
+	_ = json.NewDecoder(listRec.Body).Decode(&pending)
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending approvals, got %d", len(pending))
+	}
+
+	if h.MockLLM.CallCount() != 2 {
+		t.Errorf("expected 2 LLM calls, got %d", h.MockLLM.CallCount())
+	}
+}
+
+func TestSupervised_AutoApproveConfig(t *testing.T) {
+	// The rule comes from TOML, not from any runtime API call.
+	h := supervisedHarnessWithConfigRules(t, supervisedToolCallResponses(),
+		map[string][]string{"default": {"echo"}})
+
 	chatRec := h.Do(h.AuthedRequest("POST", "/api/v1/chat",
 		map[string]string{"message": "please call echo"}))
 	if chatRec.Code != http.StatusOK {

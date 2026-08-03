@@ -156,7 +156,7 @@
 
 <!-- Auto-Approve Rules Section -->
 <h2 class="section-title">Auto-Approve Rules</h2>
-<p class="section-desc">Rules that automatically approve tool calls without prompting. Timed rules expire after 15 minutes; permanent rules survive restarts.</p>
+<p class="section-desc">Rules that automatically approve tool calls without prompting. Timed rules expire after 15 minutes; permanent rules survive restarts; config rules come from an agent's <code>auto_approve_tools</code> in the server TOML and can only be changed there.</p>
 
 <ErrorBanner message={autoError} />
 
@@ -174,12 +174,14 @@
         <tr>
           <td class="tool-name-cell"><code>{rule.tool_name}</code></td>
           <td>{rule.agent_name}</td>
-          <td><span class="scope-badge" class:session={rule.scope === 'session'}>{rule.scope}</span></td>
+          <td><span class="scope-badge" class:session={rule.scope === 'session'} class:config={rule.scope === 'config'}>{rule.scope}</span></td>
           <td class="date">{fmtDate(rule.created_at)}</td>
           <td class="muted">{rule.created_by || '—'}</td>
           <td class="actions">
             {#if rule.scope === 'permanent'}
               <button class="btn-bad" onclick={() => revokeRule(rule.id)}>Revoke</button>
+            {:else if rule.scope === 'config'}
+              <span class="muted">TOML-managed</span>
             {:else}
               <span class="muted">session only</span>
             {/if}
@@ -261,10 +263,14 @@
 
   .section-title { font-size: 17px; font-weight: 600; margin-top: 40px; margin-bottom: 6px; }
   .section-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+  .section-desc code { font-size: 12px; }
   .tool-name-cell code { font-size: 12px; }
   .scope-badge {
     display: inline-block;
     padding: 2px 8px;
+    /* Transparent border keeps every badge the same size, so the outlined
+       config variant lines up with the filled ones. */
+    border: 1px solid transparent;
     border-radius: 3px;
     font-size: 11px;
     font-weight: 600;
@@ -273,6 +279,7 @@
     color: var(--accent);
   }
   .scope-badge.session { background: rgba(100,100,100,0.1); color: var(--text-muted); }
+  .scope-badge.config  { background: none; border-color: var(--accent); color: var(--accent); }
   .muted { color: var(--text-muted); font-size: 12px; }
 
   .add-rule-area { margin-top: 12px; }

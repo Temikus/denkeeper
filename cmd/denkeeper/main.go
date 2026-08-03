@@ -1202,6 +1202,42 @@ func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*ag
 	}
 }
 
+// configAutoApproveRules collects the per-agent auto_approve_tools lists into
+// the agent → tools map that approval.Manager.SetConfigRules consumes.
+func configAutoApproveRules(cfg *config.Config) map[string][]string {
+	rules := make(map[string][]string, len(cfg.Agents))
+	for _, ac := range cfg.Agents {
+		if len(ac.AutoApproveTools) == 0 {
+			continue
+		}
+		rules[ac.Name] = ac.AutoApproveTools
+	}
+	return rules
+}
+
+// warnUnadvertisedAutoApprove logs a warning for every auto_approve_tools entry
+// that no currently-advertised tool matches. A typo'd name is inert — the real
+// tool keeps paying supervisor latency forever — so it must be loud. It is
+// never fatal and the rule is never dropped: a remote MCP server may still be
+// connecting, and matching happens by name at call time, so the rule starts
+// working the moment the tool appears.
+func warnUnadvertisedAutoApprove(agentName string, want, advertised []string, logger *slog.Logger) {
+	if len(want) == 0 {
+		return
+	}
+	known := make(map[string]bool, len(advertised))
+	for _, name := range advertised {
+		known[name] = true
+	}
+	for _, name := range want {
+		if known[name] {
+			continue
+		}
+		logger.Warn("auto_approve_tools entry does not match any advertised tool (typo, or the server has not connected yet) — the rule is kept",
+			"agent", agentName, "tool", name)
+	}
+}
+
 func buildAllAgents(ctx context.Context, agents []config.AgentInstanceConfig, abc agentBuildCtx) (map[string]*agent.Engine, []agent.Binding, error) {
 	engines := make(map[string]*agent.Engine, len(agents))
 	var bindings []agent.Binding
@@ -1306,6 +1342,8 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	}
 
 	agentRouter.SetTools(agentToolMgr.ToolDefs)
+
+	warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, agentToolMgr.ToolNames(), abc.logger)
 
 	wireNudgeAndReviewer(ctx, ac, e, p, abc)
 
@@ -1624,7 +1662,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		ModelDetailLister: a.dispatcher.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
-		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.logger),
+		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.approvalManager, a.logger),
 		RestartFunc:       selfRestartFunc,
 		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 			return buildAgentEngine(ctx, ac, a.abc)
@@ -1899,6 +1937,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// TOML-declared auto-approve rules. Applied after the build loop so every
+	// agent's tool manager is populated (the per-agent reconciliation warning
+	// already ran inside buildAgentEngine).
+	st.approvalManager.SetConfigRules(ctx, configAutoApproveRules(cfg))
+
 	wireSupervisors(cfg.Agents, engines, logger)
 
 	// Re-create dispatcher with the fully wired engines, bindings, and channels.
@@ -1996,13 +2039,17 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 // and overwrites cfg in place, allowing hot-reloading of most settings.
 // Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
 // re-applied to live engines so they don't go stale after a reload.
-func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, logger *slog.Logger) func() error {
+func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, approvals *approval.Manager, logger *slog.Logger) func() error {
 	return func() error {
 		newCfg, err := config.Load(path)
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
 		*cfg = *newCfg
+
+		// Re-apply the TOML auto-approve policy wholesale: a reload that
+		// narrows a list must narrow the effective rules too.
+		approvals.SetConfigRules(context.Background(), configAutoApproveRules(cfg))
 
 		for _, ac := range cfg.Agents {
 			e := dispatcher.Agent(ac.Name)
@@ -2013,6 +2060,7 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 			e.SetMaxToolRounds(ac.MaxToolRounds)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
+			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)
 		}
 
 		logger.Info("config reloaded from disk", "path", path)

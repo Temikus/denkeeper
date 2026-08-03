@@ -191,6 +191,11 @@ type HarnessOpts struct {
 	// observe (or assert the absence of) adapter Send calls should provide a
 	// recording mock here.
 	Adapters []adapter.Adapter
+
+	// AutoApproveTools seeds config-scoped ("config") auto-approve rules,
+	// agent name → tool names, standing in for the [[agents]]
+	// auto_approve_tools TOML field that cmd/denkeeper wires at startup.
+	AutoApproveTools map[string][]string
 }
 
 type agentSetup struct {
@@ -249,6 +254,9 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		t.Fatalf("creating approval store: %v", err)
 	}
 	approvalMgr := approval.NewManager(approvalStore, logger)
+	if len(opts.AutoApproveTools) > 0 {
+		approvalMgr.SetConfigRules(context.Background(), opts.AutoApproveTools)
+	}
 
 	kvStore, err := kv.NewInMemoryStore()
 	if err != nil {

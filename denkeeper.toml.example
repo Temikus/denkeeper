@@ -112,6 +112,13 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # adapters     = ["telegram"]
 # # llm_model  = "anthropic/claude-sonnet-4-20250514"   # optional override
 # # session_tier = "supervised"                          # optional override
+# #
+# # Tools listed here skip the entire approval chain (auto-approve rules →
+# # supervisor → human) for this agent. Only meaningful on the "supervised"
+# # tier. Checked before session and permanent rules, survives database
+# # resets, and is read-only at runtime — changing it means editing this file
+# # and reloading (POST /api/v1/server/reload), never the API or chat buttons.
+# # auto_approve_tools = ["run_javascript", "find-completed-tasks"]
 
 # [[agents]]
 # name         = "work-assistant"
