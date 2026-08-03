@@ -505,7 +505,64 @@ describe('ServerConfig page', () => {
     await waitFor(() => {
       expect(screen.getByText(/between 1 and 100000/)).toBeInTheDocument()
     })
+    expect(input).toHaveAttribute('aria-invalid', 'true')
     expect(patched).toBe(false)
+  })
+
+  test('web_fetch page size shows Saved confirmation on success', async () => {
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const input = screen.getByLabelText('web_fetch page size')
+    await fireEvent.change(input, { target: { value: '24000' } })
+
+    await waitFor(() => {
+      expect(screen.getByText('Saved')).toBeInTheDocument()
+    })
+  })
+
+  test('web_fetch page size skips the PATCH when the value is unchanged', async () => {
+    let patched = false
+    server.use(
+      http.patch('/api/v1/server/config', async () => {
+        patched = true
+        return HttpResponse.json({ status: 'updated' })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    // Re-committing the current value (spinner up then down, blur) must not
+    // trigger an atomic TOML rewrite on the server.
+    const input = screen.getByLabelText('web_fetch page size')
+    await fireEvent.change(input, { target: { value: '8000' } })
+
+    await new Promise((r) => setTimeout(r, 600))
+    expect(patched).toBe(false)
+  })
+
+  test('web_fetch page size restores the persisted value when the save fails', async () => {
+    server.use(
+      http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'boom' }, { status: 500 }),
+      ),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const input = screen.getByLabelText('web_fetch page size')
+    await fireEvent.change(input, { target: { value: '24000' } })
+
+    // The rejected value must not linger on screen as though it were saved.
+    await waitFor(() => {
+      expect(input.value).toBe('8000')
+    })
   })
 
   test('Deterministic compute toggle PATCHes script_enabled', async () => {
