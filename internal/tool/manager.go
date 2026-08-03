@@ -75,6 +75,11 @@ type serverConn struct {
 	// Tool filtering — tools in disabledSet are excluded from the LLM payload.
 	disabledSet map[string]bool
 
+	// readOnlyHinted records tools whose MCP readOnlyHint annotation was true
+	// at discovery time. Consulted by IsIdempotent only when the server's
+	// config sets trust_annotations; repopulated on restart/re-register.
+	readOnlyHinted map[string]bool
+
 	// OAuth state (nil for non-OAuth tools).
 	oauthHandler oauthHandler
 }
@@ -595,6 +600,13 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 			continue
 		}
 
+		if tool.Annotations != nil && tool.Annotations.ReadOnlyHint {
+			if sc.readOnlyHinted == nil {
+				sc.readOnlyHinted = make(map[string]bool)
+			}
+			sc.readOnlyHinted[tool.Name] = true
+		}
+
 		m.toolMap[tool.Name] = sc
 		m.toolDefs = append(m.toolDefs, llm.ToolDef{
 			Type: "function",
@@ -747,11 +759,18 @@ var builtinIdempotentTools = map[string]bool{
 // IsIdempotent reports whether toolName's results may be memoized within a
 // single turn. In-process tools use the built-in allowlist; external MCP
 // tools default to false unless their [tools.*] config opts in via
-// idempotent / idempotent_tools.
+// idempotent / idempotent_tools, or via trust_annotations for tools the
+// server marked readOnlyHint at discovery.
 func (m *Manager) IsIdempotent(toolName string) bool {
 	m.mu.RLock()
 	sc, ok := m.toolMap[toolName]
 	parent := m.parent
+	var hinted bool
+	if ok {
+		// Read under the lock: discoverTools populates the map under m.mu
+		// during restart/re-register.
+		hinted = sc.readOnlyHinted[toolName]
+	}
 	m.mu.RUnlock()
 	if !ok {
 		if parent != nil {
@@ -764,7 +783,10 @@ func (m *Manager) IsIdempotent(toolName string) bool {
 	if sc.transport == "" && sc.command == "" {
 		return builtinIdempotentTools[toolName]
 	}
-	return sc.cfg.IsIdempotentTool(toolName)
+	if sc.cfg.IsIdempotentTool(toolName) {
+		return true
+	}
+	return sc.cfg.TrustAnnotations && hinted
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""

@@ -123,3 +123,42 @@ func TestToolConfigToMap_IdempotentFields(t *testing.T) {
 		t.Errorf("idempotent_tools = %v, want [lookup]", entry["idempotent_tools"])
 	}
 }
+
+func TestIsIdempotent_TrustAnnotations_Hinted(t *testing.T) {
+	m := NewManager(testLogger())
+	sc := &serverConn{name: "docs", transport: "sse",
+		cfg:            config.ToolConfig{Transport: "sse", TrustAnnotations: true},
+		readOnlyHinted: map[string]bool{"docs_search": true}}
+	m.toolMap["docs_search"] = sc
+	m.toolMap["docs_write"] = sc
+
+	if !m.IsIdempotent("docs_search") {
+		t.Error("IsIdempotent(docs_search) = false, want true (readOnlyHint + trust_annotations)")
+	}
+	if m.IsIdempotent("docs_write") {
+		t.Error("IsIdempotent(docs_write) = true, want false (no hint)")
+	}
+}
+
+func TestIsIdempotent_HintIgnoredWithoutTrust(t *testing.T) {
+	m := NewManager(testLogger())
+	sc := &serverConn{name: "docs", transport: "sse",
+		cfg:            config.ToolConfig{Transport: "sse"},
+		readOnlyHinted: map[string]bool{"docs_search": true}}
+	m.toolMap["docs_search"] = sc
+
+	if m.IsIdempotent("docs_search") {
+		t.Error("IsIdempotent = true, want false (readOnlyHint must be ignored without trust_annotations)")
+	}
+}
+
+func TestToolConfigToMap_TrustAnnotations(t *testing.T) {
+	entry := toolConfigToMap(config.ToolConfig{Command: "x"})
+	if _, ok := entry["trust_annotations"]; ok {
+		t.Error("trust_annotations=false must be omitted from TOML")
+	}
+	entry = toolConfigToMap(config.ToolConfig{Command: "x", TrustAnnotations: true})
+	if v, ok := entry["trust_annotations"].(bool); !ok || !v {
+		t.Errorf("trust_annotations = %v, want true", entry["trust_annotations"])
+	}
+}

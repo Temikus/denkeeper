@@ -93,6 +93,9 @@ func toolConfigFilteringToMap(cfg config.ToolConfig, entry map[string]any) {
 	if len(cfg.IdempotentTools) > 0 {
 		entry["idempotent_tools"] = cfg.IdempotentTools
 	}
+	if cfg.TrustAnnotations {
+		entry["trust_annotations"] = true
+	}
 }
 
 func toolConfigOAuthToMap(cfg config.ToolConfig, entry map[string]any) {
