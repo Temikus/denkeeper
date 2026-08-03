@@ -524,6 +524,7 @@ describe('ServerConfig page', () => {
   })
 
   test('web_fetch page size skips the PATCH when the value is unchanged', async () => {
+    vi.useFakeTimers()
     let patched = false
     server.use(
       http.patch('/api/v1/server/config', async () => {
@@ -541,8 +542,11 @@ describe('ServerConfig page', () => {
     const input = screen.getByLabelText('web_fetch page size')
     await fireEvent.change(input, { target: { value: '8000' } })
 
-    await new Promise((r) => setTimeout(r, 600))
+    // Outlast the 400ms debounce on the virtual clock rather than sleeping.
+    await vi.advanceTimersByTimeAsync(600)
     expect(patched).toBe(false)
+
+    vi.useRealTimers()
   })
 
   test('web_fetch page size restores the persisted value when the save fails', async () => {
