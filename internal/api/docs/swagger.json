@@ -4949,7 +4949,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns a single skill's full definition including name, description, version, triggers, body, and owning agent.",
+                "description": "Returns a single skill's full definition including name, description, version, triggers, body, and owning agent. max_tool_rounds and requires_tools are present only when the skill declares them.",
                 "produces": [
                     "application/json"
                 ],
@@ -7213,8 +7213,19 @@
                 "description": {
                     "type": "string"
                 },
+                "max_tool_rounds": {
+                    "description": "MaxToolRounds optionally caps tool-call ROUNDS (not calls) for turns this\nskill drives. 0 = no cap; it only lowers the agent's budget.",
+                    "type": "integer"
+                },
                 "name": {
                     "type": "string"
+                },
+                "requires_tools": {
+                    "description": "RequiresTools declares the tool names this skill depends on (frontmatter\n[requires] tools).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "triggers": {
                     "type": "array",
@@ -7236,8 +7247,19 @@
                 "description": {
                     "type": "string"
                 },
+                "max_tool_rounds": {
+                    "description": "MaxToolRounds sets the tool-call ROUND cap; 0 removes it. Omitted keeps\nwhatever the skill already carries.",
+                    "type": "integer"
+                },
                 "name": {
                     "type": "string"
+                },
+                "requires_tools": {
+                    "description": "RequiresTools replaces the declared tool set; [] clears it. Omitted keeps\nwhatever the skill already carries.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "triggers": {
                     "type": "array",

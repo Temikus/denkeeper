@@ -138,6 +138,58 @@ Body.`)
 	}
 }
 
+func TestParseFile_MaxToolRounds(t *testing.T) {
+	content := []byte(`+++
+name = "inbox-triage"
+description = "Sort new items against an allowlist."
+triggers = ["command:triage"]
+max_tool_rounds = 12
++++
+
+Body.`)
+
+	s, err := ParseFile("capped.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxToolRounds != 12 {
+		t.Errorf("MaxToolRounds = %d, want 12", s.MaxToolRounds)
+	}
+}
+
+func TestParseFile_MaxToolRoundsAbsent_Zero(t *testing.T) {
+	content := []byte(`+++
+name = "uncapped"
++++
+
+Body.`)
+
+	s, err := ParseFile("uncapped.md", content)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if s.MaxToolRounds != 0 {
+		t.Errorf("MaxToolRounds = %d, want 0 (unset)", s.MaxToolRounds)
+	}
+}
+
+func TestParseFile_MaxToolRoundsNegative_Error(t *testing.T) {
+	content := []byte(`+++
+name = "bad-cap"
+max_tool_rounds = -1
++++
+
+Body.`)
+
+	_, err := ParseFile("badcap.md", content)
+	if err == nil {
+		t.Fatal("expected error for negative max_tool_rounds, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_tool_rounds") {
+		t.Errorf("error = %q, want it to name the max_tool_rounds field", err.Error())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // LoadDir tests
 // ---------------------------------------------------------------------------

@@ -132,15 +132,15 @@ func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 }
 
 func TestToolBudgetHint(t *testing.T) {
-	if got, want := toolBudgetHint(50, 1), "\n\n[engine: 49 of 50 tool-call rounds remaining this turn]"; got != want {
+	if got, want := toolBudgetHint(turnToolBudget{maxRounds: 50}, 1), "\n\n[engine: 49 of 50 tool-call rounds remaining this turn]"; got != want {
 		t.Errorf("toolBudgetHint(50, 1) = %q, want %q", got, want)
 	}
 	// Final round reports zero remaining, not a negative number.
-	if got := toolBudgetHint(10, 10); !strings.Contains(got, "0 of 10") {
+	if got := toolBudgetHint(turnToolBudget{maxRounds: 10}, 10); !strings.Contains(got, "0 of 10") {
 		t.Errorf("toolBudgetHint(10, 10) = %q, want to contain %q", got, "0 of 10")
 	}
 	// Clamp guards against an over-count (should never go negative).
-	if got := toolBudgetHint(5, 8); !strings.Contains(got, "0 of 5") {
+	if got := toolBudgetHint(turnToolBudget{maxRounds: 5}, 8); !strings.Contains(got, "0 of 5") {
 		t.Errorf("toolBudgetHint(5, 8) = %q, want to contain %q", got, "0 of 5")
 	}
 }
@@ -161,7 +161,8 @@ func TestExecuteToolRounds_AppendsBudgetHint(t *testing.T) {
 			{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`}},
 		},
 	}
-	_, msgs, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, nil)
+	budget := turnToolBudget{maxRounds: e.maxToolRounds}
+	_, msgs, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, budget, nil)
 	if err != nil {
 		t.Fatalf("executeToolRounds: %v", err)
 	}

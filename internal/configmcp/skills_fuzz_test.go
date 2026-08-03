@@ -54,7 +54,7 @@ func FuzzApplySkillCreate_NeverEscapes(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body")
+		payload := configmcp.BuildSkillPayload(name, "desc", "1.0.0", nil, "body", 0, nil)
 		// Error or success are both fine; the invariant below is what matters.
 		_ = configmcp.ApplySkillCreate(skillsDir, func(skill.Skill) {}, ioTestLogger(), payload, 0)
 

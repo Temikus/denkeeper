@@ -926,6 +926,83 @@ func attributeSkill(matched []skill.Skill, msg adapter.IncomingMessage) (name, v
 	return "", "", false
 }
 
+// turnToolBudget is the per-turn effective tool-round budget. It is resolved
+// once in chatWithApproval and threaded through the tool loop, so a skill edit
+// mid-turn cannot change the budget a running turn was started under.
+type turnToolBudget struct {
+	// maxRounds is min(skill cap, e.maxToolRounds), and equals e.maxToolRounds
+	// when no skill cap binds.
+	maxRounds int
+	// skillName is non-empty only when a skill cap is the binding constraint,
+	// so the budget hint can name the source of a number the model's own skill
+	// prose may disagree with.
+	skillName string
+}
+
+// resolveToolBudget computes the effective tool-round budget for one turn.
+// A skill's max_tool_rounds only ever lowers e.maxToolRounds — an operator's
+// agent-level ceiling is a safety bound that a skill (which the agent itself
+// can author via skill CRUD) must not be able to raise.
+//
+// A binding skill cap is recorded on the active span as agent.skill_round_cap
+// (alongside agent.tool_rounds) and logged, so a turn that ended early can be
+// traced back to the knob that shortened it.
+func (e *Engine) resolveToolBudget(ctx context.Context, matched []skill.Skill, msg adapter.IncomingMessage) turnToolBudget {
+	budget := turnToolBudget{maxRounds: e.maxToolRounds}
+
+	driver, ok := drivingSkill(matched, msg)
+	if !ok || driver.MaxToolRounds <= 0 || driver.MaxToolRounds >= e.maxToolRounds {
+		return budget
+	}
+
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("agent.skill_round_cap", driver.MaxToolRounds))
+	e.logger.Info("skill tool-round cap applied",
+		"skill", driver.Name,
+		"skill_max_tool_rounds", driver.MaxToolRounds,
+		"engine_max_tool_rounds", e.maxToolRounds,
+		"adapter", msg.Adapter,
+		"external_id", msg.ExternalID,
+	)
+	return turnToolBudget{maxRounds: driver.MaxToolRounds, skillName: driver.Name}
+}
+
+// drivingSkill returns the single skill that explicitly drives this turn, if
+// any: a scheduled run naming it (msg.SkillName), or — absent that — exactly
+// one command-triggered match. Zero or several such skills means no skill owns
+// the turn's budget.
+//
+// This deliberately diverges from attributeSkill, which additionally claims a
+// *lone ambient* match. Attribution is observational, so a best guess there
+// beats a blank. Enforcement is not: an ambient skill matches every message, so
+// honoring its cap would silently throttle unrelated interactive turns. A cap
+// encodes a per-task budget, and only explicit invocation identifies the task.
+func drivingSkill(matched []skill.Skill, msg adapter.IncomingMessage) (skill.Skill, bool) {
+	if msg.SkillName != "" {
+		for _, s := range matched {
+			if s.Name == msg.SkillName {
+				return s, true
+			}
+		}
+		return skill.Skill{}, false
+	}
+
+	// With msg.SkillName empty, a triggered skill can only have reached the
+	// matched set via a command match (see skillMatches), so triggers are the
+	// test for "explicitly invoked".
+	var driver skill.Skill
+	var n int
+	for _, s := range matched {
+		if len(s.ParsedTriggers) > 0 {
+			driver = s
+			n++
+		}
+	}
+	if n != 1 {
+		return skill.Skill{}, false
+	}
+	return driver, true
+}
+
 // classifySkillMatch determines the match type for a skill.
 func classifySkillMatch(s skill.Skill, msg adapter.IncomingMessage) string {
 	if msg.SkillName != "" && msg.SkillName == s.Name {
@@ -1051,6 +1128,11 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	sysResult := e.buildSystemPrompt(perms, msg)
 
+	// Resolve the turn's tool-round budget once, from the matched set. Doing it
+	// per turn means skill edits (CRUD copies whole skill.Skill values) take
+	// effect on the next turn with no hot-reload plumbing.
+	budget := e.resolveToolBudget(ctx, sysResult.matchedSkills, msg)
+
 	llmMessages := make([]llm.Message, 0, len(history)+2)
 	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: sysResult.prompt})
 	if truncated {
@@ -1084,7 +1166,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, wrappedEvent)
+	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, budget, wrappedEvent)
 	if err != nil {
 		e.persistInterruptedProgress(ctx, convID, userMsgID, streamedContent.String(), toolRecords, msg, err)
 		return "", nil, convID, err
@@ -1313,7 +1395,7 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 // tool call records for persistence, and any error. Tool call records are
 // returned even when the loop fails mid-flight so callers can persist the
 // work that already executed.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
 	}
@@ -1340,7 +1422,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		}
 	}
 
-	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, onEvent)
+	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, budget, onEvent)
 	if err != nil {
 		return nil, llmMessages, toolRecords, err
 	}
@@ -1367,14 +1449,14 @@ type toolLoopOutcome struct {
 // degrade to a wrap-up round; if the model returns empty content after
 // completing tool rounds, it attempts to recover by using intermediate
 // content or nudging the model.
-func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Add(resp.TokensUsed)
 	totalCost += resp.CostUSD
 
 	parentSpan := trace.SpanFromContext(ctx)
-	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, onEvent, &totalUsage, &totalCost)
+	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, budget, onEvent, &totalUsage, &totalCost)
 	if err != nil {
 		return nil, out.llmMessages, out.toolRecords, err
 	}
@@ -1428,7 +1510,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 // tools, a model-behavior stop fires (recorded in the outcome's stopReason),
 // the soft cost limit is reached, or a transport error occurs (returned as
 // err with the partial outcome for persistence).
-func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
+func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
 	supervised := perms.Tier() == "supervised" && e.approvals != nil
 	parentSpan := trace.SpanFromContext(ctx)
 	out := toolLoopOutcome{llmMessages: llmMessages}
@@ -1441,7 +1523,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 	// look and re-executes every tool.
 	state := newTurnToolState()
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
-		if round >= e.maxToolRounds {
+		if round >= budget.maxRounds {
 			// Round budget exhausted with the model still requesting tools.
 			// The pending assistant tool_calls message is NOT appended, so the
 			// message list ends on the previous round's tool results — a valid
@@ -1460,7 +1542,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 
 		out.llmMessages = append(out.llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
 		var roundErr error
-		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, onEvent, detector, state, out.llmMessages, out.toolRecords)
+		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, budget, onEvent, detector, state, out.llmMessages, out.toolRecords)
 		if roundErr != nil {
 			return out, roundErr
 		}
@@ -1543,7 +1625,7 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 // detection), it stops executing, appends synthetic results for the offending
 // and remaining calls (keeping the tool-message protocol valid), and returns
 // stopRepeatedCalls so the caller can run a wrap-up round.
-func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
+func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, budget turnToolBudget, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
 	for i, tc := range toolCalls {
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
@@ -1569,7 +1651,7 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		toolRecords = append(toolRecords, record)
 		content := result
 		if i == len(toolCalls)-1 {
-			content += toolBudgetHint(e.maxToolRounds, round+1)
+			content += toolBudgetHint(budget, round+1)
 		}
 		llmMessages = append(llmMessages, llm.Message{
 			Role: "tool", Content: content, ToolCallID: tc.ID,
@@ -1582,12 +1664,21 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 // tool-call rounds remain this turn, so it never has to reconstruct the count
 // from its own history. currentRound is 1-based; the returned count is the
 // number of rounds still available after the current one completes.
-func toolBudgetHint(maxRounds, currentRound int) string {
-	remaining := maxRounds - currentRound
-	if remaining <= 0 {
-		return fmt.Sprintf("\n\n[engine: 0 of %d tool-call rounds remaining — your next response must be the final answer, without tool calls]", maxRounds)
+//
+// When a skill cap is the binding constraint the hint names the skill, so a
+// model whose skill prose quotes a different (stale, or call-denominated)
+// budget can see where the engine's number comes from. Uncapped turns render
+// exactly the pre-skill-cap strings.
+func toolBudgetHint(budget turnToolBudget, currentRound int) string {
+	var capNote string
+	if budget.skillName != "" {
+		capNote = fmt.Sprintf(" (skill cap: %s)", budget.skillName)
 	}
-	return fmt.Sprintf("\n\n[engine: %d of %d tool-call rounds remaining this turn]", remaining, maxRounds)
+	remaining := budget.maxRounds - currentRound
+	if remaining <= 0 {
+		return fmt.Sprintf("\n\n[engine: 0 of %d tool-call rounds remaining%s — your next response must be the final answer, without tool calls]", budget.maxRounds, capNote)
+	}
+	return fmt.Sprintf("\n\n[engine: %d of %d tool-call rounds remaining this turn%s]", remaining, budget.maxRounds, capNote)
 }
 
 // recordToolRoundEvent adds a span event for a tool-call round.

@@ -10,6 +10,8 @@ import (
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
+	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skill/skilltest"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -238,8 +240,100 @@ func TestFinishStoppedToolLoop_NoRecords_PlainError(t *testing.T) {
 	}
 }
 
+// A skill cap reuses stopMaxRounds, so the whole wrap-up path fires exactly as
+// it does at the engine cap: a tools-stripped completion, the summary plus the
+// early-end marker in history, and the executed tool records persisted (still
+// attributed by the unchanged attributeSkill).
+func TestWrapUp_SkillRoundCap(t *testing.T) {
+	toolRound := func(id, name string) *llm.ChatResponse {
+		return &llm.ChatResponse{
+			ToolCalls:    []llm.ToolCall{{ID: id, Type: "function", Function: llm.FunctionCall{Name: name, Arguments: `{}`}}},
+			TokensUsed:   llm.TokenUsage{Total: 10},
+			FinishReason: "tool_calls",
+		}
+	}
+	provider := &capturingSequentialProvider{
+		responses: []*llm.ChatResponse{
+			toolRound("c1", "tool_a"),
+			toolRound("c2", "tool_b"),
+			{Content: "Summary of the nightly run.", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
+	router.SetTools(func() []llm.ToolDef {
+		return []llm.ToolDef{{Type: "function", Function: llm.FunctionDef{Name: "tool_a"}}}
+	})
+
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	capped := skilltest.NewVersioned("nightly", "Nightly run", "2.1.0", []string{"schedule:daily"}, "Body.")
+	capped.MaxToolRounds = 1
+	engine := NewEngine("default", router, store, nil, permissions, nil, "Test.",
+		[]skill.Skill{capped}, tool.NewManager(testLogger()), nil, testLogger())
+
+	sessionID := "wrapup-skill-cap"
+	msg := wrapUpTestMessage(sessionID)
+	msg.SkillName = "nightly"
+	msg.IsScheduled = true
+
+	result, err := engine.ChatWithEvents(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("expected wrap-up success at the skill cap, got error: %v", err)
+	}
+	if !strings.Contains(result, "Summary of the nightly run.") {
+		t.Errorf("result = %q, want the wrap-up summary", result)
+	}
+	if !strings.Contains(result, "[engine: turn ended early — tool-call round budget exhausted]") {
+		t.Errorf("result = %q, want the early-end marker", result)
+	}
+
+	// Initial + 1 round completion + wrap-up: round 1 trips the cap of 1.
+	if len(provider.requests) != 3 {
+		t.Fatalf("got %d provider requests, want 3 (initial + 1 round + wrap-up)", len(provider.requests))
+	}
+	wrapReq := provider.requests[2]
+	if len(wrapReq.Tools) != 0 {
+		t.Errorf("wrap-up request carries %d tool definitions, want 0", len(wrapReq.Tools))
+	}
+	last := wrapReq.Messages[len(wrapReq.Messages)-1]
+	if last.Role != "user" || !strings.Contains(last.Content, "tool loop stopped (tool-call round budget exhausted)") {
+		t.Errorf("last message = [%s] %q, want the wrap-up instruction", last.Role, last.Content)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	assistants := assistantMessages(t, store, sessionID)
+	if len(assistants) != 1 {
+		t.Fatalf("got %d assistant messages, want 1", len(assistants))
+	}
+	if !strings.Contains(assistants[0].Content, "Summary of the nightly run.") ||
+		!strings.Contains(assistants[0].Content, "turn ended early") {
+		t.Errorf("stored content = %q, want the summary plus the early-end marker", assistants[0].Content)
+	}
+
+	records, err := store.GetToolCalls(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("getting tool calls: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d tool call records, want 1 (the single executed round)", len(records))
+	}
+	if records[0].SkillName != "nightly" || records[0].SkillVersion != "2.1.0" {
+		t.Errorf("record attribution = (%q, %q), want (nightly, 2.1.0)", records[0].SkillName, records[0].SkillVersion)
+	}
+}
+
 func TestToolBudgetHint_ZeroRemaining(t *testing.T) {
-	hint := toolBudgetHint(5, 5)
+	hint := toolBudgetHint(turnToolBudget{maxRounds: 5}, 5)
 	if !strings.Contains(hint, "0 of 5") {
 		t.Errorf("hint = %q, want '0 of 5'", hint)
 	}
@@ -247,7 +341,7 @@ func TestToolBudgetHint_ZeroRemaining(t *testing.T) {
 		t.Errorf("hint = %q, want the explicit final-answer instruction", hint)
 	}
 	// Positive case unchanged.
-	if got := toolBudgetHint(5, 3); !strings.Contains(got, "2 of 5 tool-call rounds remaining this turn") {
+	if got := toolBudgetHint(turnToolBudget{maxRounds: 5}, 3); !strings.Contains(got, "2 of 5 tool-call rounds remaining this turn") {
 		t.Errorf("hint = %q, want the standard remaining-rounds phrasing", got)
 	}
 }

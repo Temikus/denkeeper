@@ -34,3 +34,14 @@ func NewVersioned(name, description, version string, triggers []string, body str
 	s.Version = version
 	return s
 }
+
+// NewWithRoundCap is New with an explicit MaxToolRounds, for tests that
+// exercise the per-skill tool-round cap. Unlike Triggers, MaxToolRounds has no
+// parsed companion field, so assigning it directly on a value from New is
+// equally safe — this constructor just keeps such tests to one line. Panics if
+// any trigger string is invalid.
+func NewWithRoundCap(name, description string, triggers []string, body string, maxRounds int) skill.Skill {
+	s := New(name, description, triggers, body)
+	s.MaxToolRounds = maxRounds
+	return s
+}

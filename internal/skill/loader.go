@@ -31,6 +31,15 @@ type Skill struct {
 	Body           string // markdown body — everything after the closing +++
 	Source         string // file path, for logging/debugging
 
+	// MaxToolRounds optionally lowers the engine's per-turn tool-round budget
+	// for turns this skill explicitly drives (a scheduled run, or a lone
+	// command match). The unit is *rounds*, not calls — one round may fan out
+	// to many parallel tool calls, matching the agent-level max_tool_rounds
+	// knob it tightens. 0 means unset (the agent/engine budget applies), and
+	// the cap only ever lowers that budget: an operator's agent-level ceiling
+	// is never widened by a skill, which the agent itself can author.
+	MaxToolRounds int
+
 	// SubFileNames lists relative paths to sub-files within a subdirectory-form
 	// skill (e.g. "references/oauth.md", "templates/greeting.txt"). Sorted.
 	// Empty for flat-file skills.
@@ -43,11 +52,12 @@ type Skill struct {
 
 // frontmatter is the TOML-decoded structure of the +++ block.
 type frontmatter struct {
-	Name        string        `toml:"name"`
-	Description string        `toml:"description"`
-	Version     string        `toml:"version"`
-	Triggers    []string      `toml:"triggers"`
-	Requires    SkillRequires `toml:"requires"`
+	Name          string        `toml:"name"`
+	Description   string        `toml:"description"`
+	Version       string        `toml:"version"`
+	Triggers      []string      `toml:"triggers"`
+	Requires      SkillRequires `toml:"requires"`
+	MaxToolRounds int           `toml:"max_tool_rounds"`
 }
 
 // ParseFile parses the content of a single skill file.
@@ -87,6 +97,10 @@ func ParseFile(path string, content []byte) (*Skill, error) {
 		return nil, fmt.Errorf("skill %q: %w", path, err)
 	}
 
+	if fm.MaxToolRounds < 0 {
+		return nil, fmt.Errorf("skill %q: max_tool_rounds must be >= 0 (0 = unset)", path)
+	}
+
 	return &Skill{
 		Name:           strings.TrimSpace(fm.Name),
 		Description:    strings.TrimSpace(fm.Description),
@@ -94,6 +108,7 @@ func ParseFile(path string, content []byte) (*Skill, error) {
 		Triggers:       fm.Triggers,
 		ParsedTriggers: parsed,
 		Requires:       fm.Requires,
+		MaxToolRounds:  fm.MaxToolRounds,
 		Body:           body,
 		Source:         path,
 	}, nil
