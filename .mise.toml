@@ -4,7 +4,7 @@ hugo-extended = "0.159.1"
 "golangci-lint" = "2.12.2"
 swag = "1.16.6"
 task = "3.52.0"
-"go:github.com/air-verse/air" = "1.67.3"
+"go:github.com/air-verse/air" = "1.67.4"
 "aqua:casey/just" = "1.57.0"
 "aqua:anchore/grype" = "0.116.1"
 # Keep in sync with the betterleaks job in .github/workflows/security.yml.
