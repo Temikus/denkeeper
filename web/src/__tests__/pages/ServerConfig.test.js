@@ -461,6 +461,53 @@ describe('ServerConfig page', () => {
     })
   })
 
+  test('web_fetch page size PATCHes web_fetch_max_response_chars and shows restart hint', async () => {
+    let body = null
+    server.use(
+      http.patch('/api/v1/server/config', async ({ request }) => {
+        body = await request.json()
+        return HttpResponse.json({ status: 'updated', restart_required: true })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const input = screen.getByLabelText('web_fetch page size')
+    expect(input.value).toBe('8000')
+    await fireEvent.change(input, { target: { value: '24000' } })
+
+    await waitFor(() => {
+      expect(body).toEqual({ web_fetch_max_response_chars: 24000 })
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Restart the server/)).toBeInTheDocument()
+    })
+  })
+
+  test('web_fetch page size rejects out-of-range values without PATCHing', async () => {
+    let patched = false
+    server.use(
+      http.patch('/api/v1/server/config', async () => {
+        patched = true
+        return HttpResponse.json({ status: 'updated' })
+      }),
+    )
+    render(ServerConfig)
+    await waitFor(() => {
+      expect(screen.getByText('In-Process Tools')).toBeInTheDocument()
+    })
+
+    const input = screen.getByLabelText('web_fetch page size')
+    await fireEvent.change(input, { target: { value: '100001' } })
+
+    await waitFor(() => {
+      expect(screen.getByText(/between 1 and 100000/)).toBeInTheDocument()
+    })
+    expect(patched).toBe(false)
+  })
+
   test('Deterministic compute toggle PATCHes script_enabled', async () => {
     let body = null
     server.use(

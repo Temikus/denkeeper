@@ -156,6 +156,25 @@
     }
   }
 
+  async function saveWebFetchChars(raw) {
+    const value = Number(raw)
+    if (!Number.isInteger(value) || value < 1 || value > 100000) {
+      error = 'Page size must be a whole number between 1 and 100000'
+      return
+    }
+    savingWeb = true
+    error = ''
+    try {
+      const res = await api.updateServerConfig({ web_fetch_max_response_chars: value })
+      config.web_fetch_max_response_chars = value
+      if (res?.restart_required) toolsRestartHint = true
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingWeb = false
+    }
+  }
+
   async function toggleScript() {
     savingScript = true
     error = ''
@@ -432,6 +451,32 @@
         </label>
       </div>
     </div>
+
+    {#if config.web_tools_enabled}
+      <div class="config-row">
+        <div class="config-label">
+          <div class="config-name">web_fetch page size</div>
+          <div class="config-desc">
+            Characters of converted page content returned per web_fetch call; longer
+            pages paginate via start_index. Each extra page costs the model a full
+            context re-read, so 24000&ndash;32000 usually serves a whole article in one
+            call. Keep well under the model's context window. 1&ndash;100000.
+          </div>
+        </div>
+        <div class="config-value-row">
+          <input
+            type="number"
+            class="input inline-input"
+            aria-label="web_fetch page size"
+            min="1"
+            max="100000"
+            value={config.web_fetch_max_response_chars}
+            disabled={savingWeb}
+            onchange={(e) => saveWebFetchChars(e.target.value)}
+          />
+        </div>
+      </div>
+    {/if}
   </div>
 
   <div class="config-card" style="margin-top: 14px;">

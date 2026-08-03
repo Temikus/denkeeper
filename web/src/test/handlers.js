@@ -302,6 +302,7 @@ export const handlers = [
     mcp_server_stateless: false,
     mcp_server_endpoint: 'http://:8080/api/v1/mcp',
     web_tools_enabled: true,
+    web_fetch_max_response_chars: 8000,
     script_enabled: true,
     external_url: 'https://den.example.com',
     timezone: 'UTC',

@@ -3908,7 +3908,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the current server configuration including listen address, TLS, CORS, WebSocket settings, and build info.",
+                "description": "Returns the current server configuration including listen address, TLS, CORS, WebSocket settings, in-process tool settings (web/script), and build info.",
                 "produces": [
                     "application/json"
                 ],
@@ -3949,7 +3949,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Partially updates server configuration (external_url, timezone, MCP server, and the in-process web_tools_enabled / script_enabled toggles). Changes are applied in-memory and persisted to the TOML config file. Toggling web_tools_enabled or script_enabled returns restart_required: true, since the in-process MCP tools are (de)registered only at process start.",
+                "description": "Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, or web_fetch_max_response_chars returns restart_required: true, since the in-process MCP tools are registered — and their limits read — only at process start. web_fetch_max_response_chars must be between 1 and 100000.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7158,6 +7158,9 @@
                 "version": {
                     "type": "string"
                 },
+                "web_fetch_max_response_chars": {
+                    "type": "integer"
+                },
                 "web_tools_enabled": {
                     "type": "boolean"
                 },
@@ -7198,6 +7201,10 @@
                 },
                 "timezone": {
                     "type": "string"
+                },
+                "web_fetch_max_response_chars": {
+                    "description": "WebFetchMaxResponseChars mirrors [web.fetch] max_response_chars; the\nbounds match config.validateWeb so the API and TOML paths agree.",
+                    "type": "integer"
                 },
                 "web_tools_enabled": {
                     "type": "boolean"
