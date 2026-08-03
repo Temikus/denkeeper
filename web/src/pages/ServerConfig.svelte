@@ -37,12 +37,17 @@
   let savingWeb = $state(false)
   let savingScript = $state(false)
   let toolsRestartHint = $state(false)
+  let saveWebOk = $state(false)
+  let webFetchDraft = $state(null)
+  let webFetchError = $state('')
+  let webFetchSaveTimer = null
 
   async function fetchConfig() {
     loading = true
     error = ''
     try {
       config = await api.serverConfig()
+      webFetchDraft = config.web_fetch_max_response_chars
     } catch (e) {
       error = e.message
     } finally {
@@ -151,6 +156,48 @@
       if (res?.restart_required) toolsRestartHint = true
     } catch (e) {
       error = e.message
+    } finally {
+      savingWeb = false
+    }
+  }
+
+  // The input edits a draft, not config, so a rejected value never masquerades
+  // as the persisted one. Bounds come from the element's min/max attributes,
+  // keeping one client-side source rather than a third copy of 1..100000.
+  function queueWebFetchSave(e) {
+    clearTimeout(webFetchSaveTimer)
+    // Read the element, not the bound draft: bind:value updates on `input`,
+    // while this fires on `change`. The binding exists so a failed save can
+    // put the persisted value back on screen.
+    const min = Number(e.target.min)
+    const max = Number(e.target.max)
+    const value = Number(e.target.value)
+    if (!Number.isInteger(value) || value < min || value > max) {
+      webFetchError = `Page size must be a whole number between ${min} and ${max}`
+      return
+    }
+    webFetchError = ''
+    // Track the committed value in state so a later revert is an actual state
+    // change — Svelte only rewrites the DOM when the bound expression differs.
+    webFetchDraft = value
+    if (value === config.web_fetch_max_response_chars) return
+    // Coalesce spinner and arrow-key steps: each PATCH is an atomic TOML
+    // read-modify-write with a .bak backup, so one write per step is real churn.
+    webFetchSaveTimer = setTimeout(() => saveWebFetchChars(value), 400)
+  }
+
+  async function saveWebFetchChars(value) {
+    savingWeb = true
+    error = ''
+    try {
+      const res = await api.updateServerConfig({ web_fetch_max_response_chars: value })
+      config.web_fetch_max_response_chars = value
+      saveWebOk = true
+      setTimeout(() => { saveWebOk = false }, 3000)
+      if (res?.restart_required) toolsRestartHint = true
+    } catch (e) {
+      error = e.message
+      webFetchDraft = config.web_fetch_max_response_chars
     } finally {
       savingWeb = false
     }
@@ -432,7 +479,42 @@
         </label>
       </div>
     </div>
+
+    {#if config.web_tools_enabled}
+      <div class="config-row">
+        <div class="config-label">
+          <label class="config-name" for="web-fetch-chars">web_fetch page size</label>
+          <div class="config-desc" id="web-fetch-chars-desc">
+            Characters of page content returned per web_fetch call; longer pages
+            paginate via start_index. Higher values (24000&ndash;32000) usually serve a
+            whole article in one call. 1&ndash;100000. Default: 8000.
+          </div>
+          {#if webFetchError}
+            <div class="inline-error" role="alert">{webFetchError}</div>
+          {/if}
+        </div>
+        <div class="config-value-row">
+          <input
+            id="web-fetch-chars"
+            type="number"
+            class="input inline-input inline-input-num"
+            aria-label="web_fetch page size"
+            aria-describedby="web-fetch-chars-desc"
+            aria-invalid={!!webFetchError}
+            min="1"
+            max="100000"
+            bind:value={webFetchDraft}
+            disabled={savingWeb}
+            onchange={queueWebFetchSave}
+          />
+        </div>
+      </div>
+    {/if}
   </div>
+
+  {#if saveWebOk}
+    <div class="save-ok" role="status">Saved</div>
+  {/if}
 
   <div class="config-card" style="margin-top: 14px;">
     <div class="config-row">
@@ -584,8 +666,16 @@
     align-items: flex-start;
     gap: 16px;
   }
+  /* First card in the page to hold more than one row; matches the divider
+     convention used in Providers/Tools/Agents/Channels. */
+  .config-row + .config-row {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
   .config-label { flex: 1; }
-  .config-name { font-weight: 600; font-size: 14px; }
+  .config-name { font-weight: 600; font-size: 14px; display: block; }
+  .inline-error { color: var(--danger); font-size: 12px; margin-top: 6px; }
   .config-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
 
   .config-value-row {
@@ -696,6 +786,8 @@
     padding: 4px 8px;
     font-size: 13px;
   }
+  /* 80px was sized for "30m"; six digits plus the native spinner need more. */
+  .inline-input-num { width: 104px; }
 
   .mcp-hint {
     margin-top: 10px;

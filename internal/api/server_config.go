@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -28,6 +29,7 @@ type serverConfigResponse struct {
 	MCPServerStateless       bool     `json:"mcp_server_stateless"`
 	MCPServerEndpoint        string   `json:"mcp_server_endpoint"`
 	WebToolsEnabled          bool     `json:"web_tools_enabled"`
+	WebFetchMaxResponseChars int      `json:"web_fetch_max_response_chars"`
 	ScriptEnabled            bool     `json:"script_enabled"`
 	Version                  string   `json:"version"`
 	Commit                   string   `json:"commit"`
@@ -45,12 +47,21 @@ type serverConfigUpdateInput struct {
 	MCPServerChatTimeout    *string `json:"mcp_server_chat_timeout,omitempty"`
 	MCPServerStateless      *bool   `json:"mcp_server_stateless,omitempty"`
 	WebToolsEnabled         *bool   `json:"web_tools_enabled,omitempty"`
-	ScriptEnabled           *bool   `json:"script_enabled,omitempty"`
+	// WebFetchMaxResponseChars mirrors [web.fetch] max_response_chars; the
+	// bounds match config.validateWeb so the API and TOML paths agree.
+	WebFetchMaxResponseChars *int  `json:"web_fetch_max_response_chars,omitempty"`
+	ScriptEnabled            *bool `json:"script_enabled,omitempty"`
 }
+
+// Bounds for web_fetch_max_response_chars, kept in step with config.validateWeb.
+const (
+	minWebFetchMaxResponseChars = 1
+	maxWebFetchMaxResponseChars = 100000
+)
 
 // handleGetServerConfig godoc
 // @Summary      Get server configuration
-// @Description  Returns the current server configuration including listen address, TLS, CORS, WebSocket settings, and build info.
+// @Description  Returns the current server configuration including listen address, TLS, CORS, WebSocket settings, in-process tool settings (web/script), and build info.
 // @Tags         server
 // @Produce      json
 // @Security     BearerAuth
@@ -77,6 +88,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		MCPServerStateless:       cfg.MCPServer.Stateless,
 		MCPServerEndpoint:        s.mcpServerEndpoint(),
 		WebToolsEnabled:          s.deps.Config.Web.WebEnabled(),
+		WebFetchMaxResponseChars: s.deps.Config.Web.Fetch.MaxResponseChars,
 		ScriptEnabled:            s.deps.Config.Script.ScriptEnabled(),
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
@@ -91,7 +103,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePatchServerConfig godoc
 // @Summary      Update server configuration
-// @Description  Partially updates server configuration (external_url, timezone, MCP server, and the in-process web_tools_enabled / script_enabled toggles). Changes are applied in-memory and persisted to the TOML config file. Toggling web_tools_enabled or script_enabled returns restart_required: true, since the in-process MCP tools are (de)registered only at process start.
+// @Description  Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, or web_fetch_max_response_chars returns restart_required: true, since the in-process MCP tools are registered — and their limits read — only at process start. web_fetch_max_response_chars must be between 1 and 100000.
 // @Tags         server
 // @Accept       json
 // @Produce      json
@@ -128,9 +140,9 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// applyInProcessToolInput applies the [web]/[script] enabled toggles to the
-// in-memory config and reports whether either effective value changed. A change
-// needs a process restart to (de)register the in-process MCP tools, since the
+// applyInProcessToolInput applies the [web]/[script] settings to the in-memory
+// config and reports whether any effective value changed. A change needs a
+// process restart to (de)register the in-process MCP tools, since the
 // hot-reload path does not re-run connectWebMCP/connectScriptMCP.
 func applyInProcessToolInput(cfg *config.Config, input *serverConfigUpdateInput) bool {
 	changed := false
@@ -139,6 +151,14 @@ func applyInProcessToolInput(cfg *config.Config, input *serverConfigUpdateInput)
 			changed = true
 		}
 		cfg.Web.Enabled = input.WebToolsEnabled
+	}
+	if input.WebFetchMaxResponseChars != nil {
+		// The webmcp server reads this once at agent-build time, so a change
+		// only reaches web_fetch after a restart — same as the toggles.
+		if cfg.Web.Fetch.MaxResponseChars != *input.WebFetchMaxResponseChars {
+			changed = true
+		}
+		cfg.Web.Fetch.MaxResponseChars = *input.WebFetchMaxResponseChars
 	}
 	if input.ScriptEnabled != nil {
 		if cfg.Script.ScriptEnabled() != *input.ScriptEnabled {
@@ -159,6 +179,12 @@ func validateServerConfigInput(input *serverConfigUpdateInput) string {
 	if input.Timezone != nil && *input.Timezone != "" {
 		if _, err := time.LoadLocation(*input.Timezone); err != nil {
 			return "invalid timezone: must be a valid IANA timezone name (e.g. America/New_York)"
+		}
+	}
+	if v := input.WebFetchMaxResponseChars; v != nil {
+		if *v < minWebFetchMaxResponseChars || *v > maxWebFetchMaxResponseChars {
+			return fmt.Sprintf("web_fetch_max_response_chars must be between %d and %d",
+				minWebFetchMaxResponseChars, maxWebFetchMaxResponseChars)
 		}
 	}
 	return validateMCPServerInput(input)
@@ -311,8 +337,17 @@ func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
 // top-level TOML sections. Persisted separately from the [api] changes because
 // they live in distinct tables.
 func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
+	webChanges := make(map[string]any)
 	if input.WebToolsEnabled != nil {
-		if err := config.UpdateWebConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.WebToolsEnabled}); err != nil {
+		webChanges["enabled"] = *input.WebToolsEnabled
+	}
+	if input.WebFetchMaxResponseChars != nil {
+		// Nested so it lands in [web.fetch]; updateTopLevelSection merges the
+		// sub-table key-by-key, leaving timeout/user_agent/etc. intact.
+		webChanges["fetch"] = map[string]any{"max_response_chars": *input.WebFetchMaxResponseChars}
+	}
+	if len(webChanges) > 0 {
+		if err := config.UpdateWebConfig(s.deps.ConfigPath, webChanges); err != nil {
 			s.logger.Warn("failed to persist web config", "error", err)
 		}
 	}

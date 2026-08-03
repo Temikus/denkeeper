@@ -169,6 +169,7 @@ func TestWebFetch_Success(t *testing.T) {
 }
 
 func TestWebFetch_Pagination(t *testing.T) {
+	const pageSize = 4000
 	longContent := strings.Repeat("x", 10000)
 	session := newTestServer(t, Deps{
 		Fetcher: &mockFetcher{
@@ -177,7 +178,8 @@ func TestWebFetch_Pagination(t *testing.T) {
 				Content: longContent,
 			},
 		},
-		PermissionTier: func() string { return "autonomous" },
+		PermissionTier:   func() string { return "autonomous" },
+		MaxResponseChars: pageSize,
 	})
 
 	// First page.
@@ -200,14 +202,14 @@ func TestWebFetch_Pagination(t *testing.T) {
 	if resp.TotalLength != 10000 {
 		t.Errorf("total_length = %d, want 10000", resp.TotalLength)
 	}
-	if len(resp.Content) != maxResponseChars {
-		t.Errorf("content length = %d, want %d", len(resp.Content), maxResponseChars)
+	if len(resp.Content) != pageSize {
+		t.Errorf("content length = %d, want %d", len(resp.Content), pageSize)
 	}
 
-	// Second page.
+	// Middle page.
 	result2 := callTool(t, session, "web_fetch", map[string]any{
 		"url":         "https://example.com",
-		"start_index": maxResponseChars,
+		"start_index": pageSize,
 	})
 	var resp2 struct {
 		Content string `json:"content"`
@@ -216,11 +218,116 @@ func TestWebFetch_Pagination(t *testing.T) {
 	if err := json.Unmarshal([]byte(extractText(result2)), &resp2); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if len(resp2.Content) != 10000-maxResponseChars {
-		t.Errorf("second page content length = %d, want %d", len(resp2.Content), 10000-maxResponseChars)
+	if len(resp2.Content) != pageSize {
+		t.Errorf("second page content length = %d, want %d", len(resp2.Content), pageSize)
 	}
-	if resp2.HasMore {
-		t.Error("second page should not have more")
+	if !resp2.HasMore {
+		t.Error("second page should have more")
+	}
+
+	// Final page (tail shorter than the limit).
+	result3 := callTool(t, session, "web_fetch", map[string]any{
+		"url":         "https://example.com",
+		"start_index": 2 * pageSize,
+	})
+	var resp3 struct {
+		Content string `json:"content"`
+		HasMore bool   `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(extractText(result3)), &resp3); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp3.Content) != 10000-2*pageSize {
+		t.Errorf("final page content length = %d, want %d", len(resp3.Content), 10000-2*pageSize)
+	}
+	if resp3.HasMore {
+		t.Error("final page should not have more")
+	}
+}
+
+func TestWebFetch_DefaultPageSize(t *testing.T) {
+	longContent := strings.Repeat("x", 10000)
+	session := newTestServer(t, Deps{
+		Fetcher: &mockFetcher{
+			result: &webfetch.FetchResult{
+				URL:     "https://example.com",
+				Content: longContent,
+			},
+		},
+		PermissionTier: func() string { return "autonomous" },
+	})
+
+	result := callTool(t, session, "web_fetch", map[string]any{"url": "https://example.com"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+
+	var resp struct {
+		Content string `json:"content"`
+		HasMore bool   `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Content) != defaultMaxResponseChars {
+		t.Errorf("content length = %d, want default %d", len(resp.Content), defaultMaxResponseChars)
+	}
+	if !resp.HasMore {
+		t.Error("has_more should be true for long content")
+	}
+}
+
+func TestWebFetch_DescriptionIncludesPageSize(t *testing.T) {
+	session := newTestServer(t, Deps{
+		Fetcher:          &mockFetcher{},
+		PermissionTier:   func() string { return "autonomous" },
+		MaxResponseChars: 12345,
+	})
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "web_fetch" {
+			if !strings.Contains(tool.Description, "12345") {
+				t.Errorf("web_fetch description should include page size 12345: %s", tool.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("web_fetch tool not registered")
+}
+
+func TestWebFetch_CustomLimitShortContent(t *testing.T) {
+	session := newTestServer(t, Deps{
+		Fetcher: &mockFetcher{
+			result: &webfetch.FetchResult{
+				URL:     "https://example.com",
+				Content: strings.Repeat("x", 40),
+			},
+		},
+		PermissionTier:   func() string { return "autonomous" },
+		MaxResponseChars: 100,
+	})
+
+	result := callTool(t, session, "web_fetch", map[string]any{"url": "https://example.com"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+
+	var resp struct {
+		Content string `json:"content"`
+		HasMore bool   `json:"has_more"`
+	}
+	if err := json.Unmarshal([]byte(extractText(result)), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Content) != 40 {
+		t.Errorf("content length = %d, want 40 (untruncated)", len(resp.Content))
+	}
+	if resp.HasMore {
+		t.Error("has_more should be false when content fits within the limit")
 	}
 }
 

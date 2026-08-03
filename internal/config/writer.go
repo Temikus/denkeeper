@@ -747,6 +747,11 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 // (e.g. [web], [script]). Only keys present in changes are written; a key
 // mapped to a nil value is deleted so callers can restore the omitted-field
 // default. Existing sibling keys are preserved.
+//
+// Sub-table values (e.g. changes["fetch"] for [web.fetch]) are merged key-by-key
+// rather than replaced wholesale — same semantics as UpdateAPIConfig's nested
+// handling — so updating one sub-key does not clobber its siblings. Scalars are
+// replaced.
 func updateTopLevelSection(path, section string, changes map[string]any) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
@@ -761,15 +766,35 @@ func updateTopLevelSection(path, section string, changes map[string]any) error {
 		sec = map[string]any{}
 	}
 	for k, v := range changes {
-		if v == nil {
+		switch val := v.(type) {
+		case nil:
 			delete(sec, k)
-		} else {
+		case map[string]any:
+			sec[k] = mergeSubTable(sec[k], val)
+		default:
 			sec[k] = v
 		}
 	}
 	raw[section] = sec
 
 	return WriteRawConfig(path, raw)
+}
+
+// mergeSubTable merges changes into an existing TOML sub-table, preserving keys
+// the caller did not mention. A nil change value deletes its key.
+func mergeSubTable(existing any, changes map[string]any) map[string]any {
+	merged, _ := existing.(map[string]any)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for k, v := range changes {
+		if v == nil {
+			delete(merged, k)
+		} else {
+			merged[k] = v
+		}
+	}
+	return merged
 }
 
 // UpdateWebConfig persists partial updates to the top-level [web] section (the

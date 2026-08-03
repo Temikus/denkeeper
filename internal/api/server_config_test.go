@@ -343,6 +343,136 @@ func TestPatchServerConfig_DisableWebTools_Persists(t *testing.T) {
 	}
 }
 
+func TestGetServerConfig_WebFetchMaxResponseChars(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	deps.Config.Web.Fetch.MaxResponseChars = 24000
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := authedRequest(http.MethodGet, "/api/v1/server/config")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp serverConfigResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.WebFetchMaxResponseChars != 24000 {
+		t.Errorf("web_fetch_max_response_chars = %d, want 24000", resp.WebFetchMaxResponseChars)
+	}
+}
+
+func TestPatchServerConfig_WebFetchMaxResponseChars_PersistsAndRequestsRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[web.fetch]\ntimeout = \"30s\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := testDepsWithServerConfig()
+	deps.Config.Web.Fetch.MaxResponseChars = 8000
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_fetch_max_response_chars": 24000})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if deps.Config.Web.Fetch.MaxResponseChars != 24000 {
+		t.Errorf("in-memory MaxResponseChars = %d, want 24000", deps.Config.Web.Fetch.MaxResponseChars)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["restart_required"] != true {
+		t.Errorf("restart_required = %v, want true (webmcp reads the limit at startup)", resp["restart_required"])
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("max_response_chars = 24000")) {
+		t.Errorf("persisted config missing max_response_chars = 24000; got:\n%s", data)
+	}
+	if !bytes.Contains(data, []byte("timeout")) || !bytes.Contains(data, []byte("30s")) {
+		t.Errorf("persisted config lost the [web.fetch] timeout sibling; got:\n%s", data)
+	}
+}
+
+func TestPatchServerConfig_WebFetchMaxResponseChars_BelowRange(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_fetch_max_response_chars": 0})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("web_fetch_max_response_chars")) {
+		t.Errorf("error should name the field; got: %s", rec.Body.String())
+	}
+}
+
+func TestPatchServerConfig_WebFetchMaxResponseChars_AboveRange(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_fetch_max_response_chars": 100001})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestPatchServerConfig_WebFetchMaxResponseChars_UnchangedOmitsRestart(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	deps.Config.Web.Fetch.MaxResponseChars = 24000
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"web_fetch_max_response_chars": 24000})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["restart_required"]; ok {
+		t.Errorf("restart_required present, want omitted when value unchanged: %v", resp)
+	}
+}
+
 func TestPatchServerConfig_NoChangeOmitsRestartRequired(t *testing.T) {
 	// Setting web_tools_enabled=true when it is already effectively true (nil
 	// default) is not a change, so no restart is required.

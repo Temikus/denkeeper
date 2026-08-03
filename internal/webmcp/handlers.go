@@ -8,7 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const maxResponseChars = 8000
+const defaultMaxResponseChars = 8000
 
 func (s *Server) registerTools() {
 	if s.deps.SearchProvider != nil {
@@ -29,7 +29,7 @@ func (s *Server) registerTools() {
 	if s.deps.Fetcher != nil {
 		s.mcpServer.AddTool(&mcp.Tool{
 			Name:        "web_fetch",
-			Description: "Fetch a URL and convert its content to Markdown. Use for reading web pages, documentation, articles. Returns truncated content with pagination support via start_index.",
+			Description: fmt.Sprintf("Fetch a URL and convert its content to Markdown. Use for reading web pages, documentation, articles. Returns up to %d characters per call; longer pages are paginated via start_index.", s.deps.MaxResponseChars),
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -124,8 +124,8 @@ func (s *Server) handleWebFetch(ctx context.Context, req *mcp.CallToolRequest) (
 	}
 
 	hasMore := false
-	if len(content) > maxResponseChars {
-		content = content[:maxResponseChars]
+	if len(content) > s.deps.MaxResponseChars {
+		content = content[:s.deps.MaxResponseChars]
 		hasMore = true
 	}
 

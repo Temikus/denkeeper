@@ -990,10 +990,11 @@ func connectWebMCP(ctx context.Context, agentName string, cfg *config.Config, pe
 	fetcher := buildWebFetcher(cfg.Web.Fetch, logger)
 
 	srv := webmcp.New(webmcp.Deps{
-		SearchProvider: searchProvider,
-		Fetcher:        fetcher,
-		PermissionTier: permTier,
-		Logger:         logger,
+		SearchProvider:   searchProvider,
+		Fetcher:          fetcher,
+		PermissionTier:   permTier,
+		MaxResponseChars: cfg.Web.Fetch.MaxResponseChars,
+		Logger:           logger,
 	})
 	session, err := srv.Connect(ctx)
 	if err != nil {

@@ -1052,6 +1052,59 @@ func TestUpdateWebConfig_ReEnable(t *testing.T) {
 	}
 }
 
+func TestUpdateWebConfig_SubTableMergePreservesSiblings(t *testing.T) {
+	path := writeTestConfig(t, "[web.fetch]\ntimeout = \"30s\"\nuser_agent = \"CustomBot/2.0\"\n")
+
+	if err := UpdateWebConfig(path, map[string]any{
+		"fetch": map[string]any{"max_response_chars": 24000},
+	}); err != nil {
+		t.Fatalf("UpdateWebConfig: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	web, _ := raw["web"].(map[string]any)
+	fetch, _ := web["fetch"].(map[string]any)
+	if fetch["max_response_chars"] != int64(24000) {
+		t.Errorf("raw [web.fetch].max_response_chars = %v (%T), want 24000", fetch["max_response_chars"], fetch["max_response_chars"])
+	}
+	// The whole point of merging rather than replacing the sub-table.
+	if fetch["timeout"] != "30s" {
+		t.Errorf("raw [web.fetch].timeout = %v, want 30s (sibling clobbered)", fetch["timeout"])
+	}
+	if fetch["user_agent"] != "CustomBot/2.0" {
+		t.Errorf("raw [web.fetch].user_agent = %v, want CustomBot/2.0 (sibling clobbered)", fetch["user_agent"])
+	}
+}
+
+func TestUpdateWebConfig_SubTableCreatedWhenAbsent(t *testing.T) {
+	path := writeTestConfig(t, "[web]\nenabled = true\n")
+
+	if err := UpdateWebConfig(path, map[string]any{
+		"fetch": map[string]any{"max_response_chars": 16000},
+	}); err != nil {
+		t.Fatalf("UpdateWebConfig: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	web, _ := raw["web"].(map[string]any)
+	fetch, _ := web["fetch"].(map[string]any)
+	if fetch == nil {
+		t.Fatalf("raw [web.fetch] not created; got web = %v", web)
+	}
+	if fetch["max_response_chars"] != int64(16000) {
+		t.Errorf("raw [web.fetch].max_response_chars = %v, want 16000", fetch["max_response_chars"])
+	}
+	if web["enabled"] != true {
+		t.Errorf("raw [web].enabled = %v, want true (scalar sibling clobbered)", web["enabled"])
+	}
+}
+
 func TestUpdateScriptConfig_DisablePreservesSiblings(t *testing.T) {
 	path := writeTestConfig(t, "[script]\ntimeout = \"2s\"\nmax_concurrent = 4\n")
 

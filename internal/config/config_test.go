@@ -2782,6 +2782,9 @@ func TestParse_WebEnabledByDefault(t *testing.T) {
 	if cfg.Web.Fetch.MaxSizeBytes != 5242880 {
 		t.Errorf("max_size_bytes = %d, want 5242880", cfg.Web.Fetch.MaxSizeBytes)
 	}
+	if cfg.Web.Fetch.MaxResponseChars != 8000 {
+		t.Errorf("max_response_chars = %d, want 8000", cfg.Web.Fetch.MaxResponseChars)
+	}
 	if cfg.Web.Fetch.UserAgent != "Denkeeper/1.0 (+https://denkeeper.io)" {
 		t.Errorf("user_agent = %q, want default", cfg.Web.Fetch.UserAgent)
 	}
@@ -2972,6 +2975,7 @@ enabled = true
 [web.fetch]
 timeout = "15s"
 max_size_bytes = 1048576
+max_response_chars = 24000
 user_agent = "CustomBot/2.0"
 respect_robots_txt = true
 respect_agents_txt = true
@@ -2989,6 +2993,9 @@ enabled = true
 	if cfg.Web.Fetch.MaxSizeBytes != 1048576 {
 		t.Errorf("max_size_bytes = %d, want 1048576", cfg.Web.Fetch.MaxSizeBytes)
 	}
+	if cfg.Web.Fetch.MaxResponseChars != 24000 {
+		t.Errorf("max_response_chars = %d, want 24000", cfg.Web.Fetch.MaxResponseChars)
+	}
 	if cfg.Web.Fetch.UserAgent != "CustomBot/2.0" {
 		t.Errorf("user_agent = %q, want %q", cfg.Web.Fetch.UserAgent, "CustomBot/2.0")
 	}
@@ -3000,6 +3007,47 @@ enabled = true
 	}
 	if !cfg.Web.Fetch.Jina.Enabled {
 		t.Error("jina.enabled should be true")
+	}
+}
+
+func TestValidate_WebFetchMaxResponseCharsNegative_Rejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web.fetch]
+max_response_chars = -1
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative max_response_chars")
+	}
+	if !strings.Contains(err.Error(), "web.fetch.max_response_chars") {
+		t.Errorf("error should mention web.fetch.max_response_chars: %v", err)
+	}
+}
+
+func TestValidate_WebFetchMaxResponseCharsTooLarge_Rejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web.fetch]
+max_response_chars = 100001
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for max_response_chars above 100000")
+	}
+	if !strings.Contains(err.Error(), "web.fetch.max_response_chars") {
+		t.Errorf("error should mention web.fetch.max_response_chars: %v", err)
+	}
+}
+
+func TestValidate_WebFetchMaxResponseChars_DisabledWebSkipsValidation(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[web]
+enabled = false
+
+[web.fetch]
+max_response_chars = -1
+`)
+	if _, err := Parse(tomlData); err != nil {
+		t.Fatalf("disabled web should skip validation, got: %v", err)
 	}
 }
 

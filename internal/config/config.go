@@ -176,6 +176,12 @@ type WebFetchConfig struct {
 	Timeout string `toml:"timeout"`
 	// MaxSizeBytes limits the response body size. Default: 5242880 (5MB).
 	MaxSizeBytes int64 `toml:"max_size_bytes"`
+	// MaxResponseChars caps the characters of converted-Markdown content returned
+	// per web_fetch call; longer pages paginate via start_index. Each pagination
+	// round costs a full LLM context re-read, so higher values (e.g. 24000-32000)
+	// usually serve a whole article in one call and reduce rounds. Keep well under
+	// the model's context window. Default: 8000. Max: 100000.
+	MaxResponseChars int `toml:"max_response_chars"`
 	// UserAgent is the HTTP User-Agent header. Default: "Denkeeper/1.0 (+https://denkeeper.io)".
 	UserAgent string `toml:"user_agent"`
 	// RespectRobotsTxt checks robots.txt before fetching. Default: false.
@@ -1621,6 +1627,9 @@ func applyWebDefaults(cfg *Config) {
 	if cfg.Web.Fetch.MaxSizeBytes == 0 {
 		cfg.Web.Fetch.MaxSizeBytes = 5242880 // 5MB
 	}
+	if cfg.Web.Fetch.MaxResponseChars == 0 {
+		cfg.Web.Fetch.MaxResponseChars = 8000
+	}
 	if cfg.Web.Fetch.UserAgent == "" {
 		cfg.Web.Fetch.UserAgent = "Denkeeper/1.0 (+https://denkeeper.io)"
 	}
@@ -2105,6 +2114,9 @@ func validateWeb(w *WebConfig) error {
 	}
 	if w.Search.MaxResults < 1 || w.Search.MaxResults > 20 {
 		return fmt.Errorf("config: web.search.max_results must be between 1 and 20, got %d", w.Search.MaxResults)
+	}
+	if w.Fetch.MaxResponseChars < 1 || w.Fetch.MaxResponseChars > 100000 {
+		return fmt.Errorf("config: web.fetch.max_response_chars must be between 1 and 100000, got %d", w.Fetch.MaxResponseChars)
 	}
 	return nil
 }
