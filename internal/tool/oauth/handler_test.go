@@ -672,6 +672,154 @@ func TestRFCBehavior_RefreshableTokenSource(t *testing.T) {
 	}
 }
 
+// TestTokenSourceFromStored_PersistsRotatedRefreshTokenOnAutoRefresh is a
+// regression test for the refresh-token-reuse bug: a silent background
+// refresh (triggered because the cached access token has expired) must
+// write the newly-rotated refresh token back to the store immediately, not
+// just hold it in memory. Otherwise a handler recreated later (restart,
+// tool restart, health-check auto-restart, server reload) would load the
+// stale, already-invalidated refresh token from the store and replay it,
+// which providers with refresh-token rotation correctly reject as reuse.
+func TestTokenSourceFromStored_PersistsRotatedRefreshTokenOnAutoRefresh(t *testing.T) {
+	store, pending, logger := testHandlerDeps(t)
+
+	var tokenRequests int
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenRequests++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "rotated-access",
+			"refresh_token": "rotated-refresh", // provider rotates on every use
+			"token_type":    "Bearer",
+			"expires_in":    3600,
+		})
+	}))
+	t.Cleanup(tokenServer.Close)
+
+	h, err := NewHandler(HandlerConfig{
+		ToolName:     "rotating-provider",
+		CallbackURL:  "http://localhost:8080/callback",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		Store:        store,
+		Pending:      pending,
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	// Already-expired access token forces an immediate refresh.
+	expired := time.Now().Add(-time.Hour)
+	st := &StoredToken{
+		ToolName:     "rotating-provider",
+		AccessToken:  "stale-access",
+		RefreshToken: "stale-refresh",
+		TokenType:    "Bearer",
+		Expiry:       &expired,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		TokenURL:     tokenServer.URL,
+	}
+
+	ts := h.tokenSourceFromStored(st)
+	tok, err := ts.Token()
+	if err != nil {
+		t.Fatalf("getting token: %v", err)
+	}
+	if tok.AccessToken != "rotated-access" {
+		t.Fatalf("access token: got %q, want %q", tok.AccessToken, "rotated-access")
+	}
+	if tokenRequests != 1 {
+		t.Fatalf("expected exactly one refresh request, got %d", tokenRequests)
+	}
+
+	// The critical assertion: the store must now hold the rotated refresh
+	// token, not the stale one that was already consumed.
+	saved, err := store.Get("rotating-provider")
+	if err != nil {
+		t.Fatalf("loading saved token: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("expected a saved token after refresh")
+	}
+	if saved.RefreshToken != "rotated-refresh" {
+		t.Errorf("stored refresh token: got %q, want %q (stale refresh token would trigger reuse detection on next restart)",
+			saved.RefreshToken, "rotated-refresh")
+	}
+	if saved.AccessToken != "rotated-access" {
+		t.Errorf("stored access token: got %q, want %q", saved.AccessToken, "rotated-access")
+	}
+	// Metadata not present in the refresh response must be preserved from
+	// the originally stored token.
+	if saved.TokenURL != tokenServer.URL {
+		t.Errorf("stored token URL: got %q, want %q", saved.TokenURL, tokenServer.URL)
+	}
+	if saved.ClientID != "client-id" {
+		t.Errorf("stored client ID: got %q, want %q", saved.ClientID, "client-id")
+	}
+
+	// A second Token() call before expiry must be served from the in-memory
+	// cache (ReuseTokenSourceWithExpiry), not trigger another network refresh.
+	if _, err := ts.Token(); err != nil {
+		t.Fatalf("getting token again: %v", err)
+	}
+	if tokenRequests != 1 {
+		t.Errorf("expected cached token to avoid a second refresh request, got %d requests", tokenRequests)
+	}
+}
+
+// TestNotifyRefreshTokenSource_SavesOnlyOnChange verifies the notify wrapper
+// only invokes save when the underlying source actually returns a new
+// token, and that it still propagates the token and any error correctly.
+func TestNotifyRefreshTokenSource_SavesOnlyOnChange(t *testing.T) {
+	calls := 0
+	base := &fakeTokenSource{tok: &oauth2.Token{AccessToken: "a1", RefreshToken: "r1"}}
+	notifying := &notifyRefreshTokenSource{
+		base: base,
+		save: func(tok *oauth2.Token) { calls++ },
+		last: &oauth2.Token{AccessToken: "a1", RefreshToken: "r1"},
+	}
+
+	// Same token as `last` — no save.
+	if _, err := notifying.Token(); err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("expected no save for unchanged token, got %d calls", calls)
+	}
+
+	// Base rotates the token — must save exactly once.
+	base.tok = &oauth2.Token{AccessToken: "a2", RefreshToken: "r2"}
+	if _, err := notifying.Token(); err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one save after rotation, got %d calls", calls)
+	}
+
+	// Error from base must propagate without invoking save.
+	base.err = fmt.Errorf("refresh failed")
+	if _, err := notifying.Token(); err == nil {
+		t.Fatal("expected error to propagate")
+	}
+	if calls != 1 {
+		t.Fatalf("expected no save on error, got %d calls", calls)
+	}
+}
+
+type fakeTokenSource struct {
+	tok *oauth2.Token
+	err error
+}
+
+func (f *fakeTokenSource) Token() (*oauth2.Token, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.tok, nil
+}
+
 // TestPersistToken_DCRCredentialsCaptured verifies that when using DCR
 // (no pre-registered client), the client credentials discovered by the
 // SDK are captured from the token exchange and persisted.
