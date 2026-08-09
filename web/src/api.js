@@ -370,8 +370,15 @@ export const api = {
   sessionCheck: () => fetch('/auth/session').then(r => r.json()),
 
   // Audit Log
+  // Array values (category, status) go out comma-separated, which the API reads
+  // as a union. An empty array is truthy, so it has to be dropped explicitly or
+  // it would serialize as a `category=` that matches nothing.
   auditEvents: (params = {}) => {
-    const filtered = Object.fromEntries(Object.entries(params).filter(([, v]) => v))
+    const filtered = Object.fromEntries(
+      Object.entries(params)
+        .map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : v])
+        .filter(([, v]) => v),
+    )
     return apiFetch(`/api/v1/audit?${new URLSearchParams(filtered)}`)
   },
   auditStats: (since) => apiFetch(`/api/v1/audit/stats${since ? `?since=${encodeURIComponent(since)}` : ''}`),

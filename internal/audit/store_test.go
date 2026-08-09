@@ -94,7 +94,7 @@ func TestListFilterByCategory(t *testing.T) {
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryLLM, Action: "complete", Summary: "llm", Status: StatusOK})
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "tool2", Status: StatusError})
 
-	events, total, err := store.List(ctx, ListOpts{Category: CategoryToolCall})
+	events, total, err := store.List(ctx, ListOpts{Categories: []string{CategoryToolCall}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestListFilterByStatus(t *testing.T) {
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "ok", Status: StatusOK})
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "err", Status: StatusError})
 
-	events, total, err := store.List(ctx, ListOpts{Status: StatusError})
+	events, total, err := store.List(ctx, ListOpts{Statuses: []string{StatusError}})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -128,6 +128,82 @@ func TestListFilterByStatus(t *testing.T) {
 	}
 	if events[0].Summary != "err" {
 		t.Errorf("unexpected summary: %q", events[0].Summary)
+	}
+}
+
+func TestListFilterByMultipleCategories(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "tool", Status: StatusOK})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryLLM, Action: "complete", Summary: "llm", Status: StatusOK})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryApproval, Action: "approve", Summary: "approval", Status: StatusOK})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategorySkill, Action: "match", Summary: "skill", Status: StatusOK})
+
+	events, total, err := store.List(ctx, ListOpts{Categories: []string{CategoryToolCall, CategoryLLM, CategoryApproval}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("expected total=3, got %d", total)
+	}
+	for _, ev := range events {
+		if ev.Category == CategorySkill {
+			t.Errorf("skill event leaked into a tool_call/llm/approval filter")
+		}
+	}
+}
+
+func TestListFilterByMultipleStatuses(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "ok", Status: StatusOK})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "err", Status: StatusError})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "denied", Status: StatusDenied})
+
+	_, total, err := store.List(ctx, ListOpts{Statuses: []string{StatusError, StatusDenied}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2, got %d", total)
+	}
+}
+
+// An empty slice must behave like the "All" chip: no condition at all, not an
+// IN () that matches nothing.
+func TestListFilterEmptySlicesMatchEverything(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "tool", Status: StatusOK})
+	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryLLM, Action: "complete", Summary: "llm", Status: StatusError})
+
+	_, total, err := store.List(ctx, ListOpts{Categories: []string{}, Statuses: []string{}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2, got %d", total)
 	}
 }
 

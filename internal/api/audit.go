@@ -14,9 +14,9 @@ import (
 // @Tags audit
 // @Produce json
 // @Security BearerAuth
-// @Param category query string false "Filter by event category (e.g. tool_call, skill, channel, approval)"
+// @Param category query string false "Filter by event category (e.g. tool_call, skill, channel, approval). Comma-separated or repeated for a union of several categories."
 // @Param agent query string false "Filter by agent name"
-// @Param status query string false "Filter by status (ok, error, pending, denied)"
+// @Param status query string false "Filter by status (ok, error, pending, denied). Comma-separated or repeated for a union of several statuses."
 // @Param source query string false "Filter by event source"
 // @Param search query string false "Free-text search across event fields"
 // @Param since query string false "Start of time range (RFC3339 format)"
@@ -36,11 +36,11 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	opts := audit.ListOpts{
-		Category: q.Get("category"),
-		Agent:    q.Get("agent"),
-		Status:   q.Get("status"),
-		Source:   q.Get("source"),
-		Search:   q.Get("search"),
+		Categories: audit.ParseFilterList(q["category"]...),
+		Agent:      q.Get("agent"),
+		Statuses:   audit.ParseFilterList(q["status"]...),
+		Source:     q.Get("source"),
+		Search:     q.Get("search"),
 	}
 
 	if v := q.Get("since"); v != "" {

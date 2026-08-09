@@ -327,7 +327,7 @@ func TestScheduleAPI_BroadcastAuditOnPartialFailure(t *testing.T) {
 	h.FlushAudit(t)
 
 	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{
-		Category: audit.CategorySchedule,
+		Categories: []string{audit.CategorySchedule},
 	})
 	if err != nil {
 		t.Fatalf("listing audit events: %v", err)

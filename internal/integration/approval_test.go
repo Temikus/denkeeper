@@ -180,7 +180,7 @@ func TestApproval_ResolveViaAPI_DoesNotNotifyAdapter(t *testing.T) {
 	// Audit log must still record both resolutions so operators have a record
 	// of the API-driven decision even though no adapter message was emitted.
 	h.FlushAudit(t)
-	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{Category: audit.CategoryApproval})
+	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{Categories: []string{audit.CategoryApproval}})
 	if err != nil {
 		t.Fatalf("listing audit events: %v", err)
 	}

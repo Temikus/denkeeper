@@ -325,6 +325,23 @@
   flex-shrink: 0;
 }
 
+/* State marker on multi-select chips. Without it a bar that accepts several
+   values looks identical to a single-select one, so "you may pick more than
+   one" is only discoverable after risking a second click. Same geometry as
+   .chip-dot; currentColor keeps it correct on both chip backgrounds. */
+.chip-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  opacity: 0.5;
+}
+.chip.active .chip-mark {
+  background: currentColor;
+  opacity: 1;
+}
+
 /* ---------- Utilities ---------------------------------------------------- */
 
 .muted { color: var(--text-muted); }

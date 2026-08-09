@@ -144,22 +144,37 @@ func (s *SQLiteStore) InsertBatch(ctx context.Context, events []Event) error {
 	return nil
 }
 
+// inClause renders a set-membership condition for col, or ("", nil) when vals
+// is empty so the caller can drop the filter entirely. The placeholders are
+// generated from len(vals) — the values themselves are always bound, never
+// interpolated.
+func inClause(col string, vals []string) (string, []any) {
+	if len(vals) == 0 {
+		return "", nil
+	}
+	args := make([]any, len(vals))
+	for i, v := range vals {
+		args[i] = v
+	}
+	return col + " IN (?" + strings.Repeat(",?", len(vals)-1) + ")", args
+}
+
 // buildWhereClause constructs WHERE conditions from ListOpts.
 func buildWhereClause(opts ListOpts) (string, []any) {
 	var where []string
 	var args []any
 
-	if opts.Category != "" {
-		where = append(where, "category = ?")
-		args = append(args, opts.Category)
+	if cond, vals := inClause("category", opts.Categories); cond != "" {
+		where = append(where, cond)
+		args = append(args, vals...)
 	}
 	if opts.Agent != "" {
 		where = append(where, "agent = ?")
 		args = append(args, opts.Agent)
 	}
-	if opts.Status != "" {
-		where = append(where, "status = ?")
-		args = append(args, opts.Status)
+	if cond, vals := inClause("status", opts.Statuses); cond != "" {
+		where = append(where, cond)
+		args = append(args, vals...)
 	}
 	if opts.Source != "" {
 		where = append(where, "source = ?")

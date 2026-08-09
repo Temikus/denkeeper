@@ -130,3 +130,85 @@ describe('FilterChips', () => {
     expect(onselect).not.toHaveBeenCalled()
   })
 })
+
+describe('FilterChips (multiple)', () => {
+  function setupMulti(props = {}) {
+    return setup({ multiple: true, value: [], ...props })
+  }
+  const chipsOf = (container) => [...container.querySelectorAll('.chip')]
+
+  test('renders a labelled toolbar of toggle buttons instead of radios', () => {
+    const { container } = setupMulti()
+    const bar = container.querySelector('[role="toolbar"]')
+    expect(bar).toHaveAttribute('aria-label', 'Test filter')
+    expect(chipsOf(container)).toHaveLength(3)
+    expect(container.querySelectorAll('[role="radio"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[aria-checked]')).toHaveLength(0)
+  })
+
+  test('marks every selected chip', () => {
+    const { container } = setupMulti({ value: ['a', 'b'] })
+    const chips = chipsOf(container)
+    expect(chips.map(c => c.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'true'])
+    expect(chips[1]).toHaveClass('active')
+    expect(chips[2]).toHaveClass('active')
+  })
+
+  test('the All chip is active while nothing is selected', () => {
+    const { container } = setupMulti()
+    expect(chipsOf(container)[0]).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('every chip carries a state marker so the bar reads as multi-select', () => {
+    const { container } = setupMulti({ value: ['a'] })
+    expect(container.querySelectorAll('.chip-mark')).toHaveLength(3)
+    // The colour dot is a single-select affordance and must not double up.
+    expect(container.querySelectorAll('.chip-dot')).toHaveLength(0)
+  })
+
+  test('clicking an unselected chip adds it to the selection', async () => {
+    const { container, onselect } = setupMulti({ value: ['a'] })
+    await fireEvent.click(chipsOf(container)[2])
+    expect(onselect).toHaveBeenCalledWith(['a', 'b'])
+  })
+
+  test('clicking a selected chip removes it', async () => {
+    const { container, onselect } = setupMulti({ value: ['a', 'b'] })
+    await fireEvent.click(chipsOf(container)[1])
+    expect(onselect).toHaveBeenCalledWith(['b'])
+  })
+
+  test('the All chip clears the whole selection', async () => {
+    const { container, onselect } = setupMulti({ value: ['a', 'b'] })
+    await fireEvent.click(chipsOf(container)[0])
+    expect(onselect).toHaveBeenCalledWith([])
+  })
+
+  test('arrows move focus without changing the selection', async () => {
+    const { container, onselect } = setupMulti({ value: ['a'] })
+    const chips = chipsOf(container)
+    chips[1].focus()
+    await fireEvent.keyDown(chips[1], { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(chips[2])
+    expect(onselect).not.toHaveBeenCalled()
+  })
+
+  test('roving tabindex anchors on the first selected chip', () => {
+    const { container } = setupMulti({ value: ['b'] })
+    expect(chipsOf(container).map(c => c.getAttribute('tabindex'))).toEqual(['-1', '-1', '0'])
+  })
+
+  test('the tab stop follows the last-focused chip, not the selection', async () => {
+    const { container } = setupMulti({ value: ['a'] })
+    const chips = chipsOf(container)
+    expect(chips[1]).toHaveAttribute('tabindex', '0')
+    await fireEvent.keyDown(chips[1], { key: 'End' })
+    expect(chips[2]).toHaveAttribute('tabindex', '0')
+    expect(chips[1]).toHaveAttribute('tabindex', '-1')
+  })
+
+  test('tolerates a scalar value from a single-select caller', () => {
+    const { container } = setupMulti({ value: 'a' })
+    expect(chipsOf(container)[1]).toHaveAttribute('aria-pressed', 'true')
+  })
+})

@@ -14,8 +14,9 @@
   let offset = $state(0)
   const limit = 50
 
-  let category = $state('')
-  let status = $state('')
+  // Type and Status are unions (multi-select chips); an empty array is "All".
+  let categories = $state([])
+  let statuses = $state([])
   let timeRange = $state('24h')
   let search = $state('')
   let view = $state('timeline')
@@ -25,7 +26,7 @@
   let expandedRowId = $state(null)
   let expandedSessions = $state(new Set())
 
-  const categories = [
+  const categoryItems = [
     { value: '', label: 'All' },
     { value: 'tool_call', label: 'Tools' },
     { value: 'llm', label: 'LLM' },
@@ -36,7 +37,7 @@
     { value: 'skill', label: 'Skills' },
     { value: 'supervisor', label: 'Supervisor' },
   ]
-  const statuses = [
+  const statusItems = [
     { value: '', label: 'All' },
     { value: 'ok', label: 'OK' },
     { value: 'error', label: 'Error' },
@@ -68,7 +69,7 @@
       error = ''
       if (!append) refreshing = true
       const since = sinceFromRange(timeRange)
-      const res = await api.auditEvents({ category, status, search, since, limit: String(limit), offset: String(append ? offset : 0) })
+      const res = await api.auditEvents({ category: categories, status: statuses, search, since, limit: String(limit), offset: String(append ? offset : 0) })
       if (seq !== loadSeq) return
       if (append) { events = [...events, ...res.events] }
       else { events = res.events; offset = 0 }
@@ -86,12 +87,13 @@
   function refresh() { load(); loadStats() }
   function loadMore() { offset += limit; load(true) }
 
-  // Chips select on arrow-key focus, so a keyboard user sweeping the bar would
-  // fire one request per chip. Coalesce them the way the search box does.
+  // Range chips select on arrow-key focus, so a keyboard user sweeping the bar
+  // would fire one request per chip; toggling several Type chips is the same
+  // shape. Coalesce them the way the search box does.
   let filterTimeout
   function setFilter(key, value) {
-    if (key === 'category') category = value
-    else if (key === 'status') status = value
+    if (key === 'categories') categories = value
+    else if (key === 'statuses') statuses = value
     else if (key === 'timeRange') timeRange = value
     refreshing = true
     clearTimeout(filterTimeout)
@@ -258,11 +260,11 @@
   <!-- Filters -->
   <div class="filters">
     <span class="filter-label">Type</span>
-    <FilterChips items={categories} value={category} label="Category filter" size="sm"
-      onselect={(v) => setFilter('category', v)} />
+    <FilterChips items={categoryItems} value={categories} label="Category filter" size="sm" multiple
+      onselect={(v) => setFilter('categories', v)} />
     <span class="filter-label">Status</span>
-    <FilterChips items={statuses} value={status} label="Status filter" size="sm"
-      onselect={(v) => setFilter('status', v)} />
+    <FilterChips items={statusItems} value={statuses} label="Status filter" size="sm" multiple
+      onselect={(v) => setFilter('statuses', v)} />
     <span class="filter-label">Range</span>
     <FilterChips items={timeRanges} value={timeRange} label="Time range" size="sm"
       onselect={(v) => setFilter('timeRange', v)} />

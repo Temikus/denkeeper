@@ -63,6 +63,31 @@ func TestAuditEvents_ListsAndFilters(t *testing.T) {
 	}
 }
 
+func TestAuditEvents_CommaSeparatedFilters(t *testing.T) {
+	s := auditServer(t,
+		audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategoryToolCall, Agent: "a", Status: audit.StatusOK, Summary: "ran tool"},
+		audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategorySkill, Agent: "b", Status: audit.StatusError, Summary: "skill failed"},
+		audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategoryLLM, Agent: "c", Status: audit.StatusOK, Summary: "completed"},
+		audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategoryConfig, Agent: "d", Status: audit.StatusOK, Summary: "config changed"},
+	)
+
+	res, _, _ := s.handleAuditEvents(auditReadCtx(), nil, auditEventsInput{
+		Category: audit.CategoryToolCall + "," + audit.CategoryLLM,
+	})
+	var filtered audit.ListResult
+	if err := json.Unmarshal([]byte(toolResultText(res)), &filtered); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if filtered.Total != 2 {
+		t.Fatalf("expected 2 events for a two-category filter, got %+v", filtered)
+	}
+	for _, e := range filtered.Events {
+		if e.Category != audit.CategoryToolCall && e.Category != audit.CategoryLLM {
+			t.Errorf("unexpected category %q in the union", e.Category)
+		}
+	}
+}
+
 func TestAuditEvents_RequiresScope(t *testing.T) {
 	s := auditServer(t)
 	res, _, _ := s.handleAuditEvents(context.Background(), nil, auditEventsInput{})
