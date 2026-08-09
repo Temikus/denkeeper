@@ -9,9 +9,9 @@ import (
 )
 
 type auditEventsInput struct {
-	Category string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor)"`
+	Category string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor); comma-separated for several"`
 	Agent    string `json:"agent,omitempty" jsonschema:"Filter by agent name"`
-	Status   string `json:"status,omitempty" jsonschema:"Filter by status (ok, error, pending, denied)"`
+	Status   string `json:"status,omitempty" jsonschema:"Filter by status (ok, error, pending, denied); comma-separated for several"`
 	Source   string `json:"source,omitempty" jsonschema:"Filter by event source"`
 	Search   string `json:"search,omitempty" jsonschema:"Free-text search across event summaries"`
 	Since    string `json:"since,omitempty" jsonschema:"Start of time range (RFC 3339)"`
@@ -28,8 +28,9 @@ func (s *Server) registerAuditTools() {
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "audit_events",
 		Description: "List audit log events with optional filtering by category, agent, status, " +
-			"source, free-text search, and time range. Supports pagination (default limit 50, max 200). " +
-			"Requires 'audit:read' scope.",
+			"source, free-text search, and time range. 'category' and 'status' accept a " +
+			"comma-separated list and match any of the given values. " +
+			"Supports pagination (default limit 50, max 200). Requires 'audit:read' scope.",
 	}, s.handleAuditEvents)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -49,13 +50,13 @@ func (s *Server) handleAuditEvents(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	opts := audit.ListOpts{
-		Category: input.Category,
-		Agent:    input.Agent,
-		Status:   input.Status,
-		Source:   input.Source,
-		Search:   input.Search,
-		Limit:    input.Limit,
-		Offset:   input.Offset,
+		Categories: audit.ParseFilterList(input.Category),
+		Agent:      input.Agent,
+		Statuses:   audit.ParseFilterList(input.Status),
+		Source:     input.Source,
+		Search:     input.Search,
+		Limit:      input.Limit,
+		Offset:     input.Offset,
 	}
 	if input.Since != "" {
 		t, err := time.Parse(time.RFC3339, input.Since)

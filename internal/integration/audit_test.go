@@ -113,6 +113,82 @@ func TestAudit_FilterByStatus(t *testing.T) {
 	}
 }
 
+// The dashboard's multi-select Type/Status chips send a comma-separated list;
+// repeating the param is accepted too, so a hand-built URL works either way.
+func TestAudit_FilterByMultipleCategories(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryToolCall, Action: "execute", Summary: "tool", Status: audit.StatusOK})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryLLM, Action: "complete", Summary: "llm", Status: audit.StatusOK})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryApproval, Action: "approve", Summary: "approval", Status: audit.StatusOK})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategorySkill, Action: "match", Summary: "skill", Status: audit.StatusOK})
+
+	for _, query := range []string{
+		"/api/v1/audit?category=tool_call,llm,approval",
+		"/api/v1/audit?category=tool_call&category=llm,approval",
+	} {
+		rec := h.Do(h.AuthedRequest(http.MethodGet, query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d", query, rec.Code)
+		}
+
+		var resp audit.ListResult
+		DecodeJSON(t, rec, &resp)
+		if resp.Total != 3 {
+			t.Errorf("%s: expected total=3, got %d", query, resp.Total)
+		}
+		for _, ev := range resp.Events {
+			if ev.Category == audit.CategorySkill {
+				t.Errorf("%s: skill event leaked through the category union", query)
+			}
+		}
+	}
+}
+
+func TestAudit_FilterByMultipleStatuses(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryToolCall, Action: "execute", Summary: "ok", Status: audit.StatusOK})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryToolCall, Action: "execute", Summary: "err", Status: audit.StatusError})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryToolCall, Action: "execute", Summary: "denied", Status: audit.StatusDenied})
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?status=error,denied", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var resp audit.ListResult
+	DecodeJSON(t, rec, &resp)
+	if resp.Total != 2 {
+		t.Errorf("expected total=2, got %d", resp.Total)
+	}
+}
+
+// An empty filter param is the "All" chip, not a filter that matches nothing.
+func TestAudit_EmptyFilterParamsMatchEverything(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryToolCall, Action: "execute", Summary: "tool", Status: audit.StatusOK})
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: now, Category: audit.CategoryLLM, Action: "complete", Summary: "llm", Status: audit.StatusError})
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?category=&status=", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+
+	var resp audit.ListResult
+	DecodeJSON(t, rec, &resp)
+	if resp.Total != 2 {
+		t.Errorf("expected total=2, got %d", resp.Total)
+	}
+}
+
 func TestAudit_Pagination(t *testing.T) {
 	h := NewHarness(t, nil)
 	ctx := context.Background()

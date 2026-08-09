@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
@@ -164,38 +164,126 @@ describe('AuditLog page', () => {
     await waitFor(() => {
       expect(screen.getByText('Audit log')).toBeInTheDocument()
     })
-    const toolsChip = screen.getByRole('radio', { name: 'Tools' })
+    const toolsChip = screen.getByRole('button', { name: 'Tools' })
     expect(toolsChip).toBeInTheDocument()
     await fireEvent.click(toolsChip)
-    expect(toolsChip.getAttribute('aria-checked')).toBe('true')
+    expect(toolsChip.getAttribute('aria-pressed')).toBe('true')
   })
 
-  test('each chip bar is a single tab stop with arrow-key navigation', async () => {
+  test('Type and Status chips select several values at once', async () => {
+    let lastUrl = ''
+    server.use(
+      http.get('/api/v1/audit', ({ request }) => {
+        lastUrl = request.url
+        return HttpResponse.json({ events: [], total: 0 })
+      }),
+    )
+    render(AuditLog)
+    await waitFor(() => expect(lastUrl).not.toBe(''))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'LLM' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Approvals' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Error' }))
+
+    await waitFor(() => {
+      const params = new URL(lastUrl).searchParams
+      expect(params.get('category')).toBe('tool_call,llm,approval')
+      expect(params.get('status')).toBe('error')
+    })
+    expect(screen.getByRole('button', { name: 'LLM' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('deselecting a Type chip narrows the union back down', async () => {
+    let lastUrl = ''
+    server.use(
+      http.get('/api/v1/audit', ({ request }) => {
+        lastUrl = request.url
+        return HttpResponse.json({ events: [], total: 0 })
+      }),
+    )
+    render(AuditLog)
+    await waitFor(() => expect(lastUrl).not.toBe(''))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'LLM' }))
+    await waitFor(() => {
+      expect(new URL(lastUrl).searchParams.get('category')).toBe('tool_call,llm')
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await waitFor(() => {
+      expect(new URL(lastUrl).searchParams.get('category')).toBe('llm')
+    })
+  })
+
+  test('the All chip clears a multi-selection and sends no filter', async () => {
+    let lastUrl = ''
+    server.use(
+      http.get('/api/v1/audit', ({ request }) => {
+        lastUrl = request.url
+        return HttpResponse.json({ events: [], total: 0 })
+      }),
+    )
+    render(AuditLog)
+    await waitFor(() => expect(lastUrl).not.toBe(''))
+
+    const typeBar = screen.getByRole('toolbar', { name: 'Category filter' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'LLM' }))
+    await waitFor(() => {
+      expect(new URL(lastUrl).searchParams.get('category')).toBe('tool_call,llm')
+    })
+
+    // "All" is the clear-all chip; an empty selection must drop the param
+    // rather than send `category=`, which would match nothing server-side.
+    await fireEvent.click(within(typeBar).getByRole('button', { name: 'All' }))
+    await waitFor(() => {
+      expect(new URL(lastUrl).searchParams.has('category')).toBe(false)
+    })
+    expect(within(typeBar).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test('the range bar is a single tab stop with arrow-key selection', async () => {
     render(AuditLog)
     await waitFor(() => {
       expect(screen.getByText('Audit log')).toBeInTheDocument()
     })
 
-    const group = screen.getByRole('radiogroup', { name: 'Category filter' })
+    const group = screen.getByRole('radiogroup', { name: 'Time range' })
     const chips = [...group.querySelectorAll('[role="radio"]')]
-    // "All" is selected on load, so it owns the group's single tab stop.
-    expect(chips[0]).toHaveAttribute('tabindex', '0')
-    expect(chips.slice(1).every(c => c.getAttribute('tabindex') === '-1')).toBe(true)
-
-    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
-    await waitFor(() => {
-      expect(chips[1]).toHaveAttribute('aria-checked', 'true')
-    })
+    // "24h" is selected on load, so it owns the group's single tab stop.
     expect(chips[1]).toHaveAttribute('tabindex', '0')
-    expect(chips[0]).toHaveAttribute('tabindex', '-1')
+    expect(chips.filter((_, i) => i !== 1).every(c => c.getAttribute('tabindex') === '-1')).toBe(true)
 
-    await fireEvent.keyDown(chips[1], { key: 'Home' })
+    await fireEvent.keyDown(chips[1], { key: 'ArrowRight' })
+    await waitFor(() => {
+      expect(chips[2]).toHaveAttribute('aria-checked', 'true')
+    })
+    expect(chips[2]).toHaveAttribute('tabindex', '0')
+    expect(chips[1]).toHaveAttribute('tabindex', '-1')
+
+    await fireEvent.keyDown(chips[2], { key: 'Home' })
     await waitFor(() => {
       expect(chips[0]).toHaveAttribute('aria-checked', 'true')
     })
   })
 
-  test('arrow-keying across chips coalesces into a single refetch', async () => {
+  test('arrows move focus across Type chips without selecting', async () => {
+    render(AuditLog)
+    await waitFor(() => {
+      expect(screen.getByText('Audit log')).toBeInTheDocument()
+    })
+
+    const group = screen.getByRole('toolbar', { name: 'Category filter' })
+    const chips = [...group.querySelectorAll('.chip')]
+    chips[0].focus()
+    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(chips[1])
+    expect(chips[1]).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  test('rapid chip toggling coalesces into a single refetch', async () => {
     let calls = 0
     server.use(
       http.get('/api/v1/audit', () => {
@@ -206,25 +294,25 @@ describe('AuditLog page', () => {
     render(AuditLog)
     await waitFor(() => expect(calls).toBe(1))
 
-    const group = screen.getByRole('radiogroup', { name: 'Category filter' })
-    const chips = [...group.querySelectorAll('[role="radio"]')]
-    await fireEvent.keyDown(chips[0], { key: 'ArrowRight' })
-    await fireEvent.keyDown(chips[1], { key: 'ArrowRight' })
-    await fireEvent.keyDown(chips[2], { key: 'ArrowRight' })
+    const group = screen.getByRole('toolbar', { name: 'Category filter' })
+    const chips = [...group.querySelectorAll('.chip')]
+    await fireEvent.click(chips[1])
+    await fireEvent.click(chips[2])
+    await fireEvent.click(chips[3])
 
-    // Selection follows focus, so all three chips changed the filter; the
-    // page must not fire one request per keypress.
-    expect(chips[3]).toHaveAttribute('aria-checked', 'true')
+    // Three filter changes in quick succession; the page must not fire one
+    // request per click.
+    expect(chips[3]).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(calls).toBeGreaterThan(1))
     expect(calls).toBeLessThanOrEqual(2)
   })
 
-  test('status and range chip bars are labelled radiogroups', async () => {
+  test('the status bar is a labelled toolbar and the range bar a radiogroup', async () => {
     render(AuditLog)
     await waitFor(() => {
       expect(screen.getByText('Audit log')).toBeInTheDocument()
     })
-    expect(screen.getByRole('radiogroup', { name: 'Status filter' })).toBeInTheDocument()
+    expect(screen.getByRole('toolbar', { name: 'Status filter' })).toBeInTheDocument()
     expect(screen.getByRole('radiogroup', { name: 'Time range' })).toBeInTheDocument()
   })
 

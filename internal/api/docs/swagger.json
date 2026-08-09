@@ -753,7 +753,7 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter by event category (e.g. tool_call, skill, channel, approval)",
+                        "description": "Filter by event category (e.g. tool_call, skill, channel, approval). Comma-separated or repeated for a union of several categories.",
                         "name": "category",
                         "in": "query"
                     },
@@ -765,7 +765,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Filter by status (ok, error, pending, denied)",
+                        "description": "Filter by status (ok, error, pending, denied). Comma-separated or repeated for a union of several statuses.",
                         "name": "status",
                         "in": "query"
                     },

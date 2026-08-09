@@ -3,8 +3,34 @@ package audit
 
 import (
 	"context"
+	"strings"
 	"time"
 )
+
+// ParseFilterList normalizes multi-valued filter input into the union form
+// ListOpts.Categories / ListOpts.Statuses expect. Each input may itself be
+// comma-separated, so both `?category=llm,tool_call` and the repeated
+// `?category=llm&category=tool_call` spelling arrive here as the same set.
+// Blanks are dropped and duplicates collapsed, so a lone "" (the dashboard's
+// "All" chip) yields nil — i.e. no filter.
+func ParseFilterList(values ...string) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, dup := seen[part]; dup {
+				continue
+			}
+			seen[part] = struct{}{}
+			out = append(out, part)
+		}
+	}
+	return out
+}
 
 // Event categories.
 const (
@@ -45,16 +71,19 @@ type Event struct {
 }
 
 // ListOpts controls filtering and pagination for audit event queries.
+//
+// Categories and Statuses are unions: an event matches when it carries any one
+// of the listed values. Empty (or nil) means "no filter on this field".
 type ListOpts struct {
-	Category string
-	Agent    string
-	Status   string
-	Source   string
-	Search   string
-	Since    *time.Time
-	Until    *time.Time
-	Limit    int
-	Offset   int
+	Categories []string
+	Agent      string
+	Statuses   []string
+	Source     string
+	Search     string
+	Since      *time.Time
+	Until      *time.Time
+	Limit      int
+	Offset     int
 }
 
 // Stats holds aggregate counts for the audit log dashboard.
