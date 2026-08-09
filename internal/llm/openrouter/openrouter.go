@@ -60,6 +60,16 @@ type Client struct {
 
 	detailsMu    sync.Mutex
 	detailsCache *modelDetailsCache
+
+	frontendURL string // injectable frontend API base for tests; empty → frontendBaseURL
+}
+
+// frontendBase returns the frontend API base, honoring an injected override.
+func (c *Client) frontendBase() string {
+	if c.frontendURL != "" {
+		return c.frontendURL
+	}
+	return frontendBaseURL
 }
 
 // clock returns the current time, honoring an injected clock for tests.
@@ -561,7 +571,12 @@ func (c *Client) fetchModelDetails(ctx context.Context) ([]llm.ModelInfo, error)
 	return models, nil
 }
 
-const frontendBaseURL = "https://openrouter.ai/api/frontend"
+// frontendBaseURL is OpenRouter's unofficial frontend API, the only public
+// source of per-model usage analytics. It is versioned and unannounced: the
+// namespace moved from /api/frontend to /api/frontend/v1 in 2026, which
+// silently zeroed popularity sorting until noticed. If popularity bars go
+// flat, check this path against what openrouter.ai/rankings calls.
+const frontendBaseURL = "https://openrouter.ai/api/frontend/v1"
 
 const frontendTimeout = 10 * time.Second
 
@@ -571,7 +586,9 @@ func (c *Client) fetchFrontendData(ctx context.Context) (permaslugs map[string]s
 	ctx, cancel := context.WithTimeout(ctx, frontendTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, frontendBaseURL+"/models/find", nil)
+	findURL := c.frontendBase() + "/models/find"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, findURL, nil)
 	if err != nil {
 		slog.Debug("openrouter: failed to build frontend request", "error", err)
 		return nil, nil
@@ -585,7 +602,10 @@ func (c *Client) fetchFrontendData(ctx context.Context) (permaslugs map[string]s
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Debug("openrouter: frontend API returned non-200", "status", resp.StatusCode)
+		// Warn, not Debug: a moved/removed endpoint degrades popularity
+		// sorting to zeros, which looks like working-but-empty data.
+		slog.Warn("openrouter: frontend API returned non-200, popularity data unavailable",
+			"status", resp.StatusCode, "url", findURL)
 		return nil, nil
 	}
 
