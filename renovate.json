@@ -8,5 +8,14 @@
   ],
   "schedule": [
     "before 9am on monday"
-  ]
+  ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "schedule": [
+      "at any time"
+    ],
+    "labels": [
+      "security"
+    ]
+  }
 }
