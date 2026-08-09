@@ -61,6 +61,7 @@ func initOAuthSupport(ctx context.Context, cfg *config.Config, toolMgr *tool.Man
 	toolMgr.SetOAuthSupport(&tool.OAuthSupport{
 		HandlerFactory: factory,
 		CallbackURL:    callbackURL,
+		TokenStore:     store,
 	})
 
 	go pending.StartCleanup(ctx, time.Minute)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -101,6 +102,12 @@ func (lm *LifecycleManager) AddTool(ctx context.Context, name string, cfg config
 		return err
 	}
 
+	// The name passed checkConflict, so any persisted OAuth token under it is
+	// an orphan from a previously deleted tool. Purge before RegisterServer
+	// (which reads the store) so the new tool starts unauthenticated instead
+	// of adopting the old token.
+	lm.toolMgr.CleanupOAuthToken(name)
+
 	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
 		return fmt.Errorf("starting tool %q: %w", name, err)
 	}
@@ -158,9 +165,18 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
-	// Verify the tool exists.
-	if _, ok := lm.toolMgr.ServerInfo(name); !ok {
+	// Verify the tool exists and capture its old config.
+	oldCfg, ok := lm.toolMgr.ServerToolConfig(name)
+	if !ok {
 		return fmt.Errorf("tool %q not found", name)
+	}
+
+	// A stored token belongs to the OAuth identity it was issued for. If the
+	// update changes that identity, discard the token so the tool re-auths —
+	// before UnregisterServer, so a live handler's in-memory state clears too.
+	// Updates that leave the identity untouched keep the token.
+	if oauthIdentityChanged(oldCfg, cfg) {
+		lm.toolMgr.CleanupOAuthToken(name)
 	}
 
 	// Remove old server.
@@ -381,6 +397,10 @@ func (lm *LifecycleManager) RemovePlugin(ctx context.Context, name string) error
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
+	// Plugins never authenticate via OAuth, but a token row orphaned by an
+	// old same-named tool may exist; clear it so the name is clean for reuse.
+	lm.toolMgr.CleanupOAuthToken(name)
+
 	// Try to unregister from tool manager (may not be there if no tools capability).
 	_ = lm.toolMgr.UnregisterServer(name)
 
@@ -478,6 +498,23 @@ func (lm *LifecycleManager) checkLimit() error {
 		return fmt.Errorf("maximum number of tools reached (%d)", lm.maxTools)
 	}
 	return nil
+}
+
+// oauthIdentityChanged reports whether an update alters the fields a stored
+// OAuth token is bound to: auth mode, client credentials, scopes, or server
+// URL. Tokens are keyed by tool name only, so when any of these change the
+// old token must be discarded — nothing else stops the updated tool from
+// reusing a token issued to a different identity. Transitions into OAuth
+// also report true, purging rows orphaned by pre-cleanup versions.
+func oauthIdentityChanged(oldCfg, newCfg config.ToolConfig) bool {
+	if oldCfg.Auth != "oauth" && newCfg.Auth != "oauth" {
+		return false
+	}
+	return oldCfg.Auth != newCfg.Auth ||
+		oldCfg.ClientID != newCfg.ClientID ||
+		oldCfg.ClientSecret != newCfg.ClientSecret ||
+		oldCfg.URL != newCfg.URL ||
+		!slices.Equal(oldCfg.Scopes, newCfg.Scopes)
 }
 
 func validateToolName(name string) error {
