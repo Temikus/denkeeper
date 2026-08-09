@@ -15,22 +15,15 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Provider compatibility notes:
+// Providers vary: some issue non-expiring tokens with no refresh token
+// (no refresh needed); others (e.g. Todoist) issue expiring tokens with a
+// rotating refresh token, which must be persisted on every refresh or a
+// later replay of the stale token trips reuse detection. Don't assume a
+// provider's category from prior behavior — it can change.
 //
-// MCP OAuth providers fall into two categories:
-//
-//  1. Non-expiring tokens (e.g. Todoist): return expires_in=0, no refresh
-//     token, and may use Dynamic Client Registration. After the initial
-//     auth, the access token works indefinitely — no refresh needed. The
-//     MCP SDK also returns HTTP 200 (not 201) for DCR, requiring a fixup.
-//
-//  2. RFC-compliant providers: return tokens with expiry and a refresh
-//     token. Need the token URL and client credentials persisted so
-//     refresh works across restarts.
-//
-// The oauthRoundTripper below handles both by capturing the token endpoint
-// URL and any DCR-assigned client credentials from the HTTP requests the
-// SDK makes during the authorization flow.
+// oauthRoundTripper below captures the token endpoint URL and any
+// DCR-assigned client credentials from the HTTP requests the SDK makes
+// during the authorization flow.
 
 // oauthRoundTripper wraps the base transport with two workarounds:
 //  1. DCR fix: rewrites HTTP 200 → 201 for Dynamic Client Registration
@@ -160,8 +153,39 @@ type Handler struct {
 	cancel context.CancelFunc
 	rt     *oauthRoundTripper // captures token URL during exchange
 
-	mu       sync.Mutex
-	cachedTS oauth2.TokenSource // from stored token, nil if none
+	mu sync.Mutex
+
+	// cachedTS is the active token source, nil if none. Guarded by mu.
+	cachedTS oauth2.TokenSource
+
+	// refreshMeta is the metadata (client credentials, token URL, scopes)
+	// needed to persist a token from a background refresh, since those
+	// requests bypass oauthRoundTripper. Guarded by mu.
+	refreshMeta StoredToken
+}
+
+func (h *Handler) getCachedTS() oauth2.TokenSource {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cachedTS
+}
+
+func (h *Handler) setCachedTS(ts oauth2.TokenSource) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cachedTS = ts
+}
+
+func (h *Handler) getRefreshMeta() StoredToken {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.refreshMeta
+}
+
+func (h *Handler) setRefreshMeta(st StoredToken) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.refreshMeta = st
 }
 
 // NewHandler creates an OAuth handler for a remote MCP tool.
@@ -203,7 +227,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 			slog.String("tool", cfg.ToolName),
 			slog.String("error", err.Error()))
 	} else if stored != nil {
-		h.cachedTS = h.tokenSourceFromStored(stored)
+		h.setCachedTS(h.tokenSourceFromStored(stored)) // also sets h.refreshMeta
 		cfg.Logger.Info("oauth: loaded cached token",
 			slog.String("tool", cfg.ToolName),
 			slog.Bool("has_refresh", stored.RefreshToken != ""))
@@ -271,9 +295,7 @@ func NewHandler(cfg HandlerConfig) (*Handler, error) {
 // When nil is returned, the transport will send a request without auth,
 // receive a 401, and call Authorize().
 func (h *Handler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
-	h.mu.Lock()
-	ts := h.cachedTS
-	h.mu.Unlock()
+	ts := h.getCachedTS()
 	h.logger.Debug("oauth: TokenSource called",
 		slog.String("tool", h.toolName),
 		slog.Bool("has_cached", ts != nil))
@@ -371,15 +393,10 @@ func (h *Handler) persistToken(tok *oauth2.Token, ts oauth2.TokenSource) {
 		st.Expiry = &exp
 	}
 
-	// The MCP SDK constructs the oauth2.Config (with TokenURL, ClientID, etc.)
-	// as a local variable inside Authorize() — we can't access it directly.
-	// Our round tripper intercepts the token exchange HTTP request to capture
-	// these values. This is essential for two cases:
-	//  - TokenURL: needed for token refresh across restarts (RFC providers).
-	//  - ClientID/Secret: needed for DCR flows (e.g. Todoist) where the
-	//    credentials are assigned dynamically and h.clientID is empty.
-	// For non-expiring providers like Todoist (no refresh token), these
-	// fields are stored but unused — the token is static.
+	// Authorize() builds the oauth2.Config internally and doesn't expose it,
+	// so we capture TokenURL/ClientID/ClientSecret from the token exchange
+	// request via the round tripper instead (needed for refresh, and for
+	// DCR-assigned credentials when h.clientID is empty).
 	capturedURL, capturedID, capturedSecret, capturedStyle := h.rt.captured()
 	if capturedURL != "" {
 		st.TokenURL = capturedURL
@@ -411,9 +428,74 @@ func (h *Handler) persistToken(tok *oauth2.Token, ts oauth2.TokenSource) {
 		return
 	}
 
-	h.mu.Lock()
-	h.cachedTS = ts
-	h.mu.Unlock()
+	h.setCachedTS(ts)
+	h.setRefreshMeta(*st)
+}
+
+// saveRefreshedToken persists a token from a silent background refresh
+// (see notifyRefreshTokenSource). It does NOT touch cachedTS — the live
+// refreshing source is already correct and must not be replaced with a
+// static snapshot. Reuses the last-known client credentials/token
+// URL/scopes since refresh requests bypass oauthRoundTripper.
+func (h *Handler) saveRefreshedToken(tok *oauth2.Token) {
+	st := h.getRefreshMeta()
+
+	st.ToolName = h.toolName
+	st.AccessToken = tok.AccessToken
+	st.RefreshToken = tok.RefreshToken
+	st.TokenType = tok.TokenType
+	if !tok.Expiry.IsZero() {
+		exp := tok.Expiry
+		st.Expiry = &exp
+	} else {
+		st.Expiry = nil
+	}
+
+	if err := h.store.Put(&st); err != nil {
+		h.logger.Error("oauth: failed to persist refreshed token",
+			slog.String("tool", h.toolName),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	h.setRefreshMeta(st)
+
+	h.logger.Info("oauth: persisted refreshed token",
+		slog.String("tool", h.toolName),
+		slog.Bool("has_refresh_token", st.RefreshToken != ""),
+		slog.Bool("has_expiry", st.Expiry != nil))
+}
+
+// notifyRefreshTokenSource wraps a refreshing TokenSource and calls save
+// whenever the token changes. Sits inside oauth2.ReuseTokenSourceWithExpiry
+// so Token() is only called on an actual refresh, not every cache hit.
+type notifyRefreshTokenSource struct {
+	base oauth2.TokenSource
+	save func(*oauth2.Token)
+
+	mu   sync.Mutex
+	last *oauth2.Token
+}
+
+func (s *notifyRefreshTokenSource) Token() (*oauth2.Token, error) {
+	tok, err := s.base.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	changed := func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		c := s.last == nil || tok.AccessToken != s.last.AccessToken || tok.RefreshToken != s.last.RefreshToken
+		s.last = tok
+		return c
+	}()
+
+	if changed {
+		s.save(tok)
+	}
+
+	return tok, nil
 }
 
 // tokenSourceFromStored creates an oauth2.TokenSource from a stored token.
@@ -425,8 +507,17 @@ func (h *Handler) tokenSourceFromStored(st *StoredToken) oauth2.TokenSource {
 	tok := st.ToOAuth2Token()
 
 	if st.RefreshToken != "" && st.TokenURL != "" {
+		h.setRefreshMeta(*st)
+
 		cfg := st.ToOAuth2Config()
-		return oauth2.ReuseTokenSourceWithExpiry(tok, cfg.TokenSource(h.ctx, tok), 5*time.Minute)
+		// Persist on every real refresh so a stale, already-rotated refresh
+		// token never sits in the store waiting to be replayed.
+		notifying := &notifyRefreshTokenSource{
+			base: cfg.TokenSource(h.ctx, tok),
+			save: h.saveRefreshedToken,
+			last: tok,
+		}
+		return oauth2.ReuseTokenSourceWithExpiry(tok, notifying, 5*time.Minute)
 	}
 
 	// No refresh capability — return a static token source.
@@ -440,9 +531,7 @@ func (h *Handler) ToolName() string {
 
 // HasToken returns whether this handler has a cached token.
 func (h *Handler) HasToken() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.cachedTS != nil
+	return h.getCachedTS() != nil
 }
 
 // Close cancels any background token refresh operations.
@@ -476,9 +565,7 @@ func (h *Handler) InitiateOAuth(ctx context.Context, serverURL string) error {
 
 // ClearToken removes the cached token and stored token.
 func (h *Handler) ClearToken() error {
-	h.mu.Lock()
-	h.cachedTS = nil
-	h.mu.Unlock()
+	h.setCachedTS(nil)
 
 	if err := h.store.Delete(h.toolName); err != nil {
 		return fmt.Errorf("oauth: clearing token for %q: %w", h.toolName, err)
