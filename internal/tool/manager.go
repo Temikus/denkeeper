@@ -101,6 +101,17 @@ type OAuthSupport struct {
 	// a build-tag-gated init in manager_oauth.go.
 	HandlerFactory OAuthHandlerFactory
 	CallbackURL    string
+
+	// TokenStore deletes persisted tokens directly, independent of any live
+	// handler. Satisfied by *oauth.TokenStore. Needed because tokens are
+	// keyed by tool name alone: a tool that is disabled, config-errored, or
+	// pending at removal time has no oauthHandler, yet may still own a row.
+	TokenStore TokenDeleter
+}
+
+// TokenDeleter removes a persisted OAuth token by tool name.
+type TokenDeleter interface {
+	Delete(toolName string) error
 }
 
 // OAuthHandlerFactory creates an OAuthHandler and its corresponding
@@ -896,11 +907,15 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 	return text, nil
 }
 
-// UnregisterServer stops the MCP server for the given config name,
-// removes its tools from the tool map, and closes the connection.
-// Returns an error if the server is not registered.
 // CleanupOAuthToken removes the OAuth token for a tool, if any.
 // Called during tool removal to avoid leaving orphaned tokens.
+//
+// A live OAuth connection clears through its handler, which also drops the
+// in-memory token source. Handlers exist only on live connections, though —
+// a tool that is disabled, config-errored, pending, or not registered at all
+// may still own a persisted row keyed by its name, so those fall through to
+// a direct store delete. Otherwise the row survives and a tool later created
+// with the same name silently adopts the stale token.
 func (m *Manager) CleanupOAuthToken(name string) {
 	m.mu.RLock()
 	sc, ok := m.servers[name]
@@ -909,6 +924,16 @@ func (m *Manager) CleanupOAuthToken(name string) {
 	if ok && sc.oauthHandler != nil {
 		if err := sc.oauthHandler.ClearToken(); err != nil {
 			m.logger.Warn("oauth: failed to clean up token on removal",
+				slog.String("tool", name),
+				slog.String("error", err.Error()))
+		} else {
+			return
+		}
+	}
+
+	if m.oauth != nil && m.oauth.TokenStore != nil {
+		if err := m.oauth.TokenStore.Delete(name); err != nil {
+			m.logger.Warn("oauth: failed to delete stored token on removal",
 				slog.String("tool", name),
 				slog.String("error", err.Error()))
 		}
@@ -938,6 +963,9 @@ func (m *Manager) ServerResolvedURL(name string) string {
 	return ""
 }
 
+// UnregisterServer stops the MCP server for the given config name,
+// removes its tools from the tool map, and closes the connection.
+// Returns an error if the server is not registered.
 func (m *Manager) UnregisterServer(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
