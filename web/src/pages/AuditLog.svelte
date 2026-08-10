@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { api } from '../api.js'
+  import { parseAuditSearch } from '../auditSearch.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import AuditSession from '../components/AuditSession.svelte'
   import AuditRow from '../components/AuditRow.svelte'
@@ -19,6 +20,7 @@
   let statuses = $state([])
   let timeRange = $state('24h')
   let search = $state('')
+  let agent = $state('')
   let view = $state('timeline')
   let follow = $state(false)
   let refreshTimer
@@ -71,7 +73,7 @@
       error = ''
       if (!append && !quiet) refreshing = true
       const since = sinceFromRange(timeRange)
-      const res = await api.auditEvents({ category: categories, status: statuses, search, since, limit: String(limit), offset: String(append ? offset : 0) })
+      const res = await api.auditEvents({ category: categories, status: statuses, agent, search, since, limit: String(limit), offset: String(append ? offset : 0) })
       if (seq !== loadSeq) return
       if (append) { events = [...events, ...res.events] }
       else { events = res.events; offset = 0 }
@@ -107,14 +109,46 @@
     else clearInterval(refreshTimer)
   }
 
+  // `tool:`/`agent:` tokens are resolved here rather than sent verbatim: the
+  // API has an exact-match agent filter but no token syntax of its own.
   let searchTimeout
   function onSearchInput(e) {
     // Marked on the keystroke rather than when the request finally goes out:
-    // the debounce is part of the wait the user is sitting through, and a
-    // query that will return nothing must not read as "no results" meanwhile.
+    // the debounce is part of the wait the user is sitting through, and the
+    // filter chips below still describe the *previous* query until it fires.
     refreshing = true
+    const raw = e.target.value
     clearTimeout(searchTimeout)
-    searchTimeout = setTimeout(() => { search = e.target.value; refresh() }, 300)
+    searchTimeout = setTimeout(() => {
+      const parsed = parseAuditSearch(raw)
+      search = parsed.search
+      agent = parsed.agent
+      refresh()
+    }, 300)
+  }
+
+  // Chips describe the request that was sent, not the tokens that were typed:
+  // `tool:a tool:b` is one phrase match on the wire, so it reads as one chip,
+  // and untokenized text gets a chip too. The two filters read differently
+  // server-side — agent is exact, search is a summary substring — so they say
+  // so, which is the mapping the token syntax exists to expose.
+  let activeFilters = $derived([
+    ...(agent ? [`agent = ${agent}`] : []),
+    ...(search ? [`summary contains "${search}"`] : []),
+  ])
+
+  // Two audiences for one flag. `aria-busy` tracks any in-flight load, first
+  // paint included. The visible dim and the "Searching…" marker are reserved
+  // for refetches that replace results already on screen — the first paint has
+  // its own "Loading..." placeholder, and doubling it only flashes.
+  let busy = $derived(refreshing && !loading)
+
+  // Distinguishes "nothing happened yet" from "your filter matched nothing".
+  function filterSuffix() {
+    const parts = []
+    if (agent) parts.push(`for agent "${agent}"`)
+    if (search) parts.push(`matching "${search}"`)
+    return parts.length ? ` ${parts.join(' ')}` : ''
   }
 
   function toggleRow(id) { expandedRowId = expandedRowId === id ? null : id }
@@ -280,20 +314,36 @@
   <div class="search-card">
     <span class="search-icon">{'\u2315'}</span>
     <input type="text" class="search-input" placeholder="Search events" aria-label="Search audit events" oninput={onSearchInput} />
-    <span class="search-hint">try</span>
-    <code class="search-example">tool:name</code>
-    <code class="search-example">agent:planner</code>
-    {#if refreshing}
-      <span class="search-status" role="status">Searching{'\u2026'}</span>
+    <!-- Mounted even when empty: a live region inserted together with its
+         content is not reliably announced, and the first filter is the one
+         that matters. The in-flight marker shares the region rather than
+         adding a second one, for the same reason \u2014 and because "a query is
+         running" and "this is what it filtered on" are one status, read in
+         that order. -->
+    <span class="search-filters" class:has-filters={activeFilters.length > 0} role="status">
+      {#if busy}
+        <span class="search-status">Searching{'\u2026'}</span>
+      {/if}
+      {#if activeFilters.length > 0}
+        <span class="search-hint">filtering</span>
+        {#each activeFilters as f}
+          <code class="search-example is-active">{f}</code>
+        {/each}
+      {/if}
+    </span>
+    {#if activeFilters.length === 0 && !busy}
+      <span class="search-hint is-hint">try</span>
+      <code class="search-example is-hint">tool:name</code>
+      <code class="search-example is-hint">agent:planner</code>
     {/if}
   </div>
 
   <!-- Event list -->
-  <div class="results" class:is-refreshing={refreshing} aria-busy={refreshing}>
+  <div class="results" class:is-refreshing={busy} aria-busy={refreshing}>
     {#if loading}
       <p class="empty">Loading...</p>
     {:else if groupedItems.length === 0}
-      <p class="empty">No audit events found.</p>
+      <p class="empty">No audit events found{filterSuffix()}.</p>
     {:else if view === 'timeline'}
       <div class="timeline">
         {#each groupedItems as item}
@@ -384,7 +434,7 @@
   }
   .search-icon { color: var(--text-muted); font-size: 13px; }
   .search-input {
-    flex: 1; border: none; background: transparent;
+    flex: 1; min-width: 0; border: none; background: transparent;
     font-size: 12px; color: var(--text); outline: none;
   }
   .search-input::placeholder { color: var(--text-muted); }
@@ -393,11 +443,19 @@
     background: rgba(44,24,16,0.06); padding: 1px 6px;
     border-radius: 3px; font-size: 11px; color: #5F4A35;
   }
+  /* Live filters read as state, not as the muted examples they replace —
+     same accent tint the FAILED pill uses for its own state below. */
+  .search-example.is-active {
+    background: rgba(200,78,53,0.10); color: var(--accent);
+    max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .search-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
   /* In-flight marker. Every keystroke-debounce and filter chip refetches, so a
-     full-page "Loading..." swap would flicker; instead the current results dim
-     and the search card names the state. Without it a query that will return
-     nothing is indistinguishable from one still in flight. */
+     full-page "Loading..." swap would flicker; the current results dim instead
+     and the live region names the state. The filter chips above describe the
+     *last* request that went out, so without this the window before a new one
+     lands reads as a settled result. */
   .search-status { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
   .results { transition: opacity 0.12s ease; }
   .results.is-refreshing { opacity: 0.5; }
@@ -440,6 +498,10 @@
   @media (max-width: 768px) {
     .page-header { flex-direction: column; align-items: flex-start; gap: 8px; }
     .filters { grid-template-columns: 40px 1fr; }
-    .search-example { display: none; }
+    /* Examples are optional prompting; active filters must stay visible, and
+       wrap to their own line rather than crushing the input. */
+    .is-hint { display: none; }
+    .search-card { flex-wrap: wrap; }
+    .search-filters.has-filters { flex-basis: 100%; }
   }
 </style>
