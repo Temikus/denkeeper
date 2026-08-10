@@ -311,17 +311,37 @@ describe('AuditLog page', () => {
       render(AuditLog)
       await waitFor(() => expect(events.length).toBe(1))
 
-      await fireEvent.click(screen.getByText('Show eval events'))
+      await fireEvent.click(screen.getByText(/Show dry runs/))
       await waitFor(() => expect(events.length).toBe(2))
       expect(events[1].get('exclude_source')).toBeNull()
       await waitFor(() => expect(stats[stats.length - 1].get('exclude_source')).toBeNull())
+    })
+
+    // The toggle first shipped as a bare <button> appended straight to
+    // .filters, which is a 48px/1fr grid of label+control pairs — so it landed
+    // in the 48px label column, wrapped to three lines, and its 999px radius
+    // rendered it as a blob. It has to be a label + a chip in the control
+    // column, exactly like the Type/Status/Range rows above it.
+    test('sits in the control column as a shared chip, not a bespoke button', async () => {
+      const { container } = render(AuditLog)
+      await waitFor(() => expect(screen.getByText('Audit log')).toBeInTheDocument())
+
+      const toggle = screen.getByText(/Show dry runs/)
+      expect(toggle).toHaveClass('chip')
+      // A chip lives inside a .filter-chips container; a direct .filters child
+      // would be placed in the narrow label column.
+      const chips = toggle.closest('.filter-chips')
+      expect(chips).not.toBeNull()
+      expect(chips.parentElement).toHaveClass('filters')
+      // And it is paired with a label, like every other row.
+      expect(screen.getByText('Previews')).toHaveClass('filter-label')
     })
 
     test('the toggle reports its own pressed state', async () => {
       render(AuditLog)
       await waitFor(() => expect(screen.getByText('Audit log')).toBeInTheDocument())
 
-      const toggle = screen.getByText('Show eval events')
+      const toggle = screen.getByText(/Show dry runs/)
       expect(toggle).toHaveAttribute('aria-pressed', 'false')
       await fireEvent.click(toggle)
       expect(toggle).toHaveAttribute('aria-pressed', 'true')

@@ -365,7 +365,7 @@ In the dashboard this is the panel's first model slot; the second slot is empty 
 
 Dry runs still cost real tokens, so both endpoints sit behind their parent resource's write scope (`schedules:write` / `skills:write`).
 
-Every audit event a dry run emits carries `source = "dryrun"` and a pseudo-agent like `pamela#dryrun` — the record is complete, but `?agent=pamela` never returns them and the dashboard hides them until you flip **Show eval events**. Turn the volume down with:
+Every audit event a dry run emits carries `source = "dryrun"` and a pseudo-agent like `pamela#dryrun` — the record is complete, but `?agent=pamela` never returns them and the dashboard hides them until you flip **Previews → Show dry runs & evals**. Turn the volume down with:
 
 ```toml
 [eval]

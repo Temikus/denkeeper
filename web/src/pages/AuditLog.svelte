@@ -319,11 +319,17 @@
     <span class="filter-label">Range</span>
     <FilterChips items={timeRanges} value={timeRange} label="Time range" size="sm"
       onselect={(v) => setFilter('timeRange', v)} />
-    <button class="eval-toggle" class:on={showEval} aria-pressed={showEval}
-      onclick={() => { showEval = !showEval; refresh() }}
-      title="Dry runs and eval samples record everything a real turn does, so they are hidden unless you ask for them">
-      Show eval events
-    </button>
+    <!-- "Previews" not "Evals": the Type row already has an Evals *category*
+         chip for eval lifecycle events, and this filters a different axis
+         (source). Preview is the word the dry-run panel already uses. -->
+    <span class="filter-label">Previews</span>
+    <div class="filter-chips filter-chips-sm">
+      <button class="chip" class:active={showEval} aria-pressed={showEval}
+        onclick={() => { showEval = !showEval; refresh() }}
+        title="Dry runs and eval samples record everything a real turn does, so they are hidden unless you ask for them">
+        Show dry runs &amp; evals
+      </button>
+    </div>
   </div>
 
   <!-- Search -->
@@ -520,16 +526,4 @@
     .search-card { flex-wrap: wrap; }
     .search-filters.has-filters { flex-basis: 100%; }
   }
-  .eval-toggle {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .eval-toggle:hover { border-color: var(--text-muted); color: var(--text); }
-  .eval-toggle.on { border-color: var(--accent); color: var(--accent); }
 </style>
