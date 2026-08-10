@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -345,7 +346,7 @@ func TestStats(t *testing.T) {
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryToolCall, Action: "execute", Summary: "t2", Status: StatusError})
 	_ = store.Insert(ctx, Event{Timestamp: now, Category: CategoryLLM, Action: "complete", Summary: "l1", Status: StatusOK})
 
-	stats, err := store.Stats(ctx, nil)
+	stats, err := store.Stats(ctx, StatsOpts{})
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
@@ -378,5 +379,108 @@ func TestInsertBatchEmpty(t *testing.T) {
 
 	if err := store.InsertBatch(context.Background(), nil); err != nil {
 		t.Fatalf("InsertBatch(nil): %v", err)
+	}
+}
+
+// seedExclusionStore inserts a realistic mix: two ordinary engine events plus
+// the per-round events a dry run and an eval sample produce under the *same*
+// categories, which is exactly why source is the only usable discriminator.
+func seedExclusionStore(t *testing.T) (*SQLiteStore, context.Context) {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	events := []Event{
+		{Timestamp: now, Category: CategoryLLM, Action: "complete", Agent: "pamela", Summary: "live", Status: StatusOK, Source: "engine"},
+		{Timestamp: now, Category: CategoryToolCall, Action: "execute", Agent: "pamela", Summary: "live tool", Status: StatusOK, Source: "engine"},
+		{Timestamp: now, Category: CategoryLLM, Action: "complete", Agent: "pamela#dryrun", Summary: "preview", Status: StatusOK, Source: "dryrun"},
+		{Timestamp: now, Category: CategoryToolCall, Action: "execute", Agent: "pamela#dryrun", Summary: "preview tool", Status: StatusOK, Source: "dryrun"},
+		{Timestamp: now, Category: CategoryLLM, Action: "complete", Agent: "pamela#eval:candidate", Summary: "sample", Status: StatusOK, Source: "eval"},
+	}
+	if err := store.InsertBatch(ctx, events); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	return store, ctx
+}
+
+func TestList_ExcludeSources(t *testing.T) {
+	store, ctx := seedExclusionStore(t)
+
+	events, total, err := store.List(ctx, ListOpts{ExcludeSources: []string{"dryrun", "eval"}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2 (only the live events survive)", total)
+	}
+	for _, ev := range events {
+		if ev.Source != "engine" {
+			t.Errorf("event %q leaked through with source %q", ev.Summary, ev.Source)
+		}
+	}
+}
+
+func TestList_ExcludeSourcesSingle(t *testing.T) {
+	store, ctx := seedExclusionStore(t)
+
+	_, total, err := store.List(ctx, ListOpts{ExcludeSources: []string{"dryrun"}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (two live plus the eval sample)", total)
+	}
+}
+
+func TestList_AgentExactMatchExcludesPseudoIdentity(t *testing.T) {
+	// The pseudo-identity gives per-agent queries implicit exclusion with no
+	// API change at all — that is half the point of the "#" form.
+	store, ctx := seedExclusionStore(t)
+
+	events, total, err := store.List(ctx, ListOpts{Agent: "pamela"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want 2", total)
+	}
+	for _, ev := range events {
+		if strings.Contains(ev.Agent, "#") {
+			t.Errorf("?agent=pamela returned pseudo-identity %q", ev.Agent)
+		}
+	}
+}
+
+func TestStats_ExcludeSources(t *testing.T) {
+	store, ctx := seedExclusionStore(t)
+
+	before, err := store.Stats(ctx, StatsOpts{ExcludeSources: []string{"dryrun", "eval"}})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if before.Total != 2 {
+		t.Errorf("Total = %d, want 2 — a preview must not inflate the headline count", before.Total)
+	}
+	if got := before.ByCategory[CategoryLLM]; got != 1 {
+		t.Errorf("ByCategory[llm] = %d, want 1", got)
+	}
+	if got := before.ByCategory[CategoryToolCall]; got != 1 {
+		t.Errorf("ByCategory[tool_call] = %d, want 1", got)
+	}
+	if before.EventsLastHour != 2 {
+		t.Errorf("EventsLastHour = %d, want 2 — the last-hour window needs the same exclusions", before.EventsLastHour)
+	}
+
+	unfiltered, err := store.Stats(ctx, StatsOpts{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if unfiltered.Total != 5 {
+		t.Errorf("unfiltered Total = %d, want 5 — the record itself stays complete", unfiltered.Total)
 	}
 }

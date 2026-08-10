@@ -45,6 +45,7 @@ type Config struct {
 	MCP       MCPConfig               `toml:"mcp"`
 	Costs     CostsConfig             `toml:"costs"`
 	Audit     AuditConfig             `toml:"audit"`
+	Eval      EvalConfig              `toml:"eval"`
 
 	// ToolWarnings holds per-tool validation errors that were demoted to
 	// warnings (the tool is auto-disabled instead of blocking startup).
@@ -99,6 +100,25 @@ func (c *AuditConfig) AuditEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// EvalConfig controls the eval subsystem and the dry-run execution policy it
+// is built on.
+type EvalConfig struct {
+	// Audit selects how much of a dry-run or eval turn reaches the audit log.
+	// "full" (default) gives live-turn semantics — the record genuinely
+	// represents what happened, and the noise is handled by marking and
+	// filtering rather than by emitting less. "summary" is the opt-down:
+	// lifecycle events and errors only.
+	Audit string `toml:"audit"`
+}
+
+// AuditMode returns the configured eval audit mode, defaulting to "full".
+func (c *EvalConfig) AuditMode() string {
+	if c.Audit == "" {
+		return "full"
+	}
+	return c.Audit
 }
 
 // ScriptConfig controls the in-process JavaScript execution tool (run_javascript).
@@ -1304,6 +1324,7 @@ func applyScalarDefaults(cfg *Config) {
 		cfg.API.Timezone = "UTC"
 	}
 	applyAuditDefaults(cfg)
+	applyEvalDefaults(cfg)
 }
 
 func applyMCPDefaults(mcp *MCPConfig) {
@@ -1362,6 +1383,12 @@ func applyAuditDefaults(cfg *Config) {
 	} else if v == "false" || v == "0" {
 		f := false
 		cfg.Audit.Enabled = &f
+	}
+}
+
+func applyEvalDefaults(cfg *Config) {
+	if cfg.Eval.Audit == "" {
+		cfg.Eval.Audit = "full"
 	}
 }
 
@@ -1954,7 +1981,20 @@ func validate(cfg *Config) error {
 	if err := validateOpenRouter(&cfg.LLM.OpenRouter); err != nil {
 		return fmt.Errorf("validate openrouter: %w", err)
 	}
+	if err := validateEval(&cfg.Eval); err != nil {
+		return fmt.Errorf("validate eval: %w", err)
+	}
 	return nil
+}
+
+// validateEval checks the eval subsystem settings.
+func validateEval(e *EvalConfig) error {
+	switch e.Audit {
+	case "", "full", "summary":
+		return nil
+	default:
+		return fmt.Errorf("audit must be \"full\" or \"summary\", got %q", e.Audit)
+	}
 }
 
 // validateOpenRouter validates the OpenRouter provider config (reasoning plus

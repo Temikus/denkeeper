@@ -194,10 +194,14 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/skills/{agent}", s.RequireScope("skills:write", s.handleCreateSkill))
 	mux.HandleFunc("PUT /api/v1/skills/{agent}/{name}", s.RequireScope("skills:write", s.handleUpdateSkill))
 	mux.HandleFunc("DELETE /api/v1/skills/{agent}/{name}", s.RequireScope("skills:write", s.handleDeleteSkill))
+	// Dry runs write nothing, but they execute read tools and spend real
+	// tokens, so they sit behind the write scope of their parent resource.
+	mux.HandleFunc("POST /api/v1/skills/{agent}/{name}/dry-run", s.RequireScope("skills:write", s.handleDryRunSkill))
 	mux.HandleFunc("GET /api/v1/schedules", s.RequireScope("schedules:read", s.handleSchedules))
 	mux.HandleFunc("POST /api/v1/schedules", s.RequireScope("schedules:write", s.handleCreateSchedule))
 	mux.HandleFunc("PATCH /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleUpdateSchedule))
 	mux.HandleFunc("DELETE /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleDeleteSchedule))
+	mux.HandleFunc("POST /api/v1/schedules/{name}/dry-run", s.RequireScope("schedules:write", s.handleDryRunSchedule))
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/stats", s.RequireScope("sessions:read", s.handleSessionStats))

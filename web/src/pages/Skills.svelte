@@ -1,10 +1,11 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { api } from '../api.js'
   import { inert } from '../inert.js'
   import { pendingSkillTest } from '../chatStore.js'
   import { navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import DryRunPanel from '../components/DryRunPanel.svelte'
 
   let skills = $state([])
   let agents = $state([])
@@ -135,6 +136,38 @@
     return null
   }
 
+  // Dry-run preview state. `previewKey` identifies the open skill;
+  // `previewMessage` is the prompt to run it against, and `previewRunKey`
+  // is only set once the user submits, so opening the row doesn't spend
+  // tokens before they have typed anything.
+  let previewKey = $state(null)
+  let previewMessage = $state('')
+  let previewRunKey = $state(null)
+
+  function skillKey(s) { return `${s.agent}/${s.name}` }
+
+  async function togglePreview(s) {
+    const key = skillKey(s)
+    if (previewKey === key) {
+      previewKey = null
+    } else {
+      previewKey = key
+      previewMessage = ''
+    }
+    previewRunKey = null
+    // The panel is useless until a message is typed, so put the caret there.
+    if (previewKey) {
+      await tick()
+      document.getElementById('dry-run-message')?.focus()
+    }
+  }
+
+  function startPreview() {
+    if (!previewMessage.trim()) return
+    // Changing the key remounts the panel, which reruns the request.
+    previewRunKey = `${previewKey}:${Date.now()}`
+  }
+
   function testSkill(s, cmd) {
     pendingSkillTest.set({ agent: s.agent, command: `/${cmd}` })
     navigate('chat')
@@ -257,11 +290,36 @@
             <td class="muted">{(s.triggers || []).join(', ') || '—'}</td>
             <td class="muted desc">{s.description || '—'}</td>
             <td class="actions">
+              <button class="btn-sm" onclick={() => togglePreview(s)}
+                aria-expanded={previewKey === skillKey(s)}
+                title="Preview this skill with writes suppressed">Dry run</button>
               <button class="btn-sm" onclick={() => testSkill(s, cmd)} disabled={!cmd} title={cmd ? `Send /${cmd} in chat` : 'No command trigger'}>Test</button>
               <button class="btn-sm" onclick={() => openEdit(s)}>Edit</button>
               <button class="btn-sm danger" onclick={() => { confirmDelete = { agent: s.agent, name: s.name } }}>Delete</button>
             </td>
           </tr>
+          {#if previewKey === skillKey(s)}
+            <tr class="preview-row">
+              <td colspan="6">
+                <div class="preview-prompt">
+                  <label class="preview-label" for="dry-run-message">Message to run this skill against</label>
+                  <div class="preview-input-row">
+                    <input id="dry-run-message" type="text" bind:value={previewMessage}
+                      placeholder="e.g. summarise what happened yesterday"
+                      onkeydown={(e) => { if (e.key === 'Enter') startPreview() }} />
+                    <button class="btn-primary" onclick={startPreview} disabled={!previewMessage.trim()}>Run</button>
+                  </div>
+                </div>
+                {#key previewRunKey}
+                  {#if previewRunKey}
+                    <DryRunPanel
+                      run={() => api.dryRunSkill(s.agent, s.name, { message: previewMessage })}
+                      onclose={() => { previewKey = null; previewRunKey = null }} />
+                  {/if}
+                {/key}
+              </td>
+            </tr>
+          {/if}
         {/each}
       </tbody>
     </table>
@@ -320,4 +378,10 @@
     font-size: 11.5px; color: var(--text-muted); margin-bottom: 16px;
   }
   .body-loading { color: var(--text-muted); font-style: italic; padding: 12px 0; }
+  /* The preview spans the full row; the panel supplies its own borders. */
+  .preview-row > td { padding: 0; background: var(--bg); }
+  .preview-prompt { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-top: 1px solid var(--border); }
+  .preview-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  .preview-input-row { display: flex; gap: 8px; }
+  .preview-input-row input { flex: 1; }
 </style>

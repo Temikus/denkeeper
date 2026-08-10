@@ -5,6 +5,7 @@
   import { isMobile } from '../store.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import KebabMenu from '../components/KebabMenu.svelte'
+  import DryRunPanel from '../components/DryRunPanel.svelte'
   import FilterChips from '../components/FilterChips.svelte'
   import { agentColor } from '../agentColor.js'
   import { relativeTime, shortAbsolute } from '../relativeTime.js'
@@ -47,6 +48,11 @@
 
   // In-flight enable/disable toggle (schedule name)
   let togglingName = $state(null)
+
+  // Name of the schedule whose dry-run preview is expanded, or null. One at a
+  // time: a preview costs tokens, so the page should never invite a fan-out.
+  let previewName = $state(null)
+  function togglePreview(name) { previewName = previewName === name ? null : name }
 
   let panelEl = $state(null)
 
@@ -365,6 +371,7 @@
                     <span class="switch-slider"></span>
                   </label>
                   <KebabMenu items={[
+                    { label: 'Test now', onclick: () => togglePreview(s.name) },
                     { label: 'Edit', onclick: () => openEdit(s) },
                     { label: 'Delete', danger: true, onclick: () => { confirmDelete = s.name } },
                   ]} />
@@ -381,6 +388,9 @@
                     <span class="abs">{shortAbsolute(s.next_run)}</span>
                   {/if}
                 </div>
+                {#if previewName === s.name}
+                  <DryRunPanel run={() => api.dryRunSchedule(s.name)} onclose={() => previewName = null} />
+                {/if}
               </li>
             {/each}
           </ul>
@@ -426,6 +436,13 @@
                     </label>
                   </td>
                   <td class="actions">
+                    <button class="icon-btn" class:active={previewName === s.name}
+                      onclick={() => togglePreview(s.name)}
+                      aria-label="Test {s.name} without side effects"
+                      aria-expanded={previewName === s.name}
+                      title="Test now — preview with writes suppressed">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    </button>
                     <button class="icon-btn" onclick={() => openEdit(s)} aria-label="Edit {s.name}" title="Edit">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
                     </button>
@@ -434,6 +451,13 @@
                     </button>
                   </td>
                 </tr>
+                {#if previewName === s.name}
+                  <tr class="preview-row">
+                    <td colspan="7">
+                      <DryRunPanel run={() => api.dryRunSchedule(s.name)} onclose={() => previewName = null} />
+                    </td>
+                  </tr>
+                {/if}
               {/each}
             </tbody>
           </table>
@@ -463,6 +487,9 @@
 
 <style>
   .page { max-width: 1100px; }
+  .icon-btn.active { color: var(--accent); }
+  /* The preview spans the full row width and carries its own borders. */
+  .preview-row > td { padding: 0; border-bottom: 1px solid var(--border); }
   .tz-note { font-size: 12px; color: var(--text-muted); margin: -8px 0 12px; }
   .tz-note a { color: var(--accent); text-decoration: none; }
   .tz-note a:hover { text-decoration: underline; }

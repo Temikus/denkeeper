@@ -544,12 +544,28 @@ func truncateSummary(s, fallback string) string {
 	return s
 }
 
+// emitAudit emits one event, defaulting the agent field to this engine's name.
+//
+// When the turn runs under an execution policy (dry-run or eval), the context
+// carries an overlay that rewrites the agent to a variant-scoped pseudo-identity
+// and the source to the policy kind. Applying it here — rather than at each of
+// the dozen call sites — is what makes the marking total: helpers that never
+// see the policy still emit marked events.
 func (e *Engine) emitAudit(ctx context.Context, ev audit.Event) {
 	if e.auditor == nil {
 		return
 	}
 	if ev.Agent == "" {
 		ev.Agent = e.name
+	}
+	if mark := agentctx.ExecMarkFrom(ctx); mark != nil {
+		if mark.Summary && ev.Status == audit.StatusOK && ev.Category != audit.CategoryEval {
+			// Opt-down mode: keep lifecycle events and anything that went
+			// wrong, drop the per-round success chatter.
+			return
+		}
+		ev.Agent = mark.Agent
+		ev.Source = mark.Source
 	}
 	e.auditor.Emit(ctx, ev)
 }
@@ -750,7 +766,7 @@ type buildSystemPromptResult struct {
 // or the fallback string, appending trigger-matched skill instructions.
 // Persona management (memory, soul, identity, user) is handled via MCP tools
 // whose descriptions guide the agent on when and how to use them.
-func (e *Engine) buildSystemPrompt(_ *security.PermissionEngine, msg adapter.IncomingMessage) buildSystemPromptResult {
+func (e *Engine) buildSystemPrompt(_ *security.PermissionEngine, msg adapter.IncomingMessage, policy *ExecPolicy) buildSystemPromptResult {
 	var base string
 	if e.persona != nil {
 		base = e.persona.SystemPrompt()
@@ -801,8 +817,10 @@ When creating or updating schedules, use this channel value unless the user spec
 	}
 
 	// Day resolution only: the system prompt is the prompt-cache prefix, so
-	// the date busts the cache once per day; a clock time would bust it every turn.
-	today := e.now().In(e.loc)
+	// the date busts the cache once per day; a clock time would bust it every
+	// turn. A policy's as_of pins this, so a replay of a July task doesn't
+	// silently drift when run in September.
+	today := policy.clock(e.now)().In(e.loc)
 	isoYear, isoWeek := today.ISOWeek()
 	base += fmt.Sprintf(`
 
@@ -1054,24 +1072,93 @@ type ChatEventFunc func(ChatEvent)
 // the caller wants to receive the reply directly (e.g. the REST API).
 // Any pending approval request is accessible via GET /api/v1/approvals.
 func (e *Engine) Chat(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
-	text, _, _, err := e.chatWithApproval(ctx, msg, nil)
-	return text, err
+	out, err := e.chatWithApproval(ctx, msg, nil, nil)
+	return out.response, err
 }
 
 // ChatWithEvents is like Chat but calls onEvent for intermediate status events
 // (tool calls, etc.) that can be streamed to the client in real time.
 func (e *Engine) ChatWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, error) {
-	text, _, _, err := e.chatWithApproval(ctx, msg, onEvent)
-	return text, err
+	out, err := e.chatWithApproval(ctx, msg, nil, onEvent)
+	return out.response, err
+}
+
+// DryRun executes one turn under an execution policy and returns the full
+// transcript. Nothing is persisted, nothing is sent, and every non-idempotent
+// tool call is suppressed — the caller gets the response and the tool trace to
+// store (or show) wherever it wants.
+//
+// This is the entry point behind the "Test now" preview surfaces and, later,
+// the eval runner's per-sample execution.
+func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy ExecPolicy) (*TurnResult, error) {
+	if policy.Kind == ExecLive {
+		return nil, fmt.Errorf("dry run requires a non-live execution policy")
+	}
+	if policy.ConvID == "" {
+		return nil, fmt.Errorf("dry run requires a conversation identity")
+	}
+	if err := validateConversationID(policy.ConvID); err != nil {
+		return nil, fmt.Errorf("dry run conversation identity: %w", err)
+	}
+
+	start := time.Now()
+	asOf := policy.clock(e.now)()
+	out, err := e.chatWithApproval(ctx, msg, &policy, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &TurnResult{
+		ConversationID: out.convID,
+		Prompt:         msg.Text,
+		Response:       out.response,
+		ToolCalls:      out.records,
+		Rounds:         toolRounds(out.records),
+		AsOf:           asOf,
+		DurationMs:     time.Since(start).Milliseconds(),
+		Provider:       e.router.DefaultProvider(),
+	}
+	if out.resp != nil {
+		result.Tokens = out.resp.TokensUsed
+		result.CostUSD = out.resp.CostUSD
+		result.Model = out.resp.Model
+	}
+	return result, nil
+}
+
+// turnOutcome is what one full pipeline run yields internally: the response
+// text, any approval request created along the way, the conversation the turn
+// ran under, and the raw material (tool records, final LLM response) that
+// non-chat callers such as DryRun need.
+type turnOutcome struct {
+	response string
+	approval *approval.Request
+	convID   string
+	records  []ToolCallRecord
+	resp     *llm.ChatResponse
+}
+
+// turnPrep holds everything prepareTurn resolves before the LLM is called.
+type turnPrep struct {
+	convID      string
+	userMsgID   int64
+	llmMessages []llm.Message
+	sysResult   buildSystemPromptResult
+	budget      turnToolBudget
 }
 
 // chatWithApproval is the internal full-pipeline implementation. It returns
-// both the response text and any approval request that was created during this
-// call (nil if none). HandleMessage uses this to attach inline keyboard buttons.
-func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) (string, *approval.Request, string, error) {
+// the response text plus any approval request created during this call, and
+// the raw turn material non-chat callers need. HandleMessage uses the approval
+// request to attach inline keyboard buttons.
+//
+// A non-nil policy switches the turn to non-live execution: no conversation
+// row, no stored messages, no telemetry, no approvals, writes suppressed, and
+// every audit event marked (see ExecPolicy).
+func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessage, policy *ExecPolicy, onEvent ChatEventFunc) (turnOutcome, error) {
 	perms := e.resolvePermissions(msg)
 	if !perms.CanExecute("chat") {
-		return "", nil, "", fmt.Errorf("chat action not permitted")
+		return turnOutcome{}, fmt.Errorf("chat action not permitted")
 	}
 
 	agentAttr := attribute.String("agent", e.name)
@@ -1090,81 +1177,23 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		e.mChatDur.Record(ctx, time.Since(chatStart).Seconds(), metric.WithAttributes(agentAttr))
 	}()
 
+	// Install the audit overlay before anything is emitted, so the very first
+	// event of a policy turn already carries the pseudo-identity and source.
+	if mark := policy.mark(e.name); mark != nil {
+		ctx = agentctx.WithExecMark(ctx, mark)
+		span.SetAttributes(attribute.String("agent.exec_policy", string(policy.Kind)))
+	}
+
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
-	convID, err := e.resolveConversation(ctx, msg)
+	prep, err := e.prepareTurn(ctx, msg, policy, perms)
 	if err != nil {
-		return "", nil, "", err
+		return turnOutcome{convID: prep.convID}, err
 	}
+	convID := prep.convID
 	span.SetAttributes(attribute.String("conversation.id", convID))
 
-	userMsgID, err := e.memory.AddMessage(ctx, convID, StoredMessage{
-		Role:    "user",
-		Content: msg.Text,
-	})
-	if err != nil {
-		return "", nil, convID, fmt.Errorf("storing user message: %w", err)
-	}
-
-	// Audit: session trigger (user prompt or scheduled invocation).
-	triggerJSON, _ := json.Marshal(buildTriggerAuditDetail(msg))
-	triggerSource := msg.Adapter
-	if msg.IsScheduled {
-		triggerSource = "scheduler"
-	}
-	e.emitAudit(ctx, audit.Event{
-		Category:       audit.CategorySession,
-		Action:         "trigger",
-		Summary:        truncateSummary(msg.Text, "trigger"),
-		Detail:         string(triggerJSON),
-		Status:         audit.StatusOK,
-		Source:         triggerSource,
-		ConversationID: convID,
-	})
-
-	history, err := e.memory.GetMessages(ctx, convID, e.maxContextMessages)
-	if err != nil {
-		return "", nil, convID, fmt.Errorf("loading history: %w", err)
-	}
-	truncated := len(history) >= e.maxContextMessages
-	if truncated {
-		e.logger.Warn("conversation history truncated to context limit",
-			"conversation_id", convID, "limit", e.maxContextMessages)
-	}
-
-	sysResult := e.buildSystemPrompt(perms, msg)
-
-	// Resolve the turn's tool-round budget once, from the matched set. Doing it
-	// per turn means skill edits (CRUD copies whole skill.Skill values) take
-	// effect on the next turn with no hot-reload plumbing.
-	budget := e.resolveToolBudget(ctx, sysResult.matchedSkills, msg)
-
-	llmMessages := make([]llm.Message, 0, len(history)+2)
-	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: sysResult.prompt})
-	if truncated {
-		llmMessages = append(llmMessages, llm.Message{
-			Role:    "system",
-			Content: fmt.Sprintf("[Conversation history truncated — only the most recent %d messages are shown. Earlier messages have been omitted. Do not assume context from before this point.]", e.maxContextMessages),
-		})
-	}
-	for _, h := range history {
-		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content, ReasoningContent: h.ReasoningContent})
-	}
-
-	// Store adapter routing info in context for tool approval submissions,
-	// and in the engine struct for in-process MCP servers (configmcp) that
-	// can't receive context values across the JSON-RPC boundary.
-	ctx = agentctx.WithAdapter(ctx, msg.Adapter)
-	ctx = agentctx.WithExternalID(ctx, msg.ExternalID)
-	ctx = agentctx.WithConversationID(ctx, convID)
-	if sc := buildSkillSummary(msg, sysResult.matchedSkills); sc != nil {
-		ctx = agentctx.WithSkillContext(ctx, sc)
-	}
-	e.setAdapterContext(msg.Adapter, msg.ExternalID, convID)
-
-	// Register agent name for this session so the cost tracker can correctly
-	// attribute costs even for channel-based session IDs (e.g. "chan:name").
-	e.router.CostTracker().RegisterSessionAgent(convID, e.name)
+	ctx = e.turnContext(ctx, msg, convID, prep.sysResult.matchedSkills, policy)
 
 	// Wrap onEvent to accumulate content_delta text. If the context is
 	// cancelled mid-stream, savePartialResponse uses the accumulated content
@@ -1172,10 +1201,15 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, llmMessages, budget, wrappedEvent)
+	run := turnRun{budget: prep.budget, policy: policy}
+	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
-		e.persistInterruptedProgress(ctx, convID, userMsgID, streamedContent.String(), toolRecords, msg, err)
-		return "", nil, convID, err
+		// A policy turn has nothing to persist and no history to keep honest;
+		// the caller receives the records of whatever already ran.
+		if !policy.active() {
+			e.persistInterruptedProgress(ctx, convID, prep.userMsgID, streamedContent.String(), toolRecords, msg, err)
+		}
+		return turnOutcome{convID: convID, records: toolRecords}, err
 	}
 
 	if onEvent != nil {
@@ -1199,7 +1233,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	)
 
 	responseText := sanitizeStaleDirectives(resp.Content, e.logger)
-	var pendingApproval *approval.Request
+	out := turnOutcome{response: responseText, convID: convID, records: toolRecords, resp: resp}
 
 	// A blank (or whitespace-only) final turn is stored for history consistency
 	// but must not pass silently: surface it in the audit log as an error so a
@@ -1210,6 +1244,156 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 			"conversation", convID,
 		)
 		e.emitLLMAudit(ctx, convID, resp, "LLM returned an empty final response", llmAuditOpts{round: 0})
+	}
+
+	if err := e.persistTurn(ctx, msg, policy, prep, resp, responseText, toolRecords); err != nil {
+		return turnOutcome{convID: convID, records: toolRecords}, err
+	}
+
+	e.logger.Info("chat complete",
+		"adapter", msg.Adapter,
+		"response_len", len(responseText),
+		"tokens", resp.TokensUsed.Total,
+		"finish_reason", resp.FinishReason,
+		"model", resp.Model,
+		"conversation", convID,
+	)
+	return out, nil
+}
+
+// prepareTurn resolves everything the LLM call needs: the conversation
+// identity, the stored user message (live turns only), the trigger audit
+// event, the history window, the system prompt, and the tool-round budget.
+func (e *Engine) prepareTurn(ctx context.Context, msg adapter.IncomingMessage, policy *ExecPolicy, perms *security.PermissionEngine) (turnPrep, error) {
+	var prep turnPrep
+
+	convID, err := e.resolveConversation(ctx, msg, policy)
+	if err != nil {
+		return prep, err
+	}
+	prep.convID = convID
+
+	// A policy turn owns no conversation, so there is nothing to append to.
+	if !policy.active() {
+		userMsgID, err := e.memory.AddMessage(ctx, convID, StoredMessage{
+			Role:    "user",
+			Content: msg.Text,
+		})
+		if err != nil {
+			return prep, fmt.Errorf("storing user message: %w", err)
+		}
+		prep.userMsgID = userMsgID
+	}
+
+	e.emitTriggerAudit(ctx, msg, convID)
+
+	history, truncated, err := e.loadTurnHistory(ctx, convID, policy)
+	if err != nil {
+		return prep, err
+	}
+
+	prep.sysResult = e.buildSystemPrompt(perms, msg, policy)
+
+	// Resolve the turn's tool-round budget once, from the matched set. Doing it
+	// per turn means skill edits (CRUD copies whole skill.Skill values) take
+	// effect on the next turn with no hot-reload plumbing.
+	prep.budget = e.resolveToolBudget(ctx, prep.sysResult.matchedSkills, msg)
+	prep.llmMessages = e.assembleMessages(prep.sysResult.prompt, history, truncated)
+	return prep, nil
+}
+
+// emitTriggerAudit records what started this turn (user prompt or scheduled
+// invocation).
+func (e *Engine) emitTriggerAudit(ctx context.Context, msg adapter.IncomingMessage, convID string) {
+	triggerJSON, _ := json.Marshal(buildTriggerAuditDetail(msg))
+	triggerSource := msg.Adapter
+	if msg.IsScheduled {
+		triggerSource = "scheduler"
+	}
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySession,
+		Action:         "trigger",
+		Summary:        truncateSummary(msg.Text, "trigger"),
+		Detail:         string(triggerJSON),
+		Status:         audit.StatusOK,
+		Source:         triggerSource,
+		ConversationID: convID,
+	})
+}
+
+// loadTurnHistory returns the context window for this turn. A policy turn
+// reads from its declared source conversation (read-only) and defaults to no
+// history at all, since a preview or an eval sample is a fresh turn unless the
+// caller says otherwise.
+func (e *Engine) loadTurnHistory(ctx context.Context, convID string, policy *ExecPolicy) ([]StoredMessage, bool, error) {
+	src := convID
+	if policy.active() {
+		if policy.HistoryFrom == "" {
+			return nil, false, nil
+		}
+		src = policy.HistoryFrom
+	}
+
+	history, err := e.memory.GetMessages(ctx, src, e.maxContextMessages)
+	if err != nil {
+		return nil, false, fmt.Errorf("loading history: %w", err)
+	}
+	truncated := len(history) >= e.maxContextMessages
+	if truncated {
+		e.logger.Warn("conversation history truncated to context limit",
+			"conversation_id", src, "limit", e.maxContextMessages)
+	}
+	return history, truncated, nil
+}
+
+// assembleMessages builds the LLM message list from the system prompt and the
+// history window.
+func (e *Engine) assembleMessages(prompt string, history []StoredMessage, truncated bool) []llm.Message {
+	llmMessages := make([]llm.Message, 0, len(history)+2)
+	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: prompt})
+	if truncated {
+		llmMessages = append(llmMessages, llm.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("[Conversation history truncated — only the most recent %d messages are shown. Earlier messages have been omitted. Do not assume context from before this point.]", e.maxContextMessages),
+		})
+	}
+	for _, h := range history {
+		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content, ReasoningContent: h.ReasoningContent})
+	}
+	return llmMessages
+}
+
+// turnContext attaches the routing and skill values in-process MCP servers and
+// the approval chain read, and registers the session with the cost tracker.
+//
+// A policy turn registers under its pseudo-identity so preview and eval spend
+// is visible without landing in a real agent's totals.
+func (e *Engine) turnContext(ctx context.Context, msg adapter.IncomingMessage, convID string, matched []skill.Skill, policy *ExecPolicy) context.Context {
+	// Store adapter routing info in context for tool approval submissions,
+	// and in the engine struct for in-process MCP servers (configmcp) that
+	// can't receive context values across the JSON-RPC boundary.
+	ctx = agentctx.WithAdapter(ctx, msg.Adapter)
+	ctx = agentctx.WithExternalID(ctx, msg.ExternalID)
+	ctx = agentctx.WithConversationID(ctx, convID)
+	if sc := buildSkillSummary(msg, matched); sc != nil {
+		ctx = agentctx.WithSkillContext(ctx, sc)
+	}
+	if !policy.active() {
+		e.setAdapterContext(msg.Adapter, msg.ExternalID, convID)
+	}
+
+	// Register agent name for this session so the cost tracker can correctly
+	// attribute costs even for channel-based session IDs (e.g. "chan:name").
+	e.router.CostTracker().RegisterSessionAgent(convID, policy.auditAgent(e.name))
+	return ctx
+}
+
+// persistTurn stores the assistant message and its telemetry. It is the whole
+// persistence tail of a live turn, and a no-op under an execution policy —
+// isolation is structural here, not a filter applied later.
+func (e *Engine) persistTurn(ctx context.Context, msg adapter.IncomingMessage, policy *ExecPolicy, prep turnPrep, resp *llm.ChatResponse, responseText string, toolRecords []ToolCallRecord) error {
+	if policy.active() {
+		return nil
 	}
 
 	// Use a background context for storing the assistant response so it
@@ -1234,25 +1418,16 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		TokensCompletion: resp.TokensUsed.Completion,
 		TokensCached:     resp.TokensUsed.CachedPrompt,
 	}
-	assistMsgID, err := e.memory.AddMessage(saveCtx, convID, assistMsg)
+	assistMsgID, err := e.memory.AddMessage(saveCtx, prep.convID, assistMsg)
 	if err != nil {
-		return "", nil, convID, fmt.Errorf("storing assistant message: %w", err)
+		return fmt.Errorf("storing assistant message: %w", err)
 	}
 
-	e.nudgeIncToolRounds(convID, len(toolRecords))
+	e.nudgeIncToolRounds(prep.convID, len(toolRecords))
 
 	// Persist telemetry data (tool calls, skill usages, stats).
-	e.persistTelemetry(saveCtx, convID, userMsgID, assistMsgID, assistMsg, toolRecords, sysResult.matchedSkills, msg)
-
-	e.logger.Info("chat complete",
-		"adapter", msg.Adapter,
-		"response_len", len(responseText),
-		"tokens", resp.TokensUsed.Total,
-		"finish_reason", resp.FinishReason,
-		"model", resp.Model,
-		"conversation", convID,
-	)
-	return responseText, pendingApproval, convID, nil
+	e.persistTelemetry(saveCtx, prep.convID, prep.userMsgID, assistMsgID, assistMsg, toolRecords, prep.sysResult.matchedSkills, msg)
+	return nil
 }
 
 // resolvePermissions returns the effective permission engine for the message,
@@ -1281,7 +1456,14 @@ func (e *Engine) resolvePermissions(msg adapter.IncomingMessage) *security.Permi
 
 // resolveConversation returns the conversation ID for the message, creating
 // the conversation if necessary.
-func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMessage) (string, error) {
+// A policy turn carries its own in-flight identity ("dryrun:{uuid}",
+// "eval:{run}:{task}:{k}") and never creates a conversation row — the
+// namespace exists for cost attribution, audit grouping and log correlation
+// only.
+func (e *Engine) resolveConversation(ctx context.Context, msg adapter.IncomingMessage, policy *ExecPolicy) (string, error) {
+	if policy.active() {
+		return policy.ConvID, nil
+	}
 	if msg.ConversationID != "" {
 		if err := validateConversationID(msg.ConversationID); err != nil {
 			return "", err
@@ -1401,7 +1583,7 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 // tool call records for persistence, and any error. Tool call records are
 // returned even when the loop fails mid-flight so callers can persist the
 // work that already executed.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
 	}
@@ -1428,7 +1610,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		}
 	}
 
-	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, budget, onEvent)
+	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, run, onEvent)
 	if err != nil {
 		return nil, llmMessages, toolRecords, err
 	}
@@ -1455,14 +1637,14 @@ type toolLoopOutcome struct {
 // degrade to a wrap-up round; if the model returns empty content after
 // completing tool rounds, it attempts to recover by using intermediate
 // content or nudging the model.
-func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Add(resp.TokensUsed)
 	totalCost += resp.CostUSD
 
 	parentSpan := trace.SpanFromContext(ctx)
-	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, budget, onEvent, &totalUsage, &totalCost)
+	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, run, onEvent, &totalUsage, &totalCost)
 	if err != nil {
 		return nil, out.llmMessages, out.toolRecords, err
 	}
@@ -1516,8 +1698,11 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 // tools, a model-behavior stop fires (recorded in the outcome's stopReason),
 // the soft cost limit is reached, or a transport error occurs (returned as
 // err with the partial outcome for persistence).
-func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, budget turnToolBudget, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
-	supervised := perms.Tier() == "supervised" && e.approvals != nil
+func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
+	// A policy turn never enters the approval chain: suppressed calls execute
+	// nothing to approve, and the calls that do run are read-only by definition
+	// of the idempotency allowlist.
+	supervised := perms.Tier() == "supervised" && e.approvals != nil && !run.policy.active()
 	parentSpan := trace.SpanFromContext(ctx)
 	out := toolLoopOutcome{llmMessages: llmMessages}
 	var accumulatedContent strings.Builder
@@ -1529,7 +1714,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 	// look and re-executes every tool.
 	state := newTurnToolState()
 	for round := 0; resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0; round++ {
-		if round >= budget.maxRounds {
+		if round >= run.budget.maxRounds {
 			// Round budget exhausted with the model still requesting tools.
 			// The pending assistant tool_calls message is NOT appended, so the
 			// message list ends on the previous round's tool results — a valid
@@ -1548,7 +1733,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 
 		out.llmMessages = append(out.llmMessages, llm.Message{Role: "assistant", Content: resp.Content, ReasoningContent: resp.ThinkingContent, ToolCalls: resp.ToolCalls})
 		var roundErr error
-		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, budget, onEvent, detector, state, out.llmMessages, out.toolRecords)
+		out.llmMessages, out.toolRecords, out.stopReason, roundErr = e.runRoundToolCalls(ctx, resp.ToolCalls, round, convID, supervised, run, onEvent, detector, state, out.llmMessages, out.toolRecords)
 		if roundErr != nil {
 			return out, roundErr
 		}
@@ -1631,7 +1816,7 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 // detection), it stops executing, appends synthetic results for the offending
 // and remaining calls (keeping the tool-message protocol valid), and returns
 // stopRepeatedCalls so the caller can run a wrap-up round.
-func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, budget turnToolBudget, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
+func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
 	for i, tc := range toolCalls {
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
@@ -1653,11 +1838,11 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("agent", e.name),
 			attribute.String("tool_name", tc.Function.Name)))
-		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, onEvent, state)
+		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, run, onEvent, state)
 		toolRecords = append(toolRecords, record)
 		content := result
 		if i == len(toolCalls)-1 {
-			content += toolBudgetHint(budget, round+1)
+			content += toolBudgetHint(run.budget, round+1)
 		}
 		llmMessages = append(llmMessages, llm.Message{
 			Role: "tool", Content: content, ToolCallID: tc.ID,
@@ -1798,7 +1983,7 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 // chain — the original call already passed it, and a cache hit executes
 // nothing). New denials and new cacheable results are recorded in state for
 // subsequent rounds of this turn.
-func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord) {
+func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord) {
 	key := toolDedupeKey(tc)
 	if denyText, deniedBefore := state.denied[key]; deniedBefore {
 		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
@@ -1830,13 +2015,60 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 		return e.cachedToolCallResult(ctx, tc, round, convID, onEvent, hit)
 	}
 
-	result, record := e.executeToolCall(ctx, tc, round, convID, supervised, onEvent)
+	result, record := e.executeToolCall(ctx, tc, round, convID, supervised, run, onEvent)
 	if !record.Success && record.ErrorMsg == "denied" {
 		state.denied[key] = result
 	}
+	// Only real executions are cacheable. A suppressed write ran nothing, so
+	// caching its marker would let a later identical call claim a "result from
+	// round N" that never existed.
 	if record.Outcome == "ok" && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
 		state.cache[key] = cachedToolResult{result: result, round: round}
 	}
+	return result, record
+}
+
+// suppressToolCall returns the synthetic result for a write the execution
+// policy refused to run. The model sees a plausible world and keeps planning;
+// nothing mutates, nothing is approved, and the record carries the dedicated
+// "suppressed" outcome so it is never mistaken for a fault.
+func (e *Engine) suppressToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, ToolCallRecord) {
+	e.logger.Info("suppressing write under execution policy",
+		"tool", tc.Function.Name, "round", round, "conversation", convID)
+	record := ToolCallRecord{
+		ToolName:  tc.Function.Name,
+		Round:     round,
+		Success:   true,
+		Outcome:   outcomeSuppressed,
+		Arguments: tc.Function.Arguments,
+	}
+	if e.tools != nil {
+		record.ServerName = e.tools.ToolServer(tc.Function.Name)
+	}
+	result := suppressedToolResult(tc.Function.Name)
+	record.Result = result
+
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
+		onEvent(ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round,
+			Duration: 0, Text: "write suppressed — not executed"})
+	}
+
+	detail, _ := json.Marshal(map[string]any{
+		"tool":      tc.Function.Name,
+		"server":    record.ServerName,
+		"round":     round,
+		"arguments": tc.Function.Arguments,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryToolCall,
+		Action:         "suppressed",
+		Summary:        tc.Function.Name,
+		Detail:         string(detail),
+		Status:         audit.StatusOK,
+		Source:         "engine",
+		ConversationID: convID,
+	})
 	return result, record
 }
 
@@ -1889,12 +2121,21 @@ func (e *Engine) cachedToolCallResult(ctx context.Context, tc llm.ToolCall, roun
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),
 // then executing it and emitting tool_start/tool_end ChatEvents.
 // Returns the tool result string and a ToolCallRecord for persistence.
-func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, onEvent ChatEventFunc) (string, ToolCallRecord) {
+func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc) (string, ToolCallRecord) {
+	// An execution policy splits tools by the existing idempotency signal:
+	// read-only calls run for real so the model sees a truthful world, and
+	// everything else — including every unknown tool — is suppressed before it
+	// can reach the approval chain or the tool manager.
+	if run.policy.suppresses(tc.Function.Name, e.idempotencyCheck()) {
+		return e.suppressToolCall(ctx, tc, round, convID, onEvent)
+	}
+
 	record := ToolCallRecord{
-		ToolName: tc.Function.Name,
-		Round:    round,
-		Success:  true,
-		Outcome:  "ok",
+		ToolName:  tc.Function.Name,
+		Round:     round,
+		Success:   true,
+		Outcome:   "ok",
+		Arguments: tc.Function.Arguments,
 	}
 	if e.tools != nil {
 		record.ServerName = e.tools.ToolServer(tc.Function.Name)
@@ -1987,7 +2228,18 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		}
 		onEvent(evt)
 	}
+	record.Result = result
 	return result, record
+}
+
+// idempotencyCheck returns the "safe to execute" predicate an execution policy
+// consults, or nil when no tool manager is wired (in which case a policy
+// suppresses everything, which is the correct fail-closed answer).
+func (e *Engine) idempotencyCheck() func(string) bool {
+	if e.tools == nil {
+		return nil
+	}
+	return e.tools.IsIdempotent
 }
 
 // approvalOutcome represents the result of the supervised approval chain.
@@ -2580,22 +2832,23 @@ func (e *Engine) HandleMessage(ctx context.Context, msg adapter.IncomingMessage)
 // intermediate pipeline events (thinking, tool calls, usage). The Dispatcher
 // uses this to refresh adapter typing indicators during processing.
 func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.IncomingMessage, onEvent ChatEventFunc) error {
-	responseText, pendingApproval, convID, err := e.chatWithApproval(ctx, msg, onEvent)
+	turn, err := e.chatWithApproval(ctx, msg, nil, onEvent)
 	if err != nil {
 		return err
 	}
+	convID := turn.convID
 
 	if e.sendFunc != nil {
 		out := adapter.OutgoingMessage{
 			Adapter:    msg.Adapter,
 			ExternalID: msg.ExternalID,
-			Text:       responseText,
+			Text:       turn.response,
 			IsVoice:    msg.IsVoice,
 		}
-		if pendingApproval != nil {
+		if turn.approval != nil {
 			out.Buttons = []adapter.KeyboardButton{
-				{Label: "✅ Approve", CallbackData: pendingApproval.CallbackData + ":approve"},
-				{Label: "❌ Deny", CallbackData: pendingApproval.CallbackData + ":deny"},
+				{Label: "✅ Approve", CallbackData: turn.approval.CallbackData + ":approve"},
+				{Label: "❌ Deny", CallbackData: turn.approval.CallbackData + ":deny"},
 			}
 		}
 		if err := e.sendFunc(ctx, out); err != nil {

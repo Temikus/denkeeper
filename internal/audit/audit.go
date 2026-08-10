@@ -45,6 +45,11 @@ const (
 	CategoryMCP        = "mcp"
 	CategorySafety     = "safety"
 	CategorySupervisor = "supervisor"
+	// CategoryEval covers eval and dry-run lifecycle events (a preview was
+	// run, a run started/finished). The per-round events those turns produce
+	// keep their ordinary categories (llm, tool_call) and are told apart by
+	// their source, not by this category.
+	CategoryEval = "eval"
 )
 
 // Event statuses.
@@ -79,11 +84,26 @@ type ListOpts struct {
 	Agent      string
 	Statuses   []string
 	Source     string
-	Search     string
-	Since      *time.Time
-	Until      *time.Time
-	Limit      int
-	Offset     int
+	// ExcludeSources drops events carrying any of these sources. It is the
+	// negative counterpart of Source: filtering *to* a source was always
+	// possible, filtering one *out* was not — which matters because dry-run and
+	// eval turns emit under the ordinary llm/tool_call categories and would
+	// otherwise flood an unfiltered stream.
+	ExcludeSources []string
+	Search         string
+	Since          *time.Time
+	Until          *time.Time
+	Limit          int
+	Offset         int
+}
+
+// StatsOpts controls filtering for aggregate audit queries. Stats needs the
+// same source exclusion as List: eval and dry-run events land under existing
+// categories, so without it one preview visibly inflates the dashboard's
+// headline counts.
+type StatsOpts struct {
+	Since          *time.Time
+	ExcludeSources []string
 }
 
 // Stats holds aggregate counts for the audit log dashboard.
@@ -113,7 +133,7 @@ type Store interface {
 	Insert(ctx context.Context, event Event) error
 	InsertBatch(ctx context.Context, events []Event) error
 	List(ctx context.Context, opts ListOpts) ([]Event, int, error)
-	Stats(ctx context.Context, since *time.Time) (*Stats, error)
+	Stats(ctx context.Context, opts StatsOpts) (*Stats, error)
 	PruneBefore(ctx context.Context, before time.Time) (int, error)
 	Close() error
 }

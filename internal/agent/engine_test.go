@@ -1306,7 +1306,7 @@ func TestBuildSystemPrompt_IncludesSessionContext(t *testing.T) {
 	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{
 		Adapter:    "telegram",
 		ExternalID: "387956986",
-	})
+	}, nil)
 	if !strings.Contains(result.prompt, "telegram:387956986") {
 		t.Error("system prompt should contain the delivery channel")
 	}
@@ -1319,7 +1319,7 @@ func TestBuildSystemPrompt_NoAdapterOmitsContext(t *testing.T) {
 	permissions, _ := security.NewPermissionEngine("supervised")
 	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
 
-	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 	if strings.Contains(result.prompt, "Session Context") {
 		t.Error("system prompt should NOT contain Session Context when adapter is empty")
 	}
@@ -1338,7 +1338,7 @@ func TestBuildSystemPrompt_IncludesCurrentDate(t *testing.T) {
 	engine.now = func() time.Time { return time.Date(2026, 7, 6, 9, 15, 0, 0, sydney) }
 
 	// Date line must appear even with no adapter (unlike Session Context).
-	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 	if !strings.Contains(result.prompt, "## Current Date") {
 		t.Error("system prompt should contain the Current Date section")
 	}
@@ -1356,10 +1356,10 @@ func TestBuildSystemPrompt_DateLineDayResolution(t *testing.T) {
 	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
 
 	engine.now = func() time.Time { return time.Date(2026, 7, 6, 0, 5, 0, 0, time.UTC) }
-	morning := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	morning := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 
 	engine.now = func() time.Time { return time.Date(2026, 7, 6, 23, 55, 0, 0, time.UTC) }
-	evening := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	evening := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 
 	if morning.prompt != evening.prompt {
 		t.Error("prompts built at different times on the same day should be identical")
@@ -1373,7 +1373,7 @@ func TestBuildSystemPrompt_DefaultLocationUTC(t *testing.T) {
 	engine.now = func() time.Time { return time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC) }
 	engine.SetLocation(nil) // nil must be ignored, not panic or clear the default
 
-	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 	want := "Today is Monday 2026-07-06 (ISO week 2026-W28, UTC)."
 	if !strings.Contains(result.prompt, want) {
 		t.Errorf("system prompt should contain %q", want)
@@ -1393,7 +1393,7 @@ func TestBuildSystemPrompt_IncludesKVGuidanceWhenPersonaSet(t *testing.T) {
 	permissions, _ := security.NewPermissionEngine("supervised")
 	engine := NewEngine("default", nil, nil, nil, permissions, p, "", nil, nil, nil, testLogger())
 
-	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 	if !strings.Contains(result.prompt, "Structured Memory (KV)") {
 		t.Error("system prompt should contain Structured Memory (KV) section when persona is set")
 	}
@@ -1411,7 +1411,7 @@ func TestBuildSystemPrompt_IncludesKVGuidanceOnFallbackPath(t *testing.T) {
 	permissions, _ := security.NewPermissionEngine("supervised")
 	engine := NewEngine("default", nil, nil, nil, permissions, nil, "Base prompt.", nil, nil, nil, testLogger())
 
-	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{})
+	result := engine.buildSystemPrompt(permissions, adapter.IncomingMessage{}, nil)
 	if !strings.Contains(result.prompt, "Structured Memory (KV)") {
 		t.Error("system prompt should contain KV guidance on the fallback path — fallback-path agents have the same kv_* tools wired")
 	}

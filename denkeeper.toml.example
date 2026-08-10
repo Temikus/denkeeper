@@ -139,6 +139,19 @@ level = "info"
 format = "text"
 
 # ---------------------------------------------------------------------------
+# Evals & dry runs
+# ---------------------------------------------------------------------------
+# Dry runs ("Test now" on a schedule or skill) execute a real turn through the
+# agent — persona, skills and read-only tools all apply — while suppressing
+# every write and persisting nothing. Their audit events carry source "dryrun"
+# and a pseudo-agent like "pamela#dryrun", so the dashboard hides them by
+# default and per-agent queries never see them.
+#
+# [eval]
+# audit = "full"      # "full" (default) records the turn exactly as it ran;
+#                     # "summary" keeps only lifecycle events and errors
+
+# ---------------------------------------------------------------------------
 # Voice (STT / TTS)
 # ---------------------------------------------------------------------------
 # Enables speech-to-text (incoming voice messages → text) and optionally

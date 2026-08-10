@@ -1,0 +1,183 @@
+package agent
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/Temikus/denkeeper/internal/agentctx"
+	"github.com/Temikus/denkeeper/internal/llm"
+)
+
+// ExecKind labels why a turn is running under an ExecPolicy. The zero value
+// is an ordinary live turn; any other value doubles as the audit source.
+type ExecKind string
+
+const (
+	// ExecLive is the absence of a policy: a real turn with real persistence.
+	ExecLive ExecKind = ""
+	// ExecDryRun is an operator-triggered preview ("Test now").
+	ExecDryRun ExecKind = "dryrun"
+	// ExecEval is one sample of an eval run.
+	ExecEval ExecKind = "eval"
+)
+
+// Audit emission modes for a policy turn.
+const (
+	// AuditFull emits full live-turn semantics — the record genuinely
+	// represents what happened. This is the default.
+	AuditFull = "full"
+	// AuditSummary emits lifecycle events and errors only.
+	AuditSummary = "summary"
+)
+
+// suppressedResult is the synthetic tool result returned in place of a write
+// the policy refused to execute. It is phrased so the model keeps planning
+// against a plausible world instead of retrying the call.
+const suppressedResultFmt = "[dry-run: write suppressed — %s not executed; assume success]"
+
+// outcomeSuppressed is the ToolCallRecord outcome for a write the policy
+// refused to execute. Distinct from the existing ok/rejected/failed/denied/
+// cached set: nothing ran, and nothing is at fault.
+const outcomeSuppressed = "suppressed"
+
+// ExecPolicy is the per-request execution policy for a turn that must not
+// touch the world: no writes, no persistence, no approvals, no adapters. It is
+// resolved once by the caller and threaded through the turn alongside the
+// tool-round budget — there is no engine-level mutable state, so a policy turn
+// and a live turn can run concurrently on the same Engine.
+//
+// Tool execution is split by the *existing* idempotency signal
+// (tool.Manager.IsIdempotent, built for within-turn memoization): idempotent
+// tools run for real so the model sees a truthful world; everything else
+// returns a suppression marker.
+type ExecPolicy struct {
+	// Kind selects the policy flavour and becomes the audit source.
+	Kind ExecKind
+	// Variant names the eval variant this sample belongs to (e.g. "candidate").
+	// Empty for dry-runs and for the conventional incumbent.
+	Variant string
+	// ConvID is the in-flight conversation identity — "dryrun:{uuid}" or
+	// "eval:{run}:{task}:{k}". It is used for cost tracking, audit grouping and
+	// log correlation, and is never written to the conversations table.
+	ConvID string
+	// AsOf pins the clock for both date-injection points (the scheduled-message
+	// header and the "## Current Date" prompt section), so a replay is
+	// date-deterministic. Zero means "now".
+	AsOf time.Time
+	// HistoryFrom names a conversation whose recent messages are loaded
+	// read-only as context. Empty means a fresh turn with no history.
+	HistoryFrom string
+	// AuditMode is AuditFull (default) or AuditSummary.
+	AuditMode string
+}
+
+// active reports whether p asks for non-live execution. Nil-safe: a nil
+// policy is an ordinary live turn.
+func (p *ExecPolicy) active() bool {
+	return p != nil && p.Kind != ExecLive
+}
+
+// summaryAudit reports whether the policy asks for reduced audit emission.
+func (p *ExecPolicy) summaryAudit() bool {
+	return p != nil && p.AuditMode == AuditSummary
+}
+
+// auditAgent builds the variant-scoped pseudo-identity written to the agent
+// field of every audit event this turn emits: "pamela#dryrun" for a preview,
+// "pamela#eval:candidate" for an eval sample.
+func (p *ExecPolicy) auditAgent(base string) string {
+	if !p.active() {
+		return base
+	}
+	if p.Variant != "" {
+		return base + "#" + string(p.Kind) + ":" + p.Variant
+	}
+	return base + "#" + string(p.Kind)
+}
+
+// mark builds the audit overlay carried in the turn's context.
+func (p *ExecPolicy) mark(base string) *agentctx.ExecMark {
+	if !p.active() {
+		return nil
+	}
+	return &agentctx.ExecMark{
+		Agent:   p.auditAgent(base),
+		Source:  string(p.Kind),
+		Summary: p.summaryAudit(),
+	}
+}
+
+// clock returns the policy's pinned time, falling back to fallback when the
+// policy is inactive or carries no pinned time.
+func (p *ExecPolicy) clock(fallback func() time.Time) func() time.Time {
+	if !p.active() || p.AsOf.IsZero() {
+		return fallback
+	}
+	asOf := p.AsOf
+	return func() time.Time { return asOf }
+}
+
+// suppresses reports whether a call to the named tool must be replaced by a
+// synthetic result rather than executed. Unknown tools are suppressed: the
+// idempotency allowlist is the only "safe to execute" signal, and its default
+// is deliberately false.
+func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool {
+	if !p.active() {
+		return false
+	}
+	return idempotent == nil || !idempotent(name)
+}
+
+// turnRun carries the per-turn execution parameters resolved once in
+// chatWithApproval and threaded down the tool loop: the effective tool-round
+// budget and the execution policy. Bundling them keeps the loop signatures
+// from growing a parameter per concern.
+type turnRun struct {
+	budget turnToolBudget
+	policy *ExecPolicy
+}
+
+// TurnResult is everything a caller needs from one turn executed outside the
+// normal chat pipeline. The eval runner and the dry-run handlers store it
+// where they want; nothing here has been persisted.
+type TurnResult struct {
+	// ConversationID is the in-flight identity the turn ran under.
+	ConversationID string `json:"conversation_id"`
+	// Prompt is the message text that was sent, after any header injection.
+	Prompt string `json:"prompt"`
+	// Response is the final assistant text.
+	Response string `json:"response"`
+	// ToolCalls are the calls this turn made, in execution order, carrying
+	// arguments and results (in-memory only — nothing was written).
+	ToolCalls []ToolCallRecord `json:"tool_calls"`
+	// Rounds is the number of tool-call rounds the turn used.
+	Rounds int `json:"rounds"`
+	// Tokens and Cost cover the whole turn, accumulated across rounds.
+	Tokens  llm.TokenUsage `json:"tokens"`
+	CostUSD float64        `json:"cost_usd"`
+	// Model and Provider identify what actually answered.
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+	// AsOf is the clock the turn ran under.
+	AsOf time.Time `json:"as_of"`
+	// DurationMs is wall-clock time for the whole turn.
+	DurationMs int64 `json:"duration_ms"`
+}
+
+// suppressedToolResult renders the synthetic result for a suppressed call.
+func suppressedToolResult(name string) string {
+	return fmt.Sprintf(suppressedResultFmt, name)
+}
+
+// toolRounds returns the number of tool-call rounds represented by records —
+// the highest 1-based round any call ran in, which is exactly the round count
+// because every round executes at least one call.
+func toolRounds(records []ToolCallRecord) int {
+	n := 0
+	for _, r := range records {
+		if r.Round > n {
+			n = r.Round
+		}
+	}
+	return n
+}
