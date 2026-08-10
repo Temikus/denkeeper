@@ -159,6 +159,122 @@ describe('AuditLog page', () => {
     expect(screen.getByPlaceholderText('Search events')).toBeInTheDocument()
   })
 
+  // The search box advertises `tool:`/`agent:` tokens, so they have to reach
+  // the API as the filters they name — `agent:` in particular is an exact
+  // match server-side and would never hit as a summary substring.
+  describe('token search syntax', () => {
+    // Returns the query params of the most recent /api/v1/audit request.
+    function captureAuditQuery() {
+      const seen = []
+      server.use(
+        http.get('/api/v1/audit', ({ request }) => {
+          seen.push(new URL(request.url).searchParams)
+          return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+        }),
+      )
+      return seen
+    }
+
+    async function typeSearch(text) {
+      const input = screen.getByPlaceholderText('Search events')
+      await fireEvent.input(input, { target: { value: text } })
+    }
+
+    test('agent: is sent as the exact-match agent filter, not as search text', async () => {
+      const seen = captureAuditQuery()
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+
+      await typeSearch('agent:planner')
+      await waitFor(() => expect(seen.length).toBe(2))
+      expect(seen[1].get('agent')).toBe('planner')
+      expect(seen[1].get('search')).toBeNull()
+    })
+
+    test('tool: is sent as the search term', async () => {
+      const seen = captureAuditQuery()
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+
+      await typeSearch('tool:web_search')
+      await waitFor(() => expect(seen.length).toBe(2))
+      expect(seen[1].get('search')).toBe('web_search')
+      expect(seen[1].get('agent')).toBeNull()
+    })
+
+    test('tokens combine with free text in one request', async () => {
+      const seen = captureAuditQuery()
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+
+      await typeSearch('agent:planner tool:web_search timeout')
+      await waitFor(() => expect(seen.length).toBe(2))
+      expect(seen[1].get('agent')).toBe('planner')
+      expect(seen[1].get('search')).toBe('web_search timeout')
+    })
+
+    test('untokenized text still searches summaries', async () => {
+      const seen = captureAuditQuery()
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+
+      await typeSearch('database error')
+      await waitFor(() => expect(seen.length).toBe(2))
+      expect(seen[1].get('search')).toBe('database error')
+      expect(seen[1].get('agent')).toBeNull()
+    })
+
+    // The chips describe the request, not the tokens: two tool: tokens are one
+    // phrase match on the wire and must not read as two independent filters.
+    test('active chips describe the query actually sent', async () => {
+      render(AuditLog)
+      await waitFor(() => {
+        expect(screen.getByText('agent:planner')).toBeInTheDocument()
+      })
+      expect(screen.getByText('try')).toBeInTheDocument()
+
+      await typeSearch('agent:default tool:kv_get tool:kv_list')
+
+      await waitFor(() => {
+        expect(screen.getByText('filtering')).toBeInTheDocument()
+      })
+      expect(screen.getByText('agent = default')).toBeInTheDocument()
+      expect(screen.getByText('summary contains "kv_get kv_list"')).toBeInTheDocument()
+      // The example chips are gone, so nothing claims a filter that isn't set.
+      expect(screen.queryByText('try')).not.toBeInTheDocument()
+      expect(screen.queryByText('tool:name')).not.toBeInTheDocument()
+    })
+
+    test('untokenized text is chipped too, so the summary match is visible', async () => {
+      render(AuditLog)
+      await waitFor(() => expect(screen.getByText('try')).toBeInTheDocument())
+
+      await typeSearch('database error')
+
+      await waitFor(() => {
+        expect(screen.getByText('summary contains "database error"')).toBeInTheDocument()
+      })
+      expect(screen.queryByText(/^agent = /)).not.toBeInTheDocument()
+    })
+
+    // An exact-match agent filter that misses looks identical to an empty log
+    // unless the empty state says which filter produced it.
+    test('empty state names the filters that produced it', async () => {
+      server.use(
+        http.get('/api/v1/audit', () => HttpResponse.json({ events: [], total: 0 })),
+      )
+      render(AuditLog)
+      await waitFor(() => {
+        expect(screen.getByText('No audit events found.')).toBeInTheDocument()
+      })
+
+      await typeSearch('agent:typo tool:kv_get')
+      await waitFor(() => {
+        expect(screen.getByText('No audit events found for agent "typo" matching "kv_get".')).toBeInTheDocument()
+      })
+    })
+  })
+
   test('category filter chips are clickable', async () => {
     render(AuditLog)
     await waitFor(() => {
