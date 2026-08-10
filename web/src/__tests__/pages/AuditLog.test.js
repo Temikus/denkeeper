@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
@@ -448,5 +448,127 @@ describe('AuditLog page', () => {
       expect(screen.getByText('Audit log')).toBeInTheDocument()
     })
     expect(screen.queryByText('Load older events')).not.toBeInTheDocument()
+  })
+})
+
+describe('AuditLog in-flight state', () => {
+  // `.results` is the only element carrying aria-busy. The marker shares the
+  // permanently-mounted role="status" region with the active-filter chips, so
+  // it is addressed by its text rather than by the role.
+  const results = (container) => container.querySelector('.results')
+  const marker = () => screen.queryByText(/^Searching/)
+  const settled = (container) =>
+    waitFor(() => expect(results(container)).toHaveAttribute('aria-busy', 'false'))
+
+  test('marks the search card in-flight while a filter refetch is pending', async () => {
+    const { container } = render(AuditLog)
+    await settled(container)
+    expect(marker()).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    expect(marker()).toBeInTheDocument()
+    // Shares the one live region rather than mounting a second one.
+    expect(screen.getByRole('status')).toHaveTextContent('Searching')
+
+    await waitFor(() => {
+      expect(marker()).not.toBeInTheDocument()
+    })
+  })
+
+  test('dims the current results while a refetch is pending, then restores', async () => {
+    const { container } = render(AuditLog)
+    await settled(container)
+    expect(results(container)).not.toHaveClass('is-refreshing')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Error' }))
+    expect(results(container)).toHaveAttribute('aria-busy', 'true')
+    expect(results(container)).toHaveClass('is-refreshing')
+
+    await settled(container)
+    expect(results(container)).not.toHaveClass('is-refreshing')
+  })
+
+  test('marks in-flight from the keystroke, before the debounce fires a request', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/v1/audit', () => {
+        calls++
+        return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+      }),
+    )
+    const { container } = render(AuditLog)
+    await settled(container)
+    const before = calls
+
+    await fireEvent.input(screen.getByPlaceholderText('Search events'), { target: { value: 'tool:web' } })
+
+    // The 300ms debounce has not elapsed, so nothing has gone out yet and the
+    // filter chips still describe the previous query — the user is already
+    // waiting, so the page must already read as busy.
+    expect(calls).toBe(before)
+    expect(marker()).toBeInTheDocument()
+    expect(results(container)).toHaveAttribute('aria-busy', 'true')
+
+    await waitFor(() => expect(calls).toBe(before + 1))
+    await settled(container)
+    expect(marker()).not.toBeInTheDocument()
+  })
+
+  test('a mistyped agent reads as in-flight before it reads as a miss', async () => {
+    server.use(
+      http.get('/api/v1/audit', ({ request }) => {
+        const agent = new URL(request.url).searchParams.get('agent')
+        // `agent:` resolves to the server's exact-match filter, so a typo'd
+        // name is a perfectly valid query that simply returns zero rows.
+        if (agent) return HttpResponse.json({ events: [], total: 0 })
+        return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+      }),
+    )
+    const { container } = render(AuditLog)
+    await settled(container)
+    expect(screen.queryByText(/No audit events found/)).not.toBeInTheDocument()
+
+    await fireEvent.input(screen.getByPlaceholderText('Search events'), { target: { value: 'agent:plannr' } })
+    // This window used to be indistinguishable from a settled empty result.
+    expect(marker()).toBeInTheDocument()
+
+    // And once it lands, the empty state names the filter that produced it.
+    await waitFor(() => {
+      expect(screen.getByText('No audit events found for agent "plannr".')).toBeInTheDocument()
+    })
+    expect(marker()).not.toBeInTheDocument()
+    expect(results(container)).not.toHaveClass('is-refreshing')
+  })
+
+  test('the in-flight marker is absent while a response is still outstanding on Follow polls', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let calls = 0
+      let releasePoll
+      server.use(
+        http.get('/api/v1/audit', async () => {
+          calls++
+          // Hold every poll open so the assertions below run mid-request.
+          if (calls > 1) await new Promise((r) => { releasePoll = r })
+          return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+        }),
+      )
+      const { container } = render(AuditLog)
+      await settled(container)
+
+      await fireEvent.click(screen.getByText('Follow'))
+      await vi.advanceTimersByTimeAsync(5000)
+
+      // Follow refreshes in the background: the user did not ask for it, so it
+      // must not dim their list or claim a search is running.
+      expect(calls).toBe(2)
+      expect(results(container)).toHaveAttribute('aria-busy', 'false')
+      expect(marker()).not.toBeInTheDocument()
+
+      releasePoll?.()
+      await fireEvent.click(screen.getByText('Follow'))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
