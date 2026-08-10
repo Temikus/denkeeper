@@ -4986,7 +4986,7 @@ func TestRecoverEmptyToolResponse_WhitespaceAccumulatedFallsThroughToNudge(t *te
 	resp := &llm.ChatResponse{Content: "", FinishReason: "stop"}
 	llmMessages := []llm.Message{{Role: "user", Content: "hi"}}
 
-	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp, llmMessages, "   \n  ")
+	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp, llmMessages, "   \n  ", turnRun{router: engine.router})
 	if err != nil {
 		t.Fatalf("recoverEmptyToolResponse: %v", err)
 	}

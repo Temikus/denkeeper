@@ -162,7 +162,7 @@ func TestExecuteToolRounds_AppendsBudgetHint(t *testing.T) {
 		},
 	}
 	budget := turnToolBudget{maxRounds: e.maxToolRounds}
-	_, msgs, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, turnRun{budget: budget}, nil)
+	_, msgs, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, turnRun{budget: budget, router: e.router}, nil)
 	if err != nil {
 		t.Fatalf("executeToolRounds: %v", err)
 	}

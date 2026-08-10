@@ -351,6 +351,18 @@ The turn goes through the whole engine — persona, matched skills, tool loop, b
 - **Approvals are skipped.** Suppressed calls execute nothing to approve, and the calls that do run are read-only by definition.
 - **`as_of` pins the clock** for both places a date reaches the model (the scheduled-message header and the `## Current Date` prompt section), so previewing a July task in September doesn't silently drift.
 
+Both endpoints also accept a `model` override, which runs the preview against a model other than the agent's live one and changes nothing about the agent:
+
+```bash
+curl -X POST localhost:8080/api/v1/skills/pamela/heartbeat/dry-run \
+  -H "Authorization: Bearer $DENKEEPER_API_KEY" \
+  -d '{"message":"summarise yesterday","model":"moonshotai/kimi-k3"}'
+```
+
+The override clones the router rather than mutating it, so previewing a candidate model can never retarget a live turn already in flight. The response echoes `requested_model` alongside the `model` that actually answered, so a transcript is self-describing.
+
+In the dashboard this is the panel's first model slot; the second slot is empty by default, and filling it runs the same turn against both models and shows the deltas (rounds, bad tool args, cost, latency). One sample per side is a smoke test, not a verdict — the panel says so, and points at a full eval for anything you intend to decide on.
+
 Dry runs still cost real tokens, so both endpoints sit behind their parent resource's write scope (`schedules:write` / `skills:write`).
 
 Every audit event a dry run emits carries `source = "dryrun"` and a pseudo-agent like `pamela#dryrun` — the record is complete, but `?agent=pamela` never returns them and the dashboard hides them until you flip **Show eval events**. Turn the volume down with:

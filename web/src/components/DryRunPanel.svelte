@@ -1,28 +1,77 @@
 <script>
-  // Inline transcript for a dry run: what the agent said, which tools ran, and
-  // which writes were held back. Rendered in place (never a modal) directly
-  // under the schedule or skill it previews.
-  //
-  // `run` is an async function returning the transcript from the API. The panel
-  // owns the in-flight and error state so callers only supply the request.
-  let { run, onclose = undefined } = $props()
+  import { api } from '../api.js'
+  import DryRunTranscript from './DryRunTranscript.svelte'
 
-  // Unique per instance so aria-controls links a row to its own detail panel
-  // even when two panels are mounted on one page.
-  const uid = Math.random().toString(36).slice(2, 8)
+  // Inline preview for a schedule or skill, rendered in place (never a modal).
+  //
+  // The panel has two model slots. Slot 1 defaults to the agent's live model
+  // and is changeable. Slot 2 starts empty; filling it turns the preview into
+  // a comparison. That empty slot *is* the mode switch — there is no toggle to
+  // be in the wrong state of, and the common single-model case keeps the width.
+  //
+  // `run(model)` performs one dry run and resolves to a transcript.
+  let { run, liveModel = '', onclose = undefined } = $props()
+
+  let models = $state([])
+  let primaryModel = $state('')       // '' = the agent's live model
+  let compareModel = $state('')       // '' = no comparison
+  let picking = $state(null)          // 'primary' | 'compare' | null
 
   let loading = $state(false)
   let error = $state('')
-  let transcript = $state(null)
-  let expanded = $state(new Set())
+  let primary = $state(null)
+  let candidate = $state(null)
+  let hasRun = $state(false)
+
+  const comparing = $derived(!!compareModel)
+
+  $effect(() => { loadModels() })
+
+  let modelsLoaded = false
+  async function loadModels() {
+    if (modelsLoaded) return
+    modelsLoaded = true
+    models = await api.modelDetails()
+  }
+
+  function modelLabel(id) { return id || liveModel || 'live model' }
+
+  function priceOf(id) {
+    const m = models.find(x => x.id === id || x.name === id)
+    if (!m?.pricing) return ''
+    const { input, output } = m.pricing
+    if (input == null || output == null) return ''
+    return `$${Number(input).toFixed(2)} / $${Number(output).toFixed(2)}`
+  }
+
+  function choose(slot, id) {
+    if (slot === 'primary') primaryModel = id
+    else compareModel = id
+    picking = null
+    // A model change invalidates whatever is on screen — showing a stale
+    // transcript under a new model name would be a lie.
+    primary = null
+    candidate = null
+    hasRun = false
+  }
+
+  function clearCompare() {
+    compareModel = ''
+    candidate = null
+    picking = null
+  }
 
   async function start() {
     loading = true
     error = ''
-    transcript = null
-    expanded = new Set()
+    primary = null
+    candidate = null
+    hasRun = true
     try {
-      transcript = await run()
+      // Sequential, not parallel: two concurrent turns on one agent would
+      // interleave in the audit log and double the instantaneous spend.
+      primary = await run(primaryModel)
+      if (compareModel) candidate = await run(compareModel)
     } catch (e) {
       error = e.message
     } finally {
@@ -30,41 +79,91 @@
     }
   }
 
-  function toggle(i) {
-    const next = new Set(expanded)
-    if (next.has(i)) next.delete(i); else next.add(i)
-    expanded = next
+  function pct(a, b) {
+    if (!a || !b) return null
+    return Math.round(((b - a) / a) * 100)
   }
 
-  function duration(ms) {
-    if (ms == null) return ''
-    return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`
+  function faultCount(t) {
+    return (t?.tool_calls || []).filter(c => c.outcome === 'rejected' || c.outcome === 'failed').length
   }
 
-  function cost(usd) {
-    if (!usd) return '$0.0000'
-    return `$${usd.toFixed(4)}`
-  }
+  // Deltas are the answer; the transcripts are the explanation. Only "worse"
+  // is coloured — a candidate that improves on something should not compete
+  // for attention with the one that regresses.
+  let deltas = $derived(!(primary && candidate) ? [] : [
+    { label: 'Rounds', from: primary.rounds, to: candidate.rounds,
+      delta: pct(primary.rounds, candidate.rounds), worse: candidate.rounds > primary.rounds, suffix: '%' },
+    { label: 'Bad tool args', from: faultCount(primary), to: faultCount(candidate),
+      delta: faultCount(candidate) - faultCount(primary), worse: faultCount(candidate) > faultCount(primary), suffix: '', absolute: true },
+    { label: 'Cost', from: `$${(primary.cost_usd || 0).toFixed(4)}`, to: `$${(candidate.cost_usd || 0).toFixed(4)}`,
+      delta: pct(primary.cost_usd, candidate.cost_usd), worse: (candidate.cost_usd || 0) > (primary.cost_usd || 0), suffix: '%' },
+    { label: 'Latency', from: `${((primary.duration_ms || 0) / 1000).toFixed(1)}s`, to: `${((candidate.duration_ms || 0) / 1000).toFixed(1)}s`,
+      delta: pct(primary.duration_ms, candidate.duration_ms), worse: false, suffix: '%' },
+  ])
 
-  function asOfLabel(iso) {
-    if (!iso) return ''
-    return new Date(iso).toLocaleString(undefined, {
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-    })
+  function deltaText(d) {
+    if (d.delta == null) return ''
+    const sign = d.delta > 0 ? '+' : ''
+    return `${sign}${d.delta}${d.suffix}`
   }
-
-  // The dot colour encodes the outcome classes the engine already
-  // distinguishes: nothing ran, it ran, or it broke.
-  function dotClass(outcome) {
-    if (outcome === 'suppressed') return 'dot-suppressed'
-    if (outcome === 'failed' || outcome === 'rejected' || outcome === 'denied') return 'dot-error'
-    return 'dot-ok'
-  }
-
-  start()
 </script>
 
 <div class="panel">
+  <div class="header">
+    <span class="run-as">Run as</span>
+
+    <div class="slot-wrap">
+      <button class="slot" onclick={() => picking = picking === 'primary' ? null : 'primary'} aria-expanded={picking === 'primary'}>
+        <span class="slot-model">{modelLabel(primaryModel)}</span>
+        {#if !primaryModel}<span class="slot-tag">LIVE</span>{/if}
+        <span class="slot-caret">&#x25BE;</span>
+      </button>
+      {#if picking === 'primary'}
+        <div class="menu" role="listbox" aria-label="Model for this run">
+          <button class="menu-item" role="option" aria-selected={!primaryModel} onclick={() => choose('primary', '')}>
+            <span class="menu-model">{liveModel || 'live model'}</span><span class="menu-tag">LIVE</span>
+          </button>
+          {#each models as m}
+            <button class="menu-item" role="option" aria-selected={primaryModel === m.id} onclick={() => choose('primary', m.id)}>
+              <span class="menu-model">{m.id}</span><span class="menu-price">{priceOf(m.id)}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Rendered while picking too, not only once a model is chosen: the menu
+         that selects the compare model cannot live behind having selected one. -->
+    {#if comparing || picking === 'compare'}
+      <span class="vs">vs</span>
+      <div class="slot-wrap">
+        <button class="slot accent" onclick={() => picking = picking === 'compare' ? null : 'compare'} aria-expanded={picking === 'compare'}>
+          <span class="slot-model">{compareModel || 'choose a model'}</span>
+          <span class="slot-caret">&#x25BE;</span>
+        </button>
+        {#if picking === 'compare'}
+          <div class="menu" role="listbox" aria-label="Model to compare against">
+            {#each models as m}
+              <button class="menu-item" role="option" aria-selected={compareModel === m.id} onclick={() => choose('compare', m.id)}>
+                <span class="menu-model">{m.id}</span><span class="menu-price">{priceOf(m.id)}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      <button class="clear" onclick={clearCompare} aria-label="Remove comparison">&times;</button>
+    {/if}
+
+    <span class="spacer"></span>
+    <button class="btn-primary" onclick={start} disabled={loading}>
+      {loading ? 'Running…' : (hasRun ? 'Run again' : (comparing ? 'Run both' : 'Run'))}
+    </button>
+    {#if onclose}
+      <button class="clear" onclick={onclose} aria-label="Close preview">&times;</button>
+    {/if}
+  </div>
+
   <div class="notice">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4" />
@@ -72,328 +171,180 @@
       <circle cx="8" cy="11" r="0.9" fill="currentColor" />
     </svg>
     <span>Preview only: nothing was sent, written, or remembered.</span>
-    {#if onclose}
-      <button class="close" onclick={onclose} aria-label="Close preview">&times;</button>
-    {/if}
   </div>
 
-  {#if loading}
-    <div class="state">
-      <span class="spinner" aria-hidden="true"></span>
-      Running through the agent&hellip;
-    </div>
-  {:else if error}
+  {#if error}
     <div class="state error-state">
       <span>{error}</span>
       <button class="btn-sm" onclick={start}>Try again</button>
     </div>
-  {:else if transcript}
-    <div class="meta">
-      <div class="metric"><span class="metric-label">Rounds</span><span class="metric-value">{transcript.rounds}</span></div>
-      <div class="metric"><span class="metric-label">Tools</span><span class="metric-value">{transcript.tool_calls.length}</span></div>
-      <div class="metric">
-        <span class="metric-label">Suppressed</span>
-        <span class="metric-value" class:accented={transcript.suppressed_count > 0}>{transcript.suppressed_count}</span>
-      </div>
-      <div class="metric"><span class="metric-label">Cost</span><span class="metric-value">{cost(transcript.cost_usd)}</span></div>
-      <div class="metric"><span class="metric-label">Took</span><span class="metric-value">{duration(transcript.duration_ms)}</span></div>
-      <div class="meta-spacer"></div>
-      <div class="metric align-end"><span class="metric-label">As of</span><span class="metric-value small">{asOfLabel(transcript.as_of)}</span></div>
+  {/if}
+
+  {#if loading && !primary}
+    <div class="state">
+      <span class="spinner" aria-hidden="true"></span>
+      Running through the agent&hellip;
     </div>
+  {/if}
 
-    {#if transcript.tool_calls.length > 0}
-      <div class="section">
-        <div class="section-label">Tool trace</div>
-        <div class="rows">
-          {#each transcript.tool_calls as call, i (i)}
-            <button
-              class="row"
-              class:suppressed={call.suppressed}
-              onclick={() => toggle(i)}
-              aria-expanded={expanded.has(i)}
-              aria-controls="{uid}-call-{i}"
-            >
-              <span class="lane-round">R{call.round}</span>
-              <span class="dot {dotClass(call.outcome)}"></span>
-              <span class="lane-tool">{call.tool}</span>
-              <span class="lane-args">{call.arguments || ''}</span>
-              <span class="lane-outcome">
-                {#if call.suppressed}
-                  <span class="badge">SUPPRESSED</span>
-                {:else if call.outcome !== 'ok' && call.outcome !== 'cached'}
-                  <span class="badge badge-error">{call.outcome.toUpperCase()}</span>
-                {:else}
-                  {duration(call.duration_ms)}
-                {/if}
-              </span>
-              <span class="lane-chevron" class:open={expanded.has(i)}>&#x25B6;</span>
-            </button>
-            {#if expanded.has(i)}
-              <div class="row-detail" class:suppressed={call.suppressed} id="{uid}-call-{i}">
-                <div class="detail-label">Result returned to the model</div>
-                <pre class="detail-body">{call.result || call.error || '(no result)'}</pre>
-                {#if call.truncated}
-                  <div class="detail-note">Trimmed for display.</div>
-                {/if}
-              </div>
+  {#if primary && candidate}
+    <div class="deltas">
+      {#each deltas as d}
+        <div class="delta">
+          <div class="delta-label">{d.label}</div>
+          <div class="delta-values">
+            <span class="delta-from">{d.from} &rarr; {d.to}</span>
+            {#if d.delta != null && d.delta !== 0}
+              <span class="delta-pct" class:worse={d.worse}>{deltaText(d)}</span>
             {/if}
-          {/each}
+          </div>
         </div>
-      </div>
-    {/if}
+      {/each}
+    </div>
+    <div class="caveat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4" />
+        <path d="M8 5v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+        <circle cx="8" cy="11" r="0.9" fill="currentColor" />
+      </svg>
+      <span>One sample each &mdash; a smoke test, not a verdict. Two models can differ this much on the same prompt by chance. To decide anything, run this as a full eval over a test set.</span>
+    </div>
+  {/if}
 
-    <div class="section">
-      <div class="section-label">Response &mdash; not delivered</div>
-      {#if transcript.response}
-        <div class="response">{transcript.response}</div>
-      {:else}
-        <div class="response empty">The agent produced no text response.</div>
+  {#if primary}
+    <div class="body" class:split={comparing && candidate}>
+      <div class="col">
+        <DryRunTranscript transcript={primary} label={primaryModel ? '' : 'LIVE'} compact={!!(comparing && candidate)} />
+      </div>
+      {#if comparing && candidate}
+        <div class="col right">
+          <DryRunTranscript transcript={candidate} label="CANDIDATE" accent={true} compact={true} />
+        </div>
       {/if}
     </div>
+  {/if}
 
-    <div class="footer">
-      <button class="btn-sm" onclick={start}>Run again</button>
-      <span class="footer-note">{transcript.model || 'model unknown'}</span>
+  {#if !comparing && !loading && picking !== 'compare'}
+    <div class="body">
+      {#if primary}<div class="col grow"></div>{/if}
+      <button class="rail" onclick={() => picking = 'compare'}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span class="rail-title">Compare with<br />another model</span>
+        <span class="rail-sub">Runs the turn twice and shows the deltas</span>
+      </button>
     </div>
   {/if}
 </div>
 
 <style>
-  .panel {
-    display: flex;
-    flex-direction: column;
-    border-top: 1px solid var(--border);
-    background: var(--bg);
+  .panel { display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg); }
+
+  .header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; flex-wrap: wrap; }
+  .run-as { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .vs { font-size: 12px; color: var(--text-muted); }
+  .spacer { flex: 1; min-width: 0; }
+
+  .slot-wrap { position: relative; }
+  .slot {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 6px 10px; cursor: pointer; font-family: inherit;
   }
+  .slot:hover { border-color: var(--text-muted); }
+  .slot.accent { border-color: var(--accent); }
+  .slot-model {
+    font-size: 12px; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .slot-tag { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; color: var(--text-muted); }
+  .slot-caret { font-size: 9px; color: var(--text-muted); }
+
+  .menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+    display: flex; flex-direction: column; min-width: 320px; max-height: 280px; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  }
+  .menu-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    background: none; border: none; border-top: 1px solid var(--border);
+    cursor: pointer; text-align: left; width: 100%; font-family: inherit;
+  }
+  .menu-item:first-child { border-top: none; }
+  .menu-item:hover { background: var(--hover-overlay); }
+  .menu-item[aria-selected="true"] { background: rgba(200, 78, 53, 0.08); }
+  .menu-model {
+    flex: 1; min-width: 0; font-size: 12px; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .menu-tag, .menu-price { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+
+  .clear {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px;
+  }
+  .clear:hover { color: var(--text); }
 
   .notice {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 12px 16px;
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
     background: rgba(200, 126, 48, 0.08);
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    line-height: 20px;
-    color: var(--text);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    font-size: 13px; line-height: 20px; color: var(--text);
   }
   .notice svg { flex-shrink: 0; margin-top: 2px; color: var(--warn); }
-  .notice span { flex: 1; }
 
-  .close {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 18px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0 2px;
-  }
-  .close:hover { color: var(--text); }
-
-  .state {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 20px 16px;
-    font-size: 13px;
-    color: var(--text-muted);
-  }
+  .state { display: flex; align-items: center; gap: 10px; padding: 20px 16px; font-size: 13px; color: var(--text-muted); }
   .error-state { color: var(--danger); }
   .error-state span { flex: 1; }
 
   .spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    flex-shrink: 0;
+    width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  @media (prefers-reduced-motion: reduce) {
-    .spinner { animation-duration: 2s; }
-    .lane-chevron { transition: none; }
+  .deltas { display: flex; align-items: stretch; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .delta {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 14px 20px; border-right: 1px solid var(--border); flex: 1; min-width: 150px;
   }
+  .delta:last-child { border-right: none; }
+  .delta-label { font-size: 11px; color: var(--text-muted); }
+  .delta-values { display: flex; align-items: baseline; gap: 8px; }
+  .delta-from { font-size: 15px; font-weight: 600; color: var(--text); }
+  .delta-pct { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+  .delta-pct.worse { color: var(--danger); }
 
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
-    flex-wrap: wrap;
+  .caveat {
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+    background: rgba(200, 126, 48, 0.08); border-bottom: 1px solid var(--border);
+    font-size: 13px; line-height: 20px; color: var(--text);
   }
-  .metric { display: flex; flex-direction: column; gap: 2px; }
-  .align-end { align-items: flex-end; }
-  .metric-label { font-size: 11px; color: var(--text-muted); }
-  .metric-value { font-size: 14px; font-weight: 600; color: var(--text); }
-  .metric-value.small { font-size: 13px; font-weight: 400; }
-  .metric-value.accented { color: var(--warn); }
-  .meta-spacer { flex: 1; min-width: 0; }
+  .caveat svg { flex-shrink: 0; margin-top: 2px; color: var(--warn); }
 
-  .section { display: flex; flex-direction: column; gap: 10px; padding: 16px 16px 0 16px; }
-  .section:last-of-type { padding-bottom: 4px; }
+  .body { display: flex; align-items: stretch; }
+  .col { display: flex; flex-direction: column; padding: 16px; flex: 1; min-width: 0; }
+  .col.right { border-left: 1px solid var(--border); }
+  .col.grow { flex: 1; padding: 0; }
 
-  .section-label {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-muted);
+  /* Empty compare slot: a rail, not half the panel. The single-model preview
+     is the common case and keeps its width until a comparison is asked for. */
+  .rail {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    width: 272px; flex-shrink: 0; padding: 20px 16px;
+    border-left: 1px dashed var(--border); background: rgba(0, 0, 0, 0.015);
+    cursor: pointer; font-family: inherit; color: var(--text-muted);
   }
+  .rail:hover { background: var(--hover-overlay); color: var(--text); }
+  .rail-title { font-size: 13px; font-weight: 500; color: var(--text); text-align: center; line-height: 19px; }
+  .rail-sub { font-size: 11px; color: var(--text-muted); text-align: center; line-height: 16px; }
 
-  .rows {
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
 
-  /* Fixed-width lanes so round, tool, outcome and chevron line up down the
-     column regardless of how long any one argument string is. */
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 12px;
-    background: var(--bg);
-    border: none;
-    border-top: 1px solid var(--border);
-    width: 100%;
-    text-align: left;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .row:first-child { border-top: none; }
-  .row:hover { background: var(--hover-overlay); }
-  .row.suppressed { background: rgba(200, 126, 48, 0.06); }
-  .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-  .lane-round {
-    width: 30px;
-    flex-shrink: 0;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  .dot { width: 8px; height: 8px; border-radius: 4px; flex-shrink: 0; }
-  .dot-ok { background: var(--success); }
-  .dot-suppressed { background: var(--warn); }
-  .dot-error { background: var(--danger); }
-
-  .lane-tool {
-    width: 150px;
-    flex-shrink: 0;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .lane-args {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--text-muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .lane-outcome {
-    width: 96px;
-    flex-shrink: 0;
-    text-align: right;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .lane-chevron {
-    width: 16px;
-    flex-shrink: 0;
-    font-size: 9px;
-    color: var(--text-muted);
-    transition: transform 0.2s;
-  }
-  .lane-chevron.open { transform: rotate(90deg); }
-
-  .badge {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    color: var(--warn);
-    border: 1px solid var(--warn);
-    border-radius: 4px;
-    padding: 2px 6px;
-  }
-  .badge-error { color: var(--danger); border-color: var(--danger); }
-
-  .row-detail {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 12px 14px 54px;
-    background: var(--bg);
-    border-top: 1px solid var(--border);
-  }
-  .row-detail.suppressed { background: rgba(200, 126, 48, 0.06); }
-
-  .detail-label {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .detail-body {
-    font-size: 12px;
-    line-height: 18px;
-    color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    margin: 0;
-    max-height: 260px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .detail-note { font-size: 11px; color: var(--text-muted); }
-
-  .response {
-    font-size: 14px;
-    line-height: 22px;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--accent);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .response.empty { color: var(--text-muted); font-style: italic; }
-
-  .footer {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px 16px 16px;
-  }
-  .footer-note { font-size: 11px; color: var(--text-muted); }
-
-  @media (max-width: 640px) {
-    .lane-tool { width: 110px; }
-    .lane-args { display: none; }
-    .lane-outcome { width: 88px; }
-    .row-detail { padding-left: 12px; }
+  @media (max-width: 860px) {
+    .body, .body.split { flex-direction: column; }
+    .col.right { border-left: none; border-top: 1px solid var(--border); }
+    .rail { width: 100%; border-left: none; border-top: 1px dashed var(--border); }
   }
 </style>

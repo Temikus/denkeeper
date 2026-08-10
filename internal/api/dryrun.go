@@ -32,6 +32,10 @@ type dryRunInput struct {
 	// both date-injection points — the scheduled-message header and the
 	// "## Current Date" prompt section — feed dated keys the agent writes.
 	AsOf string `json:"as_of"`
+	// Model runs this preview against a model other than the agent's live one.
+	// Empty uses the live model. The override applies to this request only and
+	// changes nothing about the agent.
+	Model string `json:"model"`
 }
 
 // dryRunToolCall is one tool call in a transcript.
@@ -51,15 +55,20 @@ type dryRunToolCall struct {
 // dryRunTranscript is what both endpoints return: everything the turn did,
 // with nothing having been sent, written, or remembered.
 type dryRunTranscript struct {
-	Agent          string           `json:"agent"`
-	ConversationID string           `json:"conversation_id"`
-	AsOf           time.Time        `json:"as_of"`
-	Prompt         string           `json:"prompt"`
-	Response       string           `json:"response"`
-	Rounds         int              `json:"rounds"`
-	DurationMs     int64            `json:"duration_ms"`
-	Model          string           `json:"model,omitempty"`
-	Provider       string           `json:"provider,omitempty"`
+	Agent          string    `json:"agent"`
+	ConversationID string    `json:"conversation_id"`
+	AsOf           time.Time `json:"as_of"`
+	Prompt         string    `json:"prompt"`
+	Response       string    `json:"response"`
+	Rounds         int       `json:"rounds"`
+	DurationMs     int64     `json:"duration_ms"`
+	Model          string    `json:"model,omitempty"`
+	Provider       string    `json:"provider,omitempty"`
+	// RequestedModel is set only when the caller overrode the model, so the UI
+	// can mark a transcript as "not your live model" without knowing the agent
+	// config. Model is what actually answered; the two can differ if the
+	// provider redirected.
+	RequestedModel string           `json:"requested_model,omitempty"`
 	TokensPrompt   int              `json:"tokens_prompt"`
 	TokensTotal    int              `json:"tokens_total"`
 	CostUSD        float64          `json:"cost_usd"`
@@ -117,6 +126,7 @@ func buildTranscript(agentName string, result *agent.TurnResult) dryRunTranscrip
 		DurationMs:     result.DurationMs,
 		Model:          result.Model,
 		Provider:       result.Provider,
+		RequestedModel: result.RequestedModel,
 		TokensPrompt:   result.Tokens.Prompt,
 		TokensTotal:    result.Tokens.Total,
 		CostUSD:        result.CostUSD,
@@ -164,6 +174,9 @@ func (s *Server) emitDryRunAudit(r *http.Request, agentName, target, convID stri
 		"target": target,
 		"as_of":  asOf.Format(time.RFC3339),
 	}
+	if result != nil && result.RequestedModel != "" {
+		detail["model_override"] = result.RequestedModel
+	}
 	status := audit.StatusOK
 	summary := fmt.Sprintf("Dry run: %s", target)
 	if runErr != nil {
@@ -210,7 +223,7 @@ func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engi
 // @Produce json
 // @Security BearerAuth
 // @Param name path string true "Schedule name"
-// @Param body body dryRunInput false "Optional as_of (RFC3339) to pin the clock"
+// @Param body body dryRunInput false "Optional as_of (RFC3339) to pin the clock and model to override the agent's model"
 // @Success 200 {object} dryRunTranscript "Dry-run transcript"
 // @Failure 400 {object} map[string]string "Invalid JSON or as_of"
 // @Failure 404 {object} map[string]string "Schedule or agent not found"
@@ -232,7 +245,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, asOf, err := parseDryRunInput(r)
+	input, asOf, err := parseDryRunInput(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -271,6 +284,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 		Kind:      agent.ExecDryRun,
 		ConvID:    convID,
 		AsOf:      asOf,
+		Model:     input.Model,
 		AuditMode: s.evalAuditMode(),
 	}, "schedule "+name)
 }
@@ -284,7 +298,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param agent path string true "Agent name"
 // @Param name path string true "Skill name"
-// @Param body body dryRunInput true "Message to run, plus optional as_of (RFC3339)"
+// @Param body body dryRunInput true "Message to run, plus optional as_of (RFC3339) and model override"
 // @Success 200 {object} dryRunTranscript "Dry-run transcript"
 // @Failure 400 {object} map[string]string "Invalid JSON, missing message, or invalid as_of"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
@@ -329,6 +343,7 @@ func (s *Server) handleDryRunSkill(w http.ResponseWriter, r *http.Request) {
 		Kind:      agent.ExecDryRun,
 		ConvID:    convID,
 		AsOf:      asOf,
+		Model:     input.Model,
 		AuditMode: s.evalAuditMode(),
 	}, "skill "+agentName+"/"+skillName)
 }

@@ -52,6 +52,25 @@ func (r *Router) DefaultProvider() string { return r.defaultProvider }
 // DefaultModel returns the router's default model name.
 func (r *Router) DefaultModel() string { return r.defaultModel }
 
+// WithModel returns a shallow copy of r whose default model is model, for
+// callers that need a one-off model override — a dry run previewing a
+// candidate model, or an eval sample running a variant.
+//
+// It is a copy rather than a SetDefaultModel call because the router is shared
+// by every turn on an agent: mutating it would silently retarget the model of
+// any live turn already in flight. The copy deliberately shares the provider
+// map, cost tracker, pricing registry and fallback rules, so an override still
+// bills to the same budget and honours the same routing rules — only the model
+// differs. Returns r unchanged when the override is empty or already current.
+func (r *Router) WithModel(model string) *Router {
+	if model == "" || model == r.defaultModel {
+		return r
+	}
+	clone := *r
+	clone.defaultModel = model
+	return &clone
+}
+
 // CostTracker returns the router's cost tracker for soft-limit checks.
 func (r *Router) CostTracker() *CostTracker { return r.costTracker }
 

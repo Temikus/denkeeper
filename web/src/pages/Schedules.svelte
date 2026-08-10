@@ -64,6 +64,8 @@
   }
 
   const tierByAgent = $derived(new Map(agents.map(a => [a.name, a.permission_tier])))
+  // The preview names the agent's live model so an override reads as a change.
+  const modelByAgent = $derived(new Map(agents.map(a => [a.name, a.llm_model])))
 
   // Schedules grouped by owning agent, sorted by agent name. The section
   // tier badge is the agent-level tier; a per-schedule session_tier renders
@@ -389,7 +391,9 @@
                   {/if}
                 </div>
                 {#if previewName === s.name}
-                  <DryRunPanel run={() => api.dryRunSchedule(s.name)} onclose={() => previewName = null} />
+                  <DryRunPanel run={(model) => api.dryRunSchedule(s.name, model ? { model } : {})}
+                    liveModel={modelByAgent.get(s.agent || 'default') || ''}
+                    onclose={() => previewName = null} />
                 {/if}
               </li>
             {/each}
@@ -454,7 +458,9 @@
                 {#if previewName === s.name}
                   <tr class="preview-row">
                     <td colspan="7">
-                      <DryRunPanel run={() => api.dryRunSchedule(s.name)} onclose={() => previewName = null} />
+                      <DryRunPanel run={(model) => api.dryRunSchedule(s.name, model ? { model } : {})}
+                        liveModel={modelByAgent.get(s.agent || 'default') || ''}
+                        onclose={() => previewName = null} />
                     </td>
                   </tr>
                 {/if}

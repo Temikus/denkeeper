@@ -3940,7 +3940,7 @@
                         "required": true
                     },
                     {
-                        "description": "Optional as_of (RFC3339) to pin the clock",
+                        "description": "Optional as_of (RFC3339) to pin the clock and model to override the agent's model",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -5279,7 +5279,7 @@
                         "required": true
                     },
                     {
-                        "description": "Message to run, plus optional as_of (RFC3339)",
+                        "description": "Message to run, plus optional as_of (RFC3339) and model override",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -7043,6 +7043,10 @@
                 "message": {
                     "description": "Message is the user text to run. Required for skill dry-runs, ignored\nfor schedules.",
                     "type": "string"
+                },
+                "model": {
+                    "description": "Model runs this preview against a model other than the agent's live one.\nEmpty uses the live model. The override applies to this request only and\nchanges nothing about the agent.",
+                    "type": "string"
                 }
             }
         },
@@ -7106,6 +7110,10 @@
                     "type": "string"
                 },
                 "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "description": "RequestedModel is set only when the caller overrode the model, so the UI\ncan mark a transcript as \"not your live model\" without knowing the agent\nconfig. Model is what actually answered; the two can differ if the\nprovider redirected.",
                     "type": "string"
                 },
                 "response": {

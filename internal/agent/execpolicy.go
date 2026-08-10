@@ -56,6 +56,11 @@ type ExecPolicy struct {
 	// Variant names the eval variant this sample belongs to (e.g. "candidate").
 	// Empty for dry-runs and for the conventional incumbent.
 	Variant string
+	// Model overrides the agent's model for this turn only. Empty runs the
+	// agent's live model. The override is applied by cloning the router
+	// (llm.Router.WithModel) rather than mutating it, so a preview of a
+	// candidate model cannot retarget a live turn already in flight.
+	Model string
 	// ConvID is the in-flight conversation identity — "dryrun:{uuid}" or
 	// "eval:{run}:{task}:{k}". It is used for cost tracking, audit grouping and
 	// log correlation, and is never written to the conversations table.
@@ -130,11 +135,23 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 
 // turnRun carries the per-turn execution parameters resolved once in
 // chatWithApproval and threaded down the tool loop: the effective tool-round
-// budget and the execution policy. Bundling them keeps the loop signatures
-// from growing a parameter per concern.
+// budget, the execution policy, and the router the turn talks to. Bundling
+// them keeps the loop signatures from growing a parameter per concern.
+//
+// router is resolved once at the top of the turn so every completion in the
+// tool loop — including the wrap-up and nudge-retry rounds — reaches the same
+// model. A turn that started on a candidate model must not silently finish on
+// the live one.
+//
+// Invariant: router must be non-nil on any turnRun that reaches a completion
+// path. chatWithApproval is the only production constructor and always sets
+// it; a zero turnRun is fine for the tool-execution helpers (which read only
+// policy) and will panic loudly if it ever reaches the router, which is the
+// failure mode we want for a construction bug.
 type turnRun struct {
 	budget turnToolBudget
 	policy *ExecPolicy
+	router *llm.Router
 }
 
 // TurnResult is everything a caller needs from one turn executed outside the
@@ -155,9 +172,15 @@ type TurnResult struct {
 	// Tokens and Cost cover the whole turn, accumulated across rounds.
 	Tokens  llm.TokenUsage `json:"tokens"`
 	CostUSD float64        `json:"cost_usd"`
-	// Model and Provider identify what actually answered.
+	// Model and Provider identify what actually answered — read back from the
+	// response, so an override that the provider silently redirected shows the
+	// model that really ran rather than the one that was asked for.
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+	// RequestedModel is the override the caller asked for, empty when the turn
+	// ran the agent's live model. The pair is what lets a transcript say "this
+	// is not your live model" without the UI having to know the agent config.
+	RequestedModel string `json:"requested_model,omitempty"`
 	// AsOf is the clock the turn ran under.
 	AsOf time.Time `json:"as_of"`
 	// DurationMs is wall-clock time for the whole turn.

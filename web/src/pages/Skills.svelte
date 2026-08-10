@@ -313,7 +313,8 @@
                 {#key previewRunKey}
                   {#if previewRunKey}
                     <DryRunPanel
-                      run={() => api.dryRunSkill(s.agent, s.name, { message: previewMessage })}
+                      run={(model) => api.dryRunSkill(s.agent, s.name, model ? { message: previewMessage, model } : { message: previewMessage })}
+                      liveModel={agents.find(a => a.name === s.agent)?.llm_model || ''}
                       onclose={() => { previewKey = null; previewRunKey = null }} />
                   {/if}
                 {/key}

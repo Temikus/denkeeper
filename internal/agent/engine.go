@@ -1117,6 +1117,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 		AsOf:           asOf,
 		DurationMs:     time.Since(start).Milliseconds(),
 		Provider:       e.router.DefaultProvider(),
+		RequestedModel: policy.Model,
 	}
 	if out.resp != nil {
 		result.Tokens = out.resp.TokensUsed
@@ -1201,7 +1202,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	run := turnRun{budget: prep.budget, policy: policy}
+	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy)}
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
@@ -1588,7 +1589,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		onEvent(ChatEvent{Type: "thinking"})
 	}
 
-	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+	resp, err := run.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: 0})
 		return nil, llmMessages, nil, fmt.Errorf("LLM completion: %w", err)
@@ -1659,7 +1660,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// turn.
 	if out.stopReason != stopNone {
 		parentSpan.SetAttributes(attribute.String("agent.tool_loop_stop", out.stopReason.String()))
-		resp, llmMessages, err := e.finishStoppedToolLoop(ctx, convID, out, &totalUsage, &totalCost, onEvent)
+		resp, llmMessages, err := e.finishStoppedToolLoop(ctx, convID, out, &totalUsage, &totalCost, run, onEvent)
 		return resp, llmMessages, out.toolRecords, err
 	}
 
@@ -1680,7 +1681,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// trim is required for recovery to fire.
 	if strings.TrimSpace(resp.Content) == "" && out.toolRounds > 0 {
 		var err error
-		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, out.accumulated)
+		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, out.accumulated, run)
 		if err != nil {
 			return nil, llmMessages, out.toolRecords, err
 		}
@@ -1746,7 +1747,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 		}
 
 		var err error
-		resp, err = e.completeToolRound(ctx, convID, round+1, out.llmMessages, onEvent)
+		resp, err = e.completeToolRound(ctx, convID, round+1, out.llmMessages, run, onEvent)
 		if err != nil {
 			return out, err
 		}
@@ -1767,8 +1768,8 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 // calls and emits its audit event. A truncated final skips the ok-status
 // event: the Layer-3 guard in executeToolRounds emits the single error-status
 // event for that round-trip instead of an "ok then error" pair.
-func (e *Engine) completeToolRound(ctx context.Context, convID string, round int, llmMessages []llm.Message, onEvent ChatEventFunc) (*llm.ChatResponse, error) {
-	resp, err := e.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+func (e *Engine) completeToolRound(ctx context.Context, convID string, round int, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, error) {
+	resp, err := run.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: round})
 		return nil, fmt.Errorf("LLM completion (tool round %d): %w", round, err)
@@ -1891,7 +1892,7 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 // pre-wrap-up behavior). On success the returned response carries the
 // accumulated usage totals and a compact honesty marker so conversation
 // history (and the user) records that the turn was cut short.
-func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	stopReason := out.stopReason
 	if len(out.toolRecords) == 0 {
 		// Nothing executed — there is no work to summarize, so skip the
@@ -1903,7 +1904,7 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 		// threshold ever becomes configurable below 3 — keep it tested.
 		return nil, out.llmMessages, fmt.Errorf("tool loop stopped (%s) with no completed tool calls", stopReason)
 	}
-	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, stopReason, out.llmMessages, out.toolRounds, onEvent)
+	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, stopReason, out.llmMessages, out.toolRounds, run, onEvent)
 	if err != nil {
 		return nil, llmMessages, fmt.Errorf("tool loop stopped (%s); wrap-up failed: %w", stopReason, err)
 	}
@@ -1929,7 +1930,7 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 // definitions (Router.CompleteFinal), so the provider cannot return further
 // tool calls — the "no more tools" contract is enforced by request shape,
 // not prompt prose.
-func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopStopReason, llmMessages []llm.Message, toolRounds int, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
+func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopStopReason, llmMessages []llm.Message, toolRounds int, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	e.logger.Warn("tool loop stopped, attempting wrap-up round",
 		"reason", reason.String(), "conversation", convID, "tool_rounds", toolRounds)
 	if onEvent != nil {
@@ -1941,7 +1942,7 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 			"Summarize the outcome for the user from the tool results above — what you found, what you did, "+
 			"and anything that still needs attention. Do not mention the loop stop unless it affected the result.]", reason),
 	})
-	resp, err := e.router.CompleteFinal(ctx, convID, llmMessages)
+	resp, err := run.router.CompleteFinal(ctx, convID, llmMessages)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{wrapUp: true})
 		return nil, llmMessages, fmt.Errorf("LLM completion (wrap-up): %w", err)
@@ -1953,7 +1954,7 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 // recoverEmptyToolResponse attempts to recover when the LLM returns empty
 // content after tool rounds. It first checks for accumulated intermediate
 // content, then falls back to nudging the model for a response.
-func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string) (*llm.ChatResponse, []llm.Message, error) {
+func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string, run turnRun) (*llm.ChatResponse, []llm.Message, error) {
 	if strings.TrimSpace(accumulated) != "" {
 		e.logger.Info("using accumulated content from intermediate tool rounds",
 			"accumulated_len", len(accumulated))
@@ -1966,7 +1967,7 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 		Role:    "user",
 		Content: "Please provide your response based on the tool results above.",
 	})
-	nudgeResp, err := e.router.Complete(ctx, convID, llmMessages)
+	nudgeResp, err := run.router.Complete(ctx, convID, llmMessages)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{nudgeRetry: true})
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
@@ -2230,6 +2231,17 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	}
 	record.Result = result
 	return result, record
+}
+
+// routerFor returns the router this turn talks to: the engine's own, or a
+// one-off clone carrying the policy's model override. Resolved once per turn
+// so every round — including wrap-up and nudge retries — reaches the same
+// model; a turn that started on a candidate must not finish on the live one.
+func (e *Engine) routerFor(policy *ExecPolicy) *llm.Router {
+	if !policy.active() || policy.Model == "" {
+		return e.router
+	}
+	return e.router.WithModel(policy.Model)
 }
 
 // idempotencyCheck returns the "safe to execute" predicate an execution policy

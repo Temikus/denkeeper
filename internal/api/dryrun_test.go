@@ -205,3 +205,34 @@ func TestTruncateField(t *testing.T) {
 		t.Errorf("truncateField(long) = (%d chars, %v), want (%d, true)", len(got), truncated, maxTranscriptFieldLen)
 	}
 }
+
+func TestDryRunSkill_ModelOverrideIsEchoed(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run",
+		`{"message":"hi","model":"moonshotai/kimi-k3"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeTranscript(t, rec)
+	// requested_model is what makes a transcript self-describing: the UI can
+	// mark it "not your live model" without knowing the agent's config.
+	if got.RequestedModel != "moonshotai/kimi-k3" {
+		t.Errorf("RequestedModel = %q, want the override echoed back", got.RequestedModel)
+	}
+}
+
+func TestDryRunSkill_NoOverrideLeavesRequestedModelEmpty(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run", `{"message":"hi"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeTranscript(t, rec).RequestedModel; got != "" {
+		t.Errorf("RequestedModel = %q, want empty when the live model ran", got)
+	}
+}

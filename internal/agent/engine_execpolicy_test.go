@@ -371,3 +371,47 @@ func TestExecPolicy_AuditAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestDryRun_ModelOverrideDoesNotMutateTheEngineRouter(t *testing.T) {
+	// The router is shared by every turn on an agent. If an override mutated it
+	// instead of cloning, a preview would silently retarget the model of a live
+	// turn already in flight — the reason WithModel exists.
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}, "autonomous")
+	before := e.router.DefaultModel()
+
+	policy := dryRunPolicy()
+	policy.Model = "some/other-model"
+	result, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, policy)
+	if err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	if after := e.router.DefaultModel(); after != before {
+		t.Errorf("engine router model = %q after an override, want %q unchanged", after, before)
+	}
+	if result.RequestedModel != "some/other-model" {
+		t.Errorf("RequestedModel = %q, want the override recorded", result.RequestedModel)
+	}
+}
+
+func TestRouterFor_ReturnsEngineRouterWithoutOverride(t *testing.T) {
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop"},
+	}, "autonomous")
+
+	if got := e.routerFor(nil); got != e.router {
+		t.Error("a live turn must use the engine's own router, not a clone")
+	}
+	if got := e.routerFor(&ExecPolicy{Kind: ExecDryRun}); got != e.router {
+		t.Error("a policy with no model override must reuse the engine router")
+	}
+	clone := e.routerFor(&ExecPolicy{Kind: ExecDryRun, Model: "other/model"})
+	if clone == e.router {
+		t.Error("a model override must produce a distinct router")
+	}
+	if clone.DefaultModel() != "other/model" {
+		t.Errorf("clone model = %q, want other/model", clone.DefaultModel())
+	}
+}
