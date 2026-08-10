@@ -63,11 +63,13 @@
   // otherwise repaint the list with a filter the user has already left.
   let loadSeq = 0
 
-  async function load(append = false) {
+  // `quiet` suppresses the in-flight marker for background work (the Follow
+  // poll): dimming the list every 5s unprompted is worse than showing nothing.
+  async function load(append = false, quiet = false) {
     const seq = ++loadSeq
     try {
       error = ''
-      if (!append) refreshing = true
+      if (!append && !quiet) refreshing = true
       const since = sinceFromRange(timeRange)
       const res = await api.auditEvents({ category: categories, status: statuses, search, since, limit: String(limit), offset: String(append ? offset : 0) })
       if (seq !== loadSeq) return
@@ -84,7 +86,7 @@
     try { stats = await api.auditStats(sinceFromRange(timeRange)) } catch { /* non-critical */ }
   }
 
-  function refresh() { load(); loadStats() }
+  function refresh(quiet = false) { load(false, quiet); loadStats() }
   function loadMore() { offset += limit; load(true) }
 
   // Range chips select on arrow-key focus, so a keyboard user sweeping the bar
@@ -101,12 +103,16 @@
   }
   function toggleFollow() {
     follow = !follow
-    if (follow) refreshTimer = setInterval(refresh, 5000)
+    if (follow) refreshTimer = setInterval(() => refresh(true), 5000)
     else clearInterval(refreshTimer)
   }
 
   let searchTimeout
   function onSearchInput(e) {
+    // Marked on the keystroke rather than when the request finally goes out:
+    // the debounce is part of the wait the user is sitting through, and a
+    // query that will return nothing must not read as "no results" meanwhile.
+    refreshing = true
     clearTimeout(searchTimeout)
     searchTimeout = setTimeout(() => { search = e.target.value; refresh() }, 300)
   }
@@ -277,43 +283,48 @@
     <span class="search-hint">try</span>
     <code class="search-example">tool:name</code>
     <code class="search-example">agent:planner</code>
+    {#if refreshing}
+      <span class="search-status" role="status">Searching{'\u2026'}</span>
+    {/if}
   </div>
 
   <!-- Event list -->
-  {#if loading}
-    <p class="empty">Loading...</p>
-  {:else if groupedItems.length === 0}
-    <p class="empty">No audit events found.</p>
-  {:else if view === 'timeline'}
-    <div class="timeline">
-      {#each groupedItems as item}
-        {#if item.type === 'session'}
-          <AuditSession session={item} expandedId={expandedRowId} onToggleRow={toggleRow} onToggleSession={toggleSession} />
-        {:else}
-          <div class="standalone-card" class:error-border={item.event.status === 'error'}>
-            <AuditRow event={item.event} expanded={expandedRowId === item.event.id} ontoggle={() => toggleRow(item.event.id)} standalone={true} />
-          </div>
-        {/if}
-      {/each}
-    </div>
-  {:else}
-    <table class="table">
-      <thead><tr><th>Time</th><th>Type</th><th>Summary</th><th>Status</th><th>Duration</th><th>Agent</th></tr></thead>
-      <tbody>
-        {#each events as event (event.id)}
-          {@const isErr = event.status === 'error'}
-          <tr class="row-clickable" class:row-expanded={expandedRowId === event.id} class:error-table-row={isErr} role="button" tabindex="0" aria-expanded={expandedRowId === event.id} onclick={() => toggleRow(event.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(event.id) }}}>
-            <td class="date">{new Date(event.timestamp).toLocaleString()}</td>
-            <td><span class="cat-badge-sm">{event.category}</span></td>
-            <td class="summary-cell">{event.summary || event.action}{#if isErr} <span class="pill-failed-sm">FAILED</span>{/if}</td>
-            <td><span class="status-text" class:status-err={isErr}>{event.status}</span></td>
-            <td class="mono" class:dur-err={isErr}>{event.duration_ms > 0 ? `${event.duration_ms}ms` : '\u2014'}</td>
-            <td class="muted">{event.agent || '\u2014'}</td>
-          </tr>
+  <div class="results" class:is-refreshing={refreshing} aria-busy={refreshing}>
+    {#if loading}
+      <p class="empty">Loading...</p>
+    {:else if groupedItems.length === 0}
+      <p class="empty">No audit events found.</p>
+    {:else if view === 'timeline'}
+      <div class="timeline">
+        {#each groupedItems as item}
+          {#if item.type === 'session'}
+            <AuditSession session={item} expandedId={expandedRowId} onToggleRow={toggleRow} onToggleSession={toggleSession} />
+          {:else}
+            <div class="standalone-card" class:error-border={item.event.status === 'error'}>
+              <AuditRow event={item.event} expanded={expandedRowId === item.event.id} ontoggle={() => toggleRow(item.event.id)} standalone={true} />
+            </div>
+          {/if}
         {/each}
-      </tbody>
-    </table>
-  {/if}
+      </div>
+    {:else}
+      <table class="table">
+        <thead><tr><th>Time</th><th>Type</th><th>Summary</th><th>Status</th><th>Duration</th><th>Agent</th></tr></thead>
+        <tbody>
+          {#each events as event (event.id)}
+            {@const isErr = event.status === 'error'}
+            <tr class="row-clickable" class:row-expanded={expandedRowId === event.id} class:error-table-row={isErr} role="button" tabindex="0" aria-expanded={expandedRowId === event.id} onclick={() => toggleRow(event.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRow(event.id) }}}>
+              <td class="date">{new Date(event.timestamp).toLocaleString()}</td>
+              <td><span class="cat-badge-sm">{event.category}</span></td>
+              <td class="summary-cell">{event.summary || event.action}{#if isErr} <span class="pill-failed-sm">FAILED</span>{/if}</td>
+              <td><span class="status-text" class:status-err={isErr}>{event.status}</span></td>
+              <td class="mono" class:dur-err={isErr}>{event.duration_ms > 0 ? `${event.duration_ms}ms` : '\u2014'}</td>
+              <td class="muted">{event.agent || '\u2014'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </div>
 
   {#if events.length < total}
     <div class="load-more"><button class="btn-load-more" onclick={loadMore}>Load older events</button></div>
@@ -382,6 +393,14 @@
     background: rgba(44,24,16,0.06); padding: 1px 6px;
     border-radius: 3px; font-size: 11px; color: #5F4A35;
   }
+
+  /* In-flight marker. Every keystroke-debounce and filter chip refetches, so a
+     full-page "Loading..." swap would flicker; instead the current results dim
+     and the search card names the state. Without it a query that will return
+     nothing is indistinguishable from one still in flight. */
+  .search-status { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+  .results { transition: opacity 0.12s ease; }
+  .results.is-refreshing { opacity: 0.5; }
 
   /* Timeline */
   .timeline { display: flex; flex-direction: column; gap: 6px; }
