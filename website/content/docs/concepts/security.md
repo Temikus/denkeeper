@@ -31,13 +31,15 @@ Both adapters enforce user allowlists:
 
 ```toml
 [telegram]
-allowed_users = [123456789]   # numeric Telegram user IDs
+allowed_users = [123456789]                # bare integers
 
 [discord]
-allowed_users = ["123456789012345678"]  # Discord snowflake IDs
+allowed_users = ["YOUR_DISCORD_USER_ID"]   # snowflake IDs, quoted as strings
 ```
 
 Messages from unlisted users are silently dropped.
+
+See the [Telegram](/docs/guides/telegram-setup/) and [Discord](/docs/guides/discord-setup/) guides for how to find your own ID on each platform.
 
 ## API security
 

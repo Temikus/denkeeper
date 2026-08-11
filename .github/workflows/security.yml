@@ -62,7 +62,9 @@ jobs:
           fetch-depth: 0
       - name: Install betterleaks
         run: |
-          VERSION="v1.1.2"
+          # Keep in sync with the betterleaks pin in .mise.toml, so a local
+          # `mise x -- betterleaks` reproduces this job's verdict exactly.
+          VERSION="v1.7.3"
           curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/${VERSION}/betterleaks_${VERSION#v}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin betterleaks
       - name: Run betterleaks
