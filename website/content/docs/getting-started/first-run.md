@@ -74,6 +74,8 @@ The PIN is single-use and cleared after successful account creation. It is never
 The setup PIN protects against setup hijacking: an attacker with network access to the API port cannot create an account without also having access to the server logs.
 {{< /callout >}}
 
+See the [Web Dashboard guide](/docs/guides/web-dashboard/) for what each page does.
+
 Once you're logged in, the dashboard's setup wizard takes over as the guided path: if your config declares no `[[agents]]`, Denkeeper deliberately starts with no agent so the wizard can walk you through creating the first one — provider, model, permission tier, and persona — writing the result back to your TOML file. An onboarding checklist tracks the remaining milestones.
 
 ## Logs

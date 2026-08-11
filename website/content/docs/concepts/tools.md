@@ -10,6 +10,8 @@ toc: true
 
 Tools are external processes that expose capabilities via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). The agent discovers available tools at startup and can invoke them during conversations.
 
+Denkeeper also ships tools that need no external process — web search and fetch, JavaScript execution, a KV store, and browser automation. See [Built-in Tools](/docs/concepts/built-in-tools/) for those. For pointing MCP the other way, so that other clients can drive *this* instance, see [Denkeeper as an MCP Server](/docs/guides/mcp-server/).
+
 ## Configuration
 
 Define tools in your config file:

@@ -39,6 +39,8 @@ In supervised mode, actions like skill creation or schedule modification produce
 
 Approval requests have a 24-hour TTL. Unapproved requests expire automatically.
 
+To stop being asked about tools you trust — or to have a second LLM triage approvals while you are asleep — see [Supervisors & Auto-Approval](/docs/concepts/supervisors/).
+
 ### Approval via Telegram
 
 When the agent wants to create a skill, the user sees a message with inline buttons:

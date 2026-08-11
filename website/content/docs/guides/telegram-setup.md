@@ -72,3 +72,7 @@ adapters = ["telegram"]            # all other chats
 name = "work"
 adapters = ["telegram:987654321"]  # this specific chat only
 ```
+
+A specific binding beats a wildcard, so the two above coexist.
+
+To share one conversation between Telegram and [Discord](/docs/guides/discord-setup/), or to switch a chat between agents at runtime with `/session`, see [Channels](/docs/concepts/channels/).

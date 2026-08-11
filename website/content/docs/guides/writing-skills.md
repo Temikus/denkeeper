@@ -77,6 +77,21 @@ Agent-specific skills are merged with global skills. Same-name agent skills over
 
 ## Testing a skill
 
+The fastest loop is a **dry run** — it executes the turn now and shows you the transcript without storing anything:
+
+```bash
+curl -X POST -H "Authorization: Bearer dk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"message": "coffee, $12"}' \
+  https://localhost:8080/api/v1/skills/default/expense-tracker/dry-run
+```
+
+The dashboard's Skills page exposes the same thing with a transcript panel. This matters most for scheduled skills: without it, testing a 7am briefing means waiting until 7am.
+
+A dry run persists nothing and suppresses non-read-only tools, but it does spend real tokens and does let read-only tools hit the network. See [Dry Runs & Previews](/docs/concepts/dry-runs/) for exactly what is and is not isolated.
+
+To test the real path end to end:
+
 1. Create the skill file
 2. Restart Denkeeper (skills are loaded at startup)
 3. If the skill has a `command:` trigger, send the command in Telegram
