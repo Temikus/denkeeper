@@ -2,7 +2,7 @@
 title: "Skills"
 description: "Markdown-based instruction files that teach the agent how to behave."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -17,7 +17,7 @@ Skills are the simplest extension point. They are markdown files with TOML front
 name = "daily-briefing"
 description = "Compile and deliver a daily briefing"
 version = "1.0.0"
-triggers = ["schedule:daily:08:00", "command:briefing"]
+triggers = ["command:briefing", "schedule:daily"]
 
 [requires]
 tools = ["web-search", "calendar"]
@@ -36,8 +36,22 @@ tools = ["web-search", "calendar"]
 Skills are activated by triggers:
 
 - **`command:name`** — activated when the user sends `/name` in Telegram
-- **`schedule:pattern`** — activated by the scheduler on matching schedules
-- **Always-on** — skills without triggers are always included in the system prompt
+- **`schedule:...`** — marks the skill as scheduler-driven
+- **Ambient** — skills without triggers are always included in the system prompt
+
+{{< callout context="danger" >}}
+A `schedule:` trigger does **not** set a time. Everything after the colon is ignored by the parser — the trigger only marks the skill as one the scheduler invokes. The actual timing lives in a `[[schedules]]` entry that names the skill:
+
+```toml
+[[schedules]]
+name = "morning-briefing"
+type = "agent"
+schedule = "0 8 * * *"
+skill = "daily-briefing"
+```
+
+A skill with a `schedule:` trigger and no matching `[[schedules]]` entry will never fire on its own.
+{{< /callout >}}
 
 ## Directory structure
 
