@@ -4885,7 +4885,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all skills across all agents, deduplicated by agent+name. Each entry includes the owning agent name.",
+                "description": "Returns all skills across all agents, deduplicated by agent+name. Each entry includes the owning agent name and, when a schedule fires the skill, the names of those schedules in scheduled_by.",
                 "produces": [
                     "application/json"
                 ],
@@ -4913,7 +4913,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all skills registered for the specified agent.",
+                "description": "Returns all skills registered for the specified agent. Each entry carries scheduled_by when a schedule fires the skill.",
                 "produces": [
                     "application/json"
                 ],
@@ -5252,7 +5252,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message); 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it from the skill's triggers. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.",
+                "description": "Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message), using the schedule that fires it when one exists; 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it: a command: trigger means 'command', a schedule naming the skill means 'schedule', and a skill with neither is ambient and previewed as 'message'. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5279,7 +5279,7 @@
                         "required": true
                     },
                     {
-                        "description": "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers.",
+                        "description": "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers and from whether a schedule names it.",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -7049,7 +7049,7 @@
                     "type": "string"
                 },
                 "mode": {
-                    "description": "Mode selects how a skill preview is invoked: \"schedule\" (the scheduler\nfires it — no user message), \"command\" (the user types its command:\ntrigger) or \"message\" (an ordinary chat turn). Empty infers the mode\nfrom the skill's own triggers, so a caller that doesn't care gets the\ninvocation the skill actually has. Ignored by the schedule endpoint,\nwhich has exactly one way of firing.",
+                    "description": "Mode selects how a skill preview is invoked: \"schedule\" (the scheduler\nfires it — no user message), \"command\" (the user types its command:\ntrigger) or \"message\" (an ordinary chat turn). Empty infers the mode\nfrom the skill's triggers and from whether a schedule names it, so a\ncaller that doesn't care gets the invocation the skill actually has.\nIgnored by the schedule endpoint, which has exactly one way of firing.",
                     "type": "string"
                 },
                 "model": {
@@ -7133,6 +7133,10 @@
                 },
                 "rounds": {
                     "type": "integer"
+                },
+                "scheduled_by": {
+                    "description": "ScheduledBy names the schedule a \"schedule\" preview stood in for. Empty\nwhen the caller asked for a scheduled run of a skill nothing schedules,\nwhich is a hypothetical rather than a rehearsal.",
+                    "type": "string"
                 },
                 "suppressed_count": {
                     "type": "integer"

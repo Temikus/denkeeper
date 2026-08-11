@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,9 +41,9 @@ type dryRunInput struct {
 	// Mode selects how a skill preview is invoked: "schedule" (the scheduler
 	// fires it — no user message), "command" (the user types its command:
 	// trigger) or "message" (an ordinary chat turn). Empty infers the mode
-	// from the skill's own triggers, so a caller that doesn't care gets the
-	// invocation the skill actually has. Ignored by the schedule endpoint,
-	// which has exactly one way of firing.
+	// from the skill's triggers and from whether a schedule names it, so a
+	// caller that doesn't care gets the invocation the skill actually has.
+	// Ignored by the schedule endpoint, which has exactly one way of firing.
 	Mode string `json:"mode"`
 	// Args are the optional arguments appended after the command in "command"
 	// mode. Ignored in the other modes.
@@ -89,7 +90,11 @@ type dryRunTranscript struct {
 	RequestedModel string `json:"requested_model,omitempty"`
 	// Mode reports how the turn was invoked, so a transcript records which of
 	// a skill's entry points it actually exercised.
-	Mode         string           `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// ScheduledBy names the schedule a "schedule" preview stood in for. Empty
+	// when the caller asked for a scheduled run of a skill nothing schedules,
+	// which is a hypothetical rather than a rehearsal.
+	ScheduledBy  string           `json:"scheduled_by,omitempty"`
 	TokensPrompt int              `json:"tokens_prompt"`
 	TokensTotal  int              `json:"tokens_total"`
 	CostUSD      float64          `json:"cost_usd"`
@@ -223,7 +228,7 @@ func (s *Server) emitDryRunAudit(r *http.Request, agentName, target, convID stri
 }
 
 // runDryRun executes the turn and writes the transcript or the error.
-func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engine, msg adapter.IncomingMessage, policy agent.ExecPolicy, target, mode string) {
+func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engine, msg adapter.IncomingMessage, policy agent.ExecPolicy, target, mode, scheduledBy string) {
 	result, err := e.DryRun(r.Context(), msg, policy)
 	s.emitDryRunAudit(r, e.Name(), target, policy.ConvID, policy.AsOf, result, err)
 	if err != nil {
@@ -235,6 +240,7 @@ func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engi
 		"rounds", result.Rounds, "suppressed", len(result.ToolCalls), "cost", result.CostUSD)
 	transcript := buildTranscript(e.Name(), result)
 	transcript.Mode = mode
+	transcript.ScheduledBy = scheduledBy
 	writeJSON(w, http.StatusOK, transcript)
 }
 
@@ -309,19 +315,19 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 		AsOf:      asOf,
 		Model:     input.Model,
 		AuditMode: s.evalAuditMode(),
-	}, "schedule "+name, modeSchedule)
+	}, "schedule "+name, modeSchedule, entry.Name)
 }
 
 // handleDryRunSkill godoc
 // @Summary Preview what a skill would do for a given message
-// @Description Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message); 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it from the skill's triggers. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.
+// @Description Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message), using the schedule that fires it when one exists; 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it: a command: trigger means 'command', a schedule naming the skill means 'schedule', and a skill with neither is ambient and previewed as 'message'. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.
 // @Tags skills
 // @Accept json
 // @Produce json
 // @Security BearerAuth
 // @Param agent path string true "Agent name"
 // @Param name path string true "Skill name"
-// @Param body body dryRunInput true "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers."
+// @Param body body dryRunInput true "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers and from whether a schedule names it."
 // @Success 200 {object} dryRunTranscript "Dry-run transcript"
 // @Failure 400 {object} map[string]string "Invalid JSON, invalid mode, missing message, no command trigger, or invalid as_of"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
@@ -349,12 +355,22 @@ func (s *Server) handleDryRunSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mode := resolveSkillMode(input, sk)
+	// Ambient and scheduled skills are indistinguishable from frontmatter: the
+	// difference lives in [[schedules]], so the inference needs the schedule
+	// that fires this skill, not just its triggers.
+	entry, scheduled := s.scheduleForSkill(agentName, skillName)
+
+	mode := resolveSkillMode(input, sk, scheduled)
 	convID := newDryRunConvID()
-	msg, errMsg := buildSkillDryRunMessage(mode, skillName, sk, input, convID, asOf, e.Location())
+	msg, errMsg := buildSkillDryRunMessage(mode, skillName, sk, input, convID, asOf, e.Location(), entry, scheduled)
 	if errMsg != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
+	}
+
+	scheduledBy := ""
+	if mode == modeSchedule && scheduled {
+		scheduledBy = entry.Name
 	}
 
 	s.runDryRun(w, r, e, msg, agent.ExecPolicy{
@@ -363,7 +379,7 @@ func (s *Server) handleDryRunSkill(w http.ResponseWriter, r *http.Request) {
 		AsOf:      asOf,
 		Model:     input.Model,
 		AuditMode: s.evalAuditMode(),
-	}, "skill "+agentName+"/"+skillName, mode)
+	}, "skill "+agentName+"/"+skillName, mode, scheduledBy)
 }
 
 // commandTrigger returns the skill's first command: trigger, or "" if it has
@@ -377,11 +393,54 @@ func commandTrigger(sk skill.Skill) string {
 	return ""
 }
 
+// schedulesForSkill returns the names of every schedule that fires the given
+// skill on the given agent, sorted. A schedule with no agent runs on the
+// fallback agent, the same resolution handleDryRunSchedule does. Entries()
+// walks a map, so the result is sorted rather than left in map order.
+func (s *Server) schedulesForSkill(agentName, skillName string) []string {
+	if s.deps.Scheduler == nil || skillName == "" {
+		return nil
+	}
+	fallback := ""
+	if fb := s.deps.Dispatcher.FallbackAgent(); fb != nil {
+		fallback = fb.Name()
+	}
+	var names []string
+	for _, e := range s.deps.Scheduler.Entries() {
+		if e.Skill != skillName {
+			continue
+		}
+		owner := e.Agent
+		if owner == "" {
+			owner = fallback
+		}
+		if owner == agentName {
+			names = append(names, e.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// scheduleForSkill returns the schedule a skill preview should stand in for:
+// the first by name when several fire it, so the choice is stable across
+// requests rather than whatever the entry map yielded.
+func (s *Server) scheduleForSkill(agentName, skillName string) (scheduler.Entry, bool) {
+	names := s.schedulesForSkill(agentName, skillName)
+	if len(names) == 0 {
+		return scheduler.Entry{}, false
+	}
+	entry, ok := s.deps.Scheduler.GetEntry(names[0])
+	return entry, ok
+}
+
 // resolveSkillMode picks the invocation to preview. An explicit mode wins; a
 // caller that sent only a message keeps the message semantics it asked for;
-// otherwise the skill's own triggers decide, so the default is always the
-// entry point the skill actually has.
-func resolveSkillMode(input dryRunInput, sk skill.Skill) string {
+// otherwise the skill's real entry points decide, so the default is always one
+// the skill actually has. A skill with neither a command: trigger nor a
+// schedule is ambient: it matches an ordinary turn and reads what the user
+// said, which is a message and never a scheduler header.
+func resolveSkillMode(input dryRunInput, sk skill.Skill, scheduled bool) string {
 	if input.Mode != "" {
 		return input.Mode
 	}
@@ -391,7 +450,10 @@ func resolveSkillMode(input dryRunInput, sk skill.Skill) string {
 	if commandTrigger(sk) != "" {
 		return modeCommand
 	}
-	return modeSchedule
+	if scheduled {
+		return modeSchedule
+	}
+	return modeMessage
 }
 
 // buildSkillDryRunMessage renders the message for one invocation mode, each
@@ -402,7 +464,7 @@ func resolveSkillMode(input dryRunInput, sk skill.Skill) string {
 // (msg.SkillName), which is what forces its body to be injected; the command
 // and message paths leave it empty so ordinary trigger matching runs, which is
 // the thing those paths actually depend on.
-func buildSkillDryRunMessage(mode, skillName string, sk skill.Skill, input dryRunInput, convID string, asOf time.Time, loc *time.Location) (adapter.IncomingMessage, string) {
+func buildSkillDryRunMessage(mode, skillName string, sk skill.Skill, input dryRunInput, convID string, asOf time.Time, loc *time.Location, entry scheduler.Entry, scheduled bool) (adapter.IncomingMessage, string) {
 	msg := adapter.IncomingMessage{
 		ConversationID: convID,
 		UserName:       "dry-run",
@@ -411,8 +473,24 @@ func buildSkillDryRunMessage(mode, skillName string, sk skill.Skill, input dryRu
 
 	switch mode {
 	case modeSchedule:
-		// Same header the scheduler injects, rendered at the pinned time, so a
-		// preview of a dated skill sees the date its real run would.
+		if scheduled {
+			// A schedule really fires this skill, so build the message through
+			// the same helper the live job uses: the preview then carries the
+			// schedule's name, cron and tier rather than leaving them blank.
+			return configmcp.BuildScheduledMessage(scheduler.Config{
+				Name:        entry.Name,
+				Type:        string(entry.Type),
+				Schedule:    entry.Expr,
+				Skill:       skillName,
+				Agent:       entry.Agent,
+				SessionTier: entry.SessionTier,
+				SessionMode: entry.SessionMode,
+				Channel:     entry.Channel,
+			}, agent.AdapterBinding{}, convID, asOf, loc), ""
+		}
+		// Nothing schedules this skill; the caller asked for a scheduled run
+		// anyway ("what would happen if I scheduled it"), so synthesise the
+		// header the scheduler would inject at the pinned time.
 		msg.Text = scheduler.FormatScheduledText("", skillName, asOf, loc)
 		msg.SkillName = skillName
 		msg.IsScheduled = true

@@ -776,7 +776,7 @@ func agentFromSession(id string) string {
 
 // handleSkills godoc
 // @Summary List all skills
-// @Description Returns all skills across all agents, deduplicated by agent+name. Each entry includes the owning agent name.
+// @Description Returns all skills across all agents, deduplicated by agent+name. Each entry includes the owning agent name and, when a schedule fires the skill, the names of those schedules in scheduled_by.
 // @Tags skills
 // @Produce json
 // @Security BearerAuth
@@ -790,6 +790,10 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 		Triggers    []string `json:"triggers,omitempty"`
 		SubFiles    []string `json:"sub_files,omitempty"`
 		Agent       string   `json:"agent"`
+		// ScheduledBy names the schedules that fire this skill. Absent means
+		// nothing does: with no command: trigger either, the skill is ambient
+		// and rides along on an ordinary turn.
+		ScheduledBy []string `json:"scheduled_by,omitempty"`
 	}
 
 	all := make([]skillInfo, 0)
@@ -812,6 +816,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 				Triggers:    sk.Triggers,
 				SubFiles:    sk.SubFileNames,
 				Agent:       name,
+				ScheduledBy: s.schedulesForSkill(name, sk.Name),
 			})
 		}
 	}
@@ -820,7 +825,7 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 
 // handleSkillsByAgent godoc
 // @Summary List skills for an agent
-// @Description Returns all skills registered for the specified agent.
+// @Description Returns all skills registered for the specified agent. Each entry carries scheduled_by when a schedule fires the skill.
 // @Tags skills
 // @Produce json
 // @Security BearerAuth
@@ -842,6 +847,8 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 		Version     string   `json:"version,omitempty"`
 		Triggers    []string `json:"triggers,omitempty"`
 		SubFiles    []string `json:"sub_files,omitempty"`
+		// See handleSkills: absent means nothing schedules this skill.
+		ScheduledBy []string `json:"scheduled_by,omitempty"`
 	}
 
 	skills := e.Skills()
@@ -853,6 +860,7 @@ func (s *Server) handleSkillsByAgent(w http.ResponseWriter, r *http.Request) {
 			Version:     sk.Version,
 			Triggers:    sk.Triggers,
 			SubFiles:    sk.SubFileNames,
+			ScheduledBy: s.schedulesForSkill(agentName, sk.Name),
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

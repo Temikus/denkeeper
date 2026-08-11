@@ -5,8 +5,9 @@
   // command: trigger the user types, a schedule that injects a fire-time
   // header, or ambient matching on an ordinary chat turn. Asking for "a
   // message to run this skill against" is wrong for two of the three, so the
-  // control is driven by the skill's own triggers and defaults to the entry
-  // point it actually has.
+  // control defaults to the entry point the skill actually has — which takes
+  // the schedules that name it, not just its triggers: ambient and scheduled
+  // skills look identical in frontmatter.
   let { skill, timezone = 'UTC', onrun } = $props()
 
   const command = $derived(
@@ -15,6 +16,9 @@
       .map(t => t.slice('command:'.length))[0] || '',
   )
 
+  // Names of the schedules that fire this skill; empty means nothing does.
+  const scheduledBy = $derived(skill.scheduled_by || [])
+
   let mode = $state('')
   let message = $state('')
   let args = $state('')
@@ -22,7 +26,9 @@
 
   // Mirrors the server's inference so the UI never disagrees with what it is
   // about to ask for.
-  const effectiveMode = $derived(mode || (command ? 'command' : 'schedule'))
+  const effectiveMode = $derived(
+    mode || (command ? 'command' : scheduledBy.length ? 'schedule' : 'message'),
+  )
 
   const modes = $derived([
     { id: 'schedule', label: 'On a schedule' },
@@ -120,10 +126,18 @@
   <div class="outgoing">
     <div class="label">The agent will receive</div>
     <pre class="outgoing-body" class:empty={!outgoing}>{outgoing || '(nothing yet)'}</pre>
-    {#if effectiveMode === 'schedule'}
-      <div class="hint">No message to write — this is what a scheduled run actually sends.</div>
+    {#if effectiveMode === 'schedule' && scheduledBy.length}
+      <!-- The server previews the first schedule by name when several fire the
+           skill, so naming that one is what will actually run. -->
+      <div class="hint">
+        No message to write — this is what <code>{scheduledBy[0]}</code> sends when it fires.{scheduledBy.length > 1 ? ` (+${scheduledBy.length - 1} more schedules fire it)` : ''}
+      </div>
+    {:else if effectiveMode === 'schedule'}
+      <div class="hint">No schedule fires {skill.name} — this previews what one would send if you added it.</div>
     {:else if effectiveMode === 'command'}
       <div class="hint">Sent as a real command, so trigger matching is exercised too — not just the skill body.</div>
+    {:else if !command && !scheduledBy.length}
+      <div class="hint">No <code>command:</code> trigger and no schedule, so this skill matches ordinary turns — it reads whatever the user said.</div>
     {/if}
   </div>
 
