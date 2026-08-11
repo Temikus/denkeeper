@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 )
 
@@ -357,6 +359,83 @@ func TestTruncateField(t *testing.T) {
 	}
 }
 
+// listingProvider is the test mock that also advertises a model list, so the
+// dry-run model check has something to validate against. It registers under the
+// same name as mockProvider, replacing it on the router.
+type listingProvider struct {
+	mockProvider
+	models []string
+}
+
+func (l *listingProvider) ListModels(_ context.Context) ([]string, error) { return l.models, nil }
+
+// withListedModels makes the default agent's provider advertise models, turning
+// the override check from "cannot validate, allow" into a real check.
+func withListedModels(t *testing.T, deps Deps, models ...string) {
+	t.Helper()
+	e := deps.Dispatcher.Agent("default")
+	if e == nil {
+		t.Fatal("default agent missing from test deps")
+	}
+	e.LLMRouter().RegisterProvider(&listingProvider{
+		mockProvider: mockProvider{response: &llm.ChatResponse{
+			Content:      "Hello from mock!",
+			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:        "test-model",
+			FinishReason: "stop",
+		}},
+		models: models,
+	})
+}
+
+func TestDryRunSkill_UnknownModelOverrideIsRejected(t *testing.T) {
+	deps := testDeps()
+	withListedModels(t, deps, "test-model", "other-model")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run",
+		`{"message":"hi","model":"typo-model"}`, "dk-test-key")
+	// A model the provider does not know is a client mistake, not a server
+	// fault — before this it reached the provider and came back as a 500.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "typo-model") {
+		t.Errorf("body = %s, want the unknown name echoed back", rec.Body.String())
+	}
+}
+
+func TestDryRunSchedule_UnknownModelOverrideIsRejected(t *testing.T) {
+	deps := testDeps()
+	registerTestSchedule(t, deps, "nightly")
+	withListedModels(t, deps, "test-model")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/schedules/nightly/dry-run",
+		`{"model":"typo-model"}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDryRunSkill_AdvertisedModelOverrideIsAccepted(t *testing.T) {
+	deps := testDeps()
+	withListedModels(t, deps, "test-model", "other-model")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run",
+		`{"message":"hi","model":"other-model"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeTranscript(t, rec).RequestedModel; got != "other-model" {
+		t.Errorf("RequestedModel = %q, want the advertised override to run", got)
+	}
+}
+
+// TestDryRunSkill_ModelOverrideIsEchoed doubles as the fail-open case: the
+// default mock provider advertises nothing, so the override cannot be checked
+// and must pass through rather than be rejected.
 func TestDryRunSkill_ModelOverrideIsEchoed(t *testing.T) {
 	deps := testDeps()
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
