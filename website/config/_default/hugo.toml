@@ -17,7 +17,15 @@ copyRight = "Copyright (c) 2025-2026 Temikus"
   enable = true
 
 [outputs]
-  home = ["HTML", "RSS"]
+  home = ["HTML", "RSS", "searchIndex"]
+
+# Feeds the theme's FlexSearch modal ([doks] flexSearch in params.toml);
+# rendered by the theme's home.searchindex.json layout.
+[outputFormats.searchIndex]
+  mediaType = "application/json"
+  baseName = "search-index"
+  isPlainText = true
+  notAlternative = true
 
 [sitemap]
   changefreq = "monthly"

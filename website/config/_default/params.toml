@@ -8,12 +8,23 @@ images = ["cover.png"]
   breadcrumb = true
   headlineAnchor = true
   scrollSpy = true
-  search = true
   colorMode = "auto"
   darkColorMode = true
   repo = "https://github.com/Temikus/denkeeper"
   editURL = "/edit/main/website/content"
   lastMod = false
+
+  # FlexSearch — needs the `searchIndex` output format in hugo.toml to feed it
+  flexSearch = true
+  searchExclKinds = [] # page kinds to exclude from the index
+  searchExclTypes = [] # content types to exclude from the index
+  showSearch = [] # [] = every page; otherwise "homepage" and/or section names
+  indexSummary = false # index full .Content rather than just .Summary
+
+  ## Search results
+  showDate = false
+  showSummary = true
+  searchLimit = 99
 
 [social]
   github = "https://github.com/Temikus/denkeeper"
