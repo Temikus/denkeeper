@@ -131,8 +131,11 @@
     --border:      #e8dcc8;
     --text:        #3d2a1e;
     --text-muted:  #8a7a6a;
-    --accent:      #c84e35;
-    --accent-hover:#b5432c;
+    /* Accent is a terracotta held ~21° off --danger so "active" never reads as
+       "destructive"; --accent-rgb is the same colour for rgba() tints. */
+    --accent:      #b85a28;
+    --accent-rgb:  184, 90, 40;
+    --accent-hover:#a44e20;
     --danger:      #c43a3a;
     --success:     #3d8f62;
     --warn:        #c87e30;
@@ -146,8 +149,8 @@
     --sidebar-bg:           #FDF8F0;
     --sidebar-text:         #3d3d3a;
     --sidebar-section-label: rgba(0, 0, 0, 0.4);
-    --sidebar-border-accent: rgba(192, 68, 44, 0.15);
-    --sidebar-active-bg:    rgba(192, 68, 44, 0.08);
+    --sidebar-border-accent: rgba(var(--accent-rgb), 0.15);
+    --sidebar-active-bg:    rgba(var(--accent-rgb), 0.08);
     --sidebar-hover-bg:     rgba(0, 0, 0, 0.04);
     --sidebar-divider:      rgba(0, 0, 0, 0.08);
   }
@@ -159,6 +162,7 @@
     --text:        #e8ddd4;
     --text-muted:  #9a8a7a;
     --accent:      #e07a5a;
+    --accent-rgb:  224, 122, 90;
     --accent-hover:#eb9070;
     --danger:      #e05c6e;
     --success:     #4caf7d;
@@ -170,8 +174,8 @@
     --sidebar-bg:           #1E1C19;
     --sidebar-text:         #d4d0c8;
     --sidebar-section-label: rgba(255, 255, 255, 0.35);
-    --sidebar-border-accent: rgba(207, 100, 75, 0.25);
-    --sidebar-active-bg:    rgba(207, 100, 75, 0.15);
+    --sidebar-border-accent: rgba(var(--accent-rgb), 0.25);
+    --sidebar-active-bg:    rgba(var(--accent-rgb), 0.15);
     --sidebar-hover-bg:     rgba(255, 255, 255, 0.06);
     --sidebar-divider:      rgba(255, 255, 255, 0.08);
   }

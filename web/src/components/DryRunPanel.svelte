@@ -272,7 +272,7 @@
   }
   .menu-item:first-child { border-top: none; }
   .menu-item:hover { background: var(--hover-overlay); }
-  .menu-item[aria-selected="true"] { background: rgba(200, 78, 53, 0.08); }
+  .menu-item[aria-selected="true"] { background: rgba(var(--accent-rgb), 0.08); }
   .menu-model {
     flex: 1; min-width: 0; font-size: 12px; color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

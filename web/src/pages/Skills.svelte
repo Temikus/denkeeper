@@ -359,12 +359,12 @@
   .form-subtitle { font-size: 12px; color: var(--text-muted); }
   .agent-pill {
     display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(192, 68, 44, 0.08); border: 1px solid rgba(192, 68, 44, 0.18);
+    background: rgba(var(--accent-rgb), 0.08); border: 1px solid rgba(var(--accent-rgb), 0.18);
     color: var(--accent); font-size: 12px; font-weight: 500;
     padding: 5px 10px; border-radius: 999px; white-space: nowrap;
   }
   :global(:root.dark) .agent-pill {
-    background: rgba(224, 122, 90, 0.12); border-color: rgba(224, 122, 90, 0.22);
+    background: rgba(var(--accent-rgb), 0.12); border-color: rgba(var(--accent-rgb), 0.22);
   }
   .form-scope-hint {
     font-size: 11.5px; color: var(--text-muted); margin-bottom: 16px;

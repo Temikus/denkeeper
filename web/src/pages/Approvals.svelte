@@ -225,7 +225,7 @@
     text-transform: capitalize;
   }
   .filter-btn:hover  { color: var(--text); border-color: var(--text-muted); }
-  .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(200, 78, 53, 0.1); }
+  .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
   .summary { max-width: 380px; }
   .payload-details {

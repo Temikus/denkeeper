@@ -500,7 +500,7 @@ Remember you're a guest. You have access to someone's life — treat it with res
   .tier-option:last-child { border-bottom: none; }
   .tier-option:hover { background: var(--hover-overlay); }
   .tier-option.selected {
-    background: rgba(200, 78, 53, 0.06);
+    background: rgba(var(--accent-rgb), 0.06);
     border-left: 3px solid var(--accent);
     padding-left: 9px;
   }
@@ -536,7 +536,7 @@ Remember you're a guest. You have access to someone's life — treat it with res
     display: flex;
     flex-direction: column;
     gap: 10px;
-    background: rgba(200, 78, 53, 0.03);
+    background: rgba(var(--accent-rgb), 0.03);
   }
   .callout-header {
     display: flex;

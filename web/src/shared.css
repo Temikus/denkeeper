@@ -424,7 +424,7 @@
 }
 
 .row-expanded {
-  background: rgba(200, 78, 53, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
 }
 
 .chevron-toggle {

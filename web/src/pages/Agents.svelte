@@ -687,7 +687,7 @@
       <div class="stat-cards">
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="stat-card" class:expanded={expandedCard === 'model'} onclick={() => toggleCard('model')} role="button" tabindex="0" aria-expanded={expandedCard === 'model'}>
-          <div class="stat-icon" style="background: rgba(200, 78, 53, 0.12); color: var(--accent);">
+          <div class="stat-icon" style="background: rgba(var(--accent-rgb), 0.12); color: var(--accent);">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
           </div>
           <div class="stat-text">
@@ -1276,9 +1276,9 @@
     cursor: default;
   }
   .tool-pill:hover, .tool-pill.expanded { border-color: var(--accent); }
-  .tool-pill.expanded { background: rgba(200, 78, 53, 0.08); }
+  .tool-pill.expanded { background: rgba(var(--accent-rgb), 0.08); }
   .pill-count {
-    background: rgba(200, 78, 53, 0.15);
+    background: rgba(var(--accent-rgb), 0.15);
     color: var(--accent);
     font-size: 11px; font-weight: 600;
     padding: 1px 6px;
