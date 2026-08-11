@@ -747,6 +747,39 @@ func TestSkills_ListsAll(t *testing.T) {
 	}
 }
 
+// scheduled_by is the UI's only way to tell an ambient skill from a scheduled
+// one — they are identical in frontmatter — so it has to ride on the list.
+func TestSkills_ScheduledByNamesTheSchedulesThatFireTheSkill(t *testing.T) {
+	deps := testDeps()
+	registerTestScheduleForSkill(t, deps, "nightly-help", "help")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/skills"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var skills []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&skills); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byName := map[string]map[string]any{}
+	for _, sk := range skills {
+		name, _ := sk["name"].(string)
+		byName[name] = sk
+	}
+
+	got, ok := byName["help"]["scheduled_by"].([]any)
+	if !ok || len(got) != 1 || got[0] != "nightly-help" {
+		t.Errorf("help scheduled_by = %v, want [nightly-help]", byName["help"]["scheduled_by"])
+	}
+	// greet has a command trigger but nothing schedules it: absent, not empty.
+	if _, present := byName["greet"]["scheduled_by"]; present {
+		t.Errorf("greet scheduled_by = %v, want the key omitted", byName["greet"]["scheduled_by"])
+	}
+}
+
 func TestSkillsByAgent_NotFound(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	srv := New(cfg, testDeps(), testLogger())

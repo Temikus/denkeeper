@@ -36,11 +36,18 @@ func postDryRun(t *testing.T, srv *Server, path, body, key string) *httptest.Res
 // registerTestSchedule adds a schedule the dry-run endpoint can find.
 func registerTestSchedule(t *testing.T, deps Deps, name string) {
 	t.Helper()
+	registerTestScheduleForSkill(t, deps, name, "greet")
+}
+
+// registerTestScheduleForSkill is registerTestSchedule for a named skill, which
+// is what makes that skill scheduled rather than ambient.
+func registerTestScheduleForSkill(t *testing.T, deps Deps, name, skillName string) {
+	t.Helper()
 	cfg := scheduler.Config{
 		Name:     name,
 		Type:     string(scheduler.ScheduleTypeAgent),
 		Schedule: "@every 1h",
-		Skill:    "greet",
+		Skill:    skillName,
 		Agent:    "default",
 		Channel:  "telegram:123",
 		Enabled:  true,
@@ -246,13 +253,65 @@ func TestDryRunSkill_InferredModeFollowsTheSkillsTriggers(t *testing.T) {
 	deps := testDeps()
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
-	// help declares no triggers, so its only real invocation is a scheduled one.
-	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run", `{}`, "dk-test-key")
+	// greet declares command:hello, so that is its entry point.
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run", `{}`, "dk-test-key")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
-	if got := decodeTranscript(t, rec).Mode; got != "schedule" {
-		t.Errorf("Mode = %q, want schedule for a skill with no triggers", got)
+	if got := decodeTranscript(t, rec).Mode; got != "command" {
+		t.Errorf("Mode = %q, want command for a skill with a command: trigger", got)
+	}
+}
+
+// A skill with no triggers is only scheduled if a schedule says so. Without
+// one it is ambient: it matches an ordinary turn and reads what the user said,
+// and previewing it as a scheduled run rehearses an invocation it never has.
+func TestDryRunSkill_TriggerlessSkillWithNoScheduleIsAmbient(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run",
+		`{"message":"what happened yesterday"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeTranscript(t, rec)
+	if got.Mode != "message" {
+		t.Errorf("Mode = %q, want message for a skill nothing schedules", got.Mode)
+	}
+	if got.ScheduledBy != "" {
+		t.Errorf("ScheduledBy = %q, want empty when nothing schedules the skill", got.ScheduledBy)
+	}
+
+	// And with no message at all it is still a message invocation — just one
+	// the caller has to supply, rather than a synthesised scheduler header.
+	rec = postDryRun(t, srv, "/api/v1/skills/default/help/dry-run", `{}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (message required); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// The signal the inference was missing: [[schedules]], not frontmatter.
+func TestDryRunSkill_TriggerlessSkillWithAScheduleIsScheduled(t *testing.T) {
+	deps := testDeps()
+	registerTestScheduleForSkill(t, deps, "nightly-help", "help")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run",
+		`{"as_of":"2026-07-06T07:00:00Z"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeTranscript(t, rec)
+	if got.Mode != "schedule" {
+		t.Errorf("Mode = %q, want schedule for a skill a schedule fires", got.Mode)
+	}
+	// The transcript names the schedule it stood in for, so it is self-describing.
+	if got.ScheduledBy != "nightly-help" {
+		t.Errorf("ScheduledBy = %q, want nightly-help", got.ScheduledBy)
+	}
+	if !strings.HasPrefix(got.Prompt, "[Scheduled: help |") {
+		t.Errorf("Prompt = %q, want the scheduler's fire-time header", got.Prompt)
 	}
 }
 
