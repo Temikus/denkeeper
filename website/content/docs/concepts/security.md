@@ -23,19 +23,23 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Plugin escape | Subprocess isolation and sandboxed execution via Docker (`--cap-drop ALL`, `--read-only`, `--network none`) or Kubernetes (ephemeral Pods with init-container network isolation, Pod Security Admission, optional gVisor/Kata); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
 
+Every consequential decision — tool calls, approvals, supervisor verdicts, config changes — is recorded in the audit log. See [Observability](/docs/concepts/observability/) for what is captured and how to query it.
+
 ## Adapter security
 
 Both adapters enforce user allowlists:
 
 ```toml
 [telegram]
-allowed_users = [123456789]   # numeric Telegram user IDs
+allowed_users = [123456789]                # bare integers
 
 [discord]
-allowed_users = ["123456789012345678"]  # Discord snowflake IDs
+allowed_users = ["YOUR_DISCORD_USER_ID"]   # snowflake IDs, quoted as strings
 ```
 
 Messages from unlisted users are silently dropped.
+
+See the [Telegram](/docs/guides/telegram-setup/) and [Discord](/docs/guides/discord-setup/) guides for how to find your own ID on each platform.
 
 ## API security
 

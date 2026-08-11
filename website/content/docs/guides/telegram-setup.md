@@ -2,7 +2,7 @@
 title: "Telegram Setup"
 description: "Set up the Telegram adapter with BotFather, allowlists, and commands."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -34,12 +34,22 @@ While the LLM is processing, the bot shows a "typing..." indicator in the chat. 
 
 ### Slash commands
 
-Denkeeper registers commands with Telegram's command picker:
+Denkeeper registers these built-in commands with Telegram's command picker:
 
-- `/start` — welcome message
-- `/help` — list available commands
+| Command | Description |
+|---|---|
+| `/start` | Start a conversation |
+| `/help` | Show help and available commands |
+| `/debug` | Toggle verbose approval messages |
+| `/stop` | Cancel the current request |
+| `/panic` | Emergency stop — cancels all in-flight requests and pauses the scheduler |
+| `/resume` | Resume after an emergency stop |
+| `/clear` | Clear session history (the session itself survives) |
+| `/compact` | Replace history with a single summary message |
 
-Skills with `command:` triggers (e.g., `triggers = ["command:briefing"]`) are automatically registered as `/briefing` in Telegram's command menu.
+`/session` is also handled, though it is not registered in the command picker. Send `/session` to list the channels available to you, or `/session <name>` to switch the current chat to another channel. The selection persists across restarts.
+
+Skills with `command:` triggers (e.g., `triggers = ["command:briefing"]`) are automatically registered as `/briefing` in Telegram's command menu alongside the built-ins.
 
 ### Voice messages
 
@@ -62,3 +72,7 @@ adapters = ["telegram"]            # all other chats
 name = "work"
 adapters = ["telegram:987654321"]  # this specific chat only
 ```
+
+A specific binding beats a wildcard, so the two above coexist.
+
+To share one conversation between Telegram and [Discord](/docs/guides/discord-setup/), or to switch a chat between agents at runtime with `/session`, see [Channels](/docs/concepts/channels/).

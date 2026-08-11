@@ -2,13 +2,20 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-13T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
 ---
 
 All configuration lives in a single TOML file. Default location: `~/.denkeeper/denkeeper.toml`.
+
+## Top-level keys
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `data_dir` | string | `"~/.denkeeper"` | Base directory all default paths derive from. Overridden by `DENKEEPER_DATA_DIR` |
+| `max_tools` | int | `50` | Combined ceiling on tools + plugins |
 
 ## `[telegram]`
 
@@ -108,6 +115,19 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `tier` | string | `"supervised"` | Default permission tier: `"autonomous"`, `"supervised"`, `"restricted"` |
+| `approval_timeout` | string | `"5m"` | How long to wait for operator approval before timing out. Go duration string |
+| `approval_retries` | int | `0` | Times to re-submit a timed-out approval before reporting failure to the LLM |
+
+Note that `approval_timeout` is the *engine's* wait, distinct from the 24-hour TTL after which an unresolved approval request is expired and cleaned up.
+
+## `[agent]`
+
+Defaults for agents that do not set their own directories.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `persona_dir` | string | `<data_dir>/agents/<name>` | Base persona directory |
+| `skills_dir` | string | `<data_dir>/skills` | Global skills directory |
 
 ## `[[agents]]`
 
@@ -116,22 +136,67 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 | `name` | string | *required* | Unique agent name (one must be `"default"`) |
 | `description` | string | — | Agent description |
 | `persona_dir` | string | — | Path to persona files |
+| `skills_dir` | string | — | Override the global skills directory. Agent-specific skills in `<persona_dir>/skills/` are always loaded regardless, and override global skills by name |
 | `adapters` | string[] | — | Adapter bindings (e.g., `["telegram"]`, `["telegram:12345"]`) |
 | `llm_provider` | string | — | Override default provider (must match a configured provider instance name) |
 | `llm_model` | string | — | Override default model |
 | `session_tier` | string | — | Override default permission tier |
+| `timezone` | string | — | IANA name, e.g. `"Australia/Sydney"`. Precedence: agent > `api.timezone` > UTC. Does **not** affect cron evaluation, which stays on `api.timezone` and is restart-only |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
 | `cost_limit_hard` | float | — | Per-agent hard cost limit in USD (overrides global) |
-| `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised) |
-| `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval. |
-| `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context. |
+| `max_context_messages` | int | `50` | Most recent messages sent to the LLM. Older history is dropped from the request, not deleted |
+| `max_tool_rounds` | int | `50` | Tool-call **rounds** per turn, not calls — one round may fan out to many parallel calls |
+| `browser_url_allowlist` | string[] | — | Overrides the global browser allowlist for this agent. Supports `*.example.com` |
 | `auto_approve_tools` | string[] | — | Tool names auto-approved for this agent without human sign-off (`config` scope). Declared in TOML only — cannot be created or removed at runtime; re-applied wholesale on config reload. Names not matching an advertised tool are warned about and kept |
+| `[[agents.fallback]]` | table array | — | Per-agent fallback rules. When non-empty these **replace** the global `[[llm.fallback]]` rules rather than merging with them |
+
+### Supervisor
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised) |
+| `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval |
+| `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
+| `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
+| `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
+
+### Post-turn reviewer
+
+A headless per-agent engine that reviews after a turn and can append persona memory or report skill improvements. Distinct from the supervisor above — it reviews *after* the fact rather than gating tool calls, and is capability-reduced rather than approval-gated.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `reviewer_model` | string | — | Model used for post-turn review. **Empty disables post-turn review for this agent** |
+| `reviewer_provider` | string | — | Provider for the reviewer; inherits the agent's `llm_provider` when empty |
+| `review_max_iterations` | int | `6` | Tool-call rounds allowed to the reviewer |
+| `review_timeout` | string | `"2m"` | Max duration of a review pass |
+| `nudge_memory_interval` | int | `0` | User turns between memory-review nudges. 0 = disabled |
+| `nudge_skill_interval` | int | `0` | Tool-call rounds between skill-review nudges. 0 = disabled |
+
+## `[[channels]]`
+
+Named routing endpoints that decouple sessions from a 1:1 agent–adapter binding. A channel points at one agent and may bind several adapters, which lets one conversation be shared across them. When no `[[channels]]` are declared, Denkeeper synthesizes them from each agent's `adapters` list.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | *required* | Unique channel name. Conversation ID is `chan:{name}` |
+| `agent` | string | *required* | Agent that handles messages on this channel |
+| `adapters` | string[] | — | Adapter bindings, same format as `[[agents]] adapters`. Empty means the channel is reachable only via `/session` or the API |
+| `delivery` | string | `"single"` | How scheduled messages are delivered: `"single"` (first specific binding) or `"broadcast"` (all specific bindings) |
+| `session_mode` | string | `"persistent"` | `"persistent"` keeps one conversation per channel; `"ephemeral"` starts a fresh one per interaction (conversation ID `chan:{name}:{unix_nano}`). Cross-adapter ephemeral channels are rejected at validation |
+
+Users switch channels at runtime with `/session <name>`; the selection is persisted. Resolution priority is: active `/session` override > specific binding > wildcard binding > legacy agent-adapter fallback.
 
 ## `[memory]`
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `db_path` | string | `"~/.denkeeper/data/memory.db"` | SQLite database path |
+| `db_path` | string | `"<data_dir>/data/memory.db"` | SQLite database path |
+| `retention_days` | int | `90` | How long conversations are kept. 0 = unlimited |
+| `max_conversations` | int | `10000` | Cap on stored conversations. 0 = unlimited |
+| `cleanup_interval` | string | `"1h"` | How often retention is enforced |
+| `persona_memory_char_limit` | int | `0` | Cap on `MEMORY.md` size in characters. 0 = unlimited |
+| `persona_user_char_limit` | int | `0` | Cap on `USER.md` size in characters. 0 = unlimited |
 
 ## `[log]`
 
@@ -188,6 +253,97 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 |---|---|---|---|
 | `enabled` | bool | `false` | Enable Jina Reader as a fallback fetcher for JS-heavy pages |
 
+## `[script]`
+
+Bounds for the in-process `run_javascript` tool, which runs short ES5.1 snippets against a JSON `input` in a fresh sandboxed VM per call. There is no network, no filesystem, and no `require`. Disabled entirely in the `restricted` tier.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Enable `run_javascript` |
+| `timeout` | string | `"2s"` | Per-call wall-clock limit |
+| `max_output_chars` | int | `16000` | Result length cap (truncates) |
+| `max_input_bytes` | int | `262144` | Accepted input payload cap, 256 KiB (rejects) |
+| `max_concurrent` | int | `4` | Simultaneous VM executions across **all** agents. Negative = unlimited |
+| `max_concurrent_per_agent` | int | `0` | Additional per-agent cap so one agent cannot monopolize the global pool. 0 = off |
+
+{{< callout context="danger" >}}
+There is no per-VM heap cap. `max_concurrent` bounds the memory multiplier but is not a hard ceiling — lower it if you run on constrained hardware.
+{{< /callout >}}
+
+## `[skills]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `max_bytes` | int | `1048576` | Cap on a single persisted skill file, frontmatter + body (1 MiB). Negative = unlimited |
+
+Skill content is written verbatim, so without a bound an authorized caller could exhaust disk. The cap is enforced on every write surface (REST, config MCP, external MCP).
+
+## `[browser]`
+
+Containerized browser automation. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable browser automation |
+| `image` | string | `"ghcr.io/temikus/denkeeper-browser:latest"` | Browser plugin container image |
+| `memory_limit` | string | `"512m"` | Container memory limit |
+| `cpu_limit` | string | `"1"` | Container CPU limit |
+| `profile_dir` | string | `"data/browser-profiles"` | Per-agent profile directory, relative to `data_dir` |
+| `session_ttl` | string | `"10m"` | Idle session close timeout |
+| `max_pages` | int | `5` | Concurrent pages per agent |
+
+## `[browser.url_allowlist]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `domains` | string[] | — | Domains the browser may navigate to. Empty = unrestricted. Supports `*.example.com` |
+
+Individual agents can narrow this further with `browser_url_allowlist` on `[[agents]]`.
+
+## `[costs]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `default_rate_per_1k_tokens` | float | `0` | Fallback rate (USD per 1K tokens) when a model is in neither the bundled registry nor your overrides. 0 records $0.00 and logs a warning |
+
+Denkeeper ships a pricing registry covering roughly 70 models. Lookup priority is: provider-reported cost > registry exact match > registry longest-prefix match > `default_rate_per_1k_tokens` > $0 with a warning. The winning source is recorded as the `pricing_source` telemetry attribute, so you can tell a real price from a fallback.
+
+## `[costs.model_prices.<model>]`
+
+Override or add pricing for a model. Rates are **USD per million tokens**.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `input` | float | — | Input token rate |
+| `output` | float | — | Output token rate |
+| `cached_input` | float | `0` | Cached-input rate. 0 means "same as `input`" |
+
+```toml
+[costs.model_prices."my-org/custom-model"]
+input = 3.0
+output = 15.0
+cached_input = 0.3
+```
+
+## `[audit]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Enable audit logging |
+| `retention_days` | int | `30` | How long audit events are kept. 0 = unlimited |
+| `cleanup_interval` | string | `"1h"` | How often retention is enforced |
+| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer |
+
+Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
+
+## `[eval]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `audit` | string | `"full"` | How much of a dry-run or eval turn reaches the audit log. `"full"` records it like a live turn; `"summary"` keeps only lifecycle events and errors |
+
+Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only idempotent tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
+
 ## `[api]`
 
 | Key | Type | Default | Description |
@@ -203,6 +359,25 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 | `websocket_max_connections` | int | `0` | Maximum concurrent WebSocket connections (0 = unlimited) |
 | `websocket_replay_buffer_ttl` | string | `"5m"` | How long to buffer events for replay after a client disconnects |
 | `external_url` | string | — | Publicly-reachable base URL (used for OAuth callback URLs; defaults to `http(s)://<listen>`) |
+| `timezone` | string | `"UTC"` | IANA timezone used for cron evaluation and as the fallback for agents without their own `timezone`. Cron evaluation is restart-only |
+| `login_rate_limit` | int | `5` | Failed password logins allowed per window per IP |
+| `login_rate_window` | string | `"15m"` | Window for `login_rate_limit` |
+| `onboarding_dismissed` | bool | `false` | Set by the dashboard when the onboarding checklist is dismissed |
+| `wizard_completed` | bool | `false` | Set by the dashboard when the setup wizard finishes |
+
+## `[api.mcp_server]`
+
+Exposes this Denkeeper instance *as* an MCP server, so an external MCP client (another agent, an IDE) can drive its agents, skills, schedules, and audit log. Opt-in.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Enable the MCP server endpoint |
+| `transport` | string | `"streamable"` | `"streamable"` or `"sse"` (legacy) |
+| `session_timeout` | string | `"30m"` | Idle session cleanup duration |
+| `chat_timeout` | string | `"2m"` | Maximum time for a single chat tool call |
+| `stateless` | bool | `false` | Disable session tracking |
+
+Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers; this section is Denkeeper *being* one.
 
 ## `[[schedules]]`
 

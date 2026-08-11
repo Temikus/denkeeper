@@ -38,6 +38,8 @@ adapters = ["telegram:987654321"] # only this specific chat
 
 The Dispatcher routes incoming messages to the correct agent based on these bindings. If no specific binding matches, messages go to the `"default"` agent.
 
+For routing that is not a fixed 1:1 agent–adapter pair — one conversation shared across Telegram and Discord, or switching a chat between agents at runtime — see [Channels](/docs/concepts/channels/).
+
 ## Per-agent configuration
 
 Each agent can override the global LLM model and permission tier:

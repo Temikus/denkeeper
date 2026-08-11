@@ -2,7 +2,7 @@
 title: "Installation"
 description: "How to install the Denkeeper binary on Linux and macOS."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -82,19 +82,21 @@ The chart supports Ingress, PVC persistence, secrets management (or `existingSec
 
 ## From source
 
-Requires Go 1.25+ and Node.js 24+ (for the web dashboard build):
+Requires Go 1.26+ and Node.js 24+ (for the web dashboard build). The repository pins its toolchain with [mise](https://mise.jdx.dev/); `just` recipes shell out through it:
 
 ```bash
 git clone https://github.com/Temikus/denkeeper.git
 cd denkeeper
 just build-full   # builds web UI then the binary
-./pkg/bin/denkeeper --version
+./pkg/bin/denkeeper version
 ```
 
 ## Verify your installation
 
 ```bash
-denkeeper --version
+denkeeper version
 ```
+
+This prints the version, commit, build date, Go version, and platform. Note that it is a subcommand — there is no `--version` flag.
 
 Next: [First run](/docs/getting-started/first-run/) to create your configuration.

@@ -2,19 +2,33 @@
 title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-03T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
 ---
 
-## Global flags
+## Commands
 
-| Flag | Description |
+| Command | Purpose |
 |---|---|
-| `--config PATH` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
-| `--version` | Print version and exit |
-| `--help` | Print help |
+| `denkeeper serve` | Start the agent |
+| `denkeeper version` | Print version information |
+| `denkeeper keys` | Manage REST API keys |
+| `denkeeper sessions` | Inspect and prune conversation sessions |
+| `denkeeper passwd` | Generate a bcrypt hash for dashboard login |
+| `denkeeper plugin` | Ed25519 plugin signing |
+
+## Flags
+
+`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, and `sessions`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
+
+| Flag | Available on | Description |
+|---|---|---|
+| `--config PATH`, `-c` | `serve`, `keys`, `sessions` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
+| `--help` | all commands | Print help |
+
+There is no `--version` flag. Use the `denkeeper version` subcommand.
 
 ## `denkeeper serve`
 
@@ -25,52 +39,50 @@ denkeeper serve
 denkeeper serve --config /etc/denkeeper/denkeeper.toml
 ```
 
-## `denkeeper setup`
+## `denkeeper version`
 
-Interactive first-run wizard. Creates `~/.denkeeper/denkeeper.toml` with your LLM provider, API keys, and Telegram configuration.
+Print the version, commit, build date, Go version, and platform.
 
 ```bash
-denkeeper setup
+denkeeper version
 ```
 
 ## `denkeeper keys`
 
-Manage API keys for the REST API.
+Create and list API keys for the REST API and web dashboard.
 
 ```bash
-denkeeper keys create --name dashboard --scopes admin,chat,sessions:read
+denkeeper keys create dashboard --scopes admin,chat,sessions:read
 denkeeper keys list
-denkeeper keys revoke --name dashboard
 ```
 
-### `denkeeper keys create`
+### `denkeeper keys create <name>`
 
-| Flag | Description |
+The key name is a positional argument, not a flag.
+
+| Argument / flag | Description |
 |---|---|
-| `--name` | Key name (required) |
-| `--scopes` | Comma-separated list of scopes |
+| `<name>` | Key name (required, positional) |
+| `--scopes`, `-s` | Comma-separated list of scopes (default: `admin`) |
 
 The plaintext key is displayed once on creation and cannot be recovered.
 
 ### `denkeeper keys list`
 
-Lists all API keys with their names, scopes, and creation dates. The key secret is never shown.
+Lists all API keys with their names, scopes, status, and creation dates. The key secret is never shown.
 
-### `denkeeper keys revoke`
+### Revoking a key
 
-| Flag | Description |
-|---|---|
-| `--name` | Key name to revoke (required) |
+The CLI does not revoke keys — `keys` only has `create` and `list`. Revoke, permanently delete, and rotate through the REST API or the dashboard's API Keys page:
 
-Revocation is immediate — the key stops working as soon as the command completes.
-
-### `denkeeper keys delete`
-
-| Flag | Description |
-|---|---|
-| `--name` | Key name to permanently delete (required) |
-
-Permanently removes a revoked key from the database. Only revoked keys can be deleted.
+```bash
+curl -X DELETE -H "Authorization: Bearer dk_..." \
+  https://localhost:8080/api/v1/keys/{id}             # revoke
+curl -X DELETE -H "Authorization: Bearer dk_..." \
+  https://localhost:8080/api/v1/keys/{id}/permanent   # delete a revoked key
+curl -X POST -H "Authorization: Bearer dk_..." \
+  https://localhost:8080/api/v1/keys/{id}/rotate      # rotate
+```
 
 ## `denkeeper sessions`
 

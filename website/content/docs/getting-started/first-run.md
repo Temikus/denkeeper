@@ -2,32 +2,17 @@
 title: "First Run"
 description: "Create your first Denkeeper configuration and connect to Telegram."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
 ---
 
-## Setup wizard
+There are two ways to get started: write a minimal config by hand and start the agent, or start with an empty config and finish setup in the web dashboard's guided wizard.
 
-The easiest way to create your initial configuration is the interactive setup command:
+## Configuration
 
-```bash
-denkeeper setup
-```
-
-This walks you through:
-
-1. Choosing an LLM provider (OpenRouter, Anthropic, Ollama, or OpenAI)
-2. Entering your API key
-3. Configuring a Telegram bot token
-4. Setting your Telegram user ID for the allowlist
-
-The wizard writes `~/.denkeeper/denkeeper.toml` and creates the data directory.
-
-## Manual configuration
-
-If you prefer to configure manually, copy the example file:
+Copy the example file:
 
 ```bash
 mkdir -p ~/.denkeeper
@@ -85,9 +70,13 @@ Open the dashboard in your browser (default: `http://localhost:8080`) and you'll
 
 The PIN is single-use and cleared after successful account creation. It is never exposed via any API endpoint — only in the server logs.
 
-{{< callout type="info" >}}
+{{< callout context="note" >}}
 The setup PIN protects against setup hijacking: an attacker with network access to the API port cannot create an account without also having access to the server logs.
 {{< /callout >}}
+
+See the [Web Dashboard guide](/docs/guides/web-dashboard/) for what each page does.
+
+Once you're logged in, the dashboard's setup wizard takes over as the guided path: if your config declares no `[[agents]]`, Denkeeper deliberately starts with no agent so the wizard can walk you through creating the first one — provider, model, permission tier, and persona — writing the result back to your TOML file. An onboarding checklist tracks the remaining milestones.
 
 ## Logs
 
@@ -104,4 +93,4 @@ When running as a systemd service:
 journalctl -u denkeeper -f
 ```
 
-Next: [Configuration reference](/docs/reference/config/) for the full list of options.
+Next: [Configuration reference](/docs/reference/configuration-reference/) for the full list of options.

@@ -2,7 +2,7 @@
 title: "Writing Skills"
 description: "How to create custom skills for your Denkeeper agent."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -59,9 +59,11 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 
 ## Trigger types
 
-- **`command:name`** — activates on `/name` Telegram command
-- **`schedule:pattern`** — activates on matching scheduler runs
-- **No triggers** — always included in the system prompt
+- **`command:name`** — activates on the `/name` Telegram command
+- **`schedule:...`** — marks the skill as scheduler-driven. The text after the colon is ignored; timing comes from a `[[schedules]]` entry whose `skill` field names this skill. Without one, the skill never fires
+- **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
+
+The distinction between ambient and scheduled matters for `max_tool_rounds`: the cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
 
 ## Agent-specific skills
 
@@ -74,6 +76,21 @@ Place skills in an agent's persona directory to scope them:
 Agent-specific skills are merged with global skills. Same-name agent skills override global ones.
 
 ## Testing a skill
+
+The fastest loop is a **dry run** — it executes the turn now and shows you the transcript without storing anything:
+
+```bash
+curl -X POST -H "Authorization: Bearer dk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"message": "coffee, $12"}' \
+  https://localhost:8080/api/v1/skills/default/expense-tracker/dry-run
+```
+
+The dashboard's Skills page exposes the same thing with a transcript panel. This matters most for scheduled skills: without it, testing a 7am briefing means waiting until 7am.
+
+A dry run persists nothing and suppresses non-read-only tools, but it does spend real tokens and does let read-only tools hit the network. See [Dry Runs & Previews](/docs/concepts/dry-runs/) for exactly what is and is not isolated.
+
+To test the real path end to end:
 
 1. Create the skill file
 2. Restart Denkeeper (skills are loaded at startup)

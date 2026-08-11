@@ -2,13 +2,15 @@
 title: "Tools (MCP)"
 description: "External tool servers connected via the Model Context Protocol."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-06T00:00:00+00:00
+lastmod: 2026-08-11T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
 ---
 
 Tools are external processes that expose capabilities via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). The agent discovers available tools at startup and can invoke them during conversations.
+
+Denkeeper also ships tools that need no external process — web search and fetch, JavaScript execution, a KV store, and browser automation. See [Built-in Tools](/docs/concepts/built-in-tools/) for those. For pointing MCP the other way, so that other clients can drive *this* instance, see [Denkeeper as an MCP Server](/docs/guides/mcp-server/).
 
 ## Configuration
 
@@ -60,14 +62,19 @@ All runtime changes are persisted to the TOML config file, so they survive resta
 
 Each agent has access to a built-in MCP server that exposes Denkeeper's own configuration:
 
-- **Skills**: `list_skills`, `create_skill`
-- **Schedules**: `list_schedules`, `add_schedule`, `schedule_update`
-- **Tools**: `tool_list`, `tool_add`, `tool_remove`
+- **Skills**: `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_patch`, `skill_delete`, `skill_read_file`, `skill_write_file`
+- **Schedules**: `schedule_list`, `schedule_add`, `schedule_update`, `schedule_delete`
+- **Tools**: `tool_list`, `tool_add`, `tool_remove`, `tool_restart`
 - **Plugins**: `plugin_list`, `plugin_add`, `plugin_remove`
 - **KV store**: `kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`
+- **Channels**: `channel_list`, `channel_switch`, `channel_info`
+- **Persona**: `persona_get`, `persona_update`, `persona_memory_manage`
+- **Browser profiles**: `browser_profile_list`, `browser_profile_info`, `browser_profile_clear`, `browser_profile_delete`
+- **Sessions**: `session_search`
 - **Fallback**: `set_fallback`
 - **Costs**: `get_cost_summary`
-- **Info**: `get_permission_tier`
+
+Registration is dependency-gated: a tool is advertised only when the subsystem it needs is wired. An agent with no browser configured does not see the `browser_profile_*` tools at all, rather than seeing them and getting errors — so the advertised tool set is an accurate statement of what the agent can actually do.
 
 ### Agent KV store
 
@@ -90,9 +97,9 @@ Plugins extend the agent with external processes. Two execution strategies are a
   - **Docker** (default) — `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none`
   - **Kubernetes** — ephemeral Pods with init-container network isolation, dropped capabilities, read-only root filesystem, Pod Security Admission labels, and optional gVisor/Kata RuntimeClass
 
-Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/config/) for all sandbox options.
+Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/configuration-reference/) for all sandbox options.
 
-Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli/), and [config reference](/docs/reference/config/) pages for details.
+Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli-reference/), and [config reference](/docs/reference/configuration-reference/) pages for details.
 
 ## OAuth 2.1 for remote tools
 
