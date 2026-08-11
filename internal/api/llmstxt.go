@@ -38,6 +38,7 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - GET  /api/v1/agents                  (scope: agents:read)     List configured agents
 - GET  /api/v1/approvals               (scope: approvals:read)  Pending tool-call approvals
 - POST /api/v1/approvals/{id}/approve  (scope: approvals:write) Approve a pending tool call
+- POST /api/v1/schedules/{name}/dry-run (scope: schedules:write) Preview a schedule; writes suppressed, nothing persisted
 - POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests
 
 ## Full API Reference

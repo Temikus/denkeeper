@@ -355,6 +355,15 @@ Global MCP settings.
     cleanup_interval = "1h"          # cleanup frequency
     buffer_size = 1000               # in-memory buffer capacity
 
+### [eval]
+
+Dry runs and evals — turns that run through the real engine with every write
+suppressed and nothing persisted. Their audit events carry source "dryrun" or
+"eval" and a pseudo-agent like "pamela#dryrun".
+
+    audit = "full"                   # "full" (record the turn as it ran) or
+                                     # "summary" (lifecycle events and errors only)
+
 ### [costs]
 
     default_rate_per_1k_tokens = 0.01  # fallback pricing rate

@@ -26,6 +26,14 @@
   let refreshTimer
   let refreshing = $state(false)
   let expandedRowId = $state(null)
+
+  // Dry-run and eval turns emit full live-turn semantics under the *ordinary*
+  // llm/tool_call categories, so a category chip cannot separate them — the
+  // discriminator is the source. Hidden by default: the record stays complete,
+  // the view stays quiet.
+  let showEval = $state(false)
+  const evalSources = ['eval', 'dryrun']
+  let excludeSource = $derived(showEval ? [] : evalSources)
   let expandedSessions = $state(new Set())
 
   const categoryItems = [
@@ -38,6 +46,7 @@
     { value: 'session', label: 'Sessions' },
     { value: 'skill', label: 'Skills' },
     { value: 'supervisor', label: 'Supervisor' },
+    { value: 'eval', label: 'Evals' },
   ]
   const statusItems = [
     { value: '', label: 'All' },
@@ -73,7 +82,7 @@
       error = ''
       if (!append && !quiet) refreshing = true
       const since = sinceFromRange(timeRange)
-      const res = await api.auditEvents({ category: categories, status: statuses, agent, search, since, limit: String(limit), offset: String(append ? offset : 0) })
+      const res = await api.auditEvents({ category: categories, status: statuses, agent, search, since, exclude_source: excludeSource, limit: String(limit), offset: String(append ? offset : 0) })
       if (seq !== loadSeq) return
       if (append) { events = [...events, ...res.events] }
       else { events = res.events; offset = 0 }
@@ -85,7 +94,9 @@
   }
 
   async function loadStats() {
-    try { stats = await api.auditStats(sinceFromRange(timeRange)) } catch { /* non-critical */ }
+    // Stats needs the same exclusion or one preview inflates the headline
+    // counts above the list it is supposed to summarise.
+    try { stats = await api.auditStats(sinceFromRange(timeRange), { excludeSource }) } catch { /* non-critical */ }
   }
 
   function refresh(quiet = false) { load(false, quiet); loadStats() }
@@ -308,6 +319,17 @@
     <span class="filter-label">Range</span>
     <FilterChips items={timeRanges} value={timeRange} label="Time range" size="sm"
       onselect={(v) => setFilter('timeRange', v)} />
+    <!-- "Previews" not "Evals": the Type row already has an Evals *category*
+         chip for eval lifecycle events, and this filters a different axis
+         (source). Preview is the word the dry-run panel already uses. -->
+    <span class="filter-label">Previews</span>
+    <div class="filter-chips filter-chips-sm">
+      <button class="chip" class:active={showEval} aria-pressed={showEval}
+        onclick={() => { showEval = !showEval; refresh() }}
+        title="Dry runs and eval samples record everything a real turn does, so they are hidden unless you ask for them">
+        Show dry runs &amp; evals
+      </button>
+    </div>
   </div>
 
   <!-- Search -->

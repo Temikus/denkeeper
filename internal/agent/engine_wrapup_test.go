@@ -222,7 +222,7 @@ func TestFinishStoppedToolLoop_NoRecords_PlainError(t *testing.T) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 
-	resp, gotMsgs, err := engine.finishStoppedToolLoop(context.Background(), "conv-norecords", out, &totalUsage, &totalCost, nil)
+	resp, gotMsgs, err := engine.finishStoppedToolLoop(context.Background(), "conv-norecords", out, &totalUsage, &totalCost, turnRun{router: engine.router}, nil)
 	if err == nil {
 		t.Fatal("expected plain error for a stop with no completed tool calls")
 	}

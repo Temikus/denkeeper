@@ -12,7 +12,41 @@ const (
 	keyExternalID     ctxKey = "external_id"
 	keyConversationID ctxKey = "conversation_id"
 	keySkillContext   ctxKey = "skill_context"
+	keyExecMark       ctxKey = "exec_mark"
 )
+
+// ExecMark labels every audit event produced by a turn that ran under a
+// non-live execution policy (a dry-run preview or an eval sample), so the
+// record stays complete while the view can stay quiet.
+//
+// It travels in the context rather than as a parameter because audit events
+// are emitted from a dozen places in the turn — including helpers that never
+// see the policy — and a single overlay at the emit site is the only way to
+// mark all of them without threading the policy everywhere.
+type ExecMark struct {
+	// Agent is the variant-scoped pseudo-identity written to the event's
+	// agent field, e.g. "pamela#dryrun" or "pamela#eval:candidate". The "#"
+	// is rejected by resource-name validation, so it can never collide with a
+	// real agent, and exact-match agent queries exclude these events for free.
+	Agent string
+	// Source is the event source, e.g. "dryrun" or "eval". Exact-match
+	// filterable, and excludable via the audit exclude_source filter.
+	Source string
+	// Summary requests reduced emission (lifecycle and errors only) instead of
+	// the default full live-turn semantics.
+	Summary bool
+}
+
+// WithExecMark returns a context carrying the audit overlay for a non-live turn.
+func WithExecMark(ctx context.Context, m *ExecMark) context.Context {
+	return context.WithValue(ctx, keyExecMark, m)
+}
+
+// ExecMarkFrom extracts the audit overlay, or nil for an ordinary live turn.
+func ExecMarkFrom(ctx context.Context) *ExecMark {
+	v, _ := ctx.Value(keyExecMark).(*ExecMark)
+	return v
+}
 
 // SkillSummary carries lightweight metadata about the skill driving the
 // current session. Used by the supervisor to understand *why* a tool call

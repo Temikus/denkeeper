@@ -51,10 +51,18 @@ type ToolCallRecord struct {
 	DurationMs     int64  `db:"duration_ms"     json:"duration_ms"`
 	Success        bool   `db:"success"         json:"success"`
 	// Outcome refines Success: "ok", "rejected" (healthy tool, bad args),
-	// "failed" (transport/exec failure), "denied" (approval denied), or
+	// "failed" (transport/exec failure), "denied" (approval denied),
 	// "cached" (identical idempotent call served from the within-turn cache;
-	// Success true, DurationMs 0, nothing executed).
+	// Success true, DurationMs 0, nothing executed), or "suppressed" (a write
+	// refused by a dry-run/eval execution policy; Success true, nothing ran).
 	Outcome string `db:"outcome"    json:"outcome"`
+	// Arguments and Result are in-memory only — AddToolCalls inserts an
+	// explicit column list, so these never reach the database. They exist so a
+	// caller holding the returned records (the dry-run transcript, an eval
+	// sample) can show what the call actually did; live turns still persist
+	// name/server/round/outcome only.
+	Arguments string `db:"-" json:"arguments,omitempty"`
+	Result    string `db:"-" json:"result,omitempty"`
 	// SkillName / SkillVersion identify the skill that owned the turn this
 	// call ran under, when ownership is unambiguous (single-skill/scheduled
 	// turns). Blank for interactive multi-match or unmatched turns.

@@ -5,6 +5,8 @@
   import { pendingSkillTest } from '../chatStore.js'
   import { navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import DryRunPanel from '../components/DryRunPanel.svelte'
+  import SkillInvocation from '../components/SkillInvocation.svelte'
 
   let skills = $state([])
   let agents = $state([])
@@ -32,12 +34,15 @@
     loading = true
     error = ''
     try {
-      const [skillsRes, agentsRes] = await Promise.all([
+      const [skillsRes, agentsRes, cfg] = await Promise.all([
         api.skills().catch(() => []),
         api.agents().catch(() => []),
+        // Only used to label the scheduled-run fire time; a miss is cosmetic.
+        api.serverConfig().catch(() => null),
       ])
       skills = skillsRes || []
       agents = agentsRes || []
+      timezone = cfg?.timezone || 'UTC'
     } catch (e) {
       error = e.message
     } finally {
@@ -133,6 +138,32 @@
       if (t.startsWith('command:')) return t.slice('command:'.length)
     }
     return null
+  }
+
+  // Dry-run preview state. `previewKey` identifies the open skill;
+  // `previewMessage` is the prompt to run it against, and `previewRunKey`
+  // is only set once the user submits, so opening the row doesn't spend
+  // tokens before they have typed anything.
+  let previewKey = $state(null)
+  // The invocation the user configured (mode + its inputs), set on Run. Null
+  // until then, so opening the row never spends tokens.
+  let previewInvocation = $state(null)
+  let previewRunKey = $state(null)
+  let timezone = $state('UTC')
+
+  function skillKey(s) { return `${s.agent}/${s.name}` }
+
+  function togglePreview(s) {
+    const key = skillKey(s)
+    previewKey = previewKey === key ? null : key
+    previewInvocation = null
+    previewRunKey = null
+  }
+
+  function startPreview(invocation) {
+    previewInvocation = invocation
+    // Changing the key remounts the panel, which reruns the request.
+    previewRunKey = `${previewKey}:${Date.now()}`
   }
 
   function testSkill(s, cmd) {
@@ -257,11 +288,30 @@
             <td class="muted">{(s.triggers || []).join(', ') || '—'}</td>
             <td class="muted desc">{s.description || '—'}</td>
             <td class="actions">
+              <button class="btn-sm" onclick={() => togglePreview(s)}
+                aria-expanded={previewKey === skillKey(s)}
+                title="Preview this skill with writes suppressed">Dry run</button>
               <button class="btn-sm" onclick={() => testSkill(s, cmd)} disabled={!cmd} title={cmd ? `Send /${cmd} in chat` : 'No command trigger'}>Test</button>
               <button class="btn-sm" onclick={() => openEdit(s)}>Edit</button>
               <button class="btn-sm danger" onclick={() => { confirmDelete = { agent: s.agent, name: s.name } }}>Delete</button>
             </td>
           </tr>
+          {#if previewKey === skillKey(s)}
+            <tr class="preview-row">
+              <td colspan="6">
+                <SkillInvocation skill={s} {timezone} onrun={startPreview} />
+                {#key previewRunKey}
+                  {#if previewRunKey && previewInvocation}
+                    <DryRunPanel
+                      run={(model) => api.dryRunSkill(s.agent, s.name,
+                        model ? { ...previewInvocation, model } : previewInvocation)}
+                      liveModel={agents.find(a => a.name === s.agent)?.llm_model || ''}
+                      onclose={() => { previewKey = null; previewRunKey = null }} />
+                  {/if}
+                {/key}
+              </td>
+            </tr>
+          {/if}
         {/each}
       </tbody>
     </table>
@@ -320,4 +370,6 @@
     font-size: 11.5px; color: var(--text-muted); margin-bottom: 16px;
   }
   .body-loading { color: var(--text-muted); font-style: italic; padding: 12px 0; }
+  /* The preview spans the full row; the panel supplies its own borders. */
+  .preview-row > td { padding: 0; background: var(--bg); }
 </style>

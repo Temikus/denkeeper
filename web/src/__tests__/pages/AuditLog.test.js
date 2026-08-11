@@ -272,6 +272,94 @@ describe('AuditLog page', () => {
       await waitFor(() => {
         expect(screen.getByText('No audit events found for agent "typo" matching "kv_get".')).toBeInTheDocument()
       })
+    })  })
+
+  // Dry-run and eval turns emit full live-turn semantics under the ordinary
+  // llm/tool_call categories, so only the source can separate them — and the
+  // counts above the list must be filtered the same way as the list itself.
+  describe('eval event visibility', () => {
+    function captureQueries(path) {
+      const seen = []
+      server.use(
+        http.get(path, ({ request }) => {
+          seen.push(new URL(request.url).searchParams)
+          return HttpResponse.json(path.endsWith('stats')
+            ? auditStats
+            : { events: auditEvents, total: auditEvents.length })
+        }),
+      )
+      return seen
+    }
+
+    test('hides eval and dry-run sources by default', async () => {
+      const seen = captureQueries('/api/v1/audit')
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+      expect(seen[0].get('exclude_source')).toBe('eval,dryrun')
+    })
+
+    test('excludes them from the stats counts too', async () => {
+      const seen = captureQueries('/api/v1/audit/stats')
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+      expect(seen[0].get('exclude_source')).toBe('eval,dryrun')
+    })
+
+    test('the toggle drops the exclusion from both queries', async () => {
+      const events = captureQueries('/api/v1/audit')
+      const stats = captureQueries('/api/v1/audit/stats')
+      render(AuditLog)
+      await waitFor(() => expect(events.length).toBe(1))
+
+      await fireEvent.click(screen.getByText(/Show dry runs/))
+      await waitFor(() => expect(events.length).toBe(2))
+      expect(events[1].get('exclude_source')).toBeNull()
+      await waitFor(() => expect(stats[stats.length - 1].get('exclude_source')).toBeNull())
+    })
+
+    // The toggle first shipped as a bare <button> appended straight to
+    // .filters, which is a 48px/1fr grid of label+control pairs — so it landed
+    // in the 48px label column, wrapped to three lines, and its 999px radius
+    // rendered it as a blob. It has to be a label + a chip in the control
+    // column, exactly like the Type/Status/Range rows above it.
+    test('sits in the control column as a shared chip, not a bespoke button', async () => {
+      const { container } = render(AuditLog)
+      await waitFor(() => expect(screen.getByText('Audit log')).toBeInTheDocument())
+
+      const toggle = screen.getByText(/Show dry runs/)
+      expect(toggle).toHaveClass('chip')
+      // A chip lives inside a .filter-chips container; a direct .filters child
+      // would be placed in the narrow label column.
+      const chips = toggle.closest('.filter-chips')
+      expect(chips).not.toBeNull()
+      expect(chips.parentElement).toHaveClass('filters')
+      // And it is paired with a label, like every other row.
+      expect(screen.getByText('Previews')).toHaveClass('filter-label')
+    })
+
+    test('the toggle reports its own pressed state', async () => {
+      render(AuditLog)
+      await waitFor(() => expect(screen.getByText('Audit log')).toBeInTheDocument())
+
+      const toggle = screen.getByText(/Show dry runs/)
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+      await fireEvent.click(toggle)
+      expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    // An eval event's agent is a pseudo-identity ("pamela#dryrun"), so the
+    // exact-match agent filter the token syntax produces excludes previews on
+    // its own — the two features compose without either knowing about it.
+    test('agent: token stays an exact match, which pseudo-identities miss', async () => {
+      const seen = captureQueries('/api/v1/audit')
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBe(1))
+
+      await fireEvent.input(screen.getByPlaceholderText('Search events'), {
+        target: { value: 'agent:pamela' },
+      })
+      await waitFor(() => expect(seen.length).toBe(2))
+      expect(seen[1].get('agent')).toBe('pamela')
     })
   })
 

@@ -777,6 +777,12 @@
                     },
                     {
                         "type": "string",
+                        "description": "Drop events with these sources (e.g. eval,dryrun). Comma-separated or repeated.",
+                        "name": "exclude_source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
                         "description": "Free-text search across event fields",
                         "name": "search",
                         "in": "query"
@@ -863,6 +869,12 @@
                         "type": "string",
                         "description": "Only count events after this time (RFC3339 format)",
                         "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Drop events with these sources (e.g. eval,dryrun). Comma-separated or repeated.",
+                        "name": "exclude_source",
                         "in": "query"
                     }
                 ],
@@ -3901,6 +3913,87 @@
                 }
             }
         },
+        "/schedules/{name}/dry-run": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Runs the schedule's message through its agent under a dry-run execution policy: the real persona, skills and read-only tools apply, but every write is suppressed and nothing is persisted, sent to an adapter, or remembered. Returns the full transcript with suppressed calls marked. Costs real tokens.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "schedules"
+                ],
+                "summary": "Preview what a schedule would do",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Schedule name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional as_of (RFC3339) to pin the clock and model to override the agent's model",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.dryRunInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Dry-run transcript",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.dryRunTranscript"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON or as_of",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Schedule or agent not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Dry run failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Schedule management not available",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/server/config": {
             "get": {
                 "security": [
@@ -5152,6 +5245,86 @@
                 }
             }
         },
+        "/skills/{agent}/{name}/dry-run": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message); 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it from the skill's triggers. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skills"
+                ],
+                "summary": "Preview what a skill would do for a given message",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent name",
+                        "name": "agent",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Skill name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers.",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.dryRunInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Dry-run transcript",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.dryRunTranscript"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON, invalid mode, missing message, no command trigger, or invalid as_of",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent or skill not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Dry run failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/telemetry/summary": {
             "get": {
                 "security": [
@@ -6124,6 +6297,10 @@
         "github_com_Temikus_denkeeper_internal_agent.ToolCallRecord": {
             "type": "object",
             "properties": {
+                "arguments": {
+                    "description": "Arguments and Result are in-memory only — AddToolCalls inserts an\nexplicit column list, so these never reach the database. They exist so a\ncaller holding the returned records (the dry-run transcript, an eval\nsample) can show what the call actually did; live turns still persist\nname/server/round/outcome only.",
+                    "type": "string"
+                },
                 "conversation_id": {
                     "type": "string"
                 },
@@ -6143,7 +6320,10 @@
                     "type": "integer"
                 },
                 "outcome": {
-                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), \"denied\" (approval denied), or\n\"cached\" (identical idempotent call served from the within-turn cache;\nSuccess true, DurationMs 0, nothing executed).",
+                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), \"denied\" (approval denied),\n\"cached\" (identical idempotent call served from the within-turn cache;\nSuccess true, DurationMs 0, nothing executed), or \"suppressed\" (a write\nrefused by a dry-run/eval execution policy; Success true, nothing ran).",
+                    "type": "string"
+                },
+                "result": {
                     "type": "string"
                 },
                 "round": {
@@ -6850,6 +7030,124 @@
                 },
                 "timeout": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.dryRunInput": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "description": "Args are the optional arguments appended after the command in \"command\"\nmode. Ignored in the other modes.",
+                    "type": "string"
+                },
+                "as_of": {
+                    "description": "AsOf pins the clock (RFC3339). Empty means now. Pinning matters because\nboth date-injection points — the scheduled-message header and the\n\"## Current Date\" prompt section — feed dated keys the agent writes.",
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message is the user text to run. Required for skill dry-runs, ignored\nfor schedules.",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode selects how a skill preview is invoked: \"schedule\" (the scheduler\nfires it — no user message), \"command\" (the user types its command:\ntrigger) or \"message\" (an ordinary chat turn). Empty infers the mode\nfrom the skill's own triggers, so a caller that doesn't care gets the\ninvocation the skill actually has. Ignored by the schedule endpoint,\nwhich has exactly one way of firing.",
+                    "type": "string"
+                },
+                "model": {
+                    "description": "Model runs this preview against a model other than the agent's live one.\nEmpty uses the live model. The override applies to this request only and\nchanges nothing about the agent.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.dryRunToolCall": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string"
+                },
+                "round": {
+                    "type": "integer"
+                },
+                "server": {
+                    "type": "string"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                },
+                "tool": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.dryRunTranscript": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "as_of": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "cost_usd": {
+                    "type": "number"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "description": "Mode reports how the turn was invoked, so a transcript records which of\na skill's entry points it actually exercised.",
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "description": "RequestedModel is set only when the caller overrode the model, so the UI\ncan mark a transcript as \"not your live model\" without knowing the agent\nconfig. Model is what actually answered; the two can differ if the\nprovider redirected.",
+                    "type": "string"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "suppressed_count": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "tokens_total": {
+                    "type": "integer"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.dryRunToolCall"
+                    }
                 }
             }
         },

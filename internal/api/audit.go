@@ -18,6 +18,7 @@ import (
 // @Param agent query string false "Filter by agent name"
 // @Param status query string false "Filter by status (ok, error, pending, denied). Comma-separated or repeated for a union of several statuses."
 // @Param source query string false "Filter by event source"
+// @Param exclude_source query string false "Drop events with these sources (e.g. eval,dryrun). Comma-separated or repeated."
 // @Param search query string false "Free-text search across event fields"
 // @Param since query string false "Start of time range (RFC3339 format)"
 // @Param until query string false "End of time range (RFC3339 format)"
@@ -36,11 +37,12 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query()
 	opts := audit.ListOpts{
-		Categories: audit.ParseFilterList(q["category"]...),
-		Agent:      q.Get("agent"),
-		Statuses:   audit.ParseFilterList(q["status"]...),
-		Source:     q.Get("source"),
-		Search:     q.Get("search"),
+		Categories:     audit.ParseFilterList(q["category"]...),
+		Agent:          q.Get("agent"),
+		Statuses:       audit.ParseFilterList(q["status"]...),
+		Source:         q.Get("source"),
+		ExcludeSources: audit.ParseFilterList(q["exclude_source"]...),
+		Search:         q.Get("search"),
 	}
 
 	if v := q.Get("since"); v != "" {
@@ -102,6 +104,7 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Security BearerAuth
 // @Param since query string false "Only count events after this time (RFC3339 format)"
+// @Param exclude_source query string false "Drop events with these sources (e.g. eval,dryrun). Comma-separated or repeated."
 // @Success 200 {object} audit.Stats "Aggregate audit statistics"
 // @Failure 400 {object} map[string]string "Invalid since parameter"
 // @Failure 500 {object} map[string]string "Internal server error"
@@ -113,17 +116,18 @@ func (s *Server) handleAuditStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var since *time.Time
-	if v := r.URL.Query().Get("since"); v != "" {
+	q := r.URL.Query()
+	opts := audit.StatsOpts{ExcludeSources: audit.ParseFilterList(q["exclude_source"]...)}
+	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid since: must be RFC3339"})
 			return
 		}
-		since = &t
+		opts.Since = &t
 	}
 
-	stats, err := s.deps.AuditStore.Stats(r.Context(), since)
+	stats, err := s.deps.AuditStore.Stats(r.Context(), opts)
 	if err != nil {
 		s.logger.Error("getting audit stats", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})

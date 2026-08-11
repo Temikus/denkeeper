@@ -180,6 +180,10 @@ func buildWhereClause(opts ListOpts) (string, []any) {
 		where = append(where, "source = ?")
 		args = append(args, opts.Source)
 	}
+	if cond, vals := inClause("source", opts.ExcludeSources); cond != "" {
+		where = append(where, "NOT "+cond)
+		args = append(args, vals...)
+	}
 	if opts.Search != "" {
 		where = append(where, "summary LIKE ?")
 		args = append(args, "%"+opts.Search+"%")
@@ -245,24 +249,18 @@ func (s *SQLiteStore) List(ctx context.Context, opts ListOpts) ([]Event, int, er
 }
 
 // Stats returns aggregate counts for the audit dashboard.
-func (s *SQLiteStore) Stats(ctx context.Context, since *time.Time) (*Stats, error) {
+func (s *SQLiteStore) Stats(ctx context.Context, opts StatsOpts) (*Stats, error) {
 	st := &Stats{
 		ByCategory: make(map[string]int),
 		ByStatus:   make(map[string]int),
 	}
 
-	sinceStr := ""
-	if since != nil {
-		sinceStr = since.Format(time.RFC3339Nano)
-	}
-
-	// Total + by category.
-	var whereClause string
-	var args []any
-	if sinceStr != "" {
-		whereClause = " WHERE timestamp >= ?"
-		args = []any{sinceStr}
-	}
+	// Reuse the list filter builder so exclusion semantics can never drift
+	// between the list and the counts shown above it.
+	whereClause, args := buildWhereClause(ListOpts{
+		Since:          opts.Since,
+		ExcludeSources: opts.ExcludeSources,
+	})
 
 	// Total.
 	var total int
@@ -299,11 +297,16 @@ func (s *SQLiteStore) Stats(ctx context.Context, since *time.Time) (*Stats, erro
 		st.ByStatus[s.Status] = s.Count
 	}
 
-	// Events last hour.
-	oneHourAgo := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	// Events last hour — its own window, but the same exclusions, so a hidden
+	// source stays hidden in every number on the page.
+	oneHourAgo := time.Now().UTC().Add(-time.Hour)
+	hourClause, hourArgs := buildWhereClause(ListOpts{
+		Since:          &oneHourAgo,
+		ExcludeSources: opts.ExcludeSources,
+	})
 	var lastHour int
 	if err := s.db.GetContext(ctx, &lastHour,
-		"SELECT COUNT(*) FROM audit_events WHERE timestamp >= ?", oneHourAgo); err != nil {
+		"SELECT COUNT(*) FROM audit_events"+hourClause, hourArgs...); err != nil {
 		return nil, fmt.Errorf("counting last hour audit events: %w", err)
 	}
 	st.EventsLastHour = lastHour

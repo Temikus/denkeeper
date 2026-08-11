@@ -125,7 +125,8 @@ cosign verify \
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
 - **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor prompt includes skill/schedule context for scheduled invocations; configurable timeout (`supervisor_timeout`, default 30s) and context message count (`supervisor_context_messages`, default 5); LLM failures emit a `supervisor_error` event before falling through to human approval
-- **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 11 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`); web UI page with timeline and table views, category/status/agent/time filters
+- **Dry runs** — preview what a schedule or skill would actually do without letting it do anything: the real persona, skills, and read-only tools run, while every write is suppressed and nothing is persisted, sent to an adapter, or remembered; returns a full transcript with suppressed calls marked, and accepts an `as_of` clock so a preview of a dated task is reproducible
+- **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 12 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`, `eval`); web UI page with timeline and table views, category/status/agent/time filters, and a source-exclusion filter that hides dry-run noise by default
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
 - **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
 - **Session history management** — `/clear` removes all messages from a session, `/compact` summarises via LLM and replaces all messages with a single summary; available in Telegram, Discord, web UI, and REST API
@@ -331,6 +332,55 @@ channel = "telegram:YOUR_CHAT_ID"
 ```
 
 `session_mode = "isolated"` creates a fresh conversation context for each run so scheduled jobs don't mix into your regular chat history.
+
+#### Dry runs — "what would this actually do?"
+
+Schedules and skills both have a preview that runs the real turn with its hands tied. Hit **Test now** on a schedule row (or **Dry run** on a skill) in the dashboard, or call the API directly:
+
+```bash
+curl -X POST localhost:8080/api/v1/schedules/nightly-digest/dry-run \
+  -H "Authorization: Bearer $DENKEEPER_API_KEY" \
+  -d '{"as_of":"2026-07-06T07:00:00Z"}'
+```
+
+The turn goes through the whole engine — persona, matched skills, tool loop, budget hints. What changes is the execution policy:
+
+- **Read-only tools execute for real**, so the model reasons about the actual world. "Read-only" is the same idempotency signal the engine already uses for within-turn memoization: the built-in allowlist plus whatever external servers opted into via `idempotent` / `idempotent_tools` / `trust_annotations`.
+- **Everything else is suppressed** and gets `[dry-run: write suppressed — <name> not executed; assume success]` back, so the model keeps planning against a plausible world. Unknown tools are suppressed too — the allowlist is the only thing that vouches for a call.
+- **Nothing is persisted.** No conversation row, no messages, no telemetry, no memory extraction, no reviewer trigger. The transcript is returned to you and lives nowhere else.
+- **Approvals are skipped.** Suppressed calls execute nothing to approve, and the calls that do run are read-only by definition.
+- **`as_of` pins the clock** for both places a date reaches the model (the scheduled-message header and the `## Current Date` prompt section), so previewing a July task in September doesn't silently drift.
+
+A skill fires three ways and only one of them involves a message, so the skill endpoint takes a `mode` rather than always asking for one:
+
+| mode | what it sends | for |
+|---|---|---|
+| `schedule` | the scheduler's `[Scheduled: …]` fire-time header, with the skill named | skills a schedule runs — no user message exists |
+| `command` | the skill's own `command:` trigger, plus optional `args` | skills invoked by typing `/name` |
+| `message` | an ordinary chat turn from `message` | ambient skills that ride along on normal conversation |
+
+Omit `mode` and it is inferred from the skill's triggers, so the default is always the entry point the skill actually has. Only `schedule` names the skill (which forces its body to be injected); `command` and `message` leave it unnamed so ordinary trigger matching runs — which means a command preview exercises the trigger, not just the body.
+
+Both endpoints also accept a `model` override, which runs the preview against a model other than the agent's live one and changes nothing about the agent:
+
+```bash
+curl -X POST localhost:8080/api/v1/skills/pamela/heartbeat/dry-run \
+  -H "Authorization: Bearer $DENKEEPER_API_KEY" \
+  -d '{"message":"summarise yesterday","model":"moonshotai/kimi-k3"}'
+```
+
+The override clones the router rather than mutating it, so previewing a candidate model can never retarget a live turn already in flight. The response echoes `requested_model` alongside the `model` that actually answered, so a transcript is self-describing.
+
+In the dashboard this is the panel's first model slot; the second slot is empty by default, and filling it runs the same turn against both models and shows the deltas (rounds, bad tool args, cost, latency). One sample per side is a smoke test, not a verdict — the panel says so, and points at a full eval for anything you intend to decide on.
+
+Dry runs still cost real tokens, so both endpoints sit behind their parent resource's write scope (`schedules:write` / `skills:write`).
+
+Every audit event a dry run emits carries `source = "dryrun"` and a pseudo-agent like `pamela#dryrun` — the record is complete, but `?agent=pamela` never returns them and the dashboard hides them until you flip **Previews → Show dry runs & evals**. Turn the volume down with:
+
+```toml
+[eval]
+audit = "summary"   # lifecycle events and errors only; default is "full"
+```
 
 ### REST API
 

@@ -2014,6 +2014,29 @@ func (s *Server) locationFor(agentName string) *time.Location {
 	return time.UTC
 }
 
+// BuildScheduledMessage renders the message a schedule fires at the given
+// time, including the injected fire-time header (the model never infers
+// "today" — see FormatScheduledText).
+//
+// It is shared by the live job closure and the schedule dry-run endpoint, so a
+// preview is by construction the same message the schedule would actually
+// send, not a re-creation that can drift from it.
+func BuildScheduledMessage(cfg scheduler.Config, target agent.AdapterBinding, conversationID string, fireTime time.Time, loc *time.Location) adapter.IncomingMessage {
+	return adapter.IncomingMessage{
+		Adapter:        target.Adapter,
+		ExternalID:     target.ExternalID,
+		ConversationID: conversationID,
+		UserName:       "scheduler",
+		Text:           scheduler.FormatScheduledText(cfg.Name, cfg.Skill, fireTime, loc),
+		SkillName:      cfg.Skill,
+		ScheduleName:   cfg.Name,
+		ScheduleCron:   cfg.Schedule,
+		IsScheduled:    true,
+		SessionTier:    cfg.SessionTier,
+		Timestamp:      fireTime,
+	}
+}
+
 // BuildScheduleJob returns a JobFunc that dispatches a message when the
 // schedule fires. Used by both schedule_add and schedule_update.
 func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adapter.IncomingMessage) error, logger *slog.Logger, resolve ChannelResolver, opts BuildScheduleJobOpts) scheduler.JobFunc {
@@ -2042,21 +2065,8 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 		var failed, succeeded int
 		var lastErr string
 		now := time.Now()
-		text := scheduler.FormatScheduledText(cfg.Name, cfg.Skill, now, opts.Location)
 		for _, target := range targets {
-			msg := adapter.IncomingMessage{
-				Adapter:        target.Adapter,
-				ExternalID:     target.ExternalID,
-				ConversationID: conversationID,
-				UserName:       "scheduler",
-				Text:           text,
-				SkillName:      cfg.Skill,
-				ScheduleName:   cfg.Name,
-				ScheduleCron:   cfg.Schedule,
-				IsScheduled:    true,
-				SessionTier:    cfg.SessionTier,
-				Timestamp:      now,
-			}
+			msg := BuildScheduledMessage(cfg, target, conversationID, now, opts.Location)
 			if entry.SessionMode == "isolated" {
 				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
 			}
