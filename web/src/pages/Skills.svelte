@@ -1,11 +1,12 @@
 <script>
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import { api } from '../api.js'
   import { inert } from '../inert.js'
   import { pendingSkillTest } from '../chatStore.js'
   import { navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import DryRunPanel from '../components/DryRunPanel.svelte'
+  import SkillInvocation from '../components/SkillInvocation.svelte'
 
   let skills = $state([])
   let agents = $state([])
@@ -33,12 +34,15 @@
     loading = true
     error = ''
     try {
-      const [skillsRes, agentsRes] = await Promise.all([
+      const [skillsRes, agentsRes, cfg] = await Promise.all([
         api.skills().catch(() => []),
         api.agents().catch(() => []),
+        // Only used to label the scheduled-run fire time; a miss is cosmetic.
+        api.serverConfig().catch(() => null),
       ])
       skills = skillsRes || []
       agents = agentsRes || []
+      timezone = cfg?.timezone || 'UTC'
     } catch (e) {
       error = e.message
     } finally {
@@ -141,29 +145,23 @@
   // is only set once the user submits, so opening the row doesn't spend
   // tokens before they have typed anything.
   let previewKey = $state(null)
-  let previewMessage = $state('')
+  // The invocation the user configured (mode + its inputs), set on Run. Null
+  // until then, so opening the row never spends tokens.
+  let previewInvocation = $state(null)
   let previewRunKey = $state(null)
+  let timezone = $state('UTC')
 
   function skillKey(s) { return `${s.agent}/${s.name}` }
 
-  async function togglePreview(s) {
+  function togglePreview(s) {
     const key = skillKey(s)
-    if (previewKey === key) {
-      previewKey = null
-    } else {
-      previewKey = key
-      previewMessage = ''
-    }
+    previewKey = previewKey === key ? null : key
+    previewInvocation = null
     previewRunKey = null
-    // The panel is useless until a message is typed, so put the caret there.
-    if (previewKey) {
-      await tick()
-      document.getElementById('dry-run-message')?.focus()
-    }
   }
 
-  function startPreview() {
-    if (!previewMessage.trim()) return
+  function startPreview(invocation) {
+    previewInvocation = invocation
     // Changing the key remounts the panel, which reruns the request.
     previewRunKey = `${previewKey}:${Date.now()}`
   }
@@ -301,19 +299,12 @@
           {#if previewKey === skillKey(s)}
             <tr class="preview-row">
               <td colspan="6">
-                <div class="preview-prompt">
-                  <label class="preview-label" for="dry-run-message">Message to run this skill against</label>
-                  <div class="preview-input-row">
-                    <input id="dry-run-message" type="text" bind:value={previewMessage}
-                      placeholder="e.g. summarise what happened yesterday"
-                      onkeydown={(e) => { if (e.key === 'Enter') startPreview() }} />
-                    <button class="btn-primary" onclick={startPreview} disabled={!previewMessage.trim()}>Run</button>
-                  </div>
-                </div>
+                <SkillInvocation skill={s} {timezone} onrun={startPreview} />
                 {#key previewRunKey}
-                  {#if previewRunKey}
+                  {#if previewRunKey && previewInvocation}
                     <DryRunPanel
-                      run={(model) => api.dryRunSkill(s.agent, s.name, model ? { message: previewMessage, model } : { message: previewMessage })}
+                      run={(model) => api.dryRunSkill(s.agent, s.name,
+                        model ? { ...previewInvocation, model } : previewInvocation)}
                       liveModel={agents.find(a => a.name === s.agent)?.llm_model || ''}
                       onclose={() => { previewKey = null; previewRunKey = null }} />
                   {/if}
@@ -381,8 +372,4 @@
   .body-loading { color: var(--text-muted); font-style: italic; padding: 12px 0; }
   /* The preview spans the full row; the panel supplies its own borders. */
   .preview-row > td { padding: 0; background: var(--bg); }
-  .preview-prompt { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-top: 1px solid var(--border); }
-  .preview-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
-  .preview-input-row { display: flex; gap: 8px; }
-  .preview-input-row input { flex: 1; }
 </style>

@@ -351,6 +351,16 @@ The turn goes through the whole engine — persona, matched skills, tool loop, b
 - **Approvals are skipped.** Suppressed calls execute nothing to approve, and the calls that do run are read-only by definition.
 - **`as_of` pins the clock** for both places a date reaches the model (the scheduled-message header and the `## Current Date` prompt section), so previewing a July task in September doesn't silently drift.
 
+A skill fires three ways and only one of them involves a message, so the skill endpoint takes a `mode` rather than always asking for one:
+
+| mode | what it sends | for |
+|---|---|---|
+| `schedule` | the scheduler's `[Scheduled: …]` fire-time header, with the skill named | skills a schedule runs — no user message exists |
+| `command` | the skill's own `command:` trigger, plus optional `args` | skills invoked by typing `/name` |
+| `message` | an ordinary chat turn from `message` | ambient skills that ride along on normal conversation |
+
+Omit `mode` and it is inferred from the skill's triggers, so the default is always the entry point the skill actually has. Only `schedule` names the skill (which forces its body to be injected); `command` and `message` leave it unnamed so ordinary trigger matching runs — which means a command preview exercises the trigger, not just the body.
+
 Both endpoints also accept a `model` override, which runs the preview against a model other than the agent's live one and changes nothing about the agent:
 
 ```bash

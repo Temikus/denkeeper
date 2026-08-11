@@ -5252,7 +5252,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Runs a message through the agent under a dry-run execution policy, naming the skill so its body is injected exactly as a scheduled invocation would. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.",
+                "description": "Previews a skill under a dry-run execution policy, invoked the way it actually fires. 'schedule' injects the scheduler's fire-time header and names the skill (no user message); 'command' sends its command: trigger so trigger matching is exercised; 'message' sends an ordinary chat turn. Omitting mode infers it from the skill's triggers. Real persona and read-only tools apply; every write is suppressed and nothing is persisted, sent, or remembered. Costs real tokens.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5279,7 +5279,7 @@
                         "required": true
                     },
                     {
-                        "description": "Message to run, plus optional as_of (RFC3339) and model override",
+                        "description": "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers.",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -5296,7 +5296,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid JSON, missing message, or invalid as_of",
+                        "description": "Invalid JSON, invalid mode, missing message, no command trigger, or invalid as_of",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7036,12 +7036,20 @@
         "internal_api.dryRunInput": {
             "type": "object",
             "properties": {
+                "args": {
+                    "description": "Args are the optional arguments appended after the command in \"command\"\nmode. Ignored in the other modes.",
+                    "type": "string"
+                },
                 "as_of": {
                     "description": "AsOf pins the clock (RFC3339). Empty means now. Pinning matters because\nboth date-injection points — the scheduled-message header and the\n\"## Current Date\" prompt section — feed dated keys the agent writes.",
                     "type": "string"
                 },
                 "message": {
                     "description": "Message is the user text to run. Required for skill dry-runs, ignored\nfor schedules.",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode selects how a skill preview is invoked: \"schedule\" (the scheduler\nfires it — no user message), \"command\" (the user types its command:\ntrigger) or \"message\" (an ordinary chat turn). Empty infers the mode\nfrom the skill's own triggers, so a caller that doesn't care gets the\ninvocation the skill actually has. Ignored by the schedule endpoint,\nwhich has exactly one way of firing.",
                     "type": "string"
                 },
                 "model": {
@@ -7102,6 +7110,10 @@
                 },
                 "duration_ms": {
                     "type": "integer"
+                },
+                "mode": {
+                    "description": "Mode reports how the turn was invoked, so a transcript records which of\na skill's entry points it actually exercised.",
+                    "type": "string"
                 },
                 "model": {
                     "type": "string"

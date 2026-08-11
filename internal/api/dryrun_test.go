@@ -164,11 +164,103 @@ func TestDryRunSkill_Success(t *testing.T) {
 	}
 }
 
-func TestDryRunSkill_MissingMessage(t *testing.T) {
+func TestDryRunSkill_MessageRequiredOnlyInMessageMode(t *testing.T) {
 	deps := testDeps()
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
-	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run", `{"message":"   "}`, "dk-test-key")
+	// Asking for message mode without one is a client error...
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run",
+		`{"mode":"message","message":"   "}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("explicit message mode: status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// ...but a blank message with no mode is just "no message", which is the
+	// normal case for a skill that isn't invoked by typing at it.
+	rec = postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run", `{"message":"   "}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inferred mode: status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeTranscript(t, rec).Mode; got != "command" {
+		t.Errorf("Mode = %q, want command (greet declares command:hello)", got)
+	}
+}
+
+// The three modes are three different messages, not three labels for one.
+func TestDryRunSkill_ScheduleModeSendsTheSchedulerHeader(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run",
+		`{"mode":"schedule","as_of":"2026-07-06T07:00:00Z"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeTranscript(t, rec)
+	if got.Mode != "schedule" {
+		t.Errorf("Mode = %q, want schedule", got.Mode)
+	}
+	// No user message: what the agent receives is the injected header, at the
+	// pinned time.
+	if !strings.HasPrefix(got.Prompt, "[Scheduled: help |") {
+		t.Errorf("Prompt = %q, want the scheduler's fire-time header", got.Prompt)
+	}
+	if !strings.Contains(got.Prompt, "2026-07-06T07:00:00") {
+		t.Errorf("Prompt = %q, want the header rendered at as_of", got.Prompt)
+	}
+}
+
+func TestDryRunSkill_CommandModeSendsTheTrigger(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run",
+		`{"mode":"command","args":"unread only"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	got := decodeTranscript(t, rec)
+	if got.Prompt != "/hello unread only" {
+		t.Errorf("Prompt = %q, want the command plus its arguments", got.Prompt)
+	}
+}
+
+// A skill with no command: trigger has no command entry point, and saying so
+// is more useful than previewing an invocation that cannot happen.
+func TestDryRunSkill_CommandModeRejectedWithoutATrigger(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run", `{"mode":"command"}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no command: trigger") {
+		t.Errorf("error should name the missing trigger, got: %s", rec.Body.String())
+	}
+}
+
+func TestDryRunSkill_InferredModeFollowsTheSkillsTriggers(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	// help declares no triggers, so its only real invocation is a scheduled one.
+	rec := postDryRun(t, srv, "/api/v1/skills/default/help/dry-run", `{}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeTranscript(t, rec).Mode; got != "schedule" {
+		t.Errorf("Mode = %q, want schedule for a skill with no triggers", got)
+	}
+}
+
+func TestDryRunSkill_InvalidMode(t *testing.T) {
+	deps := testDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/skills/default/greet/dry-run", `{"mode":"telepathy"}`, "dk-test-key")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
 	}
