@@ -3,6 +3,11 @@ description = "A security-first, single-binary personal AI agent with a small fo
 images = ["cover.png"]
 
 [doks]
+  # Bundles Bootstrap's JS (offcanvas, collapse, dropdown). Without it the mobile
+  # nav burger, the "On this page" toggle and every dropdown are inert.
+  bootstrapJavascript = true
+  # Sections that get the docs sidebar (desktop) and its mobile offcanvas button.
+  sectionNav = ["docs"]
   sectionFooter = false
   docsVersioning = false
   breadcrumb = true
@@ -10,6 +15,7 @@ images = ["cover.png"]
   scrollSpy = true
   search = true
   colorMode = "auto"
+  colorModeToggler = true
   darkColorMode = true
   repo = "https://github.com/Temikus/denkeeper"
   editURL = "/edit/main/website/content"

@@ -1,8 +1,43 @@
 // Denkeeper custom styles — warm terracotta theme
 
+// ---- Typography ----
+// Doks bumps body text to $font-size-md (18px) from md up, which reads as
+// marketing copy on a keys-and-defaults reference. Back to the 16px base.
+// $font-size-md itself is left alone — the sidebar, header nav, callouts and
+// KaTeX all key off it.
+@include media-breakpoint-up(md) {
+  body {
+    font-size: $font-size-base;
+  }
+}
+
+// Reference tables are mostly short cells (key, type, default), so a step below
+// body size keeps a wide row scannable without crowding the prose around it.
+.docs-content {
+  table {
+    font-size: $font-size-base * 0.9375;
+  }
+
+  // em, so inline code tracks whatever it sits in (prose or a table cell).
+  :not(pre) > code {
+    font-size: 0.875em;
+  }
+}
+
 // ---- Light mode warm tinting ----
 body {
   background: #fffbf7;
+}
+
+// The section nav marks the current page with the theme's Starlight-derived
+// accent token, which is a cold blue in both modes. Point it at our link
+// colors so the docs sidebar matches the rest of the palette.
+:root {
+  --sl-color-text-accent: #{$link-color};
+}
+
+@include color-mode(dark, true) {
+  --sl-color-text-accent: #{$link-color-dark};
 }
 
 .navbar {
