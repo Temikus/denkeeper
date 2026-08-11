@@ -240,7 +240,7 @@
   <!-- OIDC Status -->
   <Collapsible title="OIDC / SSO" bind:open={showOIDC} id="oidc">
       {#if !authStatus?.oidc_enabled}
-        <p class="info-text">OIDC is not configured. See the <a href="https://docs.moltis.org/denkeeper/configuration/#oidc" target="_blank" rel="noopener">documentation</a> for setup instructions.</p>
+        <p class="info-text">OIDC is not configured. See the <a href="https://denkeeper.io/docs/reference/configuration-reference/#apiauthoidc" target="_blank" rel="noopener">documentation</a> for setup instructions.</p>
       {:else}
         <div class="oidc-info">
           <div class="oidc-row"><span class="oidc-label">Issuer</span> <code>{authStatus.oidc_issuer || '—'}</code></div>
