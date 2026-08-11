@@ -118,29 +118,43 @@ func runKeysList() error {
 	return w.Flush()
 }
 
-// resolveDBPath returns the memory.db_path from the config file, falling back
-// to the default location if the file is absent or does not set the field.
+// resolveDBPath returns the SQLite path the server would use for this config,
+// applying the same precedence as config.Load: DENKEEPER_MEMORY_DB_PATH >
+// [memory].db_path > <data dir>/data/memory.db, where the data dir is
+// DENKEEPER_DATA_DIR > data_dir > ~/.denkeeper.
 // It intentionally skips full config validation so it works before a valid
 // config exists (e.g. on first run when no adapter tokens are configured yet).
 func resolveDBPath(cfgPath string) string {
 	if cfgPath == "" {
-		cfgPath = config.DefaultConfigPath()
+		cfgPath = resolveConfigPath()
 	}
 
-	// Partially parse just the memory section — skip adapter/LLM validation.
+	// Partially parse just the path fields — skip adapter/LLM validation.
 	type partialMemory struct {
 		DBPath string `toml:"db_path"`
 	}
 	type partialConfig struct {
-		Memory partialMemory `toml:"memory"`
+		DataDir string        `toml:"data_dir"`
+		Memory  partialMemory `toml:"memory"`
 	}
 
-	data, err := os.ReadFile(cfgPath) // #nosec G304 -- path from CLI flag / config, not user input
-	if err == nil {
-		var cfg partialConfig
-		if toml.Unmarshal(data, &cfg) == nil && cfg.Memory.DBPath != "" {
-			return cfg.Memory.DBPath
+	var cfg partialConfig
+	if data, err := os.ReadFile(cfgPath); err == nil { // #nosec G304 -- path from CLI flag / config, not user input
+		if toml.Unmarshal(data, &cfg) != nil {
+			cfg = partialConfig{} // malformed config: fall back to defaults
 		}
+	}
+
+	if v := os.Getenv("DENKEEPER_MEMORY_DB_PATH"); v != "" {
+		return v
+	}
+	if cfg.Memory.DBPath != "" {
+		return cfg.Memory.DBPath
+	}
+	// config.DefaultDBPath already honours DENKEEPER_DATA_DIR, which outranks
+	// the TOML data_dir — so only consult data_dir when the env var is unset.
+	if cfg.DataDir != "" && os.Getenv("DENKEEPER_DATA_DIR") == "" {
+		return filepath.Join(cfg.DataDir, "data", "memory.db")
 	}
 
 	return config.DefaultDBPath()
