@@ -203,7 +203,7 @@
   .cat-schedule { color: var(--success); background: rgba(61,143,98,0.08); }
   .cat-config { color: #8b5cf6; background: rgba(139,92,246,0.08); }
   .cat-skill { color: #06b6d4; background: rgba(6,182,212,0.08); }
-  .cat-mcp { color: var(--accent); background: rgba(192,68,44,0.08); }
+  .cat-mcp { color: var(--accent); background: rgba(var(--accent-rgb), 0.08); }
   .cat-session { color: #10b981; background: rgba(16,185,129,0.08); }
   .cat-supervisor { color: #534AB7; background: rgba(127,119,221,0.12); }
 

@@ -468,7 +468,7 @@
   /* Live filters read as state, not as the muted examples they replace —
      same accent tint the FAILED pill uses for its own state below. */
   .search-example.is-active {
-    background: rgba(200,78,53,0.10); color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.10); color: var(--accent);
     max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .search-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -498,7 +498,7 @@
   .row-clickable { cursor: pointer; }
   .row-clickable:hover { background: var(--hover-overlay); }
   .row-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .row-expanded { background: rgba(200, 78, 53, 0.08); }
+  .row-expanded { background: rgba(var(--accent-rgb), 0.08); }
   .error-table-row { background: rgba(196, 58, 58, 0.04); }
   .date { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
   .mono { font-family: monospace; font-size: 12px; }

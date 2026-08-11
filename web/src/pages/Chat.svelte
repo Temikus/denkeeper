@@ -633,7 +633,7 @@
     gap: 6px;
     padding: 12px;
     margin-top: 8px;
-    background: rgba(200, 78, 53, 0.06);
+    background: rgba(var(--accent-rgb), 0.06);
     border: 1px solid var(--accent);
     border-radius: var(--radius);
   }
