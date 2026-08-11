@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -36,7 +37,10 @@ type dryRunInput struct {
 	AsOf string `json:"as_of"`
 	// Model runs this preview against a model other than the agent's live one.
 	// Empty uses the live model. The override applies to this request only and
-	// changes nothing about the agent.
+	// changes nothing about the agent. Checked against what the agent's
+	// provider advertises when that list is available — see
+	// validateModelOverride, which rejects only a name the provider is known
+	// not to have.
 	Model string `json:"model"`
 	// Mode selects how a skill preview is invoked: "schedule" (the scheduler
 	// fires it — no user message), "command" (the user types its command:
@@ -130,6 +134,50 @@ func parseDryRunInput(r *http.Request) (dryRunInput, time.Time, error) {
 		return input, time.Time{}, fmt.Errorf("invalid as_of: must be RFC3339")
 	}
 	return input, t, nil
+}
+
+// modelValidationTimeout bounds the provider round-trip that checking a model
+// override costs. Listing is a live call on most providers (only OpenRouter
+// caches), so an unresponsive one must degrade to "cannot validate" rather than
+// hold the request open.
+const modelValidationTimeout = 5 * time.Second
+
+// validateModelOverride returns a client-error message when the caller asked
+// for a model the agent's provider positively does not know, and "" otherwise.
+//
+// It deliberately fails open. The advertised set comes from the provider
+// (OpenRouter lists hundreds and the set moves), so an empty, stale or
+// unreachable listing means "cannot validate", not "reject" — a model that
+// genuinely works must never be turned away because a listing call failed. The
+// one thing it rejects is a name the provider does know the full set of and
+// does not contain, which is the typo this exists to catch.
+//
+// Only the agent's *default* provider is queried: an override changes the model
+// alone (llm.Router.WithModel keeps the provider map and the default provider),
+// so that is the provider that will receive it, and filtering keeps the cost at
+// one round-trip instead of one per registered provider. The check is skipped
+// entirely when there is no override, which is the common path.
+func (s *Server) validateModelOverride(ctx context.Context, e *agent.Engine, model string) string {
+	if model == "" || model == e.ModelName() {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, modelValidationTimeout)
+	defer cancel()
+
+	provider := e.ProviderName()
+	advertised := e.ListModelDetails(ctx, provider)
+	if len(advertised) == 0 {
+		s.logger.Debug("model override not validated: provider advertises no models",
+			"agent", e.Name(), "provider", provider, "model", model)
+		return ""
+	}
+	for _, m := range advertised {
+		if m.ID == model {
+			return ""
+		}
+	}
+	return fmt.Sprintf("unknown model %q for provider %q", model, provider)
 }
 
 // truncateField trims a transcript field to the render cap.
@@ -254,7 +302,7 @@ func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engi
 // @Param name path string true "Schedule name"
 // @Param body body dryRunInput false "Optional as_of (RFC3339) to pin the clock and model to override the agent's model"
 // @Success 200 {object} dryRunTranscript "Dry-run transcript"
-// @Failure 400 {object} map[string]string "Invalid JSON or as_of"
+// @Failure 400 {object} map[string]string "Invalid JSON, invalid as_of, or unknown model"
 // @Failure 404 {object} map[string]string "Schedule or agent not found"
 // @Failure 500 {object} map[string]string "Dry run failed"
 // @Failure 503 {object} map[string]string "Schedule management not available"
@@ -289,6 +337,11 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+
+	if errMsg := s.validateModelOverride(r.Context(), e, input.Model); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
 	}
 
@@ -329,7 +382,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 // @Param name path string true "Skill name"
 // @Param body body dryRunInput true "Invocation: mode (schedule|command|message), plus message or args for the mode that needs one, and optional as_of (RFC3339) / model override. Omitting mode infers it from the skill's triggers and from whether a schedule names it."
 // @Success 200 {object} dryRunTranscript "Dry-run transcript"
-// @Failure 400 {object} map[string]string "Invalid JSON, invalid mode, missing message, no command trigger, or invalid as_of"
+// @Failure 400 {object} map[string]string "Invalid JSON, invalid mode, missing message, no command trigger, invalid as_of, or unknown model"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 500 {object} map[string]string "Dry run failed"
 // @Router /skills/{agent}/{name}/dry-run [post]
@@ -352,6 +405,11 @@ func (s *Server) handleDryRunSkill(w http.ResponseWriter, r *http.Request) {
 	input, asOf, err := parseDryRunInput(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if errMsg := s.validateModelOverride(r.Context(), e, input.Model); errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
 	}
 

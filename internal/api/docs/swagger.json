@@ -3956,7 +3956,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid JSON or as_of",
+                        "description": "Invalid JSON, invalid as_of, or unknown model",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5296,7 +5296,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid JSON, invalid mode, missing message, no command trigger, or invalid as_of",
+                        "description": "Invalid JSON, invalid mode, missing message, no command trigger, invalid as_of, or unknown model",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7053,7 +7053,7 @@
                     "type": "string"
                 },
                 "model": {
-                    "description": "Model runs this preview against a model other than the agent's live one.\nEmpty uses the live model. The override applies to this request only and\nchanges nothing about the agent.",
+                    "description": "Model runs this preview against a model other than the agent's live one.\nEmpty uses the live model. The override applies to this request only and\nchanges nothing about the agent. Checked against what the agent's\nprovider advertises when that list is available — see\nvalidateModelOverride, which rejects only a name the provider is known\nnot to have.",
                     "type": "string"
                 }
             }
