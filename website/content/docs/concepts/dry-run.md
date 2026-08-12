@@ -3,7 +3,7 @@ title: "Dry Runs & Previews"
 description: "Seeing what a skill or schedule would do before it does it."
 slug: "dry-runs"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-12T00:00:00+00:00
 draft: false
 weight: 55
 toc: true
@@ -20,7 +20,8 @@ What changes is everything around it:
 | Aspect | Live turn | Dry run |
 |---|---|---|
 | Conversation | Created and stored | Supplied verbatim, no row created |
-| History | The session's messages | `history_from`, read-only; empty means a fresh turn |
+| History | The session's messages | `history_from`, read-only and strictly *before* this turn; empty means a fresh turn |
+| The message being previewed | Stored, then read back as the last history entry | Sent directly — there is nothing stored to read back |
 | Messages, telemetry, memory | Persisted | Nothing written |
 | Post-turn reviewer, nudges | Run | Skipped |
 | Approvals | Supervised agents prompt | Forced off |

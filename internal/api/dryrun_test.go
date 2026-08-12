@@ -101,6 +101,54 @@ func TestDryRunSchedule_Success(t *testing.T) {
 	}
 }
 
+// capturingProvider answers like mockProvider but keeps every request, so a
+// test can assert on what the engine actually sent rather than only on the
+// transcript it rendered afterwards.
+type capturingProvider struct {
+	requests []llm.ChatRequest
+}
+
+func (c *capturingProvider) Name() string { return "mock" }
+func (c *capturingProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.requests = append(c.requests, req)
+	return &llm.ChatResponse{
+		Content:      "Hello from mock!",
+		TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+		Model:        "test-model",
+		FinishReason: "stop",
+	}, nil
+}
+func (c *capturingProvider) HealthCheck(_ context.Context) error { return nil }
+
+// The transcript's Prompt field is built from the message the handler made, so
+// it reports the intent either way. What it cannot show is whether the model
+// was ever told — and a preview that runs the agent against an empty prompt
+// measures nothing.
+func TestDryRunSchedule_SendsTheFireHeaderToTheModel(t *testing.T) {
+	provider := &capturingProvider{}
+	deps := testDepsWithProvider(provider)
+	registerTestSchedule(t, deps, "nightly")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := postDryRun(t, srv, "/api/v1/schedules/nightly/dry-run", `{"as_of":"2026-07-06T10:00:00Z"}`, "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	prompt := decodeTranscript(t, rec).Prompt
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider received %d requests, want 1", len(provider.requests))
+	}
+	msgs := provider.requests[0].Messages
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" {
+		t.Fatalf("last wire message role = %q, want user; messages: %d", last.Role, len(msgs))
+	}
+	if last.Content != prompt {
+		t.Errorf("model received %q, want the transcript's prompt %q", last.Content, prompt)
+	}
+}
+
 func TestDryRunSchedule_PersistsNothing(t *testing.T) {
 	deps := testDeps()
 	registerTestSchedule(t, deps, "nightly")

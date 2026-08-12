@@ -28,6 +28,14 @@ type policyToolArgs struct {
 // report real handler invocations.
 func newPolicyTestEngine(t *testing.T, responses []*llm.ChatResponse, tier string) (*Engine, *SQLiteMemoryStore, *atomic.Int64, *atomic.Int64) {
 	t.Helper()
+	return newPolicyTestEngineWithProvider(t, &sequentialProvider{responses: responses}, tier)
+}
+
+// newPolicyTestEngineWithProvider is newPolicyTestEngine with the LLM provider
+// supplied by the caller, for tests that assert on the request the engine
+// actually put on the wire rather than only on what came back.
+func newPolicyTestEngineWithProvider(t *testing.T, provider llm.Provider, tier string) (*Engine, *SQLiteMemoryStore, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
 
 	var reads, writes atomic.Int64
 	server := mcp.NewServer(&mcp.Implementation{Name: "policy-server", Version: "v1"}, nil)
@@ -68,7 +76,7 @@ func newPolicyTestEngine(t *testing.T, responses []*llm.ChatResponse, tier strin
 
 	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 10.0}, nil)
 	router := llm.NewRouter("mock", "test-model", costTracker)
-	router.RegisterProvider(&sequentialProvider{responses: responses})
+	router.RegisterProvider(provider)
 
 	permissions, err := security.NewPermissionEngine(tier)
 	if err != nil {
@@ -133,6 +141,125 @@ func TestDryRun_SuppressesWritesAndExecutesReads(t *testing.T) {
 	}
 	if result.Response != "all done" {
 		t.Errorf("Response = %q, want %q", result.Response, "all done")
+	}
+}
+
+// firstRequest returns the first ChatRequest the provider received, which is
+// the one carrying the turn's assembled context.
+func firstRequest(t *testing.T, p *capturingProvider) llm.ChatRequest {
+	t.Helper()
+	if len(p.requests) == 0 {
+		t.Fatal("provider received no requests")
+	}
+	return p.requests[0]
+}
+
+// countContent reports how many messages carry exactly the given content.
+func countContent(messages []llm.Message, content string) int {
+	n := 0
+	for _, m := range messages {
+		if m.Content == content {
+			n++
+		}
+	}
+	return n
+}
+
+func TestDryRun_SendsTheTriggerMessageToTheModel(t *testing.T) {
+	// A live turn's message reaches the model only because it is persisted and
+	// read straight back as history. A policy turn persists nothing and loads no
+	// history, so without an explicit hand-off the request is a system prompt
+	// and nothing else — and a model given no prompt invents one, which is what
+	// made a scheduled github-trending preview answer a question about creating
+	// skills that nobody asked.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	const trigger = "[Scheduled: daily-github-trending | 2026-07-06T10:00:00+10:00 Australia/Sydney | 2026-W28]"
+	if _, err := e.DryRun(context.Background(), adapter.IncomingMessage{
+		Text:        trigger,
+		SkillName:   "daily-github-trending",
+		IsScheduled: true,
+	}, dryRunPolicy()); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	msgs := firstRequest(t, provider).Messages
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" || last.Content != trigger {
+		t.Errorf("last wire message = {%s, %q}, want {user, %q}", last.Role, last.Content, trigger)
+	}
+	if n := countContent(msgs, trigger); n != 1 {
+		t.Errorf("trigger appeared %d times in the request, want exactly 1", n)
+	}
+}
+
+func TestDryRun_HistoryFromPrecedesTheCurrentTurn(t *testing.T) {
+	// HistoryFrom is the context *before* the turn, so borrowed messages come
+	// first and the message being answered stays last. Getting this backwards
+	// would ask the model to answer the borrowed conversation's final message.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, store, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	ctx := context.Background()
+	if err := store.GetOrCreateConversationByID(ctx, "chan:main", "telegram", "42"); err != nil {
+		t.Fatalf("GetOrCreateConversationByID: %v", err)
+	}
+	for _, m := range []StoredMessage{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	} {
+		if _, err := store.AddMessage(ctx, "chan:main", m); err != nil {
+			t.Fatalf("AddMessage: %v", err)
+		}
+	}
+
+	policy := dryRunPolicy()
+	policy.HistoryFrom = "chan:main"
+	if _, err := e.DryRun(ctx, adapter.IncomingMessage{Text: "and now?"}, policy); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	msgs := firstRequest(t, provider).Messages
+	if len(msgs) != 4 {
+		t.Fatalf("request carried %d messages, want 4 (system + 2 borrowed + the turn): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "system" {
+		t.Errorf("message 0 role = %q, want system", msgs[0].Role)
+	}
+	// The two borrowed messages share a created_at to the second, so their
+	// relative order is not the point — that they precede the turn is.
+	for _, want := range []string{"earlier question", "earlier answer"} {
+		if n := countContent(msgs[1:3], want); n != 1 {
+			t.Errorf("borrowed message %q appeared %d times before the turn, want 1", want, n)
+		}
+	}
+	if last := msgs[3]; last.Role != "user" || last.Content != "and now?" {
+		t.Errorf("last message = {%s, %q}, want {user, \"and now?\"}", last.Role, last.Content)
+	}
+}
+
+func TestLiveTurn_SendsTheUserMessageExactlyOnce(t *testing.T) {
+	// The live path reads its user message back out of storage, so the explicit
+	// hand-off must stay off there or every live turn would send it twice.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "hi", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	if _, err := e.Chat(context.Background(), adapter.IncomingMessage{
+		Adapter: "api", ExternalID: "u1", Text: "hello",
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	msgs := firstRequest(t, provider).Messages
+	if n := countContent(msgs, "hello"); n != 1 {
+		t.Errorf("live request carried the user message %d times, want exactly 1: %+v", n, msgs)
 	}
 }
 

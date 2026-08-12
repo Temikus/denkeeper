@@ -1299,7 +1299,17 @@ func (e *Engine) prepareTurn(ctx context.Context, msg adapter.IncomingMessage, p
 	// per turn means skill edits (CRUD copies whole skill.Skill values) take
 	// effect on the next turn with no hot-reload plumbing.
 	prep.budget = e.resolveToolBudget(ctx, prep.sysResult.matchedSkills, msg)
-	prep.llmMessages = e.assembleMessages(prep.sysResult.prompt, history, truncated)
+
+	// A live turn's message reaches the model as the last history entry: it was
+	// stored above, so loading history reads it straight back. A policy turn
+	// stores nothing and defaults to no history at all, so it has to be handed
+	// over explicitly — otherwise the model is asked to answer a prompt it was
+	// never shown and invents one to fill the gap.
+	currentTurn := ""
+	if policy.active() {
+		currentTurn = msg.Text
+	}
+	prep.llmMessages = e.assembleMessages(prep.sysResult.prompt, history, truncated, currentTurn)
 	return prep, nil
 }
 
@@ -1347,10 +1357,15 @@ func (e *Engine) loadTurnHistory(ctx context.Context, convID string, policy *Exe
 	return history, truncated, nil
 }
 
-// assembleMessages builds the LLM message list from the system prompt and the
-// history window.
-func (e *Engine) assembleMessages(prompt string, history []StoredMessage, truncated bool) []llm.Message {
-	llmMessages := make([]llm.Message, 0, len(history)+2)
+// assembleMessages builds the LLM message list from the system prompt, the
+// history window and the current turn.
+//
+// currentTurn is set only when history cannot already carry the message being
+// answered — see prepareTurn. Appending it here rather than folding it into
+// history is what keeps it last even when a policy turn borrows context from
+// another conversation via ExecPolicy.HistoryFrom.
+func (e *Engine) assembleMessages(prompt string, history []StoredMessage, truncated bool, currentTurn string) []llm.Message {
+	llmMessages := make([]llm.Message, 0, len(history)+3)
 	llmMessages = append(llmMessages, llm.Message{Role: "system", Content: prompt})
 	if truncated {
 		llmMessages = append(llmMessages, llm.Message{
@@ -1360,6 +1375,9 @@ func (e *Engine) assembleMessages(prompt string, history []StoredMessage, trunca
 	}
 	for _, h := range history {
 		llmMessages = append(llmMessages, llm.Message{Role: h.Role, Content: h.Content, ReasoningContent: h.ReasoningContent})
+	}
+	if currentTurn != "" {
+		llmMessages = append(llmMessages, llm.Message{Role: "user", Content: currentTurn})
 	}
 	return llmMessages
 }

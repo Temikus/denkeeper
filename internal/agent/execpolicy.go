@@ -70,7 +70,10 @@ type ExecPolicy struct {
 	// date-deterministic. Zero means "now".
 	AsOf time.Time
 	// HistoryFrom names a conversation whose recent messages are loaded
-	// read-only as context. Empty means a fresh turn with no history.
+	// read-only as the context *preceding* this turn. Empty means a fresh turn
+	// with no history. The message being answered is always appended after it,
+	// so a caller replaying a stored conversation points here at the messages
+	// before the one it re-runs, not at the whole thing.
 	HistoryFrom string
 	// AuditMode is AuditFull (default) or AuditSummary.
 	AuditMode string
