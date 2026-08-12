@@ -37,7 +37,8 @@
       const [skillsRes, agentsRes, cfg] = await Promise.all([
         api.skills().catch(() => []),
         api.agents().catch(() => []),
-        // Only used to label the scheduled-run fire time; a miss is cosmetic.
+        // The zone the scheduled-run fire time is picked in, so a miss falls
+        // back to UTC rather than to the browser's zone.
         api.serverConfig().catch(() => null),
       ])
       skills = skillsRes || []

@@ -22,7 +22,6 @@
   let mode = $state('')
   let message = $state('')
   let args = $state('')
-  let asOf = $state('')
 
   // Mirrors the server's inference so the UI never disagrees with what it is
   // about to ask for.
@@ -36,19 +35,93 @@
     { id: 'command', label: 'As a command', disabled: !command },
   ])
 
-  function fireTime() {
-    return asOf ? new Date(asOf) : new Date()
+  // ---- Fire time ---------------------------------------------------------
+  //
+  // Every clock calculation below runs in the *agent's* zone, not the
+  // browser's: that is the zone the field is labelled with, the zone the
+  // scheduled header is stamped in, and the zone whose midnight decides which
+  // dated key the skill writes.
+
+  // An unresolvable zone would throw on every render, so a bad [api] timezone
+  // degrades to UTC instead of blanking the panel.
+  function resolveZone(tz) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz })
+      return tz
+    } catch {
+      return 'UTC'
+    }
   }
 
-  function isoWeek(d) {
-    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const zone = $derived(resolveZone(timezone))
+
+  // Wall-clock parts of an instant, as that zone reads them.
+  function zoneParts(d, tz) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(d)
+    const p = {}
+    for (const { type, value } of parts) p[type] = value
+    return p
+  }
+
+  function nowIn(tz) {
+    const p = zoneParts(new Date(), tz)
+    return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` }
+  }
+
+  // Minutes east of UTC at a given instant — read back off the formatted wall
+  // time, so DST is handled without a table.
+  function zoneOffset(d, tz) {
+    const p = zoneParts(d, tz)
+    const wall = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second)
+    return (wall - Math.floor(d.getTime() / 1000) * 1000) / 60000
+  }
+
+  // The instant a wall time in `tz` names. Solved twice because the first pass
+  // uses the offset in effect at the wrong instant — which only differs within
+  // an hour of a DST change, and the second pass lands the right side of it.
+  function instantIn(date, time, tz) {
+    const [y, mo, da] = date.split('-').map(Number)
+    const [h, mi] = time.split(':').map(Number)
+    const wall = Date.UTC(y, mo - 1, da, h, mi)
+    const first = wall - zoneOffset(new Date(wall), tz) * 60000
+    return new Date(wall - zoneOffset(new Date(first), tz) * 60000)
+  }
+
+  // Split across two native controls rather than one datetime-local: several
+  // browsers open a date-only popover for datetime-local, leaving the time half
+  // typable but not pickable. Defaults to now so the common case — preview this
+  // as if it fired right now — needs no input at all.
+  // A deliberate one-shot read: the default is "now, when you opened this",
+  // and the panel only mounts once the config that carries the zone has loaded.
+  // svelte-ignore state_referenced_locally
+  const initial = nowIn(resolveZone(timezone))
+  let asOfDate = $state(initial.date)
+  let asOfTime = $state(initial.time)
+
+  function resetToNow() {
+    const n = nowIn(zone)
+    asOfDate = n.date
+    asOfTime = n.time
+  }
+
+  // Both halves are required: browsers let either be cleared, and a half-filled
+  // pair means "unpinned", which is the server's own default.
+  const pinned = $derived(!!asOfDate && !!asOfTime)
+  const fireTime = $derived(pinned ? instantIn(asOfDate, asOfTime, zone) : new Date())
+
+  function isoWeek(y, m, d) {
+    const t = new Date(Date.UTC(y, m - 1, d))
     t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7))
     const start = new Date(Date.UTC(t.getUTCFullYear(), 0, 1))
     return [t.getUTCFullYear(), Math.ceil(((t - start) / 86400000 + 1) / 7)]
   }
 
-  function offset(d) {
-    const m = -d.getTimezoneOffset()
+  function offset(d, tz) {
+    const m = zoneOffset(d, tz)
     const sign = m >= 0 ? '+' : '-'
     const p = n => String(Math.floor(Math.abs(n))).padStart(2, '0')
     return `${sign}${p(m / 60)}:${p(m % 60)}`
@@ -57,11 +130,10 @@
   // Rendered client-side purely so the user can see what will be sent before
   // spending tokens; the server builds the real one via FormatScheduledText.
   function scheduledHeader() {
-    const d = fireTime()
-    const p = n => String(n).padStart(2, '0')
-    const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T` +
-      `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${offset(d)}`
-    const [y, w] = isoWeek(d)
+    const p = zoneParts(fireTime, zone)
+    const stamp = `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}` +
+      offset(fireTime, zone)
+    const [y, w] = isoWeek(+p.year, +p.month, +p.day)
     return `[Scheduled: ${skill.name} | ${stamp} ${timezone} | ${y}-W${String(w).padStart(2, '0')}]`
   }
 
@@ -82,7 +154,7 @@
       mode: effectiveMode,
       ...(effectiveMode === 'message' ? { message } : {}),
       ...(effectiveMode === 'command' && args.trim() ? { args: args.trim() } : {}),
-      ...(asOf ? { as_of: new Date(asOf).toISOString() } : {}),
+      ...(pinned ? { as_of: fireTime.toISOString() } : {}),
     })
   }
 </script>
@@ -108,8 +180,15 @@
 
   {#if effectiveMode === 'schedule'}
     <div class="row">
-      <label class="row-label" for="dry-run-asof">Fire time</label>
-      <input id="dry-run-asof" type="datetime-local" bind:value={asOf} />
+      <label class="row-label" for="dry-run-asof-date">Fire time</label>
+      <div class="datetime">
+        <input id="dry-run-asof-date" type="date" bind:value={asOfDate}
+          aria-label="Fire date" />
+        <input id="dry-run-asof-time" type="time" bind:value={asOfTime}
+          aria-label="Fire time of day" />
+        <button class="btn-sm" onclick={resetToNow}
+          title="Reset to the current time in {timezone}">Now</button>
+      </div>
       <span class="hint">{timezone} &middot; pins dated keys the skill writes</span>
     </div>
   {:else if effectiveMode === 'command'}
@@ -166,6 +245,19 @@
 
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .row-label { font-size: 12px; color: var(--text-muted); }
+
+  .datetime { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .datetime input {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    padding: 6px 10px; font-size: 13px; font-family: inherit;
+  }
+  .datetime input:focus { outline: none; border-color: var(--accent); }
+  /* Native pickers draw their own chrome — tell them which theme they are in,
+     or the popover and its indicator icon come back light on a dark page. */
+  .datetime input { color-scheme: light; }
+  :global(:root.dark) .datetime input { color-scheme: dark; }
+  .datetime .btn-sm { margin-right: 0; }
 
   .command-row {
     display: flex; align-items: stretch;
