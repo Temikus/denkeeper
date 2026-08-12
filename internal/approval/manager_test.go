@@ -278,14 +278,18 @@ func TestManager_WaitForResolution_Approved(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	// Approve in a goroutine after a brief delay so WaitForResolution
-	// registers its waiter channel first (avoids a dropped notification).
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		_, _ = m.Resolve(ctx, req.ID, true, "operator")
-	}()
+	// Approve only once WaitForResolution has registered its waiter channel,
+	// otherwise the notification is dropped and the wait never returns.
+	resolveWhenWaiting(t, m, req.ID, func() {
+		if _, err := m.Resolve(ctx, req.ID, true, "operator"); err != nil {
+			t.Errorf("Resolve: %v", err)
+		}
+	})
 
-	status := m.WaitForResolution(ctx, req.ID)
+	waitCtx, cancel := context.WithTimeout(ctx, waiterTimeout)
+	defer cancel()
+
+	status := m.WaitForResolution(waitCtx, req.ID)
 	if status != StatusApproved {
 		t.Errorf("WaitForResolution = %q, want %q", status, StatusApproved)
 	}
@@ -303,12 +307,16 @@ func TestManager_WaitForResolution_Denied(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		_, _ = m.Resolve(ctx, req.ID, false, "operator")
-	}()
+	resolveWhenWaiting(t, m, req.ID, func() {
+		if _, err := m.Resolve(ctx, req.ID, false, "operator"); err != nil {
+			t.Errorf("Resolve: %v", err)
+		}
+	})
 
-	status := m.WaitForResolution(ctx, req.ID)
+	waitCtx, cancel := context.WithTimeout(ctx, waiterTimeout)
+	defer cancel()
+
+	status := m.WaitForResolution(waitCtx, req.ID)
 	if status != StatusDenied {
 		t.Errorf("WaitForResolution = %q, want %q", status, StatusDenied)
 	}
@@ -346,12 +354,18 @@ func TestManager_WaitForResolution_ViaCallback(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	// Resolve via callback (simulates Telegram button press).
-	go func() {
-		_, _ = m.ResolveByCallback(ctx, req.CallbackData+":approve", "user-123")
-	}()
+	// Resolve via callback (simulates Telegram button press) once the waiter
+	// channel exists.
+	resolveWhenWaiting(t, m, req.ID, func() {
+		if _, err := m.ResolveByCallback(ctx, req.CallbackData+":approve", "user-123"); err != nil {
+			t.Errorf("ResolveByCallback: %v", err)
+		}
+	})
 
-	status := m.WaitForResolution(ctx, req.ID)
+	waitCtx, cancel := context.WithTimeout(ctx, waiterTimeout)
+	defer cancel()
+
+	status := m.WaitForResolution(waitCtx, req.ID)
 	if status != StatusApproved {
 		t.Errorf("WaitForResolution via callback = %q, want %q", status, StatusApproved)
 	}
@@ -545,4 +559,54 @@ func resolveAfter(t *testing.T, m *Manager, approve bool, delay time.Duration) {
 			}
 		}
 	}()
+}
+
+// waiterTimeout bounds the handshake helpers below. It is a safety net, not a
+// delay: on the happy path the waiter shows up within a poll or two.
+const waiterTimeout = 5 * time.Second
+
+// resolveWhenWaiting calls resolve in a goroutine, but not before
+// WaitForResolution has registered its waiter channel for id.
+//
+// WaitForResolution creates the channel that notifyWaiterWithErr delivers to,
+// and that delivery is a non-blocking send guarded by a map lookup: a
+// resolution landing before registration is dropped, and the waiter then blocks
+// until the go test timeout kills the whole run. Sleeping first only narrows
+// that window, so wait for the registration itself. (These tests cannot use
+// SubmitAndWait, which pre-registers its waiter in submit — WaitForResolution
+// is the thing under test.)
+func resolveWhenWaiting(t *testing.T, m *Manager, id string, resolve func()) {
+	t.Helper()
+
+	done := make(chan struct{})
+	// Hold the test open until the goroutine returns, so neither the resolve
+	// closure nor the error below can log after the test completes.
+	t.Cleanup(func() { <-done })
+
+	go func() {
+		defer close(done)
+		if !waitForWaiter(m, id, waiterTimeout) {
+			t.Errorf("no waiter registered for %q within %s", id, waiterTimeout)
+			return
+		}
+		resolve()
+	}()
+}
+
+// waitForWaiter reports whether a waiter channel for id is registered within
+// timeout.
+func waitForWaiter(m *Manager, id string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		m.waiterMu.Lock()
+		_, ok := m.waiters[id]
+		m.waiterMu.Unlock()
+		if ok {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
