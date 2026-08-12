@@ -71,14 +71,7 @@ func testConfig(keys ...config.APIKeyConfig) config.APIConfig {
 
 // testDeps builds a minimal Deps with real components suitable for testing.
 func testDeps() Deps {
-	logger := testLogger()
-	mem, _ := agent.NewInMemoryStore()
-	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
-
-	// Build a minimal "default" engine with a mock LLM provider.
-	perms, _ := security.NewPermissionEngine("supervised")
-	router := llm.NewRouter("mock", "test-model", costTracker)
-	router.RegisterProvider(&mockProvider{
+	return testDepsWithProvider(&mockProvider{
 		response: &llm.ChatResponse{
 			Content:      "Hello from mock!",
 			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
@@ -86,6 +79,20 @@ func testDeps() Deps {
 			FinishReason: "stop",
 		},
 	})
+}
+
+// testDepsWithProvider is testDeps with the LLM provider supplied by the
+// caller, for tests that assert on the request the engine put on the wire
+// rather than only on the response that came back.
+func testDepsWithProvider(provider llm.Provider) Deps {
+	logger := testLogger()
+	mem, _ := agent.NewInMemoryStore()
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
+
+	// Build a minimal "default" engine with a mock LLM provider.
+	perms, _ := security.NewPermissionEngine("supervised")
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(provider)
 	approvalStore, _ := approval.NewInMemoryStore()
 	approvalMgr := approval.NewManager(approvalStore, logger)
 
