@@ -60,6 +60,79 @@ describe('SkillInvocation', () => {
     expect(outgoing).toMatch(/\d{4}-W\d{2}\]$/)
   })
 
+  // Empty defaults made the common case — "run this as if it fired now" — an
+  // act of typing, and left the header preview claiming a time nothing sent.
+  test('fire time defaults to now in the agent timezone', () => {
+    render(SkillInvocation, {
+      props: { skill: scheduled, timezone: 'Australia/Sydney', onrun: vi.fn() },
+    })
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Australia/Sydney', hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(new Date()).reduce((a, p) => ({ ...a, [p.type]: p.value }), {})
+
+    expect(screen.getByLabelText('Fire date')).toHaveValue(
+      `${parts.year}-${parts.month}-${parts.day}`)
+    expect(screen.getByLabelText('Fire time of day')).toHaveValue(
+      `${parts.hour}:${parts.minute}`)
+  })
+
+  // datetime-local opens a date-only popover in several browsers, so the time
+  // was typable but not pickable. Two controls, both with a native picker.
+  test('the time of day is its own control, and moves the previewed header', async () => {
+    const { container } = render(SkillInvocation, {
+      props: { skill: scheduled, timezone: 'Australia/Sydney', onrun: vi.fn() },
+    })
+
+    await fireEvent.input(screen.getByLabelText('Fire date'), { target: { value: '2026-08-11' } })
+    await fireEvent.input(screen.getByLabelText('Fire time of day'), { target: { value: '01:00' } })
+
+    // Stamped in the agent's zone (+10:00 in August), not the browser's — the
+    // zone the label names is the one whose midnight rolls the dated key.
+    expect(container.querySelector('.outgoing-body')).toHaveTextContent(
+      '[Scheduled: hello | 2026-08-11T01:00:00+10:00 Australia/Sydney | 2026-W33]')
+
+    await fireEvent.input(screen.getByLabelText('Fire time of day'), { target: { value: '23:30' } })
+    expect(container.querySelector('.outgoing-body')).toHaveTextContent('2026-08-11T23:30:00+10:00')
+  })
+
+  test('the chosen fire time is sent as the instant it names in that zone', async () => {
+    const onrun = vi.fn()
+    render(SkillInvocation, {
+      props: { skill: scheduled, timezone: 'Australia/Sydney', onrun },
+    })
+
+    await fireEvent.input(screen.getByLabelText('Fire date'), { target: { value: '2026-08-11' } })
+    await fireEvent.input(screen.getByLabelText('Fire time of day'), { target: { value: '01:00' } })
+    await fireEvent.click(screen.getByText('Run'))
+
+    expect(onrun).toHaveBeenCalledWith(expect.objectContaining({
+      as_of: '2026-08-10T15:00:00.000Z',
+    }))
+  })
+
+  // Browsers let either half be cleared; a half-filled pair is not a time.
+  test('clearing the date unpins the clock instead of sending a partial one', async () => {
+    const onrun = vi.fn()
+    render(SkillInvocation, { props: { skill: scheduled, timezone: 'UTC', onrun } })
+
+    await fireEvent.input(screen.getByLabelText('Fire date'), { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Run'))
+
+    expect(onrun.mock.calls[0][0].as_of).toBeUndefined()
+  })
+
+  test('Now resets a fiddled-with fire time', async () => {
+    render(SkillInvocation, { props: { skill: scheduled, timezone: 'UTC', onrun: vi.fn() } })
+
+    await fireEvent.input(screen.getByLabelText('Fire date'), { target: { value: '2020-01-01' } })
+    await fireEvent.click(screen.getByText('Now'))
+
+    const today = new Date().toISOString().slice(0, 10)
+    expect(screen.getByLabelText('Fire date')).toHaveValue(today)
+  })
+
   test('shows the command with its arguments as it will be sent', async () => {
     const { container } = render(SkillInvocation, { props: { skill: commanded, onrun: vi.fn() } })
 
