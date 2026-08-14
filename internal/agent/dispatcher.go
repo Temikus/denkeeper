@@ -863,12 +863,27 @@ func (d *Dispatcher) handleResumeCommand(ctx context.Context, msg adapter.Incomi
 	d.sendControlResponse(ctx, msg, "Processing resumed.")
 }
 
-// executePanic performs the panic: sets state, cancels all in-flight, calls hook.
+// executePanic performs the panic: sets state, asks every engine to stop its
+// in-flight turns at the next step boundary, cancels all in-flight contexts,
+// calls the hook.
 func (d *Dispatcher) executePanic() {
 	d.panicMu.Lock()
 	d.panicked = true
 	d.panicTime = time.Now()
 	d.panicMu.Unlock()
+
+	// Raise the cooperative stop BEFORE cancelling contexts: a turn that sees
+	// the cancellation first must already find the flag set when it reaches its
+	// next boundary. This reaches every in-flight turn on these engines — WS,
+	// SSE, REST, MCP-chat and scheduled turns included, none of which is
+	// registered in inFlight and so none of which the sweep below can touch.
+	// See design/plans/6-step-boundary-stop.md (stage 1) — the coverage table
+	// there is the authority on what each entry path observes.
+	d.mu.RLock()
+	for _, e := range d.agents {
+		e.RequestStop()
+	}
+	d.mu.RUnlock()
 
 	d.inFlightMu.Lock()
 	for key, req := range d.inFlight {

@@ -151,10 +151,15 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 // it; a zero turnRun is fine for the tool-execution helpers (which read only
 // policy) and will panic loudly if it ever reaches the router, which is the
 // failure mode we want for a construction bug.
+// stopGen is the engine's stop generation as it was when the turn began; the
+// loop compares it against the live value at every step boundary (see
+// Engine.RequestStop). Zero on a bare turnRun, which matches a fresh engine and
+// so reads as "no stop requested" for the tool-execution helpers.
 type turnRun struct {
-	budget turnToolBudget
-	policy *ExecPolicy
-	router *llm.Router
+	budget  turnToolBudget
+	policy  *ExecPolicy
+	router  *llm.Router
+	stopGen uint64
 }
 
 // TurnResult is everything a caller needs from one turn executed outside the
