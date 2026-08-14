@@ -270,6 +270,7 @@ Global MCP settings.
     auto_restart = true              # auto-restart crashed servers
     max_restart_attempts = 3         # failure threshold before giving up
     restart_cooldown = "5m"          # cooldown before reset
+    drain_timeout = "35s"            # wait for in-flight tool calls before teardown closes the transport
     health_fail_threshold = 3        # consecutive probe failures before remote servers emit health_fail audit
     init_retry_attempts = 5          # initial connection retries
     init_retry_backoff = "2s"        # backoff between retries

@@ -53,6 +53,21 @@ func init() {
 		metric.WithUnit("s"))
 }
 
+// drainState is a serverConn's teardown lifecycle. A conn starts live, moves to
+// draining for the duration of teardown phase 2 (waiting out in-flight calls),
+// and ends closed once its transport is shut. It never moves backwards — a torn
+// down conn is replaced by a fresh one, never revived.
+//
+// See UnregisterServer for the two-phase teardown this state drives, and the
+// finding it comes from.
+type drainState uint8
+
+const (
+	drainStateLive     drainState = iota // accepting new tool calls
+	drainStateDraining                   // teardown phase 2 in progress
+	drainStateClosed                     // transport closed
+)
+
 // serverConn tracks a connected MCP server subprocess and its session.
 type serverConn struct {
 	name      string
@@ -62,6 +77,15 @@ type serverConn struct {
 	url       string            // remote server URL (SSE only)
 	cfg       config.ToolConfig // stored for restart
 	session   *mcp.ClientSession
+
+	// Teardown state, guarded by drainMu rather than Manager.mu: Execute must
+	// admit a call (and bump the counter) while holding only m.mu.RLock, and
+	// teardown phase 2 must wait for the counter to reach zero while holding no
+	// manager lock at all. Lock order is always m.mu → drainMu, never reverse.
+	drainMu   sync.Mutex
+	drain     drainState
+	inFlight  int           // tool calls currently executing against this conn
+	drainDone chan struct{} // non-nil while draining with calls outstanding; closed at zero
 
 	// Health monitoring state.
 	connectedAt   time.Time // when the server was last successfully connected
@@ -92,6 +116,80 @@ type serverConn struct {
 
 	// OAuth state (nil for non-OAuth tools).
 	oauthHandler oauthHandler
+}
+
+// ErrServerDraining is returned when a tool call targets an MCP server that is
+// being torn down (removed, disabled, restarted, or reconfigured). The refusal
+// is immediate — the model sees it and adapts, exactly as it does for an
+// unknown tool. Callers classify with errors.Is, mirroring ErrToolNotFound.
+var ErrServerDraining = errors.New("server is shutting down")
+
+// enterCall admits a tool call and records it as in flight. It returns false if
+// the server is no longer live, in which case the caller must refuse the call
+// with ErrServerDraining and must NOT call leaveCall.
+func (sc *serverConn) enterCall() bool {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	if sc.drain != drainStateLive {
+		return false
+	}
+	sc.inFlight++
+	return true
+}
+
+// leaveCall retires an admitted tool call, releasing a waiting drain once the
+// last one finishes.
+func (sc *serverConn) leaveCall() {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	sc.inFlight--
+	if sc.inFlight == 0 && sc.drainDone != nil {
+		close(sc.drainDone)
+		sc.drainDone = nil
+	}
+}
+
+// beginDrain is teardown phase 1: it stops the conn admitting new calls and
+// returns a channel closed once the in-flight count reaches zero, along with
+// the count at this instant. The channel is already closed when nothing is in
+// flight, so the common case costs no waiting. Idempotent — a conn that is
+// already draining or closed keeps its state.
+func (sc *serverConn) beginDrain() (<-chan struct{}, int) {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	if sc.drain == drainStateLive {
+		sc.drain = drainStateDraining
+	}
+	if sc.inFlight == 0 {
+		done := make(chan struct{})
+		close(done)
+		return done, 0
+	}
+	if sc.drainDone == nil {
+		sc.drainDone = make(chan struct{})
+	}
+	return sc.drainDone, sc.inFlight
+}
+
+// finishDrain marks the conn closed, ending the "draining" status window.
+func (sc *serverConn) finishDrain() {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	sc.drain = drainStateClosed
+}
+
+// drainStatus reports the conn's teardown state.
+func (sc *serverConn) drainStatus() drainState {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	return sc.drain
+}
+
+// inFlightCount reports how many tool calls are currently executing.
+func (sc *serverConn) inFlightCount() int {
+	sc.drainMu.Lock()
+	defer sc.drainMu.Unlock()
+	return sc.inFlight
 }
 
 // oauthHandler is an internal interface satisfied by oauth.Handler.
@@ -136,7 +234,7 @@ type ServerStatus struct {
 	Args           []string         `json:"-"`          // excluded from JSON (may contain secrets)
 	ArgsCount      int              `json:"args_count"` // safe count for display
 	ToolNames      []string         `json:"tool_names"`
-	Status         string           `json:"status"` // "connected", "restarting", "error", "disabled"
+	Status         string           `json:"status"` // "connected", "connecting", "draining", "error", "disabled", "config_error", "pending_auth"
 	Transport      string           `json:"transport,omitempty"`
 	URL            string           `json:"url,omitempty"` // redacted
 	RestartCount   int              `json:"restart_count,omitempty"`
@@ -466,16 +564,26 @@ func (m *Manager) registerSSE(ctx context.Context, name string, cfg config.ToolC
 	}
 
 	m.mu.Lock()
-	// Close the old session if we're overwriting (e.g. OAuth reconnect).
-	if old, exists := m.servers[name]; exists {
-		m.disabledCount -= len(old.disabledSet)
-		if old.session != nil {
-			_ = old.session.Close()
-		}
+	// Retire the old session if we're overwriting (e.g. OAuth reconnect).
+	var old *serverConn
+	var oldDone <-chan struct{}
+	var oldInFlight int
+	if prev, exists := m.servers[name]; exists {
+		m.disabledCount -= len(prev.disabledSet)
+		old = prev
+		oldDone, oldInFlight = old.beginDrain()
 	}
 	m.disabledCount += len(sc.disabledSet)
 	m.servers[name] = sc
 	m.mu.Unlock()
+
+	// Drain and close the replaced session off the lock, and off this
+	// goroutine: a fresh session for this name is already live, so nothing
+	// here waits on the old transport and blocking discovery behind an old
+	// call's drain window would be a pointless stall.
+	if old != nil {
+		go m.drainAndClose(old, oldDone, oldInFlight, m.drainTimeout())
+	}
 
 	return m.discoverTools(ctx, sc)
 }
@@ -875,6 +983,10 @@ func (m *Manager) ToolDescription(toolName string) string {
 // what goes on the wire. A bare name that two servers claim is never guessed
 // at — it returns ErrAmbiguousTool naming the alternatives.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
+	// Admission to the in-flight set is taken under the same read lock that
+	// resolves the server and snapshots its session: teardown phase 1 flips the
+	// conn to draining under the write lock, so an admission decided after the
+	// unlock could let a call slip past a teardown that has already begun.
 	m.mu.RLock()
 	sc, local, resolveErr := m.resolveTool(call.Function.Name)
 	parent := m.parent
@@ -882,9 +994,11 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		serverName string
 		session    *mcp.ClientSession
 		disabled   bool
+		admitted   bool
 	)
 	if resolveErr == nil {
 		serverName, session, disabled = sc.name, sc.session, sc.disabledSet[local]
+		admitted = sc.enterCall()
 	}
 	m.mu.RUnlock()
 
@@ -899,6 +1013,11 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		}
 		return "", resolveErr
 	}
+	if !admitted {
+		return "", fmt.Errorf("tool %q on MCP server %q: %w", call.Function.Name, serverName, ErrServerDraining)
+	}
+	defer sc.leaveCall()
+
 	if disabled {
 		return "", fmt.Errorf("tool %q is disabled", call.Function.Name)
 	}
@@ -1032,17 +1151,52 @@ func (m *Manager) ServerResolvedURL(name string) string {
 	return ""
 }
 
+// defaultDrainTimeout bounds how long teardown waits for in-flight tool calls.
+// Just above the engine's 30s per-tool-call timeout, so a call that is going to
+// complete gets to.
+const defaultDrainTimeout = 35 * time.Second
+
+// shutdownDrainTimeout caps the per-server drain during process shutdown.
+// Shutdown trades a possibly-truncated call for a prompt exit; the ordinary
+// teardown ceiling would make a hung server hold the process open far too long.
+const shutdownDrainTimeout = 5 * time.Second
+
+// drainTimeout returns the configured [mcp] drain_timeout, falling back to
+// defaultDrainTimeout for unset or unparseable values.
+func (m *Manager) drainTimeout() time.Duration {
+	if d, err := time.ParseDuration(m.mcpCfg.DrainTimeout); err == nil && d > 0 {
+		return d
+	}
+	return defaultDrainTimeout
+}
+
 // UnregisterServer stops the MCP server for the given config name,
 // removes its tools from the tool map, and closes the connection.
 // Returns an error if the server is not registered.
+//
+// Teardown is two-phase. Phase 1 runs under the write lock and only unpublishes
+// the server: its tools leave the advertised set and new calls are refused with
+// ErrServerDraining. Phase 2 runs with no manager lock held — it waits out the
+// calls already executing, then closes the transport. The wait matters because
+// the MCP SDK's ClientSession.Close blocks until outgoing calls retire; holding
+// m.mu across it would freeze every other agent's tool calls, the health
+// checker, and the tools API for the whole drain.
+//
+// The two-phase shape follows the drain-before-withdraw teardown model in
+// "A Programming Paradigm for Spatiotemporal Composability" (Shi, Zhang, Cui —
+// https://github.com/cordiverse/paper/blob/main/paper.pdf): a component stops
+// being offered before it is dismantled, and the effects already in flight are
+// allowed to retire under a bounded window rather than being severed.
 func (m *Manager) UnregisterServer(name string) error {
+	// Phase 1: unpublish, fast, under the write lock.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	sc, ok := m.servers[name]
 	if !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("server %q: %w", name, ErrToolNotFound)
 	}
+
+	done, inFlight := sc.beginDrain()
 
 	// Drop this server's contribution and rebuild the advertised projection
 	// from what remains, rather than filtering definitions in place: under a
@@ -1059,17 +1213,57 @@ func (m *Manager) UnregisterServer(name string) error {
 	_, cleared := m.rebuildToolIndex()
 	m.reportClearedCollisions(cleared)
 	m.recomputeDisabledCount()
+	m.mu.Unlock()
 
-	// Best-effort session cleanup. The server is already removed from the map,
-	// so returning an error here would leave callers in an inconsistent state
-	// (entry gone but error returned). Log and move on.
+	// Phase 2: drain, then close — no manager lock held.
+	m.drainAndClose(sc, done, inFlight, m.drainTimeout())
+	return nil
+}
+
+// drainAndClose is teardown phase 2. It waits for the conn's in-flight calls to
+// retire, bounded by timeout, then closes the transport. Must be called with no
+// manager lock held, after beginDrain has already unpublished the server.
+//
+// A ceiling that expires forces the close and emits a single forced_close audit
+// event. Session cleanup is best-effort: the server is already out of the maps,
+// so a close error has nowhere useful to go — log it and move on.
+func (m *Manager) drainAndClose(sc *serverConn, done <-chan struct{}, inFlight int, timeout time.Duration) {
+	if inFlight > 0 {
+		m.logger.Info("draining MCP server before close",
+			"server", sc.name, "in_flight", inFlight, "drain_timeout", timeout)
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			m.forcedClose(sc, timeout)
+		}
+	}
+
 	if sc.session != nil {
 		if err := sc.session.Close(); err != nil {
 			m.logger.Warn("error closing MCP session during unregister",
-				"server", name, "error", err)
+				"server", sc.name, "error", err)
 		}
 	}
-	return nil
+	sc.finishDrain()
+}
+
+// forcedClose records a drain window that expired with calls still running.
+func (m *Manager) forcedClose(sc *serverConn, timeout time.Duration) {
+	remaining := sc.inFlightCount()
+	m.logger.Warn("MCP drain window expired, forcing close",
+		"server", sc.name, "in_flight", remaining, "drain_timeout", timeout)
+	if m.Auditor == nil {
+		return
+	}
+	m.Auditor.Emit(context.Background(), audit.Event{
+		Category: audit.CategoryMCP,
+		Action:   "forced_close",
+		Summary:  fmt.Sprintf("MCP server %s closed with %d call(s) still in flight", sc.name, remaining),
+		Detail: fmt.Sprintf(`{"server":"%s","in_flight":%d,"drain_timeout":"%s"}`,
+			sc.name, remaining, timeout),
+		Status: audit.StatusError,
+		Source: "tool_manager",
+	})
 }
 
 // RestartServer stops and re-registers an MCP server using its stored config.
@@ -1157,26 +1351,33 @@ func (m *Manager) ServerNames() []string {
 // The second return value is false if the server is not registered.
 // Checks the parent manager if the server is not found locally.
 func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
+	// The read lock covers the whole build, not just the lookup. Every
+	// serverConn field buildServerStatus reads — lastError, restartCount,
+	// connectedAt, disabledSet — is written under m.mu's write lock by
+	// handleServerFailure and SetDisabledTools, so building the status after
+	// unlocking races them on the dashboard-polled GET /api/v1/tools path.
+	// oauthHandler.HasToken is an in-memory check that never re-enters m.mu,
+	// so it is safe to call from here.
 	m.mu.RLock()
 	sc, ok := m.servers[name]
 	parent := m.parent
-	// Server-local tool names in discovery order: this is what the disable
-	// controls and [tools.*] disabled_tools are keyed by, and it stays correct
-	// when the advertised name is server-qualified by a collision.
-	var toolNames []string
-	if ok && len(sc.tools) > 0 {
-		toolNames = make([]string, 0, len(sc.tools))
-		for _, td := range sc.tools {
-			toolNames = append(toolNames, td.Function.Name)
-		}
-	}
-	m.mu.RUnlock()
-
 	if !ok {
+		m.mu.RUnlock()
 		if parent != nil {
 			return parent.ServerInfo(name)
 		}
 		return ServerStatus{}, false
+	}
+
+	// Server-local tool names in discovery order: this is what the disable
+	// controls and [tools.*] disabled_tools are keyed by, and it stays correct
+	// when the advertised name is server-qualified by a collision.
+	var toolNames []string
+	if len(sc.tools) > 0 {
+		toolNames = make([]string, 0, len(sc.tools))
+		for _, td := range sc.tools {
+			toolNames = append(toolNames, td.Function.Name)
+		}
 	}
 
 	ss := buildServerStatus(sc, toolNames)
@@ -1192,12 +1393,18 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 			ss.OAuthStatus = &OAuthStatusInfo{NeedsReauth: true}
 		}
 	}
+	m.mu.RUnlock()
 
 	return ss, true
 }
 
 func serverConnStatus(sc *serverConn) string {
 	switch {
+	case sc.drainStatus() == drainStateDraining:
+		// Teardown phase 2: unpublished, waiting out in-flight calls. Wins over
+		// every other state because it describes what is happening right now —
+		// a server torn down after a health failure carries lastError too.
+		return "draining"
 	case sc.userDisabled:
 		return "disabled"
 	case sc.configError != "":
@@ -1289,21 +1496,74 @@ func (m *Manager) SetDisabledTools(serverName string, disabled []string) error {
 }
 
 // Close shuts down all MCP server connections and OAuth handlers.
+//
+// Shutdown follows the same two phases as UnregisterServer — every server is
+// unpublished under one write lock, then drained and closed with no lock held.
+// The drains run concurrently and under a short ceiling, so a process exit
+// costs at most one drain window rather than one per server.
 func (m *Manager) Close() error {
+	type pending struct {
+		sc       *serverConn
+		done     <-chan struct{}
+		inFlight int
+	}
+
+	// Phase 1: unpublish everything. Clear each server's tool list and rebuild
+	// rather than hand-resetting the derived maps: toolMap/owners/localOf/
+	// toolDefs are one projection of serverConn.tools, and resetting a subset
+	// would leave owners and localOf pointing at torn-down conns. The rebuild's
+	// collision reports are dropped on purpose — nothing is reclaiming a name
+	// at shutdown. disabledCount is set directly for the same reason
+	// recomputeDisabledCount is not called: an emptied registry is a known 0,
+	// not drift worth warning about.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	var firstErr error
-	for name, sc := range m.servers {
-		if sc.oauthHandler != nil {
-			sc.oauthHandler.Close()
-		}
-		if sc.session != nil {
-			if err := sc.session.Close(); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("closing MCP server %q: %w", name, err)
+	drains := make([]pending, 0, len(m.servers))
+	for _, sc := range m.servers {
+		done, inFlight := sc.beginDrain()
+		sc.tools = nil
+		drains = append(drains, pending{sc: sc, done: done, inFlight: inFlight})
+	}
+	m.servers = make(map[string]*serverConn)
+	m.discoveryOrder = nil
+	m.rebuildToolIndex()
+	m.disabledCount = 0
+	m.mu.Unlock()
+
+	timeout := min(m.drainTimeout(), shutdownDrainTimeout)
+
+	// Phase 2: drain and close, concurrently, no lock held.
+	var wg sync.WaitGroup
+	errs := make([]error, len(drains))
+	for i, p := range drains {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if p.sc.oauthHandler != nil {
+				p.sc.oauthHandler.Close()
 			}
+			if p.inFlight > 0 {
+				select {
+				case <-p.done:
+				case <-time.After(timeout):
+					m.forcedClose(p.sc, timeout)
+				}
+			}
+			if p.sc.session != nil {
+				if err := p.sc.session.Close(); err != nil {
+					errs[i] = fmt.Errorf("closing MCP server %q: %w", p.sc.name, err)
+				}
+			}
+			p.sc.finishDrain()
+		}()
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return err
 		}
 	}
-	return firstErr
+	return nil
 }
 
 // StartHealthChecker runs a background goroutine that periodically probes MCP
@@ -1359,6 +1619,14 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 		m.mu.RUnlock()
 		if !ok || sc.disabled || sc.userDisabled || sc.configError != "" {
 			// Skip disabled and config-error servers.
+			continue
+		}
+		if sc.drainStatus() == drainStateDraining {
+			// Teardown owns this conn right now. Probing it would fail and kick
+			// off a redundant second teardown of the same server. A *closed*
+			// conn is deliberately not skipped: handleServerFailure re-inserts
+			// one when re-registration fails, relying on the next probe to fail
+			// and retry.
 			continue
 		}
 		// OAuth tools that never completed authorization sit with session==nil

@@ -3469,6 +3469,11 @@ func TestParse_MCPDefaults(t *testing.T) {
 	if cfg.MCP.RestartCooldown != "5m" {
 		t.Errorf("MCP.RestartCooldown = %q, want 5m", cfg.MCP.RestartCooldown)
 	}
+	// Must sit above the engine's 30s per-tool-call timeout so a call that is
+	// going to complete survives a teardown drain.
+	if cfg.MCP.DrainTimeout != "35s" {
+		t.Errorf("MCP.DrainTimeout = %q, want 35s", cfg.MCP.DrainTimeout)
+	}
 }
 
 func TestParse_MCPConfigExplicit(t *testing.T) {
@@ -3536,6 +3541,34 @@ restart_cooldown = "not-a-duration"
 		t.Fatal("expected error for invalid restart_cooldown")
 	}
 	if !strings.Contains(err.Error(), "restart_cooldown") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_MCPDrainTimeoutExplicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+drain_timeout = "90s"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MCP.DrainTimeout != "90s" {
+		t.Errorf("MCP.DrainTimeout = %q, want 90s", cfg.MCP.DrainTimeout)
+	}
+}
+
+func TestParse_MCPInvalidDrainTimeout(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+drain_timeout = "not-a-duration"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid drain_timeout")
+	}
+	if !strings.Contains(err.Error(), "drain_timeout") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

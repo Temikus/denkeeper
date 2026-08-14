@@ -555,6 +555,7 @@
   function statusDot(status) {
     if (status === 'connected') return 'green'
     if (status === 'pending_auth') return 'orange'
+    if (status === 'draining') return 'orange'
     if (status === 'config_error') return 'red'
     if (status === 'error') return 'red'
     if (status === 'disabled') return 'grey'
@@ -566,6 +567,9 @@
     if (t.status === 'error') return 'Error'
     if (t.status === 'disabled') return 'Disabled'
     if (t.status === 'pending_auth') return 'Needs Auth'
+    // Teardown in progress: unpublished, finishing the tool calls already
+    // running before the transport closes.
+    if (t.status === 'draining') return 'Draining'
     if (t.status === 'connected') return 'Connected'
     return t.status
   }
