@@ -15,7 +15,8 @@
 // but an automated reverter that undoes such a revision would oscillate — it
 // must skip them.
 //
-// Inspired by https://github.com/cordiverse/paper/blob/main/paper.pdf.
+// Inspired by "A Programming Paradigm for Spatiotemporal Composability" (Shi,
+// Zhang & Cui): https://github.com/cordiverse/paper/blob/main/paper.pdf
 package skilleffect
 
 import (
