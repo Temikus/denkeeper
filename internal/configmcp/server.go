@@ -58,6 +58,12 @@ type Deps struct {
 	// Required for skill rename support.
 	RemoveSkill func(string) bool
 
+	// SkillWriter performs skill mutations through the undo journal, so each
+	// one can be reverted. Nil = untracked passthrough to the Apply* helpers
+	// (same behaviour, no undo history) — see skillwriter.go for why this is
+	// injected rather than imported.
+	SkillWriter SkillWriter
+
 	// Sched is the shared scheduler instance. If nil, schedule_add is disabled.
 	Sched *scheduler.Scheduler
 

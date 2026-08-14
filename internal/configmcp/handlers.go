@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -436,8 +437,8 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	payload := BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
 	deps := s.deps
-	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillCreate(deps.AgentSkillsDir, deps.AppendSkill, deps.Logger, p, deps.MaxSkillBytes); err != nil {
+	applyFn := approval.ActionFunc(func(ctx context.Context, p string) error {
+		if err := deps.skillWriter().Create(ctx, p); err != nil {
 			return err
 		}
 		if deps.SetSkillOrigin != nil {
@@ -616,8 +617,8 @@ func resolveSkillRename(name string, newName *string) (effectiveName string, isR
 func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename bool, _ string) (approval.ActionFunc, string) {
 	deps := s.deps
 	if isRename {
-		fn := approval.ActionFunc(func(_ context.Context, p string) error {
-			if err := ApplySkillRename(deps.AgentSkillsDir, deps.RemoveSkill, deps.AppendSkill, deps.Logger, oldName, p, deps.MaxSkillBytes); err != nil {
+		fn := approval.ActionFunc(func(ctx context.Context, p string) error {
+			if err := deps.skillWriter().Rename(ctx, oldName, p); err != nil {
 				return err
 			}
 			if deps.BumpSkillPatch != nil {
@@ -630,8 +631,8 @@ func (s *Server) buildSkillUpdateAction(oldName, effectiveName string, isRename 
 		})
 		return fn, fmt.Sprintf("Rename skill: %s → %s", oldName, effectiveName)
 	}
-	fn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, oldName, p, deps.MaxSkillBytes); err != nil {
+	fn := approval.ActionFunc(func(ctx context.Context, p string) error {
+		if err := deps.skillWriter().Update(ctx, oldName, p); err != nil {
 			return err
 		}
 		if deps.BumpSkillPatch != nil {
@@ -694,8 +695,8 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 
 	deps := s.deps
 	skillName := input.Name
-	applyFn := approval.ActionFunc(func(_ context.Context, p string) error {
-		if err := ApplySkillUpdate(deps.AgentSkillsDir, deps.UpdateSkill, deps.Logger, skillName, p, deps.MaxSkillBytes); err != nil {
+	applyFn := approval.ActionFunc(func(ctx context.Context, p string) error {
+		if err := deps.skillWriter().Update(ctx, skillName, p); err != nil {
 			return err
 		}
 		if deps.BumpSkillPatch != nil {
@@ -1225,15 +1226,12 @@ func (s *Server) handleSkillDelete(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	deps := s.deps
-	applyFn := approval.ActionFunc(func(_ context.Context, _ string) error {
-		// Disk-first: remove the file before mutating memory, so a real IO
-		// error leaves the skill intact in memory and on the next reload
-		// (matching create/update/rename's persist-failure semantics).
-		if err := RemoveSkillFile(deps.AgentSkillsDir, input.Name); err != nil {
+	applyFn := approval.ActionFunc(func(ctx context.Context, _ string) error {
+		// Disk-first: the writer removes the file before mutating memory, so a
+		// real IO error leaves the skill intact in memory and on the next
+		// reload (matching create/update/rename's persist-failure semantics).
+		if err := deps.skillWriter().Delete(ctx, input.Name); err != nil {
 			return fmt.Errorf("deleting skill file: %w", err)
-		}
-		if !deps.RemoveSkill(input.Name) {
-			deps.Logger.Info("skill file removed; skill was not present in memory", "name", input.Name)
 		}
 		deps.Logger.Info("skill deleted via config MCP", "name", input.Name)
 		return nil
@@ -1796,6 +1794,60 @@ func writeSkillFileAtomic(root *os.Root, name, payload string) error {
 		return fmt.Errorf("committing skill file: %w", err)
 	}
 	return nil
+}
+
+// ReadSkillFile returns the raw on-disk bytes of "<name>.md" from the agent's
+// skills directory, read through an os.Root so the read is confined to that
+// directory and cannot escape it via traversal or symlink — the same hard
+// boundary the write and remove helpers above sit behind.
+//
+// ok is false (with a nil error) when the file, or the skills directory itself,
+// does not exist. Any other IO failure is returned as an error: callers that
+// journal these bytes as the "state before a mutation" must not mistake an
+// unreadable file for an absent one.
+//
+// The bytes are returned verbatim rather than re-serialized through
+// BuildSkillPayload, so a frontmatter field this build does not know about
+// still survives a round trip through the undo journal.
+func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
+	if err := ValidateSkillName(name); err != nil {
+		return "", false, err
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("opening skills directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	f, err := root.Open(name + ".md")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("opening skill file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", false, fmt.Errorf("reading skill file: %w", err)
+	}
+	return string(data), true, nil
+}
+
+// SkillPayloadFromFile converts raw skill-file bytes back into the payload form
+// the Apply* helpers take, by removing the trailer writeSkillFileAtomic
+// appends. Without it, feeding a file's own bytes back through a write helper
+// would grow the file by one newline each round trip — which is exactly what an
+// undo does when it restores the bytes it captured.
+//
+// The inverse is therefore "what the writer would have written", not a literal
+// byte copy: a hand-authored file with no trailing newline comes back with one.
+func SkillPayloadFromFile(content string) string {
+	return strings.TrimSuffix(content, skillFileTrailer)
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the

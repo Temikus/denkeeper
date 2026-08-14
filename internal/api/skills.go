@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/skilleffect"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,18 @@ func (s *Server) skillMaxBytes() int {
 		return 0
 	}
 	return s.deps.Config.Skills.MaxBytes
+}
+
+// skillWriter returns a writer that journals each mutation before performing
+// it, so a skill change made over REST can be reverted. A memory store without
+// the revision methods — or none at all — yields an untracked passthrough that
+// behaves exactly like the direct write helpers it replaced.
+//
+// Actor is "user": REST is the operator's surface, as opposed to the agent
+// editing its own skills through config MCP.
+func (s *Server) skillWriter(agentName string, e *agent.Engine) *skilleffect.Binding {
+	store, _ := s.deps.Memory.(skilleffect.Store)
+	return skilleffect.New(store, agentName, s.logger).Bind(e, agent.SkillActorUser, s.skillMaxBytes())
 }
 
 // handleGetSkill godoc
@@ -138,7 +152,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 
 	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
-	if err := configmcp.ApplySkillCreate(skillsDir, e.AppendSkill, s.logger, payload, s.skillMaxBytes()); err != nil {
+	if err := s.skillWriter(agentName, e).Create(r.Context(), payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
 		return
 	}
@@ -227,14 +241,15 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 
 	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 
+	writer := s.skillWriter(agentName, e)
 	if isRename {
-		if err := configmcp.ApplySkillRename(skillsDir, e.RemoveSkill, e.AppendSkill, s.logger, skillName, payload, s.skillMaxBytes()); err != nil {
+		if err := writer.Rename(r.Context(), skillName, payload); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("renaming skill: %v", err)})
 			return
 		}
 		s.logger.Info("skill renamed via API", "agent", agentName, "old", skillName, "new", newName)
 	} else {
-		if err := configmcp.ApplySkillUpdate(skillsDir, e.UpdateSkill, s.logger, skillName, payload, s.skillMaxBytes()); err != nil {
+		if err := writer.Update(r.Context(), skillName, payload); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("updating skill: %v", err)})
 			return
 		}
@@ -283,15 +298,14 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disk-first: remove the file before mutating memory, so a real IO error
-	// leaves the skill intact in memory and on the next reload (matching
-	// create/update, which return 500 and leave state unchanged on persist
-	// failure).
-	if err := configmcp.RemoveSkillFile(skillsDir, skillName); err != nil {
+	// Disk-first: the writer removes the file before mutating memory, so a real
+	// IO error leaves the skill intact in memory and on the next reload
+	// (matching create/update, which return 500 and leave state unchanged on
+	// persist failure).
+	if err := s.skillWriter(agentName, e).Delete(r.Context(), skillName); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("deleting skill file: %v", err)})
 		return
 	}
-	e.RemoveSkill(skillName)
 
 	s.logger.Info("skill deleted via API", "agent", agentName, "name", skillName)
 	w.WriteHeader(http.StatusNoContent)
