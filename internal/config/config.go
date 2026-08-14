@@ -704,6 +704,12 @@ type MCPConfig struct {
 	// RestartCooldown is the duration a server must stay connected before its
 	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
 	RestartCooldown string `toml:"restart_cooldown"`
+	// DrainTimeout is how long teardown (remove/disable/restart/reconfigure)
+	// waits for a server's in-flight tool calls to finish before forcing the
+	// transport closed. Defaults to "35s" — just above the engine's 30s
+	// per-tool-call timeout, so a call that is going to complete gets to.
+	// Expiry forces the close and emits a forced_close audit event.
+	DrainTimeout string `toml:"drain_timeout"`
 	// HealthFailThreshold is the number of consecutive health-probe failures
 	// required before a health_fail audit event is emitted for remote
 	// (sse/http) servers, so transient network drops don't pollute the audit
@@ -1343,6 +1349,9 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.RestartCooldown == "" {
 		mcp.RestartCooldown = "5m"
+	}
+	if mcp.DrainTimeout == "" {
+		mcp.DrainTimeout = "35s"
 	}
 	if mcp.HealthFailThreshold == 0 {
 		mcp.HealthFailThreshold = 3
@@ -2763,6 +2772,11 @@ func validateMCP(mcp *MCPConfig) error {
 	if mcp.RestartCooldown != "" {
 		if _, err := time.ParseDuration(mcp.RestartCooldown); err != nil {
 			return fmt.Errorf("config: mcp.restart_cooldown: invalid duration %q: %w", mcp.RestartCooldown, err)
+		}
+	}
+	if mcp.DrainTimeout != "" {
+		if _, err := time.ParseDuration(mcp.DrainTimeout); err != nil {
+			return fmt.Errorf("config: mcp.drain_timeout: invalid duration %q: %w", mcp.DrainTimeout, err)
 		}
 	}
 	if mcp.InitRetryAttempts < 1 {

@@ -456,7 +456,17 @@ Global settings that apply to all MCP tool servers.
 | `auto_restart` | bool | `true` | Automatically restart crashed stdio servers |
 | `max_restart_attempts` | int | `3` | Consecutive failures before disabling a server |
 | `restart_cooldown` | string | `"5m"` | Duration a server must stay connected to reset the failure counter |
+| `drain_timeout` | string | `"35s"` | How long teardown waits for in-flight tool calls before forcing the transport closed |
 | `url_allowlist` | string[] | — | Allowed hostnames/wildcards for SSE tool server URLs (empty = all non-blocked hosts) |
+
+Removing, disabling, restarting or reconfiguring a tool server tears it down in
+two phases. The server stops being offered immediately — its tools leave the
+advertised set and new calls are refused — and only then does Denkeeper wait for
+the calls already running to finish, up to `drain_timeout`, before closing the
+transport. The server reports status `draining` while it waits. A window that
+expires forces the close and records a `forced_close` event in the audit log with
+the number of calls that were still running. The default sits just above the 30s
+per-tool-call timeout, so a call that was going to succeed gets to.
 
 ## `[tools.*]`
 

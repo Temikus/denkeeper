@@ -6724,7 +6724,7 @@
                     "type": "integer"
                 },
                 "status": {
-                    "description": "\"connected\", \"restarting\", \"error\", \"disabled\"",
+                    "description": "\"connected\", \"connecting\", \"draining\", \"error\", \"disabled\", \"config_error\", \"pending_auth\"",
                     "type": "string"
                 },
                 "tool_names": {
