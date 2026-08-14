@@ -312,12 +312,7 @@ func TestServerInfo_DisabledToolCounts(t *testing.T) {
 		disabledSet: map[string]bool{"tool-b": true},
 		cfg:         config.ToolConfig{Command: "test", DisabledTools: []string{"tool-b"}},
 	}
-	m.servers["test-server"] = sc
-	m.toolMap = map[string]*serverConn{
-		"tool-a": sc,
-		"tool-b": sc,
-		"tool-c": sc,
-	}
+	seedServerTools(m, sc, toolDef("tool-a"), toolDef("tool-b"), toolDef("tool-c"))
 
 	info, ok := m.ServerInfo("test-server")
 	if !ok {
@@ -340,11 +335,7 @@ func TestSetDisabledTools_NonexistentToolName(t *testing.T) {
 		name: "test-server",
 		cfg:  config.ToolConfig{Command: "test"},
 	}
-	m.servers["test-server"] = sc
-	m.toolDefs = []llm.ToolDef{
-		{Type: "function", Function: llm.FunctionDef{Name: "real-tool"}},
-	}
-	m.toolMap = map[string]*serverConn{"real-tool": sc}
+	seedServerTools(m, sc, toolDef("real-tool"))
 
 	// Disable a tool name that doesn't exist on the server.
 	if err := m.SetDisabledTools("test-server", []string{"nonexistent-tool"}); err != nil {
@@ -534,6 +525,23 @@ func TestToolDescription_ChildWinsOverParent(t *testing.T) {
 	if got != "Child version" {
 		t.Errorf("ToolDescription = %q, want %q (child should win)", got, "Child version")
 	}
+}
+
+// seedServerTools registers a server with the given tool definitions (server-
+// local names) and rebuilds the advertised index, standing in for a real
+// discoverTools round-trip without spawning a server.
+func seedServerTools(m *Manager, sc *serverConn, defs ...llm.ToolDef) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc.tools = defs
+	m.servers[sc.name] = sc
+	m.noteDiscoveryOrder(sc.name)
+	m.rebuildToolIndex()
+}
+
+// toolDef builds a minimal tool definition for seeding.
+func toolDef(name string) llm.ToolDef {
+	return llm.ToolDef{Type: "function", Function: llm.FunctionDef{Name: name}}
 }
 
 func toolNames(defs []llm.ToolDef) []string {

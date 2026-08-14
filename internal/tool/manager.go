@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +74,15 @@ type serverConn struct {
 	userDisabled  bool      // true when explicitly disabled by user
 	configError   string    // non-empty when auto-disabled due to config validation error
 
+	// tools holds this server's discovered tool definitions under their
+	// server-local names, in discovery order. It is the source of truth the
+	// manager's advertised index is rebuilt from (see rebuildToolIndex), so a
+	// server that is unregistered must have it cleared.
+	tools []llm.ToolDef
+
 	// Tool filtering — tools in disabledSet are excluded from the LLM payload.
+	// Keyed by server-local tool name, never by the advertised (possibly
+	// server-qualified) one.
 	disabledSet map[string]bool
 
 	// readOnlyHinted records tools whose MCP readOnlyHint annotation was true
@@ -148,17 +158,26 @@ type OAuthStatusInfo struct {
 }
 
 // Manager manages MCP tool server connections and tool execution.
+//
+// toolMap, owners, localOf and toolDefs are one derived projection of the
+// per-server tool lists, rebuilt as a whole by rebuildToolIndex on every
+// registration change. Two servers may advertise the same tool name; when they
+// do, neither is reachable under the bare name and both are advertised as
+// "<server>__<tool>" instead (see toolindex.go).
 type Manager struct {
-	mu            sync.RWMutex
-	parent        *Manager               // optional parent for delegated lookups (set by AdoptFrom)
-	servers       map[string]*serverConn // keyed by config name (e.g. "web-search")
-	toolMap       map[string]*serverConn // keyed by MCP tool name → owning server
-	toolDefs      []llm.ToolDef          // cached OpenAI-format tool definitions
-	disabledCount int                    // total disabled tools across all servers; 0 = fast-path in ToolDefs
-	mcpCfg        config.MCPConfig       // global MCP settings
-	logger        *slog.Logger
-	oauth         *OAuthSupport // nil if OAuth not configured
-	Auditor       audit.Emitter // nil = no audit events
+	mu             sync.RWMutex
+	parent         *Manager                 // optional parent for delegated lookups (set by AdoptFrom)
+	servers        map[string]*serverConn   // keyed by config name (e.g. "web-search")
+	toolMap        map[string]*serverConn   // keyed by *advertised* tool name → owning server
+	owners         map[string][]*serverConn // keyed by bare tool name → every server advertising it, registration order
+	localOf        map[string]string        // advertised name → server-local name (qualified entries only)
+	discoveryOrder []string                 // server names in discovery order; fixes the order of toolDefs
+	toolDefs       []llm.ToolDef            // cached OpenAI-format tool definitions, advertised names
+	disabledCount  int                      // total disabled tools across all servers; 0 = fast-path in ToolDefs
+	mcpCfg         config.MCPConfig         // global MCP settings
+	logger         *slog.Logger
+	oauth          *OAuthSupport // nil if OAuth not configured
+	Auditor        audit.Emitter // nil = no audit events
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.
@@ -171,6 +190,8 @@ func NewManager(logger *slog.Logger, mcpCfg ...config.MCPConfig) *Manager {
 	m := &Manager{
 		servers: make(map[string]*serverConn),
 		toolMap: make(map[string]*serverConn),
+		owners:  make(map[string][]*serverConn),
+		localOf: make(map[string]string),
 		logger:  logger,
 	}
 	if len(mcpCfg) > 0 {
@@ -584,8 +605,13 @@ func buildDisabledSet(names []string) map[string]bool {
 	return s
 }
 
-// discoverTools calls ListTools on the server's session and populates the
-// manager's toolMap and toolDefs. Called by both RegisterServer and RegisterSession.
+// discoverTools calls ListTools on the server's session, stores the result on
+// the connection, and rebuilds the manager's advertised tool index. Called by
+// both RegisterServer and RegisterSession.
+//
+// The server's own list replaces any previous one rather than accumulating, so
+// re-discovery (restart, OAuth reconnect) cannot leave stale definitions
+// behind.
 func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 	timeout := time.Duration(m.mcpCfg.RequestTimeoutSecs) * time.Second
 	if timeout == 0 {
@@ -599,9 +625,8 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 		return fmt.Errorf("listing tools from MCP server %q: %w", sc.name, err)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	defs := make([]llm.ToolDef, 0, len(result.Tools))
+	var hinted map[string]bool
 	for _, tool := range result.Tools {
 		// Convert InputSchema (*jsonschema.Schema) to map[string]any for OpenAI format.
 		params, err := schemaToMap(tool.InputSchema)
@@ -612,14 +637,13 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 		}
 
 		if tool.Annotations != nil && tool.Annotations.ReadOnlyHint {
-			if sc.readOnlyHinted == nil {
-				sc.readOnlyHinted = make(map[string]bool)
+			if hinted == nil {
+				hinted = make(map[string]bool)
 			}
-			sc.readOnlyHinted[tool.Name] = true
+			hinted[tool.Name] = true
 		}
 
-		m.toolMap[tool.Name] = sc
-		m.toolDefs = append(m.toolDefs, llm.ToolDef{
+		defs = append(defs, llm.ToolDef{
 			Type: "function",
 			Function: llm.FunctionDef{
 				Name:        tool.Name,
@@ -629,6 +653,17 @@ func (m *Manager) discoverTools(ctx context.Context, sc *serverConn) error {
 		})
 		m.logger.Debug("discovered tool", "server", sc.name, "tool", tool.Name)
 	}
+
+	m.mu.Lock()
+	sc.readOnlyHinted = hinted
+	sc.tools = defs
+	m.noteDiscoveryOrder(sc.name)
+	collisions, cleared := m.rebuildToolIndex()
+	m.mu.Unlock()
+
+	// Report outside the lock — the auditor may block.
+	m.reportCollisions(ctx, sc.name, collisions)
+	m.reportClearedCollisions(cleared)
 
 	return nil
 }
@@ -679,6 +714,9 @@ func (m *Manager) ToolDefs() []llm.ToolDef {
 }
 
 // enabledToolDefs returns toolDefs with disabled tools filtered out.
+// The disabled check resolves through resolveTool so it consults the owning
+// server's set under the server-local name — a tool disabled on one server is
+// never re-advertised because another server happens to share the name.
 // Caller must hold m.mu.
 func (m *Manager) enabledToolDefs() []llm.ToolDef {
 	if m.disabledCount == 0 {
@@ -687,7 +725,7 @@ func (m *Manager) enabledToolDefs() []llm.ToolDef {
 
 	filtered := make([]llm.ToolDef, 0, len(m.toolDefs))
 	for _, td := range m.toolDefs {
-		if sc, ok := m.toolMap[td.Function.Name]; ok && sc.disabledSet[td.Function.Name] {
+		if sc, local, err := m.resolveTool(td.Function.Name); err == nil && sc.disabledSet[local] {
 			continue
 		}
 		filtered = append(filtered, td)
@@ -722,8 +760,9 @@ func (m *Manager) ToolNames() []string {
 	return names
 }
 
-// ServerToolDefs returns tool definitions for a specific server.
-// Returns false if the server is not registered.
+// ServerToolDefs returns tool definitions for a specific server, under the
+// names they are advertised by (server-qualified when another server shares
+// the tool name). Returns false if the server is not registered.
 func (m *Manager) ServerToolDefs(serverName string) ([]llm.ToolDef, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -746,12 +785,13 @@ func (m *Manager) ServerToolDefs(serverName string) ([]llm.ToolDef, bool) {
 }
 
 // ToolServer returns the MCP server name that hosts the given tool.
-// Returns an empty string if the tool is not found.
+// Returns an empty string if the tool is not found, or if a bare name is
+// ambiguous — there is no single hosting server to name.
 func (m *Manager) ToolServer(toolName string) string {
 	m.mu.RLock()
-	sc, ok := m.toolMap[toolName]
-	m.mu.RUnlock()
-	if !ok {
+	defer m.mu.RUnlock()
+	sc, _, err := m.resolveTool(toolName)
+	if err != nil {
 		return ""
 	}
 	return sc.name
@@ -774,34 +814,45 @@ var builtinIdempotentTools = map[string]bool{
 // server marked readOnlyHint at discovery.
 func (m *Manager) IsIdempotent(toolName string) bool {
 	m.mu.RLock()
-	sc, ok := m.toolMap[toolName]
+	sc, local, err := m.resolveTool(toolName)
 	parent := m.parent
-	var hinted bool
-	if ok {
-		// Read under the lock: discoverTools populates the map under m.mu
-		// during restart/re-register.
-		hinted = sc.readOnlyHinted[toolName]
+	// Everything the decision needs is read under the lock: discoverTools and
+	// SetDisabledTools mutate these fields under m.mu during restart,
+	// re-register and config edits.
+	var inProcess, optedIn, trusted, hinted bool
+	if err == nil {
+		// In-process sessions (RegisterSession) have no transport and no
+		// command; external servers always set one of them.
+		inProcess = sc.transport == "" && sc.command == ""
+		optedIn = sc.cfg.IsIdempotentTool(local)
+		trusted = sc.cfg.TrustAnnotations
+		hinted = sc.readOnlyHinted[local]
 	}
 	m.mu.RUnlock()
-	if !ok {
-		if parent != nil {
+
+	if err != nil {
+		// An ambiguous name is not memoizable — and must not be answered by
+		// the parent either, since the collision is here.
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
 			return parent.IsIdempotent(toolName)
 		}
 		return false
 	}
-	// In-process sessions (RegisterSession) have no transport and no command;
-	// external servers always set one of them.
-	if sc.transport == "" && sc.command == "" {
-		return builtinIdempotentTools[toolName]
+	if inProcess {
+		return builtinIdempotentTools[local]
 	}
-	if sc.cfg.IsIdempotentTool(toolName) {
+	if optedIn {
 		return true
 	}
-	return sc.cfg.TrustAnnotations && hinted
+	return trusted && hinted
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""
 // if the tool is not found or has no description.
+//
+// Lookup is by *advertised* name, which is the surface the model calls: a bare
+// name two servers claim has no definition of its own, so it returns "" rather
+// than describing one of the two candidates.
 func (m *Manager) ToolDescription(toolName string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -818,22 +869,40 @@ func (m *Manager) ToolDescription(toolName string) string {
 
 // Execute runs a single tool call and returns the text result.
 // If the tool is not found locally, it delegates to the parent manager.
+//
+// The name the model called (bare when unique, "<server>__<tool>" when two
+// servers share it) is resolved to its owning server; the server-local name is
+// what goes on the wire. A bare name that two servers claim is never guessed
+// at — it returns ErrAmbiguousTool naming the alternatives.
 func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
 	m.mu.RLock()
-	sc, ok := m.toolMap[call.Function.Name]
+	sc, local, resolveErr := m.resolveTool(call.Function.Name)
 	parent := m.parent
-	m.mu.RUnlock()
-	if !ok {
-		if parent != nil {
-			return parent.Execute(ctx, call)
-		}
-		return "", fmt.Errorf("unknown tool %q", call.Function.Name)
+	var (
+		serverName string
+		session    *mcp.ClientSession
+		disabled   bool
+	)
+	if resolveErr == nil {
+		serverName, session, disabled = sc.name, sc.session, sc.disabledSet[local]
 	}
-	if sc.disabledSet[call.Function.Name] {
+	m.mu.RUnlock()
+
+	if resolveErr != nil {
+		// Only a genuine miss delegates: an ambiguous name means the collision
+		// is in this manager, and the parent cannot resolve it either.
+		if errors.Is(resolveErr, ErrToolNotFound) {
+			if parent != nil {
+				return parent.Execute(ctx, call)
+			}
+			return "", fmt.Errorf("unknown tool %q", call.Function.Name)
+		}
+		return "", resolveErr
+	}
+	if disabled {
 		return "", fmt.Errorf("tool %q is disabled", call.Function.Name)
 	}
 
-	serverName := sc.name
 	ctx, span := toolTracer.Start(ctx, "tool.execute", trace.WithAttributes(
 		attribute.String("tool.name", call.Function.Name),
 		attribute.String("tool.server", serverName),
@@ -850,7 +919,7 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		span.End()
 	}()
 
-	if sc.session == nil {
+	if session == nil {
 		err := fmt.Errorf("tool %q is not connected (OAuth authorization required)", call.Function.Name)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -869,8 +938,8 @@ func (m *Manager) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		}
 	}
 
-	result, err := sc.session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      call.Function.Name,
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      local,
 		Arguments: arguments,
 	})
 	if err != nil {
@@ -975,18 +1044,20 @@ func (m *Manager) UnregisterServer(name string) error {
 		return fmt.Errorf("server %q: %w", name, ErrToolNotFound)
 	}
 
-	// Remove tool definitions contributed by this server.
-	var remaining []llm.ToolDef
-	for _, td := range m.toolDefs {
-		if owner, exists := m.toolMap[td.Function.Name]; exists && owner == sc {
-			delete(m.toolMap, td.Function.Name)
-			continue
-		}
-		remaining = append(remaining, td)
-	}
-	m.toolDefs = remaining
-
+	// Drop this server's contribution and rebuild the advertised projection
+	// from what remains, rather than filtering definitions in place: under a
+	// name collision, in-place filtering deleted the *owner's* entry when the
+	// other collider was unregistered, and left the survivor's definition
+	// stranded when the owner went first.
+	//
+	// Clearing sc.tools matters beyond this rebuild: handleServerFailure
+	// re-inserts this same serverConn after unregistering it, and a stale list
+	// would resurrect the dead server's tools on the next rebuild.
+	sc.tools = nil
 	delete(m.servers, name)
+	m.discoveryOrder = slices.DeleteFunc(m.discoveryOrder, func(s string) bool { return s == name })
+	_, cleared := m.rebuildToolIndex()
+	m.reportClearedCollisions(cleared)
 	m.recomputeDisabledCount()
 
 	// Best-effort session cleanup. The server is already removed from the map,
@@ -1089,6 +1160,16 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 	m.mu.RLock()
 	sc, ok := m.servers[name]
 	parent := m.parent
+	// Server-local tool names in discovery order: this is what the disable
+	// controls and [tools.*] disabled_tools are keyed by, and it stays correct
+	// when the advertised name is server-qualified by a collision.
+	var toolNames []string
+	if ok && len(sc.tools) > 0 {
+		toolNames = make([]string, 0, len(sc.tools))
+		for _, td := range sc.tools {
+			toolNames = append(toolNames, td.Function.Name)
+		}
+	}
 	m.mu.RUnlock()
 
 	if !ok {
@@ -1096,13 +1177,6 @@ func (m *Manager) ServerInfo(name string) (ServerStatus, bool) {
 			return parent.ServerInfo(name)
 		}
 		return ServerStatus{}, false
-	}
-
-	var toolNames []string
-	for tn, owner := range m.toolMap {
-		if owner == sc {
-			toolNames = append(toolNames, tn)
-		}
 	}
 
 	ss := buildServerStatus(sc, toolNames)
