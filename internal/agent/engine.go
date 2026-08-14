@@ -882,6 +882,9 @@ func skillNameMatched(matched []skill.Skill, name string) bool {
 // call. That beats fail-broken even for a schedule-driven run — an injected
 // body whose tools are gone burns a round on "unknown tool" — so exclusion
 // applies to the whole matched set, with a Warn so the skipped run is visible.
+//
+// Inspired by the reactive dependency-driven activation model in
+// https://github.com/cordiverse/paper/blob/main/paper.pdf.
 func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.IncomingMessage) []skill.Skill {
 	// No tool manager means no capability information at all; guessing which
 	// way is worse than not filtering, so declared requirements are ignored.
