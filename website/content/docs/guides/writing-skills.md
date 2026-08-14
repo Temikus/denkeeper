@@ -54,7 +54,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 | `description` | Yes | What the skill does (shown in Telegram command menu for command triggers) |
 | `version` | No | Semantic version |
 | `triggers` | No | When to activate (see below) |
-| `requires.tools` | No | MCP tools this skill needs |
+| `requires.tools` | No | MCP tools this skill needs. The skill is skipped while any of them is unavailable (see below) |
 | `max_tool_rounds` | No | Cap on tool-call rounds for turns this skill drives (command or schedule trigger). Only lowers the agent's limit, never raises it; must be ≥ 0 |
 
 ## Trigger types
@@ -64,6 +64,23 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 - **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
 
 The distinction between ambient and scheduled matters for `max_tool_rounds`: the cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.
+
+## Tool requirements
+
+A skill that names tools in `requires.tools` is only injected while **every** one of them is registered:
+
+```toml
+requires.tools = ["gmail_list", "gmail_send"]
+```
+
+If the MCP server hosting `gmail_list` is disconnected or disabled, the skill goes quiet — it is left out of the system prompt entirely rather than instructing the agent to call a tool that isn't there. Availability is re-checked on every message, so the skill comes back on its own the moment the server reconnects. No restart or config reload is involved.
+
+Notes:
+
+- Names are matched exactly as the MCP server advertises them (same as auto-approve rules). A typo means the skill never activates.
+- This applies to scheduled skills too: a run whose tools are missing does nothing and logs a warning, rather than half-executing.
+- Deactivation and reactivation are logged once per change, not once per message.
+- A skill with no `requires.tools` is always active — the field is opt-in.
 
 ## Agent-specific skills
 

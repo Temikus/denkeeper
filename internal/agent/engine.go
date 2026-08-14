@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,6 +150,13 @@ type Engine struct {
 	tools          *tool.Manager     // nil = no tools available
 	approvals      *approval.Manager // nil = supervised tool calls execute immediately
 
+	// skillSatisfaction remembers, per skill, the sorted comma-joined names of
+	// its required-but-unregistered tools as of the last message. It exists
+	// purely to keep deactivation logging to one line per state change; the
+	// filter itself is stateless and re-derived every message.
+	skillSatisfactionMu sync.Mutex
+	skillSatisfaction   map[string]string
+
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
 
@@ -270,6 +278,7 @@ func NewEngine(
 		loc:                       time.UTC,
 		now:                       time.Now,
 		nudgeCounters:             make(map[string]*nudgeState),
+		skillSatisfaction:         make(map[string]string),
 		logger:                    logger.With("agent", name),
 		tracer:                    tracer,
 		mMessages:                 msgs,
@@ -837,6 +846,11 @@ Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never i
 		MessageText: msg.Text,
 		SkillName:   msg.SkillName,
 	})
+	active := e.filterUnsatisfiedSkills(matched, msg)
+	// The not-found warning is deliberately evaluated against the pre-filter
+	// set: a skill dropped for unsatisfied requirements was found, and
+	// filterUnsatisfiedSkills has already warned about it by name. Everything
+	// downstream (round caps, attribution, usage) sees the filtered set only.
 	if msg.SkillName != "" && !skillNameMatched(matched, msg.SkillName) {
 		e.logger.Warn("scheduled skill not found — body will not be injected",
 			"skill", msg.SkillName,
@@ -844,10 +858,10 @@ Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never i
 			"external_id", msg.ExternalID,
 		)
 	}
-	if suffix := skill.BuildPromptSection(matched); suffix != "" {
-		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: matched}
+	if suffix := skill.BuildPromptSection(active); suffix != "" {
+		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: active}
 	}
-	return buildSystemPromptResult{prompt: base, matchedSkills: matched}
+	return buildSystemPromptResult{prompt: base, matchedSkills: active}
 }
 
 func skillNameMatched(matched []skill.Skill, name string) bool {
@@ -857,6 +871,110 @@ func skillNameMatched(matched []skill.Skill, name string) bool {
 		}
 	}
 	return false
+}
+
+// filterUnsatisfiedSkills drops matched skills whose requires.tools name a
+// tool not currently registered. Evaluated per message so availability
+// changes (server reconnect, tool enable) take effect on the next turn.
+//
+// The semantics are fail-inactive: an unsatisfied skill is simply not injected
+// for this message, so the model is never handed prose about tools it cannot
+// call. That beats fail-broken even for a schedule-driven run — an injected
+// body whose tools are gone burns a round on "unknown tool" — so exclusion
+// applies to the whole matched set, with a Warn so the skipped run is visible.
+func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.IncomingMessage) []skill.Skill {
+	// No tool manager means no capability information at all; guessing which
+	// way is worse than not filtering, so declared requirements are ignored.
+	if e.tools == nil || !anySkillRequiresTools(matched) {
+		return matched
+	}
+
+	names := e.tools.ToolNames()
+	available := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		available[n] = struct{}{}
+	}
+
+	active := make([]skill.Skill, 0, len(matched))
+	for _, s := range matched {
+		missing := missingRequiredTools(s, available)
+		changed := e.recordSkillSatisfaction(s.Name, missing)
+		switch {
+		case len(missing) == 0:
+			if changed {
+				e.logger.Info("skill reactivated — required tools available again", "skill", s.Name)
+			}
+			active = append(active, s)
+		case msg.SkillName == s.Name:
+			// Per occurrence, not per state change: a scheduled run that
+			// silently does nothing is an operational failure.
+			e.logger.Warn("scheduled skill deactivated — required tools unavailable, body will not be injected",
+				"skill", s.Name,
+				"missing", strings.Join(missing, ","),
+				"declared", strings.Join(s.Requires.Tools, ","),
+				"adapter", msg.Adapter,
+				"external_id", msg.ExternalID,
+			)
+		case changed:
+			e.logger.Warn("skill deactivated — required tools unavailable",
+				"skill", s.Name,
+				"missing", strings.Join(missing, ","),
+				"declared", strings.Join(s.Requires.Tools, ","),
+			)
+		}
+	}
+	return active
+}
+
+// anySkillRequiresTools reports whether any matched skill declares a tool
+// requirement. Nothing to enforce is the common case, and it keeps the
+// per-message ToolNames() snapshot off that path entirely.
+func anySkillRequiresTools(matched []skill.Skill) bool {
+	for _, s := range matched {
+		if len(s.Requires.Tools) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// missingRequiredTools returns the skill's declared tools that are absent from
+// the available set, sorted so the result doubles as a stable state signature.
+// Names are compared verbatim — same convention as auto-approve rules, where a
+// rule matches the advertised MCP tool name exactly.
+func missingRequiredTools(s skill.Skill, available map[string]struct{}) []string {
+	var missing []string
+	for _, want := range s.Requires.Tools {
+		if _, ok := available[want]; !ok {
+			missing = append(missing, want)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+// recordSkillSatisfaction stores the skill's current missing-tool signature and
+// reports whether it differs from the last one seen. Callers log only on a
+// change: an ambient skill matches every message, so an unsatisfied requirement
+// would otherwise warn on every turn for as long as the server stays down.
+func (e *Engine) recordSkillSatisfaction(name string, missing []string) bool {
+	sig := strings.Join(missing, ",")
+
+	e.skillSatisfactionMu.Lock()
+	defer e.skillSatisfactionMu.Unlock()
+
+	prev := e.skillSatisfaction[name]
+	if prev == sig {
+		return false
+	}
+	if sig == "" {
+		// Satisfied is the default state, so drop the entry rather than
+		// keeping one per skill that ever went missing.
+		delete(e.skillSatisfaction, name)
+	} else {
+		e.skillSatisfaction[name] = sig
+	}
+	return true
 }
 
 // persistTelemetry writes tool calls, skill usages, and conversation stats
