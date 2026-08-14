@@ -228,8 +228,12 @@
   }
   .agent-card:hover { border-color: var(--accent); }
   .agent-name { font-weight: 600; margin-bottom: 6px; }
-  .agent-meta { display: flex; gap: 10px; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-  .tier { background: var(--border); padding: 2px 8px; border-radius: 10px; }
+  .agent-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+    font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+  }
+  .agent-meta > span { white-space: nowrap; }
+  .tier { flex: none; background: var(--border); padding: 2px 8px; border-radius: 10px; }
   .agent-model { font-size: 11px; color: var(--text-muted); font-family: monospace; }
   .loading { color: var(--text-muted); }
 
