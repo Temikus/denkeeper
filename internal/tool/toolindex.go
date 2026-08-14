@@ -13,6 +13,19 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
+// Tool-name collision handling for the MCP registry: two servers contributing
+// the same tool name are both advertised under server-qualified names, and the
+// bare name becomes unroutable rather than resolving to whichever server
+// happened to register last.
+//
+// Origin: item 3, "Tool key collisions and namespacing", of the
+// spatiotemporal-composability review (docs/composability-findings.md, local),
+// which audited this codebase against the model in "A Programming Paradigm for
+// Spatiotemporal Composability" (Shi/Zhang/Cui 2026). The qualification scheme
+// below is not prescribed by that paper — it is the fix for a gap the review
+// surfaced: two components contributing one name to a shared registry, with no
+// rule for composing them and no detection when they clash.
+
 // ErrAmbiguousTool is returned when a bare tool name is advertised by more than
 // one connected MCP server. Colliding tools are advertised — and must be called
 // — under their server-qualified name, so resolving the bare name would mean
