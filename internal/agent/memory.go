@@ -319,6 +319,45 @@ CREATE INDEX IF NOT EXISTS idx_skill_usage_state ON skill_usage(state);
 CREATE INDEX IF NOT EXISTS idx_skill_usage_last_used ON skill_usage(last_used_at);
 `
 
+// skillRevisionsSchema is the undo journal behind skill_revert: one row per
+// tracked skill mutation, capturing the on-disk state that existed *before* it.
+//
+// prior_payload holds the raw bytes the file had before the mutation (NULL for
+// 'create', where the prior state is "absent"), so the inverse restores exactly
+// what was there rather than a re-serialization. transition_id groups a
+// multi-skill edit and seq orders it, so a transition reverts LIFO — a rename
+// followed by an update must be undone update-then-rename, or the update
+// targets a name that no longer exists.
+//
+// reverted_at is the at-most-once armed flag: NULL = armed, non-NULL = already
+// disposed. It is claimed with a conditional UPDATE (see
+// MarkSkillRevisionReverted), which makes the claim race-free and restart-proof.
+//
+// created_at/reverted_at are DATETIME (not TEXT) so the driver converts them to
+// time.Time on scan, matching every other table here; CURRENT_TIMESTAMP and
+// datetime('now') produce the same value.
+const skillRevisionsSchema = `
+CREATE TABLE IF NOT EXISTS skill_revisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent         TEXT NOT NULL,
+    transition_id TEXT NOT NULL,
+    seq           INTEGER NOT NULL,
+    op            TEXT NOT NULL,
+    skill_name    TEXT NOT NULL,
+    prior_name    TEXT,
+    prior_payload TEXT,
+    new_version   TEXT,
+    prior_version TEXT,
+    actor         TEXT NOT NULL,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reverted_at   DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_skill_revisions_skill
+    ON skill_revisions(agent, skill_name, id DESC);
+CREATE INDEX IF NOT EXISTS idx_skill_revisions_transition
+    ON skill_revisions(agent, transition_id, seq DESC);
+`
+
 const channelSchema = `
 CREATE TABLE IF NOT EXISTS active_channels (
     adapter_key TEXT PRIMARY KEY,
@@ -391,6 +430,9 @@ func initDB(db *sqlx.DB) error {
 	}
 	if _, err := db.Exec(skillUsageSchema); err != nil {
 		return fmt.Errorf("initializing skill usage schema: %w", err)
+	}
+	if _, err := db.Exec(skillRevisionsSchema); err != nil {
+		return fmt.Errorf("initializing skill revisions schema: %w", err)
 	}
 	if err := initFTS5(db); err != nil {
 		return fmt.Errorf("initializing FTS5: %w", err)
@@ -1303,6 +1345,176 @@ func (s *SQLiteMemoryStore) SetSkillOrigin(ctx context.Context, agent, skill, or
 		return fmt.Errorf("setting skill origin: %w", err)
 	}
 	return nil
+}
+
+// --- Skill revisions (undo journal) ---
+
+// Skill mutation kinds recorded in skill_revisions.op. The name always
+// describes the mutation that happened, never its inverse.
+const (
+	SkillOpCreate = "create"
+	SkillOpUpdate = "update"
+	SkillOpRename = "rename"
+	SkillOpDelete = "delete"
+)
+
+// Actors recorded in skill_revisions.actor — who caused the mutation.
+// SkillActorRevert marks a row written by an undo, which is what makes a revert
+// itself revertible (and what a future auto-revert curator must refuse to
+// auto-undo, or it would oscillate).
+const (
+	SkillActorSelf    = "self"    // the agent editing its own skills (config MCP)
+	SkillActorUser    = "user"    // an operator via REST or external MCP
+	SkillActorCurator = "curator" // an automated maintenance pass
+	SkillActorRevert  = "revert"  // the inverse of an earlier revision
+)
+
+// SkillRevision is one row of the skill mutation undo journal. It records the
+// on-disk state that existed *before* a mutation, so the mutation can be undone
+// exactly once.
+//
+// PriorName and PriorPayload are pointers because NULL is load-bearing: a NULL
+// PriorPayload means the skill file did not exist before the mutation (the
+// prior state is "absent"), which is a different instruction to the reverter
+// than an empty file.
+type SkillRevision struct {
+	ID           int64  `db:"id"            json:"id"`
+	Agent        string `db:"agent"         json:"agent"`
+	TransitionID string `db:"transition_id" json:"transition_id"`
+	// Seq orders revisions within one transition. It is assigned by
+	// AppendSkillRevision; whatever a caller sets here is ignored.
+	Seq       int    `db:"seq"        json:"seq"`
+	Op        string `db:"op"         json:"op"`
+	SkillName string `db:"skill_name" json:"skill_name"`
+	// PriorName is the name before a rename; nil for every other op.
+	PriorName *string `db:"prior_name" json:"prior_name,omitempty"`
+	// PriorPayload is the raw file content before the mutation; nil when no
+	// file existed (always so for SkillOpCreate).
+	PriorPayload *string `db:"prior_payload" json:"prior_payload,omitempty"`
+	// NewVersion and PriorVersion are the frontmatter versions after and
+	// before the mutation. They are the join key against tool_calls
+	// (skill_name/skill_version), i.e. by_tool_skill in GetTelemetrySummary —
+	// not skill_usage, which is version-less. Empty means unknown (e.g. the
+	// prior bytes did not parse).
+	NewVersion   string    `db:"new_version"   json:"new_version,omitempty"`
+	PriorVersion string    `db:"prior_version" json:"prior_version,omitempty"`
+	Actor        string    `db:"actor"         json:"actor"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	// RevertedAt is nil while the revision is armed (revertible) and set once
+	// it has been disposed of by a revert.
+	RevertedAt *time.Time `db:"reverted_at" json:"reverted_at,omitempty"`
+}
+
+// skillRevisionColumns is the shared SELECT list. The COALESCEs keep the
+// version fields plain strings (empty = unknown) rather than pointers.
+const skillRevisionColumns = `id, agent, transition_id, seq, op, skill_name,
+	       prior_name, prior_payload,
+	       COALESCE(new_version, '') AS new_version,
+	       COALESCE(prior_version, '') AS prior_version,
+	       actor, created_at, reverted_at`
+
+// AppendSkillRevision records a skill mutation and returns the new revision id.
+// seq is assigned here as the next value within (agent, transition_id), so a
+// caller only has to supply the transition id.
+func (s *SQLiteMemoryStore) AppendSkillRevision(ctx context.Context, r SkillRevision) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO skill_revisions
+			(agent, transition_id, seq, op, skill_name, prior_name,
+			 prior_payload, new_version, prior_version, actor)
+		VALUES (?, ?,
+			(SELECT COALESCE(MAX(seq), 0) + 1 FROM skill_revisions
+			  WHERE agent = ? AND transition_id = ?),
+			?, ?, ?, ?, ?, ?, ?)`,
+		r.Agent, r.TransitionID,
+		r.Agent, r.TransitionID,
+		r.Op, r.SkillName, r.PriorName, r.PriorPayload,
+		r.NewVersion, r.PriorVersion, r.Actor)
+	if err != nil {
+		return 0, fmt.Errorf("appending skill revision: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("reading skill revision id: %w", err)
+	}
+	return id, nil
+}
+
+// LatestSkillRevision returns the newest still-armed revision for a skill, or
+// for the whole agent when skillName is empty. Returns (nil, nil) when there is
+// nothing left to revert.
+func (s *SQLiteMemoryStore) LatestSkillRevision(ctx context.Context, agent, skillName string) (*SkillRevision, error) {
+	query := `SELECT ` + skillRevisionColumns + `
+		FROM skill_revisions
+		WHERE agent = ? AND reverted_at IS NULL
+		ORDER BY id DESC LIMIT 1`
+	args := []any{agent}
+	if skillName != "" {
+		query = `SELECT ` + skillRevisionColumns + `
+			FROM skill_revisions
+			WHERE agent = ? AND skill_name = ? AND reverted_at IS NULL
+			ORDER BY id DESC LIMIT 1`
+		args = append(args, skillName)
+	}
+
+	var rev SkillRevision
+	err := s.db.GetContext(ctx, &rev, query, args...)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting latest skill revision: %w", err)
+	}
+	return &rev, nil
+}
+
+// GetSkillRevision returns a revision by id regardless of whether it is still
+// armed. Returns (nil, nil) when no such revision exists.
+func (s *SQLiteMemoryStore) GetSkillRevision(ctx context.Context, id int64) (*SkillRevision, error) {
+	var rev SkillRevision
+	err := s.db.GetContext(ctx, &rev,
+		`SELECT `+skillRevisionColumns+` FROM skill_revisions WHERE id = ?`, id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting skill revision %d: %w", id, err)
+	}
+	return &rev, nil
+}
+
+// MarkSkillRevisionReverted claims a revision for undoing and reports whether
+// this caller won the claim. The conditional UPDATE is the whole at-most-once
+// mechanism: two concurrent reverts of the same revision both run the
+// statement, exactly one affects a row, and the loser is told the revision was
+// already disposed of. Because the flag lives in SQLite rather than memory, the
+// guarantee also survives a restart.
+func (s *SQLiteMemoryStore) MarkSkillRevisionReverted(ctx context.Context, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE skill_revisions SET reverted_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND reverted_at IS NULL`, id)
+	if err != nil {
+		return false, fmt.Errorf("claiming skill revision %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking skill revision claim %d: %w", id, err)
+	}
+	return n == 1, nil
+}
+
+// TransitionSkillRevisions returns the still-armed revisions of one transition
+// in LIFO order (newest first) — the order they must be undone in.
+func (s *SQLiteMemoryStore) TransitionSkillRevisions(ctx context.Context, agent, transitionID string) ([]SkillRevision, error) {
+	var revs []SkillRevision
+	err := s.db.SelectContext(ctx, &revs,
+		`SELECT `+skillRevisionColumns+`
+		 FROM skill_revisions
+		 WHERE agent = ? AND transition_id = ? AND reverted_at IS NULL
+		 ORDER BY seq DESC, id DESC`, agent, transitionID)
+	if err != nil {
+		return nil, fmt.Errorf("listing skill revisions for transition %q: %w", transitionID, err)
+	}
+	return revs, nil
 }
 
 // MessageSearchHit represents a single FTS5 search result.

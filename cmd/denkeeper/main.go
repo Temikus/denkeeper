@@ -45,6 +45,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scriptmcp"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/skilleffect"
 	"github.com/Temikus/denkeeper/internal/tool"
 	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
 	"github.com/Temikus/denkeeper/internal/web"
@@ -803,6 +804,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		GetSkill:       e.GetSkill,
 		UpdateSkill:    e.UpdateSkill,
 		RemoveSkill:    e.RemoveSkill,
+		SkillWriter:    buildSkillWriter(agentName, e, abc),
 		Sched:          abc.sched,
 		HandleMessage:  e.HandleMessage,
 		ResolveAgentHandler: func(name string) func(context.Context, adapter.IncomingMessage) error {
@@ -879,6 +881,19 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	}
 	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
 	return nil
+}
+
+// buildSkillWriter returns the tracked writer behind the agent's own skill
+// tools, so a skill the agent edits about itself is journaled and can be
+// reverted. The actor is "self" — this is the agent editing its own skills, as
+// opposed to an operator working through REST or external MCP.
+//
+// A memory store that does not carry the revision methods yields an untracked
+// passthrough: skill edits keep working, they just have no undo history.
+func buildSkillWriter(agentName string, e *agent.Engine, abc agentBuildCtx) configmcp.SkillWriter {
+	store, _ := abc.memory.(skilleffect.Store)
+	return skilleffect.New(store, agentName, abc.logger).
+		Bind(e, agent.SkillActorSelf, abc.cfg.Skills.MaxBytes)
 }
 
 func buildTelemetrySummary(memory agent.MemoryStore) func(ctx context.Context, since *time.Time) (*agent.TelemetrySummary, error) {

@@ -286,6 +286,8 @@ Agent-specific skills in `<persona_dir>/skills/` override global skills of the s
 
 A sample `help` skill is included in `agents/default/skills/`.
 
+Every skill change made at runtime — by the agent about itself, over REST, or over MCP — is recorded in an undo journal before it happens, capturing the file's exact prior bytes. The `skill_revert` MCP tool rolls the most recent change back, so an agent that botches an edit to its own skill can be fixed with one call instead of by hand. Reverting restores the skill file only: it does not undo messages already sent, tool calls already made, or KV keys already written while the changed skill was live.
+
 ### Multi-Agent
 
 Define multiple agents, each with their own persona, skills, LLM model, and adapter bindings:
@@ -561,7 +563,7 @@ Cursor (`.cursor/mcp.json`):
 
 Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
 
-The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
 
 ## Development
 

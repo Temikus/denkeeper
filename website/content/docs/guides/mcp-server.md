@@ -54,7 +54,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 |---|---|
 | Chat | `chat` |
 | Agents | `agent_list`, `agent_info` |
-| Skills | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete` |
+| Skills | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert` |
 | Schedules | `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete` |
 | Sessions | `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact` |
 | Approvals | `approval_list`, `approval_resolve` |
@@ -68,6 +68,8 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 `agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. Supervisor information is read from live wiring, so it reflects the state after a config reload rather than what the file said at startup.
 
 Skill writes are disk-first: the file is written before memory is updated, so an IO error leaves the skill intact rather than creating a version that exists only in RAM until the next restart.
+
+They are also journaled. Before any skill write, the file's exact prior bytes are recorded, and `skill_revert` replays them — undoing a create, update, rename or delete exactly once. Call it with a `skill` to undo that skill's most recent change, with a `transition_id` to undo a whole multi-skill edit (newest change first, so a rename followed by an update unwinds in the order that works), or with neither to undo the agent's most recent skill change. A revert is itself a recorded change, so calling it twice in a row *redoes* the original change rather than stepping further back. It restores skill files and nothing else: messages already sent, tool calls already made and KV keys already written while the changed skill was live are unaffected.
 
 ## Why do this
 

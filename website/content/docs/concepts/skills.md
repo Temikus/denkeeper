@@ -71,3 +71,11 @@ Agent-specific skills are merged with global skills. If both define a skill with
 ## Creating skills at runtime
 
 In `supervised` or `autonomous` tiers, the agent can create new skills via the Config MCP server. In supervised mode, this requires human approval via the approval workflow.
+
+## Undoing a skill change
+
+Every runtime skill change — from the agent's own Config MCP tools, the REST API, or the external MCP server — is recorded in an undo journal *before* it is applied. Each entry holds the file's raw prior bytes, so a revert restores exactly what was there rather than a re-rendered approximation: a frontmatter field this build does not recognise still survives the round trip.
+
+The `skill_revert` tool on the [MCP server](/docs/guides/mcp-server/) applies the inverse — deleting a created skill, restoring an updated or deleted one, renaming a renamed one back. Each journal entry can be spent only once, and the claim is persisted, so a revert cannot be applied twice even across a restart.
+
+Reverting restores the skill file. It does not undo what the skill did while it was live: messages already sent, tool calls already made and KV keys already written stay as they are.

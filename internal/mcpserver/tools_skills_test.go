@@ -33,13 +33,29 @@ func toolResultText(r *mcp.CallToolResult) string {
 
 // skillServer wires a Server whose "test-agent" engine has its skills directory
 // pointed at dir, so the skill write handlers persist there.
+//
+// Memory is wired with a real store, so these tests run in the production shape
+// with the undo journal enabled. TestSkill_NoJournalStore_StillWrites covers
+// the degraded shape.
 func skillServer(t *testing.T, dir string) (*Server, *agent.Engine) {
 	t.Helper()
 	e := testEngine(t)
 	e.SetSkillDirs(dir, "")
 	dispatcher := agent.NewDispatcher(map[string]*agent.Engine{"test-agent": e}, nil, nil, testLogger())
-	s := &Server{deps: Deps{Dispatcher: dispatcher, Logger: testLogger()}}
+	s := &Server{deps: Deps{Dispatcher: dispatcher, Memory: skillRevisionStore(t), Logger: testLogger()}}
 	return s, e
+}
+
+// skillRevisionStore returns a store that carries the skill_revisions methods,
+// which is what turns journaling on for a Server.
+func skillRevisionStore(t *testing.T) *agent.SQLiteMemoryStore {
+	t.Helper()
+	store, err := agent.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating revision store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 func writeScope(t *testing.T) context.Context {
