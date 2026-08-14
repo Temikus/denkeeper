@@ -35,6 +35,16 @@ func NewVersioned(name, description, version string, triggers []string, body str
 	return s
 }
 
+// NewWithRequiresTools is New with an explicit requires.tools declaration, for
+// tests that exercise tool-requirement gating. Like MaxToolRounds, Requires has
+// no parsed companion field, so assigning it directly on a value from New is
+// equally safe. Panics if any trigger string is invalid.
+func NewWithRequiresTools(name, description string, triggers []string, body string, tools []string) skill.Skill {
+	s := New(name, description, triggers, body)
+	s.Requires = skill.SkillRequires{Tools: tools}
+	return s
+}
+
 // NewWithRoundCap is New with an explicit MaxToolRounds, for tests that
 // exercise the per-skill tool-round cap. Unlike Triggers, MaxToolRounds has no
 // parsed companion field, so assigning it directly on a value from New is
