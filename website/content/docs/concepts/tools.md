@@ -2,7 +2,7 @@
 title: "Tools (MCP)"
 description: "External tool servers connected via the Model Context Protocol."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -103,9 +103,9 @@ Plugins extend the agent with external processes. Two execution strategies are a
   - **Docker** (default) — `docker run -i --rm` with `--cap-drop ALL`, `--read-only`, `--network none`
   - **Kubernetes** — ephemeral Pods with init-container network isolation, dropped capabilities, read-only root filesystem, Pod Security Admission labels, and optional gVisor/Kata RuntimeClass
 
-Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/configuration-reference/) for all sandbox options.
+Select the sandbox backend in config with `[sandbox] runtime = "docker"` or `"kubernetes"`. See the [config reference](/docs/reference/config/) for all sandbox options.
 
-Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli-reference/), and [config reference](/docs/reference/configuration-reference/) pages for details.
+Subprocess plugins can optionally be verified with Ed25519 signatures. Use `denkeeper plugin keygen/sign/verify` to manage signing keys and signatures. See the [security](/docs/concepts/security/), [CLI reference](/docs/reference/cli/), and [config reference](/docs/reference/config/) pages for details.
 
 ## OAuth 2.1 for remote tools
 

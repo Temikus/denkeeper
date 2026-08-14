@@ -2,7 +2,7 @@
 title: "First Run"
 description: "Create your first Denkeeper configuration and connect to Telegram."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -93,4 +93,4 @@ When running as a systemd service:
 journalctl -u denkeeper -f
 ```
 
-Next: [Configuration reference](/docs/reference/configuration-reference/) for the full list of options.
+Next: [Configuration reference](/docs/reference/config/) for the full list of options.

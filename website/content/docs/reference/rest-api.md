@@ -2,7 +2,7 @@
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -317,7 +317,7 @@ Replace a persona section's contents.
 
 ## Channels
 
-Named routing endpoints. See the [config reference](/docs/reference/configuration-reference/) for the `[[channels]]` schema.
+Named routing endpoints. See the [config reference](/docs/reference/config/) for the `[[channels]]` schema.
 
 ### `GET /api/v1/channels`
 

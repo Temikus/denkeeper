@@ -2,7 +2,7 @@
 title: "Built-in Tools"
 description: "Web search and fetch, JavaScript execution, the KV store, and browser automation."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 35
 toc: true
@@ -111,4 +111,4 @@ A browser with a persistent profile is the most powerful capability an agent can
 
 Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools-mcp/). Of the built-ins, `web_search`, `web_fetch`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
 
-See the [configuration reference](/docs/reference/configuration-reference/) for every option in `[web]`, `[script]`, `[kv]`, and `[browser]`.
+See the [configuration reference](/docs/reference/config/) for every option in `[web]`, `[script]`, `[kv]`, and `[browser]`.

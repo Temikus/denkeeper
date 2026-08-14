@@ -3,7 +3,7 @@ title: "Denkeeper as an MCP Server"
 description: "Expose your instance to other MCP clients — Claude Code, IDEs, or another agent."
 slug: "mcp-server"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 40
 toc: true
@@ -91,4 +91,4 @@ Enable TLS, or keep the port on a trusted network. Prefer several narrow keys ov
 
 Sessions are tracked by default and cleaned up after `session_timeout`. Set `stateless = true` for clients that do not keep a session, at the cost of per-session context.
 
-See the [configuration reference](/docs/reference/configuration-reference/) for every `[api.mcp_server]` option.
+See the [configuration reference](/docs/reference/config/) for every `[api.mcp_server]` option.

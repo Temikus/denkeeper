@@ -3,7 +3,7 @@ title: "Supervisors & Auto-Approval"
 description: "Letting an LLM reviewer, or a standing rule, answer approval prompts for you."
 slug: "supervisors"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 45
 toc: true
@@ -114,4 +114,4 @@ The reviewer is **capability-reduced, not supervised** — a deliberate design c
 It runs at the `supervised` tier rather than `restricted`, because `restricted` omits tool use altogether and would block every call it needs to make.
 {{< /callout >}}
 
-See the [configuration reference](/docs/reference/configuration-reference/) for every supervisor and reviewer knob.
+See the [configuration reference](/docs/reference/config/) for every supervisor and reviewer knob.

@@ -176,13 +176,12 @@ fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
-INSTALLED_VERSION="$("${INSTALL_DIR}/denkeeper" --version 2>/dev/null || echo "${VERSION}")"
+INSTALLED_VERSION="$("${INSTALL_DIR}/denkeeper" version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "${VERSION}")"
 
 printf '\n'
 info "denkeeper ${INSTALLED_VERSION} installed to ${INSTALL_DIR}/denkeeper"
 printf '\n'
 log "Get started:"
-log "  denkeeper setup       # first-run configuration wizard"
-log "  denkeeper serve       # start the agent"
+log "  denkeeper serve       # start the agent (first run opens the setup wizard)"
 log ""
 log "Documentation: https://github.com/${REPO}"

@@ -2,7 +2,7 @@
 title: "Discord Setup"
 description: "Connect Denkeeper to Discord with a bot application and user allowlist."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 15
 toc: true
@@ -51,7 +51,9 @@ The environment variable takes precedence over the TOML value, which is the usua
 
 **Approval buttons** — approval requests arrive as messages with Approve/Deny action-row buttons; resolving one is a click, not a reply.
 
-**Voice** — incoming voice messages are transcribed when `[voice]` is configured.
+{{< callout context="note" >}}
+Voice transcription is Telegram-only — the Discord adapter has no voice/STT/TTS support.
+{{< /callout >}}
 
 {{< callout context="note" >}}
 The Discord adapter does **not** register slash commands. Telegram publishes `/start`, `/help`, `/clear` and the rest into its command picker, and adds skill `command:` triggers to it; on Discord those commands are not advertised.
