@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
@@ -107,17 +108,24 @@ func (d *repeatDetector) observe(name, args string) bool {
 	return d.consecutiveN >= d.threshold
 }
 
-// loopStopReason classifies model-behavior faults that stop the tool loop
-// while the LLM context is still healthy and full of executed tool results.
-// Unlike transport faults (which surface as errors and take the
-// persistInterruptedProgress path), these are eligible for a wrap-up round:
-// one final tools-stripped completion that summarizes the work done so far.
+// loopStopReason classifies the reasons the tool loop ends early while the LLM
+// context is still healthy and full of executed tool results. Unlike transport
+// faults (which surface as errors and take the persistInterruptedProgress
+// path), these all leave through the graceful exit in finishStoppedToolLoop.
+//
+// The two model-behavior reasons are eligible for a wrap-up round: one final
+// tools-stripped completion that summarizes the work done so far. stopRequested
+// is not — an operator stop must not spend tokens (see finishStoppedTurn).
+//
+// Wrap-up design: design/archive/loop-guard-wrapup-round.md. Step-boundary stop
+// (stopRequested): design/plans/6-step-boundary-stop.md.
 type loopStopReason int
 
 const (
 	stopNone loopStopReason = iota
 	stopRepeatedCalls
 	stopMaxRounds
+	stopRequested
 )
 
 func (r loopStopReason) String() string {
@@ -126,10 +134,19 @@ func (r loopStopReason) String() string {
 		return "repeated identical tool calls"
 	case stopMaxRounds:
 		return "tool-call round budget exhausted"
+	case stopRequested:
+		return "stop requested"
 	default:
 		return "none"
 	}
 }
+
+// syntheticStoppedResult is the tool message for a call the engine never
+// started because the turn was stopped between calls. Such a call gets no
+// ToolCallRecord at all: nothing was attempted, so telemetry must not show it
+// as a fault (the same treatment the repeated-call guard gives its suppressed
+// calls).
+const syntheticStoppedResult = "[engine: call not executed — the turn was stopped before this call started]"
 
 // SendFunc is a callback for sending a response back to the originating adapter.
 // The Dispatcher sets this when constructing each Engine.
@@ -162,6 +179,13 @@ type Engine struct {
 
 	// maxToolRounds limits the number of tool-call rounds per message.
 	maxToolRounds int
+
+	// stopGen is the engine's stop generation: RequestStop bumps it, and every
+	// turn compares it against the value it captured at its start. A monotonic
+	// counter rather than a flag means a stop is self-scoping ("end everything
+	// running now") and needs no reset — a turn that starts later captures the
+	// new value and runs normally.
+	stopGen atomic.Uint64
 
 	// Approval configuration (set via SetApprovalConfig after construction).
 	approvalTimeout time.Duration // default 5m
@@ -321,6 +345,52 @@ func (e *Engine) SetMaxToolRounds(n int) {
 	if n > 0 {
 		e.maxToolRounds = n
 	}
+}
+
+// RequestStop asks every turn currently running on this engine to end at its
+// next step boundary — the top of a tool round, or the gap before the next tool
+// call in a round. The call in flight is never killed: it completes (bounded by
+// toolExecTimeout) and is recorded with its real outcome, the remaining calls
+// are not started, and the turn leaves through the normal wrap-up and
+// persistence path instead of the error path.
+//
+// It is a signal, not a barrier: RequestStop returns immediately and a turn
+// with no tool rounds left to run (or none at all) is unaffected. Turns that
+// start after this call capture the new generation and run normally, so there
+// is nothing to reset — the dispatcher's panic state is what refuses new work.
+//
+// Why a boundary and not a kill: this is the temporal-composability half of
+// "A Programming Paradigm for Spatiotemporal Composability" (Shi, Zhang & Cui):
+// https://github.com/cordiverse/paper/blob/main/paper.pdf — applied to a turn.
+// A tool call is an effect; the runtime can only revert — or even truthfully
+// report — a set of effects it knows the exact extent of. A context kill lands
+// mid-step and destroys that: the call in flight is abandoned client-side
+// while the server may still commit, and the calls after it are recorded as
+// failures though nothing was attempted. Stopping at a boundary keeps the
+// recorded effect set equal to the applied one, which is the precondition the
+// revertible-effect machinery in internal/skilleffect needs to mean anything at
+// turn granularity (see stage 7 of the plan below).
+//
+// Stage 1 of design/plans/6-step-boundary-stop.md, and deliberately only that:
+// the signal is engine-wide and wired from Dispatcher.executePanic alone, so
+// /stop, POST /sessions/{id}/stop and the WS cancel frame still work by context
+// cancellation until stop scoping (stage 3) lands. Approval abort (stage 4) and
+// the scheduler fixes (stage 5) are likewise not here.
+func (e *Engine) RequestStop() {
+	gen := e.stopGen.Add(1)
+	e.logger.Warn("stop requested for in-flight turns", "stop_generation", gen)
+}
+
+// StopGeneration returns the engine's current stop generation. A turn that
+// started at generation g must end at its next step boundary once this differs
+// from g.
+func (e *Engine) StopGeneration() uint64 {
+	return e.stopGen.Load()
+}
+
+// turnStopRequested reports whether a stop was requested after this turn began.
+func (e *Engine) turnStopRequested(run turnRun) bool {
+	return e.stopGen.Load() != run.stopGen
 }
 
 // SetApprovalConfig configures the approval timeout and retry count.
@@ -1308,6 +1378,10 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
+	// Capture the stop generation before any turn work begins: from here on, a
+	// stop belongs to this turn and must end it at the next step boundary.
+	stopGen := e.stopGen.Load()
+
 	prep, err := e.prepareTurn(ctx, msg, policy, perms)
 	if err != nil {
 		return turnOutcome{convID: prep.convID}, err
@@ -1323,7 +1397,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy)}
+	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), stopGen: stopGen}
 	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
@@ -1836,8 +1910,9 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 
 // runToolLoop executes tool-call rounds until the model stops requesting
 // tools, a model-behavior stop fires (recorded in the outcome's stopReason),
-// the soft cost limit is reached, or a transport error occurs (returned as
-// err with the partial outcome for persistence).
+// an operator stop is observed at a step boundary (stopRequested), the soft
+// cost limit is reached, or a transport error occurs (returned as err with the
+// partial outcome for persistence).
 func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc, totalUsage *llm.TokenUsage, totalCost *float64) (toolLoopOutcome, error) {
 	// A policy turn never enters the approval chain: suppressed calls execute
 	// nothing to approve, and the calls that do run are read-only by definition
@@ -1860,6 +1935,13 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 			// message list ends on the previous round's tool results — a valid
 			// state for the wrap-up completion.
 			out.stopReason = stopMaxRounds
+			break
+		}
+		if e.stopAtRoundBoundary(convID, round+1, run, resp, &accumulatedContent) {
+			// Same message-list state as the round-budget stop above: the
+			// pending assistant tool_calls message is NOT appended, so the list
+			// ends on the previous round's tool results.
+			out.stopReason = stopRequested
 			break
 		}
 		out.toolRounds++
@@ -1901,6 +1983,25 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 	out.resp = resp
 	out.accumulated = accumulatedContent.String()
 	return out, nil
+}
+
+// stopAtRoundBoundary reports whether a stop was requested since this turn
+// began, in which case the round must not start — not the LLM call, not any of
+// its tool calls. Any text the model produced alongside the pending tool calls
+// is captured first, so the stopped turn can still answer with it instead of
+// discarding work the user already saw streamed.
+//
+// Kept out of runToolLoop's body to hold that loop under the gocyclo ceiling.
+func (e *Engine) stopAtRoundBoundary(convID string, nextRound int, run turnRun, resp *llm.ChatResponse, accumulated *strings.Builder) bool {
+	if !e.turnStopRequested(run) {
+		return false
+	}
+	if resp.Content != "" {
+		accumulated.WriteString(resp.Content)
+	}
+	e.logger.Warn("stop requested, ending turn at round boundary",
+		"conversation", convID, "next_round", nextRound, "pending_tool_calls", len(resp.ToolCalls))
+	return true
 }
 
 // completeToolRound issues the follow-up completion after one round of tool
@@ -1956,8 +2057,22 @@ func (e *Engine) softCostLimitReached(convID string, onEvent ChatEventFunc) bool
 // detection), it stops executing, appends synthetic results for the offending
 // and remaining calls (keeping the tool-message protocol valid), and returns
 // stopRepeatedCalls so the caller can run a wrap-up round.
+//
+// It also observes an operator stop in the gap before each call — never inside
+// one — returning stopRequested with synthetic results for the calls it did not
+// start. Those calls get no ToolCallRecord: nothing was attempted.
 func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, detector *repeatDetector, state *turnToolState, llmMessages []llm.Message, toolRecords []ToolCallRecord) ([]llm.Message, []ToolCallRecord, loopStopReason, error) {
 	for i, tc := range toolCalls {
+		// Step boundary: a stop is observed between calls, never inside one.
+		// The call that is already running finishes and keeps its real outcome;
+		// the ones below have not started, so they are skipped and left
+		// unrecorded rather than logged as failures.
+		if e.turnStopRequested(run) {
+			e.logger.Warn("stop requested, skipping remaining tool calls in round",
+				"round", round+1, "skipped", len(toolCalls)-i, "conversation", convID)
+			return appendSyntheticResults(llmMessages, toolCalls[i:], syntheticStoppedResult),
+				toolRecords, stopRequested, nil
+		}
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
 				"tool", tc.Function.Name,
@@ -1968,12 +2083,8 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			synthetic := fmt.Sprintf(
 				"[engine: call not executed — %q was called with identical arguments %d consecutive times; the tool loop is stopping]",
 				tc.Function.Name, defaultRepeatDetectionThreshold)
-			for _, skipped := range toolCalls[i:] {
-				llmMessages = append(llmMessages, llm.Message{
-					Role: "tool", Content: synthetic, ToolCallID: skipped.ID,
-				})
-			}
-			return llmMessages, toolRecords, stopRepeatedCalls, nil
+			return appendSyntheticResults(llmMessages, toolCalls[i:], synthetic),
+				toolRecords, stopRepeatedCalls, nil
 		}
 		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("agent", e.name),
@@ -1989,6 +2100,18 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		})
 	}
 	return llmMessages, toolRecords, stopNone, nil
+}
+
+// appendSyntheticResults appends one synthetic tool message per un-executed
+// call, so a round the engine cut short still answers every assistant tool_call
+// with a matching tool result and the message list stays a valid request.
+func appendSyntheticResults(llmMessages []llm.Message, calls []llm.ToolCall, content string) []llm.Message {
+	for _, c := range calls {
+		llmMessages = append(llmMessages, llm.Message{
+			Role: "tool", Content: content, ToolCallID: c.ID,
+		})
+	}
+	return llmMessages
 }
 
 // toolBudgetHint returns a short authoritative note telling the model how many
@@ -2025,7 +2148,10 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 	))
 }
 
-// finishStoppedToolLoop finalizes a turn after a model-behavior loop stop.
+// finishStoppedToolLoop finalizes a turn after an early loop stop. An operator
+// stop short-circuits to finishStoppedTurn (no completion at all); the two
+// model-behavior stops run the wrap-up round described below.
+//
 // Fallback ordering: wrap-up text → accumulated intermediate content → error
 // (which routes to persistInterruptedProgress upstream, i.e. exactly the
 // pre-wrap-up behavior). On success the returned response carries the
@@ -2033,6 +2159,13 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 // history (and the user) records that the turn was cut short.
 func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	stopReason := out.stopReason
+	if stopReason == stopRequested {
+		// An operator stop takes the graceful exit without the wrap-up
+		// completion, and unlike the model-behavior stops it is meaningful with
+		// zero executed calls — so this branch sits above the no-records guard.
+		resp, llmMessages := e.finishStoppedTurn(convID, out, totalUsage, totalCost)
+		return resp, llmMessages, nil
+	}
 	if len(out.toolRecords) == 0 {
 		// Nothing executed — there is no work to summarize, so skip the
 		// wrap-up completion and take the plain-error path (upstream persists
@@ -2060,6 +2193,37 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 	resp.TokensUsed = *totalUsage
 	resp.CostUSD = *totalCost
 	return resp, llmMessages, nil
+}
+
+// finishStoppedTurn finalizes a turn that was asked to stop. It issues no
+// wrap-up completion: a stop is an operator instruction, and an emergency stop
+// that bills one more model call is a broken emergency stop. The response is
+// whatever intermediate content the model already produced plus the standard
+// early-end marker, so a stopped turn always leaves an assistant message behind
+// — never a dangling user message — and the executed tool results reach history
+// through the normal persistTurn path.
+func (e *Engine) finishStoppedTurn(convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64) (*llm.ChatResponse, []llm.Message) {
+	resp := &llm.ChatResponse{}
+	if out.resp != nil {
+		// Shallow copy: keep the model/provider metadata of the response that
+		// asked for the tools, without its now-abandoned tool calls.
+		*resp = *out.resp
+	}
+	resp.ToolCalls = nil
+	resp.FinishReason = "stop"
+
+	marker := fmt.Sprintf("[engine: turn ended early — %s]", out.stopReason)
+	if content := strings.TrimSpace(out.accumulated); content != "" {
+		resp.Content = content + "\n\n" + marker
+	} else {
+		resp.Content = marker
+	}
+	resp.TokensUsed = *totalUsage
+	resp.CostUSD = *totalCost
+
+	e.logger.Warn("turn stopped at step boundary",
+		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
+	return resp, out.llmMessages
 }
 
 // wrapUpToolLoop issues one final tools-stripped completion after a
