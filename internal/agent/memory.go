@@ -324,11 +324,10 @@ CREATE INDEX IF NOT EXISTS idx_skill_usage_last_used ON skill_usage(last_used_at
 //
 // prior_payload holds the raw bytes the file had before the mutation (NULL for
 // 'create', where the prior state is "absent"), so the inverse restores exactly
-// what was there rather than a re-serialization — a before-image, in the
-// vocabulary of the recovery literature cited in internal/skilleffect.
-// transition_id groups a multi-skill edit and seq orders it, so a transition
-// reverts LIFO — a rename followed by an update must be undone
-// update-then-rename, or the update targets a name that no longer exists.
+// what was there rather than a re-serialization. transition_id groups a
+// multi-skill edit and seq orders it, so a transition reverts LIFO — a rename
+// followed by an update must be undone update-then-rename, or the update
+// targets a name that no longer exists.
 //
 // reverted_at is the at-most-once armed flag: NULL = armed, non-NULL = already
 // disposed. It is claimed with a conditional UPDATE (see
@@ -1489,10 +1488,6 @@ func (s *SQLiteMemoryStore) GetSkillRevision(ctx context.Context, id int64) (*Sk
 // statement, exactly one affects a row, and the loser is told the revision was
 // already disposed of. Because the flag lives in SQLite rather than memory, the
 // guarantee also survives a restart.
-//
-// This is optimistic validation — no lock is taken and the write itself detects
-// the conflict. See the Prior art section of internal/skilleffect for the
-// reference, and for the recovery literature behind the rest of this table.
 func (s *SQLiteMemoryStore) MarkSkillRevisionReverted(ctx context.Context, id int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE skill_revisions SET reverted_at = CURRENT_TIMESTAMP
