@@ -14,6 +14,54 @@
 // SkillActorRevert records an undo, not a mistake. Nothing enforces this today,
 // but an automated reverter that undoes such a revision would oscillate — it
 // must skip them.
+//
+// # Prior art
+//
+// This design was not derived from the literature; it was written against the
+// constraints of this codebase. The references below were attached afterwards
+// as a map, not a provenance claim: the mechanisms here are small instances of
+// well-studied database recovery techniques, so if one of the decisions ever
+// needs revisiting, this is where the reasoning has already been worked out
+// properly — including the failure modes we have not hit yet.
+//
+//   - [WAL] Mohan, Haderle, Lindsay, Pirahesh & Schwarz, "ARIES: A Transaction
+//     Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks
+//     Using Write-Ahead Logging", ACM Transactions on Database Systems, 1992.
+//   - [REC] Haerder & Reuter, "Principles of Transaction-Oriented Database
+//     Recovery", ACM Computing Surveys, 1983. The taxonomy paper for
+//     physical/logical logging and before-images.
+//   - [OCC] Kung & Robinson, "On Optimistic Methods for Concurrency Control",
+//     ACM Transactions on Database Systems, 1981.
+//
+// Where each applies:
+//
+// Journal-before-write (see Create) is the write-ahead rule of [WAL]: the log
+// record reaches stable storage before the change it describes, so recovery
+// never faces a mutation it has no record of. Our asymmetry argument — that a
+// crash after journaling is an idempotent no-op while a crash after writing is
+// untracked — is that rule's standard justification.
+//
+// Storing raw prior bytes rather than re-serializing is physical before-image
+// logging in the sense of [REC], as against logical logging. The trade is the
+// documented one: before-images are larger and bound to the exact byte layout,
+// but replaying one cannot lose information the writer did not understand —
+// which is precisely why BuildSkillPayload must not be in this path.
+//
+// LIFO transaction rollback (RevertTransition) is [WAL]'s undo order.
+//
+// The conditional UPDATE claim (MarkSkillRevisionReverted) is optimistic
+// validation in the sense of [OCC]: no lock is taken, the update itself
+// detects the conflict, and the loser is told to retry or give up.
+//
+// One deliberate divergence worth flagging to anyone reading [WAL] alongside
+// this code. In ARIES an undo is logged as a compensation log record, and CLRs
+// are specifically constructed never to be undone — that is what stops
+// recovery oscillating across repeated restarts. Here an undo IS re-revertible
+// on purpose (see applyInverse), because a human operator asking twice means
+// "put it back", and undo/redo alternation is the behaviour they expect. The
+// ARIES rule is not abandoned, only narrowed: it is exactly the loop guard
+// stated above, and it becomes load-bearing the moment an automated curator
+// starts issuing reverts without a human in the loop.
 package skilleffect
 
 import (
@@ -101,6 +149,8 @@ func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 // no-op. Write-before-journal would leave an untracked mutation, which is the
 // one failure mode this design exists to prevent. A failed append therefore
 // aborts the mutation: fail closed.
+//
+// This is the write-ahead rule; see [WAL] under Prior art in the package doc.
 func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, actor string, maxBytes int) error {
 	if name, version, ok := e.parseTracked(payload); ok && validName(name) {
 		// prior_payload stays NULL: the prior state of a create is "absent",
@@ -238,7 +288,8 @@ func (e *Effector) RevertByID(ctx context.Context, sa SkillAccess, id int64, max
 
 // RevertTransition undoes every armed revision of one transition, newest first.
 // LIFO is required, not cosmetic: a rename followed by an update must be undone
-// update-then-rename, or the update targets a name that no longer exists.
+// update-then-rename, or the update targets a name that no longer exists. It is
+// the rollback order of [WAL] (see Prior art in the package doc).
 //
 // It stops at the first failure and reports how far it got; the revisions it
 // did undo stay undone (each is claimed and applied individually).
@@ -288,6 +339,10 @@ func (e *Effector) revertOne(ctx context.Context, sa SkillAccess, rev agent.Skil
 // the undo is journaled like any other change and "undo the undo" comes free.
 // A nil PriorPayload always means "the file did not exist", so the inverse is a
 // removal regardless of which op recorded it.
+//
+// Journaling the undo is ARIES compensation logging, but re-revertible undo is
+// a deliberate departure from it — see the divergence note under Prior art in
+// the package doc before changing this.
 func (e *Effector) applyInverse(ctx context.Context, sa SkillAccess, rev agent.SkillRevision, tid string, maxBytes int) error {
 	switch rev.Op {
 	case agent.SkillOpCreate:
