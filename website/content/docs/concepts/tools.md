@@ -34,6 +34,12 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 4. When the LLM requests a tool call, Denkeeper executes it and returns the result
 5. This continues in an agentic loop until the LLM produces a final response
 
+### Duplicate tool names
+
+Two MCP servers can advertise a tool with the same name. When that happens, neither keeps the bare name: both are offered to the model as `<server>__<tool>` — a GitHub server and a Gitea server both exposing `create_issue` become `github__create_issue` and `gitea__create_issue`. The bare name stops being offered and stops routing, so a call that used it fails with an error naming both servers and the qualified alternatives rather than silently landing on whichever server connected last. The collision is logged as a warning and recorded in the audit log (`tool_name_collision`); removing one of the servers gives the survivor its bare name back.
+
+Tool names you have written down elsewhere follow the same rule, deliberately: an `auto_approve_tools` entry naming the bare form of a now-duplicated tool stops matching — and says so in a startup warning — instead of quietly granting one server's blessing to another server's tool. Update it to the qualified name, or rename the tool on one of the servers.
+
 ### Within-turn memoization
 
 Models occasionally repeat a tool call with byte-identical arguments in the same turn. For tools declared *idempotent*, the second identical call returns the first call's cached result instead of re-executing — skipping the tool latency and, on supervised agents, the approval round-trip (the original call already passed approval, and a cache hit executes nothing). The cache lives for a single message turn.

@@ -25,18 +25,10 @@ func TestUnregisterServer_RemovesToolDefs(t *testing.T) {
 
 	// Manually inject a server and its tools to avoid real subprocess spawning.
 	sc := &serverConn{name: "test-srv", command: "/usr/bin/test"}
-	m.servers["test-srv"] = sc
-	m.toolMap["tool_a"] = sc
-	m.toolMap["tool_b"] = sc
-	m.toolDefs = []llm.ToolDef{
-		{Type: "function", Function: llm.FunctionDef{Name: "tool_a"}},
-		{Type: "function", Function: llm.FunctionDef{Name: "tool_b"}},
-		{Type: "function", Function: llm.FunctionDef{Name: "tool_other"}},
-	}
+	seedServerTools(m, sc, toolDef("tool_a"), toolDef("tool_b"))
 	// tool_other belongs to a different server
 	otherSC := &serverConn{name: "other-srv"}
-	m.servers["other-srv"] = otherSC
-	m.toolMap["tool_other"] = otherSC
+	seedServerTools(m, otherSC, toolDef("tool_other"))
 
 	// UnregisterServer will try to close the session, which is nil here.
 	// We accept the error from Close but care about the cleanup.
@@ -99,8 +91,7 @@ func TestServerInfo_NotFound(t *testing.T) {
 func TestServerInfo_Found(t *testing.T) {
 	m := NewManager(testLogger())
 	sc := &serverConn{name: "my-tool", command: "/usr/bin/my-tool", args: []string{"--flag"}}
-	m.servers["my-tool"] = sc
-	m.toolMap["do_thing"] = sc
+	seedServerTools(m, sc, toolDef("do_thing"))
 
 	info, ok := m.ServerInfo("my-tool")
 	if !ok {
