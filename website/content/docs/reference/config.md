@@ -332,7 +332,7 @@ cached_input = 0.3
 | `enabled` | bool | `true` | Enable audit logging |
 | `retention_days` | int | `30` | How long audit events are kept. 0 = unlimited |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
-| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer |
+| `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log |
 
 Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 
