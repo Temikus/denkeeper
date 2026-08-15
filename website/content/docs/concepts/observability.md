@@ -21,6 +21,8 @@ retention_days = 30
 buffer_size = 1000
 ```
 
+Auditing is deliberately best-effort: emission never blocks an agent turn, so if a burst overruns the buffer the excess events are dropped with a warning log rather than stalling the agent.
+
 Events are grouped into categories:
 
 | Category | Records |
