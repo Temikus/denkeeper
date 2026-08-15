@@ -2,7 +2,7 @@
 title: "Channels"
 description: "Named routing endpoints that decouple conversations from adapter bindings."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 15
 toc: true
@@ -83,4 +83,4 @@ Channels are reachable from every surface:
 - **Config MCP** — agents can call `channel_list`, `channel_info`, and `channel_switch`.
 - **Dashboard** — the Channels page.
 
-See the [configuration reference](/docs/reference/configuration-reference/) for the full `[[channels]]` schema.
+See the [configuration reference](/docs/reference/config/) for the full `[[channels]]` schema.

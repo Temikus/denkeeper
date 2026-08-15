@@ -2,7 +2,7 @@
 title: "Configuration"
 description: "Overview of Denkeeper's TOML configuration file."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -140,4 +140,4 @@ env = { API_KEY = "$MY_SECRET" }
 
 Denkeeper validates the config on startup using a three-phase pattern: parse TOML, apply defaults, then validate. If validation fails, the process exits with a descriptive error message and a suggested fix.
 
-See the [full configuration reference](/docs/reference/configuration-reference/) for every option.
+See the [full configuration reference](/docs/reference/config/) for every option.

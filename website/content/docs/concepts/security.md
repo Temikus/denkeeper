@@ -2,7 +2,7 @@
 title: "Security"
 description: "Denkeeper's security model: threat model, permissions, and sandboxing."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-04-03T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 50
 toc: true
@@ -22,6 +22,9 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
 | Plugin escape | Subprocess isolation and sandboxed execution via Docker (`--cap-drop ALL`, `--read-only`, `--network none`) or Kubernetes (ephemeral Pods with init-container network isolation, Pod Security Admission, optional gVisor/Kata); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
+| SSRF via remote MCP tool servers or the browser tool | Connect-time IP blocking of link-local, loopback, and cloud-metadata addresses, plus an optional hostname allowlist |
+| Secret leakage into stdio MCP subprocesses | Children do not inherit the parent environment — they get a fixed non-secret allowlist; any `DENKEEPER_*` or otherwise denylisted name is blocked even if explicitly passed through |
+| Skill file writes escaping the skills directory | Skill writes are confined to the agent's skills directory at the OS level (Go's `os.Root`), backstopping name validation against `..` traversal and symlink escapes |
 
 Every consequential decision — tool calls, approvals, supervisor verdicts, config changes — is recorded in the audit log. See [Observability](/docs/concepts/observability/) for what is captured and how to query it.
 
@@ -49,6 +52,18 @@ The REST API uses scoped bearer tokens with constant-time comparison:
 - Per-key rate limiting via token bucket
 - Optional TLS with configurable cert/key
 - CORS origin allowlist
+
+## MCP tool security
+
+Denkeeper connects outward to MCP servers to give agents external tools (see [Tools](/docs/concepts/tools/)). A few isolation properties apply specifically to that boundary:
+
+**OAuth 2.1 for remote servers** — a tool can be configured with `auth = "oauth"` (plus optional `client_id`/`client_secret`/`scopes`) to authenticate against a remote SSE MCP server using the standard Authorization Code flow. Tokens are stored in SQLite, not the config file, and the callback routes live at `/api/v1/tools/{name}/oauth/...`.
+
+**Stdio subprocess environment scoping** — a stdio MCP server does not inherit Denkeeper's process environment. It receives only a built-in non-secret allowlist (`PATH`, `HOME`, language-runtime variables, etc.) plus the tool's own configured `env`. `env_passthrough` on `[mcp]` or a specific `[tools.*]` entry can forward additional names, but a hard denylist — every `DENKEEPER_*` variable plus a fixed list of other secret-shaped names — is enforced even on explicit passthrough entries, so a misconfigured tool cannot pull API keys or tokens out of the parent process.
+
+**Tool name collisions never silently merge** — if two connected servers advertise the same tool name, neither keeps the bare name. Both are re-advertised as `<server>__<tool>` and the bare name becomes unroutable, so a call can never be silently misrouted to the wrong server's tool.
+
+**Skill file writes are hardened** — every skill create/update/delete goes through an OS-level `os.Root` confined to the agent's skills directory (blocking `..` traversal and symlink escapes), writes land via a randomized, exclusively-created temp file and an atomic rename, and a configurable per-file byte cap (`[skills] max_bytes`, 1 MiB by default) bounds how much a single skill write can grow the file.
 
 ## Dashboard authentication
 

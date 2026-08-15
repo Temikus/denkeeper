@@ -2,7 +2,7 @@
 title: "Sessions & Permissions"
 description: "Permission tiers, session management, and approval workflows."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 40
 toc: true
@@ -15,7 +15,7 @@ Every agent session operates in one of three tiers:
 | Tier | Capabilities |
 |---|---|
 | **Autonomous** | All capabilities — intended for sandboxed environments |
-| **Supervised** | Chat, memory, tools. Self-modification actions (create skills, modify schedules, update USER.md) require human approval |
+| **Supervised** | Chat, memory, tools. Every tool call requires approval — an auto-approve rule, a supervisor LLM decision, or a human — before it runs. Self-modification actions (create skills, modify schedules, update USER.md) are one case of this, not the whole story |
 | **Restricted** | Chat and read-only tools only. No memory writes beyond MEMORY.md |
 
 Set the default tier globally:
@@ -35,7 +35,7 @@ session_tier = "restricted"
 
 ## Approval workflows
 
-In supervised mode, actions like skill creation or schedule modification produce an approval request. The user is notified via Telegram (inline keyboard with Approve/Deny buttons) or the REST API.
+In supervised mode, every tool call — not just self-modification actions like skill creation or schedule modification — produces an approval request unless an auto-approve rule or supervisor already resolved it. The user is notified via Telegram (inline keyboard with Approve/Deny buttons) or the REST API.
 
 Approval requests have a 24-hour TTL. Unapproved requests expire automatically.
 

@@ -2,7 +2,7 @@
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -36,7 +36,7 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `default_provider` | string | `"openrouter"` | Name of the provider instance to use by default (must match a configured instance name) |
-| `default_model` | string | — | Model identifier (format depends on provider) |
+| `default_model` | string | `"anthropic/claude-sonnet-4-20250514"` | Model identifier (format depends on provider) |
 | `cost_limit_soft` | float | `0` | Soft cost limit per session in USD (warns but continues) |
 | `cost_limit_hard` | float | `1.0` | Hard cost limit per session in USD (stops generation) |
 
@@ -195,8 +195,8 @@ Users switch channels at runtime with `/session <name>`; the selection is persis
 | `retention_days` | int | `90` | How long conversations are kept. 0 = unlimited |
 | `max_conversations` | int | `10000` | Cap on stored conversations. 0 = unlimited |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
-| `persona_memory_char_limit` | int | `0` | Cap on `MEMORY.md` size in characters. 0 = unlimited |
-| `persona_user_char_limit` | int | `0` | Cap on `USER.md` size in characters. 0 = unlimited |
+| `persona_memory_char_limit` | int | `2200` | Cap on `MEMORY.md` size in characters. `0` in TOML falls back to this default — there is currently no way to request an unlimited cap |
+| `persona_user_char_limit` | int | `1375` | Cap on `USER.md` size in characters. `0` in TOML falls back to this default — there is currently no way to request an unlimited cap |
 
 ## `[log]`
 
@@ -392,6 +392,7 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`) |
 | `tags` | string[] | — | Freeform labels |
 | `enabled` | bool | `true` | Enable/disable without removing |
+| `session_mode` | string | `"shared"` | `"shared"` reuses the target channel's existing conversation history; `"isolated"` starts a fresh conversation with no prior context for each run. Note: schedules created via `POST /schedules` default to `"isolated"` instead — the default differs by creation path |
 
 ## `[plugins.*]`
 
@@ -458,6 +459,11 @@ Global settings that apply to all MCP tool servers.
 | `restart_cooldown` | string | `"5m"` | Duration a server must stay connected to reset the failure counter |
 | `drain_timeout` | string | `"35s"` | How long teardown waits for in-flight tool calls before forcing the transport closed |
 | `url_allowlist` | string[] | — | Allowed hostnames/wildcards for SSE tool server URLs (empty = all non-blocked hosts) |
+| `health_fail_threshold` | int | `3` | Consecutive health-probe failures before a `health_fail` audit event fires for remote (sse/http) servers. Stdio servers always emit on the first failure |
+| `init_retry_attempts` | int | `5` | Retries for a server's initial connection attempt |
+| `init_retry_backoff` | string | `"2s"` | Base backoff duration between initial-connection retries |
+| `sse_keep_alive_secs` | int | `15` | TCP keepalive interval for SSE connections (overridable per server) |
+| `env_passthrough` | string[] | — | Extra parent-process environment variable names forwarded to stdio server subprocesses, on top of the built-in non-secret allowlist. `DENKEEPER_*` and other denylisted names are always blocked, even here |
 
 Removing, disabling, restarting or reconfiguring a tool server tears it down in
 two phases. The server stops being offered immediately — its tools leave the

@@ -2,7 +2,7 @@
 title: "Installation"
 description: "How to install the Denkeeper binary on Linux and macOS."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-14T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -25,7 +25,7 @@ curl -fsSL https://get.denkeeper.io | sh -s -- --version v0.0.1
 ## Homebrew (macOS)
 
 ```bash
-brew install Temikus/tap/denkeeper
+brew install Temikus/denkeeper/denkeeper
 ```
 
 ## Linux packages
