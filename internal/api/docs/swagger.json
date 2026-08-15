@@ -7138,6 +7138,10 @@
                     "description": "ScheduledBy names the schedule a \"schedule\" preview stood in for. Empty\nwhen the caller asked for a scheduled run of a skill nothing schedules,\nwhich is a hypothetical rather than a rehearsal.",
                     "type": "string"
                 },
+                "stop_reason": {
+                    "description": "StopReason is why the tool loop ended — \"repeated_calls\", \"max_rounds\"\nor \"stop_requested\". Omitted when the model finished on its own, so its\npresence alone means the turn was cut short and the response is a\nwrap-up rather than a completed answer.",
+                    "type": "string"
+                },
                 "suppressed_count": {
                     "type": "integer"
                 },

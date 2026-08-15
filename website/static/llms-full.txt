@@ -364,6 +364,11 @@ suppressed and nothing persisted. Their audit events carry source "dryrun" or
 
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)
+    max_concurrent = 2               # eval samples running at once, process-wide
+    max_cost_per_run = 2.0           # USD ceiling for one run; no uncapped option
+    default_k = 3                    # samples per (task, variant) pair
+    completeness_floor = 0.8         # fraction of samples that must succeed for
+                                     # a run's scorecard to count as conclusive
 
 ### [costs]
 

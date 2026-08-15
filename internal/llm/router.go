@@ -71,6 +71,33 @@ func (r *Router) WithModel(model string) *Router {
 	return &clone
 }
 
+// WithProvider is WithModel's counterpart for the provider half of an
+// override, with the same shallow-copy contract: the clone shares the provider
+// map, cost tracker, pricing registry and fallback rules, so only the routing
+// target differs. Composes with WithModel — an eval variant that overrides
+// both chains the two calls and pays for one extra struct copy.
+//
+// An unregistered name is *not* rejected here: the copy is cheap and
+// side-effect-free, and failing at request time would be an unhelpful place to
+// learn about it. Callers that can validate earlier should ask HasProvider
+// first. Returns r unchanged when the override is empty or already current.
+func (r *Router) WithProvider(provider string) *Router {
+	if provider == "" || provider == r.defaultProvider {
+		return r
+	}
+	clone := *r
+	clone.defaultProvider = provider
+	return &clone
+}
+
+// HasProvider reports whether the named provider is registered on this router,
+// so a caller accepting a provider override can reject an unknown name up
+// front rather than failing every request that follows.
+func (r *Router) HasProvider(provider string) bool {
+	_, ok := r.providers[provider]
+	return ok
+}
+
 // CostTracker returns the router's cost tracker for soft-limit checks.
 func (r *Router) CostTracker() *CostTracker { return r.costTracker }
 

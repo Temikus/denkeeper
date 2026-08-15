@@ -1130,3 +1130,100 @@ func TestRouter_FallbackEmitsStreamReset(t *testing.T) {
 		t.Errorf("reset chunks = %d, want 1 (one per fallback attempt)", resets)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Variant overlay clones (WithModel / WithProvider / HasProvider)
+// ---------------------------------------------------------------------------
+
+// twoProviderRouter builds a router with two registered providers, mirroring a
+// real agent router (buildAgentRouter registers every configured provider on
+// every agent), which is what makes a provider overlay a pointer swap.
+func twoProviderRouter() (*Router, *capturingMockProvider, *capturingMockProvider) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("primary", "primary-model", ct)
+	resp := &ChatResponse{Content: "ok", Model: "m", FinishReason: "stop"}
+	primary := &capturingMockProvider{mockProvider: mockProvider{name: "primary", response: resp}}
+	secondary := &capturingMockProvider{mockProvider: mockProvider{name: "secondary", response: resp}}
+	r.RegisterProvider(primary)
+	r.RegisterProvider(secondary)
+	return r, primary, secondary
+}
+
+func TestWithProvider_CloneRoutesElsewhereAndLeavesOriginalAlone(t *testing.T) {
+	r, primary, secondary := twoProviderRouter()
+
+	clone := r.WithProvider("secondary")
+	if clone == r {
+		t.Fatal("WithProvider returned the receiver; a real override must clone")
+	}
+	if r.DefaultProvider() != "primary" {
+		t.Errorf("original provider = %q, want it untouched at \"primary\"", r.DefaultProvider())
+	}
+	if clone.DefaultProvider() != "secondary" {
+		t.Errorf("clone provider = %q, want \"secondary\"", clone.DefaultProvider())
+	}
+
+	msgs := []Message{{Role: "user", Content: "hi"}}
+	if _, err := clone.Complete(context.Background(), "s1", msgs); err != nil {
+		t.Fatalf("clone Complete: %v", err)
+	}
+	if secondary.lastModel == "" {
+		t.Error("clone did not reach the secondary provider")
+	}
+	if primary.lastModel != "" {
+		t.Error("clone reached the primary provider; the override did not take")
+	}
+}
+
+func TestWithProvider_CloneSharesCostTracker(t *testing.T) {
+	r, _, _ := twoProviderRouter()
+	clone := r.WithProvider("secondary")
+	if clone.CostTracker() != r.CostTracker() {
+		t.Error("clone must share the cost tracker so a variant bills to the same budget")
+	}
+}
+
+func TestWithProvider_EmptyIsNoop(t *testing.T) {
+	r, _, _ := twoProviderRouter()
+	if got := r.WithProvider(""); got != r {
+		t.Error("empty override should return the receiver unchanged")
+	}
+}
+
+func TestWithProvider_SameProviderIsNoop(t *testing.T) {
+	r, _, _ := twoProviderRouter()
+	if got := r.WithProvider("primary"); got != r {
+		t.Error("override matching the current provider should return the receiver")
+	}
+}
+
+func TestWithProvider_ComposesWithModel(t *testing.T) {
+	r, _, secondary := twoProviderRouter()
+
+	clone := r.WithModel("candidate-model").WithProvider("secondary")
+	if clone.DefaultModel() != "candidate-model" || clone.DefaultProvider() != "secondary" {
+		t.Fatalf("composed clone = %q/%q, want \"candidate-model\"/\"secondary\"",
+			clone.DefaultProvider(), clone.DefaultModel())
+	}
+	if r.DefaultModel() != "primary-model" || r.DefaultProvider() != "primary" {
+		t.Errorf("original mutated: %q/%q", r.DefaultProvider(), r.DefaultModel())
+	}
+
+	msgs := []Message{{Role: "user", Content: "hi"}}
+	if _, err := clone.Complete(context.Background(), "s1", msgs); err != nil {
+		t.Fatalf("composed Complete: %v", err)
+	}
+	if secondary.lastModel != "candidate-model" {
+		t.Errorf("secondary saw model %q, want \"candidate-model\"", secondary.lastModel)
+	}
+}
+
+func TestHasProvider_RegisteredAndUnknown(t *testing.T) {
+	r, _, _ := twoProviderRouter()
+	if !r.HasProvider("secondary") {
+		t.Error("HasProvider(secondary) = false, want true")
+	}
+	if r.HasProvider("nope") {
+		t.Error("HasProvider(nope) = true, want false")
+	}
+}

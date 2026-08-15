@@ -84,9 +84,14 @@ type dryRunTranscript struct {
 	Prompt         string    `json:"prompt"`
 	Response       string    `json:"response"`
 	Rounds         int       `json:"rounds"`
-	DurationMs     int64     `json:"duration_ms"`
-	Model          string    `json:"model,omitempty"`
-	Provider       string    `json:"provider,omitempty"`
+	// StopReason is why the tool loop ended — "repeated_calls", "max_rounds"
+	// or "stop_requested". Omitted when the model finished on its own, so its
+	// presence alone means the turn was cut short and the response is a
+	// wrap-up rather than a completed answer.
+	StopReason string `json:"stop_reason,omitempty"`
+	DurationMs int64  `json:"duration_ms"`
+	Model      string `json:"model,omitempty"`
+	Provider   string `json:"provider,omitempty"`
 	// RequestedModel is set only when the caller overrode the model, so the UI
 	// can mark a transcript as "not your live model" without knowing the agent
 	// config. Model is what actually answered; the two can differ if the
@@ -197,6 +202,7 @@ func buildTranscript(agentName string, result *agent.TurnResult) dryRunTranscrip
 		Prompt:         result.Prompt,
 		Response:       result.Response,
 		Rounds:         result.Rounds,
+		StopReason:     result.StopReason,
 		DurationMs:     result.DurationMs,
 		Model:          result.Model,
 		Provider:       result.Provider,
