@@ -3,6 +3,7 @@
 
   let open = $state(false)
   let containerEl = $state(null)
+  let triggerEl = $state(null)
 
   function handleBlur(e) {
     if (e.relatedTarget && containerEl?.contains(e.relatedTarget)) return
@@ -13,16 +14,19 @@
     if (e.key === 'Escape') open = false
   }
 
+  // The trigger element is handed to the callback so a caller that opens a
+  // panel from this menu can return focus here when the panel closes. Call
+  // sites that don't need it simply ignore the argument.
   function handleItemClick(item) {
     if (item.disabled) return
     open = false
-    item.onclick?.()
+    item.onclick?.(triggerEl)
   }
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div class="kebab-wrap" role="group" bind:this={containerEl} onfocusout={handleBlur} onkeydown={handleKeydown}>
-  <button class="kebab-trigger" onclick={() => { open = !open }} aria-haspopup="true" aria-expanded={open} title="More actions">
+  <button class="kebab-trigger" bind:this={triggerEl} onclick={() => { open = !open }} aria-haspopup="true" aria-expanded={open} title="More actions">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
   </button>
   {#if open}

@@ -31,8 +31,26 @@
   let showMobileChannelMenu = $state(false)
 
   // Index of the user message whose "Save as test case" panel is open, or null.
-  // Only one at a time — the panel is a focused decision, not a sidebar.
+  // Only one at a time — the panel is a focused decision, not a sidebar. Since
+  // only one can be open, one trigger ref suffices to hand focus back on close
+  // rather than dropping it to the top of the document.
   let saveTestCaseIndex = $state(null)
+  let saveTestCaseTrigger = null
+
+  function toggleSaveTestCase(index, triggerEl) {
+    if (saveTestCaseIndex === index) {
+      closeSaveTestCase()
+      return
+    }
+    saveTestCaseIndex = index
+    saveTestCaseTrigger = triggerEl
+  }
+
+  function closeSaveTestCase() {
+    saveTestCaseIndex = null
+    saveTestCaseTrigger?.focus()
+    saveTestCaseTrigger = null
+  }
 
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
@@ -455,7 +473,7 @@
           {#if msg.role === 'user' && !msg.streaming}
             <KebabMenu items={[{
               label: saveTestCaseIndex === msgIndex ? 'Cancel' : 'Save as test case',
-              onclick: () => { saveTestCaseIndex = saveTestCaseIndex === msgIndex ? null : msgIndex },
+              onclick: (triggerEl) => toggleSaveTestCase(msgIndex, triggerEl),
               disabled: !msg.text?.trim(),
             }]} />
           {/if}
@@ -547,7 +565,7 @@
             prompt={msg.text}
             precedingTurns={$chatState.messages.slice(0, msgIndex)}
             conversationId={$chatState.sessionId}
-            onclose={() => { saveTestCaseIndex = null }}
+            onclose={closeSaveTestCase}
           />
         {/if}
       </div>
@@ -764,6 +782,21 @@
   .bubble:hover .btn-copy { opacity: 0.5; }
   .btn-copy:hover { opacity: 1 !important; }
   .bubble.user .btn-copy { color: #fff; }
+
+  /* The kebab sets its own --text-muted, which sits at ~1.2:1 on the user
+     bubble's accent fill. Same treatment as .btn-copy above, and the same
+     reveal-on-hover so the two controls in this header behave alike; focus and
+     an open menu override it so the control never vanishes under the keyboard. */
+  .bubble.user :global(.kebab-trigger) { color: #fff; }
+  .bubble.user :global(.kebab-trigger:hover) {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: transparent;
+    color: #fff;
+  }
+  .bubble :global(.kebab-trigger) { opacity: 0; transition: opacity 0.15s; }
+  .bubble:hover :global(.kebab-trigger),
+  .bubble :global(.kebab-trigger:focus-visible),
+  .bubble :global(.kebab-trigger[aria-expanded='true']) { opacity: 1; }
 
   .approval-cards { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
   .approval-card {
