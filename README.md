@@ -383,6 +383,25 @@ Every audit event a dry run emits carries `source = "dryrun"` and a pseudo-agent
 audit = "summary"   # lifecycle events and errors only; default is "full"
 ```
 
+#### Evals — "is this candidate model actually better for *my* agent?"
+
+A dry run answers one question once. An eval asks it thirty times and does the arithmetic. Save real turns as test cases from the Chat page's message menu ("Save as test case", optionally pinning the preceding turns as context), then compare your current config against a candidate over the whole set:
+
+```bash
+curl -X POST localhost:8080/api/v1/eval/runs \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"task_set":"regression","base_agent":"pamela","k":3,
+       "variants":[{"name":"incumbent"},{"name":"candidate","llm_model":"moonshotai/kimi-k3"}]}'
+```
+
+The run proceeds in the background on the agent's **live** engine — real persona, real skills, real tools — under the same policy dry runs use, so reads happen and writes do not. `GET /eval/runs/{id}/summary` then reports the objective half of the verdict, no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent. A test set is an appreciating asset — the next candidate model starts here rather than at a blank page.
+
+Runs are bounded twice, by spend and by rate. Crossing `cost_cap` stops dispatching new samples, lets the in-flight ones finish, and keeps the partial results as `capped` — never a silent truncation. `POST /api/v1/panic` cancels active runs along with everything else, and resume deliberately does not revive them: a panic is not a pause. A sample that fails takes only itself down; the summary says how many of the expected samples landed and calls the run inconclusive below `completeness_floor` rather than reading a verdict off thin data.
+
+Task sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances.
+
+Judging — blinded A/B pairs scored from Claude Code — is the next stage; Stage B stops at the objective scorecard.
+
 ### REST API
 
 The API server and web dashboard are enabled by default (listening on `:8080`). All endpoints (except `/health`) require a `Bearer` token matching a configured API key.
@@ -397,7 +416,7 @@ key  = "dk-your-secret-key"
 scopes = ["chat", "sessions:read", "costs:read"]
 ```
 
-**Available scopes**: `chat`, `admin`, `agents:read`, `agents:write`, `sessions:read`, `sessions:write`, `costs:read`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `kv:read`, `kv:write`, `channels:read`, `channels:write`, `audit:read`
+**Available scopes**: `chat`, `admin`, `agents:read`, `agents:write`, `sessions:read`, `sessions:write`, `costs:read`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `kv:read`, `kv:write`, `channels:read`, `channels:write`, `audit:read`, `eval:read`, `eval:write`
 
 **Endpoints:**
 

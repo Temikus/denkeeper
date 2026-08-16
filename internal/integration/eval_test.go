@@ -1,0 +1,433 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/audit"
+	"github.com/Temikus/denkeeper/internal/eval"
+	"github.com/Temikus/denkeeper/internal/llm"
+)
+
+// evalHarness boots a harness with the eval subsystem wired. max_concurrent
+// defaults to 1 for determinism: the harness shares one mockProvider across
+// every agent with a single global response sequence, so concurrent samples
+// would race for positions in it.
+func evalHarness(t *testing.T, opts *HarnessOpts) *Harness {
+	t.Helper()
+	if opts == nil {
+		opts = &HarnessOpts{}
+	}
+	opts.WithEval = true
+	if opts.EvalConfig.MaxConcurrent == 0 {
+		opts.EvalConfig.MaxConcurrent = 1
+	}
+	return NewHarness(t, opts)
+}
+
+// seedEvalSet creates a task set with the given prompts through the REST API,
+// so the test exercises the same path the Chat UI does.
+func seedEvalSet(t *testing.T, h *Harness, name string, prompts ...string) {
+	t.Helper()
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/eval/task-sets",
+		map[string]any{"name": name}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creating task set: status %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, p := range prompts {
+		rec := h.Do(h.AuthedRequest(http.MethodPost,
+			"/api/v1/eval/task-sets/"+name+"/tasks", map[string]any{"prompt": p}))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("adding task %q: status %d: %s", p, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// startEvalRun launches a run and returns its id.
+func startEvalRun(t *testing.T, h *Harness, body map[string]any) int64 {
+	t.Helper()
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/eval/runs", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creating run: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	DecodeJSON(t, rec, &created)
+	if created.ID == 0 {
+		t.Fatal("run created without an id")
+	}
+	return created.ID
+}
+
+// evalRunStatus polls GET /eval/runs/{id} until the run is terminal.
+func evalRunStatus(t *testing.T, h *Harness, runID int64) eval.Run {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		rec := h.Do(h.AuthedRequest(http.MethodGet, fmt.Sprintf("/api/v1/eval/runs/%d", runID), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("run status: %d: %s", rec.Code, rec.Body.String())
+		}
+		var detail struct {
+			eval.Run
+			SamplesTotal int `json:"samples_total"`
+		}
+		DecodeJSON(t, rec, &detail)
+		if eval.IsTerminal(detail.Status) {
+			return detail.Run
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %d never reached a terminal status", runID)
+	return eval.Run{}
+}
+
+func evalSamples(t *testing.T, h *Harness, runID int64) []eval.Sample {
+	t.Helper()
+	rec := h.Do(h.AuthedRequest(http.MethodGet, fmt.Sprintf("/api/v1/eval/runs/%d/samples", runID), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("samples: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var samples []eval.Sample
+	DecodeJSON(t, rec, &samples)
+	return samples
+}
+
+func evalSummary(t *testing.T, h *Harness, runID int64) eval.Summary {
+	t.Helper()
+	rec := h.Do(h.AuthedRequest(http.MethodGet, fmt.Sprintf("/api/v1/eval/runs/%d/summary", runID), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var summary eval.Summary
+	DecodeJSON(t, rec, &summary)
+	return summary
+}
+
+// memorySnapshot counts conversations and the messages across them, so a test
+// can assert that a run left the real telemetry untouched.
+func memorySnapshot(t *testing.T, h *Harness) (conversations, messages int) {
+	t.Helper()
+	convs, total, err := h.Memory.ListConversations(context.Background(), agent.SessionListOpts{Limit: 1000})
+	if err != nil {
+		t.Fatalf("listing conversations: %v", err)
+	}
+	for _, c := range convs {
+		messages += c.MessageCount
+	}
+	return total, messages
+}
+
+// assertSampleLeftNoTrace checks the eval conversation ids the run used never
+// became real conversations. This is the structural half of the isolation
+// guarantee: ExecPolicy short-circuits resolveConversation and returns early
+// from persistTurn, so there should be nothing under these ids at all.
+func assertSampleLeftNoTrace(t *testing.T, h *Harness, samples []eval.Sample, runID int64) {
+	t.Helper()
+	var telemetry agent.TelemetryStore = h.Memory
+	for _, smp := range samples {
+		convID := eval.SampleConvID(runID, smp.TaskID, smp.KIndex, smp.VariantID)
+		msgs, err := h.Memory.GetMessages(context.Background(), convID, 100)
+		if err != nil {
+			t.Fatalf("GetMessages(%s): %v", convID, err)
+		}
+		if len(msgs) != 0 {
+			t.Errorf("conversation %s holds %d message(s); an eval sample must persist none", convID, len(msgs))
+		}
+		calls, err := telemetry.GetToolCalls(context.Background(), convID)
+		if err != nil {
+			t.Fatalf("GetToolCalls(%s): %v", convID, err)
+		}
+		if len(calls) != 0 {
+			t.Errorf("conversation %s holds %d tool call(s)", convID, len(calls))
+		}
+		if stats, err := telemetry.GetConversationStats(context.Background(), convID); err == nil && stats != nil {
+			t.Errorf("conversation %s has a stats row; eval turns must not reach conversation_stats", convID)
+		}
+	}
+}
+
+func TestEvalRun_TwoVariantsTwoTasksKTwo(t *testing.T) {
+	h := evalHarness(t, &HarnessOpts{
+		Responses: []*llm.ChatResponse{{
+			Content:      "the answer",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+			FinishReason: "stop",
+		}},
+	})
+	seedEvalSet(t, h, "regression", "first question", "second question")
+
+	// Baseline for the isolation assertion: whatever the harness itself wrote.
+	convsBefore, msgsBefore := memorySnapshot(t, h)
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "regression",
+		"base_agent": "default",
+		"k":          2,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate", "llm_model": "test-model"},
+		},
+	})
+
+	run := evalRunStatus(t, h, runID)
+	if run.Status != eval.StatusDone {
+		t.Fatalf("status = %q, want %q (error %q)", run.Status, eval.StatusDone, run.Error)
+	}
+
+	samples := evalSamples(t, h, runID)
+	if len(samples) != 8 {
+		t.Fatalf("got %d samples, want 2 tasks × 2 variants × k=2 = 8", len(samples))
+	}
+	for _, smp := range samples {
+		if smp.Status != eval.SampleOK {
+			t.Errorf("sample %d is %q: %s", smp.ID, smp.Status, smp.Error)
+		}
+		if smp.Response != "the answer" {
+			t.Errorf("sample %d response = %q, want the scripted answer", smp.ID, smp.Response)
+		}
+		if smp.TokensPrompt != 20 {
+			t.Errorf("sample %d tokens_prompt = %d, want 20", smp.ID, smp.TokensPrompt)
+		}
+	}
+
+	summary := evalSummary(t, h, runID)
+	if len(summary.Variants) != 2 {
+		t.Fatalf("summary has %d variants, want 2", len(summary.Variants))
+	}
+	for _, v := range summary.Variants {
+		if v.SamplesOK != 4 {
+			t.Errorf("variant %q has %d ok samples, want 4", v.Name, v.SamplesOK)
+		}
+		if v.RejectedRate != 0 || v.FailedRate != 0 {
+			t.Errorf("variant %q rates = %v/%v, want 0/0 on a clean run", v.Name, v.RejectedRate, v.FailedRate)
+		}
+	}
+	if summary.Completeness.SamplesOK != 8 || !summary.Completeness.Conclusive {
+		t.Errorf("completeness = %+v, want 8/8 and conclusive", summary.Completeness)
+	}
+	if summary.BaselineVariant != "incumbent" {
+		t.Errorf("baseline = %q, want the first variant", summary.BaselineVariant)
+	}
+	if len(summary.PerTask) != 2 {
+		t.Errorf("per_task has %d entries, want one per task", len(summary.PerTask))
+	}
+
+	// Structural isolation: a policy turn never reaches the persistence layer,
+	// so eight full turns must leave no trace in the real telemetry.
+	convsAfter, msgsAfter := memorySnapshot(t, h)
+	if convsAfter != convsBefore {
+		t.Errorf("conversations grew from %d to %d — an eval sample must not create one", convsBefore, convsAfter)
+	}
+	if msgsAfter != msgsBefore {
+		t.Errorf("messages grew from %d to %d — eval samples must not persist", msgsBefore, msgsAfter)
+	}
+	assertSampleLeftNoTrace(t, h, samples, runID)
+
+	// Audit marking: every event the run produced carries source=eval and the
+	// variant-scoped pseudo-agent, so ?agent=default excludes them for free.
+	h.FlushAudit(t)
+	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{Source: "eval", Limit: 500})
+	if err != nil {
+		t.Fatalf("listing audit events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no audit events carried source=eval")
+	}
+	var sawStart, sawFinish bool
+	for _, e := range events {
+		if !strings.HasPrefix(e.Agent, "default#eval") {
+			t.Errorf("event %q has agent %q, want the default#eval pseudo-identity", e.Action, e.Agent)
+		}
+		switch e.Action {
+		case "eval_run_start":
+			sawStart = true
+		case "eval_run_finish":
+			sawFinish = true
+		}
+	}
+	if !sawStart || !sawFinish {
+		t.Errorf("lifecycle events: start=%v finish=%v, want both", sawStart, sawFinish)
+	}
+
+	realAgent, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{Agent: "default", Limit: 500})
+	if err != nil {
+		t.Fatalf("listing audit events: %v", err)
+	}
+	for _, e := range realAgent {
+		if e.Source == "eval" {
+			t.Errorf("?agent=default returned an eval event (%q); the pseudo-identity must exclude them", e.Action)
+		}
+	}
+}
+
+func TestEvalRun_CostCapStopsMidFlightWithCapped(t *testing.T) {
+	// The harness router has no pricing registry, so TokenCost takes the
+	// legacy $0.01/1k fallback. 50k tokens per completion is therefore $0.50 a
+	// sample, and a $1.20 cap admits three of the eight before refusing to
+	// dispatch the fourth.
+	h := evalHarness(t, &HarnessOpts{
+		Responses: []*llm.ChatResponse{{
+			Content:      "expensive answer",
+			TokensUsed:   llm.TokenUsage{Prompt: 40000, Completion: 10000, Total: 50000},
+			Model:        "test-model",
+			FinishReason: "stop",
+		}},
+	})
+	seedEvalSet(t, h, "pricey", "one", "two", "three", "four")
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "pricey",
+		"base_agent": "default",
+		"k":          1,
+		"cost_cap":   1.20,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate"},
+		},
+	})
+
+	run := evalRunStatus(t, h, runID)
+	if run.Status != eval.StatusCapped {
+		t.Fatalf("status = %q, want %q (spent %v of %v)", run.Status, eval.StatusCapped, run.CostSpent, run.CostCap)
+	}
+	if run.CostSpent < run.CostCap {
+		t.Errorf("cost_spent = %v, want it to have reached the %v cap", run.CostSpent, run.CostCap)
+	}
+
+	samples := evalSamples(t, h, runID)
+	if len(samples) == 0 {
+		t.Fatal("capped run kept no samples; partial results are the point of the status")
+	}
+	if len(samples) >= 8 {
+		t.Fatalf("all %d samples ran despite the cap", len(samples))
+	}
+	for _, smp := range samples {
+		if smp.Status != eval.SampleOK {
+			t.Errorf("sample %d is %q — the cap must not kill a sample already in flight", smp.ID, smp.Status)
+		}
+	}
+
+	summary := evalSummary(t, h, runID)
+	if summary.Completeness.Conclusive {
+		t.Error("a capped run below the floor reported conclusive; thin data must not read as a verdict")
+	}
+	if summary.Completeness.SamplesExpected != 8 {
+		t.Errorf("samples_expected = %d, want the full 8 the run set out to do",
+			summary.Completeness.SamplesExpected)
+	}
+}
+
+func TestEvalRun_PanicCancelsActiveRun(t *testing.T) {
+	h := evalHarness(t, nil)
+	seedEvalSet(t, h, "slow", "one", "two", "three")
+	// Long enough that the run is unambiguously mid-flight when panic lands.
+	h.MockLLM.SetDelay(300 * time.Millisecond)
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "slow",
+		"base_agent": "default",
+		"k":          2,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate"},
+		},
+	})
+
+	// Wait for the run to actually be executing before pulling the switch.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && h.MockLLM.CallCount() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.MockLLM.CallCount() == 0 {
+		t.Fatal("run never reached the provider")
+	}
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/panic", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("panic: status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	run := evalRunStatus(t, h, runID)
+	if run.Status != eval.StatusStopped {
+		t.Fatalf("status = %q, want %q — panic must reach eval runs, which are never in the inFlight map",
+			run.Status, eval.StatusStopped)
+	}
+
+	samples := evalSamples(t, h, runID)
+	if len(samples) >= 12 {
+		t.Errorf("all %d samples ran despite the panic", len(samples))
+	}
+
+	// Resume clears the panic but deliberately does not revive the run: a
+	// panic is not a pause.
+	rec = h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/resume", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("resume: status = %d", rec.Code)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	rec = h.Do(h.AuthedRequest(http.MethodGet, fmt.Sprintf("/api/v1/eval/runs/%d", runID), nil))
+	var detail struct {
+		Status string `json:"status"`
+		Active bool   `json:"active"`
+	}
+	DecodeJSON(t, rec, &detail)
+	if detail.Status != eval.StatusStopped || detail.Active {
+		t.Errorf("after resume the run is %q (active=%v), want it left stopped", detail.Status, detail.Active)
+	}
+}
+
+func TestEvalTaskSet_JSONLRoundTripThroughAPI(t *testing.T) {
+	h := evalHarness(t, nil)
+	seedEvalSet(t, h, "source", "alpha", "beta")
+	seedEvalSet(t, h, "destination")
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/eval/task-sets/source/export", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export: status %d", rec.Code)
+	}
+	exported := rec.Body.String()
+	if strings.Count(strings.TrimSpace(exported), "\n") != 1 {
+		t.Fatalf("export produced %q, want two JSONL lines", exported)
+	}
+
+	req := h.AuthedRequest(http.MethodPost, "/api/v1/eval/task-sets/destination/import", nil)
+	req.Body = io.NopCloser(strings.NewReader(exported))
+	rec = h.Do(req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Imported int `json:"imported"`
+	}
+	DecodeJSON(t, rec, &result)
+	if result.Imported != 2 {
+		t.Fatalf("imported = %d, want 2", result.Imported)
+	}
+
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/eval/task-sets/destination", nil))
+	var detail struct {
+		Tasks []eval.Task `json:"tasks"`
+	}
+	DecodeJSON(t, rec, &detail)
+	prompts := make([]string, 0, len(detail.Tasks))
+	for _, task := range detail.Tasks {
+		prompts = append(prompts, task.Prompt)
+	}
+	if strings.Join(prompts, ",") != "alpha,beta" {
+		t.Errorf("imported prompts = %v, want [alpha beta] in order", prompts)
+	}
+}

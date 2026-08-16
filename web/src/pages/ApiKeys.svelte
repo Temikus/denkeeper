@@ -27,6 +27,7 @@
     'approvals:read', 'approvals:write',
     'browser:read', 'browser:write',
     'costs:read',
+    'eval:read', 'eval:write',
     'kv:read', 'kv:write',
     'schedules:read', 'schedules:write',
     'sessions:read', 'sessions:write',
@@ -50,6 +51,7 @@
     { name: 'KV Store', desc: 'Agent key-value storage', levels: ['none', 'read', 'readwrite'], scopes: { read: ['kv:read'], readwrite: ['kv:read', 'kv:write'] } },
     { name: 'Channels', desc: 'View and manage channels', levels: ['none', 'read', 'readwrite'], scopes: { read: ['channels:read'], readwrite: ['channels:read', 'channels:write'] } },
     { name: 'Audit Log', desc: 'View audit trail', levels: ['none', 'read'], scopes: { read: ['audit:read'] } },
+    { name: 'Evals', desc: 'Test sets and comparison runs', levels: ['none', 'read', 'readwrite'], scopes: { read: ['eval:read'], readwrite: ['eval:read', 'eval:write'] } },
   ]
 
   // Track permission level per resource group

@@ -383,6 +383,130 @@ List audit events. Filters: `?category=`, `?agent=`, `?status=`, `?source=`, `?s
 
 Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` filter as the list endpoint.
 
+## Evals
+
+An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.
+
+### `POST /api/v1/eval/task-sets`
+
+**Scope:** `eval:write`
+
+Create a named, empty test set. `409 Conflict` if the name is taken.
+
+### `GET /api/v1/eval/task-sets`
+
+**Scope:** `eval:read`
+
+List test sets with their task counts.
+
+### `GET /api/v1/eval/task-sets/{name}`
+
+**Scope:** `eval:read`
+
+One test set with its tasks, in creation order.
+
+### `PATCH /api/v1/eval/task-sets/{name}`
+
+**Scope:** `eval:write`
+
+Rename a set or change its description.
+
+### `DELETE /api/v1/eval/task-sets/{name}`
+
+**Scope:** `eval:write`
+
+Delete a set and its tasks. Returns `409 Conflict` while any run references it — a run's samples are only interpretable against the tasks that produced them.
+
+### `POST /api/v1/eval/task-sets/{name}/tasks`
+
+**Scope:** `eval:write`
+
+Add a test case. This is what the Chat UI's "Save as test case" calls.
+
+**Request body:**
+
+```json
+{
+  "prompt": "what's on my plate today",
+  "category": "chat",
+  "pinned_history": [{ "role": "user", "content": "earlier turn" }],
+  "notes": "should list the standup before anything else"
+}
+```
+
+`category` is one of `chat`, `skill_command`, `scheduled`, `tool_heavy` (default `chat`). `pinned_history` is captured now and replayed verbatim at run time rather than re-read from the source conversation, which drifts. `notes` are judge context, never parsed as assertions.
+
+### `PATCH` / `DELETE /api/v1/eval/task-sets/{name}/tasks/{id}`
+
+**Scope:** `eval:write`
+
+Edit or remove one test case.
+
+### `GET /api/v1/eval/task-sets/{name}/export`
+
+**Scope:** `eval:read`
+
+JSONL, one task per line, for hand-editing or git-versioning a curated set.
+
+### `POST /api/v1/eval/task-sets/{name}/import`
+
+**Scope:** `eval:write`
+
+Append JSONL tasks. All-or-none: every line is validated first, so a typo halfway down leaves the set untouched and the `400` names the offending line.
+
+### `POST /api/v1/eval/runs`
+
+**Scope:** `eval:write`
+
+Create and start a run.
+
+**Request body:**
+
+```json
+{
+  "task_set": "regression",
+  "base_agent": "pamela",
+  "variants": [
+    { "name": "incumbent" },
+    { "name": "candidate", "llm_model": "moonshotai/kimi-k3" }
+  ],
+  "k": 3,
+  "cost_cap": 2.0
+}
+```
+
+At least two variants are required. An empty variant runs the agent's live config; by convention the incumbent is listed first, and per-task deltas are measured against it. `k` and `cost_cap` default to `[eval] default_k` and `max_cost_per_run`. An unregistered `llm_provider` is rejected here rather than failing every sample later.
+
+### `GET /api/v1/eval/runs`
+
+**Scope:** `eval:read`
+
+List runs newest first. Filters: `?task_set=`, `?status=`.
+
+### `GET /api/v1/eval/runs/{id}`
+
+**Scope:** `eval:read`
+
+Status and progress: samples done out of expected, spend against the cap, and a rough ETA. This is the authoritative view; the `eval_progress` WebSocket frame is a droppable convenience on top of it.
+
+### `POST /api/v1/eval/runs/{id}/stop`
+
+**Scope:** `eval:write`
+
+Cancel an active run. In-flight calls die on the context, queued samples never start, and the run finishes `stopped` with the samples it already produced. `409 Conflict` if the run is already terminal. The panic switch stops every active run the same way; resume does not revive them.
+
+### `GET /api/v1/eval/runs/{id}/summary`
+
+**Scope:** `eval:read`
+
+The objective scorecard. Rates are tool-call level with cached and suppressed calls excluded, because nothing executed in either case. A run below `[eval] completeness_floor` still reports its numbers but is flagged inconclusive.
+
+### `GET /api/v1/eval/runs/{id}/samples`
+
+**Scope:** `eval:read`
+
+Per-sample transcripts, including the full tool trace with arguments and results.
+
 ## Safety
 
 ### `POST /api/v1/panic`
