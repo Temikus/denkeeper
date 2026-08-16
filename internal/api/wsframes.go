@@ -92,6 +92,24 @@ type PanicStatusFrame struct {
 	Message string `json:"message"` // human-readable description
 }
 
+// EvalProgressFrame is broadcast as an eval run advances. Server→client only,
+// so ParseClientFrame knows nothing about it.
+//
+// Progress frames are droppable and are not replayed: the WebSocket send
+// buffer discards non-critical frames under pressure, and GET /eval/runs/{id}
+// is the authoritative view a client falls back to. Losing one frame costs a
+// stale progress bar until the next sample, never a wrong terminal status.
+type EvalProgressFrame struct {
+	Type         string  `json:"type"` // "eval_progress"
+	RunID        int64   `json:"run_id"`
+	Status       string  `json:"status"`
+	SamplesDone  int     `json:"samples_done"`
+	SamplesTotal int     `json:"samples_total"`
+	CostSpent    float64 `json:"cost_spent"`
+	CostCap      float64 `json:"cost_cap"`
+	ETASeconds   int     `json:"eta_seconds,omitempty"`
+}
+
 // --- Frame type constants ---
 
 const (
@@ -104,6 +122,7 @@ const (
 	FrameTypeActivity         = "activity"
 	FrameTypePanic            = "panic"
 	FrameTypePanicStatus      = "panic_status"
+	FrameTypeEvalProgress     = "eval_progress"
 )
 
 // validateApprovalResponseFrame checks required fields and action validity.

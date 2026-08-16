@@ -23,6 +23,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -67,6 +68,8 @@ type Deps struct {
 	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo         // returns enriched model metadata; nil = endpoint returns 503
 	AuditStore        audit.Store                                                              // nil = audit endpoints return 503
 	Auditor           audit.Emitter                                                            // nil = no audit events from schedule delivery
+	EvalStore         *eval.Store                                                              // nil = eval endpoints return 503
+	EvalRunner        *eval.Runner                                                             // nil = eval endpoints return 503
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
@@ -265,6 +268,26 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/plugins/{name}", s.RequireScope("tools:read", s.handleGetPlugin))
 	mux.HandleFunc("POST /api/v1/plugins", s.RequireScope("tools:write", s.handleAddPlugin))
 	mux.HandleFunc("DELETE /api/v1/plugins/{name}", s.RequireScope("tools:write", s.handleRemovePlugin))
+
+	// Eval endpoints. Runs write nothing real, but they execute read tools and
+	// spend real tokens, so everything that starts or mutates one sits behind
+	// the write scope — the same reasoning as the dry-run endpoints above.
+	mux.HandleFunc("POST /api/v1/eval/task-sets", s.RequireScope("eval:write", s.handleCreateEvalTaskSet))
+	mux.HandleFunc("GET /api/v1/eval/task-sets", s.RequireScope("eval:read", s.handleListEvalTaskSets))
+	mux.HandleFunc("GET /api/v1/eval/task-sets/{name}", s.RequireScope("eval:read", s.handleGetEvalTaskSet))
+	mux.HandleFunc("PATCH /api/v1/eval/task-sets/{name}", s.RequireScope("eval:write", s.handleUpdateEvalTaskSet))
+	mux.HandleFunc("DELETE /api/v1/eval/task-sets/{name}", s.RequireScope("eval:write", s.handleDeleteEvalTaskSet))
+	mux.HandleFunc("POST /api/v1/eval/task-sets/{name}/tasks", s.RequireScope("eval:write", s.handleCreateEvalTask))
+	mux.HandleFunc("PATCH /api/v1/eval/task-sets/{name}/tasks/{id}", s.RequireScope("eval:write", s.handleUpdateEvalTask))
+	mux.HandleFunc("DELETE /api/v1/eval/task-sets/{name}/tasks/{id}", s.RequireScope("eval:write", s.handleDeleteEvalTask))
+	mux.HandleFunc("GET /api/v1/eval/task-sets/{name}/export", s.RequireScope("eval:read", s.handleExportEvalTaskSet))
+	mux.HandleFunc("POST /api/v1/eval/task-sets/{name}/import", s.RequireScope("eval:write", s.handleImportEvalTaskSet))
+	mux.HandleFunc("POST /api/v1/eval/runs", s.RequireScope("eval:write", s.handleCreateEvalRun))
+	mux.HandleFunc("GET /api/v1/eval/runs", s.RequireScope("eval:read", s.handleListEvalRuns))
+	mux.HandleFunc("GET /api/v1/eval/runs/{id}", s.RequireScope("eval:read", s.handleGetEvalRun))
+	mux.HandleFunc("POST /api/v1/eval/runs/{id}/stop", s.RequireScope("eval:write", s.handleStopEvalRun))
+	mux.HandleFunc("GET /api/v1/eval/runs/{id}/summary", s.RequireScope("eval:read", s.handleEvalRunSummary))
+	mux.HandleFunc("GET /api/v1/eval/runs/{id}/samples", s.RequireScope("eval:read", s.handleEvalRunSamples))
 
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))

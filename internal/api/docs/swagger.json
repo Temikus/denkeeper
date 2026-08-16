@@ -2362,6 +2362,1037 @@
                 }
             }
         },
+        "/eval/runs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns runs newest first, optionally filtered by task set name and status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "List eval runs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by task set name",
+                        "name": "task_set",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by status (pending, running, done, capped, stopped, failed)",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Runs",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Run"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Named task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates and launches a background run: every task in the set is executed k times against each variant, on the base agent's live engine under the eval execution policy. Reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry or memory. Costs real tokens, bounded by cost_cap and by [eval] max_concurrent. By convention the first variant is the incumbent (empty overlay = live config) and per-task deltas are measured against it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Start an eval comparison run",
+                "parameters": [
+                    {
+                        "description": "Task set, base agent, and two or more variants",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalRunInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created run with its variants",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalRunCreated"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON, fewer than two variants, unknown agent/provider/model, or an empty task set",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/runs/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the run with its variants, samples done out of expected, spend against the cap, and a rough ETA (mean sample latency times remaining, divided by concurrency). This is the authoritative view; the eval_progress WebSocket frame is a droppable convenience on top.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get an eval run's status and progress",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Run status",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalRunDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/runs/{id}/samples": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get an eval run's per-sample transcripts",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Samples",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Sample"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/runs/{id}/stop": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Cancels an active run. In-flight LLM calls die on the context, queued samples never start, and the run finishes 'stopped' with the samples it already produced. A run that has already reached a terminal status returns 409.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Stop an eval run",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stop requested",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Run is not active",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/runs/{id}/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Aggregates the run's samples: per-variant rejected and failed rates (tool-call level, with cached and suppressed calls excluded because nothing executed), mean rounds, wrap-up count, mean cost per task and latency, plus per-task deltas against the baseline variant and a completeness indicator. A run below the [eval] completeness_floor still reports its numbers but is flagged inconclusive rather than dressed up as a verdict. No judging — that is Stage C.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get an eval run's objective scorecard",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Objective scorecard",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Summary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns every task set with the number of tasks it holds.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "List eval task sets",
+                "responses": {
+                    "200": {
+                        "description": "Task sets",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TaskSet"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a named, empty set of eval test cases. Names are unique; tasks are added separately or imported as JSONL.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Create an eval task set",
+                "parameters": [
+                    {
+                        "description": "Set name and optional description",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalTaskSetInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created task set",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TaskSet"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON or missing name",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "A set with that name already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets/{name}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns one task set and every task in it, in creation order.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get an eval task set with its tasks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Task set with tasks",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalTaskSetDetail"
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Removes a set and its tasks. Refused with 409 while any run references the set: a run's samples are only interpretable against the tasks that produced them, so the delete would either orphan results or silently cascade them away.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Delete an eval task set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Deleted"
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Runs reference this task set",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies a partial update. Omitted fields are left unchanged.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Rename an eval task set or change its description",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalTaskSetInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Updated task set",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TaskSet"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON or blank name",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "The new name is taken",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets/{name}/export": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Streams one task per line, for hand-editing, git-versioning a curated set, or moving it between instances. Source ids are written for provenance and ignored on import.",
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Export an eval task set as JSONL",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "JSONL, one task per line",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets/{name}/import": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Appends every line of the body to the set. All-or-none: every line is parsed and validated first, so a typo halfway down a hand-edited file leaves the set exactly as it was rather than half-imported. The 400 names the offending line.",
+                "consumes": [
+                    "text/plain"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Import JSONL tasks into an eval task set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "JSONL, one task object per line",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Number of tasks appended",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalImportResult"
+                        }
+                    },
+                    "400": {
+                        "description": "A line failed validation; nothing was imported",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets/{name}/tasks": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Appends one test case. This is what the Chat \"Save as test case\" action calls. pinned_history is captured now and replayed verbatim at run time, rather than re-read from the source conversation, which drifts.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Add a task to an eval task set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Task fields; prompt is required, category defaults to chat",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalTaskInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created task",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Task"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON, missing prompt, or unknown category",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/task-sets/{name}/tasks/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Deletes one test case. Samples already recorded against it are left alone.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Remove a task from an eval task set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Task id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Deleted"
+                    },
+                    "400": {
+                        "description": "Bad task id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set or task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies a partial update. Omitted fields are left unchanged.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Edit a task in an eval task set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task set name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Task id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalTaskInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Updated task",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Task"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON, bad id, or unknown category",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set or task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Returns server health status. When ready=true is set, also verifies that at least one agent is registered and returns 503 if not.",
@@ -6633,6 +7664,366 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Completeness": {
+            "type": "object",
+            "properties": {
+                "conclusive": {
+                    "type": "boolean"
+                },
+                "floor": {
+                    "type": "number"
+                },
+                "ratio": {
+                    "type": "number"
+                },
+                "samples_expected": {
+                    "type": "integer"
+                },
+                "samples_ok": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Overlay": {
+            "type": "object",
+            "properties": {
+                "llm_model": {
+                    "type": "string"
+                },
+                "llm_provider": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Run": {
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "type": "string"
+                },
+                "base_agent": {
+                    "type": "string"
+                },
+                "cost_cap": {
+                    "type": "number"
+                },
+                "cost_spent": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "k": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_set_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Sample": {
+            "type": "object",
+            "properties": {
+                "cost": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "k_index": {
+                    "type": "integer"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "outcome_cached": {
+                    "type": "integer"
+                },
+                "outcome_denied": {
+                    "type": "integer"
+                },
+                "outcome_failed": {
+                    "type": "integer"
+                },
+                "outcome_ok": {
+                    "description": "Outcome counts are tool-call level, split exactly as\nagent.ToolCallRecord.Outcome. Cached and suppressed are kept separate\nfrom failed on purpose: folding either in would poison the failed-rate\ngate, and an eval turn suppresses writes routinely.",
+                    "type": "integer"
+                },
+                "outcome_rejected": {
+                    "type": "integer"
+                },
+                "outcome_suppressed": {
+                    "type": "integer"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "run_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stop_reason": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "tokens_completion": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "trace": {
+                    "type": "string"
+                },
+                "variant_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Summary": {
+            "type": "object",
+            "properties": {
+                "base_agent": {
+                    "type": "string"
+                },
+                "baseline_variant": {
+                    "description": "BaselineVariant names the variant per-task deltas are measured against:\nthe first by creation order. This is a convention (the incumbent is\ncreated first), not something the API enforces.",
+                    "type": "string"
+                },
+                "completeness": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Completeness"
+                },
+                "cost_cap": {
+                    "type": "number"
+                },
+                "cost_spent": {
+                    "type": "number"
+                },
+                "k": {
+                    "type": "integer"
+                },
+                "per_task": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TaskMetrics"
+                    }
+                },
+                "run_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_set": {
+                    "type": "string"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.VariantMetrics"
+                    }
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Task": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pinned_history": {
+                    "description": "PinnedHistory is a JSON array of {role, content} replayed verbatim as\nthe context preceding the turn. NULL/empty means a fresh turn.",
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "set_id": {
+                    "type": "integer"
+                },
+                "source_conversation_id": {
+                    "type": "string"
+                },
+                "source_message_id": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.TaskMetrics": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TaskVariantMetrics"
+                    }
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.TaskSet": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "task_count": {
+                    "description": "TaskCount is populated by ListTaskSets; it is not a column.",
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.TaskVariantMetrics": {
+            "type": "object",
+            "properties": {
+                "delta_cost": {
+                    "description": "Deltas are against the baseline variant and are zero on the baseline\nrow itself.",
+                    "type": "number"
+                },
+                "delta_latency_ms": {
+                    "type": "number"
+                },
+                "delta_rounds": {
+                    "type": "number"
+                },
+                "mean_cost": {
+                    "type": "number"
+                },
+                "mean_latency_ms": {
+                    "type": "number"
+                },
+                "mean_rounds": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "samples_ok": {
+                    "type": "integer"
+                },
+                "variant_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Variant": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "overlay": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.VariantMetrics": {
+            "type": "object",
+            "properties": {
+                "failed_rate": {
+                    "type": "number"
+                },
+                "mean_cost_per_task": {
+                    "type": "number"
+                },
+                "mean_latency_ms": {
+                    "type": "number"
+                },
+                "mean_rounds": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "overlay": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Overlay"
+                },
+                "rejected_rate": {
+                    "description": "RejectedRate and FailedRate are tool-call level: the denominator is\nok+rejected+failed+denied. Cached and suppressed calls are excluded\nbecause nothing executed, so counting them would dilute both rates with\nnon-events.",
+                    "type": "number"
+                },
+                "samples_failed": {
+                    "type": "integer"
+                },
+                "samples_ok": {
+                    "type": "integer"
+                },
+                "tool_calls": {
+                    "description": "ToolCalls is that denominator, so a reader can tell a 0 % rate over 200\ncalls from a 0 % rate over none.",
+                    "type": "integer"
+                },
+                "total_cost": {
+                    "type": "number"
+                },
+                "variant_id": {
+                    "type": "integer"
+                },
+                "wrapup_count": {
+                    "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls or by exhausting the round budget — the \"flaily\" signal.",
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_tool.OAuthStatusInfo": {
             "type": "object",
             "properties": {
@@ -7156,6 +8547,228 @@
                     "items": {
                         "$ref": "#/definitions/internal_api.dryRunToolCall"
                     }
+                }
+            }
+        },
+        "internal_api.evalImportResult": {
+            "type": "object",
+            "properties": {
+                "imported": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.evalRunCreated": {
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "type": "string"
+                },
+                "base_agent": {
+                    "type": "string"
+                },
+                "cost_cap": {
+                    "type": "number"
+                },
+                "cost_spent": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "k": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_set_id": {
+                    "type": "integer"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Variant"
+                    }
+                }
+            }
+        },
+        "internal_api.evalRunDetail": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "as_of": {
+                    "type": "string"
+                },
+                "base_agent": {
+                    "type": "string"
+                },
+                "cost_cap": {
+                    "type": "number"
+                },
+                "cost_spent": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "eta_seconds": {
+                    "type": "integer"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "k": {
+                    "type": "integer"
+                },
+                "samples_done": {
+                    "type": "integer"
+                },
+                "samples_total": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_set_id": {
+                    "type": "integer"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Variant"
+                    }
+                }
+            }
+        },
+        "internal_api.evalRunInput": {
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "description": "AsOf pins the clock (RFC3339) so a replay is date-deterministic.",
+                    "type": "string"
+                },
+                "base_agent": {
+                    "type": "string"
+                },
+                "cost_cap": {
+                    "description": "CostCap is the run's USD ceiling. Omitted uses [eval] max_cost_per_run.",
+                    "type": "number"
+                },
+                "k": {
+                    "description": "K is samples per (task, variant). Omitted uses [eval] default_k.",
+                    "type": "integer"
+                },
+                "task_set": {
+                    "type": "string"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.evalVariantInput"
+                    }
+                }
+            }
+        },
+        "internal_api.evalTaskInput": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pinned_history": {
+                    "description": "PinnedHistory is a JSON array of {role, content} replayed verbatim as the\ncontext preceding the turn. Captured at save time on purpose: the source\nconversation drifts, and its latest window is not the window that\npreceded the saved message.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "source_conversation_id": {
+                    "type": "string"
+                },
+                "source_message_id": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_api.evalTaskSetDetail": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "task_count": {
+                    "description": "TaskCount is populated by ListTaskSets; it is not a column.",
+                    "type": "integer"
+                },
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Task"
+                    }
+                }
+            }
+        },
+        "internal_api.evalTaskSetInput": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.evalVariantInput": {
+            "type": "object",
+            "properties": {
+                "llm_model": {
+                    "type": "string"
+                },
+                "llm_provider": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },

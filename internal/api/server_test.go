@@ -147,6 +147,7 @@ func allScopesKey() config.APIKeyConfig {
 			"browser:read", "browser:write",
 			"kv:read", "kv:write",
 			"channels:read", "channels:write", "audit:read",
+			"eval:read", "eval:write",
 		},
 	}
 }

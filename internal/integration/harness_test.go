@@ -26,6 +26,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -46,24 +47,45 @@ type mockProvider struct {
 	errors    []error
 	calls     int
 	requests  []llm.ChatRequest
+
+	// delay pauses every completion, so a test can catch a run mid-flight.
+	// Honours the context, which is what makes cancellation observable.
+	delay time.Duration
+}
+
+// SetDelay makes every subsequent completion take d, so a background run stays
+// in flight long enough for a test to act on it.
+func (m *mockProvider) SetDelay(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.delay = d
 }
 
 func (m *mockProvider) Name() string { return "mock" }
 
-func (m *mockProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *mockProvider) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.requests = append(m.requests, req)
 	idx := m.calls
 	m.calls++
+	errs, responses, delay := m.errors, m.responses, m.delay
+	m.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	// Return errors if configured.
-	if idx < len(m.errors) && m.errors[idx] != nil {
-		return nil, m.errors[idx]
+	if idx < len(errs) && errs[idx] != nil {
+		return nil, errs[idx]
 	}
 
 	// Return responses in order; last one repeats.
-	if len(m.responses) == 0 {
+	if len(responses) == 0 {
 		return &llm.ChatResponse{
 			Content:      "default mock response",
 			TokensUsed:   llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
@@ -71,10 +93,10 @@ func (m *mockProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*
 			FinishReason: "stop",
 		}, nil
 	}
-	if idx >= len(m.responses) {
-		idx = len(m.responses) - 1
+	if idx >= len(responses) {
+		idx = len(responses) - 1
 	}
-	return m.responses[idx], nil
+	return responses[idx], nil
 }
 
 func (m *mockProvider) HealthCheck(_ context.Context) error { return nil }
@@ -112,6 +134,8 @@ type Harness struct {
 	auditorBE   *audit.BufferedEmitter // concrete type for Flush/Close
 	Approvals   *approval.Manager
 	CostTracker *llm.CostTracker
+	EvalStore   *eval.Store         // nil unless WithEval is set
+	EvalRunner  *eval.Runner        // nil unless WithEval is set
 	Sessions    *api.SessionManager // always wired by the harness
 	KeyStore    *api.KeyStore       // nil unless WithKeyStore is set
 	APIKey      string
@@ -192,6 +216,15 @@ type HarnessOpts struct {
 	// recording mock here.
 	Adapters []adapter.Adapter
 
+	// WithEval, when true, builds an in-memory eval store and a runner over
+	// the harness dispatcher and wires the OnPanic chain the way main.go does,
+	// so the eval endpoints are live and the panic switch reaches runs.
+	WithEval bool
+
+	// EvalConfig overrides the runner's [eval] settings. Zero values take the
+	// same defaults config.Load would apply.
+	EvalConfig eval.Config
+
 	// AutoApproveTools seeds config-scoped ("config") auto-approve rules,
 	// agent name → tool names, standing in for the [[agents]]
 	// auto_approve_tools TOML field that cmd/denkeeper wires at startup.
@@ -229,7 +262,53 @@ func allScopes() []string {
 		"kv:read", "kv:write",
 		"audit:read",
 		"channels:read", "channels:write",
+		"eval:read", "eval:write",
 	}
+}
+
+// buildEvalDeps mirrors cmd/denkeeper/main.go: an eval store on the same DB,
+// a runner over the live dispatcher (with the typed-nil guard), and the
+// OnPanic hook that reaches active runs — eval turns are never in the
+// dispatcher's inFlight map, so without this the panic switch would miss them.
+func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) (*eval.Store, *eval.Runner) {
+	t.Helper()
+	store, err := eval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating eval store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	cfg := opts.EvalConfig
+	if cfg.MaxConcurrent < 1 {
+		cfg.MaxConcurrent = 2
+	}
+	if cfg.MaxCostPerRun <= 0 {
+		cfg.MaxCostPerRun = 2.0
+	}
+	if cfg.DefaultK < 1 {
+		cfg.DefaultK = 3
+	}
+	if cfg.CompletenessFloor <= 0 {
+		cfg.CompletenessFloor = 0.8
+	}
+
+	runner := eval.NewRunner(store, func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}, auditor, cfg, logger)
+	t.Cleanup(runner.Shutdown)
+
+	prevPanic := dispatcher.OnPanic
+	dispatcher.OnPanic = func() {
+		if prevPanic != nil {
+			prevPanic()
+		}
+		runner.StopAll()
+	}
+	return store, runner
 }
 
 // NewHarness creates and returns a fully wired test harness.
@@ -428,6 +507,12 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		keyStore = ks
 	}
 
+	var evalStore *eval.Store
+	var evalRunner *eval.Runner
+	if opts.WithEval {
+		evalStore, evalRunner = buildEvalDeps(t, opts, dispatcher, auditor, logger)
+	}
+
 	deps := api.Deps{
 		Dispatcher:        dispatcher,
 		Scheduler:         sched,
@@ -446,9 +531,23 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		ModelDetailLister: opts.ModelDetailLister,
 		ReloadFunc:        opts.ReloadFunc,
 		RestartFunc:       opts.RestartFunc,
+		EvalStore:         evalStore,
+		EvalRunner:        evalRunner,
 		Config: &config.Config{
 			Agents: agentConfigs,
+			Eval: config.EvalConfig{
+				Audit:             "full",
+				MaxConcurrent:     2,
+				MaxCostPerRun:     2.0,
+				DefaultK:          3,
+				CompletenessFloor: 0.8,
+			},
 		},
+	}
+	if opts.WithEval {
+		if c := opts.EvalConfig; c.CompletenessFloor > 0 {
+			deps.Config.Eval.CompletenessFloor = c.CompletenessFloor
+		}
 	}
 
 	if opts.WithAgentFactory {
@@ -495,6 +594,8 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		auditorBE:   auditor,
 		Approvals:   approvalMgr,
 		CostTracker: costTracker,
+		EvalStore:   evalStore,
+		EvalRunner:  evalRunner,
 		Sessions:    sessionMgr,
 		KeyStore:    keyStore,
 		APIKey:      apiKey,

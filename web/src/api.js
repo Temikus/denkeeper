@@ -402,6 +402,17 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  // Evals — saved test cases. Stage B exposes only the acquisition half here;
+  // runs are API-only until the Evals page lands.
+  evalTaskSets: () => apiFetch('/api/v1/eval/task-sets'),
+  createEvalTaskSet: (body) =>
+    apiFetch('/api/v1/eval/task-sets', { method: 'POST', body: JSON.stringify(body) }),
+  addEvalTask: (name, body) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // Safety — stop/panic/resume.
   stopSession: (id) => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   panic: () => apiFetch('/api/v1/panic', { method: 'POST' }),

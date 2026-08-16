@@ -217,7 +217,7 @@ Named routing endpoints decoupling sessions from adapters.
 Available scopes: chat, admin, sessions:read, sessions:write, agents:read,
 approvals:read, approvals:write, schedules:read, schedules:write,
 skills:read, skills:write, tools:read, tools:write, costs:read,
-channels:read, channels:write, audit:read
+channels:read, channels:write, audit:read, eval:read, eval:write
 
 ### [api.auth]
 
@@ -361,6 +361,13 @@ Global MCP settings.
 Dry runs and evals — turns that run through the real engine with every write
 suppressed and nothing persisted. Their audit events carry source "dryrun" or
 "eval" and a pseudo-agent like "pamela#dryrun".
+
+An eval run compares two or more config variants (model and/or provider) of one
+agent over a saved set of test cases, then reports an objective scorecard:
+per-variant rejected and failed tool-call rates, mean rounds, wrap-up count,
+cost and latency, plus per-task deltas. Task sets and runs live under
+/api/v1/eval/ behind the eval:read and eval:write scopes; test cases are saved
+one at a time from the web Chat UI or imported as JSONL.
 
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)

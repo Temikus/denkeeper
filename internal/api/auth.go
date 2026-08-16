@@ -241,6 +241,7 @@ func adminScopes() []string {
 		"browser:read", "browser:write", "kv:read", "kv:write",
 		"agents:read", "agents:write",
 		"channels:read", "channels:write", "audit:read",
+		"eval:read", "eval:write",
 	}
 }
 

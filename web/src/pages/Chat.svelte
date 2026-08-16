@@ -5,6 +5,8 @@
   import { isMobile } from '../store.js'
   import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, clearCurrentSession, compactCurrentSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
+  import KebabMenu from '../components/KebabMenu.svelte'
+  import SaveTestCase from '../components/SaveTestCase.svelte'
 
   let agents = $state([])
   let sessions = $state([])
@@ -27,6 +29,28 @@
   }
 
   let showMobileChannelMenu = $state(false)
+
+  // Index of the user message whose "Save as test case" panel is open, or null.
+  // Only one at a time — the panel is a focused decision, not a sidebar. Since
+  // only one can be open, one trigger ref suffices to hand focus back on close
+  // rather than dropping it to the top of the document.
+  let saveTestCaseIndex = $state(null)
+  let saveTestCaseTrigger = null
+
+  function toggleSaveTestCase(index, triggerEl) {
+    if (saveTestCaseIndex === index) {
+      closeSaveTestCase()
+      return
+    }
+    saveTestCaseIndex = index
+    saveTestCaseTrigger = triggerEl
+  }
+
+  function closeSaveTestCase() {
+    saveTestCaseIndex = null
+    saveTestCaseTrigger?.focus()
+    saveTestCaseTrigger = null
+  }
 
   // Pending approvals from all adapters (polled).
   let pendingApprovals = $state([])
@@ -439,13 +463,20 @@
         <p>Send a message to start a conversation.</p>
       </div>
     {/if}
-    {#each $chatState.messages as msg}
+    {#each $chatState.messages as msg, msgIndex}
       <div class="bubble {msg.role}" class:streaming={msg.streaming} class:incomplete={msg.text?.startsWith('\u26a0')} aria-label="{msg.role === 'user' ? 'Your message' : 'Agent response'}">
         <div class="bubble-header">
           <span class="role-label">{msg.role === 'user' ? 'You' : agentLabel()}</span>
           <button class="btn-copy" onclick={() => copyText(msg.text)} title="Copy message" aria-label="Copy message to clipboard">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
+          {#if msg.role === 'user' && !msg.streaming}
+            <KebabMenu items={[{
+              label: saveTestCaseIndex === msgIndex ? 'Cancel' : 'Save as test case',
+              onclick: (triggerEl) => toggleSaveTestCase(msgIndex, triggerEl),
+              disabled: !msg.text?.trim(),
+            }]} />
+          {/if}
         </div>
         {#if (msg.approvals?.length > 0) || (msg.toolCalls?.length > 0)}
           {@const orphanToolCalls = (msg.toolCalls || []).filter(tc => !(msg.approvals || []).some(a => a.tool_id === tc.id))}
@@ -528,6 +559,14 @@
         {/if}
         {#if msg.tokens}
           <span class="usage">{msg.tokens.toLocaleString()} tokens · ~{formatCost(msg.costUSD)}</span>
+        {/if}
+        {#if saveTestCaseIndex === msgIndex}
+          <SaveTestCase
+            prompt={msg.text}
+            precedingTurns={$chatState.messages.slice(0, msgIndex)}
+            conversationId={$chatState.sessionId}
+            onclose={closeSaveTestCase}
+          />
         {/if}
       </div>
     {/each}
@@ -743,6 +782,21 @@
   .bubble:hover .btn-copy { opacity: 0.5; }
   .btn-copy:hover { opacity: 1 !important; }
   .bubble.user .btn-copy { color: #fff; }
+
+  /* The kebab sets its own --text-muted, which sits at ~1.2:1 on the user
+     bubble's accent fill. Same treatment as .btn-copy above, and the same
+     reveal-on-hover so the two controls in this header behave alike; focus and
+     an open menu override it so the control never vanishes under the keyboard. */
+  .bubble.user :global(.kebab-trigger) { color: #fff; }
+  .bubble.user :global(.kebab-trigger:hover) {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: transparent;
+    color: #fff;
+  }
+  .bubble :global(.kebab-trigger) { opacity: 0; transition: opacity 0.15s; }
+  .bubble:hover :global(.kebab-trigger),
+  .bubble :global(.kebab-trigger:focus-visible),
+  .bubble :global(.kebab-trigger[aria-expanded='true']) { opacity: 1; }
 
   .approval-cards { margin-bottom: 0; display: flex; flex-direction: column; gap: 4px; }
   .approval-card {

@@ -46,6 +46,8 @@
     { value: 'browser:read',     label: 'browser:read' },
     { value: 'browser:write',    label: 'browser:write' },
     { value: 'costs:read',       label: 'costs:read' },
+    { value: 'eval:read',        label: 'eval:read' },
+    { value: 'eval:write',       label: 'eval:write' },
     { value: 'kv:read',          label: 'kv:read' },
     { value: 'kv:write',         label: 'kv:write' },
     { value: 'schedules:read',   label: 'schedules:read' },

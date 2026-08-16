@@ -39,6 +39,10 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - GET  /api/v1/approvals               (scope: approvals:read)  Pending tool-call approvals
 - POST /api/v1/approvals/{id}/approve  (scope: approvals:write) Approve a pending tool call
 - POST /api/v1/schedules/{name}/dry-run (scope: schedules:write) Preview a schedule; writes suppressed, nothing persisted
+- GET  /api/v1/eval/task-sets          (scope: eval:read)       Saved eval test sets
+- POST /api/v1/eval/task-sets/{name}/tasks (scope: eval:write)  Save a test case
+- POST /api/v1/eval/runs               (scope: eval:write)      Compare agent config variants on a test set
+- GET  /api/v1/eval/runs/{id}/summary  (scope: eval:read)       Objective scorecard for a run
 - POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests
 
 ## Full API Reference

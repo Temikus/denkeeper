@@ -14,7 +14,54 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/scope"
 )
+
+// adminScopesIntentionallyOmitted lists canonical scopes a dashboard session
+// deliberately does not receive. Keep the reason with the entry: this set is
+// the only sanctioned way past TestAdminScopes_CoversCanonicalList.
+var adminScopesIntentionallyOmitted = map[string]string{
+	// GET /health needs no auth at all, so a session has nothing to gain.
+	"health": "health endpoint is unauthenticated",
+}
+
+// TestAdminScopes_CoversCanonicalList pins adminScopes() to the canonical scope
+// list. The function is hand-maintained and grants dashboard password/OIDC
+// logins their permissions, so a scope added to internal/scope without being
+// added here locks session users out of the new surface with no other test
+// failing — the gap that shipped `health` and nearly shipped `eval:*`.
+func TestAdminScopes_CoversCanonicalList(t *testing.T) {
+	granted := make(map[string]bool, len(adminScopes()))
+	for _, s := range adminScopes() {
+		granted[s] = true
+	}
+
+	for _, s := range scope.Names() {
+		if granted[s] {
+			continue
+		}
+		if _, ok := adminScopesIntentionallyOmitted[s]; ok {
+			continue
+		}
+		t.Errorf("scope %q is missing from adminScopes(): dashboard sessions cannot reach it. "+
+			"Add it there, or record why not in adminScopesIntentionallyOmitted.", s)
+	}
+}
+
+// TestAdminScopes_GrantsOnlyRealScopes catches the reverse drift: a typo or a
+// scope removed from the canonical list but left granted here.
+func TestAdminScopes_GrantsOnlyRealScopes(t *testing.T) {
+	seen := make(map[string]bool, len(adminScopes()))
+	for _, s := range adminScopes() {
+		if !scope.IsValid(s) {
+			t.Errorf("adminScopes() grants %q, which is not a canonical scope", s)
+		}
+		if seen[s] {
+			t.Errorf("adminScopes() lists %q more than once", s)
+		}
+		seen[s] = true
+	}
+}
 
 func testPasswordHash(password string) string {
 	h, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
