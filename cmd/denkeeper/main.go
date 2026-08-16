@@ -29,6 +29,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
@@ -198,6 +199,7 @@ type stores struct {
 	approvalManager *approval.Manager
 	kvStore         *kv.SQLiteStore
 	auditStore      *audit.SQLiteStore
+	evalStore       *eval.Store
 }
 
 // initStores creates the memory, approval, and KV stores that share a single
@@ -231,12 +233,25 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 		return stores{}, fmt.Errorf("initializing kv store: %w", err)
 	}
 
+	// Eval tables live in the main DB: every run reads eval_tasks, and the
+	// write rate is far below anything that would justify a separate file.
+	// Created unconditionally, like kv — five empty tables is the whole
+	// footprint for a user who never runs an eval.
+	evalStore, err := eval.NewSQLiteStore(cfg.Memory.DBPath)
+	if err != nil {
+		_ = kvStore.Close()
+		_ = approvalStore.Close()
+		_ = memory.Close()
+		return stores{}, fmt.Errorf("initializing eval store: %w", err)
+	}
+
 	// Audit store uses a separate DB file to avoid contention with the main store.
 	var auditStore *audit.SQLiteStore
 	if cfg.Audit.AuditEnabled() {
 		auditDBPath := filepath.Join(filepath.Dir(cfg.Memory.DBPath), "audit.db")
 		auditStore, err = audit.NewSQLiteStore(auditDBPath)
 		if err != nil {
+			_ = evalStore.Close()
 			_ = kvStore.Close()
 			_ = approvalStore.Close()
 			_ = memory.Close()
@@ -250,6 +265,7 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 		approvalManager: approval.NewManager(approvalStore, logger),
 		kvStore:         kvStore,
 		auditStore:      auditStore,
+		evalStore:       evalStore,
 	}, nil
 }
 
@@ -257,6 +273,9 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 func (s stores) Close() {
 	if s.auditStore != nil {
 		_ = s.auditStore.Close()
+	}
+	if s.evalStore != nil {
+		_ = s.evalStore.Close()
 	}
 	_ = s.kvStore.Close()
 	_ = s.approvalStore.Close()
@@ -1449,6 +1468,33 @@ func reviewerConfigDeps(agentName string, parent *agent.Engine, tierFn func() st
 	}
 }
 
+// buildEvalRunner wires the eval runner over the live dispatcher.
+//
+// Eval samples execute on the agent's *live* engine, not on a per-run rebuilt
+// one: the unit of evaluation is model-in-harness, so the sample must see the
+// real skills, tools, persona and auditor. Isolation is ExecPolicy's job
+// (structural — the eval path never reaches the persistence layer) and the
+// variant's model/provider overlay is a per-turn router clone, so nothing
+// about the live engine is mutated.
+func buildEvalRunner(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) *eval.Runner {
+	source := func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		// Nil-check before boxing: Agent returns a typed *agent.Engine, and a
+		// nil one wrapped in the interface reads as non-nil to every caller.
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}
+	return eval.NewRunner(store, source, auditor, eval.Config{
+		MaxConcurrent:     cfg.Eval.MaxConcurrent,
+		MaxCostPerRun:     cfg.Eval.MaxCostPerRun,
+		DefaultK:          cfg.Eval.DefaultK,
+		CompletenessFloor: cfg.Eval.CompletenessFloor,
+		AuditMode:         cfg.Eval.AuditMode(),
+	}, logger)
+}
+
 func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, parent *agent.Engine, p *persona.Persona, abc agentBuildCtx) (*agent.Engine, error) {
 	revProvider := ac.LLMProvider
 	if ac.ReviewerProvider != "" {
@@ -1627,6 +1673,8 @@ type startAPIWithMCPArgs struct {
 	kvStore         kv.Store
 	auditStore      audit.Store
 	auditor         audit.Emitter
+	evalStore       *eval.Store
+	evalRunner      *eval.Runner
 	oauthDeps       *api.OAuthDeps
 	abc             agentBuildCtx
 	path            string
@@ -1658,7 +1706,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Logger:          a.logger,
 	})
 
-	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, api.Deps{
+	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, api.Deps{
 		Dispatcher:        a.dispatcher,
 		Scheduler:         a.sched,
 		CostTracker:       a.cost,
@@ -1673,6 +1721,8 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		KVStore:           a.kvStore,
 		AuditStore:        a.auditStore,
 		Auditor:           a.auditor,
+		EvalStore:         a.evalStore,
+		EvalRunner:        a.evalRunner,
 		ConfigPath:        a.path,
 		ModelLister:       a.dispatcher.ListModels,
 		ModelDetailLister: a.dispatcher.ListModelDetails,
@@ -1740,7 +1790,7 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, hasA
 
 // startAPIAndWireBroadcast starts the API server and wires the adapter→WebSocket
 // broadcast so the web UI is notified when messages arrive via external adapters.
-func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
+func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, evalRunner *eval.Runner, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
 	apiServer, err := startAPIServer(ctx, cfg, deps, hasActiveKey, logger)
 	if err != nil {
 		return err
@@ -1758,6 +1808,20 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 				Summary:        summary,
 			})
 		}
+		if evalRunner != nil {
+			evalRunner.OnProgress = func(e eval.ProgressEvent) {
+				hub.Broadcast(api.EvalProgressFrame{
+					Type:         api.FrameTypeEvalProgress,
+					RunID:        e.RunID,
+					Status:       e.Status,
+					SamplesDone:  e.SamplesDone,
+					SamplesTotal: e.SamplesTotal,
+					CostSpent:    e.CostSpent,
+					CostCap:      e.CostCap,
+					ETASeconds:   e.ETASeconds,
+				})
+			}
+		}
 	}
 
 	// Wire panic/resume hooks — pause scheduler and broadcast status.
@@ -1765,6 +1829,13 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 	dispatcher.OnPanic = func() {
 		if sched != nil {
 			sched.Pause()
+		}
+		// Eval runs are never in the dispatcher's inFlight map (only the
+		// adapter message loop registers there), so the panic switch has to
+		// cancel them explicitly. There is deliberately no counterpart in
+		// OnResume: a panic is not a pause, and a stopped run stays stopped.
+		if evalRunner != nil {
+			evalRunner.StopAll()
 		}
 		if hub != nil {
 			hub.Broadcast(api.PanicStatusFrame{
@@ -1970,6 +2041,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 	wireSkillCommands(tgAdapter, engines, logger)
 
+	// Built after the final dispatcher exists, since eval samples execute on
+	// the live engines it owns. Construction starts no goroutine.
+	evalRunner := buildEvalRunner(cfg, st.evalStore, dispatcher, auditor, logger)
+	defer evalRunner.Shutdown()
+
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
 		return err
 	}
@@ -1990,6 +2066,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 			kvStore:         st.kvStore,
 			auditStore:      st.auditStore,
 			auditor:         auditor,
+			evalStore:       st.evalStore,
+			evalRunner:      evalRunner,
 			oauthDeps:       oauthDeps,
 			abc:             abc,
 			path:            path,

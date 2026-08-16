@@ -23,6 +23,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -67,6 +68,8 @@ type Deps struct {
 	ModelDetailLister func(ctx context.Context, providerFilter string) []llm.ModelInfo         // returns enriched model metadata; nil = endpoint returns 503
 	AuditStore        audit.Store                                                              // nil = audit endpoints return 503
 	Auditor           audit.Emitter                                                            // nil = no audit events from schedule delivery
+	EvalStore         *eval.Store                                                              // nil = eval endpoints return 503
+	EvalRunner        *eval.Runner                                                             // nil = eval endpoints return 503
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
