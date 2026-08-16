@@ -4826,3 +4826,139 @@ timezone = "not-a-zone"
 		t.Errorf("error should name the agent and field: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Eval config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_EvalDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.Audit != "full" {
+		t.Errorf("audit = %q, want \"full\"", cfg.Eval.Audit)
+	}
+	if cfg.Eval.MaxConcurrent != 2 {
+		t.Errorf("max_concurrent = %d, want 2", cfg.Eval.MaxConcurrent)
+	}
+	if cfg.Eval.MaxCostPerRun != 2.0 {
+		t.Errorf("max_cost_per_run = %v, want 2.0", cfg.Eval.MaxCostPerRun)
+	}
+	if cfg.Eval.DefaultK != 3 {
+		t.Errorf("default_k = %d, want 3", cfg.Eval.DefaultK)
+	}
+	if cfg.Eval.CompletenessFloor != 0.8 {
+		t.Errorf("completeness_floor = %v, want 0.8", cfg.Eval.CompletenessFloor)
+	}
+}
+
+func TestParse_EvalExplicitValuesSurviveDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[eval]
+audit = "summary"
+max_concurrent = 8
+max_cost_per_run = 0.25
+default_k = 1
+completeness_floor = 1.0
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.Audit != "summary" {
+		t.Errorf("audit = %q, want \"summary\"", cfg.Eval.Audit)
+	}
+	if cfg.Eval.MaxConcurrent != 8 {
+		t.Errorf("max_concurrent = %d, want 8", cfg.Eval.MaxConcurrent)
+	}
+	if cfg.Eval.MaxCostPerRun != 0.25 {
+		t.Errorf("max_cost_per_run = %v, want 0.25", cfg.Eval.MaxCostPerRun)
+	}
+	if cfg.Eval.DefaultK != 1 {
+		t.Errorf("default_k = %d, want 1", cfg.Eval.DefaultK)
+	}
+	if cfg.Eval.CompletenessFloor != 1.0 {
+		t.Errorf("completeness_floor = %v, want 1.0", cfg.Eval.CompletenessFloor)
+	}
+}
+
+// A written zero is indistinguishable from an omitted key, so applyEvalDefaults
+// fills it in and validation never sees it. Documented here so the behaviour is
+// a decision rather than a surprise: the bounds below catch negatives, which a
+// default cannot paper over.
+func TestParse_EvalExplicitZeroTakesTheDefault(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[eval]
+max_concurrent = 0
+default_k = 0
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.MaxConcurrent != 2 {
+		t.Errorf("max_concurrent = %d, want the default 2", cfg.Eval.MaxConcurrent)
+	}
+	if cfg.Eval.DefaultK != 3 {
+		t.Errorf("default_k = %d, want the default 3", cfg.Eval.DefaultK)
+	}
+}
+
+func TestValidateEval_RejectsBadAudit(t *testing.T) {
+	err := validateEval(&EvalConfig{Audit: "verbose", MaxConcurrent: 2, MaxCostPerRun: 2, DefaultK: 3, CompletenessFloor: 0.8})
+	if err == nil {
+		t.Fatal("expected error for unknown audit mode")
+	}
+	if !strings.Contains(err.Error(), "audit") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestValidateEval_RejectsNegativeConcurrency(t *testing.T) {
+	err := validateEval(&EvalConfig{MaxConcurrent: -1, MaxCostPerRun: 2, DefaultK: 3, CompletenessFloor: 0.8})
+	if err == nil {
+		t.Fatal("expected error for negative max_concurrent")
+	}
+	if !strings.Contains(err.Error(), "max_concurrent") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestValidateEval_RejectsNegativeCostCap(t *testing.T) {
+	err := validateEval(&EvalConfig{MaxConcurrent: 2, MaxCostPerRun: -0.5, DefaultK: 3, CompletenessFloor: 0.8})
+	if err == nil {
+		t.Fatal("expected error for negative max_cost_per_run")
+	}
+	if !strings.Contains(err.Error(), "max_cost_per_run") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestValidateEval_RejectsNegativeK(t *testing.T) {
+	err := validateEval(&EvalConfig{MaxConcurrent: 2, MaxCostPerRun: 2, DefaultK: -3, CompletenessFloor: 0.8})
+	if err == nil {
+		t.Fatal("expected error for negative default_k")
+	}
+	if !strings.Contains(err.Error(), "default_k") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestValidateEval_RejectsFloorAboveOne(t *testing.T) {
+	err := validateEval(&EvalConfig{MaxConcurrent: 2, MaxCostPerRun: 2, DefaultK: 3, CompletenessFloor: 1.5})
+	if err == nil {
+		t.Fatal("expected error for completeness_floor above 1")
+	}
+	if !strings.Contains(err.Error(), "completeness_floor") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestParse_EvalRejectsNegativeConcurrencyEndToEnd(t *testing.T) {
+	_, err := Parse([]byte(baseConfig + `
+[eval]
+max_concurrent = -2
+`))
+	if err == nil {
+		t.Fatal("expected validation error for negative max_concurrent")
+	}
+}

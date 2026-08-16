@@ -61,6 +61,12 @@ type ExecPolicy struct {
 	// (llm.Router.WithModel) rather than mutating it, so a preview of a
 	// candidate model cannot retarget a live turn already in flight.
 	Model string
+	// Provider overrides the agent's provider for this turn only, composed
+	// with Model by the same clone (llm.Router.WithProvider). Empty runs the
+	// agent's live provider. Safe to override freely because every agent
+	// router registers every configured provider, so the clone is a pointer
+	// swap rather than a rebuild.
+	Provider string
 	// ConvID is the in-flight conversation identity — "dryrun:{uuid}" or
 	// "eval:{run}:{task}:{k}". It is used for cost tracking, audit grouping and
 	// log correlation, and is never written to the conversations table.
@@ -75,6 +81,21 @@ type ExecPolicy struct {
 	// so a caller replaying a stored conversation points here at the messages
 	// before the one it re-runs, not at the whole thing.
 	HistoryFrom string
+	// History is context pinned by the caller and replayed verbatim as the
+	// messages preceding this turn. It takes precedence over HistoryFrom.
+	//
+	// The two differ in *when* the context is chosen. HistoryFrom names a live
+	// conversation and reads its most recent window at turn time, which is
+	// right for "preview this against whatever the session looks like now".
+	// History carries a snippet captured earlier, which is what a saved eval
+	// task needs: the source conversation drifts (ClearMessages empties it,
+	// retention prunes it) and its latest window is not the window that
+	// preceded the saved message. A test case that silently re-scopes itself
+	// between runs is not a test case.
+	//
+	// Only Role and Content are read; the remaining StoredMessage fields are
+	// ignored by assembleMessages and may be left zero.
+	History []StoredMessage
 	// AuditMode is AuditFull (default) or AuditSummary.
 	AuditMode string
 }
@@ -177,6 +198,12 @@ type TurnResult struct {
 	ToolCalls []ToolCallRecord `json:"tool_calls"`
 	// Rounds is the number of tool-call rounds the turn used.
 	Rounds int `json:"rounds"`
+	// StopReason is why the tool loop ended, as a machine-readable slug
+	// ("repeated_calls", "max_rounds", "stop_requested"). Empty means the model
+	// finished on its own — the ordinary case. It is the only non-textual
+	// signal that a turn was cut short: the alternative is scraping the
+	// "[engine: turn ended early — …]" marker out of the response body.
+	StopReason string `json:"stop_reason,omitempty"`
 	// Tokens and Cost cover the whole turn, accumulated across rounds.
 	Tokens  llm.TokenUsage `json:"tokens"`
 	CostUSD float64        `json:"cost_usd"`

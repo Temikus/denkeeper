@@ -341,6 +341,12 @@ Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `audit` | string | `"full"` | How much of a dry-run or eval turn reaches the audit log. `"full"` records it like a live turn; `"summary"` keeps only lifecycle events and errors |
+| `max_concurrent` | int | `2` | Eval samples running at once, process-wide across all runs |
+| `max_cost_per_run` | float | `2.0` | Default USD ceiling for one eval run, overridable per run. There is no uncapped value |
+| `default_k` | int | `3` | Samples per (task, variant) pair, giving the objective metrics something to average over |
+| `completeness_floor` | float | `0.8` | Fraction of expected samples that must succeed before a run's scorecard is called conclusive |
+
+An eval run is bounded twice, by spend (`max_cost_per_run`) and by rate (`max_concurrent`); both are always in force. Writing `0` for any of these keys is indistinguishable from omitting it and yields the default — set a real value to change one. A run that hits its cost cap stops dispatching new samples, lets the in-flight ones finish, and keeps its partial results rather than discarding them.
 
 Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only idempotent tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
 

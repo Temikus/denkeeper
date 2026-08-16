@@ -111,6 +111,24 @@ type EvalConfig struct {
 	// filtering rather than by emitting less. "summary" is the opt-down:
 	// lifecycle events and errors only.
 	Audit string `toml:"audit"`
+	// MaxConcurrent bounds how many eval samples run at once, process-wide
+	// across all runs. Default: 2. Half of the two cost bounds an eval run
+	// carries (the other is MaxCostPerRun); both are always present, so a run
+	// is bounded by spend and by rate.
+	MaxConcurrent int `toml:"max_concurrent"`
+	// MaxCostPerRun is the default USD ceiling for one run, overridable per
+	// run by the operator API. There is deliberately no "uncapped" value: a
+	// run that dispatches samples until the money runs out is the failure mode
+	// this exists to prevent. Default: 2.0.
+	MaxCostPerRun float64 `toml:"max_cost_per_run"`
+	// DefaultK is how many samples each (task, variant) pair runs by default,
+	// giving the objective metrics something to average over. Default: 3.
+	DefaultK int `toml:"default_k"`
+	// CompletenessFloor is the fraction of expected samples that must succeed
+	// before a run's scorecard is called conclusive. A run that finishes below
+	// it still reports its numbers — partial results are the point of the
+	// capped/stopped statuses — but flags them as inconclusive. Default: 0.8.
+	CompletenessFloor float64 `toml:"completeness_floor"`
 }
 
 // AuditMode returns the configured eval audit mode, defaulting to "full".
@@ -1399,6 +1417,18 @@ func applyEvalDefaults(cfg *Config) {
 	if cfg.Eval.Audit == "" {
 		cfg.Eval.Audit = "full"
 	}
+	if cfg.Eval.MaxConcurrent == 0 {
+		cfg.Eval.MaxConcurrent = 2
+	}
+	if cfg.Eval.MaxCostPerRun == 0 {
+		cfg.Eval.MaxCostPerRun = 2.0
+	}
+	if cfg.Eval.DefaultK == 0 {
+		cfg.Eval.DefaultK = 3
+	}
+	if cfg.Eval.CompletenessFloor == 0 {
+		cfg.Eval.CompletenessFloor = 0.8
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -1997,13 +2027,30 @@ func validate(cfg *Config) error {
 }
 
 // validateEval checks the eval subsystem settings.
+//
+// applyEvalDefaults runs first and cannot tell an explicit `= 0` from an
+// omitted key, so a written zero is defaulted rather than rejected. These
+// bounds therefore catch negatives and out-of-range floors — the cases a
+// default can't paper over.
 func validateEval(e *EvalConfig) error {
 	switch e.Audit {
 	case "", "full", "summary":
-		return nil
 	default:
 		return fmt.Errorf("audit must be \"full\" or \"summary\", got %q", e.Audit)
 	}
+	if e.MaxConcurrent < 1 {
+		return fmt.Errorf("max_concurrent must be at least 1, got %d", e.MaxConcurrent)
+	}
+	if e.MaxCostPerRun <= 0 {
+		return fmt.Errorf("max_cost_per_run must be greater than 0, got %v", e.MaxCostPerRun)
+	}
+	if e.DefaultK < 1 {
+		return fmt.Errorf("default_k must be at least 1, got %d", e.DefaultK)
+	}
+	if e.CompletenessFloor <= 0 || e.CompletenessFloor > 1 {
+		return fmt.Errorf("completeness_floor must be in (0, 1], got %v", e.CompletenessFloor)
+	}
+	return nil
 }
 
 // validateOpenRouter validates the OpenRouter provider config (reasoning plus

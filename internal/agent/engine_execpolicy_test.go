@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -540,5 +541,233 @@ func TestRouterFor_ReturnsEngineRouterWithoutOverride(t *testing.T) {
 	}
 	if clone.DefaultModel() != "other/model" {
 		t.Errorf("clone model = %q, want other/model", clone.DefaultModel())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stage B engine deltas: pinned history, provider overlay, stop reason
+// ---------------------------------------------------------------------------
+
+func TestDryRun_InlineHistoryPrecedesTheCurrentTurn(t *testing.T) {
+	// Same ordering contract as HistoryFrom — pinned context first, the message
+	// being answered last — but sourced from the caller rather than the store.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	policy := dryRunPolicy()
+	policy.History = []StoredMessage{
+		{Role: "user", Content: "pinned question"},
+		{Role: "assistant", Content: "pinned answer"},
+	}
+	if _, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "and now?"}, policy); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	msgs := firstRequest(t, provider).Messages
+	if len(msgs) != 4 {
+		t.Fatalf("request carried %d messages, want 4 (system + 2 pinned + the turn): %+v", len(msgs), msgs)
+	}
+	if msgs[1].Content != "pinned question" || msgs[2].Content != "pinned answer" {
+		t.Errorf("pinned history not replayed in order: %+v", msgs)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" || last.Content != "and now?" {
+		t.Errorf("last wire message = {%s, %q}, want {user, \"and now?\"}", last.Role, last.Content)
+	}
+}
+
+func TestDryRun_InlineHistoryWinsOverHistoryFrom(t *testing.T) {
+	// A saved eval task carries the window that preceded it. If HistoryFrom won,
+	// the task would silently re-scope itself to whatever the source conversation
+	// looks like at run time — the drift the pinned field exists to prevent.
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, store, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	ctx := context.Background()
+	if err := store.GetOrCreateConversationByID(ctx, "chan:main", "telegram", "42"); err != nil {
+		t.Fatalf("GetOrCreateConversationByID: %v", err)
+	}
+	if _, err := store.AddMessage(ctx, "chan:main", StoredMessage{Role: "user", Content: "live drift"}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	policy := dryRunPolicy()
+	policy.HistoryFrom = "chan:main"
+	policy.History = []StoredMessage{{Role: "user", Content: "pinned question"}}
+	if _, err := e.DryRun(ctx, adapter.IncomingMessage{Text: "and now?"}, policy); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	msgs := firstRequest(t, provider).Messages
+	if countContent(msgs, "live drift") != 0 {
+		t.Errorf("request carried the live conversation's message; pinned history must win: %+v", msgs)
+	}
+	if countContent(msgs, "pinned question") != 1 {
+		t.Errorf("pinned history missing from the request: %+v", msgs)
+	}
+}
+
+func TestDryRun_EmptyInlineHistoryFallsBackToHistoryFrom(t *testing.T) {
+	provider := &capturingProvider{responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, store, _, _ := newPolicyTestEngineWithProvider(t, provider, "autonomous")
+
+	ctx := context.Background()
+	if err := store.GetOrCreateConversationByID(ctx, "chan:main", "telegram", "42"); err != nil {
+		t.Fatalf("GetOrCreateConversationByID: %v", err)
+	}
+	if _, err := store.AddMessage(ctx, "chan:main", StoredMessage{Role: "user", Content: "borrowed"}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	policy := dryRunPolicy()
+	policy.HistoryFrom = "chan:main"
+	policy.History = nil
+	if _, err := e.DryRun(ctx, adapter.IncomingMessage{Text: "and now?"}, policy); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	if countContent(firstRequest(t, provider).Messages, "borrowed") != 1 {
+		t.Error("nil History should leave the HistoryFrom path untouched")
+	}
+}
+
+// namedProvider is a capturingProvider with a settable name, for asserting
+// which of two registered providers a turn actually reached.
+type namedProvider struct {
+	name      string
+	responses []*llm.ChatResponse
+	callIndex int
+	requests  []llm.ChatRequest
+}
+
+func (n *namedProvider) Name() string { return n.name }
+func (n *namedProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	n.requests = append(n.requests, req)
+	if n.callIndex >= len(n.responses) {
+		return nil, fmt.Errorf("no more mock responses (call %d)", n.callIndex)
+	}
+	resp := n.responses[n.callIndex]
+	n.callIndex++
+	return resp, nil
+}
+func (n *namedProvider) HealthCheck(_ context.Context) error { return nil }
+
+func TestDryRun_ProviderOverrideRoutesElsewhereWithoutMutatingTheEngineRouter(t *testing.T) {
+	primary := &namedProvider{name: "mock", responses: []*llm.ChatResponse{
+		{Content: "from primary", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, primary, "autonomous")
+
+	candidate := &namedProvider{name: "candidate-provider", responses: []*llm.ChatResponse{
+		{Content: "from candidate", FinishReason: "stop", Model: "test-model"},
+	}}
+	e.router.RegisterProvider(candidate)
+	before := e.router.DefaultProvider()
+
+	policy := dryRunPolicy()
+	policy.Provider = "candidate-provider"
+	result, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, policy)
+	if err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	if result.Response != "from candidate" {
+		t.Errorf("response = %q, want the candidate provider's", result.Response)
+	}
+	if len(primary.requests) != 0 {
+		t.Errorf("primary provider received %d requests, want 0", len(primary.requests))
+	}
+	if after := e.router.DefaultProvider(); after != before {
+		t.Errorf("engine router provider = %q after an override, want %q unchanged", after, before)
+	}
+}
+
+func TestDryRun_ModelAndProviderOverridesCompose(t *testing.T) {
+	primary := &namedProvider{name: "mock", responses: []*llm.ChatResponse{
+		{Content: "from primary", FinishReason: "stop", Model: "test-model"},
+	}}
+	e, _, _, _ := newPolicyTestEngineWithProvider(t, primary, "autonomous")
+
+	candidate := &namedProvider{name: "candidate-provider", responses: []*llm.ChatResponse{
+		{Content: "ok", FinishReason: "stop", Model: "candidate-model"},
+	}}
+	e.router.RegisterProvider(candidate)
+
+	policy := dryRunPolicy()
+	policy.Provider = "candidate-provider"
+	policy.Model = "candidate-model"
+	if _, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, policy); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	if len(candidate.requests) != 1 {
+		t.Fatalf("candidate provider received %d requests, want 1", len(candidate.requests))
+	}
+	if got := candidate.requests[0].Model; got != "candidate-model" {
+		t.Errorf("candidate saw model %q, want \"candidate-model\"", got)
+	}
+}
+
+func TestDryRun_StopReasonEmptyOnCleanFinish(t *testing.T) {
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		{Content: "all done", FinishReason: "stop", Model: "test-model"},
+	}, "autonomous")
+
+	result, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, dryRunPolicy())
+	if err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+	if result.StopReason != "" {
+		t.Errorf("StopReason = %q, want empty on a clean finish", result.StopReason)
+	}
+}
+
+func TestDryRun_StopReasonSurfacesMaxRounds(t *testing.T) {
+	// A one-round budget with the model still asking for tools: the loop stops,
+	// degrades to a wrap-up round, and the caller must be able to tell that the
+	// answer is a wrap-up without scraping the honesty marker out of the text.
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		toolCallResponse("c1", "read_thing", `{"value":"a"}`),
+		toolCallResponse("c2", "read_thing", `{"value":"b"}`),
+		{Content: "wrapped up", FinishReason: "stop", Model: "test-model"},
+	}, "autonomous")
+	e.SetMaxToolRounds(1)
+
+	result, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, dryRunPolicy())
+	if err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+	if result.StopReason != "max_rounds" {
+		t.Errorf("StopReason = %q, want \"max_rounds\"", result.StopReason)
+	}
+}
+
+func TestLoopStopReason_SlugIsMachineReadableAndStringIsProse(t *testing.T) {
+	// String feeds the user-facing "[engine: turn ended early — …]" marker and
+	// must stay prose; slug is what consumers group by. Asserting both together
+	// so a future edit cannot quietly collapse them into one.
+	cases := []struct {
+		reason     loopStopReason
+		wantSlug   string
+		wantString string
+	}{
+		{stopNone, "", "none"},
+		{stopRepeatedCalls, "repeated_calls", "repeated identical tool calls"},
+		{stopMaxRounds, "max_rounds", "tool-call round budget exhausted"},
+		{stopRequested, "stop_requested", "stop requested"},
+	}
+	for _, tc := range cases {
+		if got := tc.reason.slug(); got != tc.wantSlug {
+			t.Errorf("slug() = %q, want %q", got, tc.wantSlug)
+		}
+		if got := tc.reason.String(); got != tc.wantString {
+			t.Errorf("String() = %q, want %q", got, tc.wantString)
+		}
 	}
 }

@@ -141,6 +141,27 @@ func (r loopStopReason) String() string {
 	}
 }
 
+// slug is the machine-readable form of the stop reason, for consumers that
+// group or count by it (TurnResult.StopReason, and the eval scorecard's
+// wrap-up count on top of that). Deliberately separate from String, whose
+// prose is baked into the user-facing "[engine: turn ended early — …]" marker
+// and must stay byte-identical.
+//
+// stopNone renders empty rather than "none" so the JSON field can omitempty
+// away on the overwhelmingly common clean finish.
+func (r loopStopReason) slug() string {
+	switch r {
+	case stopRepeatedCalls:
+		return "repeated_calls"
+	case stopMaxRounds:
+		return "max_rounds"
+	case stopRequested:
+		return "stop_requested"
+	default:
+		return ""
+	}
+}
+
 // syntheticStoppedResult is the tool message for a call the engine never
 // started because the turn was stopped between calls. Such a call gets no
 // ToolCallRecord at all: nothing was attempted, so telemetry must not show it
@@ -1305,6 +1326,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 		Response:       out.response,
 		ToolCalls:      out.records,
 		Rounds:         toolRounds(out.records),
+		StopReason:     out.stopReason.slug(),
 		AsOf:           asOf,
 		DurationMs:     time.Since(start).Milliseconds(),
 		Provider:       e.router.DefaultProvider(),
@@ -1328,6 +1350,11 @@ type turnOutcome struct {
 	convID   string
 	records  []ToolCallRecord
 	resp     *llm.ChatResponse
+	// stopReason is why the tool loop ended (stopNone = the model finished on
+	// its own). Only DryRun reads it; the live chat path ignores it, since the
+	// same information already reaches a live user as the honesty marker in
+	// the response text.
+	stopReason loopStopReason
 }
 
 // turnPrep holds everything prepareTurn resolves before the LLM is called.
@@ -1398,14 +1425,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
 	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), stopGen: stopGen}
-	resp, _, toolRecords, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
+	resp, _, toolRecords, stopReason, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
 		// the caller receives the records of whatever already ran.
 		if !policy.active() {
 			e.persistInterruptedProgress(ctx, convID, prep.userMsgID, streamedContent.String(), toolRecords, msg, err)
 		}
-		return turnOutcome{convID: convID, records: toolRecords}, err
+		return turnOutcome{convID: convID, records: toolRecords, stopReason: stopReason}, err
 	}
 
 	if onEvent != nil {
@@ -1429,7 +1456,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	)
 
 	responseText := sanitizeStaleDirectives(resp.Content, e.logger)
-	out := turnOutcome{response: responseText, convID: convID, records: toolRecords, resp: resp}
+	out := turnOutcome{response: responseText, convID: convID, records: toolRecords, resp: resp, stopReason: stopReason}
 
 	// A blank (or whitespace-only) final turn is stored for history consistency
 	// but must not pass silently: surface it in the audit log as an error so a
@@ -1443,7 +1470,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	}
 
 	if err := e.persistTurn(ctx, msg, policy, prep, resp, responseText, toolRecords); err != nil {
-		return turnOutcome{convID: convID, records: toolRecords}, err
+		return turnOutcome{convID: convID, records: toolRecords, stopReason: stopReason}, err
 	}
 
 	e.logger.Info("chat complete",
@@ -1531,9 +1558,16 @@ func (e *Engine) emitTriggerAudit(ctx context.Context, msg adapter.IncomingMessa
 // reads from its declared source conversation (read-only) and defaults to no
 // history at all, since a preview or an eval sample is a fresh turn unless the
 // caller says otherwise.
+//
+// Pinned History wins over HistoryFrom: it is already the exact window the
+// caller wants replayed, so there is nothing to load and nothing to truncate
+// (the caller bounded it when it captured it).
 func (e *Engine) loadTurnHistory(ctx context.Context, convID string, policy *ExecPolicy) ([]StoredMessage, bool, error) {
 	src := convID
 	if policy.active() {
+		if len(policy.History) > 0 {
+			return policy.History, false, nil
+		}
 		if policy.HistoryFrom == "" {
 			return nil, false, nil
 		}
@@ -1794,10 +1828,10 @@ func streamCallbackFor(onEvent ChatEventFunc) llm.StreamCallback {
 
 // runLLMWithTools makes the LLM call and runs the tool-call loop until the
 // LLM produces a text response. Returns the response, messages, collected
-// tool call records for persistence, and any error. Tool call records are
-// returned even when the loop fails mid-flight so callers can persist the
-// work that already executed.
-func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+// tool call records for persistence, why the loop ended, and any error. Tool
+// call records are returned even when the loop fails mid-flight so callers can
+// persist the work that already executed.
+func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *security.PermissionEngine, msg adapter.IncomingMessage, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, loopStopReason, error) {
 	if onEvent != nil {
 		onEvent(ChatEvent{Type: "thinking"})
 	}
@@ -1805,7 +1839,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	resp, err := run.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: 0})
-		return nil, llmMessages, nil, fmt.Errorf("LLM completion: %w", err)
+		return nil, llmMessages, nil, stopNone, fmt.Errorf("LLM completion: %w", err)
 	}
 	// A truncated final skips the ok-status event: executeToolRounds' Layer-3
 	// guard emits the single error-status event for this round-trip instead of
@@ -1817,19 +1851,19 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 	// Validate tool execution preconditions before entering the loop.
 	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
 		if e.tools == nil {
-			return nil, llmMessages, nil, fmt.Errorf("LLM requested tool calls but no tool manager configured")
+			return nil, llmMessages, nil, stopNone, fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
 		if !perms.CanExecute("use_tools") {
-			return nil, llmMessages, nil, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
+			return nil, llmMessages, nil, stopNone, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 	}
 
-	resp, llmMessages, toolRecords, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, run, onEvent)
+	resp, llmMessages, toolRecords, stopReason, err := e.executeToolRounds(ctx, convID, perms, resp, llmMessages, run, onEvent)
 	if err != nil {
-		return nil, llmMessages, toolRecords, err
+		return nil, llmMessages, toolRecords, stopReason, err
 	}
 
-	return resp, llmMessages, toolRecords, nil
+	return resp, llmMessages, toolRecords, stopReason, nil
 }
 
 // toolLoopOutcome carries the state produced by runToolLoop: the last LLM
@@ -1851,7 +1885,7 @@ type toolLoopOutcome struct {
 // degrade to a wrap-up round; if the model returns empty content after
 // completing tool rounds, it attempts to recover by using intermediate
 // content or nudging the model.
-func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, error) {
+func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *security.PermissionEngine, resp *llm.ChatResponse, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, []ToolCallRecord, loopStopReason, error) {
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Add(resp.TokensUsed)
@@ -1860,7 +1894,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	parentSpan := trace.SpanFromContext(ctx)
 	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, run, onEvent, &totalUsage, &totalCost)
 	if err != nil {
-		return nil, out.llmMessages, out.toolRecords, err
+		return nil, out.llmMessages, out.toolRecords, out.stopReason, err
 	}
 	resp, llmMessages = out.resp, out.llmMessages
 
@@ -1874,7 +1908,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	if out.stopReason != stopNone {
 		parentSpan.SetAttributes(attribute.String("agent.tool_loop_stop", out.stopReason.String()))
 		resp, llmMessages, err := e.finishStoppedToolLoop(ctx, convID, out, &totalUsage, &totalCost, run, onEvent)
-		return resp, llmMessages, out.toolRecords, err
+		return resp, llmMessages, out.toolRecords, out.stopReason, err
 	}
 
 	// Layer 3 (belt-and-braces): reject a final response that never received an
@@ -1885,7 +1919,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// non-empty content — never on a silently truncated stream.
 	if isTruncatedFinal(resp) {
 		e.emitLLMAudit(ctx, convID, resp, "truncated final response (no finish_reason)", llmAuditOpts{round: out.toolRounds})
-		return nil, llmMessages, out.toolRecords, fmt.Errorf("LLM returned truncated final response (no finish_reason): %w", llm.ErrStreamTruncated)
+		return nil, llmMessages, out.toolRecords, out.stopReason, fmt.Errorf("LLM returned truncated final response (no finish_reason): %w", llm.ErrStreamTruncated)
 	}
 
 	// If the model returned empty (or whitespace-only) content after tool
@@ -1896,7 +1930,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 		var err error
 		resp, llmMessages, err = e.recoverEmptyToolResponse(ctx, convID, resp, llmMessages, out.accumulated, run)
 		if err != nil {
-			return nil, llmMessages, out.toolRecords, err
+			return nil, llmMessages, out.toolRecords, out.stopReason, err
 		}
 		totalUsage.Add(resp.TokensUsed)
 		totalCost += resp.CostUSD
@@ -1905,7 +1939,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	// Replace per-round usage with accumulated totals.
 	resp.TokensUsed = totalUsage
 	resp.CostUSD = totalCost
-	return resp, llmMessages, out.toolRecords, nil
+	return resp, llmMessages, out.toolRecords, out.stopReason, nil
 }
 
 // runToolLoop executes tool-call rounds until the model stops requesting
@@ -2537,14 +2571,19 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 }
 
 // routerFor returns the router this turn talks to: the engine's own, or a
-// one-off clone carrying the policy's model override. Resolved once per turn
-// so every round — including wrap-up and nudge retries — reaches the same
-// model; a turn that started on a candidate must not finish on the live one.
+// one-off clone carrying the policy's model and provider overrides. Resolved
+// once per turn so every round — including wrap-up and nudge retries — reaches
+// the same target; a turn that started on a candidate must not finish on the
+// live one.
+//
+// Each With* call is a no-op returning the receiver when its override is empty
+// or already current, so an unset overlay costs nothing and the incumbent
+// variant of an eval run talks to the engine's own router.
 func (e *Engine) routerFor(policy *ExecPolicy) *llm.Router {
-	if !policy.active() || policy.Model == "" {
+	if !policy.active() {
 		return e.router
 	}
-	return e.router.WithModel(policy.Model)
+	return e.router.WithModel(policy.Model).WithProvider(policy.Provider)
 }
 
 // idempotencyCheck returns the "safe to execute" predicate an execution policy
