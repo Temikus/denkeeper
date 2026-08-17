@@ -73,6 +73,50 @@ type Completeness struct {
 	Ratio           float64 `json:"ratio"`
 	Floor           float64 `json:"floor"`
 	Conclusive      bool    `json:"conclusive"`
+	// Pairs and PairsJudged sit next to the sample figures because a run can be
+	// sample-complete and still have holes in the judging grid: a (task, k)
+	// whose sample failed on either side yields no pair at all.
+	Pairs       int `json:"pairs"`
+	PairsJudged int `json:"pairs_judged"`
+}
+
+// SummaryOpts carries the [eval] policy a summary is computed against.
+// Thresholds are configuration, not constants: what counts as a regression is
+// the operator's call.
+type SummaryOpts struct {
+	CompletenessFloor float64
+	// WinThreshold is the judge win-rate a candidate must reach to be called an
+	// upgrade.
+	WinThreshold float64
+	// GateRejectedPP is the largest tolerated rise in rejected tool-call rate,
+	// in percentage points.
+	GateRejectedPP float64
+	// GateRoundsPct and GateCostPct are the largest tolerated relative rises in
+	// mean rounds and cost per task.
+	GateRoundsPct float64
+	GateCostPct   float64
+}
+
+// withDefaults fills unset fields with the shipped defaults, so a caller that
+// only cares about one knob does not silently zero the rest — a zero threshold
+// would fail every gate.
+func (o SummaryOpts) withDefaults() SummaryOpts {
+	if o.CompletenessFloor <= 0 {
+		o.CompletenessFloor = 0.8
+	}
+	if o.WinThreshold <= 0 {
+		o.WinThreshold = 0.55
+	}
+	if o.GateRejectedPP <= 0 {
+		o.GateRejectedPP = 2.0
+	}
+	if o.GateRoundsPct <= 0 {
+		o.GateRoundsPct = 20
+	}
+	if o.GateCostPct <= 0 {
+		o.GateCostPct = 25
+	}
+	return o
 }
 
 // Summary is the objective scorecard for one run — everything computable
@@ -92,32 +136,23 @@ type Summary struct {
 	Variants        []VariantMetrics `json:"variants"`
 	PerTask         []TaskMetrics    `json:"per_task"`
 	Completeness    Completeness     `json:"completeness"`
+	// Verdicts holds one decision per non-baseline variant, each with its gate
+	// table, judge tally and per-category breakdown. Present even before any
+	// judging: the objective half alone can already say "downgrade" or "no
+	// regressions detected".
+	Verdicts []VariantVerdict `json:"verdicts"`
 }
 
 // Summarize aggregates a run's samples in Go rather than SQL. A run holds at
 // most a few hundred samples, and the arithmetic is far easier to test as
 // ordinary code than as window functions.
-func (s *Store) Summarize(ctx context.Context, runID int64, floor float64) (*Summary, error) {
-	run, err := s.GetRun(ctx, runID)
+func (s *Store) Summarize(ctx context.Context, runID int64, opts SummaryOpts) (*Summary, error) {
+	opts = opts.withDefaults()
+	in, run, set, err := s.loadSummary(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	variants, err := s.ListVariants(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	tasks, err := s.ListTasks(ctx, run.TaskSetID)
-	if err != nil {
-		return nil, err
-	}
-	samples, err := s.ListSamples(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	set, err := s.GetTaskSetByID(ctx, run.TaskSetID)
-	if err != nil {
-		return nil, err
-	}
+	in.opts = opts
 
 	sum := &Summary{
 		RunID:     run.ID,
@@ -128,13 +163,64 @@ func (s *Store) Summarize(ctx context.Context, runID int64, floor float64) (*Sum
 		CostCap:   run.CostCap,
 		CostSpent: run.CostSpent,
 	}
-	if len(variants) > 0 {
-		sum.BaselineVariant = variants[0].Name
+	if len(in.variants) > 0 {
+		sum.BaselineVariant = in.variants[0].Name
 	}
-	sum.Variants = variantMetrics(variants, samples)
-	sum.PerTask = taskMetrics(tasks, variants, samples)
-	sum.Completeness = completeness(samples, len(tasks)*len(variants)*run.K, floor)
+	sum.Variants = variantMetrics(in.variants, in.samples)
+	sum.PerTask = taskMetrics(in.tasks, in.variants, in.samples)
+	sum.Completeness = completeness(in.samples,
+		len(in.tasks)*len(in.variants)*run.K, opts.CompletenessFloor)
+	sum.Completeness.Pairs = len(in.pairs)
+
+	in.metrics = sum.Variants
+	in.complete = sum.Completeness
+	sum.Verdicts = buildVerdicts(in)
+	sum.Completeness.PairsJudged = judgedPairs(sum.Verdicts)
 	return sum, nil
+}
+
+// loadSummary reads everything a summary is computed from in one place, so the
+// objective and judged halves can never be built from different snapshots.
+func (s *Store) loadSummary(ctx context.Context, runID int64) (verdictInput, *Run, *TaskSet, error) {
+	var in verdictInput
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return in, nil, nil, err
+	}
+	if in.variants, err = s.ListVariants(ctx, runID); err != nil {
+		return in, nil, nil, err
+	}
+	if in.tasks, err = s.ListTasks(ctx, run.TaskSetID); err != nil {
+		return in, nil, nil, err
+	}
+	if in.samples, err = s.ListSamples(ctx, runID); err != nil {
+		return in, nil, nil, err
+	}
+	if in.pairs, err = s.ListPairs(ctx, runID); err != nil {
+		return in, nil, nil, err
+	}
+	if in.items, err = s.ListItems(ctx, runID); err != nil {
+		return in, nil, nil, err
+	}
+	if in.verdicts, err = s.ListVerdicts(ctx, runID); err != nil {
+		return in, nil, nil, err
+	}
+	set, err := s.GetTaskSetByID(ctx, run.TaskSetID)
+	if err != nil {
+		return in, nil, nil, err
+	}
+	return in, run, set, nil
+}
+
+// judgedPairs sums the fully-judged pair counts across candidates. With the
+// two-variant shape that is the whole run; with more it is the total judging
+// work completed.
+func judgedPairs(verdicts []VariantVerdict) int {
+	var n int
+	for _, v := range verdicts {
+		n += v.Judgment.JudgedPairs
+	}
+	return n
 }
 
 // variantAcc accumulates one variant's ok samples.

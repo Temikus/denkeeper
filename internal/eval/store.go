@@ -1,8 +1,8 @@
 // Package eval stores eval task sets and runs comparison evals against a base
 // agent's live engine under the no-side-effects execution policy
-// (agent.ExecPolicy). Stage B of design/eval-subsystem.md: L2 task sets plus
-// the L3 runner and its objective metrics — everything up to, but not
-// including, judging.
+// (agent.ExecPolicy). Stages B and C of design/eval-subsystem.md: L2 task sets,
+// the L3 runner and its objective metrics, then the blinded pairing, judging
+// and decision rule layered on top.
 package eval
 
 import (
@@ -60,6 +60,56 @@ const (
 	SampleFailed = "failed"
 )
 
+// Judgment item statuses.
+const (
+	ItemPending = "pending"
+	ItemJudged  = "judged"
+)
+
+// Presentation orders. An item's order says which pair letter is shown to the
+// judge first: "ab" shows the pair's A sample as Response A, "ba" swaps them.
+// Two items per pair, one of each, is what makes position-bias control
+// structural rather than a matter of judge discipline.
+const (
+	OrderAB = "ab"
+	OrderBA = "ba"
+)
+
+// Verdict winners, in terms of the *presented* responses — the judge never
+// learns the pair letters, only "Response A" and "Response B" as shown to it.
+const (
+	WinnerA   = "a"
+	WinnerB   = "b"
+	WinnerTie = "tie"
+)
+
+// JudgeOperator is the judge identity reserved for the operator's calibration
+// marks. Stored as ordinary verdicts (no schema of their own) and excluded from
+// the win rate; they only feed the operator–judge agreement figure.
+const JudgeOperator = "operator"
+
+// Judgment dimensions, in the order the rubric lists them.
+const (
+	DimTaskSuccess = "task_success"
+	DimToolPath    = "tool_path"
+	DimPersonaFit  = "persona_fit"
+	DimLength      = "length"
+)
+
+// ValidWinner reports whether w is one of the three verdict outcomes.
+func ValidWinner(w string) bool {
+	switch w {
+	case WinnerA, WinnerB, WinnerTie:
+		return true
+	}
+	return false
+}
+
+// Dimensions returns the four judgment dimensions, in rubric order.
+func Dimensions() []string {
+	return []string{DimTaskSuccess, DimToolPath, DimPersonaFit, DimLength}
+}
+
 // ValidCategory reports whether c is one of the four curation categories.
 func ValidCategory(c string) bool {
 	switch c {
@@ -85,12 +135,11 @@ func IsTerminal(status string) bool {
 	return false
 }
 
-// schema holds the five Stage B tables.
+// schema holds the five Stage B tables plus the three Stage C judging tables.
 //
-// Deliberately absent: the pairing and judging tables (eval_pairs,
-// eval_judgment_items, eval_verdicts) land with Stage C, and turn_traces with
-// L1 live capture. Eval samples self-capture their trace inline in
-// eval_samples.trace, which is why Stage B needs neither.
+// Deliberately absent: turn_traces, which lands with L1 live capture. Eval
+// samples self-capture their trace inline in eval_samples.trace, which is why
+// neither stage needs it.
 const schema = `
 CREATE TABLE IF NOT EXISTS eval_task_sets (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,12 +207,50 @@ CREATE TABLE IF NOT EXISTS eval_samples (
     created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS eval_pairs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     INTEGER NOT NULL REFERENCES eval_runs(id),
+    task_id    INTEGER NOT NULL REFERENCES eval_tasks(id),
+    k_index    INTEGER NOT NULL,
+    sample_a   INTEGER NOT NULL REFERENCES eval_samples(id),
+    sample_b   INTEGER NOT NULL REFERENCES eval_samples(id),
+    assignment TEXT    NOT NULL DEFAULT '{}',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS eval_judgment_items (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    pair_id            INTEGER NOT NULL REFERENCES eval_pairs(id),
+    presentation_order TEXT    NOT NULL,
+    status             TEXT    NOT NULL DEFAULT 'pending',
+    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS eval_verdicts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     INTEGER NOT NULL REFERENCES eval_judgment_items(id),
+    winner      TEXT    NOT NULL,
+    dimensions  TEXT    NOT NULL DEFAULT '{}',
+    notes       TEXT    NOT NULL DEFAULT '',
+    judge_ident TEXT    NOT NULL DEFAULT '',
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_eval_tasks_set      ON eval_tasks (set_id);
 CREATE INDEX IF NOT EXISTS idx_eval_runs_task_set  ON eval_runs (task_set_id);
 CREATE INDEX IF NOT EXISTS idx_eval_runs_status    ON eval_runs (status);
 CREATE INDEX IF NOT EXISTS idx_eval_variants_run   ON eval_variants (run_id);
 CREATE INDEX IF NOT EXISTS idx_eval_samples_run    ON eval_samples (run_id);
 CREATE INDEX IF NOT EXISTS idx_eval_samples_pair   ON eval_samples (variant_id, task_id);
+CREATE INDEX IF NOT EXISTS idx_eval_pairs_run      ON eval_pairs (run_id);
+CREATE INDEX IF NOT EXISTS idx_eval_items_pair     ON eval_judgment_items (pair_id);
+CREATE INDEX IF NOT EXISTS idx_eval_items_status   ON eval_judgment_items (status);
+
+-- One verdict per (item, judge). A judge that re-runs the queue overwrites its
+-- own earlier call rather than stacking duplicates, and the operator's
+-- calibration mark sits alongside the judge's rather than replacing it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_verdicts_item_judge
+    ON eval_verdicts (item_id, judge_ident);
 `
 
 // evalMigrations holds idempotent ALTER statements for schema changes after
@@ -255,6 +342,54 @@ type Sample struct {
 	Cost              float64   `db:"cost"               json:"cost"`
 	LatencyMs         int64     `db:"latency_ms"         json:"latency_ms"`
 	CreatedAt         time.Time `db:"created_at"         json:"created_at"`
+}
+
+// Pair is one blinded comparison: a baseline sample and a candidate sample for
+// the same (task, k), with a random A/B assignment that lives server-side only.
+type Pair struct {
+	ID      int64 `db:"id"        json:"id"`
+	RunID   int64 `db:"run_id"    json:"run_id"`
+	TaskID  int64 `db:"task_id"   json:"task_id"`
+	KIndex  int   `db:"k_index"   json:"k_index"`
+	SampleA int64 `db:"sample_a"  json:"sample_a"`
+	SampleB int64 `db:"sample_b"  json:"sample_b"`
+	// Assignment is the letter→variant map. It is the unblinding key and must
+	// never reach a judge-visible payload.
+	Assignment string    `db:"assignment" json:"assignment"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+}
+
+// Assignment is the decoded eval_pairs.assignment JSON: which variant each
+// presented letter really was.
+type Assignment struct {
+	A int64 `json:"a"`
+	B int64 `json:"b"`
+}
+
+// JudgmentItem is one pass over a pair at a fixed presentation order. A pair
+// yields two, one per order.
+type JudgmentItem struct {
+	ID                int64     `db:"id"                 json:"id"`
+	PairID            int64     `db:"pair_id"            json:"pair_id"`
+	PresentationOrder string    `db:"presentation_order" json:"presentation_order"`
+	Status            string    `db:"status"             json:"status"`
+	CreatedAt         time.Time `db:"created_at"         json:"created_at"`
+}
+
+// Verdict is one judge's call on one item, expressed in presented letters.
+type Verdict struct {
+	ID     int64  `db:"id"      json:"id"`
+	ItemID int64  `db:"item_id" json:"item_id"`
+	Winner string `db:"winner" json:"winner"`
+	// Dimensions is a JSON object of dimension → winner (a/b/tie), the same
+	// pairwise form as Winner rather than absolute scores: a judge comparing
+	// two responses is reliable, a judge scoring one in isolation is not.
+	Dimensions string `db:"dimensions" json:"dimensions"`
+	Notes      string `db:"notes"      json:"notes"`
+	// JudgeIdent names who judged — an API key name, or JudgeOperator for the
+	// operator's calibration marks.
+	JudgeIdent string    `db:"judge_ident" json:"judge_ident"`
+	CreatedAt  time.Time `db:"created_at"  json:"created_at"`
 }
 
 // Store persists eval task sets, runs and samples. It owns its own handle on

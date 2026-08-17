@@ -49,7 +49,11 @@ Thumbs.db
 .task/
 
 # ai tooling
-.claude
+# Everything under .claude is local state, except skills/ — a project skill is
+# a repo deliverable (/judge-eval drives the eval judging loop) and has to
+# travel with the code it operates on.
+.claude/*
+!.claude/skills/
 .mcp.json
 
 # Git worktrees

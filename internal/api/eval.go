@@ -128,12 +128,21 @@ func evalRunID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// evalCompletenessFloor is the configured floor a summary is judged against.
-func (s *Server) evalCompletenessFloor() float64 {
-	if s.deps.Config == nil || s.deps.Config.Eval.CompletenessFloor <= 0 {
-		return 0.8
+// evalSummaryOpts is the [eval] policy a summary is computed against. A nil
+// config leaves every field zero, and eval.SummaryOpts fills in the shipped
+// defaults — a zero threshold would otherwise fail every gate.
+func (s *Server) evalSummaryOpts() eval.SummaryOpts {
+	if s.deps.Config == nil {
+		return eval.SummaryOpts{}
 	}
-	return s.deps.Config.Eval.CompletenessFloor
+	c := s.deps.Config.Eval
+	return eval.SummaryOpts{
+		CompletenessFloor: c.CompletenessFloor,
+		WinThreshold:      c.WinThreshold,
+		GateRejectedPP:    c.GateRejectedRatePP,
+		GateRoundsPct:     c.GateRoundsPct,
+		GateCostPct:       c.GateCostPct,
+	}
 }
 
 // --- Task sets ---
@@ -792,8 +801,8 @@ func (s *Server) handleStopEvalRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvalRunSummary godoc
-// @Summary Get an eval run's objective scorecard
-// @Description Aggregates the run's samples: per-variant rejected and failed rates (tool-call level, with cached and suppressed calls excluded because nothing executed), mean rounds, wrap-up count, mean cost per task and latency, plus per-task deltas against the baseline variant and a completeness indicator. A run below the [eval] completeness_floor still reports its numbers but is flagged inconclusive rather than dressed up as a verdict. No judging — that is Stage C.
+// @Summary Get an eval run's scorecard and verdict
+// @Description Aggregates the run's samples: per-variant rejected and failed rates (tool-call level, with cached and suppressed calls excluded because nothing executed), mean rounds, wrap-up count, mean cost per task and latency, plus per-task deltas against the baseline variant and a completeness indicator. Each non-baseline variant also gets a verdict with its work shown: the objective gate table (value, delta, threshold, pass/fail), a one-line plain-language reason, the blinded-pair judge tally, the operator-judge agreement figure, and a per-category breakdown. The rule is asymmetric — the gates alone can declare a downgrade or report no regressions, but only the judge win-rate can declare an upgrade. A run below the [eval] completeness_floor reports its numbers but is flagged inconclusive rather than dressed up as a verdict.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -811,7 +820,7 @@ func (s *Server) handleEvalRunSummary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	summary, err := s.deps.EvalStore.Summarize(r.Context(), id, s.evalCompletenessFloor())
+	summary, err := s.deps.EvalStore.Summarize(r.Context(), id, s.evalSummaryOpts())
 	if err != nil {
 		writeEvalError(w, err)
 		return

@@ -390,6 +390,132 @@ func TestEvalRun_PanicCancelsActiveRun(t *testing.T) {
 	}
 }
 
+// The full Stage C loop against a live server: run → pairs created at
+// finalization → blinded items → verdicts → an unblinded upgrade.
+func TestEvalRun_JudgedEndToEndProducesAnUpgradeVerdict(t *testing.T) {
+	h := evalHarness(t, &HarnessOpts{
+		Responses: []*llm.ChatResponse{{
+			Content:      "the answer",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+			FinishReason: "stop",
+		}},
+	})
+	seedEvalSet(t, h, "regression", "first question", "second question")
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "regression",
+		"base_agent": "default",
+		"k":          1,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate", "llm_model": "test-model"},
+		},
+	})
+	if run := evalRunStatus(t, h, runID); run.Status != eval.StatusDone {
+		t.Fatalf("status = %q, want %q (error %q)", run.Status, eval.StatusDone, run.Error)
+	}
+
+	ctx := context.Background()
+	// Before any judging the objective half stands alone, and it can never
+	// promote a candidate on its own.
+	summary := evalSummary(t, h, runID)
+	if len(summary.Verdicts) != 1 {
+		t.Fatalf("got %d verdicts, want 1", len(summary.Verdicts))
+	}
+	if got := summary.Verdicts[0].Verdict; got != eval.VerdictNoRegressions {
+		t.Fatalf("unjudged verdict = %q (%s), want %q",
+			got, summary.Verdicts[0].Reason, eval.VerdictNoRegressions)
+	}
+	if summary.Completeness.Pairs != 2 {
+		t.Fatalf("got %d pairs, want 2 (2 tasks × k=1)", summary.Completeness.Pairs)
+	}
+
+	// Work the queue the way a judge would: pull the blinded item, decide, and
+	// never consult the pair rows.
+	pending, err := h.EvalStore.ListPending(ctx, runID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 4 {
+		t.Fatalf("got %d pending items, want 4 (both presentation orders per pair)", len(pending))
+	}
+	candidateID := candidateVariantID(t, h, runID)
+	for _, item := range pending {
+		blinded, err := h.EvalStore.GetBlindedItem(ctx, item.ItemID)
+		if err != nil {
+			t.Fatalf("GetBlindedItem: %v", err)
+		}
+		if blinded.ResponseA.Response == "" || blinded.ResponseB.Response == "" {
+			t.Fatalf("item %d is missing a response", item.ItemID)
+		}
+		if _, err := h.EvalStore.RecordVerdict(ctx, eval.Verdict{
+			ItemID:     item.ItemID,
+			Winner:     winnerFavouring(t, h, item.ItemID, candidateID),
+			JudgeIdent: "integration-judge",
+			Notes:      "candidate followed the persona more closely",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	summary = evalSummary(t, h, runID)
+	vv := summary.Verdicts[0]
+	if vv.Verdict != eval.VerdictUpgrade {
+		t.Fatalf("judged verdict = %q (%s), want %q", vv.Verdict, vv.Reason, eval.VerdictUpgrade)
+	}
+	if vv.Judgment.JudgedPairs != 2 || vv.Judgment.Wins != 2 {
+		t.Errorf("judgment = %+v, want 2 pairs judged and 2 wins", vv.Judgment)
+	}
+	if summary.Completeness.PairsJudged != 2 {
+		t.Errorf("pairs judged = %d, want 2", summary.Completeness.PairsJudged)
+	}
+	if len(vv.Gates) != 3 || vv.Reason == "" {
+		t.Errorf("verdict arrived without its work: %d gates, reason %q", len(vv.Gates), vv.Reason)
+	}
+}
+
+// candidateVariantID resolves the non-baseline variant of a run.
+func candidateVariantID(t *testing.T, h *Harness, runID int64) int64 {
+	t.Helper()
+	variants, err := h.EvalStore.ListVariants(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListVariants: %v", err)
+	}
+	if len(variants) != 2 {
+		t.Fatalf("got %d variants, want 2", len(variants))
+	}
+	return variants[1].ID
+}
+
+// winnerFavouring picks the presented letter that means `variant` on this item.
+// A real judge decides on the responses; the test needs a deterministic outcome,
+// so it works the unblinding backwards through the same helper the summary uses.
+func winnerFavouring(t *testing.T, h *Harness, itemID, variant int64) string {
+	t.Helper()
+	ctx := context.Background()
+	item, err := h.EvalStore.GetItem(ctx, itemID)
+	if err != nil {
+		t.Fatalf("GetItem: %v", err)
+	}
+	pair, err := h.EvalStore.GetPair(ctx, item.PairID)
+	if err != nil {
+		t.Fatalf("GetPair: %v", err)
+	}
+	assign, err := eval.DecodeAssignment(pair.Assignment)
+	if err != nil {
+		t.Fatalf("DecodeAssignment: %v", err)
+	}
+	for _, w := range []string{eval.WinnerA, eval.WinnerB} {
+		if eval.VariantFor(assign, item.PresentationOrder, w) == variant {
+			return w
+		}
+	}
+	t.Fatalf("item %d resolves to neither side of variant %d", itemID, variant)
+	return eval.WinnerTie
+}
+
 func TestEvalTaskSet_JSONLRoundTripThroughAPI(t *testing.T) {
 	h := evalHarness(t, nil)
 	seedEvalSet(t, h, "source", "alpha", "beta")

@@ -1701,6 +1701,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		ChannelResolver: buildChannelResolver(a.dispatcher),
 		Auditor:         a.auditor,
 		AuditStore:      a.auditStore,
+		EvalStore:       a.evalStore,
 		ConfigPath:      a.path,
 		Version:         version,
 		Logger:          a.logger,

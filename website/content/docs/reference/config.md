@@ -345,6 +345,12 @@ Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 | `max_cost_per_run` | float | `2.0` | Default USD ceiling for one eval run, overridable per run. There is no uncapped value |
 | `default_k` | int | `3` | Samples per (task, variant) pair, giving the objective metrics something to average over |
 | `completeness_floor` | float | `0.8` | Fraction of expected samples that must succeed before a run's scorecard is called conclusive |
+| `win_threshold` | float | `0.55` | Blinded-pair judge win rate a candidate must reach to be called an upgrade |
+| `gate_rejected_rate_pp` | float | `2.0` | Largest tolerated rise in the rejected tool-call rate, in percentage points |
+| `gate_rounds_pct` | float | `20` | Largest tolerated rise in mean tool-call rounds per task, in percent |
+| `gate_cost_pct` | float | `25` | Largest tolerated rise in mean cost per task, in percent |
+
+The last four are the decision rule, and it is deliberately asymmetric: the three gates can declare a *downgrade* on their own (a failed gate needs no judge to reject a candidate) or report that nothing regressed, but calling a candidate an *upgrade* also requires the judge win-rate to reach `win_threshold`. A judge's preference can never override an objective regression. `GET /api/v1/eval/runs/{id}/summary` returns the gate table with each value, delta, threshold and pass/fail alongside a one-line reason, plus a per-category breakdown so a candidate that wins on chat while regressing on tool-heavy tasks is visible rather than averaged away.
 
 An eval run is bounded twice, by spend (`max_cost_per_run`) and by rate (`max_concurrent`); both are always in force. Writing `0` for any of these keys is indistinguishable from omitting it and yields the default — set a real value to change one. A run that hits its cost cap stops dispatching new samples, lets the in-flight ones finish, and keeps its partial results rather than discarding them.
 

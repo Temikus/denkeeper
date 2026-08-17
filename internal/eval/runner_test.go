@@ -194,7 +194,29 @@ func (f *runnerFixture) createRun(t *testing.T, k int, costCap float64, variants
 	return run
 }
 
-// waitForTerminal polls until the run reaches a terminal status.
+// waitFor polls cond until it holds, and fails with msg if it never does.
+//
+// It exists because the run row reaches its terminal status *before* the finish
+// audit event and the final progress frame are emitted, and that ordering is
+// deliberate: the authoritative GET must never lag the droppable frame, or a
+// client that refetches on seeing "done" would read "running". So waiting on
+// the row (waitForTerminal) is not the same as waiting on the side effects that
+// follow it, and a test asserting on those has to wait for them specifically.
+func waitFor(t *testing.T, msg string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
+
+// waitForTerminal polls until the run reaches a terminal status. Note that the
+// run's finish audit event and final progress frame are emitted *after* this
+// returns — use waitFor to observe those.
 func waitForTerminal(t *testing.T, store *Store, runID int64) *Run {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -450,6 +472,34 @@ func TestRunner_StopAllOnPanicStopsEveryActiveRun(t *testing.T) {
 	}
 }
 
+// A run cancelled in the window before its first sample is stopped, not
+// failed. prepare's store reads run on the cancellable context, so a stop
+// landing there returns context.Canceled — which is a decision, not a store
+// error, and "failed" has to keep meaning something was actually wrong.
+func TestRunner_StopDuringPrepareReportsStoppedNotFailed(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a")
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	// Cancel immediately, racing prepare rather than waiting for a sample.
+	f.runner.StopAll()
+
+	got := waitForTerminal(t, f.store, run.ID)
+	if got.Status == StatusFailed {
+		t.Fatalf("a cancelled run reported %q with error %q; a stop is not a failure",
+			got.Status, got.Error)
+	}
+	if got.Status != StatusStopped {
+		t.Fatalf("status = %q, want %q", got.Status, StatusStopped)
+	}
+	if got.Error != "" {
+		t.Errorf("stopped run carries error %q, want none", got.Error)
+	}
+}
+
 func TestRunner_ConcurrencyBoundedByMaxConcurrent(t *testing.T) {
 	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
 	f.addTasks(t, "a", "b", "c")
@@ -476,6 +526,15 @@ func TestRunner_EmitsLifecycleAuditEvents(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	waitForTerminal(t, f.store, run.ID)
+	// The finish event trails the row write, so wait for the event itself.
+	waitFor(t, "the eval_run_finish audit event", func() bool {
+		for _, e := range auditor.all() {
+			if e.Action == "eval_run_finish" {
+				return true
+			}
+		}
+		return false
+	})
 
 	events := auditor.all()
 	var start, finish *audit.Event
@@ -640,10 +699,10 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 	run := f.createRun(t, 1, 10.0, twoVariants()...)
 
 	var mu sync.Mutex
-	var events []ProgressEvent
+	var collected []ProgressEvent
 	f.runner.OnProgress = func(e ProgressEvent) {
 		mu.Lock()
-		events = append(events, e)
+		collected = append(collected, e)
 		mu.Unlock()
 	}
 
@@ -651,9 +710,16 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	waitForTerminal(t, f.store, run.ID)
+	// The terminal frame trails the row write, so wait for the frame itself.
+	waitFor(t, "the terminal progress frame", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(collected) > 0 && IsTerminal(collected[len(collected)-1].Status)
+	})
 
 	mu.Lock()
 	defer mu.Unlock()
+	events := collected
 	if len(events) < 3 {
 		t.Fatalf("got %d progress events, want start + per-sample + finish", len(events))
 	}
@@ -663,6 +729,58 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 	}
 	if last.CostCap != 10.0 {
 		t.Errorf("cost cap = %v, want 10", last.CostCap)
+	}
+}
+
+// Pairing is a run-finalization step, so a finished run arrives at the judge
+// queue already populated — no separate "prepare for judging" call to forget.
+func TestRunner_FinalizationCreatesJudgmentPairs(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
+	f.addTasks(t, "first", "second")
+	run := f.createRun(t, 2, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForTerminal(t, f.store, run.ID)
+
+	pairs, err := f.store.CountPairs(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("CountPairs: %v", err)
+	}
+	if pairs != 4 {
+		t.Fatalf("got %d pairs, want 4 (2 tasks × k=2)", pairs)
+	}
+	pending, err := f.store.ListPending(context.Background(), run.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 8 {
+		t.Fatalf("got %d pending items, want 8 (both presentation orders per pair)", len(pending))
+	}
+}
+
+// A capped run keeps its partial results, so it must still be judgeable on the
+// samples it paid for.
+func TestRunner_CappedRunStillPairsWhatItProduced(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.engine.costPerSample = 0.6
+	f.addTasks(t, "first", "second", "third")
+	run := f.createRun(t, 1, 1.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	got := waitForTerminal(t, f.store, run.ID)
+	if got.Status != StatusCapped {
+		t.Fatalf("status = %q, want %q", got.Status, StatusCapped)
+	}
+	pairs, err := f.store.CountPairs(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("CountPairs: %v", err)
+	}
+	if pairs == 0 {
+		t.Fatal("a capped run produced no pairs — its partial results are unjudgeable")
 	}
 }
 

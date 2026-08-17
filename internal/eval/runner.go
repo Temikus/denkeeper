@@ -215,6 +215,7 @@ type runState struct {
 	spent      float64
 	latencySum int64
 	latencyN   int
+	pairs      int
 }
 
 // execute drives one run to a terminal status.
@@ -230,12 +231,7 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 
 	st, err := r.prepare(ctx, run)
 	if err != nil {
-		r.logger.Error("eval run failed to start", "run", run.ID, "error", err)
-		if ferr := r.store.FinishRun(bookkeeping, run.ID, StatusFailed, err.Error()); ferr != nil {
-			r.logger.Error("eval run finish failed", "run", run.ID, "error", ferr)
-		}
-		r.emitLifecycle(bookkeeping, run, "eval_run_finish", StatusFailed, err, nil)
-		r.progress(run.ID, StatusFailed, 0, 0, 0, run.CostCap, 0)
+		r.finishBeforeStart(ctx, bookkeeping, run, err)
 		return
 	}
 
@@ -247,7 +243,14 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 	r.progress(run.ID, StatusRunning, 0, st.total, 0, run.CostCap, 0)
 
 	status, runErr := r.dispatch(ctx, st)
+	st.pairs = r.finalizePairs(bookkeeping, run.ID, status)
 
+	// The terminal row write comes first, then the finish event and frame.
+	// That order is deliberate and must not be flipped for convenience: the
+	// progress frame is droppable and GET /eval/runs/{id} is authoritative, so
+	// a client that refetches on seeing "done" in a frame has to find the row
+	// already terminal. The cost is that anything observing the row is not yet
+	// guaranteed to have seen the event or the frame.
 	if err := r.store.FinishRun(bookkeeping, run.ID, status, errText(runErr)); err != nil {
 		r.logger.Error("eval run finish failed", "run", run.ID, "error", err)
 	}
@@ -256,7 +259,55 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 	r.emitLifecycle(bookkeeping, run, "eval_run_finish", status, runErr, st)
 	r.progress(run.ID, status, st.done, st.total, st.spent, run.CostCap, 0)
 	r.logger.Info("eval run finished", "run", run.ID, "status", status,
-		"samples", st.done, "expected", st.total, "cost", st.spent)
+		"samples", st.done, "expected", st.total, "cost", st.spent, "pairs", st.pairs)
+}
+
+// finalizePairs turns the run's completed samples into blinded judgment work.
+//
+// It runs for capped and stopped runs as well as done ones: partial results are
+// the point of those statuses, and a run that already spent the money should be
+// judgeable on what it produced. Only a run that never got off the ground
+// (failed before its first sample) is skipped, and even then CreatePairs would
+// find nothing to pair — the skip is about not logging a confusing error.
+//
+// A pairing failure never changes the run's status: the samples are recorded
+// and the objective scorecard stands on its own. Judging is a separate,
+// re-runnable step.
+func (r *Runner) finalizePairs(ctx context.Context, runID int64, status string) int {
+	if status == StatusFailed {
+		return 0
+	}
+	n, err := r.store.CreatePairs(ctx, runID)
+	if err != nil {
+		r.logger.Error("creating eval judgment pairs failed", "run", runID, "error", err)
+		return 0
+	}
+	return n
+}
+
+// finishBeforeStart records a run that died during prepare, before its first
+// sample.
+//
+// A cancelled run is stopped, not failed. prepare's store reads take the run's
+// own (cancellable) context, so Stop, StopAll or the panic switch landing in
+// that window makes them return context.Canceled — which is not a store error
+// and must not be reported as one. Keeping "failed" to mean "something was
+// actually wrong" is what makes the status worth reading: the summary's failed
+// path is the operator's signal that the subsystem, not their decision, ended
+// the run.
+func (r *Runner) finishBeforeStart(ctx, bookkeeping context.Context, run *Run, err error) {
+	status, runErr := StatusFailed, err
+	if ctx.Err() != nil {
+		status, runErr = StatusStopped, nil
+		r.logger.Info("eval run stopped before its first sample", "run", run.ID)
+	} else {
+		r.logger.Error("eval run failed to start", "run", run.ID, "error", err)
+	}
+	if ferr := r.store.FinishRun(bookkeeping, run.ID, status, errText(runErr)); ferr != nil {
+		r.logger.Error("eval run finish failed", "run", run.ID, "error", ferr)
+	}
+	r.emitLifecycle(bookkeeping, run, "eval_run_finish", status, runErr, nil)
+	r.progress(run.ID, status, 0, 0, 0, run.CostCap, 0)
 }
 
 // prepare resolves everything a run needs before the first sample: its tasks,
@@ -592,6 +643,7 @@ func (r *Runner) emitLifecycle(ctx context.Context, run *Run, action, status str
 		if action == "eval_run_finish" {
 			detail["samples_done"] = st.done
 			detail["cost_spent"] = st.spent
+			detail["pairs"] = st.pairs
 		}
 	}
 	evStatus := audit.StatusOK
