@@ -36,10 +36,12 @@
 
   function modelLabel(id) { return id || liveModel || 'live model' }
 
+  // `GET /models/details` returns llm.ModelInfo: top-level `input_per_mtok` /
+  // `output_per_mtok`, null when pricing is unknown.
   function priceOf(id) {
     const m = models.find(x => x.id === id || x.name === id)
-    if (!m?.pricing) return ''
-    const { input, output } = m.pricing
+    if (!m) return ''
+    const { input_per_mtok: input, output_per_mtok: output } = m
     if (input == null || output == null) return ''
     return `$${Number(input).toFixed(2)} / $${Number(output).toFixed(2)}`
   }
