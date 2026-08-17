@@ -42,7 +42,7 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - GET  /api/v1/eval/task-sets          (scope: eval:read)       Saved eval test sets
 - POST /api/v1/eval/task-sets/{name}/tasks (scope: eval:write)  Save a test case
 - POST /api/v1/eval/runs               (scope: eval:write)      Compare agent config variants on a test set
-- GET  /api/v1/eval/runs/{id}/summary  (scope: eval:read)       Objective scorecard for a run
+- GET  /api/v1/eval/runs/{id}/summary  (scope: eval:read)       Scorecard, gate table and verdict for a run
 - POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests
 
 ## Full API Reference

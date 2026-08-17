@@ -16,6 +16,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
@@ -47,7 +48,11 @@ type Deps struct {
 	ChannelResolver configmcp.ChannelResolver
 	Auditor         audit.Emitter
 	AuditStore      audit.Store
-	ConfigPath      string
-	Version         string
-	Logger          *slog.Logger
+	// EvalStore backs the judge tools. It is deliberately the read/verdict
+	// surface only — the runner that creates and cancels runs is not wired
+	// here, so a judge key cannot start spend.
+	EvalStore  *eval.Store
+	ConfigPath string
+	Version    string
+	Logger     *slog.Logger
 }

@@ -129,6 +129,20 @@ type EvalConfig struct {
 	// it still reports its numbers — partial results are the point of the
 	// capped/stopped statuses — but flags them as inconclusive. Default: 0.8.
 	CompletenessFloor float64 `toml:"completeness_floor"`
+	// WinThreshold is the blinded-pair win rate a candidate must reach before
+	// it can be called an upgrade. The objective gates below can reject a
+	// candidate on their own; only the judge can promote one. Default: 0.55.
+	WinThreshold float64 `toml:"win_threshold"`
+	// GateRejectedRatePP is the largest tolerated rise in the rejected
+	// tool-call rate (healthy tool, bad arguments), in percentage points.
+	// Default: 2.0.
+	GateRejectedRatePP float64 `toml:"gate_rejected_rate_pp"`
+	// GateRoundsPct is the largest tolerated relative rise in mean tool-call
+	// rounds per task, in percent. Default: 20.
+	GateRoundsPct float64 `toml:"gate_rounds_pct"`
+	// GateCostPct is the largest tolerated relative rise in mean cost per task,
+	// in percent. Default: 25.
+	GateCostPct float64 `toml:"gate_cost_pct"`
 }
 
 // AuditMode returns the configured eval audit mode, defaulting to "full".
@@ -1429,6 +1443,18 @@ func applyEvalDefaults(cfg *Config) {
 	if cfg.Eval.CompletenessFloor == 0 {
 		cfg.Eval.CompletenessFloor = 0.8
 	}
+	if cfg.Eval.WinThreshold == 0 {
+		cfg.Eval.WinThreshold = 0.55
+	}
+	if cfg.Eval.GateRejectedRatePP == 0 {
+		cfg.Eval.GateRejectedRatePP = 2.0
+	}
+	if cfg.Eval.GateRoundsPct == 0 {
+		cfg.Eval.GateRoundsPct = 20
+	}
+	if cfg.Eval.GateCostPct == 0 {
+		cfg.Eval.GateCostPct = 25
+	}
 }
 
 func applyLLMDefaults(cfg *Config) {
@@ -2049,6 +2075,25 @@ func validateEval(e *EvalConfig) error {
 	}
 	if e.CompletenessFloor <= 0 || e.CompletenessFloor > 1 {
 		return fmt.Errorf("completeness_floor must be in (0, 1], got %v", e.CompletenessFloor)
+	}
+	if e.WinThreshold <= 0 || e.WinThreshold > 1 {
+		return fmt.Errorf("win_threshold must be in (0, 1], got %v", e.WinThreshold)
+	}
+	// Gate thresholds are "how much worse the candidate may get before this
+	// counts as a regression", so a negative one is meaningless. As with the
+	// other keys here, a written 0 cannot be told from an omitted key and takes
+	// the default.
+	for _, g := range []struct {
+		key string
+		val float64
+	}{
+		{"gate_rejected_rate_pp", e.GateRejectedRatePP},
+		{"gate_rounds_pct", e.GateRoundsPct},
+		{"gate_cost_pct", e.GateCostPct},
+	} {
+		if g.val < 0 {
+			return fmt.Errorf("%s must not be negative, got %v", g.key, g.val)
+		}
 	}
 	return nil
 }

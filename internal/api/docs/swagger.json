@@ -2700,14 +2700,14 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Aggregates the run's samples: per-variant rejected and failed rates (tool-call level, with cached and suppressed calls excluded because nothing executed), mean rounds, wrap-up count, mean cost per task and latency, plus per-task deltas against the baseline variant and a completeness indicator. A run below the [eval] completeness_floor still reports its numbers but is flagged inconclusive rather than dressed up as a verdict. No judging — that is Stage C.",
+                "description": "Aggregates the run's samples: per-variant rejected and failed rates (tool-call level, with cached and suppressed calls excluded because nothing executed), mean rounds, wrap-up count, mean cost per task and latency, plus per-task deltas against the baseline variant and a completeness indicator. Each non-baseline variant also gets a verdict with its work shown: the objective gate table (value, delta, threshold, pass/fail), a one-line plain-language reason, the blinded-pair judge tally, the operator-judge agreement figure, and a per-category breakdown. The rule is asymmetric — the gates alone can declare a downgrade or report no regressions, but only the judge win-rate can declare an upgrade. A run below the [eval] completeness_floor reports its numbers but is flagged inconclusive rather than dressed up as a verdict.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "eval"
                 ],
-                "summary": "Get an eval run's objective scorecard",
+                "summary": "Get an eval run's scorecard and verdict",
                 "parameters": [
                     {
                         "type": "integer",
@@ -7664,6 +7664,57 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Agreement": {
+            "type": "object",
+            "properties": {
+                "agreed": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "integer"
+                },
+                "rate": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.CategoryResult": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "delta_cost_pct": {
+                    "type": "number"
+                },
+                "delta_rejected_pp": {
+                    "description": "Deltas mirror the three gates, restricted to this category's tasks.",
+                    "type": "number"
+                },
+                "delta_rounds_pct": {
+                    "type": "number"
+                },
+                "judged_pairs": {
+                    "type": "integer"
+                },
+                "losses": {
+                    "type": "integer"
+                },
+                "regressed": {
+                    "description": "Regressed is true when this category alone would fail a gate or fall\nbelow the win threshold, whatever the aggregate says.",
+                    "type": "boolean"
+                },
+                "ties": {
+                    "type": "integer"
+                },
+                "win_rate": {
+                    "type": "number"
+                },
+                "wins": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Completeness": {
             "type": "object",
             "properties": {
@@ -7673,6 +7724,13 @@
                 "floor": {
                     "type": "number"
                 },
+                "pairs": {
+                    "description": "Pairs and PairsJudged sit next to the sample figures because a run can be\nsample-complete and still have holes in the judging grid: a (task, k)\nwhose sample failed on either side yields no pair at all.",
+                    "type": "integer"
+                },
+                "pairs_judged": {
+                    "type": "integer"
+                },
                 "ratio": {
                     "type": "number"
                 },
@@ -7680,6 +7738,69 @@
                     "type": "integer"
                 },
                 "samples_ok": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Gate": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "number"
+                },
+                "delta": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pass": {
+                    "type": "boolean"
+                },
+                "threshold": {
+                    "description": "Threshold is the largest Delta that still passes, in Unit.",
+                    "type": "number"
+                },
+                "unit": {
+                    "description": "Unit is \"pp\" (percentage points, for rates) or \"%\" (relative change).",
+                    "type": "string"
+                },
+                "value": {
+                    "type": "number"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.Judgment": {
+            "type": "object",
+            "properties": {
+                "judged_pairs": {
+                    "description": "JudgedPairs counts pairs whose *both* presentation orders carry a judge\nverdict. A half-judged pair is not evidence.",
+                    "type": "integer"
+                },
+                "losses": {
+                    "type": "integer"
+                },
+                "operator_agreement": {
+                    "description": "OperatorAgreement is nil until the operator marks a calibration item.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Agreement"
+                        }
+                    ]
+                },
+                "pairs": {
+                    "type": "integer"
+                },
+                "ties": {
+                    "type": "integer"
+                },
+                "win_rate": {
+                    "type": "number"
+                },
+                "win_threshold": {
+                    "type": "number"
+                },
+                "wins": {
                     "type": "integer"
                 }
             }
@@ -7846,6 +7967,13 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.VariantMetrics"
+                    }
+                },
+                "verdicts": {
+                    "description": "Verdicts holds one decision per non-baseline variant, each with its gate\ntable, judge tally and per-category breakdown. Present even before any\njudging: the objective half alone can already say \"downgrade\" or \"no\nregressions detected\".",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.VariantVerdict"
                     }
                 }
             }
@@ -8021,6 +8149,46 @@
                 "wrapup_count": {
                     "description": "WrapupCount is samples whose loop was cut short by repeated identical\ncalls or by exhausting the round budget — the \"flaily\" signal.",
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.VariantVerdict": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "string"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.CategoryResult"
+                    }
+                },
+                "divergence": {
+                    "description": "Divergence is set when the aggregate and a category disagree, e.g. \"wins\noverall; regresses on tool_heavy\". v1 surfaces this prominently without\ngating on it.",
+                    "type": "string"
+                },
+                "gates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Gate"
+                    }
+                },
+                "judgment": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Judgment"
+                },
+                "reason": {
+                    "description": "Reason is the one-line plain-language explanation, e.g. \"downgrade: mean\nrounds regressed +35% against a +20% threshold\".",
+                    "type": "string"
+                },
+                "variant": {
+                    "type": "string"
+                },
+                "variant_id": {
+                    "type": "integer"
+                },
+                "verdict": {
+                    "type": "string"
                 }
             }
         },

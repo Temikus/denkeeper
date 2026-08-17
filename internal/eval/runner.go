@@ -215,6 +215,7 @@ type runState struct {
 	spent      float64
 	latencySum int64
 	latencyN   int
+	pairs      int
 }
 
 // execute drives one run to a terminal status.
@@ -247,6 +248,7 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 	r.progress(run.ID, StatusRunning, 0, st.total, 0, run.CostCap, 0)
 
 	status, runErr := r.dispatch(ctx, st)
+	st.pairs = r.finalizePairs(bookkeeping, run.ID, status)
 
 	if err := r.store.FinishRun(bookkeeping, run.ID, status, errText(runErr)); err != nil {
 		r.logger.Error("eval run finish failed", "run", run.ID, "error", err)
@@ -256,7 +258,30 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 	r.emitLifecycle(bookkeeping, run, "eval_run_finish", status, runErr, st)
 	r.progress(run.ID, status, st.done, st.total, st.spent, run.CostCap, 0)
 	r.logger.Info("eval run finished", "run", run.ID, "status", status,
-		"samples", st.done, "expected", st.total, "cost", st.spent)
+		"samples", st.done, "expected", st.total, "cost", st.spent, "pairs", st.pairs)
+}
+
+// finalizePairs turns the run's completed samples into blinded judgment work.
+//
+// It runs for capped and stopped runs as well as done ones: partial results are
+// the point of those statuses, and a run that already spent the money should be
+// judgeable on what it produced. Only a run that never got off the ground
+// (failed before its first sample) is skipped, and even then CreatePairs would
+// find nothing to pair — the skip is about not logging a confusing error.
+//
+// A pairing failure never changes the run's status: the samples are recorded
+// and the objective scorecard stands on its own. Judging is a separate,
+// re-runnable step.
+func (r *Runner) finalizePairs(ctx context.Context, runID int64, status string) int {
+	if status == StatusFailed {
+		return 0
+	}
+	n, err := r.store.CreatePairs(ctx, runID)
+	if err != nil {
+		r.logger.Error("creating eval judgment pairs failed", "run", runID, "error", err)
+		return 0
+	}
+	return n
 }
 
 // prepare resolves everything a run needs before the first sample: its tasks,
@@ -592,6 +617,7 @@ func (r *Runner) emitLifecycle(ctx context.Context, run *Run, action, status str
 		if action == "eval_run_finish" {
 			detail["samples_done"] = st.done
 			detail["cost_spent"] = st.spent
+			detail["pairs"] = st.pairs
 		}
 	}
 	evStatus := audit.StatusOK

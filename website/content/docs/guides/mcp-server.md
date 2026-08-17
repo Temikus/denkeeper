@@ -61,6 +61,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Tools | `tool_list`, `tool_health`, `tool_restart` |
 | Channels | `channel_list` |
 | Audit | `audit_events`, `audit_summary` |
+| Evals | `eval_pending`, `eval_get_pair`, `eval_verdict`, `eval_summary`, `eval_run_status` |
 | Telemetry | `cost_summary`, `telemetry_summary` |
 | KV | `kv_get`, `kv_set`, `kv_list`, `kv_delete` |
 | Safety | `panic`, `panic_status`, `resume` |
@@ -76,6 +77,8 @@ They are also journaled. Before any skill write, the file's exact prior bytes ar
 **Editing skills where you write code.** Skills are markdown with frontmatter; an IDE agent with `skill_*` tools can draft and revise them against the real instance instead of you pasting into a web form.
 
 **Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask.
+
+**Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop.
 
 **Resolving approvals from wherever you are.** `approval_list` and `approval_resolve` mean a client already on your screen can clear a queue without opening the dashboard.
 

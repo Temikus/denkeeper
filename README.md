@@ -400,7 +400,21 @@ Runs are bounded twice, by spend and by rate. Crossing `cost_cap` stops dispatch
 
 Task sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances.
 
-Judging — blinded A/B pairs scored from Claude Code — is the next stage; Stage B stops at the objective scorecard.
+#### Judging — blinded A/B pairs, scored from Claude Code
+
+The objective half can reject a candidate on its own, but it can't promote one: "cheap and quiet" is not the same as "better". When a run finishes it pairs the incumbent and candidate samples for each test case, assigns each pair a random A/B identity that never leaves the server, and queues **two** judgment items per pair with the presentation order swapped — so position bias splits the vote instead of deciding it. A pair only counts once both orders have been judged, and if the two calls name different sides the pair records as a tie.
+
+The judge is Claude Code over Denkeeper's MCP server, working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary`. Everything that would identify a side — model, provider, variant name, cost, latency, token usage, even the sample's conversation id — is withheld; the payload is built from scratch rather than filtered, so a new field can't leak into it by default. Give the judge a key scoped to `eval:read,eval:write` and nothing more.
+
+The rubric lives in [`.claude/skills/judge-eval/SKILL.md`](.claude/skills/judge-eval/SKILL.md), where you can read and edit it: four dimensions in priority order (`task_success`, `tool_path`, `persona_fit`, `length`), with instructions to cite the specific persona or skill clause behind any deduction. On a new rubric, judge a random ~20-item calibration subset interactively and record your own call alongside the judge's (`judge_ident: "operator"`); `eval_summary` reports the agreement rate. Below roughly 80 %, fix the rubric before letting it run headless — a drifted rubric quietly devalues every later run.
+
+`GET /eval/runs/{id}/summary` then returns the verdict **with its work**: the gate table (each value, delta, threshold and pass/fail), a one-line reason, the win-rate, and a per-category breakdown. The rule is conjunctive and asymmetric — a candidate is an *upgrade* only if the judge win-rate reaches `win_threshold` **and** no objective gate regressed; a failed gate is a *downgrade* whatever the judge thought. A candidate that wins overall while regressing on tool-heavy tasks says so out loud rather than hiding inside an average:
+
+```
+downgrade: mean rounds regressed +35.0% against a +20.0% threshold
+upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and no objective gate regressed
+  ↳ wins overall; regresses on tool_heavy
+```
 
 ### REST API
 

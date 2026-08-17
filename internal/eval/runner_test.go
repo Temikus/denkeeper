@@ -666,6 +666,58 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 	}
 }
 
+// Pairing is a run-finalization step, so a finished run arrives at the judge
+// queue already populated — no separate "prepare for judging" call to forget.
+func TestRunner_FinalizationCreatesJudgmentPairs(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
+	f.addTasks(t, "first", "second")
+	run := f.createRun(t, 2, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForTerminal(t, f.store, run.ID)
+
+	pairs, err := f.store.CountPairs(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("CountPairs: %v", err)
+	}
+	if pairs != 4 {
+		t.Fatalf("got %d pairs, want 4 (2 tasks × k=2)", pairs)
+	}
+	pending, err := f.store.ListPending(context.Background(), run.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 8 {
+		t.Fatalf("got %d pending items, want 8 (both presentation orders per pair)", len(pending))
+	}
+}
+
+// A capped run keeps its partial results, so it must still be judgeable on the
+// samples it paid for.
+func TestRunner_CappedRunStillPairsWhatItProduced(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.engine.costPerSample = 0.6
+	f.addTasks(t, "first", "second", "third")
+	run := f.createRun(t, 1, 1.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	got := waitForTerminal(t, f.store, run.ID)
+	if got.Status != StatusCapped {
+		t.Fatalf("status = %q, want %q", got.Status, StatusCapped)
+	}
+	pairs, err := f.store.CountPairs(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("CountPairs: %v", err)
+	}
+	if pairs == 0 {
+		t.Fatal("a capped run produced no pairs — its partial results are unjudgeable")
+	}
+}
+
 func TestDecodeOverlay_EmptyIsIncumbent(t *testing.T) {
 	for _, raw := range []string{"", "{}"} {
 		ov, err := DecodeOverlay(raw)

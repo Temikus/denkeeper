@@ -369,6 +369,14 @@ cost and latency, plus per-task deltas. Task sets and runs live under
 /api/v1/eval/ behind the eval:read and eval:write scopes; test cases are saved
 one at a time from the web Chat UI or imported as JSONL.
 
+When a run finishes it pairs the incumbent and candidate samples for each test
+case, assigns each pair a random A/B identity that stays server-side, and queues
+two judgment items per pair with the presentation order swapped. An LLM judge
+works that queue over MCP (eval_pending, eval_get_pair, eval_verdict,
+eval_summary, eval_run_status) and never learns which side is which. The verdict
+is asymmetric: the objective gates below can declare a downgrade on their own,
+but calling a candidate an upgrade also needs the judge win-rate.
+
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)
     max_concurrent = 2               # eval samples running at once, process-wide
@@ -376,6 +384,10 @@ one at a time from the web Chat UI or imported as JSONL.
     default_k = 3                    # samples per (task, variant) pair
     completeness_floor = 0.8         # fraction of samples that must succeed for
                                      # a run's scorecard to count as conclusive
+    win_threshold = 0.55             # blinded-pair win rate needed for "upgrade"
+    gate_rejected_rate_pp = 2.0      # max rise in rejected tool-call rate (points)
+    gate_rounds_pct = 20             # max rise in mean rounds per task (percent)
+    gate_cost_pct = 25               # max rise in mean cost per task (percent)
 
 ### [costs]
 

@@ -43,7 +43,8 @@ func (f *summaryFixture) add(t *testing.T, smp Sample) {
 
 func (f *summaryFixture) summarize(t *testing.T, floor float64) *Summary {
 	t.Helper()
-	sum, err := f.store.Summarize(context.Background(), f.run.ID, floor)
+	sum, err := f.store.Summarize(context.Background(), f.run.ID,
+		SummaryOpts{CompletenessFloor: floor})
 	if err != nil {
 		t.Fatalf("Summarize: %v", err)
 	}
