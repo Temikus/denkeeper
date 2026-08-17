@@ -231,12 +231,7 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 
 	st, err := r.prepare(ctx, run)
 	if err != nil {
-		r.logger.Error("eval run failed to start", "run", run.ID, "error", err)
-		if ferr := r.store.FinishRun(bookkeeping, run.ID, StatusFailed, err.Error()); ferr != nil {
-			r.logger.Error("eval run finish failed", "run", run.ID, "error", ferr)
-		}
-		r.emitLifecycle(bookkeeping, run, "eval_run_finish", StatusFailed, err, nil)
-		r.progress(run.ID, StatusFailed, 0, 0, 0, run.CostCap, 0)
+		r.finishBeforeStart(ctx, bookkeeping, run, err)
 		return
 	}
 
@@ -288,6 +283,31 @@ func (r *Runner) finalizePairs(ctx context.Context, runID int64, status string) 
 		return 0
 	}
 	return n
+}
+
+// finishBeforeStart records a run that died during prepare, before its first
+// sample.
+//
+// A cancelled run is stopped, not failed. prepare's store reads take the run's
+// own (cancellable) context, so Stop, StopAll or the panic switch landing in
+// that window makes them return context.Canceled — which is not a store error
+// and must not be reported as one. Keeping "failed" to mean "something was
+// actually wrong" is what makes the status worth reading: the summary's failed
+// path is the operator's signal that the subsystem, not their decision, ended
+// the run.
+func (r *Runner) finishBeforeStart(ctx, bookkeeping context.Context, run *Run, err error) {
+	status, runErr := StatusFailed, err
+	if ctx.Err() != nil {
+		status, runErr = StatusStopped, nil
+		r.logger.Info("eval run stopped before its first sample", "run", run.ID)
+	} else {
+		r.logger.Error("eval run failed to start", "run", run.ID, "error", err)
+	}
+	if ferr := r.store.FinishRun(bookkeeping, run.ID, status, errText(runErr)); ferr != nil {
+		r.logger.Error("eval run finish failed", "run", run.ID, "error", ferr)
+	}
+	r.emitLifecycle(bookkeeping, run, "eval_run_finish", status, runErr, nil)
+	r.progress(run.ID, status, 0, 0, 0, run.CostCap, 0)
 }
 
 // prepare resolves everything a run needs before the first sample: its tasks,

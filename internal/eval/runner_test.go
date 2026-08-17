@@ -472,6 +472,34 @@ func TestRunner_StopAllOnPanicStopsEveryActiveRun(t *testing.T) {
 	}
 }
 
+// A run cancelled in the window before its first sample is stopped, not
+// failed. prepare's store reads run on the cancellable context, so a stop
+// landing there returns context.Canceled — which is a decision, not a store
+// error, and "failed" has to keep meaning something was actually wrong.
+func TestRunner_StopDuringPrepareReportsStoppedNotFailed(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a")
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	// Cancel immediately, racing prepare rather than waiting for a sample.
+	f.runner.StopAll()
+
+	got := waitForTerminal(t, f.store, run.ID)
+	if got.Status == StatusFailed {
+		t.Fatalf("a cancelled run reported %q with error %q; a stop is not a failure",
+			got.Status, got.Error)
+	}
+	if got.Status != StatusStopped {
+		t.Fatalf("status = %q, want %q", got.Status, StatusStopped)
+	}
+	if got.Error != "" {
+		t.Errorf("stopped run carries error %q, want none", got.Error)
+	}
+}
+
 func TestRunner_ConcurrencyBoundedByMaxConcurrent(t *testing.T) {
 	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
 	f.addTasks(t, "a", "b", "c")
