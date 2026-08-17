@@ -194,7 +194,29 @@ func (f *runnerFixture) createRun(t *testing.T, k int, costCap float64, variants
 	return run
 }
 
-// waitForTerminal polls until the run reaches a terminal status.
+// waitFor polls cond until it holds, and fails with msg if it never does.
+//
+// It exists because the run row reaches its terminal status *before* the finish
+// audit event and the final progress frame are emitted, and that ordering is
+// deliberate: the authoritative GET must never lag the droppable frame, or a
+// client that refetches on seeing "done" would read "running". So waiting on
+// the row (waitForTerminal) is not the same as waiting on the side effects that
+// follow it, and a test asserting on those has to wait for them specifically.
+func waitFor(t *testing.T, msg string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
+
+// waitForTerminal polls until the run reaches a terminal status. Note that the
+// run's finish audit event and final progress frame are emitted *after* this
+// returns — use waitFor to observe those.
 func waitForTerminal(t *testing.T, store *Store, runID int64) *Run {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -476,6 +498,15 @@ func TestRunner_EmitsLifecycleAuditEvents(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	waitForTerminal(t, f.store, run.ID)
+	// The finish event trails the row write, so wait for the event itself.
+	waitFor(t, "the eval_run_finish audit event", func() bool {
+		for _, e := range auditor.all() {
+			if e.Action == "eval_run_finish" {
+				return true
+			}
+		}
+		return false
+	})
 
 	events := auditor.all()
 	var start, finish *audit.Event
@@ -640,10 +671,10 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 	run := f.createRun(t, 1, 10.0, twoVariants()...)
 
 	var mu sync.Mutex
-	var events []ProgressEvent
+	var collected []ProgressEvent
 	f.runner.OnProgress = func(e ProgressEvent) {
 		mu.Lock()
-		events = append(events, e)
+		collected = append(collected, e)
 		mu.Unlock()
 	}
 
@@ -651,9 +682,16 @@ func TestRunner_ProgressReportsSampleCounts(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	waitForTerminal(t, f.store, run.ID)
+	// The terminal frame trails the row write, so wait for the frame itself.
+	waitFor(t, "the terminal progress frame", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(collected) > 0 && IsTerminal(collected[len(collected)-1].Status)
+	})
 
 	mu.Lock()
 	defer mu.Unlock()
+	events := collected
 	if len(events) < 3 {
 		t.Fatalf("got %d progress events, want start + per-sample + finish", len(events))
 	}

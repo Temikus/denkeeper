@@ -250,6 +250,12 @@ func (r *Runner) execute(ctx context.Context, run *Run) {
 	status, runErr := r.dispatch(ctx, st)
 	st.pairs = r.finalizePairs(bookkeeping, run.ID, status)
 
+	// The terminal row write comes first, then the finish event and frame.
+	// That order is deliberate and must not be flipped for convenience: the
+	// progress frame is droppable and GET /eval/runs/{id} is authoritative, so
+	// a client that refetches on seeing "done" in a frame has to find the row
+	// already terminal. The cost is that anything observing the row is not yet
+	// guaranteed to have seen the event or the frame.
 	if err := r.store.FinishRun(bookkeeping, run.ID, status, errText(runErr)); err != nil {
 		r.logger.Error("eval run finish failed", "run", run.ID, "error", err)
 	}
