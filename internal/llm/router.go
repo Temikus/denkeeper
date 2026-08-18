@@ -456,6 +456,9 @@ func (r *Router) setSpanResponseAttrs(span trace.Span, resp *ChatResponse, cost 
 	if cost > 0 {
 		span.SetAttributes(attribute.Float64("gen_ai.usage.cost", cost))
 	}
+	if resp.Upstream != "" {
+		span.SetAttributes(attribute.String("gen_ai.response.upstream", resp.Upstream))
+	}
 	if len(resp.ToolCalls) > 0 {
 		span.SetAttributes(attribute.Int("gen_ai.response.tool_calls", len(resp.ToolCalls)))
 	}

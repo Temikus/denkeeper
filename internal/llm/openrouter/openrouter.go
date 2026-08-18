@@ -397,6 +397,7 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		ToolCalls:       result.ToolCalls,
 		Model:           result.Model,
 		FinishReason:    result.FinishReason,
+		Upstream:        result.Provider,
 	}
 	if result.Usage != nil {
 		var cachedPrompt int
@@ -447,6 +448,7 @@ func buildChatResponse(apiResp *apiResponse) *llm.ChatResponse {
 		ToolCalls:       choice.Message.ToolCalls,
 		Model:           apiResp.Model,
 		FinishReason:    choice.FinishReason,
+		Upstream:        apiResp.Provider,
 		TokensUsed: llm.TokenUsage{
 			// OpenRouter follows the OpenAI format: cached tokens are a
 			// subset of prompt_tokens, so split them out.

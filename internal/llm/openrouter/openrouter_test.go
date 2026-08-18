@@ -79,6 +79,59 @@ func TestChatCompletion_Success(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_UpstreamProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := apiResponse{
+			ID:       "chatcmpl-1",
+			Model:    "deepseek/deepseek-v4-flash-0731",
+			Provider: "Fireworks",
+			Choices: []apiChoice{
+				{Message: apiMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop"},
+			},
+			Usage: apiUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "deepseek/deepseek-v4-flash-0731",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Upstream != "Fireworks" {
+		t.Errorf("Upstream = %q, want Fireworks", resp.Upstream)
+	}
+}
+
+func TestChatCompletionStream_UpstreamProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			`data: {"id":"1","model":"deepseek/deepseek-v4-flash-0731","provider":"Fireworks","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n" +
+				`data: {"id":"1","model":"deepseek/deepseek-v4-flash-0731","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}` + "\n\n" +
+				"data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("test-key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "deepseek/deepseek-v4-flash-0731",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(_ llm.StreamChunk) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Upstream != "Fireworks" {
+		t.Errorf("Upstream = %q, want Fireworks", resp.Upstream)
+	}
+}
+
 // TestChatCompletion_ArrayContent verifies that models returning content as an
 // array of content blocks (e.g. moonshotai/kimi-k2.5) are handled correctly.
 func TestChatCompletion_ArrayContent(t *testing.T) {

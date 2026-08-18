@@ -3154,6 +3154,29 @@ func TestBuildTriggerAuditDetail_ScheduledMessage(t *testing.T) {
 	}
 }
 
+func TestBuildLLMAuditDetail_UpstreamPresentWhenSet(t *testing.T) {
+	resp := &llm.ChatResponse{
+		Model:        "deepseek/deepseek-v4-flash-0731",
+		FinishReason: "stop",
+		Upstream:     "Fireworks",
+	}
+	d := buildLLMAuditDetail(resp, "openrouter")
+	if d["upstream"] != "Fireworks" {
+		t.Errorf("upstream = %q, want Fireworks", d["upstream"])
+	}
+}
+
+func TestBuildLLMAuditDetail_UpstreamAbsentWhenEmpty(t *testing.T) {
+	resp := &llm.ChatResponse{
+		Model:        "claude-opus-4-8",
+		FinishReason: "stop",
+	}
+	d := buildLLMAuditDetail(resp, "anthropic")
+	if _, ok := d["upstream"]; ok {
+		t.Error("upstream should be absent when the provider reports none")
+	}
+}
+
 func TestEngine_AuditSource_UserMessage(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
