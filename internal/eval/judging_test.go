@@ -36,10 +36,10 @@ func TestGetBlindedItem_LeaksNoIdentity(t *testing.T) {
 	// through the one field that is legitimately verbatim.
 	f.addSample(t, Sample{VariantID: inc.ID, TaskID: task.ID, KIndex: 0,
 		Response: "nothing logged today", Rounds: 2, Cost: 0.1234, LatencyMs: 5150,
-		TokensPrompt: 900, TokensCompletion: 210})
+		TokensPrompt: 900, TokensCompletion: 210, Upstream: "Fireworks"})
 	f.addSample(t, Sample{VariantID: cand.ID, TaskID: task.ID, KIndex: 0,
 		Response: "no entries for today", Rounds: 3, Cost: 0.9876, LatencyMs: 7373,
-		TokensPrompt: 950, TokensCompletion: 260, Trace: string(trace)})
+		TokensPrompt: 950, TokensCompletion: 260, Trace: string(trace), Upstream: "Together"})
 	f.createPairs(t)
 
 	items, err := f.store.ListItems(ctx, f.run.ID)
@@ -64,6 +64,7 @@ func TestGetBlindedItem_LeaksNoIdentity(t *testing.T) {
 			"incumbent", "kimi-k3-candidate", "kimi-k3", "llm_model", "overlay",
 			"eval:", "0.1234", "0.9876", "5150", "7373", "4242",
 			"cost", "latency", "tokens", "variant",
+			"Fireworks", "Together", "upstream",
 		} {
 			if strings.Contains(payload, forbidden) {
 				t.Errorf("item %d payload leaks %q:\n%s", it.ID, forbidden, payload)

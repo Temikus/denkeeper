@@ -211,7 +211,7 @@ func (s *Store) GetSample(ctx context.Context, id int64) (*Sample, error) {
 	var smp Sample
 	err := s.db.GetContext(ctx, &smp,
 		`SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
-		        rounds, stop_reason, outcome_ok, outcome_rejected, outcome_failed,
+		        rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
 		        outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
 		        tokens_completion, cost, latency_ms, created_at
 		 FROM eval_samples WHERE id = ?`, id)

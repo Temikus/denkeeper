@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS eval_samples (
     trace              TEXT    NOT NULL DEFAULT '[]',
     rounds             INTEGER NOT NULL DEFAULT 0,
     stop_reason        TEXT    NOT NULL DEFAULT '',
+    upstream           TEXT    NOT NULL DEFAULT '',
     outcome_ok         INTEGER NOT NULL DEFAULT 0,
     outcome_rejected   INTEGER NOT NULL DEFAULT 0,
     outcome_failed     INTEGER NOT NULL DEFAULT 0,
@@ -254,9 +255,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_verdicts_item_judge
 `
 
 // evalMigrations holds idempotent ALTER statements for schema changes after
-// the initial release. Empty today; the slot exists so a future column follows
-// the memory.go idiom instead of inventing one.
-var evalMigrations []string
+// the initial release. Each is run once; a duplicate-column error on an
+// already-migrated DB is swallowed (isDuplicateColumn).
+var evalMigrations = []string{
+	// upstream: OpenRouter's provider-reported serving upstream for the sample,
+	// empty for providers without the concept.
+	`ALTER TABLE eval_samples ADD COLUMN upstream TEXT NOT NULL DEFAULT ''`,
+}
 
 // TaskSet is a named collection of eval tasks.
 type TaskSet struct {
@@ -327,6 +332,9 @@ type Sample struct {
 	Trace      string `db:"trace"       json:"trace"`
 	Rounds     int    `db:"rounds"      json:"rounds"`
 	StopReason string `db:"stop_reason" json:"stop_reason,omitempty"`
+	// Upstream is the provider-reported serving upstream (OpenRouter's routed
+	// provider), empty for providers without the concept.
+	Upstream string `db:"upstream" json:"upstream,omitempty"`
 	// Outcome counts are tool-call level, split exactly as
 	// agent.ToolCallRecord.Outcome. Cached and suppressed are kept separate
 	// from failed on purpose: folding either in would poison the failed-rate
@@ -854,12 +862,12 @@ func (s *Store) AddSample(ctx context.Context, smp Sample) (*Sample, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO eval_samples
 		   (run_id, variant_id, task_id, k_index, status, error, response, trace, rounds,
-		    stop_reason, outcome_ok, outcome_rejected, outcome_failed, outcome_denied,
+		    stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed, outcome_denied,
 		    outcome_cached, outcome_suppressed, tokens_prompt, tokens_completion,
 		    cost, latency_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		smp.RunID, smp.VariantID, smp.TaskID, smp.KIndex, smp.Status, smp.Error,
-		smp.Response, smp.Trace, smp.Rounds, smp.StopReason,
+		smp.Response, smp.Trace, smp.Rounds, smp.StopReason, smp.Upstream,
 		smp.OutcomeOK, smp.OutcomeRejected, smp.OutcomeFailed, smp.OutcomeDenied,
 		smp.OutcomeCached, smp.OutcomeSuppressed, smp.TokensPrompt, smp.TokensCompletion,
 		smp.Cost, smp.LatencyMs, smp.CreatedAt)
@@ -878,7 +886,7 @@ func (s *Store) ListSamples(ctx context.Context, runID int64) ([]Sample, error) 
 	out := []Sample{}
 	if err := s.db.SelectContext(ctx, &out,
 		`SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
-		        rounds, stop_reason, outcome_ok, outcome_rejected, outcome_failed,
+		        rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
 		        outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
 		        tokens_completion, cost, latency_ms, created_at
 		 FROM eval_samples WHERE run_id = ? ORDER BY id`, runID); err != nil {
