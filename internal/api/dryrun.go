@@ -103,12 +103,17 @@ type dryRunTranscript struct {
 	// ScheduledBy names the schedule a "schedule" preview stood in for. Empty
 	// when the caller asked for a scheduled run of a skill nothing schedules,
 	// which is a hypothetical rather than a rehearsal.
-	ScheduledBy  string           `json:"scheduled_by,omitempty"`
-	TokensPrompt int              `json:"tokens_prompt"`
-	TokensTotal  int              `json:"tokens_total"`
-	CostUSD      float64          `json:"cost_usd"`
-	SuppressedN  int              `json:"suppressed_count"`
-	ToolCalls    []dryRunToolCall `json:"tool_calls"`
+	ScheduledBy string `json:"scheduled_by,omitempty"`
+	// ReplyGuard reports a reply sanity guard trip, omitted when nothing
+	// tripped. A preview evaluates the guard but never substitutes the text,
+	// so Response still holds what the model produced and this says what a
+	// live scheduled turn would have delivered instead.
+	ReplyGuard   *agent.ReplyGuardVerdict `json:"reply_guard,omitempty"`
+	TokensPrompt int                      `json:"tokens_prompt"`
+	TokensTotal  int                      `json:"tokens_total"`
+	CostUSD      float64                  `json:"cost_usd"`
+	SuppressedN  int                      `json:"suppressed_count"`
+	ToolCalls    []dryRunToolCall         `json:"tool_calls"`
 }
 
 // newDryRunConvID mints the in-flight identity for one preview. It is used for
@@ -203,6 +208,7 @@ func buildTranscript(agentName string, result *agent.TurnResult) dryRunTranscrip
 		Response:       result.Response,
 		Rounds:         result.Rounds,
 		StopReason:     result.StopReason,
+		ReplyGuard:     result.ReplyGuard,
 		DurationMs:     result.DurationMs,
 		Model:          result.Model,
 		Provider:       result.Provider,

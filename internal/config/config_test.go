@@ -5009,3 +5009,87 @@ max_concurrent = -2
 		t.Fatal("expected validation error for negative max_concurrent")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Reply sanity guard config tests
+// ---------------------------------------------------------------------------
+
+func TestParse_ReplyGuardDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	rg := cfg.Safety.ReplyGuard
+	if !rg.IsEnabled() {
+		t.Error("reply guard should be enabled by default")
+	}
+	if rg.OnRoleMarkup != ReplyGuardWithhold {
+		t.Errorf("on_role_markup = %q, want %q", rg.OnRoleMarkup, ReplyGuardWithhold)
+	}
+	if rg.OnOversized != ReplyGuardWithhold {
+		t.Errorf("on_oversized = %q, want %q", rg.OnOversized, ReplyGuardWithhold)
+	}
+	// A skill that legitimately ends without tools is common, so this one
+	// flags rather than holds.
+	if rg.OnNoToolCalls != ReplyGuardWarn {
+		t.Errorf("on_no_tool_calls = %q, want %q", rg.OnNoToolCalls, ReplyGuardWarn)
+	}
+	if rg.MaxReplyBytes != 16000 {
+		t.Errorf("max_reply_bytes = %d, want 16000", rg.MaxReplyBytes)
+	}
+	if rg.MaxCompletionTokens != 0 {
+		t.Errorf("max_completion_tokens = %d, want 0 (off)", rg.MaxCompletionTokens)
+	}
+	if rg.ExcerptBytes != 200 {
+		t.Errorf("excerpt_bytes = %d, want 200", rg.ExcerptBytes)
+	}
+}
+
+func TestParse_ReplyGuardExplicitValuesSurviveDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[safety.reply_guard]
+enabled = false
+on_role_markup = "warn"
+on_oversized = "off"
+on_no_tool_calls = "withhold"
+max_reply_bytes = -1
+max_completion_tokens = 8000
+excerpt_bytes = 500
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	rg := cfg.Safety.ReplyGuard
+	if rg.IsEnabled() {
+		t.Error("explicit enabled = false was overwritten")
+	}
+	if rg.OnRoleMarkup != ReplyGuardWarn || rg.OnOversized != ReplyGuardOff || rg.OnNoToolCalls != ReplyGuardWithhold {
+		t.Errorf("actions = %q/%q/%q, want warn/off/withhold", rg.OnRoleMarkup, rg.OnOversized, rg.OnNoToolCalls)
+	}
+	// Negative is the "off" sentinel for the byte cap, since a written 0 is
+	// indistinguishable from an omitted key and takes the default.
+	if rg.MaxReplyBytes != -1 {
+		t.Errorf("max_reply_bytes = %d, want -1 to survive as the off sentinel", rg.MaxReplyBytes)
+	}
+	if rg.MaxCompletionTokens != 8000 {
+		t.Errorf("max_completion_tokens = %d, want 8000", rg.MaxCompletionTokens)
+	}
+	if rg.ExcerptBytes != 500 {
+		t.Errorf("excerpt_bytes = %d, want 500", rg.ExcerptBytes)
+	}
+}
+
+// An action typo must fail loudly: silently reading as "off" would disable a
+// guard the operator believes is on.
+func TestParse_ReplyGuardRejectsUnknownAction(t *testing.T) {
+	_, err := Parse([]byte(baseConfig + `
+[safety.reply_guard]
+on_oversized = "supress"
+`))
+	if err == nil {
+		t.Fatal("expected validation error for an unknown reply-guard action")
+	}
+	if !strings.Contains(err.Error(), "on_oversized") {
+		t.Errorf("error should name the offending key: %v", err)
+	}
+}

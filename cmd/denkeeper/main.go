@@ -1364,6 +1364,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	applySupervisorKnobs(e, ac)
 	e.SetLocation(agentLocation(abc.cfg, ac))
+	e.SetReplyGuard(replyGuardFrom(abc.cfg))
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -2158,11 +2159,28 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 			e.SetMaxToolRounds(ac.MaxToolRounds)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
+			e.SetReplyGuard(replyGuardFrom(cfg))
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)
 		}
 
 		logger.Info("config reloaded from disk", "path", path)
 		return nil
+	}
+}
+
+// replyGuardFrom translates the TOML reply-guard policy into the engine-side
+// form. The guard is global rather than per-agent: it is an operator safety
+// net on unattended output, not an agent trait.
+func replyGuardFrom(cfg *config.Config) agent.ReplyGuard {
+	rg := cfg.Safety.ReplyGuard
+	return agent.ReplyGuard{
+		Enabled:             rg.IsEnabled(),
+		OnRoleMarkup:        rg.OnRoleMarkup,
+		OnOversized:         rg.OnOversized,
+		OnNoToolCalls:       rg.OnNoToolCalls,
+		MaxReplyBytes:       rg.MaxReplyBytes,
+		MaxCompletionTokens: rg.MaxCompletionTokens,
+		ExcerptBytes:        rg.ExcerptBytes,
 	}
 }
 

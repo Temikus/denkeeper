@@ -46,10 +46,73 @@ type Config struct {
 	Costs     CostsConfig             `toml:"costs"`
 	Audit     AuditConfig             `toml:"audit"`
 	Eval      EvalConfig              `toml:"eval"`
+	Safety    SafetyConfig            `toml:"safety"`
 
 	// ToolWarnings holds per-tool validation errors that were demoted to
 	// warnings (the tool is auto-disabled instead of blocking startup).
 	ToolWarnings map[string]string `toml:"-"`
+}
+
+// Reply-guard actions. Mirrored by the agent package, which owns the runtime
+// side; kept as literals here so config does not import agent.
+const (
+	// ReplyGuardOff disables a signal.
+	ReplyGuardOff = "off"
+	// ReplyGuardWarn audits the trip and delivers the reply unchanged.
+	ReplyGuardWarn = "warn"
+	// ReplyGuardWithhold audits the trip and replaces the delivered text with
+	// a one-line operator notice.
+	ReplyGuardWithhold = "withhold"
+)
+
+// SafetyConfig groups runtime guardrails that hold back bad output rather than
+// preventing bad input. Distinct from SecurityConfig, which is plugin signing.
+type SafetyConfig struct {
+	ReplyGuard ReplyGuardConfig `toml:"reply_guard"`
+}
+
+// ReplyGuardConfig controls the reply sanity guard: the check that holds an
+// obviously broken reply on a schedule-driven turn instead of delivering it.
+//
+// It applies to scheduled turns only. A live user reads a broken reply and
+// reacts; a scheduled turn fires unattended, so the only reader is whatever the
+// adapter chunks out.
+type ReplyGuardConfig struct {
+	// Enabled is the master switch. Default: true. Pointer so an omitted key is
+	// distinguishable from an explicit false.
+	Enabled *bool `toml:"enabled"`
+	// OnRoleMarkup fires when the reply carries role or tool-call scaffolding
+	// as plain text (<rs_tool_calls>, <|im_start|>, "\n\nHuman:", ...) — the
+	// model leaked its own framing instead of calling a tool.
+	// One of "withhold", "warn", "off". Default: "withhold".
+	OnRoleMarkup string `toml:"on_role_markup"`
+	// OnOversized fires when the reply exceeds MaxReplyBytes or
+	// MaxCompletionTokens. Default: "withhold".
+	OnOversized string `toml:"on_oversized"`
+	// OnNoToolCalls fires when a schedule named a skill and the turn made no
+	// tool calls at all. Default: "warn", not "withhold": a skill that
+	// legitimately ends without tools (a summariser, a reflection prompt) is
+	// common, so this is a hint rather than proof. Set it to "withhold" when
+	// every scheduled skill on this instance is known to use tools.
+	OnNoToolCalls string `toml:"on_no_tool_calls"`
+	// MaxReplyBytes caps the final reply in bytes. Default: 16000, roughly four
+	// Telegram chunks and under half that adapter's own render limit, so a trip
+	// is a strong signal rather than a long-but-legitimate reply. Negative
+	// disables the byte measure.
+	MaxReplyBytes int `toml:"max_reply_bytes"`
+	// MaxCompletionTokens caps provider-reported completion tokens. Default: 0
+	// (off) — it measures the same thing as MaxReplyBytes and doubles the
+	// false-positive surface. Set it for providers whose byte count understates
+	// the generation.
+	MaxCompletionTokens int `toml:"max_completion_tokens"`
+	// ExcerptBytes is how much of the held reply reaches the audit detail.
+	// Default: 200. Negative disables the excerpt.
+	ExcerptBytes int `toml:"excerpt_bytes"`
+}
+
+// IsEnabled reports whether the reply guard runs. Default: true.
+func (c *ReplyGuardConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // CostsConfig controls the pricing registry and cost calculation.
@@ -1368,6 +1431,7 @@ func applyScalarDefaults(cfg *Config) {
 	}
 	applyAuditDefaults(cfg)
 	applyEvalDefaults(cfg)
+	applyReplyGuardDefaults(cfg)
 }
 
 func applyMCPDefaults(mcp *MCPConfig) {
@@ -1459,6 +1523,35 @@ func applyEvalDefaults(cfg *Config) {
 	}
 	if cfg.Eval.GateCostPct == 0 {
 		cfg.Eval.GateCostPct = 25
+	}
+}
+
+// applyReplyGuardDefaults fills the reply sanity guard settings.
+//
+// A written 0 is indistinguishable from an omitted key here, so the "off"
+// sentinel for the two size measures is a negative value, matching
+// [skills] max_bytes. MaxCompletionTokens is the exception: its default *is*
+// off, so 0 needs no sentinel.
+func applyReplyGuardDefaults(cfg *Config) {
+	rg := &cfg.Safety.ReplyGuard
+	if rg.Enabled == nil {
+		t := true
+		rg.Enabled = &t
+	}
+	if rg.OnRoleMarkup == "" {
+		rg.OnRoleMarkup = ReplyGuardWithhold
+	}
+	if rg.OnOversized == "" {
+		rg.OnOversized = ReplyGuardWithhold
+	}
+	if rg.OnNoToolCalls == "" {
+		rg.OnNoToolCalls = ReplyGuardWarn
+	}
+	if rg.MaxReplyBytes == 0 {
+		rg.MaxReplyBytes = 16000
+	}
+	if rg.ExcerptBytes == 0 {
+		rg.ExcerptBytes = 200
 	}
 }
 
@@ -2069,6 +2162,9 @@ func validateSubsystems(cfg *Config) error {
 	if err := validateKV(&cfg.KV); err != nil {
 		return fmt.Errorf("validate kv: %w", err)
 	}
+	if err := validateReplyGuard(&cfg.Safety.ReplyGuard); err != nil {
+		return fmt.Errorf("validate safety.reply_guard: %w", err)
+	}
 	return nil
 }
 
@@ -2083,6 +2179,26 @@ func validateKV(k *KVConfig) error {
 	}
 	if k.ListValueHeadBytes > k.ListMaxBytes {
 		return fmt.Errorf("config: kv.list_value_head_bytes (%d) must not exceed kv.list_max_bytes (%d)", k.ListValueHeadBytes, k.ListMaxBytes)
+	}
+	return nil
+}
+
+// validateReplyGuard checks the reply sanity guard settings. The size bounds
+// are already defaulted and carry their own "off" sentinel, so only the action
+// strings can be wrong — and a typo there must not silently read as "off".
+func validateReplyGuard(rg *ReplyGuardConfig) error {
+	actions := map[string]string{
+		"on_role_markup":   rg.OnRoleMarkup,
+		"on_oversized":     rg.OnOversized,
+		"on_no_tool_calls": rg.OnNoToolCalls,
+	}
+	for _, key := range []string{"on_role_markup", "on_oversized", "on_no_tool_calls"} {
+		switch actions[key] {
+		case "", ReplyGuardOff, ReplyGuardWarn, ReplyGuardWithhold:
+		default:
+			return fmt.Errorf("%s must be %q, %q or %q, got %q",
+				key, ReplyGuardWithhold, ReplyGuardWarn, ReplyGuardOff, actions[key])
+		}
 	}
 	return nil
 }

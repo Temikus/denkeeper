@@ -216,6 +216,11 @@ type TurnResult struct {
 	// ran the agent's live model. The pair is what lets a transcript say "this
 	// is not your live model" without the UI having to know the agent config.
 	RequestedModel string `json:"requested_model,omitempty"`
+	// ReplyGuard is the reply sanity guard verdict, omitted when nothing
+	// tripped. A preview evaluates the guard but never substitutes the text,
+	// so this is the only place a previewed trip is visible — Response still
+	// holds what the model actually produced.
+	ReplyGuard *ReplyGuardVerdict `json:"reply_guard,omitempty"`
 	// AsOf is the clock the turn ran under.
 	AsOf time.Time `json:"as_of"`
 	// DurationMs is wall-clock time for the whole turn.
