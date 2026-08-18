@@ -6,8 +6,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Temikus/denkeeper/internal/kv"
+)
+
+const (
+	defaultKVListMaxBytes       = 16384
+	defaultKVListValueHeadBytes = 1024
+
+	// kvListEnvelopeBytes budgets the JSON around the entries array: the
+	// object braces plus the truncation flags and note.
+	kvListEnvelopeBytes = 192
+
+	// kvTruncationMarker is appended to a head-capped value.
+	kvTruncationMarker = "\u2026"
 )
 
 // registerKVTools adds the five KV MCP tools to the server.
@@ -52,12 +67,18 @@ func (s *Server) registerKVTools() {
 	}, s.handleKVDelete)
 
 	s.mcpServer.AddTool(&mcp.Tool{
-		Name:        "kv_list",
-		Description: "List keys in your key-value store, optionally filtered by prefix. Prefix-filter to scan a namespace (e.g. `log:heartbeat:`).",
+		Name: "kv_list",
+		Description: fmt.Sprintf(
+			"List keys in your key-value store, optionally filtered by prefix. Prefix-filter to scan a namespace (e.g. `log:heartbeat:`). "+
+				"Every key is always returned, but values are size-capped: at most %d bytes per value and %d bytes of values per call. "+
+				"Past that, entries come back with `value_omitted: true` and the response carries `truncated` plus `omitted_values` - kv_get those keys individually. "+
+				"Pass `keys_only: true` when you only need the namespace.",
+			s.kvListValueHeadBytes(), s.kvListMaxBytes()),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"prefix": {"type": "string", "description": "Optional prefix filter (e.g. 'lock:' to list all locks)"}
+				"prefix":    {"type": "string", "description": "Optional prefix filter (e.g. 'lock:' to list all locks)"},
+				"keys_only": {"type": "boolean", "description": "Return keys and metadata without any values. Cheapest way to scan a namespace."}
 			}
 		}`),
 	}, s.handleKVList)
@@ -155,7 +176,8 @@ func (s *Server) handleKVDelete(ctx context.Context, req *mcp.CallToolRequest) (
 
 func (s *Server) handleKVList(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input struct {
-		Prefix string `json:"prefix"`
+		Prefix   string `json:"prefix"`
+		KeysOnly bool   `json:"keys_only"`
 	}
 	if req.Params.Arguments != nil {
 		_ = json.Unmarshal(req.Params.Arguments, &input)
@@ -166,28 +188,126 @@ func (s *Server) handleKVList(ctx context.Context, req *mcp.CallToolRequest) (*m
 		return toolError(fmt.Sprintf("kv_list failed: %v", err)), nil
 	}
 
-	type entry struct {
-		Key       string  `json:"key"`
-		Value     string  `json:"value"`
-		ExpiresAt *string `json:"expires_at,omitempty"`
-		UpdatedAt string  `json:"updated_at"`
+	out, omitted, headCapped := s.buildKVListRows(entries, input.KeysOnly)
+
+	resp := map[string]any{"entries": out}
+	switch {
+	case omitted > 0:
+		resp["truncated"] = true
+		resp["omitted_values"] = omitted
+		resp["note"] = fmt.Sprintf("value budget of %d bytes reached: %d value(s) omitted. Use kv_get on those keys for their contents.", s.kvListMaxBytes(), omitted)
+	case headCapped > 0:
+		resp["truncated"] = true
+		resp["note"] = fmt.Sprintf("%d value(s) cut to the first %d bytes. Use kv_get on those keys for their full contents.", headCapped, s.kvListValueHeadBytes())
 	}
 
-	out := make([]entry, len(entries))
+	body, _ := json.Marshal(resp)
+	return toolText(string(body)), nil
+}
+
+// kvListRow is one entry of a kv_list response. Value is a pointer so a stored
+// empty string stays distinguishable from a value that was left out.
+type kvListRow struct {
+	Key            string  `json:"key"`
+	Value          *string `json:"value,omitempty"`
+	ValueTruncated bool    `json:"value_truncated,omitempty"`
+	ValueOmitted   bool    `json:"value_omitted,omitempty"`
+	ExpiresAt      *string `json:"expires_at,omitempty"`
+	UpdatedAt      string  `json:"updated_at"`
+}
+
+// buildKVListRows renders entries under the response size caps. Keys and
+// metadata are always complete; values are what gets dropped, from the tail
+// onwards, so listing a namespace stays reliable however large it grows.
+func (s *Server) buildKVListRows(entries []kv.Entry, keysOnly bool) (rows []kvListRow, omitted, headCapped int) {
+	maxBytes := s.kvListMaxBytes()
+	headBytes := s.kvListValueHeadBytes()
+
+	rows = make([]kvListRow, len(entries))
+	used := kvListEnvelopeBytes
+	budgetSpent := false
+
 	for i, e := range entries {
-		out[i] = entry{
-			Key:       e.Key,
-			Value:     e.Value,
-			UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
-		}
+		row := kvListRow{Key: e.Key, UpdatedAt: e.UpdatedAt.Format(time.RFC3339)}
 		if e.ExpiresAt != nil {
-			s := e.ExpiresAt.Format(time.RFC3339)
-			out[i].ExpiresAt = &s
+			exp := e.ExpiresAt.Format(time.RFC3339)
+			row.ExpiresAt = &exp
 		}
-	}
 
-	resp, _ := json.Marshal(map[string]any{"entries": out})
-	return toolText(string(resp)), nil
+		if keysOnly {
+			used += kvRowBytes(row)
+			rows[i] = row
+			continue
+		}
+
+		val := e.Value
+		cut := false
+		if len(val) > headBytes {
+			val = truncateUTF8(val, headBytes) + kvTruncationMarker
+			cut = true
+		}
+		row.Value = &val
+		row.ValueTruncated = cut
+
+		cost := kvRowBytes(row)
+		if budgetSpent || used+cost > maxBytes {
+			budgetSpent = true
+			row.Value = nil
+			row.ValueTruncated = false
+			row.ValueOmitted = true
+			omitted++
+			used += kvRowBytes(row)
+			rows[i] = row
+			continue
+		}
+
+		if cut {
+			headCapped++
+		}
+		used += cost
+		rows[i] = row
+	}
+	return rows, omitted, headCapped
+}
+
+// kvRowBytes is the serialised cost of one row, including its comma.
+// Marshalling cannot fail for this struct; the guard just keeps an
+// unmeasurable row from reading as free budget.
+func kvRowBytes(row kvListRow) int {
+	b, err := json.Marshal(row)
+	if err != nil {
+		n := len(row.Key) + 64
+		if row.Value != nil {
+			n += len(*row.Value)
+		}
+		return n
+	}
+	return len(b) + 1
+}
+
+// truncateUTF8 cuts s to at most n bytes without splitting a rune.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+func (s *Server) kvListMaxBytes() int {
+	if s.deps.KVListMaxBytes <= 0 {
+		return defaultKVListMaxBytes
+	}
+	return s.deps.KVListMaxBytes
+}
+
+func (s *Server) kvListValueHeadBytes() int {
+	if s.deps.KVListValueHeadBytes <= 0 {
+		return defaultKVListValueHeadBytes
+	}
+	return s.deps.KVListValueHeadBytes
 }
 
 func (s *Server) handleKVSetNX(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

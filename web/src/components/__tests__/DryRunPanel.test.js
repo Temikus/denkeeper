@@ -10,10 +10,12 @@ beforeEach(() => {
   token.set('test-key')
   authMode.set('token')
   server.use(
+    // Real shape: llm.ModelInfo — top-level *_per_mtok, null = pricing unknown.
     http.get('/api/v1/models/details', () => HttpResponse.json({
       models: [
-        { id: 'moonshotai/kimi-k3', pricing: { input: 0.8, output: 3.2 } },
-        { id: 'openai/gpt-4o-mini', pricing: { input: 0.15, output: 0.6 } },
+        { id: 'moonshotai/kimi-k3', name: 'Kimi K3', provider: 'openrouter', input_per_mtok: 0.8, output_per_mtok: 3.2, supports_tools: true, weekly_tokens: 0 },
+        { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini', provider: 'openrouter', input_per_mtok: 0.15, output_per_mtok: 0.6, supports_tools: true, weekly_tokens: 0 },
+        { id: 'local/mystery', name: 'Mystery', provider: 'ollama', input_per_mtok: null, output_per_mtok: null, supports_tools: false, weekly_tokens: 0 },
       ],
     })),
   )
@@ -136,6 +138,21 @@ describe('DryRunPanel', () => {
       const option = await screen.findByRole('option', { name: new RegExp(model) })
       await fireEvent.click(option)
     }
+
+    // Regression: priceOf() used to read a `pricing` object the endpoint never
+    // returns, so the label was always empty. Known pricing must render, and
+    // null (unknown) must stay blank rather than showing "$NaN".
+    test('shows per-model pricing from the models/details shape', async () => {
+      render(DryRunPanel, { props: { run: okRun } })
+      await fireEvent.click(screen.getByText(/Compare with/))
+
+      const priced = await screen.findByRole('option', { name: /moonshotai\/kimi-k3/ })
+      expect(priced.querySelector('.menu-price')).toHaveTextContent('$0.80 / $3.20')
+
+      const unknown = screen.getByRole('option', { name: /local\/mystery/ })
+      expect(unknown.querySelector('.menu-price')).toHaveTextContent('')
+      expect(unknown.textContent).not.toMatch(/\$/)
+    })
 
     test('running with a compare model calls run twice, once per model', async () => {
       const run = vi.fn()

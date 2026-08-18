@@ -95,6 +95,16 @@ type Deps struct {
 	// KVStore is the per-agent key-value store. If nil, kv_* tools are disabled.
 	KVStore kv.Store
 
+	// KVListMaxBytes caps the total serialised size of a kv_list response.
+	// 0 or negative falls back to defaultKVListMaxBytes. Sourced from
+	// [kv] list_max_bytes.
+	KVListMaxBytes int
+
+	// KVListValueHeadBytes caps each value included in a kv_list response.
+	// 0 or negative falls back to defaultKVListValueHeadBytes. Sourced from
+	// [kv] list_value_head_bytes.
+	KVListValueHeadBytes int
+
 	// CostSummary returns a snapshot of cost tracking data. If nil,
 	// get_cost_summary is disabled.
 	CostSummary func() CostSummaryData

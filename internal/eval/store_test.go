@@ -345,6 +345,7 @@ func TestStore_SampleRoundTripKeepsOutcomeSplit(t *testing.T) {
 	if _, err := s.AddSample(ctx, Sample{
 		RunID: run.ID, VariantID: variants[0].ID, TaskID: task.ID, KIndex: 0,
 		Status: SampleOK, Response: "answer", Rounds: 2, StopReason: "max_rounds",
+		Upstream:  "Fireworks",
 		OutcomeOK: 3, OutcomeRejected: 1, OutcomeFailed: 2, OutcomeDenied: 1,
 		OutcomeCached: 4, OutcomeSuppressed: 5,
 		TokensPrompt: 100, TokensCompletion: 20, Cost: 0.5, LatencyMs: 1200,
@@ -372,6 +373,9 @@ func TestStore_SampleRoundTripKeepsOutcomeSplit(t *testing.T) {
 	}
 	if got.StopReason != "max_rounds" {
 		t.Errorf("stop_reason = %q, want the slug", got.StopReason)
+	}
+	if got.Upstream != "Fireworks" {
+		t.Errorf("upstream = %q, want Fireworks", got.Upstream)
 	}
 
 	n, err := s.CountSamples(ctx, run.ID)

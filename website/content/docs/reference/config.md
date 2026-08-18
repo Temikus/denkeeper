@@ -437,9 +437,13 @@ When `allow_unsigned = false`, all subprocess plugin binaries must have a valid 
 |---|---|---|---|
 | `max_keys_per_agent` | int | `1000` | Maximum keys per agent |
 | `max_value_bytes` | int | `65536` | Maximum value size in bytes (64 KB) |
+| `list_max_bytes` | int | `16384` | Total value bytes a single `kv_list` response may carry |
+| `list_value_head_bytes` | int | `1024` | Per-value cap inside a `kv_list` response |
 | `cleanup_interval` | string | `"1h"` | Background cleanup interval for expired keys |
 
 Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
+
+`list_max_bytes` and `list_value_head_bytes` are sized for model context, not disk: a `kv_list` over a busy namespace can otherwise return tens of thousands of tokens in one tool result. Keys are always returned in full; values are what gets dropped once the budget is spent. Both must be positive, and `list_value_head_bytes` must not exceed `list_max_bytes`.
 
 ## `[sandbox]`
 

@@ -48,7 +48,8 @@
   }
 
   // On mount, check if we have a valid session cookie (e.g. after OIDC redirect)
-  // and initialize the global WebSocket connection.
+  // and start the global WebSocket. initWS only dials once a credential exists
+  // and redials when it changes, so calling it pre-login is safe.
   onMount(async () => {
     try {
       const sess = await api.sessionCheck()

@@ -347,6 +347,8 @@ Global MCP settings.
 
     max_keys_per_agent = 1000        # max keys per agent
     max_value_bytes = 65536          # max value size (bytes)
+    list_max_bytes = 16384           # total value bytes per kv_list response
+    list_value_head_bytes = 1024     # per-value cap inside a kv_list response
     cleanup_interval = "1h"          # expiry cleanup interval
 
 ### [audit]
@@ -388,6 +390,37 @@ but calling a candidate an upgrade also needs the judge win-rate.
     gate_rejected_rate_pp = 2.0      # max rise in rejected tool-call rate (points)
     gate_rounds_pct = 20             # max rise in mean rounds per task (percent)
     gate_cost_pct = 25               # max rise in mean cost per task (percent)
+
+### [safety]
+
+Runtime guardrails that hold back bad output. Distinct from [security], which
+covers plugin signing.
+
+    [safety.reply_guard]
+
+The reply sanity guard. On schedule-driven turns only, an obviously broken final
+reply is held instead of being delivered: a live user reads a broken reply and
+reacts, while a schedule fires unattended. The turn is still stored in full and
+an audit event lands under category "safety", action "reply_guard", carrying the
+signals, sizes and an excerpt; what changes is the delivered text, replaced by a
+one-line notice. Dry runs and evals evaluate the guard and report the verdict on
+the transcript, but never substitute the text.
+
+Each signal takes "withhold", "warn" (audit but deliver anyway) or "off".
+
+    enabled = true                   # master switch
+    on_role_markup = "withhold"      # reply carries <rs_tool_calls>, <|im_start|>,
+                                     # "Human:" and similar scaffolding as plain
+                                     # text instead of calling a tool
+    on_oversized = "withhold"        # reply exceeds one of the size caps below
+    on_no_tool_calls = "warn"        # a schedule named a skill and no tool ran;
+                                     # only flags, since some skills legitimately
+                                     # finish without tools
+    max_reply_bytes = 16000          # ~4 Telegram chunks, well under that
+                                     # adapter's own 35000-byte render limit;
+                                     # negative disables (a written 0 defaults)
+    max_completion_tokens = 0        # off; measures the same thing as bytes
+    excerpt_bytes = 200              # how much of the held reply is audited
 
 ### [costs]
 
