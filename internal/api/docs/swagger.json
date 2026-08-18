@@ -7302,6 +7302,26 @@
         }
     },
     "definitions": {
+        "github_com_Temikus_denkeeper_internal_agent.ReplyGuardVerdict": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "description": "Action is the strongest action any tripped signal asked for\n(\"warn\" or \"withhold\").",
+                    "type": "string"
+                },
+                "notice": {
+                    "description": "Notice is the operator notice a live turn would have delivered in place\nof the reply. Empty when the action is only \"warn\".",
+                    "type": "string"
+                },
+                "signals": {
+                    "description": "Signals lists every signal that tripped, in evaluation order.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_agent.SkillUsageRecord": {
             "type": "object",
             "properties": {
@@ -8686,6 +8706,14 @@
                 },
                 "provider": {
                     "type": "string"
+                },
+                "reply_guard": {
+                    "description": "ReplyGuard reports a reply sanity guard trip, omitted when nothing\ntripped. A preview evaluates the guard but never substitutes the text,\nso Response still holds what the model produced and this says what a\nlive scheduled turn would have delivered instead.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.ReplyGuardVerdict"
+                        }
+                    ]
                 },
                 "requested_model": {
                     "description": "RequestedModel is set only when the caller overrode the model, so the UI\ncan mark a transcript as \"not your live model\" without knowing the agent\nconfig. Model is what actually answered; the two can differ if the\nprovider redirected.",

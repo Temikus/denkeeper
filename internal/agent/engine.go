@@ -195,6 +195,12 @@ type Engine struct {
 	skillSatisfactionMu sync.Mutex
 	skillSatisfaction   map[string]string
 
+	// replyGuard holds the reply sanity guard settings. Read on every turn and
+	// replaced wholesale on hot-reload, so it takes its own lock rather than
+	// riding on the engine's other state.
+	replyGuardMu sync.RWMutex
+	replyGuard   ReplyGuard
+
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
 
@@ -366,6 +372,22 @@ func (e *Engine) SetMaxToolRounds(n int) {
 	if n > 0 {
 		e.maxToolRounds = n
 	}
+}
+
+// SetReplyGuard replaces the reply sanity guard settings. Called at wiring
+// time and again on every config reload, so a narrowed policy narrows the
+// effective guard.
+func (e *Engine) SetReplyGuard(g ReplyGuard) {
+	e.replyGuardMu.Lock()
+	defer e.replyGuardMu.Unlock()
+	e.replyGuard = g
+}
+
+// ReplyGuardConfig returns the current reply sanity guard settings.
+func (e *Engine) ReplyGuardConfig() ReplyGuard {
+	e.replyGuardMu.RLock()
+	defer e.replyGuardMu.RUnlock()
+	return e.replyGuard
 }
 
 // RequestStop asks every turn currently running on this engine to end at its
@@ -630,6 +652,49 @@ func (e *Engine) emitLLMAudit(ctx context.Context, convID string, resp *llm.Chat
 		Detail:         string(body),
 		Status:         status,
 		Source:         "engine",
+		ConversationID: convID,
+	})
+}
+
+// emitReplyGuardAudit records a reply-guard trip. Both statuses are non-OK, so
+// the event survives the "summary" audit opt-down a policy turn may carry.
+func (e *Engine) emitReplyGuardAudit(ctx context.Context, convID string, msg adapter.IncomingMessage, g ReplyGuard, r replyGuardResult, content string) {
+	status := audit.StatusError
+	verb := "flagged"
+	if r.withholds() {
+		status = audit.StatusDenied
+		verb = "withheld"
+	}
+
+	detail, _ := json.Marshal(map[string]any{
+		"signals":           r.Signals,
+		"action":            r.Action,
+		"reply_bytes":       r.replyBytes,
+		"completion_tokens": r.completionTokens,
+		"tool_calls":        r.toolCalls,
+		"threshold_bytes":   g.MaxReplyBytes,
+		"schedule":          msg.ScheduleName,
+		"skill":             msg.SkillName,
+		"excerpt":           replyExcerpt(content, g.ExcerptBytes),
+	})
+
+	e.logger.Warn("reply guard tripped on scheduled turn",
+		"action", r.Action,
+		"signals", strings.Join(r.Signals, ","),
+		"reply_bytes", r.replyBytes,
+		"completion_tokens", r.completionTokens,
+		"tool_calls", r.toolCalls,
+		"schedule", msg.ScheduleName,
+		"conversation", convID,
+	)
+
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySafety,
+		Action:         "reply_guard",
+		Summary:        fmt.Sprintf("Reply %s on scheduled turn (%s)", verb, strings.Join(r.Signals, ", ")),
+		Detail:         string(detail),
+		Status:         status,
+		Source:         msg.Adapter,
 		ConversationID: convID,
 	})
 }
@@ -1330,6 +1395,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 		ToolCalls:      out.records,
 		Rounds:         toolRounds(out.records),
 		StopReason:     out.stopReason.slug(),
+		ReplyGuard:     out.replyGuard.verdict(),
 		AsOf:           asOf,
 		DurationMs:     time.Since(start).Milliseconds(),
 		Provider:       e.router.DefaultProvider(),
@@ -1359,6 +1425,10 @@ type turnOutcome struct {
 	// same information already reaches a live user as the honesty marker in
 	// the response text.
 	stopReason loopStopReason
+	// replyGuard is the reply sanity guard verdict, zero when nothing tripped.
+	// On a live turn a withholding verdict has already replaced response with
+	// the operator notice; on a policy turn it is reported and nothing else.
+	replyGuard replyGuardResult
 }
 
 // turnPrep holds everything prepareTurn resolves before the LLM is called.
@@ -1471,6 +1541,23 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 			"conversation", convID,
 		)
 		e.emitLLMAudit(ctx, convID, resp, "LLM returned an empty final response", llmAuditOpts{round: 0})
+	}
+
+	// Reply sanity guard: a schedule-driven turn has no reader to notice that
+	// the model produced junk, so an obviously broken reply is audited and
+	// held here rather than chunked out by the adapter. The stored record
+	// keeps the raw text either way; only the wire text changes.
+	// One read of the policy for the whole turn: a reload landing mid-turn must
+	// not evaluate against one guard and report against another.
+	guardCfg := e.ReplyGuardConfig()
+	if guard := evaluateReplyGuard(guardCfg, msg, responseText, resp, toolRecords); guard.tripped() {
+		e.emitReplyGuardAudit(ctx, convID, msg, guardCfg, guard, responseText)
+		out.replyGuard = guard
+		// A policy turn delivers nothing and persists nothing, so substituting
+		// would only hide the evidence the preview exists to show.
+		if guard.withholds() && !policy.active() {
+			out.response = replyWithheldNotice(guard)
+		}
 	}
 
 	if err := e.persistTurn(ctx, msg, policy, prep, resp, responseText, toolRecords); err != nil {

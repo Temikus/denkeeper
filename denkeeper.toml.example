@@ -152,6 +152,37 @@ format = "text"
 #                     # "summary" keeps only lifecycle events and errors
 
 # ---------------------------------------------------------------------------
+# Reply sanity guard
+# ---------------------------------------------------------------------------
+# Holds an obviously broken reply on a schedule-driven turn instead of letting
+# the adapter chunk it out. Scheduled turns only: a live user reads a broken
+# reply and reacts, while a schedule fires unattended.
+#
+# On a trip the turn is still stored in full — the honest record — and an audit
+# event lands under category "safety", action "reply_guard", carrying which
+# signals fired, the sizes and an excerpt. What changes is the delivered text:
+# a "withhold" signal replaces it with a one-line operator notice.
+#
+# Each signal takes "withhold", "warn" (audit but deliver anyway) or "off".
+
+# [safety.reply_guard]
+# enabled = true
+# on_role_markup = "withhold"     # reply carries <rs_tool_calls>, <|im_start|>,
+#                                 # "\n\nHuman:" etc. as plain text — the model
+#                                 # leaked its framing instead of calling a tool
+# on_oversized = "withhold"       # reply exceeds one of the size caps below
+# on_no_tool_calls = "warn"       # a schedule named a skill and no tool ran;
+#                                 # a hint, not proof — some skills legitimately
+#                                 # finish without tools, so this only flags
+# max_reply_bytes = 16000         # ~4 Telegram chunks, well under that adapter's
+#                                 # own 35000-byte render limit. Negative = off
+#                                 # (a written 0 takes the default)
+# max_completion_tokens = 0       # off by default; measures the same thing as
+#                                 # max_reply_bytes. Set it for providers whose
+#                                 # byte count understates the generation
+# excerpt_bytes = 200             # how much of the held reply reaches the audit
+
+# ---------------------------------------------------------------------------
 # Voice (STT / TTS)
 # ---------------------------------------------------------------------------
 # Enables speech-to-text (incoming voice messages → text) and optionally
