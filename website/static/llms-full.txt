@@ -347,6 +347,8 @@ Global MCP settings.
 
     max_keys_per_agent = 1000        # max keys per agent
     max_value_bytes = 65536          # max value size (bytes)
+    list_max_bytes = 16384           # total value bytes per kv_list response
+    list_value_head_bytes = 1024     # per-value cap inside a kv_list response
     cleanup_interval = "1h"          # expiry cleanup interval
 
 ### [audit]
