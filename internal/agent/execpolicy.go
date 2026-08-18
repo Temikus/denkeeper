@@ -212,6 +212,9 @@ type TurnResult struct {
 	// model that really ran rather than the one that was asked for.
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+	// Upstream is the provider-reported serving upstream (OpenRouter's routed
+	// provider), empty when the provider has no such concept.
+	Upstream string `json:"upstream,omitempty"`
 	// RequestedModel is the override the caller asked for, empty when the turn
 	// ran the agent's live model. The pair is what lets a transcript say "this
 	// is not your live model" without the UI having to know the agent config.

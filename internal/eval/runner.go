@@ -509,6 +509,7 @@ func applyResult(smp *Sample, result *agent.TurnResult, logger *slog.Logger) {
 	smp.Response = result.Response
 	smp.Rounds = result.Rounds
 	smp.StopReason = result.StopReason
+	smp.Upstream = result.Upstream
 	smp.TokensPrompt = result.Tokens.Prompt
 	smp.TokensCompletion = result.Tokens.Completion
 	for _, rec := range result.ToolCalls {

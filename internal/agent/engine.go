@@ -543,6 +543,9 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 		"tokens_cached": resp.TokensUsed.CachedPrompt,
 		"finish_reason": resp.FinishReason,
 	}
+	if resp.Upstream != "" {
+		d["upstream"] = resp.Upstream
+	}
 	if resp.Content != "" {
 		text := resp.Content
 		if len(text) > maxLen {
@@ -1336,6 +1339,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 		result.Tokens = out.resp.TokensUsed
 		result.CostUSD = out.resp.CostUSD
 		result.Model = out.resp.Model
+		result.Upstream = out.resp.Upstream
 	}
 	return result, nil
 }

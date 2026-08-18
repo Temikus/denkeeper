@@ -7921,6 +7921,10 @@
                 "trace": {
                     "type": "string"
                 },
+                "upstream": {
+                    "description": "Upstream is the provider-reported serving upstream (OpenRouter's routed\nprovider), empty for providers without the concept.",
+                    "type": "string"
+                },
                 "variant_id": {
                     "type": "integer"
                 }

@@ -148,6 +148,9 @@ type ChatResponse struct {
 	Model           string
 	FinishReason    string
 	CostUSD         float64 // provider-reported or estimated cost in USD
+	// Upstream is the provider-reported serving upstream (OpenRouter's routed
+	// provider). Empty when the provider has no such concept.
+	Upstream string
 }
 
 // ToolCall represents a tool invocation requested by the LLM (OpenAI format).
