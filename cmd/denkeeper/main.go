@@ -842,6 +842,9 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
 		KVStore:        abc.kvStore,
+
+		KVListMaxBytes:       abc.cfg.KV.ListMaxBytes,
+		KVListValueHeadBytes: abc.cfg.KV.ListValueHeadBytes,
 		CostSummary: func() configmcp.CostSummaryData {
 			return configmcp.CostSummaryData{
 				GlobalCost:    costTracker.GlobalCost(),

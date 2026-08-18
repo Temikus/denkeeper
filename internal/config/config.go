@@ -1054,6 +1054,11 @@ type KVConfig struct {
 	MaxKeysPerAgent int `toml:"max_keys_per_agent"`
 	// MaxValueBytes limits the size of each value in bytes.
 	MaxValueBytes int `toml:"max_value_bytes"`
+	// ListMaxBytes caps the total serialised size of a kv_list response.
+	// Sized for model context, not disk.
+	ListMaxBytes int `toml:"list_max_bytes"`
+	// ListValueHeadBytes caps each individual value in a kv_list response.
+	ListValueHeadBytes int `toml:"list_value_head_bytes"`
 	// CleanupInterval is how often expired keys are purged (Go duration string).
 	CleanupInterval string `toml:"cleanup_interval"`
 }
@@ -1638,6 +1643,12 @@ func applyMiscDefaults(cfg *Config) {
 	if cfg.KV.MaxValueBytes == 0 {
 		cfg.KV.MaxValueBytes = 65536
 	}
+	if cfg.KV.ListMaxBytes == 0 {
+		cfg.KV.ListMaxBytes = 16384
+	}
+	if cfg.KV.ListValueHeadBytes == 0 {
+		cfg.KV.ListValueHeadBytes = 1024
+	}
 	if cfg.KV.CleanupInterval == "" {
 		cfg.KV.CleanupInterval = "1h"
 	}
@@ -2034,6 +2045,12 @@ func validate(cfg *Config) error {
 	if err := validateAPI(&cfg.API); err != nil {
 		return fmt.Errorf("validate api: %w", err)
 	}
+	return validateSubsystems(cfg)
+}
+
+// validateSubsystems checks the self-contained per-subsystem sections, split
+// out of validate to keep it under the gocyclo threshold.
+func validateSubsystems(cfg *Config) error {
 	if err := validateWeb(&cfg.Web); err != nil {
 		return fmt.Errorf("validate web: %w", err)
 	}
@@ -2048,6 +2065,24 @@ func validate(cfg *Config) error {
 	}
 	if err := validateEval(&cfg.Eval); err != nil {
 		return fmt.Errorf("validate eval: %w", err)
+	}
+	if err := validateKV(&cfg.KV); err != nil {
+		return fmt.Errorf("validate kv: %w", err)
+	}
+	return nil
+}
+
+// validateKV checks the key-value store bounds. Defaults run first and turn a
+// written zero into the default, so only negatives reach here.
+func validateKV(k *KVConfig) error {
+	if k.ListMaxBytes < 0 {
+		return fmt.Errorf("config: kv.list_max_bytes must be positive, got %d", k.ListMaxBytes)
+	}
+	if k.ListValueHeadBytes < 0 {
+		return fmt.Errorf("config: kv.list_value_head_bytes must be positive, got %d", k.ListValueHeadBytes)
+	}
+	if k.ListValueHeadBytes > k.ListMaxBytes {
+		return fmt.Errorf("config: kv.list_value_head_bytes (%d) must not exceed kv.list_max_bytes (%d)", k.ListValueHeadBytes, k.ListMaxBytes)
 	}
 	return nil
 }

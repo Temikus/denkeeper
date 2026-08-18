@@ -70,8 +70,12 @@ Per-agent key-value storage with optional TTL, exposed as `kv_get`, `kv_set`, `k
 [kv]
 max_keys_per_agent = 1000
 max_value_bytes = 65536
+list_max_bytes = 16384
+list_value_head_bytes = 1024
 cleanup_interval = "1h"
 ```
+
+`kv_list` is size-capped so one call over a busy namespace cannot flood the model's context. Every key comes back, but values are budgeted: a value longer than `list_value_head_bytes` is cut to its head and marked `value_truncated`, and once `list_max_bytes` of values is spent the remaining entries arrive with `value_omitted: true` plus a top-level `truncated` and `omitted_values` count, so the agent knows to `kv_get` them individually. Pass `keys_only: true` when you only need to see what is in the namespace.
 
 It exists because an agent's memory is prose, and prose is a bad place to keep state that has to be *exact*. Typical uses:
 

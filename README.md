@@ -221,7 +221,7 @@ Key sections:
 | `[api.auth]` | Dashboard authentication (bcrypt password, session secret, OIDC SSO) |
 | `[otel]` | OpenTelemetry observability (Prometheus metrics, OTLP trace export) |
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
-| `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `cleanup_interval`) |
+| `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `list_max_bytes`, `list_value_head_bytes`, `cleanup_interval`) |
 | `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
 | `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, `[web.fetch.jina]` fallback |
 | `[memory]` | SQLite database path |
