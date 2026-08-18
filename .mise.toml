@@ -8,4 +8,4 @@ task = "3.52.0"
 "aqua:casey/just" = "1.58.0"
 "aqua:anchore/grype" = "0.117.0"
 # Keep in sync with the betterleaks job in .github/workflows/security.yml.
-"aqua:betterleaks/betterleaks" = "1.7.3"
+"aqua:betterleaks/betterleaks" = "1.7.4"
