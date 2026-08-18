@@ -1,6 +1,16 @@
-import { writable, get } from 'svelte/store'
+import { writable, derived, get } from 'svelte/store'
 import { token, authMode } from './store.js'
 import { DenkeeperWS } from './ws.js'
+
+/**
+ * The credential the WS URL is built from — 'session' for cookie auth, the API
+ * key for token auth, '' when unauthenticated. Mirrors `_buildURL`, so a change
+ * here is exactly a change in how the upgrade would authenticate.
+ */
+const credential = derived(
+  [token, authMode],
+  ([$t, $m]) => ($m === 'session' ? 'session' : $t)
+)
 
 /**
  * Connection status store.
@@ -87,10 +97,37 @@ export function getWSClient() {
   return wsClient
 }
 
-/** Initialize the WS connection. Call once on app startup. */
+/** Last credential the socket was connected with; '' means none. */
+let lastCredential = ''
+
+/** Unsubscribe for the credential watcher, null when not watching. */
+let credentialUnsub = null
+
+/**
+ * Start the WS connection and keep it tracking the credential. Call once on app
+ * startup.
+ *
+ * Connecting is gated on having a credential: an upgrade sent before login 401s,
+ * and three of those exhaust the reconnect budget and strand the session on SSE
+ * until a reload. The watcher also covers the reverse transition (logout) and a
+ * key swap, resetting the budget so a stale failure count can't leak across
+ * credentials.
+ */
 export function initWS() {
   const client = getWSClient()
-  client.connect()
+  if (credentialUnsub) return client
+
+  credentialUnsub = credential.subscribe((cred) => {
+    if (cred === lastCredential) return
+    lastCredential = cred
+    if (!cred) {
+      client.close()
+      return
+    }
+    client.reset()
+    client.connect()
+  })
+
   return client
 }
 
@@ -100,8 +137,13 @@ export function onActivity(cb) {
   return () => activityCallbacks.delete(cb)
 }
 
-/** Tear down the WS connection. */
+/** Tear down the WS connection and stop tracking the credential. */
 export function destroyWS() {
+  if (credentialUnsub) {
+    credentialUnsub()
+    credentialUnsub = null
+  }
+  lastCredential = ''
   if (wsClient) {
     wsClient.close()
   }

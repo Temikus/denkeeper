@@ -265,4 +265,26 @@ describe('reset', () => {
     ws.connect()
     expect(MockWebSocket.instances).toHaveLength(2)
   })
+
+  test('clears the reconnect budget after falling back to SSE', () => {
+    const { ws } = createWS()
+    ws.connect()
+
+    // Exhaust the budget: 3 reconnects, then the 4th failure falls back.
+    for (let i = 0; i < 3; i++) {
+      MockWebSocket.instances[MockWebSocket.instances.length - 1].onclose({ code: 1006 })
+      vi.advanceTimersByTime(30000)
+    }
+    MockWebSocket.instances[MockWebSocket.instances.length - 1].onclose({ code: 1006 })
+    expect(ws.status).toBe('sse_fallback')
+
+    const before = MockWebSocket.instances.length
+    ws.reset()
+    ws.connect()
+    expect(MockWebSocket.instances).toHaveLength(before + 1)
+
+    // Budget is fresh — a failure now reconnects instead of falling back again.
+    MockWebSocket.instances[MockWebSocket.instances.length - 1].onclose({ code: 1006 })
+    expect(ws.status).toBe('reconnecting')
+  })
 })

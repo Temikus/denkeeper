@@ -1,9 +1,11 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { token, authMode } from '../store.js'
 
 // Track DenkeeperWS constructor calls and instances
 const mockConnect = vi.fn()
 const mockClose = vi.fn()
+const mockWSReset = vi.fn()
 const mockWSSend = vi.fn(() => true)
 let capturedOptions = null
 
@@ -12,15 +14,27 @@ vi.mock('../ws.js', () => ({
     capturedOptions = opts
     this.connect = mockConnect
     this.close = mockClose
+    this.reset = mockWSReset
     this.send = mockWSSend
   }),
 }))
 
 const { wsStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
 
+/** Drop the credential watcher and clear auth, so each test starts logged out. */
+function resetAuth() {
+  destroyWS()
+  token.clear()
+  authMode.set(null)
+  mockConnect.mockReset()
+  mockClose.mockReset()
+  mockWSReset.mockReset()
+}
+
 beforeEach(() => {
   mockConnect.mockReset()
   mockClose.mockReset()
+  mockWSReset.mockReset()
   mockWSSend.mockReset().mockReturnValue(true)
 })
 
@@ -42,15 +56,87 @@ describe('getWSClient', () => {
 })
 
 describe('initWS / destroyWS lifecycle', () => {
-  test('initWS calls connect on the client', () => {
+  beforeEach(resetAuth)
+
+  test('initWS calls connect on the client when a token is already stored', () => {
+    token.set('stored-key')
+    mockConnect.mockReset()
     initWS()
     expect(mockConnect).toHaveBeenCalled()
+    resetAuth()
   })
 
   test('destroyWS calls close on the client', () => {
     getWSClient() // ensure client exists
     destroyWS()
     expect(mockClose).toHaveBeenCalled()
+  })
+})
+
+describe('credential-gated connect', () => {
+  beforeEach(resetAuth)
+
+  test('initWS does not dial while unauthenticated', () => {
+    initWS()
+    expect(mockConnect).not.toHaveBeenCalled()
+    resetAuth()
+  })
+
+  test('logging in with an API key after initWS connects the socket', () => {
+    initWS()
+    expect(mockConnect).not.toHaveBeenCalled()
+
+    token.set('login-key')
+
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    // reset() before connect clears the reconnect budget, so a pre-login
+    // failure streak can't leave the session stranded on SSE.
+    expect(mockWSReset).toHaveBeenCalledTimes(1)
+    resetAuth()
+  })
+
+  test('session auth after initWS connects the socket', () => {
+    initWS()
+    authMode.set('session')
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    resetAuth()
+  })
+
+  test('swapping the API key redials with a fresh reconnect budget', () => {
+    token.set('first-key')
+    initWS()
+    mockConnect.mockReset()
+    mockWSReset.mockReset()
+
+    token.set('second-key')
+
+    expect(mockWSReset).toHaveBeenCalledTimes(1)
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    resetAuth()
+  })
+
+  test('re-setting the same credential does not redial', () => {
+    token.set('same-key')
+    initWS()
+    mockConnect.mockReset()
+
+    token.set('same-key')
+
+    expect(mockConnect).not.toHaveBeenCalled()
+    resetAuth()
+  })
+
+  test('logging out closes the socket without redialling', () => {
+    token.set('bye-key')
+    initWS()
+    mockConnect.mockReset()
+
+    token.clear()
+    authMode.set(null)
+
+    expect(mockClose).toHaveBeenCalled()
+    expect(mockConnect).not.toHaveBeenCalled()
+    resetAuth()
   })
 })
 
