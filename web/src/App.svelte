@@ -6,6 +6,7 @@
   import { initWS, destroyWS } from './wsStore.js'
   import Nav from './components/Nav.svelte'
   import BottomNav from './components/BottomNav.svelte'
+  import PanicBar from './components/PanicBar.svelte'
   import Login from './pages/Login.svelte'
   import SetupWizard from './pages/SetupWizard.svelte'
   import Overview from './pages/Overview.svelte'
@@ -71,8 +72,10 @@
 {:else if showWizard}
   <SetupWizard onComplete={() => { showWizard = false }} />
 {:else}
-  <div class="shell">
-    <Nav active={route} />
+  <div class="app">
+    <PanicBar />
+    <div class="shell">
+      <Nav active={route} />
     <main class="content">
       {#if route === 'overview' || route === ''}
         <Overview />
@@ -114,7 +117,8 @@
         <p style="color: var(--text-muted)">Page not found.</p>
       {/if}
     </main>
-    <BottomNav active={route} />
+      <BottomNav active={route} />
+    </div>
   </div>
 {/if}
 
@@ -197,9 +201,20 @@
     color: var(--accent-hover);
   }
 
+  /* The panic bar is full-bleed above the sidebar, so the shell row is nested
+     inside a column. min-height: 0 lets the row shrink instead of overflowing
+     the viewport when the bar appears. */
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
   .shell {
     display: flex;
-    height: 100vh;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 

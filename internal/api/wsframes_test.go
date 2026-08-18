@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -157,5 +158,34 @@ func TestParseClientFrame_Panic(t *testing.T) {
 	_, ok := frame.(PanicFrame)
 	if !ok {
 		t.Fatalf("expected PanicFrame, got %T", frame)
+	}
+}
+
+func TestPanicStatusFrame_CarriesSinceWhenActive(t *testing.T) {
+	data, err := json.Marshal(PanicStatusFrame{
+		Type:    FrameTypePanicStatus,
+		Active:  true,
+		Message: "Emergency stop triggered",
+		Since:   "2026-08-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"since":"2026-08-18T10:00:00Z"`) {
+		t.Errorf("frame = %s, want a since field", data)
+	}
+}
+
+func TestPanicStatusFrame_OmitsSinceOnResume(t *testing.T) {
+	data, err := json.Marshal(PanicStatusFrame{
+		Type:    FrameTypePanicStatus,
+		Active:  false,
+		Message: "Processing resumed",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "since") {
+		t.Errorf("frame = %s, want no since field on resume", data)
 	}
 }

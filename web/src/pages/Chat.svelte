@@ -4,7 +4,7 @@
   import { api } from '../api.js'
   import { isMobile } from '../store.js'
   import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, clearCurrentSession, compactCurrentSession, pendingSkillTest } from '../chatStore.js'
-  import { wsStatus, onActivity, panicStatus } from '../wsStore.js'
+  import { wsStatus, onActivity } from '../wsStore.js'
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
 
@@ -163,14 +163,6 @@
     input = ''
     autoResizeTextarea()
     await sendMessage(text)
-  }
-
-  async function triggerResume() {
-    try {
-      await api.resume()
-    } catch (e) {
-      chatState.update(s => ({ ...s, error: 'Resume failed: ' + e.message }))
-    }
   }
 
   let clearing = $state(false)
@@ -417,14 +409,6 @@
       {/if}
     </span>
   </div>
-
-  <!-- Panic banner -->
-  {#if $panicStatus.active}
-    <div class="panic-banner" role="alert">
-      <span>All processing paused</span>
-      <button class="btn-resume" onclick={triggerResume}>Resume</button>
-    </div>
-  {/if}
 
   <!-- Pending approvals banner (polled, cross-adapter) -->
   {#if pendingApprovals.length > 0}
@@ -1047,31 +1031,6 @@
     white-space: nowrap;
   }
   .btn-stop:hover { opacity: 0.85; }
-
-  .panic-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: var(--danger);
-    color: #fff;
-    padding: 8px 12px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    font-weight: 600;
-    margin-bottom: 8px;
-  }
-
-  .btn-resume {
-    background: #fff;
-    color: var(--danger);
-    border: none;
-    padding: 4px 12px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .btn-resume:hover { opacity: 0.85; }
 
   .btn-ghost {
     background: none;

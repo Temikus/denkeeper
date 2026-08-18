@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store'
 import { token, authMode } from './store.js'
+import { api } from './api.js'
 import { DenkeeperWS } from './ws.js'
 
 /**
@@ -9,9 +10,47 @@ import { DenkeeperWS } from './ws.js'
 export const wsStatus = writable('disconnected')
 
 /**
- * Panic status store — updated when the server broadcasts a panic_status frame.
+ * Panic status store — updated when the server broadcasts a panic_status frame,
+ * and hydrated from GET /panic whenever the transport (re)connects.
+ *
+ * The frame alone is not enough: it only reaches clients that were connected at
+ * the moment panic was pressed. A reload, an SSE fallback, or a panic raised
+ * from Telegram before the dashboard was open would otherwise leave the UI
+ * showing "Panic" with no way to un-panic.
  */
-export const panicStatus = writable({ active: false, message: '' })
+export const panicStatus = writable({ active: false, message: '', since: '' })
+
+const PANIC_MESSAGE = 'Emergency stop triggered — all processing paused'
+
+/** Bumped by every panic_status frame, so a slow hydrate can tell it is stale. */
+let panicFrameSeq = 0
+
+/**
+ * Fetch the authoritative panic state and update the store.
+ *
+ * A frame that lands while the request is in flight wins: it is newer than the
+ * response we are holding, and letting a stale "not panicked" overwrite a live
+ * panic would hide the Resume button behind another reload.
+ *
+ * Errors are swallowed: this runs on every connect, including before login and
+ * for credentials without the admin scope, and a failed poll must not surface
+ * as a UI error.
+ */
+export async function refreshPanicStatus() {
+  const seq = panicFrameSeq
+  try {
+    const s = await api.panicStatus()
+    if (seq !== panicFrameSeq) return
+    panicStatus.set({
+      active: !!s.panicked,
+      message: s.panicked ? PANIC_MESSAGE : '',
+      // panic_time is a zero time when not panicked — never surface that.
+      since: s.panicked ? (s.panic_time || '') : '',
+    })
+  } catch {
+    // Not authenticated, insufficient scope, or the server is unreachable.
+  }
+}
 
 /** Stores for per-session event routing. sessionID -> callback */
 const sessionHandlers = new Map()
@@ -69,7 +108,12 @@ export function getWSClient() {
       }
       // Handle panic status broadcasts.
       if (frame.type === 'panic_status') {
-        panicStatus.set({ active: frame.active, message: frame.message || '' })
+        panicFrameSeq++
+        panicStatus.set({
+          active: frame.active,
+          message: frame.message || '',
+          since: frame.active ? (frame.since || '') : '',
+        })
         return
       }
       // Frames without a registered session are silently dropped.
@@ -81,15 +125,27 @@ export function getWSClient() {
       if (status === 'disconnected' || status === 'reconnecting' || status === 'sse_fallback') {
         failAllSessionHandlers()
       }
+      // Any panic_status frame broadcast while we were away is gone — the hub's
+      // replay buffer is per-connection, so a new connection starts empty.
+      // Re-read the real state instead of trusting whatever we last saw.
+      if (status === 'connected' || status === 'sse_fallback') {
+        refreshPanicStatus()
+      }
     },
   })
 
   return wsClient
 }
 
-/** Initialize the WS connection. Call once on app startup. */
+/**
+ * Initialize the WS connection. Call once on app startup.
+ *
+ * Hydrates panic state up front rather than waiting for a 'connected' status:
+ * a connection that never establishes still has to render the right button.
+ */
 export function initWS() {
   const client = getWSClient()
+  refreshPanicStatus()
   client.connect()
   return client
 }

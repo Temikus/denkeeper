@@ -4,6 +4,7 @@
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
   import { panicStatus } from '../wsStore.js'
+  import { relativeTime } from '../relativeTime.js'
 
   let error = $state('')
   let errorTimer
@@ -166,7 +167,12 @@
 
   <div class="footer">
     {#if $panicStatus.active}
-      <button class="btn-panic active" onclick={triggerResume} data-testid="nav-resume">Resume</button>
+      <button
+        class="btn-panic active"
+        onclick={triggerResume}
+        title={$panicStatus.since ? `Paused ${relativeTime($panicStatus.since)} — resume processing` : 'Resume processing'}
+        data-testid="nav-resume"
+      >Resume</button>
     {:else}
       <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="nav-panic">Panic</button>
     {/if}
