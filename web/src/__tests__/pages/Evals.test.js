@@ -204,10 +204,41 @@ describe('Evals page — launcher', () => {
     })
   })
 
-  test('Start stays disabled until a candidate is named', async () => {
+  test('Start stays disabled until a candidate is named, and says why', async () => {
     render(Evals)
     await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
     expect(screen.getByTestId('start-run')).toBeDisabled()
+    expect(screen.getByTestId('start-blocker')).toHaveTextContent('Pick a candidate model')
+  })
+
+  test('a hand-typed candidate drops the provider captured for another model', async () => {
+    let body = null
+    server.use(
+      http.post('/api/v1/eval/runs', async ({ request }) => {
+        body = await request.json()
+        return HttpResponse.json({ id: 3, task_set_id: 1, status: 'pending', k: 1, cost_cap: 2, cost_spent: 0, variants: [], samples_done: 0, samples_total: 0, active: true }, { status: 201 })
+      }),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    // Pick from the list, which captures the model's provider...
+    const input = document.querySelector('.model-selector input')
+    await fireEvent.focus(input)
+    // The selector only lists models once a provider is chosen.
+    await waitFor(() => expect(document.querySelector('.provider-select')).toBeInTheDocument())
+    await fireEvent.change(document.querySelector('.provider-select'), { target: { value: 'openrouter' } })
+    await waitFor(() => expect(screen.getByText('OpenAI: GPT-4o')).toBeInTheDocument())
+    await fireEvent.mouseDown(screen.getByText('OpenAI: GPT-4o'))
+
+    // ...then hand-edit the field to a model that provider was never read for.
+    await fireEvent.input(input, { target: { value: 'anthropic/claude-3-opus' } })
+    await waitFor(() => expect(screen.getByTestId('start-run')).not.toBeDisabled())
+    await fireEvent.click(screen.getByTestId('start-run'))
+
+    await waitFor(() => expect(body).not.toBeNull())
+    expect(body.variants[1].llm_model).toBe('anthropic/claude-3-opus')
+    expect(body.variants[1].llm_provider).toBeUndefined()
   })
 
   test('a rejected run surfaces the error inline', async () => {
@@ -230,8 +261,9 @@ describe('Evals page — runs list', () => {
     render(Evals)
     await waitFor(() => expect(screen.getByTestId('run-1')).toBeInTheDocument())
 
+    // Statuses render as operator words, not the API's own ("capped" especially).
     expect(screen.getByTestId('run-status-1')).toHaveTextContent('running')
-    expect(screen.getByTestId('run-status-2')).toHaveTextContent('done')
+    expect(screen.getByTestId('run-status-2')).toHaveTextContent('finished')
     expect(screen.getByTestId('progress-1')).toHaveTextContent('8 / 20')
     expect(screen.getByTestId('run-1')).toHaveTextContent('$0.31 of $2.00')
     expect(screen.getByTestId('run-1')).toHaveTextContent('golden-set')
@@ -275,6 +307,22 @@ describe('Evals page — runs list', () => {
     await waitFor(() => expect(stopped).toBe(1))
   })
 
+  test('a failed Stop keeps the dialog open and reports inside it', async () => {
+    server.use(
+      http.post('/api/v1/eval/runs/:id/stop', () =>
+        HttpResponse.json({ error: 'run 1 is done and cannot be stopped' }, { status: 409 })),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('stop-1')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('stop-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop run' }))
+
+    await waitFor(() => expect(screen.getByTestId('stop-error')).toHaveTextContent('cannot be stopped'))
+    // The run card may be screens away, so closing on failure would read as success.
+    expect(screen.getByTestId('stop-confirm')).toBeInTheDocument()
+  })
+
   test('cancelling the confirm leaves the run alone', async () => {
     let stopped = 0
     server.use(
@@ -313,7 +361,7 @@ describe('Evals page — runs list', () => {
 
     // The mount hydrate is read 1; the poll interval supplies the rest.
     await waitFor(() => expect(screen.getByTestId('progress-1')).toHaveTextContent('12 / 20'), { timeout: 3000 })
-    await waitFor(() => expect(screen.getByTestId('run-status-1')).toHaveTextContent('done'), { timeout: 15000 })
+    await waitFor(() => expect(screen.getByTestId('run-status-1')).toHaveTextContent('finished'), { timeout: 15000 })
 
     const settled = detailReads
     await new Promise(r => setTimeout(r, 5000))
