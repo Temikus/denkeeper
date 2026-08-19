@@ -19,7 +19,13 @@ vi.mock('../ws.js', () => ({
   }),
 }))
 
-const { wsStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
+const mockPanicStatus = vi.fn(async () => ({ panicked: false, panic_time: '0001-01-01T00:00:00Z' }))
+
+vi.mock('../api.js', () => ({
+  api: { panicStatus: (...args) => mockPanicStatus(...args) },
+}))
+
+const { wsStatus, panicStatus, refreshPanicStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
 
 /** Drop the credential watcher and clear auth, so each test starts logged out. */
 function resetAuth() {
@@ -36,6 +42,8 @@ beforeEach(() => {
   mockClose.mockReset()
   mockWSReset.mockReset()
   mockWSSend.mockReset().mockReturnValue(true)
+  mockPanicStatus.mockReset().mockResolvedValue({ panicked: false, panic_time: '0001-01-01T00:00:00Z' })
+  panicStatus.set({ active: false, message: '', since: '' })
 })
 
 describe('getWSClient', () => {
@@ -327,5 +335,115 @@ describe('onStatus triggers failAllSessionHandlers', () => {
 
     expect(handler).not.toHaveBeenCalled()
     offSessionEvent('sess-ok')
+  })
+})
+
+
+describe('panic status hydration', () => {
+  beforeEach(() => {
+    getWSClient()
+  })
+
+  test('refreshPanicStatus reflects an active panic from the server', async () => {
+    mockPanicStatus.mockResolvedValue({ panicked: true, panic_time: '2026-08-18T10:00:00Z' })
+
+    await refreshPanicStatus()
+
+    expect(get(panicStatus).active).toBe(true)
+    expect(get(panicStatus).since).toBe('2026-08-18T10:00:00Z')
+    expect(get(panicStatus).message).not.toBe('')
+  })
+
+  test('refreshPanicStatus drops the zero panic_time when not panicked', async () => {
+    panicStatus.set({ active: true, message: 'stale', since: '2026-08-18T10:00:00Z' })
+    mockPanicStatus.mockResolvedValue({ panicked: false, panic_time: '0001-01-01T00:00:00Z' })
+
+    await refreshPanicStatus()
+
+    expect(get(panicStatus)).toEqual({ active: false, message: '', since: '' })
+  })
+
+  test('a failed fetch leaves the store untouched', async () => {
+    panicStatus.set({ active: true, message: 'paused', since: '2026-08-18T10:00:00Z' })
+    mockPanicStatus.mockRejectedValue(new Error('Unauthorized'))
+
+    await refreshPanicStatus()
+
+    expect(get(panicStatus).active).toBe(true)
+  })
+
+  // Hydration hangs off the credential rather than app startup: a socket that
+  // never establishes still has to render the right button, but a fetch fired
+  // before login could only 401.
+  test('a credential appearing hydrates panic state without waiting for a frame', () => {
+    resetAuth()
+    initWS()
+    expect(mockPanicStatus).not.toHaveBeenCalled()
+
+    token.set('login-key')
+    expect(mockPanicStatus).toHaveBeenCalled()
+  })
+
+  test('connecting and reconnecting re-read panic state; a drop does not', () => {
+    capturedOptions.onStatus('connected')
+    expect(mockPanicStatus).toHaveBeenCalledTimes(1)
+
+    capturedOptions.onStatus('reconnecting')
+    expect(mockPanicStatus).toHaveBeenCalledTimes(1)
+
+    capturedOptions.onStatus('connected')
+    expect(mockPanicStatus).toHaveBeenCalledTimes(2)
+
+    capturedOptions.onStatus('sse_fallback')
+    expect(mockPanicStatus).toHaveBeenCalledTimes(3)
+
+    capturedOptions.onStatus('disconnected')
+    expect(mockPanicStatus).toHaveBeenCalledTimes(3)
+  })
+
+  test('a panic_status frame carries the panic time', () => {
+    capturedOptions.onEvent({
+      type: 'panic_status',
+      active: true,
+      message: 'Emergency stop triggered',
+      since: '2026-08-18T10:00:00Z',
+    })
+
+    expect(get(panicStatus)).toEqual({
+      active: true,
+      message: 'Emergency stop triggered',
+      since: '2026-08-18T10:00:00Z',
+    })
+  })
+
+  test('a resume frame clears the panic time', () => {
+    panicStatus.set({ active: true, message: 'paused', since: '2026-08-18T10:00:00Z' })
+
+    capturedOptions.onEvent({ type: 'panic_status', active: false, message: 'Processing resumed' })
+
+    expect(get(panicStatus)).toEqual({ active: false, message: 'Processing resumed', since: '' })
+  })
+
+  test('a frame landing mid-fetch wins over the older in-flight response', async () => {
+    let release
+    mockPanicStatus.mockReturnValue(new Promise((resolve) => {
+      release = () => resolve({ panicked: false, panic_time: '0001-01-01T00:00:00Z' })
+    }))
+
+    const pending = refreshPanicStatus()
+
+    // Panic is raised while the status request is still in flight.
+    capturedOptions.onEvent({
+      type: 'panic_status',
+      active: true,
+      message: 'Emergency stop triggered',
+      since: '2026-08-18T10:00:00Z',
+    })
+
+    release()
+    await pending
+
+    expect(get(panicStatus).active).toBe(true)
+    expect(get(panicStatus).since).toBe('2026-08-18T10:00:00Z')
   })
 })

@@ -86,10 +86,15 @@ type PanicFrame struct {
 }
 
 // PanicStatusFrame is broadcast by the server to notify clients of panic state.
+//
+// Since carries the same instant as GET /panic's panic_time so a client that
+// hydrates over REST and a client that saw the live frame render identically.
+// Omitted when resuming — there is nothing to date.
 type PanicStatusFrame struct {
-	Type    string `json:"type"`    // "panic_status"
-	Active  bool   `json:"active"`  // true = panicked, false = resumed
-	Message string `json:"message"` // human-readable description
+	Type    string `json:"type"`            // "panic_status"
+	Active  bool   `json:"active"`          // true = panicked, false = resumed
+	Message string `json:"message"`         // human-readable description
+	Since   string `json:"since,omitempty"` // RFC3339 panic time, active frames only
 }
 
 // EvalProgressFrame is broadcast as an eval run advances. Server→client only,

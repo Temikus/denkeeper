@@ -1847,6 +1847,7 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 				Type:    api.FrameTypePanicStatus,
 				Active:  true,
 				Message: "Emergency stop triggered — all processing paused",
+				Since:   dispatcher.PanicTime().Format(time.RFC3339),
 			})
 		}
 	}

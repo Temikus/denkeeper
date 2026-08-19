@@ -3,6 +3,7 @@
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
   import { panicStatus } from '../wsStore.js'
+  import { relativeTime } from '../relativeTime.js'
 
   let error = $state('')
 
@@ -89,7 +90,7 @@
   {#if $panicStatus.active}
     <button class="menu-row danger" onclick={triggerResume}>
       <span>Resume</span>
-      <span class="meta">System paused</span>
+      <span class="meta">{$panicStatus.since ? `Paused ${relativeTime($panicStatus.since)}` : 'System paused'}</span>
     </button>
   {:else}
     <button class="menu-row danger" onclick={triggerPanic}>
