@@ -8,6 +8,8 @@ package eval
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -171,6 +173,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     cost_spent  REAL     NOT NULL DEFAULT 0,
     as_of       DATETIME NOT NULL,
     error       TEXT     NOT NULL DEFAULT '',
+    task_ids    TEXT,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME
 );
@@ -261,6 +264,9 @@ var evalMigrations = []string{
 	// upstream: OpenRouter's provider-reported serving upstream for the sample,
 	// empty for providers without the concept.
 	`ALTER TABLE eval_samples ADD COLUMN upstream TEXT NOT NULL DEFAULT ''`,
+	// task_ids: the run's task list, pinned at creation. NULL means the whole
+	// set, resolved at read time.
+	`ALTER TABLE eval_runs ADD COLUMN task_ids TEXT`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -289,19 +295,81 @@ type Task struct {
 	CreatedAt            time.Time `db:"created_at"             json:"created_at"`
 }
 
+// TaskIDList is eval_runs.task_ids: a JSON array of task ids, or NULL for the
+// whole set. It carries its own SQL codec so a run row round-trips without the
+// callers ever handling the raw JSON.
+type TaskIDList []int64
+
+// Scan decodes the stored JSON. NULL and the empty string both mean "not
+// pinned", which is the same thing a caller sees as a nil slice.
+func (l *TaskIDList) Scan(src any) error {
+	var raw string
+	switch v := src.(type) {
+	case nil:
+		*l = nil
+		return nil
+	case string:
+		raw = v
+	case []byte:
+		raw = string(v)
+	default:
+		return fmt.Errorf("scanning task_ids: unsupported type %T", src)
+	}
+	if strings.TrimSpace(raw) == "" {
+		*l = nil
+		return nil
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return fmt.Errorf("scanning task_ids: %w", err)
+	}
+	*l = ids
+	return nil
+}
+
+// Value encodes the pin, storing NULL rather than "[]" when absent: NULL is
+// what every reader tests for, and an empty array would read as "run nothing".
+func (l TaskIDList) Value() (driver.Value, error) {
+	if len(l) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal([]int64(l))
+	if err != nil {
+		return nil, fmt.Errorf("encoding task_ids: %w", err)
+	}
+	return string(raw), nil
+}
+
 // Run is one comparison run.
 type Run struct {
-	ID         int64      `db:"id"          json:"id"`
-	TaskSetID  int64      `db:"task_set_id" json:"task_set_id"`
-	BaseAgent  string     `db:"base_agent"  json:"base_agent"`
-	Status     string     `db:"status"      json:"status"`
-	K          int        `db:"k"           json:"k"`
-	CostCap    float64    `db:"cost_cap"    json:"cost_cap"`
-	CostSpent  float64    `db:"cost_spent"  json:"cost_spent"`
-	AsOf       time.Time  `db:"as_of"       json:"as_of"`
+	ID        int64     `db:"id"          json:"id"`
+	TaskSetID int64     `db:"task_set_id" json:"task_set_id"`
+	BaseAgent string    `db:"base_agent"  json:"base_agent"`
+	Status    string    `db:"status"      json:"status"`
+	K         int       `db:"k"           json:"k"`
+	CostCap   float64   `db:"cost_cap"    json:"cost_cap"`
+	CostSpent float64   `db:"cost_spent"  json:"cost_spent"`
+	AsOf      time.Time `db:"as_of"       json:"as_of"`
+	// TaskIDs pins the run's task list at creation; nil means the whole set.
+	// Pinning is what makes a sampled subset possible, and it also stops a task
+	// added to the set later from retroactively inflating samples_expected and
+	// flipping a finished run to inconclusive.
+	TaskIDs TaskIDList `db:"task_ids" json:"task_ids,omitempty"`
+	// TaskCount is how many tasks the run covers: the pinned count when pinned,
+	// otherwise the set's current size. It is a display figure — the
+	// authoritative dispatch count is len(RunTasks), which also drops a pinned
+	// task deleted after the run was created.
+	TaskCount  int        `db:"task_count"  json:"task_count"`
 	Error      string     `db:"error"       json:"error,omitempty"`
 	CreatedAt  time.Time  `db:"created_at"  json:"created_at"`
 	FinishedAt *time.Time `db:"finished_at" json:"finished_at,omitempty"`
+}
+
+// resolveTaskCount narrows the set-wide count the SQL returns to the pin.
+func (r *Run) resolveTaskCount() {
+	if len(r.TaskIDs) > 0 {
+		r.TaskCount = len(r.TaskIDs)
+	}
 }
 
 // Variant is one side of a comparison: a named overlay on the base agent's
@@ -717,6 +785,13 @@ func (s *Store) DeleteTask(ctx context.Context, setID, taskID int64) error {
 
 // --- Runs & variants ---
 
+// runColumns is the shared select list for run reads. task_count comes back as
+// the *set's* current size; resolveTaskCount narrows it to the pin, which is
+// cheaper and clearer than counting a JSON array in SQL.
+const runColumns = `id, task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of,
+	        error, task_ids, created_at, finished_at,
+	        (SELECT COUNT(*) FROM eval_tasks t WHERE t.set_id = eval_runs.task_set_id) AS task_count`
+
 // CreateRun inserts a run in the pending status together with its variants,
 // in one transaction: a run without variants has nothing to compare and must
 // never be visible.
@@ -730,11 +805,19 @@ func (s *Store) CreateRun(ctx context.Context, run Run, variants []Variant) (*Ru
 	run.Status = StatusPending
 	run.CreatedAt = time.Now().UTC()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO eval_runs (task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of, created_at)
-		 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-		run.TaskSetID, run.BaseAgent, run.Status, run.K, run.CostCap, run.AsOf, run.CreatedAt)
+		`INSERT INTO eval_runs (task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of, task_ids, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+		run.TaskSetID, run.BaseAgent, run.Status, run.K, run.CostCap, run.AsOf,
+		run.TaskIDs, run.CreatedAt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating run: %w", err)
+	}
+	run.TaskCount = len(run.TaskIDs)
+	if run.TaskCount == 0 {
+		if err := tx.GetContext(ctx, &run.TaskCount,
+			`SELECT COUNT(*) FROM eval_tasks WHERE set_id = ?`, run.TaskSetID); err != nil {
+			return nil, nil, fmt.Errorf("counting tasks of set %d: %w", run.TaskSetID, err)
+		}
 	}
 	run.ID, err = res.LastInsertId()
 	if err != nil {
@@ -770,24 +853,21 @@ func (s *Store) CreateRun(ctx context.Context, run Run, variants []Variant) (*Ru
 func (s *Store) GetRun(ctx context.Context, id int64) (*Run, error) {
 	var run Run
 	err := s.db.GetContext(ctx, &run,
-		`SELECT id, task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of,
-		        error, created_at, finished_at
-		 FROM eval_runs WHERE id = ?`, id)
+		`SELECT `+runColumns+` FROM eval_runs WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("run %d: %w", id, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting run %d: %w", id, err)
 	}
+	run.resolveTaskCount()
 	return &run, nil
 }
 
 // ListRuns returns runs newest first, optionally filtered by task set id
 // (0 = any) and status ("" = any).
 func (s *Store) ListRuns(ctx context.Context, taskSetID int64, status string) ([]Run, error) {
-	q := `SELECT id, task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of,
-	             error, created_at, finished_at
-	      FROM eval_runs WHERE 1 = 1`
+	q := `SELECT ` + runColumns + ` FROM eval_runs WHERE 1 = 1`
 	var args []any
 	if taskSetID > 0 {
 		q += ` AND task_set_id = ?`
@@ -803,7 +883,42 @@ func (s *Store) ListRuns(ctx context.Context, taskSetID int64, status string) ([
 	if err := s.db.SelectContext(ctx, &runs, q, args...); err != nil {
 		return nil, fmt.Errorf("listing runs: %w", err)
 	}
+	for i := range runs {
+		runs[i].resolveTaskCount()
+	}
 	return runs, nil
+}
+
+// RunTasks returns the tasks a run covers: its pinned list, or the whole set
+// when it has none. Every reader that needs "what does this run run" goes
+// through here — the runner, the progress figures and the summary's
+// samples_expected — so the three can never disagree about the denominator.
+//
+// A pinned task deleted after the run was created is skipped rather than
+// erroring: eval_tasks has no delete guard, the samples it already produced
+// stay readable, and an expected count that no longer matches what the runner
+// can dispatch would be the worse failure. Order is always creation order, the
+// order the baseline convention and the per-task deltas are read in, whatever
+// order the pin was written in.
+func (s *Store) RunTasks(ctx context.Context, run *Run) ([]Task, error) {
+	tasks, err := s.ListTasks(ctx, run.TaskSetID)
+	if err != nil {
+		return nil, err
+	}
+	if len(run.TaskIDs) == 0 {
+		return tasks, nil
+	}
+	pinned := make(map[int64]struct{}, len(run.TaskIDs))
+	for _, id := range run.TaskIDs {
+		pinned[id] = struct{}{}
+	}
+	out := make([]Task, 0, len(run.TaskIDs))
+	for _, t := range tasks {
+		if _, ok := pinned[t.ID]; ok {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 // ListVariants returns a run's variants in creation order. The first is the
