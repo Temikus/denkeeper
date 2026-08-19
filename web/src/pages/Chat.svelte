@@ -549,6 +549,7 @@
             prompt={msg.text}
             precedingTurns={$chatState.messages.slice(0, msgIndex)}
             conversationId={$chatState.sessionId}
+            sourceMessageId={msg.id ?? null}
             onclose={closeSaveTestCase}
           />
         {/if}

@@ -1386,7 +1386,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ID is exposed so a caller can cite the exact turn it read — the eval
+	// "save as test case" flow stores it as source_message_id.
 	type messageInfo struct {
+		ID               int64     `json:"id"`
 		Role             string    `json:"role"`
 		Content          string    `json:"content"`
 		TokensUsed       int       `json:"tokens_used,omitempty"`
@@ -1402,6 +1405,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	out := make([]messageInfo, len(messages))
 	for i, m := range messages {
 		out[i] = messageInfo{
+			ID:               m.ID,
 			Role:             m.Role,
 			Content:          m.Content,
 			TokensUsed:       m.TokensUsed,
