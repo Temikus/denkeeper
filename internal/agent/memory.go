@@ -199,9 +199,10 @@ type SQLiteMemoryStore struct {
 
 // Compile-time interface checks.
 var (
-	_ MemoryStore        = (*SQLiteMemoryStore)(nil)
-	_ TelemetryStore     = (*SQLiteMemoryStore)(nil)
-	_ ActiveChannelStore = (*SQLiteMemoryStore)(nil)
+	_ MemoryStore          = (*SQLiteMemoryStore)(nil)
+	_ TelemetryStore       = (*SQLiteMemoryStore)(nil)
+	_ ActiveChannelStore   = (*SQLiteMemoryStore)(nil)
+	_ InterestingTurnStore = (*SQLiteMemoryStore)(nil)
 )
 
 const schema = `
@@ -1515,6 +1516,163 @@ func (s *SQLiteMemoryStore) TransitionSkillRevisions(ctx context.Context, agent,
 		return nil, fmt.Errorf("listing skill revisions for transition %q: %w", transitionID, err)
 	}
 	return revs, nil
+}
+
+// TurnMessage is one {role, content} pair of context preceding a turn. It is
+// the shape eval task pinned history is stored in.
+type TurnMessage struct {
+	Role    string `db:"role"    json:"role"`
+	Content string `db:"content" json:"content"`
+}
+
+// InterestingTurn is one past user turn with the facts that decide whether it
+// is worth offering as an eval test case. The facts are raw — which signals
+// count, and how they rank, is the caller's policy (internal/eval decides
+// both, since the cost decile is relative to the pool it asked for).
+type InterestingTurn struct {
+	MessageID      int64     `db:"message_id"`
+	ConversationID string    `db:"conversation_id"`
+	Content        string    `db:"content"`
+	CreatedAt      time.Time `db:"created_at"`
+	// ToolCalls, MaxRound, Faults and ReplyCost describe the assistant reply to
+	// this turn: the next assistant message in the conversation.
+	ToolCalls int     `db:"tool_calls"`
+	MaxRound  int     `db:"max_round"`
+	Faults    int     `db:"faults"`
+	ReplyCost float64 `db:"reply_cost"`
+	// CommandMatches counts skills that matched this turn via a command
+	// trigger (match_type 'command'), as opposed to ambient or scheduled.
+	CommandMatches int `db:"command_matches"`
+	// Preceding holds up to precedingTurns messages immediately before this
+	// one, oldest first, each capped at precedingContentMax runes.
+	Preceding []TurnMessage `db:"-"`
+}
+
+// InterestingTurnStore is the narrow telemetry surface behind the eval
+// "suggest test cases from history" endpoint. It is deliberately not folded
+// into MemoryStore or TelemetryStore: obtain one by type-asserting a
+// MemoryStore, the same way the API layer reaches TelemetryStore.
+type InterestingTurnStore interface {
+	ListInterestingTurns(ctx context.Context, agent string, since time.Time, limit int) ([]InterestingTurn, error)
+}
+
+const (
+	// precedingTurns is how many messages of context travel with a candidate,
+	// enough to pin a short history without turning a suggestion into a
+	// transcript.
+	precedingTurns = 4
+	// precedingContentMax caps each preceding message so one runaway tool dump
+	// cannot dominate the response.
+	precedingContentMax = 2000
+	// interestingTurnsMaxLimit bounds the candidate pool. Preceding context is
+	// fetched per turn, so the pool size is also the query count.
+	interestingTurnsMaxLimit = 500
+	// sqliteDatetimeLayout is what CURRENT_TIMESTAMP writes into a DATETIME
+	// column.
+	sqliteDatetimeLayout = "2006-01-02 15:04:05"
+)
+
+// interestingTurnsQuery pairs each user message with the assistant message
+// that answered it (the next assistant row in the conversation) and rolls up
+// that reply's tool calls. Agent scoping goes through conversation_stats,
+// LEFT-joined so an unfiltered call still sees turns whose stats row was
+// pruned.
+const interestingTurnsQuery = `
+SELECT
+    c.message_id,
+    c.conversation_id,
+    c.content,
+    c.created_at,
+    COALESCE(tc.tool_calls, 0)     AS tool_calls,
+    COALESCE(tc.max_round, 0)      AS max_round,
+    COALESCE(tc.faults, 0)         AS faults,
+    COALESCE(r.cost, 0)            AS reply_cost,
+    COALESCE(ms.command_matches, 0) AS command_matches
+FROM (
+    SELECT m.id AS message_id, m.conversation_id, m.content, m.created_at,
+           (SELECT a.id FROM messages a
+             WHERE a.conversation_id = m.conversation_id
+               AND a.role = 'assistant'
+               AND a.id > m.id
+             ORDER BY a.id LIMIT 1) AS reply_id
+    FROM messages m
+    LEFT JOIN conversation_stats cs ON cs.conversation_id = m.conversation_id
+    WHERE m.role = 'user'
+      AND m.created_at >= ?
+      AND (? = '' OR cs.agent = ?)
+) c
+JOIN messages r ON r.id = c.reply_id
+LEFT JOIN (
+    SELECT message_id,
+           COUNT(*) AS tool_calls,
+           MAX(round) AS max_round,
+           SUM(CASE WHEN outcome IN ('rejected', 'failed') THEN 1 ELSE 0 END) AS faults
+    FROM tool_calls GROUP BY message_id
+) tc ON tc.message_id = c.reply_id
+LEFT JOIN (
+    SELECT message_id,
+           SUM(CASE WHEN match_type = 'command' THEN 1 ELSE 0 END) AS command_matches
+    FROM message_skills GROUP BY message_id
+) ms ON ms.message_id = c.message_id
+ORDER BY c.created_at DESC, c.message_id DESC
+LIMIT ?`
+
+// ListInterestingTurns returns the most recent answered user turns since the
+// given time, newest first, with the reply telemetry a suggestion ranker needs.
+// An empty agent means every agent. The limit bounds the candidate pool, not
+// the number of suggestions.
+func (s *SQLiteMemoryStore) ListInterestingTurns(ctx context.Context, agent string, since time.Time, limit int) ([]InterestingTurn, error) {
+	if limit <= 0 || limit > interestingTurnsMaxLimit {
+		limit = interestingTurnsMaxLimit
+	}
+	var turns []InterestingTurn
+	// Bound as SQLite's own DATETIME text rather than a time.Time: created_at
+	// is stored by CURRENT_TIMESTAMP in that layout, and the comparison is a
+	// string comparison whichever way the driver renders the parameter.
+	sinceText := since.UTC().Format(sqliteDatetimeLayout)
+	if err := s.db.SelectContext(ctx, &turns, interestingTurnsQuery, sinceText, agent, agent, limit); err != nil {
+		return nil, fmt.Errorf("listing interesting turns: %w", err)
+	}
+	for i := range turns {
+		preceding, err := s.precedingMessages(ctx, turns[i].ConversationID, turns[i].MessageID)
+		if err != nil {
+			return nil, err
+		}
+		turns[i].Preceding = preceding
+	}
+	return turns, nil
+}
+
+// precedingMessages returns the messages immediately before msgID in its
+// conversation, oldest first.
+func (s *SQLiteMemoryStore) precedingMessages(ctx context.Context, convID string, msgID int64) ([]TurnMessage, error) {
+	var msgs []TurnMessage
+	err := s.db.SelectContext(ctx, &msgs,
+		`SELECT role, substr(content, 1, ?) AS content
+		 FROM messages
+		 WHERE conversation_id = ? AND id < ?
+		 ORDER BY id DESC LIMIT ?`,
+		precedingContentMax+1, convID, msgID, precedingTurns)
+	if err != nil {
+		return nil, fmt.Errorf("loading context before message %d: %w", msgID, err)
+	}
+	slices.Reverse(msgs)
+	for i := range msgs {
+		msgs[i].Content = truncateRunes(msgs[i].Content, precedingContentMax)
+	}
+	return msgs, nil
+}
+
+// truncateRunes cuts s to at most n runes, marking the cut with an ellipsis.
+func truncateRunes(s string, n int) string {
+	count := 0
+	for i := range s {
+		count++
+		if count > n {
+			return s[:i] + "…"
+		}
+	}
+	return s
 }
 
 // MessageSearchHit represents a single FTS5 search result.
