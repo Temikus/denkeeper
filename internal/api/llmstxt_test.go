@@ -45,6 +45,34 @@ func TestLLMsTxt_NoAuth(t *testing.T) {
 	}
 }
 
+// TestLLMsTxt_ListsEvalEndpoints pins the eval entries, including the two
+// D0.2 additions. llms.txt is how an LLM-driven caller discovers the API
+// without reading the OpenAPI spec, so an endpoint missing here is invisible
+// to exactly the audience this file exists for.
+func TestLLMsTxt_ListsEvalEndpoints(t *testing.T) {
+	s := &Server{
+		cfg:    config.APIConfig{},
+		logger: testLogger(),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/llms.txt", nil)
+	rec := httptest.NewRecorder()
+	s.handleLLMsTxt(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"GET  /api/v1/eval/task-sets",
+		"POST /api/v1/eval/runs",
+		"GET  /api/v1/eval/runs/{id}/summary",
+		"POST /api/v1/eval/estimate",
+		"GET  /api/v1/eval/config",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
 func TestLLMsTxt_IncludesBaseURL(t *testing.T) {
 	s := &Server{
 		cfg:    config.APIConfig{ExternalURL: "https://my.denkeeper.example.com"},

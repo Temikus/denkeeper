@@ -2362,6 +2362,115 @@
                 }
             }
         },
+        "/eval/config": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the [eval] TOML section: the run defaults a launcher should preselect (default_k, max_cost_per_run, max_concurrent) and the policy a scorecard is judged against (completeness_floor, win_threshold, the three objective gates). Read-only by design — v1 keeps threshold edits in TOML plus a reload, and every verdict already carries the thresholds it was measured against.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get the eval subsystem's configured defaults and thresholds",
+                "responses": {
+                    "200": {
+                        "description": "Eval defaults and thresholds",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalConfigResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/eval/estimate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Prices a run before it is created, so the launcher can show a range beside the hard cap. Per (task, variant) the basis is, in order: history (the task's source conversation has real telemetry, giving an honest per-exchange average — scaled by the list-price ratio when the variant runs a different model), list price (the variant's advertised per-million-token price against a nominal per-turn token budget), or unknown. Nothing is fabricated: a variant that can be priced neither way reports basis \"unknown\" with a zero range, and the caller shows the cap alone. When sample_tasks narrows the run the drawn subset is not known yet, so the figure scales the mean per-task cost and says so in note.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Estimate what an eval run will cost",
+                "parameters": [
+                    {
+                        "description": "Task set, base agent and the variants to price",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalEstimateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Cost range in USD with a per-variant breakdown",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Estimate"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid JSON, no variants, or unknown agent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs": {
             "get": {
                 "security": [
@@ -7762,6 +7871,40 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Estimate": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "high": {
+                    "type": "number"
+                },
+                "k": {
+                    "type": "integer"
+                },
+                "low": {
+                    "type": "number"
+                },
+                "note": {
+                    "description": "Note names anything that makes the figure less than a straight sum:\na sampled subset, or tasks that could not be priced at all.",
+                    "type": "string"
+                },
+                "per_variant": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.VariantEstimate"
+                    }
+                },
+                "tasks": {
+                    "description": "Tasks is how many tasks the figure covers — the drawn subset size when\nsample_tasks narrows the run, otherwise the whole set.",
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Gate": {
             "type": "object",
             "properties": {
@@ -8137,6 +8280,23 @@
                 },
                 "run_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.VariantEstimate": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "type": "string"
+                },
+                "high": {
+                    "type": "number"
+                },
+                "low": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },
@@ -8757,6 +8917,63 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_api.dryRunToolCall"
+                    }
+                }
+            }
+        },
+        "internal_api.evalConfigResponse": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "type": "string"
+                },
+                "completeness_floor": {
+                    "type": "number"
+                },
+                "default_k": {
+                    "type": "integer"
+                },
+                "gate_cost_pct": {
+                    "type": "number"
+                },
+                "gate_rejected_rate_pp": {
+                    "type": "number"
+                },
+                "gate_rounds_pct": {
+                    "type": "number"
+                },
+                "max_concurrent": {
+                    "type": "integer"
+                },
+                "max_cost_per_run": {
+                    "type": "number"
+                },
+                "win_threshold": {
+                    "type": "number"
+                }
+            }
+        },
+        "internal_api.evalEstimateInput": {
+            "type": "object",
+            "properties": {
+                "base_agent": {
+                    "type": "string"
+                },
+                "k": {
+                    "description": "K is samples per (task, variant). Omitted uses [eval] default_k.",
+                    "type": "integer"
+                },
+                "sample_tasks": {
+                    "description": "SampleTasks is the Quick check subset size. Omitted or \u003e= the set size\nprices the whole set.",
+                    "type": "integer"
+                },
+                "task_set": {
+                    "type": "string"
+                },
+                "variants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.evalVariantInput"
                     }
                 }
             }
