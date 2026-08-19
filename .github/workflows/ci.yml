@@ -227,9 +227,11 @@ jobs:
           key: playwright-${{ hashFiles('web/package-lock.json') }}
       - name: Install Playwright browsers
         if: steps.pw-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
         run: cd web && npx playwright install --with-deps chromium
       - name: Install Playwright system deps
         if: steps.pw-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 3
         run: cd web && npx playwright install-deps chromium
       - name: Create E2E data directory
         run: |
