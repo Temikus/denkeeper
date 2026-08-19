@@ -26,6 +26,7 @@
   import Settings from './pages/Settings.svelte'
   import AuditLog from './pages/AuditLog.svelte'
   import Channels from './pages/Channels.svelte'
+  import Evals from './pages/Evals.svelte'
   import MoreMenu from './pages/MoreMenu.svelte'
   import './shared.css'
 
@@ -110,6 +111,8 @@
         <Channels />
       {:else if route === 'audit'}
         <AuditLog />
+      {:else if route === 'evals'}
+        <Evals />
       {:else if route === 'settings'}
         <Settings />
       {:else if route === 'more'}

@@ -32,6 +32,7 @@
         { id: 'server',    label: 'Server' },
         { id: 'providers', label: 'Providers' },
         { id: 'costs',     label: 'Costs' },
+        { id: 'evals',     label: 'Evals' },
         { id: 'keys',      label: 'API Keys' },
         { id: 'settings',  label: 'Settings' },
       ],

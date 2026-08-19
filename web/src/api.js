@@ -402,16 +402,76 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // Evals — saved test cases. Stage B exposes only the acquisition half here;
-  // runs are API-only until the Evals page lands.
+  // Evals — saved test cases and comparison runs.
   evalTaskSets: () => apiFetch('/api/v1/eval/task-sets'),
+  evalTaskSet: (name) => apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}`),
   createEvalTaskSet: (body) =>
     apiFetch('/api/v1/eval/task-sets', { method: 'POST', body: JSON.stringify(body) }),
+  updateEvalTaskSet: (name, body) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteEvalTaskSet: (name) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   addEvalTask: (name, body) =>
     apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/tasks`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  updateEvalTask: (name, id, body) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/tasks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteEvalTask: (name, id) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/tasks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  // Export streams JSONL, not JSON, so it bypasses apiFetch's parse.
+  exportEvalTaskSet: async (name) => {
+    const res = await fetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/export`, {
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `HTTP ${res.status}`)
+    }
+    return res.text()
+  },
+  // The import body is the JSONL itself, one task per line.
+  importEvalTaskSet: (name, jsonl) =>
+    apiFetch(`/api/v1/eval/task-sets/${encodeURIComponent(name)}/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: jsonl,
+    }),
+
+  createEvalRun: (body) =>
+    apiFetch('/api/v1/eval/runs', { method: 'POST', body: JSON.stringify(body) }),
+  evalRuns: (opts = {}) => {
+    const params = new URLSearchParams()
+    if (opts.taskSet) params.set('task_set', opts.taskSet)
+    if (opts.status) params.set('status', opts.status)
+    const qs = params.toString()
+    return apiFetch(`/api/v1/eval/runs${qs ? `?${qs}` : ''}`)
+  },
+  evalRun: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}`),
+  stopEvalRun: (id) =>
+    apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+  evalRunSummary: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/summary`),
+  evalRunSamples: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/samples`),
+  evalRunPairs: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/pairs`),
+  evalEstimate: (body) =>
+    apiFetch('/api/v1/eval/estimate', { method: 'POST', body: JSON.stringify(body) }),
+  evalConfig: () => apiFetch('/api/v1/eval/config'),
+  evalSuggest: (opts = {}) => {
+    const params = new URLSearchParams()
+    if (opts.agent) params.set('agent', opts.agent)
+    if (opts.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return apiFetch(`/api/v1/eval/suggest${qs ? `?${qs}` : ''}`)
+  },
 
   // Safety — stop/panic/resume.
   stopSession: (id) => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
