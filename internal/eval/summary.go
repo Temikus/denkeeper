@@ -190,7 +190,7 @@ func (s *Store) loadSummary(ctx context.Context, runID int64) (verdictInput, *Ru
 	if in.variants, err = s.ListVariants(ctx, runID); err != nil {
 		return in, nil, nil, err
 	}
-	if in.tasks, err = s.ListTasks(ctx, run.TaskSetID); err != nil {
+	if in.tasks, err = s.RunTasks(ctx, run); err != nil {
 		return in, nil, nil, err
 	}
 	if in.samples, err = s.ListSamples(ctx, runID); err != nil {

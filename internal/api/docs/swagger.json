@@ -2427,7 +2427,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates and launches a background run: every task in the set is executed k times against each variant, on the base agent's live engine under the eval execution policy. Reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry or memory. Costs real tokens, bounded by cost_cap and by [eval] max_concurrent. By convention the first variant is the incumbent (empty overlay = live config) and per-task deltas are measured against it.",
+                "description": "Creates and launches a background run: every task in the set is executed k times against each variant, on the base agent's live engine under the eval execution policy. Reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry or memory. Costs real tokens, bounded by cost_cap and by [eval] max_concurrent. By convention the first variant is the incumbent (empty overlay = live config) and per-task deltas are measured against it. Pass sample_tasks to run a stratified random subset instead of the whole set; the drawn task ids are pinned on the run, so a task added to the set later cannot retroactively change what the run was measured over.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2502,7 +2502,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the run with its variants, samples done out of expected, spend against the cap, and a rough ETA (mean sample latency times remaining, divided by concurrency). This is the authoritative view; the eval_progress WebSocket frame is a droppable convenience on top.",
+                "description": "Returns the run with its variants, samples done out of expected, spend against the cap, and a rough ETA (mean sample latency times remaining, divided by concurrency). samples_total counts the run's pinned task list when it has one, so a task added to the set after the run was created does not inflate it. This is the authoritative view; the eval_progress WebSocket frame is a droppable convenience on top.",
                 "produces": [
                     "application/json"
                 ],
@@ -7869,6 +7869,17 @@
                 "status": {
                     "type": "string"
                 },
+                "task_count": {
+                    "description": "TaskCount is how many tasks the run covers: the pinned count when pinned,\notherwise the set's current size. It is a display figure — the\nauthoritative dispatch count is len(RunTasks), which also drops a pinned\ntask deleted after the run was created.",
+                    "type": "integer"
+                },
+                "task_ids": {
+                    "description": "TaskIDs pins the run's task list at creation; nil means the whole set.\nPinning is what makes a sampled subset possible, and it also stops a task\nadded to the set later from retroactively inflating samples_expected and\nflipping a finished run to inconclusive.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "task_set_id": {
                     "type": "integer"
                 }
@@ -8791,6 +8802,17 @@
                 "status": {
                     "type": "string"
                 },
+                "task_count": {
+                    "description": "TaskCount is how many tasks the run covers: the pinned count when pinned,\notherwise the set's current size. It is a display figure — the\nauthoritative dispatch count is len(RunTasks), which also drops a pinned\ntask deleted after the run was created.",
+                    "type": "integer"
+                },
+                "task_ids": {
+                    "description": "TaskIDs pins the run's task list at creation; nil means the whole set.\nPinning is what makes a sampled subset possible, and it also stops a task\nadded to the set later from retroactively inflating samples_expected and\nflipping a finished run to inconclusive.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "task_set_id": {
                     "type": "integer"
                 },
@@ -8847,6 +8869,17 @@
                 "status": {
                     "type": "string"
                 },
+                "task_count": {
+                    "description": "TaskCount is how many tasks the run covers: the pinned count when pinned,\notherwise the set's current size. It is a display figure — the\nauthoritative dispatch count is len(RunTasks), which also drops a pinned\ntask deleted after the run was created.",
+                    "type": "integer"
+                },
+                "task_ids": {
+                    "description": "TaskIDs pins the run's task list at creation; nil means the whole set.\nPinning is what makes a sampled subset possible, and it also stops a task\nadded to the set later from retroactively inflating samples_expected and\nflipping a finished run to inconclusive.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "task_set_id": {
                     "type": "integer"
                 },
@@ -8874,6 +8907,10 @@
                 },
                 "k": {
                     "description": "K is samples per (task, variant). Omitted uses [eval] default_k.",
+                    "type": "integer"
+                },
+                "sample_tasks": {
+                    "description": "SampleTasks runs a stratified random subset of the set instead of all of\nit. 0 or a value at or above the set size runs everything. The server\ndraws, because the drawn ids are recorded on the run and every expected-\nsample figure counts what was drawn.",
                     "type": "integer"
                 },
                 "task_set": {

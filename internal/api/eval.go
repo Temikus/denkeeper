@@ -55,6 +55,11 @@ type evalRunInput struct {
 	CostCap float64 `json:"cost_cap"`
 	// AsOf pins the clock (RFC3339) so a replay is date-deterministic.
 	AsOf string `json:"as_of"`
+	// SampleTasks runs a stratified random subset of the set instead of all of
+	// it. 0 or a value at or above the set size runs everything. The server
+	// draws, because the drawn ids are recorded on the run and every expected-
+	// sample figure counts what was drawn.
+	SampleTasks int `json:"sample_tasks"`
 }
 
 // evalTaskSetDetail is a task set with its tasks.
@@ -532,7 +537,7 @@ func (s *Server) handleImportEvalTaskSet(w http.ResponseWriter, r *http.Request)
 
 // handleCreateEvalRun godoc
 // @Summary Start an eval comparison run
-// @Description Creates and launches a background run: every task in the set is executed k times against each variant, on the base agent's live engine under the eval execution policy. Reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry or memory. Costs real tokens, bounded by cost_cap and by [eval] max_concurrent. By convention the first variant is the incumbent (empty overlay = live config) and per-task deltas are measured against it.
+// @Description Creates and launches a background run: every task in the set is executed k times against each variant, on the base agent's live engine under the eval execution policy. Reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry or memory. Costs real tokens, bounded by cost_cap and by [eval] max_concurrent. By convention the first variant is the incumbent (empty overlay = live config) and per-task deltas are measured against it. Pass sample_tasks to run a stratified random subset instead of the whole set; the drawn task ids are pinned on the run, so a task added to the set later cannot retroactively change what the run was measured over.
 // @Tags eval
 // @Accept json
 // @Produce json
@@ -577,13 +582,46 @@ func (s *Server) handleCreateEvalRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	draft, errMsg, err := s.draftEvalRun(r, set, input)
+	if err != nil {
+		writeEvalError(w, err)
+		return
+	}
+	if errMsg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
+		return
+	}
+
+	run, created, err := s.deps.EvalStore.CreateRun(r.Context(), draft, variants)
+	if err != nil {
+		writeEvalError(w, err)
+		return
+	}
+	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("starting run: %v", err)})
+		return
+	}
+	s.logger.Info("eval run started", "run", run.ID, "agent", input.BaseAgent,
+		"task_set", input.TaskSet, "k", run.K, "cost_cap", run.CostCap,
+		"variants", len(created), "tasks", run.TaskCount, "sampled", len(run.TaskIDs) > 0)
+	writeJSON(w, http.StatusCreated, evalRunCreated{Run: *run, Variants: created})
+}
+
+// draftEvalRun resolves the run's own parameters — clock, k, cap and the
+// pinned task list — returning a client-error message instead on rejection.
+//
+// The subset is drawn here rather than by the caller because the drawn ids are
+// what the run is measured over: they go on the row, and every expected-sample
+// figure counts them.
+func (s *Server) draftEvalRun(r *http.Request, set *eval.TaskSet, input evalRunInput) (eval.Run, string, error) {
 	asOf := time.Now()
 	if input.AsOf != "" {
-		asOf, err = time.Parse(time.RFC3339, input.AsOf)
+		parsed, err := time.Parse(time.RFC3339, input.AsOf)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid as_of: must be RFC3339"})
-			return
+			return eval.Run{}, "invalid as_of: must be RFC3339", nil
 		}
+		asOf = parsed
 	}
 
 	cfg := s.deps.EvalRunner.Config()
@@ -596,25 +634,26 @@ func (s *Server) handleCreateEvalRun(w http.ResponseWriter, r *http.Request) {
 		costCap = cfg.MaxCostPerRun
 	}
 
-	run, created, err := s.deps.EvalStore.CreateRun(r.Context(), eval.Run{
+	var taskIDs eval.TaskIDList
+	if input.SampleTasks < 0 {
+		return eval.Run{}, "sample_tasks cannot be negative", nil
+	}
+	if input.SampleTasks > 0 {
+		tasks, err := s.deps.EvalStore.ListTasks(r.Context(), set.ID)
+		if err != nil {
+			return eval.Run{}, "", err
+		}
+		taskIDs = eval.DrawStratified(tasks, input.SampleTasks)
+	}
+
+	return eval.Run{
 		TaskSetID: set.ID,
 		BaseAgent: input.BaseAgent,
 		K:         k,
 		CostCap:   costCap,
 		AsOf:      asOf,
-	}, variants)
-	if err != nil {
-		writeEvalError(w, err)
-		return
-	}
-	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("starting run: %v", err)})
-		return
-	}
-	s.logger.Info("eval run started", "run", run.ID, "agent", input.BaseAgent,
-		"task_set", input.TaskSet, "k", k, "cost_cap", costCap, "variants", len(created))
-	writeJSON(w, http.StatusCreated, evalRunCreated{Run: *run, Variants: created})
+		TaskIDs:   taskIDs,
+	}, "", nil
 }
 
 // buildEvalVariants validates the requested variants and encodes their
@@ -694,7 +733,7 @@ func (s *Server) handleListEvalRuns(w http.ResponseWriter, r *http.Request) {
 
 // handleGetEvalRun godoc
 // @Summary Get an eval run's status and progress
-// @Description Returns the run with its variants, samples done out of expected, spend against the cap, and a rough ETA (mean sample latency times remaining, divided by concurrency). This is the authoritative view; the eval_progress WebSocket frame is a droppable convenience on top.
+// @Description Returns the run with its variants, samples done out of expected, spend against the cap, and a rough ETA (mean sample latency times remaining, divided by concurrency). samples_total counts the run's pinned task list when it has one, so a task added to the set after the run was created does not inflate it. This is the authoritative view; the eval_progress WebSocket frame is a droppable convenience on top.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -722,7 +761,7 @@ func (s *Server) handleGetEvalRun(w http.ResponseWriter, r *http.Request) {
 		writeEvalError(w, err)
 		return
 	}
-	tasks, err := s.deps.EvalStore.ListTasks(r.Context(), run.TaskSetID)
+	tasks, err := s.deps.EvalStore.RunTasks(r.Context(), run)
 	if err != nil {
 		writeEvalError(w, err)
 		return

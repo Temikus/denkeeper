@@ -814,3 +814,92 @@ func waitForCalls(t *testing.T, m *mockEngine, n int) {
 	}
 	t.Fatalf("engine saw %d calls, waited for %d", m.callCount(), n)
 }
+
+// createPinnedRun mirrors createRun but pins the run to a subset of the set's
+// tasks, the shape POST /eval/runs produces when sample_tasks is set.
+func (f *runnerFixture) createPinnedRun(t *testing.T, k int, costCap float64, pin TaskIDList, variants ...Variant) *Run {
+	t.Helper()
+	run, _, err := f.store.CreateRun(context.Background(), Run{
+		TaskSetID: f.setID, BaseAgent: "pamela", K: k, CostCap: costCap,
+		AsOf: time.Now().UTC(), TaskIDs: pin,
+	}, variants)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	return run
+}
+
+func TestRunner_DispatchesOnlyThePinnedTasks(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
+	tasks := f.addTasks(t, "first", "second", "third", "fourth")
+	run := f.createPinnedRun(t, 1, 10.0,
+		TaskIDList{tasks[0].ID, tasks[2].ID}, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if got := waitForTerminal(t, f.store, run.ID); got.Status != StatusDone {
+		t.Fatalf("status = %q, want %q (error %q)", got.Status, StatusDone, got.Error)
+	}
+
+	samples, err := f.store.ListSamples(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("ListSamples: %v", err)
+	}
+	if len(samples) != 4 {
+		t.Fatalf("got %d samples, want 2 pinned tasks x 2 variants x k=1 = 4", len(samples))
+	}
+	pinned := map[int64]bool{tasks[0].ID: true, tasks[2].ID: true}
+	for _, smp := range samples {
+		if !pinned[smp.TaskID] {
+			t.Errorf("sample ran task %d, which the run does not pin", smp.TaskID)
+		}
+	}
+}
+
+// The runner's dispatch count and the summary's samples_expected are read from
+// the same pinned list; a disagreement would make every finished sampled run
+// look incomplete.
+func TestRunner_PinnedRunIsSampleComplete(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 2}, nil)
+	tasks := f.addTasks(t, "first", "second", "third")
+	run := f.createPinnedRun(t, 2, 10.0, TaskIDList{tasks[1].ID}, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForTerminal(t, f.store, run.ID)
+
+	sum, err := f.store.Summarize(context.Background(), run.ID, SummaryOpts{})
+	if err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if sum.Completeness.SamplesExpected != 4 {
+		t.Errorf("samples_expected = %d, want 1 pinned task x 2 variants x k=2 = 4",
+			sum.Completeness.SamplesExpected)
+	}
+	if sum.Completeness.SamplesOK != 4 || !sum.Completeness.Conclusive {
+		t.Errorf("completeness = %+v, want a complete, conclusive run", sum.Completeness)
+	}
+}
+
+func TestRunner_PinnedRunWhoseTasksAllVanishedFails(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	tasks := f.addTasks(t, "only", "other")
+	run := f.createPinnedRun(t, 1, 10.0, TaskIDList{tasks[0].ID}, twoVariants()...)
+	if err := f.store.DeleteTask(context.Background(), f.setID, tasks[0].ID); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	got := waitForTerminal(t, f.store, run.ID)
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q - a run with nothing left to dispatch is a failure, not a silent no-op",
+			got.Status, StatusFailed)
+	}
+	if !strings.Contains(got.Error, "pins") {
+		t.Errorf("error = %q, want it to name the vanished pin", got.Error)
+	}
+}
