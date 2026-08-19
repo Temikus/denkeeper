@@ -77,6 +77,7 @@ export async function loadSession(sessionId, agent) {
       sessionId,
       agent: agent || s.agent,
       messages: (history || []).map(m => ({
+        id: m.id,
         role: m.role === 'assistant' ? 'agent' : 'user',
         text: m.content,
       })),
@@ -117,6 +118,7 @@ async function restoreSession() {
       sessionId: saved.sessionId,
       agent: saved.agent || s.agent,
       messages: history.map(m => ({
+        id: m.id,
         role: m.role === 'assistant' ? 'agent' : 'user',
         text: m.content,
       })),

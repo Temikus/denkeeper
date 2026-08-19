@@ -32,8 +32,8 @@ export const sessionSkillUsages = [
 ]
 
 export const messages = [
-  { role: 'user', content: 'Hello' },
-  { role: 'assistant', content: 'Hi there' },
+  { id: 41, role: 'user', content: 'Hello' },
+  { id: 42, role: 'assistant', content: 'Hi there' },
 ]
 
 export const approvals = [
