@@ -51,7 +51,9 @@ describe('SaveTestCase', () => {
   })
 
   test('saves the prompt with the chosen category and set', async () => {
-    render(SaveTestCase, { props: { prompt: 'do the thing', conversationId: 'chan:main' } })
+    render(SaveTestCase, {
+      props: { prompt: 'do the thing', conversationId: 'chan:main', sourceMessageId: 417 },
+    })
 
     await waitFor(() => expect(screen.getByLabelText('Test set')).toBeTruthy())
     await fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'tool_heavy' } })
@@ -62,7 +64,16 @@ describe('SaveTestCase', () => {
     expect(addedTasks[0].body.prompt).toBe('do the thing')
     expect(addedTasks[0].body.category).toBe('tool_heavy')
     expect(addedTasks[0].body.source_conversation_id).toBe('chan:main')
-    // Message ids are stripped from the sessions API, so provenance is partial.
+    expect(addedTasks[0].body.source_message_id).toBe(417)
+  })
+
+  test('sends a null source_message_id for a turn that has no stored id yet', async () => {
+    render(SaveTestCase, { props: { prompt: 'just sent', conversationId: 'chan:main' } })
+
+    await waitFor(() => expect(screen.getByLabelText('Test set')).toBeTruthy())
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(addedTasks.length).toBe(1))
     expect(addedTasks[0].body.source_message_id).toBeNull()
   })
 

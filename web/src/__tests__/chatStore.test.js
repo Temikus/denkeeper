@@ -330,6 +330,18 @@ describe('loadSession', () => {
     expect(state.sessionId).toBe('sess-1')
   })
 
+  test('carries the stored message id so a saved test case can cite its source', async () => {
+    mockSessionMessages.mockResolvedValue([
+      { id: 41, role: 'user', content: 'Hello' },
+      { id: 42, role: 'assistant', content: 'Hi there' },
+    ])
+
+    await loadSession('sess-1', 'default')
+    const state = get(chatState)
+    expect(state.messages[0].id).toBe(41)
+    expect(state.messages[1].id).toBe(42)
+  })
+
   test('sets restoring during fetch', async () => {
     let resolveMessages
     mockSessionMessages.mockImplementation(() => new Promise(r => { resolveMessages = r }))

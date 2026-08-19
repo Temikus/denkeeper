@@ -313,11 +313,14 @@ func (r *Runner) finishBeforeStart(ctx, bookkeeping context.Context, run *Run, e
 // prepare resolves everything a run needs before the first sample: its tasks,
 // variants and the live engine it will execute on.
 func (r *Runner) prepare(ctx context.Context, run *Run) (*runState, error) {
-	tasks, err := r.store.ListTasks(ctx, run.TaskSetID)
+	tasks, err := r.store.RunTasks(ctx, run)
 	if err != nil {
 		return nil, err
 	}
 	if len(tasks) == 0 {
+		if len(run.TaskIDs) > 0 {
+			return nil, fmt.Errorf("run %d pins %d task(s), none of which still exist", run.ID, len(run.TaskIDs))
+		}
 		return nil, fmt.Errorf("task set %d has no tasks", run.TaskSetID)
 	}
 	variants, err := r.store.ListVariants(ctx, run.ID)

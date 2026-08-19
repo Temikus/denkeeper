@@ -72,7 +72,7 @@ func (s *Store) loadPairingGrid(ctx context.Context, runID int64) (pairingGrid, 
 	if g.variants, err = s.ListVariants(ctx, runID); err != nil {
 		return g, err
 	}
-	if g.tasks, err = s.ListTasks(ctx, run.TaskSetID); err != nil {
+	if g.tasks, err = s.RunTasks(ctx, run); err != nil {
 		return g, err
 	}
 	samples, err := s.ListSamples(ctx, runID)

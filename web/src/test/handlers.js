@@ -6,6 +6,84 @@ import {
   channels, sessionStats, sessionToolCalls, sessionSkillUsages,
 } from './fixtures/index.js'
 
+// --- Eval fixtures ---------------------------------------------------------
+// Inline like the other server-shaped fixtures below (auth sessions, providers,
+// server config) rather than in fixtures/index.js, since only the Evals page
+// reads them.
+
+export const evalTaskSets = [
+  { id: 1, name: 'golden-set', description: 'Curated from live history', task_count: 37, created_at: '2026-08-01T09:00:00Z' },
+  { id: 2, name: 'tool-heavy', description: '', task_count: 8, created_at: '2026-08-05T09:00:00Z' },
+]
+
+export const evalConfig = {
+  default_k: 3,
+  max_cost_per_run: 2,
+  max_concurrent: 2,
+  completeness_floor: 0.8,
+  win_threshold: 0.55,
+  gate_rejected_rate_pp: 2,
+  gate_rounds_pct: 20,
+  gate_cost_pct: 25,
+  audit: 'full',
+}
+
+export const evalEstimate = {
+  low: 0.12,
+  high: 0.4,
+  currency: 'USD',
+  basis: 'history',
+  tasks: 10,
+  k: 1,
+  per_variant: [
+    { name: 'current', low: 0.06, high: 0.2, basis: 'history' },
+    { name: 'openai/gpt-4o', low: 0.06, high: 0.2, basis: 'history' },
+  ],
+}
+
+export const evalRuns = [
+  {
+    id: 1,
+    task_set_id: 1,
+    base_agent: 'default',
+    status: 'running',
+    k: 1,
+    cost_cap: 2,
+    cost_spent: 0.31,
+    as_of: '2026-08-18T09:00:00Z',
+    created_at: '2026-08-18T09:00:00Z',
+    task_count: 10,
+    variants: [
+      { id: 1, run_id: 1, name: 'current', overlay: '{}' },
+      { id: 2, run_id: 1, name: 'openai/gpt-4o', overlay: '{"llm_model":"openai/gpt-4o"}' },
+    ],
+    samples_done: 8,
+    samples_total: 20,
+    eta_seconds: 90,
+    active: true,
+  },
+  {
+    id: 2,
+    task_set_id: 1,
+    base_agent: 'default',
+    status: 'done',
+    k: 3,
+    cost_cap: 2,
+    cost_spent: 1.04,
+    as_of: '2026-08-17T09:00:00Z',
+    created_at: '2026-08-17T09:00:00Z',
+    finished_at: '2026-08-17T09:40:00Z',
+    task_count: 37,
+    variants: [
+      { id: 3, run_id: 2, name: 'current', overlay: '{}' },
+      { id: 4, run_id: 2, name: 'anthropic/claude-3-opus', overlay: '{"llm_model":"anthropic/claude-3-opus"}' },
+    ],
+    samples_done: 222,
+    samples_total: 222,
+    active: false,
+  },
+]
+
 export const handlers = [
   // Health
   http.get('/api/v1/health', () => HttpResponse.json({ status: 'ok' })),
@@ -263,6 +341,54 @@ export const handlers = [
   // Audit
   http.get('/api/v1/audit', () => HttpResponse.json({ events: auditEvents, total: auditEvents.length })),
   http.get('/api/v1/audit/stats', () => HttpResponse.json(auditStats)),
+
+  // Evals
+  http.get('/api/v1/eval/task-sets', () => HttpResponse.json(evalTaskSets)),
+  http.get('/api/v1/eval/task-sets/:name', ({ params }) => {
+    const set = evalTaskSets.find(s => s.name === params.name)
+    return set ? HttpResponse.json({ ...set, tasks: [] }) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post('/api/v1/eval/task-sets', async ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ id: 99, name: body.name, description: body.description || '', task_count: 0 }, { status: 201 })
+  }),
+  http.patch('/api/v1/eval/task-sets/:name', () => HttpResponse.json({ ok: true })),
+  http.delete('/api/v1/eval/task-sets/:name', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/eval/task-sets/:name/tasks', () => HttpResponse.json({ id: 1 }, { status: 201 })),
+  http.patch('/api/v1/eval/task-sets/:name/tasks/:id', () => HttpResponse.json({ ok: true })),
+  http.delete('/api/v1/eval/task-sets/:name/tasks/:id', () => new HttpResponse(null, { status: 204 })),
+  http.get('/api/v1/eval/task-sets/:name/export', () => HttpResponse.text('{"prompt":"hi","category":"chat"}\n')),
+  http.post('/api/v1/eval/task-sets/:name/import', () => HttpResponse.json({ imported: 3 })),
+  http.get('/api/v1/eval/config', () => HttpResponse.json(evalConfig)),
+  http.post('/api/v1/eval/estimate', () => HttpResponse.json(evalEstimate)),
+  http.get('/api/v1/eval/runs', () => HttpResponse.json(evalRuns)),
+  http.get('/api/v1/eval/runs/:id', ({ params }) => {
+    const run = evalRuns.find(r => String(r.id) === params.id)
+    return run ? HttpResponse.json(run) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post('/api/v1/eval/runs', async ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({
+      id: 3,
+      task_set_id: 1,
+      base_agent: body.base_agent,
+      status: 'pending',
+      k: body.k ?? 3,
+      cost_cap: body.cost_cap ?? 2,
+      cost_spent: 0,
+      created_at: '2026-08-19T09:00:00Z',
+      task_count: body.sample_tasks || 37,
+      variants: (body.variants || []).map((v, i) => ({ id: 10 + i, run_id: 3, name: v.name, overlay: '{}' })),
+      samples_done: 0,
+      samples_total: 0,
+      active: true,
+    }, { status: 201 })
+  }),
+  http.post('/api/v1/eval/runs/:id/stop', () => HttpResponse.json({ status: 'stopping' })),
+  http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json({ variants: [], per_task: [], completeness: {}, verdicts: [] })),
+  http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([])),
+  http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json([])),
+  http.get('/api/v1/eval/suggest', () => HttpResponse.json([])),
 
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),

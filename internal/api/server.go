@@ -288,6 +288,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/eval/runs/{id}/stop", s.RequireScope("eval:write", s.handleStopEvalRun))
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/summary", s.RequireScope("eval:read", s.handleEvalRunSummary))
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/samples", s.RequireScope("eval:read", s.handleEvalRunSamples))
+	// Estimating and reading the policy spend nothing, so both are read-scoped.
+	mux.HandleFunc("POST /api/v1/eval/estimate", s.RequireScope("eval:read", s.handleEvalEstimate))
+	mux.HandleFunc("GET /api/v1/eval/config", s.RequireScope("eval:read", s.handleEvalConfig))
 
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))
@@ -1386,7 +1389,10 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ID is exposed so a caller can cite the exact turn it read — the eval
+	// "save as test case" flow stores it as source_message_id.
 	type messageInfo struct {
+		ID               int64     `json:"id"`
 		Role             string    `json:"role"`
 		Content          string    `json:"content"`
 		TokensUsed       int       `json:"tokens_used,omitempty"`
@@ -1402,6 +1408,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	out := make([]messageInfo, len(messages))
 	for i, m := range messages {
 		out[i] = messageInfo{
+			ID:               m.ID,
 			Role:             m.Role,
 			Content:          m.Content,
 			TokensUsed:       m.TokensUsed,

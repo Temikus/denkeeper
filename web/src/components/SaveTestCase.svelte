@@ -10,7 +10,17 @@
   // last; the operator picks how many to pin. Pinned history is captured *now*
   // and replayed verbatim at run time: the source conversation drifts, so its
   // latest window would not be the window that preceded this message.
-  let { prompt = '', precedingTurns = [], conversationId = '', onclose = undefined } = $props()
+  //
+  // `sourceMessageId` is the stored message row id, present only for turns read
+  // back from GET /sessions/{id}/messages — a message still streaming in this
+  // session has no id yet, and provenance stays partial rather than wrong.
+  let {
+    prompt = '',
+    precedingTurns = [],
+    conversationId = '',
+    sourceMessageId = null,
+    onclose = undefined,
+  } = $props()
 
   const CATEGORIES = [
     { value: 'chat', label: 'Chat / persona' },
@@ -105,9 +115,7 @@
         notes: notes.trim() || undefined,
         pinned_history: pinned,
         source_conversation_id: conversationId || undefined,
-        // Message ids are stripped from the sessions API, so full provenance
-        // is not available from the browser yet.
-        source_message_id: null,
+        source_message_id: sourceMessageId ?? null,
       })
       saved = true
       selectedSet = setName

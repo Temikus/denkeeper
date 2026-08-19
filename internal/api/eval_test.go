@@ -665,3 +665,128 @@ func TestEvalETA_ScalesByConcurrency(t *testing.T) {
 		t.Errorf("eta = %d, want 7", got)
 	}
 }
+
+// seedCategorisedTaskSet builds a set with one task per named category, so a
+// stratified draw has something to stratify over.
+func seedCategorisedTaskSet(t *testing.T, store *eval.Store, name string, perCategory int, categories ...string) *eval.TaskSet {
+	t.Helper()
+	set, err := store.CreateTaskSet(context.Background(), name, "")
+	if err != nil {
+		t.Fatalf("CreateTaskSet: %v", err)
+	}
+	for _, cat := range categories {
+		for i := 0; i < perCategory; i++ {
+			if _, err := store.AddTask(context.Background(), set.ID,
+				eval.Task{Prompt: cat + " prompt", Category: cat}); err != nil {
+				t.Fatalf("AddTask: %v", err)
+			}
+		}
+	}
+	return set
+}
+
+func TestEvalRuns_SampleTasksPinsAStratifiedSubset(t *testing.T) {
+	srv, store := evalTestServer(t)
+	seedCategorisedTaskSet(t, store, "set", 4,
+		eval.CategoryChat, eval.CategorySkillCommand, eval.CategoryToolHeavy)
+
+	rec := evalRequest(t, srv, http.MethodPost, "/api/v1/eval/runs",
+		`{"task_set":"set","base_agent":"default","k":1,"sample_tasks":5,`+
+			`"variants":[{"name":"incumbent"},{"name":"candidate"}]}`, "dk-test-key")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	var created evalRunCreated
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(created.TaskIDs) != 5 {
+		t.Fatalf("task_ids = %v, want the 5 drawn tasks recorded on the run", created.TaskIDs)
+	}
+	if created.TaskCount != 5 {
+		t.Errorf("task_count = %d, want the drawn 5 (of a 12-task set)", created.TaskCount)
+	}
+
+	rec = evalRequest(t, srv, http.MethodGet,
+		fmt.Sprintf("/api/v1/eval/runs/%d", created.ID), "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var detail evalRunDetail
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if detail.SamplesTotal != 10 {
+		t.Errorf("samples_total = %d, want 5 drawn tasks x 2 variants x k=1 = 10", detail.SamplesTotal)
+	}
+}
+
+func TestEvalRuns_SampleTasksAtOrAboveSetSizeRunsEverything(t *testing.T) {
+	srv, store := evalTestServer(t)
+	seedTaskSet(t, store, "set", "a", "b")
+
+	rec := evalRequest(t, srv, http.MethodPost, "/api/v1/eval/runs",
+		`{"task_set":"set","base_agent":"default","k":1,"sample_tasks":9,`+
+			`"variants":[{"name":"incumbent"},{"name":"candidate"}]}`, "dk-test-key")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	var created evalRunCreated
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.TaskIDs != nil {
+		t.Errorf("task_ids = %v, want no pin when the sample covers the whole set", created.TaskIDs)
+	}
+	if created.TaskCount != 2 {
+		t.Errorf("task_count = %d, want the set's 2 tasks", created.TaskCount)
+	}
+}
+
+func TestEvalRuns_CreateRejectsNegativeSampleTasks(t *testing.T) {
+	srv, store := evalTestServer(t)
+	seedTaskSet(t, store, "set", "a")
+
+	rec := evalRequest(t, srv, http.MethodPost, "/api/v1/eval/runs",
+		`{"task_set":"set","base_agent":"default","sample_tasks":-1,`+
+			`"variants":[{"name":"incumbent"},{"name":"candidate"}]}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A task added to the set after the run was created must not move the run's
+// expected-sample count; before pinning it did, and could flip a finished run
+// to inconclusive.
+func TestEvalRuns_GetTotalsIgnoreTasksAddedAfterAPinnedRun(t *testing.T) {
+	srv, store := evalTestServer(t)
+	set := seedTaskSet(t, store, "set", "a", "b", "c")
+	tasks, err := store.ListTasks(context.Background(), set.ID)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	run, _, err := store.CreateRun(context.Background(), eval.Run{
+		TaskSetID: set.ID, BaseAgent: "default", K: 1, CostCap: 1, AsOf: time.Now(),
+		TaskIDs: eval.TaskIDList{tasks[0].ID},
+	}, []eval.Variant{{Name: "a"}, {Name: "b"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := store.AddTask(context.Background(), set.ID,
+		eval.Task{Prompt: "added later", Category: eval.CategoryChat}); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+
+	rec := evalRequest(t, srv, http.MethodGet,
+		fmt.Sprintf("/api/v1/eval/runs/%d", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var detail evalRunDetail
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if detail.SamplesTotal != 2 {
+		t.Errorf("samples_total = %d, want 1 pinned task x 2 variants x k=1 = 2", detail.SamplesTotal)
+	}
+}

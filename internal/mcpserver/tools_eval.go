@@ -300,7 +300,7 @@ func buildEvalRunStatus(ctx context.Context, store *eval.Store, runID int64) (*e
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := store.ListTasks(ctx, run.TaskSetID)
+	tasks, err := store.RunTasks(ctx, run)
 	if err != nil {
 		return nil, err
 	}

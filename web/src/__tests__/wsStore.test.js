@@ -25,7 +25,7 @@ vi.mock('../api.js', () => ({
   api: { panicStatus: (...args) => mockPanicStatus(...args) },
 }))
 
-const { wsStatus, panicStatus, refreshPanicStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
+const { wsStatus, panicStatus, evalProgress, refreshPanicStatus, onSessionEvent, offSessionEvent, failAllSessionHandlers, getWSClient, initWS, destroyWS } = await import('../wsStore.js')
 
 /** Drop the credential watcher and clear auth, so each test starts logged out. */
 function resetAuth() {
@@ -44,6 +44,7 @@ beforeEach(() => {
   mockWSSend.mockReset().mockReturnValue(true)
   mockPanicStatus.mockReset().mockResolvedValue({ panicked: false, panic_time: '0001-01-01T00:00:00Z' })
   panicStatus.set({ active: false, message: '', since: '' })
+  evalProgress.set(new Map())
 })
 
 describe('getWSClient', () => {
@@ -445,5 +446,62 @@ describe('panic status hydration', () => {
 
     expect(get(panicStatus).active).toBe(true)
     expect(get(panicStatus).since).toBe('2026-08-18T10:00:00Z')
+  })
+})
+
+describe('eval progress frames', () => {
+  beforeEach(() => {
+    getWSClient()
+  })
+
+  test('an eval_progress frame lands in the store keyed by run_id', () => {
+    capturedOptions.onEvent({
+      type: 'eval_progress',
+      run_id: 7,
+      status: 'running',
+      samples_done: 3,
+      samples_total: 20,
+      cost_spent: 0.12,
+      cost_cap: 2,
+      eta_seconds: 90,
+    })
+
+    const frame = get(evalProgress).get(7)
+    expect(frame.status).toBe('running')
+    expect(frame.samples_done).toBe(3)
+    expect(frame.eta_seconds).toBe(90)
+  })
+
+  test('a later frame for the same run replaces the earlier one', () => {
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 7, status: 'running', samples_done: 3, samples_total: 20 })
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 7, status: 'done', samples_done: 20, samples_total: 20 })
+
+    expect(get(evalProgress).size).toBe(1)
+    expect(get(evalProgress).get(7).status).toBe('done')
+    expect(get(evalProgress).get(7).samples_done).toBe(20)
+  })
+
+  test('runs are tracked independently', () => {
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 7, status: 'running', samples_done: 3 })
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 8, status: 'capped', samples_done: 11 })
+
+    expect(get(evalProgress).get(7).samples_done).toBe(3)
+    expect(get(evalProgress).get(8).status).toBe('capped')
+  })
+
+  // The store publishes a new Map rather than mutating in place, so Svelte
+  // subscribers actually see the update.
+  test('each frame publishes a new Map instance', () => {
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 7, status: 'running' })
+    const first = get(evalProgress)
+    capturedOptions.onEvent({ type: 'eval_progress', run_id: 7, status: 'done' })
+
+    expect(get(evalProgress)).not.toBe(first)
+  })
+
+  test('unknown session-less frames are still dropped', () => {
+    capturedOptions.onEvent({ type: 'something_new', run_id: 7 })
+
+    expect(get(evalProgress).size).toBe(0)
   })
 })

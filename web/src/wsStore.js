@@ -30,6 +30,16 @@ export const wsStatus = writable('disconnected')
  */
 export const panicStatus = writable({ active: false, message: '', since: '' })
 
+/**
+ * Latest eval_progress frame per run — a Map keyed by run_id.
+ *
+ * The frame is a wake-up, not truth: progress frames are droppable and are
+ * never replayed, so a consumer treats an update as "re-read the run" and
+ * takes GET /eval/runs/{id} as authoritative. A lost frame costs a stale
+ * progress bar until the next sample, never a wrong terminal status.
+ */
+export const evalProgress = writable(new Map())
+
 const PANIC_MESSAGE = 'Emergency stop triggered — all processing paused'
 
 /** Bumped by every panic_status frame, so a slow hydrate can tell it is stale. */
@@ -123,6 +133,16 @@ export function getWSClient() {
           active: frame.active,
           message: frame.message || '',
           since: frame.active ? (frame.since || '') : '',
+        })
+        return
+      }
+      // Handle eval run progress broadcasts. A new Map is set rather than
+      // mutated in place, so Svelte subscribers actually see the change.
+      if (frame.type === 'eval_progress') {
+        evalProgress.update((m) => {
+          const next = new Map(m)
+          next.set(frame.run_id, frame)
+          return next
         })
         return
       }

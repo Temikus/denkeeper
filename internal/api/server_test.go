@@ -919,6 +919,45 @@ func TestSessionMessages_ReturnsMessages(t *testing.T) {
 	}
 }
 
+// The eval "save as test case" flow stores the id as source_message_id, so a
+// stripped id costs provenance on every test case saved from the browser.
+func TestSessionMessages_ExposesMessageID(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_, _ = deps.Memory.GetOrCreateConversation(ctx, "telegram", "12345")
+	userID, err := deps.Memory.AddMessage(ctx, "telegram:12345", agent.StoredMessage{
+		Role: "user", Content: "hello",
+	})
+	if err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/sessions/telegram:12345/messages"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var messages []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&messages); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages count = %d, want 1", len(messages))
+	}
+	gotID, ok := messages[0]["id"].(float64)
+	if !ok {
+		t.Fatalf("id missing from %v", messages[0])
+	}
+	if int64(gotID) != userID {
+		t.Errorf("id = %d, want %d", int64(gotID), userID)
+	}
+}
+
 func TestSessionMessages_EmptyForUnknown(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	srv := New(cfg, testDeps(), testLogger())
