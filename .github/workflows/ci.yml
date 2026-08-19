@@ -198,6 +198,7 @@ jobs:
     name: E2E Tests
     needs: [build]
     runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:v1.62.1-noble
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -219,20 +220,6 @@ jobs:
         run: chmod +x denkeeper-linux-amd64
       - name: Install dependencies
         run: cd web && npm ci
-      - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('web/package-lock.json') }}
-      - name: Install Playwright browsers
-        if: steps.pw-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 5
-        run: cd web && npx playwright install --with-deps chromium
-      - name: Install Playwright system deps
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 3
-        run: cd web && npx playwright install-deps chromium
       - name: Create E2E data directory
         run: |
           dir="$(mktemp -d)"
