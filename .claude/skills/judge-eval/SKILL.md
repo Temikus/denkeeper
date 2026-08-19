@@ -43,7 +43,7 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp --he
 | `eval_run_status` | Run status, progress, pairs produced, items still pending |
 | `eval_pending` | The queue. `run_id` scopes it; `sample_n` draws a random subset |
 | `eval_get_pair` | One blinded item: prompt, notes, pinned history, Response A and B with tool traces |
-| `eval_verdict` | Record `{item_id, winner, dimensions, notes}` |
+| `eval_verdict` | Record `{item_id, winner, dimensions, notes, rubric_version}` |
 | `eval_summary` | Unblinds: gate table, win-rate, per-category breakdown, verdict |
 
 Each pair of responses is queued **twice**, with the presentation order swapped.
@@ -127,12 +127,19 @@ eval_verdict:
   item_id: 41
   winner: "a"            # a, b, or tie
   dimensions: {"task_success":"a","tool_path":"tie","persona_fit":"a","length":"b"}
+  rubric_version: "v1"   # the "Rubric version" line at the top of this file
   notes: "A completed both halves of the request; B answered only the first.
           B's tool path was cleaner (2 rounds vs 4) and its reply was tighter,
           but persona.md line 'answer the whole question before offering more'
           is what A honoured and B did not."
 ```
 
+- `rubric_version` is **always** the version at the top of this file, on every
+  verdict including the operator's calibration marks. It is what lets the
+  results view name the policy a win-rate was produced under, and it is how a
+  queue worked across a rubric edit shows up as two versions rather than
+  silently averaging two different rubrics. Bump the line above when you change
+  the rubric below it.
 - `winner` is the overall call and is what the win-rate counts. It is **not** a
   majority vote of the dimensions — `task_success` can carry a pair on its own.
 - Use `tie` honestly. A forced preference between two equally good responses is
