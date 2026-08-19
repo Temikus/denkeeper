@@ -652,6 +652,263 @@ func TestEvalRuns_SamplesUnknownRunIs404(t *testing.T) {
 	}
 }
 
+// --- Unblinded pairs ---
+
+// seedPairedRun builds a two-variant, one-task, k=1 run with both samples ok
+// and its pairs created — the state a finished run reaches on its own.
+func seedPairedRun(t *testing.T, store *eval.Store) (*eval.Run, []eval.Variant) {
+	t.Helper()
+	ctx := context.Background()
+	set, err := store.CreateTaskSet(ctx, "paired", "")
+	if err != nil {
+		t.Fatalf("CreateTaskSet: %v", err)
+	}
+	for _, prompt := range []string{"what is on today?", "summarise my week"} {
+		if _, err := store.AddTask(ctx, set.ID, eval.Task{
+			Prompt: prompt, Category: eval.CategoryChat,
+		}); err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+	}
+	tasks, err := store.ListTasks(ctx, set.ID)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	run, variants, err := store.CreateRun(ctx, eval.Run{
+		TaskSetID: set.ID, BaseAgent: "default", K: 1, CostCap: 1, AsOf: time.Now(),
+	}, []eval.Variant{{Name: "incumbent"}, {Name: "candidate", Overlay: `{"llm_model":"kimi-k3"}`}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, task := range tasks {
+		for _, v := range variants {
+			if _, err := store.AddSample(ctx, eval.Sample{
+				RunID: run.ID, VariantID: v.ID, TaskID: task.ID, KIndex: 0,
+				Status: eval.SampleOK, Response: "an answer", Rounds: 2, OutcomeOK: 5,
+			}); err != nil {
+				t.Fatalf("AddSample: %v", err)
+			}
+		}
+	}
+	if _, err := store.CreatePairs(ctx, run.ID); err != nil {
+		t.Fatalf("CreatePairs: %v", err)
+	}
+	return run, variants
+}
+
+// judgePairs records a verdict naming `variant` on the first `limit` items of a
+// run (limit <= 0 = all), resolving the presented letter per item.
+func judgePairs(t *testing.T, store *eval.Store, runID, variant int64, ident string, limit int) {
+	t.Helper()
+	ctx := context.Background()
+	pairs, err := store.ListPairs(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListPairs: %v", err)
+	}
+	assigns := make(map[int64]eval.Assignment, len(pairs))
+	for _, p := range pairs {
+		a, err := eval.DecodeAssignment(p.Assignment)
+		if err != nil {
+			t.Fatalf("DecodeAssignment: %v", err)
+		}
+		assigns[p.ID] = a
+	}
+	items, err := store.ListItems(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for i, it := range items {
+		if limit > 0 && i >= limit {
+			return
+		}
+		winner := eval.WinnerTie
+		for _, w := range []string{eval.WinnerA, eval.WinnerB} {
+			if eval.VariantFor(assigns[it.PairID], it.PresentationOrder, w) == variant {
+				winner = w
+			}
+		}
+		if _, err := store.RecordVerdict(ctx, eval.Verdict{
+			ItemID: it.ID, Winner: winner, JudgeIdent: ident, RubricVersion: "v1",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+}
+
+func getPairs(t *testing.T, srv *Server, runID int64, query, key string) eval.PairView {
+	t.Helper()
+	path := fmt.Sprintf("/api/v1/eval/runs/%d/pairs%s", runID, query)
+	rec := evalRequest(t, srv, http.MethodGet, path, "", key)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var view eval.PairView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return view
+}
+
+func TestEvalRuns_PairsUnblindAJudgedPair(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, variants := seedPairedRun(t, store)
+	judgePairs(t, store, run.ID, variants[1].ID, "claude-code", 0)
+
+	view := getPairs(t, srv, run.ID, "", "dk-test-key")
+	if view.RunID != run.ID || view.BaselineVariant != "incumbent" {
+		t.Fatalf("view = %+v, want the run id and the incumbent baseline", view)
+	}
+	if len(view.Pairs) != 2 {
+		t.Fatalf("got %d pairs, want one per task", len(view.Pairs))
+	}
+	for _, p := range view.Pairs {
+		if p.Outcome != eval.PairOutcomeWin {
+			t.Errorf("pair %d outcome = %q, want %q", p.PairID, p.Outcome, eval.PairOutcomeWin)
+		}
+		if p.Baseline.Variant != "incumbent" || p.Candidate.Variant != "candidate" {
+			t.Errorf("pair %d sides = %+v / %+v", p.PairID, p.Baseline, p.Candidate)
+		}
+		if p.Baseline.SampleID == 0 || p.Candidate.SampleID == 0 {
+			t.Errorf("pair %d is missing a sample id: %+v / %+v", p.PairID, p.Baseline, p.Candidate)
+		}
+		if p.TaskPrompt == "" || p.Category != eval.CategoryChat {
+			t.Errorf("pair %d lost its task context: %+v", p.PairID, p)
+		}
+		if len(p.Items) != 2 {
+			t.Fatalf("pair %d has %d items, want both presentation orders", p.PairID, len(p.Items))
+		}
+		for _, it := range p.Items {
+			if len(it.Verdicts) != 1 || it.Verdicts[0].WinnerVariant != "candidate" {
+				t.Errorf("pair %d order %s verdicts = %+v", p.PairID, it.PresentationOrder, it.Verdicts)
+			}
+			if it.Verdicts[0].RubricVersion != "v1" {
+				t.Errorf("pair %d order %s lost its rubric version", p.PairID, it.PresentationOrder)
+			}
+		}
+	}
+}
+
+func TestEvalRuns_PairsHalfJudgedIsPending(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, variants := seedPairedRun(t, store)
+	// One item only: the pair's other presentation order stays unjudged.
+	judgePairs(t, store, run.ID, variants[1].ID, "claude-code", 1)
+
+	view := getPairs(t, srv, run.ID, "", "dk-test-key")
+	for _, p := range view.Pairs {
+		if p.Outcome != eval.PairOutcomePending {
+			t.Errorf("pair %d outcome = %q, want %q while an order is unjudged",
+				p.PairID, p.Outcome, eval.PairOutcomePending)
+		}
+	}
+}
+
+// Both orders naming the same presented letter means the judge tracked
+// position. The endpoint must report the tie the tally records, not a win.
+func TestEvalRuns_PairsDisagreementIsATie(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+	ctx := context.Background()
+	items, err := store.ListItems(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+	for _, it := range items {
+		if _, err := store.RecordVerdict(ctx, eval.Verdict{
+			ItemID: it.ID, Winner: eval.WinnerA, JudgeIdent: "claude-code",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	view := getPairs(t, srv, run.ID, "", "dk-test-key")
+	for _, p := range view.Pairs {
+		if p.Outcome != eval.PairOutcomeTie {
+			t.Errorf("pair %d outcome = %q, want %q", p.PairID, p.Outcome, eval.PairOutcomeTie)
+		}
+	}
+}
+
+// The operator's calibration marks are shown next to the judge's — that is the
+// point of the calibration pass — but they are not judge work and must not
+// decide the pair.
+func TestEvalRuns_PairsOperatorVerdictIsListedButNotDeciding(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, variants := seedPairedRun(t, store)
+	judgePairs(t, store, run.ID, variants[0].ID, eval.JudgeOperator, 0)
+
+	view := getPairs(t, srv, run.ID, "", "dk-test-key")
+	var operatorRows int
+	for _, p := range view.Pairs {
+		if p.Outcome != eval.PairOutcomePending {
+			t.Errorf("pair %d outcome = %q, want %q — only the operator has marked it",
+				p.PairID, p.Outcome, eval.PairOutcomePending)
+		}
+		for _, it := range p.Items {
+			for _, v := range it.Verdicts {
+				if v.JudgeIdent == eval.JudgeOperator {
+					operatorRows++
+				}
+			}
+		}
+	}
+	if operatorRows != 4 {
+		t.Errorf("listed %d operator verdicts, want 4 (2 pairs × 2 orders)", operatorRows)
+	}
+}
+
+func TestEvalRuns_PairsFilterByTask(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+
+	all := getPairs(t, srv, run.ID, "", "dk-test-key")
+	if len(all.Pairs) != 2 {
+		t.Fatalf("got %d pairs unfiltered, want 2", len(all.Pairs))
+	}
+	target := all.Pairs[1].TaskID
+	filtered := getPairs(t, srv, run.ID, fmt.Sprintf("?task_id=%d", target), "dk-test-key")
+	if len(filtered.Pairs) != 1 || filtered.Pairs[0].TaskID != target {
+		t.Errorf("filtered pairs = %+v, want only task %d", filtered.Pairs, target)
+	}
+}
+
+func TestEvalRuns_PairsUnknownRunIs404(t *testing.T) {
+	srv, _ := evalTestServer(t)
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/runs/999/pairs", "", "dk-test-key")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 via the ErrNotFound sentinel", rec.Code)
+	}
+}
+
+func TestEvalRuns_PairsBadTaskIDIs400(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+
+	rec := evalRequest(t, srv, http.MethodGet,
+		fmt.Sprintf("/api/v1/eval/runs/%d/pairs?task_id=nope", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// The unblinded view is a read: eval:read must be enough, and a key without it
+// must not reach it at all.
+func TestEvalRuns_PairsAreReadableWithReadScopeOnly(t *testing.T) {
+	srv, store := evalTestServer(t, allScopesKey(), evalReadOnlyKey(), config.APIKeyConfig{
+		Name: "chat-only", Key: "dk-chat-only", Scopes: []string{"chat"},
+	})
+	run, _ := seedPairedRun(t, store)
+	path := fmt.Sprintf("/api/v1/eval/runs/%d/pairs", run.ID)
+
+	if rec := evalRequest(t, srv, http.MethodGet, path, "", "dk-eval-readonly"); rec.Code != http.StatusOK {
+		t.Errorf("status = %d for an eval:read key, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if rec := evalRequest(t, srv, http.MethodGet, path, "", "dk-chat-only"); rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d for a key without eval:read, want 403", rec.Code)
+	}
+}
+
 func TestEvalETA_ZeroWhenNothingLanded(t *testing.T) {
 	if got := evalETA(nil, 8, 2); got != 0 {
 		t.Errorf("eta = %d, want 0 before any sample lands", got)

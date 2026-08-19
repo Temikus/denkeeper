@@ -288,6 +288,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/eval/runs/{id}/stop", s.RequireScope("eval:write", s.handleStopEvalRun))
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/summary", s.RequireScope("eval:read", s.handleEvalRunSummary))
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/samples", s.RequireScope("eval:read", s.handleEvalRunSamples))
+	// Unblinded, and deliberately REST-only: the judge's MCP surface must not
+	// be able to look up which variant produced which response.
+	mux.HandleFunc("GET /api/v1/eval/runs/{id}/pairs", s.RequireScope("eval:read", s.handleEvalRunPairs))
 	// Estimating, suggesting and reading the policy spend nothing, so all
 	// three are read-scoped.
 	mux.HandleFunc("POST /api/v1/eval/estimate", s.RequireScope("eval:read", s.handleEvalEstimate))

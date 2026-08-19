@@ -36,6 +36,9 @@ type evalVerdictInput struct {
 	Notes      string `json:"notes,omitempty" jsonschema:"Short rationale; cite the persona or skill clause behind any persona_fit or task_success deduction"`
 	Dimensions string `json:"dimensions,omitempty" jsonschema:"JSON object of dimension to winner, e.g. {\"task_success\":\"a\",\"tool_path\":\"tie\",\"persona_fit\":\"a\",\"length\":\"b\"}"`
 	JudgeIdent string `json:"judge_ident,omitempty" jsonschema:"Who is judging; defaults to the API key name. Pass \"operator\" to record a human calibration mark alongside the judge's verdict rather than replacing it"`
+	// RubricVersion is stored verbatim: the rubric is a skill file the operator
+	// edits, so the server has no list of valid versions to check against.
+	RubricVersion string `json:"rubric_version,omitempty" jsonschema:"The judging rubric revision this call was made under, e.g. \"v1\" — copy the 'Rubric version' line of the judging skill so the results view can name what the win-rate was judged against"`
 }
 
 type evalRunInput struct {
@@ -66,8 +69,8 @@ func (s *Server) registerEvalTools() {
 		Name: "eval_verdict",
 		Description: "Record a verdict on one judgment item: which response won (a, b, or tie), " +
 			"optional per-dimension winners (task_success, tool_path, persona_fit, length), " +
-			"and notes. Re-judging the same item overwrites your own earlier verdict. " +
-			"Requires 'eval:write' scope.",
+			"notes, and the rubric version it was judged under. Re-judging the same item " +
+			"overwrites your own earlier verdict. Requires 'eval:write' scope.",
 	}, s.handleEvalVerdict)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -160,11 +163,12 @@ func (s *Server) handleEvalVerdict(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	verdict, err := store.RecordVerdict(ctx, eval.Verdict{
-		ItemID:     input.ItemID,
-		Winner:     winner,
-		Dimensions: dims,
-		Notes:      input.Notes,
-		JudgeIdent: judgeIdent(ctx, input.JudgeIdent),
+		ItemID:        input.ItemID,
+		Winner:        winner,
+		Dimensions:    dims,
+		Notes:         input.Notes,
+		JudgeIdent:    judgeIdent(ctx, input.JudgeIdent),
+		RubricVersion: strings.TrimSpace(input.RubricVersion),
 	})
 	if err != nil {
 		return toolError("recording verdict: " + err.Error()), nil, nil

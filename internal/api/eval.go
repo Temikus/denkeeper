@@ -873,6 +873,45 @@ func (s *Server) handleEvalRunSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summary)
 }
 
+// handleEvalRunPairs godoc
+// @Summary Get an eval run's judged pairs, unblinded
+// @Description Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.
+// @Tags eval
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Run id"
+// @Param task_id query int false "Only return pairs for this task"
+// @Success 200 {object} eval.PairView "Unblinded pairs"
+// @Failure 400 {object} map[string]string "Bad run id or task_id"
+// @Failure 404 {object} map[string]string "Run not found"
+// @Failure 503 {object} map[string]string "Eval subsystem not configured"
+// @Router /eval/runs/{id}/pairs [get]
+func (s *Server) handleEvalRunPairs(w http.ResponseWriter, r *http.Request) {
+	if !s.evalRequired(w) {
+		return
+	}
+	id, ok := evalRunID(w, r)
+	if !ok {
+		return
+	}
+	var taskID int64
+	if raw := r.URL.Query().Get("task_id"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "task_id must be a positive integer"})
+			return
+		}
+		taskID = parsed
+	}
+	view, err := s.deps.EvalStore.PairDetails(r.Context(), id, taskID)
+	if err != nil {
+		writeEvalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 // handleEvalRunSamples godoc
 // @Summary Get an eval run's per-sample transcripts
 // @Description Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.

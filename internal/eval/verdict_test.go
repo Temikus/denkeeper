@@ -423,3 +423,92 @@ func TestSummaryOpts_ZeroValueUsesShippedDefaults(t *testing.T) {
 		t.Errorf("verdict = %q (%s), want %q", vv.Verdict, vv.Reason, VerdictNoRegressions)
 	}
 }
+
+// A queue worked across a rubric edit must show both versions rather than
+// silently averaging two different policies into one win-rate.
+func TestJudgment_RubricVersionsAreDistinctAndSorted(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat, CategoryToolHeavy})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+
+	// Two rubric versions across the queue, recorded newest-first so the sort
+	// is doing the ordering rather than insertion order.
+	versions := []string{"v2", "v1", "v2", "v1"}
+	for i, it := range f.items(t) {
+		if _, err := f.store.RecordVerdict(ctx, Verdict{
+			ItemID: it.ID, Winner: WinnerA, JudgeIdent: "claude-code",
+			RubricVersion: versions[i%len(versions)],
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	got := f.onlyVerdict(t, f.summarizeWith(t, testOpts())).Judgment.RubricVersions
+	if len(got) != 2 || got[0] != "v1" || got[1] != "v2" {
+		t.Errorf("rubric_versions = %v, want [v1 v2]", got)
+	}
+}
+
+// A judge that does not report a version contributes nothing, and the field
+// stays absent rather than carrying an empty string.
+func TestJudgment_RubricVersionsEmptyWhenUnreported(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	f.cleanRun(t)
+	f.createPairs(t)
+	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+
+	if got := f.onlyVerdict(t, f.summarizeWith(t, testOpts())).Judgment.RubricVersions; got != nil {
+		t.Errorf("rubric_versions = %v, want nil when no judge reported one", got)
+	}
+}
+
+// The operator's calibration mark is excluded from the win rate, so it must not
+// describe the rubric the win rate was produced under either.
+func TestJudgment_RubricVersionsIgnoreOperatorMarks(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+
+	for _, it := range f.items(t) {
+		if _, err := f.store.RecordVerdict(ctx, Verdict{
+			ItemID: it.ID, Winner: WinnerA, JudgeIdent: JudgeOperator, RubricVersion: "operator-notes",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	if got := f.onlyVerdict(t, f.summarizeWith(t, testOpts())).Judgment.RubricVersions; got != nil {
+		t.Errorf("rubric_versions = %v, want nil — only judge verdicts count", got)
+	}
+}
+
+// The verdict upsert must carry the rubric version through a re-judge rather
+// than blanking it, since a retrying headless judge overwrites its own row.
+func TestRecordVerdict_UpsertPreservesRubricVersion(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	item := f.items(t)[0]
+
+	for _, w := range []string{WinnerA, WinnerB} {
+		if _, err := f.store.RecordVerdict(ctx, Verdict{
+			ItemID: item.ID, Winner: w, JudgeIdent: "claude-code", RubricVersion: "v1",
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	rows, err := f.store.ListVerdicts(ctx, f.run.ID)
+	if err != nil {
+		t.Fatalf("ListVerdicts: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d verdict rows, want 1 after a re-judge", len(rows))
+	}
+	if rows[0].Winner != WinnerB || rows[0].RubricVersion != "v1" {
+		t.Errorf("verdict = %+v, want the second winner and rubric v1", rows[0])
+	}
+}
