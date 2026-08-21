@@ -2,7 +2,7 @@
 title: "Observability"
 description: "The audit log, tool-call telemetry, cost tracking, and OpenTelemetry."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 60
 toc: true
@@ -90,7 +90,7 @@ Whichever source won is recorded as the `pricing_source` attribute, so a real pr
 
 Cached prompt tokens are tracked separately, read from the provider's own cache-read counts.
 
-Limits are enforced per session against the agent's `cost_limit_soft` and `cost_limit_hard`; see [Sessions & Permissions](/docs/concepts/sessions-permissions/). Fallback rules can switch to a cheaper model when a limit is approached rather than simply stopping.
+Limits are enforced per session against the agent's `cost_limit_soft` and `cost_limit_hard`; see [Sessions & Permissions](/docs/concepts/sessions/). Fallback rules can switch to a cheaper model when a limit is approached rather than simply stopping.
 
 ## OpenTelemetry
 

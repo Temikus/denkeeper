@@ -1,8 +1,9 @@
 ---
 title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
+slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -42,12 +43,14 @@ Send a message to an agent and receive a response.
   "session_id": "optional-session-id",
   "message": "Hello!",
   "user_id": "api-user",
-  "user_name": "API User"
+  "user_name": "API User",
+  "channel": "optional-channel-name"
 }
 ```
 
 - `session_id` is auto-generated if omitted. Pass the same value in subsequent requests to continue the conversation.
 - `agent` defaults to `"default"` if omitted.
+- `channel` is optional; when set, the message routes through the named [channel](/docs/concepts/channels/) instead of a direct agent binding.
 
 **Response (JSON):**
 
@@ -291,7 +294,7 @@ Create an agent. Creates the persona directory and persists an `[[agents]]` bloc
 
 **Scope:** `agents:write`
 
-Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`.
+Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
 
 ### `DELETE /api/v1/agents/{name}`
 
@@ -386,6 +389,18 @@ Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` fi
 ## Evals
 
 An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.
+
+### `GET /api/v1/eval/config`
+
+**Scope:** `eval:read`
+
+Returns the `[eval]` defaults and gate thresholds used to size and judge a run — `default_k`, `max_cost_per_run`, `max_concurrent`, `completeness_floor`, `win_threshold`, and the rest of the config used by `POST /eval/runs` and the verdict rule when a request doesn't override them.
+
+### `POST /api/v1/eval/estimate`
+
+**Scope:** `eval:read`
+
+Prices a prospective run before creating it — same request shape as `POST /eval/runs` — so a cost cap can be sized sensibly ahead of spending real tokens.
 
 ### `POST /api/v1/eval/task-sets`
 
@@ -748,7 +763,13 @@ No authentication required. Returns the first-run setup status.
 
 ### `POST /api/v1/setup`
 
-No authentication required. Initialize the first-run configuration.
+No authentication required — the endpoint locks itself after first use. Creates the first API key, defaulting to `name: "admin"` / `scopes: ["admin"]` if the body omits them, and returns the plaintext token (`201`). Returns `409 Conflict` once any active key already exists.
+
+**Request body:**
+
+```json
+{ "name": "admin", "scopes": ["admin"] }
+```
 
 ### `POST /api/v1/setup/account`
 

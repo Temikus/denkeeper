@@ -2,7 +2,7 @@
 title: "Channels"
 description: "Named routing endpoints that decouple conversations from adapter bindings."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 15
 toc: true
@@ -79,7 +79,7 @@ Wildcard bindings are not delivery targets — there is no single chat to send t
 
 Channels are reachable from every surface:
 
-- **REST** — `GET/POST/PATCH/DELETE /api/v1/channels`, plus `POST/DELETE /api/v1/channels/{name}/activate` to set the active override for an adapter key. See the [REST API reference](/docs/reference/rest-api-reference/).
+- **REST** — `GET/POST/PATCH/DELETE /api/v1/channels`, plus `POST/DELETE /api/v1/channels/{name}/activate` to set the active override for an adapter key. See the [REST API reference](/docs/reference/rest-api/).
 - **Config MCP** — agents can call `channel_list`, `channel_info`, and `channel_switch`.
 - **Dashboard** — the Channels page.
 

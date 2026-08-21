@@ -1,8 +1,9 @@
 ---
 title: "Raspberry Pi Deployment"
 description: "Deploy Denkeeper on a Raspberry Pi 5."
+slug: "raspberry-pi"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 20
 toc: true

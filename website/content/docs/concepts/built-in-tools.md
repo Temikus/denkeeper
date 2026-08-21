@@ -2,13 +2,13 @@
 title: "Built-in Tools"
 description: "Web search and fetch, JavaScript execution, the KV store, and browser automation."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 35
 toc: true
 ---
 
-Alongside external [MCP tool servers](/docs/concepts/tools-mcp/), Denkeeper ships tools that run in-process. They need no subprocess, no container, and no separate install — just a config section.
+Alongside external [MCP tool servers](/docs/concepts/tools/), Denkeeper ships tools that run in-process. They need no subprocess, no container, and no separate install — just a config section.
 
 All of them respect the agent's permission tier.
 
@@ -113,6 +113,6 @@ A browser with a persistent profile is the most powerful capability an agent can
 
 ## Memoization
 
-Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools-mcp/). Of the built-ins, `web_search`, `web_fetch`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
+Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools/). Of the built-ins, `web_search`, `web_fetch`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
 
 See the [configuration reference](/docs/reference/config/) for every option in `[web]`, `[script]`, `[kv]`, and `[browser]`.
