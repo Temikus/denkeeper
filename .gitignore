@@ -49,11 +49,13 @@ Thumbs.db
 .task/
 
 # ai tooling
-# Everything under .claude is local state, except skills/ — a project skill is
-# a repo deliverable (/judge-eval drives the eval judging loop) and has to
-# travel with the code it operates on.
+# Everything under .claude is local state, except skills/ and rules/ — a project
+# skill is a repo deliverable (/judge-eval drives the eval judging loop) and
+# path-scoped rules/ carry the subsystem invariants split out of CLAUDE.md, so
+# both have to travel with the code they operate on.
 .claude/*
 !.claude/skills/
+!.claude/rules/
 .mcp.json
 
 # Git worktrees
