@@ -13,14 +13,20 @@ on:
 jobs:
   claude:
     # This job holds `contents: write` and may push. The repo is public, so anyone
-    # can comment `@claude` - the OWNER gate is what keeps a stranger's comment from
+    # can comment `@claude` - the owner gate is what keeps a stranger's comment from
     # steering a job that can write to the repo. Do not widen it without also
     # narrowing the permissions block below.
+    #
+    # The gate is on `github.actor` (who performed the action) rather than
+    # `author_association` (who wrote the text). They diverge on `issues.assigned`:
+    # a collaborator assigning an owner-authored issue that says `@claude` would
+    # pass an authorship check while not being the owner.
     if: |
-      (github.event_name == 'issue_comment' && github.event.comment.author_association == 'OWNER' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && github.event.comment.author_association == 'OWNER' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && github.event.review.author_association == 'OWNER' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && github.event.issue.author_association == 'OWNER' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      github.actor == github.repository_owner &&
+      ((github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
     runs-on: ubuntu-latest
     permissions:
       contents: write # Push rebased/amended branches
@@ -51,9 +57,15 @@ jobs:
           # Git write operations. Without these the run gets only the read-only
           # default set (status/log/diff) and a rebase stalls on "requires
           # approval" - an Actions run has no one to approve it.
+          #
+          # `gh pr` is enumerated by verb, not `gh pr:*`. The owner gate above
+          # controls who *starts* the run, but not what the run then reads: PR
+          # diffs, commit messages, and CI logs on a public repo are attacker
+          # -authored text, so a run steered by injected instructions must not be
+          # able to reach `gh pr merge/close/edit` or `gh pr review --approve`.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           claude_args: >-
             --allowedTools
-            Bash(git fetch:*),Bash(git checkout:*),Bash(git rebase:*),Bash(git stash:*),Bash(git push:*),Bash(gh pr:*)
+            Bash(git fetch:*),Bash(git checkout:*),Bash(git rebase:*),Bash(git stash:*),Bash(git push:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checkout:*),Bash(gh pr comment:*)
 
