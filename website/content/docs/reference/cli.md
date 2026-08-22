@@ -1,8 +1,9 @@
 ---
 title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
+slug: "cli"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
