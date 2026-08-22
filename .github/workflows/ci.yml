@@ -227,11 +227,11 @@ jobs:
           echo "DENKEEPER_DATA_DIR=$dir" >> "$GITHUB_ENV"
       - name: Start mock LLM server
         run: |
-          cd web && node -e "
+          cd web && setsid nohup node -e "
             import('./test/e2e/helpers/mock-llm.js')
               .then(m => m.startMockLLM(19111))
               .then(() => console.log('Mock LLM ready on :19111'))
-          " &
+          " > "$RUNNER_TEMP/mock-llm.log" 2>&1 &
           for i in $(seq 1 10); do
             curl -sf http://127.0.0.1:19111/api/tags > /dev/null && echo "Mock LLM ready" && exit 0
             sleep 0.5
@@ -239,7 +239,11 @@ jobs:
           echo "Mock LLM failed to start" && exit 1
       - name: Start denkeeper
         run: |
-          ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml &
+          # setsid + nohup: in a container job each step is its own docker exec,
+          # so a plain `&` child can die with the step's shell. Logs go to a
+          # file so a crash mid-run is diagnosable.
+          setsid nohup ./denkeeper-linux-amd64 serve --config web/test/e2e/fixtures/test.toml \
+            > "$RUNNER_TEMP/denkeeper.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -sf 'http://localhost:8080/api/v1/health?ready=true' > /dev/null && echo "Server ready" && exit 0
             sleep 1
@@ -259,3 +263,14 @@ jobs:
         with:
           name: playwright-traces
           path: web/test-results/
+      - name: Print server log tail
+        if: failure()
+        run: tail -n 100 "$RUNNER_TEMP/denkeeper.log" || true
+      - name: Upload server logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-server-logs
+          path: |
+            ${{ runner.temp }}/denkeeper.log
+            ${{ runner.temp }}/mock-llm.log
