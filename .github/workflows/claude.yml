@@ -58,14 +58,22 @@ jobs:
           # default set (status/log/diff) and a rebase stalls on "requires
           # approval" - an Actions run has no one to approve it.
           #
-          # `gh pr` is enumerated by verb, not `gh pr:*`. The owner gate above
-          # controls who *starts* the run, but not what the run then reads: PR
-          # diffs, commit messages, and CI logs on a public repo are attacker
-          # -authored text, so a run steered by injected instructions must not be
-          # able to reach `gh pr merge/close/edit` or `gh pr review --approve`.
+          # The owner gate above controls who *starts* the run, but not what the
+          # run then reads: PR diffs, commit messages, and CI logs on a public
+          # repo are attacker-authored text. So the allowlist is scoped on the
+          # assumption a run can be steered by injected instructions.
+          #
+          # `gh pr` is enumerated by verb rather than `gh pr:*`, keeping `merge`,
+          # `close`, `edit`, and `review --approve` out of reach.
+          #
+          # `git push` is absent on purpose - see .github/scripts/claude-push.sh.
+          # A prefix rule cannot express "force-push this branch but never main",
+          # so the push target is decided by that script, not by the model.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           claude_args: >-
             --allowedTools
-            Bash(git fetch:*),Bash(git checkout:*),Bash(git rebase:*),Bash(git stash:*),Bash(git push:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checkout:*),Bash(gh pr comment:*)
+            Bash(git fetch:*),Bash(git checkout:*),Bash(git rebase:*),Bash(git stash:*),Bash(.github/scripts/claude-push.sh),Bash(./.github/scripts/claude-push.sh),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr checkout:*),Bash(gh pr comment:*)
+            --append-system-prompt
+            "To push, run ./.github/scripts/claude-push.sh - it force-pushes the current branch with --force-with-lease. Plain `git push` is not permitted and will be refused."
 
