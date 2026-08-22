@@ -231,13 +231,14 @@ CREATE TABLE IF NOT EXISTS eval_judgment_items (
 );
 
 CREATE TABLE IF NOT EXISTS eval_verdicts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id     INTEGER NOT NULL REFERENCES eval_judgment_items(id),
-    winner      TEXT    NOT NULL,
-    dimensions  TEXT    NOT NULL DEFAULT '{}',
-    notes       TEXT    NOT NULL DEFAULT '',
-    judge_ident TEXT    NOT NULL DEFAULT '',
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id        INTEGER NOT NULL REFERENCES eval_judgment_items(id),
+    winner         TEXT    NOT NULL,
+    dimensions     TEXT    NOT NULL DEFAULT '{}',
+    notes          TEXT    NOT NULL DEFAULT '',
+    judge_ident    TEXT    NOT NULL DEFAULT '',
+    rubric_version TEXT    NOT NULL DEFAULT '',
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_eval_tasks_set      ON eval_tasks (set_id);
@@ -267,6 +268,9 @@ var evalMigrations = []string{
 	// task_ids: the run's task list, pinned at creation. NULL means the whole
 	// set, resolved at read time.
 	`ALTER TABLE eval_runs ADD COLUMN task_ids TEXT`,
+	// rubric_version: which revision of the judging rubric produced the verdict.
+	// Empty on every pre-migration row, and on any judge that does not say.
+	`ALTER TABLE eval_verdicts ADD COLUMN rubric_version TEXT NOT NULL DEFAULT ''`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -464,8 +468,13 @@ type Verdict struct {
 	Notes      string `db:"notes"      json:"notes"`
 	// JudgeIdent names who judged — an API key name, or JudgeOperator for the
 	// operator's calibration marks.
-	JudgeIdent string    `db:"judge_ident" json:"judge_ident"`
-	CreatedAt  time.Time `db:"created_at"  json:"created_at"`
+	JudgeIdent string `db:"judge_ident" json:"judge_ident"`
+	// RubricVersion is the judging rubric revision this call was made under, as
+	// the judge reported it (the `Rubric version:` line of the judge-eval
+	// skill). Empty when the judge did not say, which is why the results view
+	// reports the distinct set rather than assuming one.
+	RubricVersion string    `db:"rubric_version" json:"rubric_version,omitempty"`
+	CreatedAt     time.Time `db:"created_at"     json:"created_at"`
 }
 
 // Store persists eval task sets, runs and samples. It owns its own handle on

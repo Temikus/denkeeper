@@ -265,12 +265,14 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO eval_verdicts (item_id, winner, dimensions, notes, judge_ident, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO eval_verdicts
+		   (item_id, winner, dimensions, notes, judge_ident, rubric_version, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (item_id, judge_ident) DO UPDATE SET
 		     winner = excluded.winner, dimensions = excluded.dimensions,
-		     notes = excluded.notes, created_at = excluded.created_at`,
-		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.CreatedAt)
+		     notes = excluded.notes, rubric_version = excluded.rubric_version,
+		     created_at = excluded.created_at`,
+		v.ItemID, v.Winner, v.Dimensions, v.Notes, v.JudgeIdent, v.RubricVersion, v.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("recording verdict for item %d: %w", v.ItemID, err)
 	}
@@ -293,7 +295,8 @@ func (s *Store) RecordVerdict(ctx context.Context, v Verdict) (*Verdict, error) 
 func (s *Store) ListVerdicts(ctx context.Context, runID int64) ([]Verdict, error) {
 	out := []Verdict{}
 	if err := s.db.SelectContext(ctx, &out,
-		`SELECT v.id, v.item_id, v.winner, v.dimensions, v.notes, v.judge_ident, v.created_at
+		`SELECT v.id, v.item_id, v.winner, v.dimensions, v.notes, v.judge_ident,
+		        v.rubric_version, v.created_at
 		 FROM eval_verdicts v
 		 JOIN eval_judgment_items i ON i.id = v.item_id
 		 JOIN eval_pairs p ON p.id = i.pair_id
