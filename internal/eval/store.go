@@ -703,6 +703,29 @@ func (s *Store) ListTasks(ctx context.Context, setID int64) ([]Task, error) {
 	return tasks, nil
 }
 
+// SavedTaskSources returns the SourceKey of every turn already saved as a
+// task, across all sets. The suggestion endpoint subtracts it so an accepted
+// candidate does not come back next time. Tasks with no source message (hand
+// written, imported) contribute nothing — there is no turn to suppress.
+func (s *Store) SavedTaskSources(ctx context.Context) (map[string]struct{}, error) {
+	var rows []struct {
+		ConversationID string `db:"source_conversation_id"`
+		MessageID      int64  `db:"source_message_id"`
+	}
+	err := s.db.SelectContext(ctx, &rows,
+		`SELECT DISTINCT source_conversation_id, source_message_id
+		 FROM eval_tasks
+		 WHERE source_message_id IS NOT NULL AND source_conversation_id != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("listing saved task sources: %w", err)
+	}
+	saved := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		saved[SourceKey(r.ConversationID, r.MessageID)] = struct{}{}
+	}
+	return saved, nil
+}
+
 // GetTask returns one task by id, scoped to a set so a caller cannot address
 // another set's task through a set-scoped route.
 func (s *Store) GetTask(ctx context.Context, setID, taskID int64) (*Task, error) {

@@ -2863,6 +2863,87 @@
                 }
             }
         },
+        "/eval/suggest": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Suggest eval test cases from history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Only turns handled by this agent",
+                        "name": "agent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Candidates returned across all categories (default 20, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339 lower bound on turn time (default 90 days ago)",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stratified candidates",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalSuggestResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad limit or since",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "501": {
+                        "description": "Telemetry not available",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/task-sets": {
             "get": {
                 "security": [
@@ -7807,6 +7888,38 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Candidate": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "message_id": {
+                    "type": "integer"
+                },
+                "preceding": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PrecedingMessage"
+                    }
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "signals": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.CategoryResult": {
             "type": "object",
             "properties": {
@@ -7975,6 +8088,17 @@
                     "type": "string"
                 },
                 "llm_provider": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PrecedingMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "role": {
                     "type": "string"
                 }
             }
@@ -9137,6 +9261,17 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_api.evalVariantInput"
+                    }
+                }
+            }
+        },
+        "internal_api.evalSuggestResult": {
+            "type": "object",
+            "properties": {
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Candidate"
                     }
                 }
             }
