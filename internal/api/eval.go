@@ -89,6 +89,12 @@ type evalImportResult struct {
 	Imported int `json:"imported"`
 }
 
+// evalSuggestResult is the cold-start fill path's response: past turns worth
+// saving as test cases, stratified across the four categories.
+type evalSuggestResult struct {
+	Candidates []eval.Candidate `json:"candidates"`
+}
+
 // --- Guards and helpers ---
 
 // evalRequired writes a 503 when the eval subsystem is not wired.
@@ -897,4 +903,92 @@ func (s *Server) handleEvalRunSamples(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, samples)
+}
+
+// --- Suggestions ---
+
+const (
+	// suggestDefaultLimit is how many candidates a suggestion pass returns —
+	// enough to fill the four category columns without a wall of cards.
+	suggestDefaultLimit = 20
+	suggestMaxLimit     = 100
+	// suggestDefaultWindow is how far back the telemetry query looks.
+	suggestDefaultWindow = 90 * 24 * time.Hour
+	// suggestPoolFactor oversamples the candidate pool relative to the limit:
+	// stratification and the cost decile both need more turns to choose from
+	// than the pass returns.
+	suggestPoolFactor = 10
+	suggestMinPool    = 100
+)
+
+// suggestParams parses the query string, writing a 400 and reporting false on
+// a malformed one.
+func suggestParams(w http.ResponseWriter, r *http.Request) (agentName string, since time.Time, limit int, ok bool) {
+	agentName = r.URL.Query().Get("agent")
+	limit = suggestDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be a positive integer"})
+			return "", time.Time{}, 0, false
+		}
+		limit = min(n, suggestMaxLimit)
+	}
+	since = time.Now().Add(-suggestDefaultWindow)
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "since must be an RFC3339 timestamp"})
+			return "", time.Time{}, 0, false
+		}
+		since = t
+	}
+	return agentName, since, limit, true
+}
+
+// handleEvalSuggest godoc
+// @Summary Suggest eval test cases from history
+// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
+// @Tags eval
+// @Produce json
+// @Security BearerAuth
+// @Param agent query string false "Only turns handled by this agent"
+// @Param limit query int false "Candidates returned across all categories (default 20, max 100)"
+// @Param since query string false "RFC3339 lower bound on turn time (default 90 days ago)"
+// @Success 200 {object} evalSuggestResult "Stratified candidates"
+// @Failure 400 {object} map[string]string "Bad limit or since"
+// @Failure 500 {object} map[string]string "Store error"
+// @Failure 501 {object} map[string]string "Telemetry not available"
+// @Failure 503 {object} map[string]string "Eval subsystem not configured"
+// @Router /eval/suggest [get]
+func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
+	if !s.evalRequired(w) {
+		return
+	}
+	store, ok := s.deps.Memory.(agent.InterestingTurnStore)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
+		return
+	}
+	agentName, since, limit, ok := suggestParams(w, r)
+	if !ok {
+		return
+	}
+
+	pool := max(limit*suggestPoolFactor, suggestMinPool)
+	turns, err := store.ListInterestingTurns(r.Context(), agentName, since, pool)
+	if err != nil {
+		s.logger.Error("listing interesting turns", "error", err, "agent", agentName)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	saved, err := s.deps.EvalStore.SavedTaskSources(r.Context())
+	if err != nil {
+		writeEvalError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, evalSuggestResult{
+		Candidates: eval.Suggest(turns, eval.SuggestOpts{Limit: limit, Exclude: saved}),
+	})
 }
