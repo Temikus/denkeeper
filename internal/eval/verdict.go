@@ -1,6 +1,9 @@
 package eval
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Decision-rule outcomes.
 //
@@ -61,6 +64,12 @@ type Judgment struct {
 	WinThreshold float64 `json:"win_threshold"`
 	// OperatorAgreement is nil until the operator marks a calibration item.
 	OperatorAgreement *Agreement `json:"operator_agreement,omitempty"`
+	// RubricVersions is the distinct set of rubric revisions the judge verdicts
+	// behind this tally were made under, sorted. A set rather than a single
+	// value because a queue worked across a rubric edit is a real thing to see:
+	// two versions here means the win-rate mixes two policies. Judges that did
+	// not report a version contribute nothing.
+	RubricVersions []string `json:"rubric_versions,omitempty"`
 }
 
 // CategoryResult breaks a candidate's performance down by task category. A
@@ -207,6 +216,7 @@ func gateLabel(name string) string {
 
 // pairOutcome is one pair collapsed to a single winner.
 type pairOutcome struct {
+	pairID    int64
 	taskID    int64
 	candidate int64
 	// winner is the variant id that took the pair, 0 for a tie.
@@ -215,6 +225,33 @@ type pairOutcome struct {
 	decided bool
 	// agreement counts the operator's calibration marks on this pair's items.
 	agreeItems, agreed int
+	// rubrics are the non-empty rubric versions the judge verdicts on this
+	// pair's items reported.
+	rubrics []string
+}
+
+// Pair outcomes, from the candidate's point of view. They follow the
+// aggregation rules exactly: a pair is only decided once both presentation
+// orders carry a judge verdict, and orders that disagree are a tie.
+const (
+	PairOutcomeWin     = "win"
+	PairOutcomeLoss    = "loss"
+	PairOutcomeTie     = "tie"
+	PairOutcomePending = "pending"
+)
+
+// outcome names a resolved pair from the candidate's point of view.
+func (po pairOutcome) outcome(baselineID int64) string {
+	switch {
+	case !po.decided:
+		return PairOutcomePending
+	case po.winner == po.candidate:
+		return PairOutcomeWin
+	case po.winner == baselineID:
+		return PairOutcomeLoss
+	default:
+		return PairOutcomeTie
+	}
 }
 
 // resolvePairs collapses each pair's two presentation orders into one outcome.
@@ -236,9 +273,10 @@ func resolvePairs(in verdictInput) []pairOutcome {
 		if err != nil {
 			continue
 		}
-		po := pairOutcome{taskID: p.TaskID, candidate: candidateOf(assign, in.variants[0].ID)}
+		po := pairOutcome{pairID: p.ID, taskID: p.TaskID, candidate: candidateOf(assign, in.variants[0].ID)}
 		po.decided, po.winner = resolveOutcome(itemsByPair[p.ID], judge, assign)
 		po.agreeItems, po.agreed = countAgreement(itemsByPair[p.ID], judge, operator)
+		po.rubrics = pairRubrics(itemsByPair[p.ID], judge)
 		out = append(out, po)
 	}
 	return out
@@ -289,6 +327,20 @@ func countAgreement(items []JudgmentItem, judge, operator map[int64]Verdict) (in
 	return total, agreed
 }
 
+// pairRubrics collects the rubric versions the judge reported on one pair's
+// items. Only the judge's own calls count: the operator's calibration mark is
+// excluded from the win rate, so it does not describe the rubric the tally was
+// produced under.
+func pairRubrics(items []JudgmentItem, judge map[int64]Verdict) []string {
+	var out []string
+	for _, it := range items {
+		if v, ok := judge[it.ID]; ok && v.RubricVersion != "" {
+			out = append(out, v.RubricVersion)
+		}
+	}
+	return out
+}
+
 // verdictsByItem splits stored verdicts into the judge's and the operator's,
 // keeping the newest of each per item.
 func verdictsByItem(verdicts []Verdict) (judge, operator map[int64]Verdict) {
@@ -318,6 +370,7 @@ func candidateOf(assign Assignment, baselineID int64) int64 {
 func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID int64) Judgment {
 	j := Judgment{WinThreshold: opts.WinThreshold}
 	var agreeItems, agreed int
+	rubrics := make(map[string]struct{})
 	for _, po := range outcomes {
 		if po.candidate != candID {
 			continue
@@ -325,6 +378,9 @@ func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID 
 		j.Pairs++
 		agreeItems += po.agreeItems
 		agreed += po.agreed
+		for _, rv := range po.rubrics {
+			rubrics[rv] = struct{}{}
+		}
 		if !po.decided {
 			continue
 		}
@@ -347,7 +403,22 @@ func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID 
 			Rate: float64(agreed) / float64(agreeItems),
 		}
 	}
+	j.RubricVersions = sortedKeys(rubrics)
 	return j
+}
+
+// sortedKeys returns a map's keys in a stable order; a map walk would reshuffle
+// the rubric list on every request.
+func sortedKeys(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // --- Per-category breakdown ---

@@ -2665,6 +2665,73 @@
                 }
             }
         },
+        "/eval/runs/{id}/pairs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Get an eval run's judged pairs, unblinded",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only return pairs for this task",
+                        "name": "task_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Unblinded pairs",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id or task_id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs/{id}/samples": {
             "get": {
                 "security": [
@@ -8067,6 +8134,13 @@
                 "pairs": {
                     "type": "integer"
                 },
+                "rubric_versions": {
+                    "description": "RubricVersions is the distinct set of rubric revisions the judge verdicts\nbehind this tally were made under, sorted. A set rather than a single\nvalue because a queue worked across a rubric edit is a real thing to see:\ntwo versions here means the win-rate mixes two policies. Judges that did\nnot report a version contribute nothing.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "ties": {
                     "type": "integer"
                 },
@@ -8089,6 +8163,128 @@
                 },
                 "llm_provider": {
                     "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PairDetail": {
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairSide"
+                },
+                "candidate": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairSide"
+                },
+                "category": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairItem"
+                    }
+                },
+                "k": {
+                    "description": "K is the pair's sample index within the task, so a k \u003e 1 run is readable.",
+                    "type": "integer"
+                },
+                "outcome": {
+                    "description": "Outcome is win/loss/tie/pending from the candidate's point of view.",
+                    "type": "string"
+                },
+                "pair_id": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "integer"
+                },
+                "task_prompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PairItem": {
+            "type": "object",
+            "properties": {
+                "item_id": {
+                    "type": "integer"
+                },
+                "presentation_order": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "verdicts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairVerdict"
+                    }
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PairSide": {
+            "type": "object",
+            "properties": {
+                "sample_id": {
+                    "type": "integer"
+                },
+                "variant": {
+                    "type": "string"
+                },
+                "variant_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PairVerdict": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "dimensions": {
+                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "judge_ident": {
+                    "description": "JudgeIdent names who judged. JudgeOperator marks a calibration call: it\nis listed here but never drives the pair's outcome.",
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "rubric_version": {
+                    "type": "string"
+                },
+                "winner": {
+                    "description": "Winner is the presented letter the judge named — what it actually saw.",
+                    "type": "string"
+                },
+                "winner_variant": {
+                    "description": "WinnerVariant is that letter resolved through the item's presentation\norder and the pair's assignment. Empty on a tie.",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.PairView": {
+            "type": "object",
+            "properties": {
+                "baseline_variant": {
+                    "description": "BaselineVariant names the incumbent every pair is measured against.",
+                    "type": "string"
+                },
+                "pairs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PairDetail"
+                    }
+                },
+                "run_id": {
+                    "type": "integer"
                 }
             }
         },

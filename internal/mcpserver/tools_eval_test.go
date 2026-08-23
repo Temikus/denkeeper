@@ -3,11 +3,13 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/eval"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func evalReadCtx() context.Context {
@@ -163,6 +165,93 @@ func TestEvalVerdict_RecordsAndDefaultsJudgeToTheKeyName(t *testing.T) {
 	}
 	if item.Status != eval.ItemJudged {
 		t.Errorf("item status = %q, want %q", item.Status, eval.ItemJudged)
+	}
+}
+
+// The rubric version has to survive the whole path — MCP input, store row,
+// aggregation — or the results view cannot name the policy a win-rate was
+// produced under.
+func TestEvalVerdict_RubricVersionReachesTheSummary(t *testing.T) {
+	s, store, runID := evalServer(t)
+	ctx := context.Background()
+	items, err := store.ListItems(ctx, runID)
+	if err != nil {
+		t.Fatalf("ListItems: %v", err)
+	}
+
+	for _, it := range items {
+		res, _, _ := s.handleEvalVerdict(evalWriteCtx(), nil, evalVerdictInput{
+			ItemID: it.ID, Winner: "a", RubricVersion: "  v1  ",
+		})
+		if res.IsError {
+			t.Fatalf("eval_verdict: %s", toolResultText(res))
+		}
+	}
+
+	res, _, _ := s.handleEvalSummary(evalReadCtx(), nil, evalRunInput{RunID: runID})
+	if res.IsError {
+		t.Fatalf("eval_summary: %s", toolResultText(res))
+	}
+	var sum eval.Summary
+	if err := json.Unmarshal([]byte(toolResultText(res)), &sum); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(sum.Verdicts) != 1 {
+		t.Fatalf("got %d verdicts, want 1", len(sum.Verdicts))
+	}
+	got := sum.Verdicts[0].Judgment.RubricVersions
+	if len(got) != 1 || got[0] != "v1" {
+		t.Errorf("rubric_versions = %v, want [v1] with the padding trimmed", got)
+	}
+}
+
+// listEvalToolNames connects an in-process client and returns what the judge
+// surface advertises.
+func listEvalToolNames(t *testing.T) []string {
+	t.Helper()
+	s := &Server{deps: Deps{Logger: testLogger()}}
+	s.mcpServer = mcp.NewServer(&mcp.Implementation{Name: "denkeeper", Version: "test"}, nil)
+	s.registerEvalTools()
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	if _, err := s.mcpServer.Connect(ctx, serverTransport, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "tool-list-test", Version: "test"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	result, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	names := make([]string, 0, len(result.Tools))
+	for _, tool := range result.Tools {
+		names = append(names, tool.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// The judge surface is exactly five tools, and none of them unblinds a pair.
+// The unblinded view (GET /eval/runs/{id}/pairs) is REST-only on purpose: a
+// judge that can look up which variant produced which response can unblind its
+// own queue, and every position-bias control downstream stops meaning anything.
+func TestEvalTools_JudgeSurfaceCannotUnblindAPair(t *testing.T) {
+	want := []string{"eval_get_pair", "eval_pending", "eval_run_status", "eval_summary", "eval_verdict"}
+	got := listEvalToolNames(t)
+
+	if len(got) != len(want) {
+		t.Fatalf("judge tools = %v, want exactly %v", got, want)
+	}
+	for i, name := range want {
+		if got[i] != name {
+			t.Fatalf("judge tools = %v, want exactly %v", got, want)
+		}
 	}
 }
 
