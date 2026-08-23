@@ -3,7 +3,7 @@ title: "Dry Runs & Previews"
 description: "Seeing what a skill or schedule would do before it does it."
 slug: "dry-runs"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-12T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 55
 toc: true
@@ -103,4 +103,4 @@ Set `[eval] audit = "summary"` to record only lifecycle events and errors instea
 
 ## Where to find it
 
-The dashboard exposes previews from the Skills and Schedules pages; the transcript panel shows suppressed calls inline. See the [REST API reference](/docs/reference/rest-api-reference/) for the full request and response shapes.
+The dashboard exposes previews from the Skills and Schedules pages; the transcript panel shows suppressed calls inline. See the [REST API reference](/docs/reference/rest-api/) for the full request and response shapes.

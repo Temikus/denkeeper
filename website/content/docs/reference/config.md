@@ -1,8 +1,9 @@
 ---
 title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
+slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-08-21T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -39,6 +40,7 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 | `default_model` | string | `"anthropic/claude-sonnet-4-20250514"` | Model identifier (format depends on provider) |
 | `cost_limit_soft` | float | `0` | Soft cost limit per session in USD (warns but continues) |
 | `cost_limit_hard` | float | `1.0` | Hard cost limit per session in USD (stops generation) |
+| `stream_idle_timeout_secs` | int | `120` | Seconds a streaming LLM response may sit idle before the request is aborted |
 
 ## `[[llm.providers]]`
 
@@ -72,6 +74,21 @@ api_key = "lm-studio"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `api_key` | string | *required* | OpenRouter API key |
+| `provider_order` | []string | none | Explicit preference list of upstream provider slugs (e.g. `"moonshotai"`) that overrides sticky routing when set — usually unnecessary |
+| `provider_allow_fallbacks` | bool | unset (OpenRouter default: allowed) | Whether OpenRouter may fall back to providers outside `provider_order` |
+| `provider_sticky` | bool | `true` | Prefer the last-served upstream provider for `provider_sticky_ttl` after a successful response, so upstream prompt caching keeps hitting. Reset by upstream errors (429/5xx/network), not by client cancellation or 4xx |
+| `provider_sticky_ttl` | duration string | `"1h"` | How long to keep the sticky provider preference |
+
+### `[llm.openrouter.reasoning]`
+
+Controls the `reasoning` parameter sent to OpenRouter.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | inferred `true` if `effort` or `max_tokens` is set | Activate reasoning with model defaults |
+| `effort` | string | none | `"xhigh"`, `"high"`, `"medium"`, `"low"`, `"minimal"`, or `"none"`. Mutually exclusive with `max_tokens` |
+| `max_tokens` | int | `0` | Reasoning token budget. Mutually exclusive with `effort` |
+| `exclude` | bool | `false` | Omit reasoning from the response (tokens are still billed) |
 
 ## `[llm.anthropic]` *(legacy)*
 
@@ -377,6 +394,25 @@ Dry-run turns persist nothing — no messages, telemetry, or memory — and exec
 | `onboarding_dismissed` | bool | `false` | Set by the dashboard when the onboarding checklist is dismissed |
 | `wizard_completed` | bool | `false` | Set by the dashboard when the setup wizard finishes |
 
+## `[[api.keys]]`
+
+Static API keys, in addition to any created at runtime via the Keys CLI, the `keys` REST endpoints, or first-run setup. All keys — static and runtime — are stored and checked the same way.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | *required* | Unique, human-readable key name |
+| `key` | string | *required* | The token clients send as `Authorization: Bearer <key>` |
+| `scopes` | string[] | *required* | Permissions this key grants; `["admin"]` grants everything |
+
+```toml
+[[api.keys]]
+name = "ci"
+key = "dk_..."
+scopes = ["chat", "sessions:read"]
+```
+
+**Valid scopes:** `admin`, `chat`, `health`, `sessions:read`, `sessions:write`, `costs:read`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `browser:read`, `browser:write`, `kv:read`, `kv:write`, `audit:read`, `channels:read`, `channels:write`, `eval:read`, `eval:write`. `admin` implies every other scope.
+
 ## `[api.mcp_server]`
 
 Exposes this Denkeeper instance *as* an MCP server, so an external MCP client (another agent, an IDE) can drive its agents, skills, schedules, and audit log. Opt-in.
@@ -501,13 +537,17 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 | `url` | string | *required for sse* | Remote server URL (SSE only, must be http/https) |
 | `headers` | map | — | HTTP headers sent with SSE requests (SSE only) |
 | `request_timeout_secs` | int | `0` | Per-server timeout override (0 = use global `[mcp]` value) |
+| `sse_keep_alive_secs` | int | `0` | Per-server keep-alive override (0 = use global `[mcp]` value, SSE only) |
 | `auth` | string | `""` | Authentication method: `""` (none) or `"oauth"` (OAuth 2.1, SSE only) |
 | `client_id` | string | — | OAuth2 client ID (optional; some servers use dynamic registration) |
 | `client_secret` | string | — | OAuth2 client secret (optional; must be set together with `client_id`) |
 | `scopes` | string[] | — | OAuth2 scopes to request (optional) |
+| `disabled_tools` | string[] | — | Tool names on this server to exclude from the LLM's tool payload |
 | `idempotent` | bool | `false` | Memoize identical calls to this server's tools within one message turn (identical name+args returns the cached result instead of re-executing). Only set on servers whose tools are **all** read-only — a cached write is a silently dropped side effect |
 | `idempotent_tools` | string[] | — | Per-tool memoization opt-in for servers that mix read and write tools; union with `idempotent` |
 | `trust_annotations` | bool | `false` | Also memoize tools this server marks read-only via the MCP `readOnlyHint` annotation. Annotations are self-declared by the server — enable only for servers you trust to describe their tools honestly |
+| `env_passthrough` | string[] | — | Additional parent-process env vars to forward into this stdio server's subprocess, on top of the built-in allowlist and the global `[mcp] env_passthrough`. `DENKEEPER_*` and other secret-matching names are always filtered out |
+| `allow_loopback` | bool | `false` | Bypass SSRF protection against localhost/127.x/::1 for this server's `url` (SSE only) — unsafe, only for a server you control |
 
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 
@@ -532,6 +572,8 @@ When enabled, Prometheus metrics are exposed at `GET /metrics` (no auth required
 | `password_hash` | string | — | bcrypt hash from `denkeeper passwd` CLI |
 | `session_secret` | string | — | Hex-encoded AES-256 key (64 hex chars). Generate with `openssl rand -hex 32` |
 | `session_max_age` | string | `"24h"` | Session cookie lifetime |
+| `preferred_login_method` | string | `"auto"` | Which login method the login page shows first: `"auto"`, `"password"`, or `"apikey"` |
+| `session_record_retention` | string | `"720h"` | How long to keep session records after they expire |
 
 Env override: `DENKEEPER_API_AUTH_SESSION_SECRET` sets `session_secret`.
 

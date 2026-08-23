@@ -213,9 +213,12 @@ format = "text"
 # rate_limit = 10.0                # max requests per second per API key (0 = unlimited)
 
 # API keys — each key has a name, secret, and list of scopes.
-# Valid scopes: chat, sessions:read, costs:read, skills:read, skills:write,
+# Valid scopes: admin, chat, health, sessions:read, sessions:write, costs:read,
+#               agents:read, agents:write, skills:read, skills:write,
 #               schedules:read, schedules:write, approvals:read, approvals:write,
-#               health, admin
+#               tools:read, tools:write, browser:read, browser:write, kv:read,
+#               kv:write, audit:read, channels:read, channels:write, eval:read,
+#               eval:write. "admin" implies every other scope.
 
 # Web dashboard key — needs all read scopes + approvals:write to manage approvals.
 # Navigate to http://localhost:8080 and enter this key to log in.
