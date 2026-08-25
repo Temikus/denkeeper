@@ -55,6 +55,15 @@
     mean_cost_per_task: 'Cost per test case',
   }
 
+  // Categories are stored as slugs; SuggestCases.svelte labels them the same
+  // way, and the two lists have to agree.
+  const CATEGORY_LABEL = {
+    chat: 'Chat / persona',
+    skill_command: 'Skill command',
+    scheduled: 'Scheduled',
+    tool_heavy: 'Tool-heavy',
+  }
+
   const OUTCOME_LABEL = {
     win: 'candidate won',
     loss: 'current won',
@@ -91,6 +100,11 @@
     return v.toFixed(digits)
   }
 
+  /** A signed plain number, for delta cells with no unit of their own. */
+  function fmtSignedNum(v, digits = 2) {
+    return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`
+  }
+
   function fmtMs(ms) {
     if (!ms) return '—'
     return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`
@@ -112,6 +126,10 @@
 
   function verdictLabel(v) {
     return VERDICT_LABEL[v] || v
+  }
+
+  function categoryLabel(c) {
+    return CATEGORY_LABEL[c] || c || '—'
   }
 
   /** The candidate's own metrics row, for the objective table's ordering. */
@@ -202,7 +220,41 @@
 
   /** Judge calls only — the operator's calibration marks are shown apart. */
   function judgeVerdicts(pair) {
-    return (pair?.items || []).flatMap(it => (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order })))
+    return (pair?.items || []).flatMap(it => {
+      const key = letterKey(it, pair)
+      return (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order, key }))
+    })
+  }
+
+  // A judge names a presented letter, and only the pair's assignment — which
+  // never leaves the server — says which model that letter was. The pairs
+  // endpoint resolves the overall winner but leaves the per-dimension letters
+  // raw, so an unresolved "persona_fit: b" names nothing the reader can act
+  // on. A non-tie verdict on an item is itself the key for that item's
+  // letters: its winner letter is its winner_variant, so the other letter is
+  // the other side of the pair. An item everyone judged a tie stays
+  // unresolvable and keeps its letter.
+  function letterKey(item, pair) {
+    for (const v of item.verdicts || []) {
+      if (!v.winner_variant || !v.winner) continue
+      const won = v.winner.toLowerCase()
+      if (won !== 'a' && won !== 'b') continue
+      const other = v.winner_variant === pair.candidate?.variant
+        ? pair.baseline?.variant
+        : pair.candidate?.variant
+      return won === 'a'
+        ? { a: v.winner_variant, b: other }
+        : { a: other, b: v.winner_variant }
+    }
+    return null
+  }
+
+  /** One dimension's winner, as a model name where the letter resolves. */
+  function dimensionWinner(value, key) {
+    const v = (value || '').toLowerCase()
+    if (v === 'tie') return 'tie'
+    if (key && (v === 'a' || v === 'b')) return key[v] || value
+    return value
   }
 
   /** The model behind a variant, for the transcript header. */
@@ -390,7 +442,7 @@
               {#each v.categories as c (c.category)}
                 <tr class:failed={c.regressed}>
                   <td>
-                    {c.category}
+                    {categoryLabel(c.category)}
                     {#if c.regressed}<span class="flag" data-testid="regressed-{c.category}">regressed</span>{/if}
                   </td>
                   <td>{c.judged_pairs}</td>
@@ -529,17 +581,33 @@
                   </span>
                 </td>
                 <td class="prompt-cell">{shortPrompt(t.prompt)}</td>
-                <td>{t.category}</td>
+                <td>{categoryLabel(t.category)}</td>
                 {#each variants as v (v.variant_id)}
                   {@const cell = (t.variants || []).find(c => c.variant_id === v.variant_id)}
                   <td>
                     {#if cell}
-                      {fmtUSD(cell.mean_cost)} · {fmtNum(cell.mean_rounds, 1)} rounds
+                      {fmtUSD(cell.mean_cost)}
                       {#if v.name !== baselineName && cell.delta_cost}
                         <span class="delta" class:worse={cell.delta_cost > 0}>
                           {fmtCostDelta(cell.delta_cost)}
                         </span>
                       {/if}
+                      <span class="cell-line">
+                        {fmtNum(cell.mean_rounds, 1)} rounds
+                        {#if v.name !== baselineName && cell.delta_rounds}
+                          <span class="delta" class:worse={cell.delta_rounds > 0}>
+                            {fmtSignedNum(cell.delta_rounds, 1)}
+                          </span>
+                        {/if}
+                      </span>
+                      <span class="cell-line">
+                        {fmtMs(cell.mean_latency_ms)}
+                        {#if v.name !== baselineName && cell.delta_latency_ms}
+                          <span class="delta" class:worse={cell.delta_latency_ms > 0}>
+                            {cell.delta_latency_ms > 0 ? '+' : '-'}{fmtMs(Math.abs(cell.delta_latency_ms))}
+                          </span>
+                        {/if}
+                      </span>
                     {:else}
                       —
                     {/if}
@@ -605,7 +673,7 @@
                                   {#if jv.dimensions}
                                     <ul class="dimensions">
                                       {#each Object.entries(jv.dimensions) as [dim, who] (dim)}
-                                        <li><span class="dim">{dim}</span>: {who}</li>
+                                        <li><span class="dim">{dim}</span>: {dimensionWinner(who, jv.key)}</li>
                                       {/each}
                                     </ul>
                                   {/if}
@@ -756,6 +824,9 @@
 
   /* Per-task diffs */
   .prompt-cell { max-width: 380px; overflow-wrap: anywhere; }
+  /* Rounds and latency sit under the cost, so a cell reads as three lines
+     rather than one run-on string. */
+  .cell-line { display: block; font-size: 11px; color: var(--text-muted); }
   .delta { color: var(--success); margin-left: 6px; font-size: 11px; }
   .delta.worse { color: var(--warn); }
   .detail-row td { background: var(--surface); }

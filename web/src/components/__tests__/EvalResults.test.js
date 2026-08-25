@@ -55,9 +55,11 @@ describe('EvalResults — verdict banner', () => {
     expect(screen.getByTestId('agreement-4')).toHaveTextContent('4 of 5 spot checks')
     expect(screen.getByTestId('rubric-4')).toHaveTextContent('Rubric v1')
 
+    // Categories are labelled, not shown as their stored slugs.
     const cats = screen.getByTestId('categories-4')
-    expect(cats).toHaveTextContent('tool_heavy')
-    expect(cats).toHaveTextContent('chat')
+    expect(cats).toHaveTextContent('Tool-heavy')
+    expect(cats).toHaveTextContent('Chat / persona')
+    expect(cats).not.toHaveTextContent('tool_heavy')
   })
 
   test('flags a failed gate and a regressed category, and appends divergence', async () => {
@@ -288,6 +290,75 @@ describe('EvalResults — per-task diffs', () => {
 
     await fireEvent.click(screen.getByTestId('turns-retry'))
     await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+  })
+
+  test('a row carries cost, rounds and latency, each with its own delta', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    const row = await screen.findByTestId('task-row-11')
+    // Current: $0.02, 3 rounds, 5 s. Candidate: cheaper, a round shorter,
+    // 900 ms faster — all three deltas signed against the current model.
+    expect(row).toHaveTextContent('3.0 rounds')
+    expect(row).toHaveTextContent('5.0 s')
+    expect(row).toHaveTextContent('2.0 rounds')
+    expect(row).toHaveTextContent('4.1 s')
+    expect(row).toHaveTextContent('-1.0')
+    expect(row).toHaveTextContent('-900 ms')
+  })
+
+  test('labels the test case kind rather than showing its slug', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    const row = await screen.findByTestId('task-row-11')
+    expect(row).toHaveTextContent('Tool-heavy')
+    expect(row).not.toHaveTextContent('tool_heavy')
+  })
+
+  test('resolves each dimension letter to the model that won it', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    const dims = [...screen.getByTestId('pair-judgment-71').querySelectorAll('.dimensions li')]
+      .map(li => li.textContent.replace(/\s+/g, ' ').trim())
+    // The letters are the blinded presentation order, not a model. Both
+    // orders named the candidate, so every non-tie dimension resolves to it.
+    expect(dims).toEqual([
+      'correctness: anthropic/claude-3-opus',
+      'tool_use: anthropic/claude-3-opus',
+      'tone: tie',
+      'correctness: anthropic/claude-3-opus',
+    ])
+  })
+
+  test('keeps the raw letter when nothing on the item can unblind it', async () => {
+    server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
+      ...evalPairs,
+      pairs: [{
+        ...evalPairs.pairs[0],
+        outcome: 'tie',
+        items: [{
+          item_id: 141, presentation_order: 'ab', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'tie', winner_variant: '',
+            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-17T10:00:00Z',
+          }],
+        }],
+      }],
+    })))
+
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    const judgment = screen.getByTestId('pair-judgment-71')
+    expect(judgment).toHaveTextContent('called it a tie')
+    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: a')
   })
 
   test('an unjudged comparison says so rather than showing nothing', async () => {
