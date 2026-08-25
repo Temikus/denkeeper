@@ -358,6 +358,105 @@ describe('EvalResults — apply to agent', () => {
   })
 })
 
+describe('EvalResults — variant naming', () => {
+  /** A run created over the API or MCP, whose variants carry arbitrary names. */
+  function apiNamedRun() {
+    withSummary({
+      baseline_variant: 'baseline',
+      variants: [
+        { ...evalSummary.variants[0], name: 'baseline' },
+        { ...evalSummary.variants[1], name: 'variant-a' },
+      ],
+      verdicts: [{ ...evalSummary.verdicts[0], variant: 'variant-a', baseline: 'baseline' }],
+    })
+  }
+
+  test('names the model a variant ran, never the raw variant name', async () => {
+    apiNamedRun()
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.getByTestId('verdict-4')).toHaveTextContent('anthropic/claude-3-opus')
+    expect(screen.getByTestId('verdict-4').textContent).not.toContain('variant-a')
+  })
+
+  test('applying sends the model, not the variant name', async () => {
+    let patched = null
+    apiNamedRun()
+    server.use(
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patched = await request.json()
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+    await fireEvent.click(await screen.findByTestId('apply-confirm-btn'))
+
+    await waitFor(() => expect(patched).not.toBeNull())
+    expect(patched.llm_model).toBe('anthropic/claude-3-opus')
+  })
+
+  test('a variant with no model behind it cannot be applied', async () => {
+    withSummary({
+      variants: [evalSummary.variants[0], { ...evalSummary.variants[1], overlay: {} }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    expect(screen.getByTestId('apply-4')).toBeDisabled()
+    expect(screen.getByTestId('apply-blocker-4')).toHaveTextContent('did not record a model')
+  })
+
+  test('nor escalated to a full eval', async () => {
+    withSummary({
+      variants: [evalSummary.variants[0], { ...evalSummary.variants[1], overlay: {} }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT, quick: true } })
+
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.queryByTestId('escalate-4')).not.toBeInTheDocument()
+  })
+})
+
+describe('EvalResults — apply confirm placement', () => {
+  test('confirms inline, leaving the gate table on screen', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+
+    await waitFor(() => expect(screen.getByTestId('apply-confirm')).toBeInTheDocument())
+    // The evidence for the decision must stay visible while it is made.
+    expect(document.querySelector('.overlay')).toBeNull()
+    expect(screen.getByTestId('gates-4')).toBeVisible()
+  })
+
+  test('the confirm sits in the verdict it belongs to', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+
+    const confirm = await screen.findByTestId('apply-confirm')
+    expect(screen.getByTestId('verdict-4')).toContainElement(confirm)
+  })
+})
+
+describe('EvalResults — accessible tables', () => {
+  test('the gate and category tables carry captions', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('gates-4')).toBeInTheDocument())
+    expect(screen.getByTestId('gates-4').querySelector('caption'))
+      .toHaveTextContent('Objective checks for anthropic/claude-3-opus')
+    expect(screen.getByTestId('categories-4').querySelector('caption'))
+      .toHaveTextContent('Per-category results for anthropic/claude-3-opus')
+  })
+})
+
 describe('evalSampleTranscript', () => {
   test('maps a sample onto the dry-run transcript shape', () => {
     const t = evalSampleTranscript(evalSamples[0], 'kimi-k2.6')

@@ -126,7 +126,8 @@
 
   /** A clean Quick check is worth escalating; a failed gate is not. */
   function canEscalate(verdict) {
-    return quick && (verdict.gates || []).every(g => g.pass) && verdict.verdict !== 'downgrade'
+    return quick && !!modelOf(verdict)
+      && (verdict.gates || []).every(g => g.pass) && verdict.verdict !== 'downgrade'
   }
 
   let judgeCommand = $derived(`claude -p "judge pending pairs for eval run ${run?.id}"`)
@@ -211,13 +212,28 @@
     return variant.overlay?.llm_model || variant.name
   }
 
+  /**
+   * Variant names are free text chosen by whoever created the run, so a run
+   * started over the API or MCP can be called `variant-a` or `sample-2`. The
+   * model the variant actually ran is the honest label, and the only one this
+   * page's terminology rule allows; the raw name is the last resort.
+   */
+  function displayName(variantName) {
+    return metricsFor(variantName)?.overlay?.llm_model || variantName
+  }
+
+  /** A variant with no model in its overlay is nothing the agent can switch to. */
+  function modelOf(verdict) {
+    return metricsFor(verdict.variant)?.overlay?.llm_model || ''
+  }
+
   function askApply(verdict) {
     applyError = ''
     applyOk = ''
     const m = metricsFor(verdict.variant)
     confirmApply = {
       variant: verdict.variant,
-      model: m?.overlay?.llm_model || verdict.variant,
+      model: modelOf(verdict),
       provider: m?.overlay?.llm_provider || '',
     }
   }
@@ -245,7 +261,7 @@
   function escalate(verdict) {
     const m = metricsFor(verdict.variant)
     onrunfull({
-      model: m?.overlay?.llm_model || verdict.variant,
+      model: modelOf(verdict),
       provider: m?.overlay?.llm_provider || '',
       taskSet: summary?.task_set || '',
     })
@@ -279,7 +295,7 @@
       <header class="verdict-head">
         <span class="verdict-label" data-testid="verdict-label-{v.variant_id}">{verdictLabel(v.verdict)}</span>
         <span class="verdict-sub">
-          <span class="mono">{v.variant}</span> against your current model
+          <span class="mono">{displayName(v.variant)}</span> against your current model
           {#if agent?.model}<span class="mono">({agent.model})</span>{/if}
         </span>
       </header>
@@ -312,6 +328,7 @@
       <h3 class="block-title">Objective checks</h3>
       <div class="table-wrapper">
         <table class="table" data-testid="gates-{v.variant_id}">
+          <caption class="sr-only">Objective checks for {displayName(v.variant)}</caption>
           <thead>
             <tr>
               <th>Check</th>
@@ -375,6 +392,7 @@
         <h3 class="block-title">By kind of test case</h3>
         <div class="table-wrapper">
           <table class="table" data-testid="categories-{v.variant_id}">
+            <caption class="sr-only">Per-category results for {displayName(v.variant)}</caption>
             <thead>
               <tr>
                 <th>Kind</th>
@@ -406,12 +424,42 @@
         </div>
       {/if}
 
+      <!-- Inline, not an overlay: this is a reversible config write, and the
+           gate table above it is the evidence for the decision. The house rule
+           is overlay for irreversible actions only (Stop run), inline here. -->
+      {#if confirmApply?.variant === v.variant}
+        <div class="apply-confirm" data-testid="apply-confirm">
+          <span>
+            Switch <strong>{run.base_agent}</strong> from
+            <span class="mono">{agent?.model || 'its current model'}</span> to
+            <span class="mono">{confirmApply.model}</span>{#if confirmApply.provider}
+              on <span class="mono">{confirmApply.provider}</span>{/if}?
+          </span>
+          <p class="hint">Every new conversation on this agent uses it from then on.</p>
+          {#if applyError}
+            <div class="inline-error" role="alert" data-testid="apply-error">{applyError}</div>
+          {/if}
+          <div class="confirm-actions">
+            <button class="btn-primary" onclick={doApply} disabled={applying}
+              data-testid="apply-confirm-btn" use:focusOnMount>
+              {applying ? 'Applying…' : 'Switch model'}
+            </button>
+            <button class="btn-ghost" onclick={() => confirmApply = null} disabled={applying}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+
       <div class="verdict-actions">
         {#if v.verdict === 'upgrade'}
           <button class="btn-primary" onclick={() => askApply(v)}
-            disabled={appliedVariant === v.variant} data-testid="apply-{v.variant_id}">
+            disabled={appliedVariant === v.variant || !modelOf(v)} data-testid="apply-{v.variant_id}">
             {appliedVariant === v.variant ? 'Applied' : `Apply to ${run.base_agent}`}
           </button>
+          {#if !modelOf(v)}
+            <span class="hint" data-testid="apply-blocker-{v.variant_id}">
+              This run did not record a model to switch to.
+            </span>
+          {/if}
         {/if}
         {#if canEscalate(v)}
           <button class="btn-ghost" onclick={() => escalate(v)} data-testid="escalate-{v.variant_id}">
@@ -638,35 +686,35 @@
   {/if}
 {/if}
 
-{#if confirmApply}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) confirmApply = null }}
-    onkeydown={(e) => { if (e.key === 'Escape') confirmApply = null }}
-    role="dialog" aria-modal="true" aria-labelledby="apply-title"
-    tabindex="-1" use:focusOnMount>
-    <div class="confirm-modal" data-testid="apply-confirm">
-      <h2 id="apply-title">Switch model</h2>
-      <p>
-        Switch <strong>{run.base_agent}</strong> from
-        <span class="mono">{agent?.model || 'its current model'}</span> to
-        <span class="mono">{confirmApply.model}</span>{#if confirmApply.provider}
-          on <span class="mono">{confirmApply.provider}</span>{/if}? Every new conversation on this
-        agent uses it from then on.
-      </p>
-      {#if applyError}
-        <div class="inline-error" role="alert" data-testid="apply-error">{applyError}</div>
-      {/if}
-      <div class="modal-actions">
-        <button class="btn-primary" onclick={doApply} disabled={applying} data-testid="apply-confirm-btn">
-          {applying ? 'Applying…' : 'Switch model'}
-        </button>
-        <button class="btn-ghost" onclick={() => confirmApply = null} disabled={applying}>Cancel</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
 <style>
+  .apply-confirm {
+    margin: 10px 0;
+    padding: 10px;
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    border-radius: var(--radius);
+    font-size: 13px;
+  }
+  .apply-confirm .hint { margin-top: 2px; }
+  .confirm-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .block-title {
     font-size: 11px;
     font-weight: 500;
