@@ -79,7 +79,7 @@ const PAIRS = {
           item_id: 1, presentation_order: 'AB', status: 'judged',
           verdicts: [{
             judge_ident: 'claude-code', winner: 'B', winner_variant: 'openai/gpt-4o',
-            dimensions: { correctness: 'B', tone: 'tie' },
+            dimensions: { correctness: 'b', tone: 'tie' },
             notes: 'Candidate followed the persona more closely.',
             rubric_version: 'v1', created_at: '2026-08-20T10:00:00Z',
           }],
@@ -88,7 +88,7 @@ const PAIRS = {
           item_id: 2, presentation_order: 'BA', status: 'judged',
           verdicts: [{
             judge_ident: 'claude-code', winner: 'A', winner_variant: 'openai/gpt-4o',
-            dimensions: { correctness: 'A' }, notes: '', rubric_version: 'v1',
+            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
             created_at: '2026-08-20T10:01:00Z',
           }],
         },
@@ -137,7 +137,7 @@ describe('EvalTaskDiffs — rows', () => {
     await renderDiffs()
 
     expect(screen.getByText('Summarise the on-call handover for this week')).toBeInTheDocument()
-    expect(screen.getByText('chat')).toBeInTheDocument()
+    expect(screen.getByText('Chat / persona')).toBeInTheDocument()
     // Both models' numbers, in the operator's units.
     expect(screen.getByText('$0.0200')).toBeInTheDocument()
     expect(screen.getByText('$0.0150')).toBeInTheDocument()
@@ -215,9 +215,10 @@ describe('EvalTaskDiffs — expansion', () => {
 
     expect(screen.getByText('Current model answer')).toBeInTheDocument()
     expect(screen.getByText('Candidate model answer')).toBeInTheDocument()
-    // The candidate column is headed by its model, in the table and again on
-    // the transcript.
-    expect(screen.getAllByText('openai/gpt-4o')).toHaveLength(2)
+    // The candidate column is headed by its model in the table, and the
+    // transcript beneath it names the model that answered.
+    expect(screen.getByRole('columnheader', { name: /openai\/gpt-4o/ })).toBeInTheDocument()
+    expect(screen.getByTestId('task-detail-11')).toHaveTextContent('openai/gpt-4o')
     // Tool calls came through the adapter, suppressed one included.
     expect(screen.getAllByText('kv_get')).toHaveLength(2)
     expect(screen.getAllByText('SUPPRESSED')).toHaveLength(2)
@@ -233,7 +234,47 @@ describe('EvalTaskDiffs — expansion', () => {
     expect(judgment).toHaveTextContent('picked openai/gpt-4o')
     expect(judgment).toHaveTextContent('correctness')
     expect(judgment).toHaveTextContent('Candidate followed the persona more closely.')
+    // Dimension letters are blinding artefacts: both orders named the
+    // candidate, so both resolve to it rather than showing 'a' and 'b'.
+    expect(judgment.querySelectorAll('.dim-winner')).toHaveLength(3)
+    expect(judgment).not.toHaveTextContent(/\bcorrectness\s*[ab]\b/i)
     expect(judgment).toHaveTextContent('rubric v1')
+  })
+
+  test('resolves each dimension letter to the model that won it', async () => {
+    await renderDiffs()
+    await expandFirstRow()
+
+    const winners = [...screen.getByTestId('judgment-11-0').querySelectorAll('.dim-winner')]
+      .map(el => el.textContent)
+    // AB order: correctness 'b' → the candidate, tone stays a tie.
+    // BA order: correctness 'a' → the candidate again.
+    expect(winners).toEqual(['openai/gpt-4o', 'tie', 'openai/gpt-4o'])
+  })
+
+  test('keeps the raw letter when nothing on the item can unblind it', async () => {
+    server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
+      ...PAIRS,
+      pairs: [{
+        ...PAIRS.pairs[0],
+        outcome: 'tie',
+        items: [{
+          item_id: 1, presentation_order: 'AB', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'tie', winner_variant: '',
+            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-20T10:00:00Z',
+          }],
+        }],
+      }],
+    })))
+
+    await renderDiffs()
+    await expandFirstRow()
+
+    const judgment = screen.getByTestId('judgment-11-0')
+    expect(judgment).toHaveTextContent('called it a tie')
+    expect(judgment.querySelector('.dim-winner')).toHaveTextContent('a')
   })
 
   test('says when a comparison is unjudged rather than dead-ending', async () => {

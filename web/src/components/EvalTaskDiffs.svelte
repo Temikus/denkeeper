@@ -112,9 +112,55 @@
     return (pairs || []).find(p => p.task_id === taskID && p.k === k) || null
   }
 
-  /** Every verdict recorded against a pair, across both presentation orders. */
+  // A judge names a presented letter, and only the pair's assignment — which
+  // never leaves the server — says which model that letter was. The pair view
+  // resolves the overall winner (winner_variant) but leaves the per-dimension
+  // letters raw, so an unresolved "correctness: B" means nothing to the reader.
+  // A non-tie verdict on an item is itself the key for that item's letters:
+  // its winner letter is its winner_variant, so the other letter is the other
+  // side of the pair. An item judged a tie by everyone stays unresolvable and
+  // keeps its letter.
+  function letterKey(item, pair) {
+    for (const vd of item.verdicts || []) {
+      if (!vd.winner_variant || !vd.winner) continue
+      const won = vd.winner.toLowerCase()
+      if (won !== 'a' && won !== 'b') continue
+      const other = vd.winner_variant === pair.candidate?.variant
+        ? pair.baseline?.variant
+        : pair.candidate?.variant
+      return won === 'a'
+        ? { a: vd.winner_variant, b: other }
+        : { a: other, b: vd.winner_variant }
+    }
+    return null
+  }
+
+  /**
+   * Every verdict recorded against a pair, across both presentation orders,
+   * each carrying the letter key of the item it was recorded on.
+   */
   function verdictsOf(pair) {
-    return (pair?.items || []).flatMap(item => item.verdicts || [])
+    return (pair?.items || []).flatMap(item => {
+      const key = letterKey(item, pair)
+      return (item.verdicts || []).map(vd => ({ ...vd, key }))
+    })
+  }
+
+  /** One dimension's winner, as a model name where the letter can be resolved. */
+  function dimensionWinner(value, key) {
+    const v = (value || '').toLowerCase()
+    if (v === 'tie') return 'tie'
+    if (key && (v === 'a' || v === 'b')) return key[v] || value
+    return value
+  }
+
+  // Categories are stored as slugs; SuggestCases.svelte labels them the same
+  // way, and the two lists have to agree.
+  const CATEGORY_LABEL = {
+    chat: 'Chat / persona',
+    skill_command: 'Skill command',
+    scheduled: 'Scheduled',
+    tool_heavy: 'Tool-heavy',
   }
 
   const OUTCOME_LABEL = {
@@ -204,7 +250,7 @@
           {#each perTask as t (t.task_id)}
             <tr data-testid="task-row-{t.task_id}">
               <td class="col-prompt" title={t.prompt}>{shortPrompt(t.prompt)}</td>
-              <td><span class="pill">{t.category || '—'}</span></td>
+              <td><span class="pill">{CATEGORY_LABEL[t.category] || t.category || '—'}</span></td>
               {#each variants as v (v.variant_id)}
                 {@const cell = t.variants?.find(c => c.variant_id === v.variant_id)}
                 {#if !cell || cell.samples_ok === 0}
@@ -320,7 +366,7 @@
                                       {#if vd.dimensions && Object.keys(vd.dimensions).length > 0}
                                         <ul class="dimensions">
                                           {#each Object.entries(vd.dimensions) as [dim, winner] (dim)}
-                                            <li><span class="dim">{dim}</span><span class="dim-winner">{winner}</span></li>
+                                            <li><span class="dim">{dim}</span><span class="dim-winner">{dimensionWinner(winner, vd.key)}</span></li>
                                           {/each}
                                         </ul>
                                       {/if}
