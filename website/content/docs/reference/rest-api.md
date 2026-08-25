@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-08-25T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -388,7 +388,7 @@ Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` fi
 
 ## Evals
 
-An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.
+An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. The loop these endpoints serve is described in [Evals](/docs/concepts/evals/). Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.
 
 ### `GET /api/v1/eval/config`
 
@@ -396,11 +396,23 @@ An eval run compares two or more config variants of one agent over a saved set o
 
 Returns the `[eval]` defaults and gate thresholds used to size and judge a run — `default_k`, `max_cost_per_run`, `max_concurrent`, `completeness_floor`, `win_threshold`, and the rest of the config used by `POST /eval/runs` and the verdict rule when a request doesn't override them.
 
+### `GET /api/v1/eval/suggest`
+
+**Scope:** `eval:read`
+
+Past turns worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Filters: `?agent=`, `?limit=` (default 20, max 100), `?since=` (RFC3339, default 90 days ago).
+
+Each candidate carries `prompt`, `category`, `conversation_id`, `message_id`, `created_at`, the `signals` that earned it a place, and `preceding` — the turns before it, ready to pin as the test case's history.
+
+Candidates are **stratified across the four categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
+
 ### `POST /api/v1/eval/estimate`
 
 **Scope:** `eval:read`
 
 Prices a prospective run before creating it — same request shape as `POST /eval/runs` — so a cost cap can be sized sensibly ahead of spending real tokens.
+
+Per (task, variant) the `basis` is, in order: `history` (the task's source conversation has real telemetry, giving an honest per-exchange average, scaled by the list-price ratio when the variant runs a different model), `list_price` (the variant's advertised per-million-token price against a nominal per-turn token budget), or `unknown`. Nothing is fabricated — a variant priceable neither way reports `unknown` with a zero range and the caller shows the cap alone. The response carries `low`, `high`, `currency`, `basis`, `tasks`, `k`, a `per_variant` breakdown, and a `note` when a sampled subset or an unpriceable task makes the figure less than a straight sum.
 
 ### `POST /api/v1/eval/task-sets`
 
@@ -486,11 +498,14 @@ Create and start a run.
     { "name": "candidate", "llm_model": "moonshotai/kimi-k3" }
   ],
   "k": 3,
+  "sample_tasks": 10,
   "cost_cap": 2.0
 }
 ```
 
 At least two variants are required. An empty variant runs the agent's live config; by convention the incumbent is listed first, and per-task deltas are measured against it. `k` and `cost_cap` default to `[eval] default_k` and `max_cost_per_run`. An unregistered `llm_provider` is rejected here rather than failing every sample later.
+
+`sample_tasks` runs a stratified random subset of the set instead of all of it; `0` or a value at or above the set size runs everything. The server draws the subset, because the drawn ids are pinned on the run and every expected-sample figure counts what was drawn — which also means a task added to the set afterwards cannot change what an existing run was measuring. `as_of` (RFC3339) pins the clock the samples see, so a replay is date-deterministic.
 
 ### `GET /api/v1/eval/runs`
 
@@ -515,6 +530,16 @@ Cancel an active run. In-flight calls die on the context, queued samples never s
 **Scope:** `eval:read`
 
 The objective scorecard. Rates are tool-call level with cached and suppressed calls excluded, because nothing executed in either case. A run below `[eval] completeness_floor` still reports its numbers but is flagged inconclusive.
+
+### `GET /api/v1/eval/runs/{id}/pairs`
+
+**Scope:** `eval:read`
+
+The judged pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Filter to one task with `?task_id=`.
+
+Outcomes follow the aggregation rules exactly — `win` or `loss` only when both presentation orders carry a judge verdict naming the same variant, `tie` when the orders disagree (the judge tracked position, not quality), `pending` while half-judged. Operator calibration marks (`judge_ident` `operator`) are listed but never drive the outcome.
+
+This is the operator's results view and is deliberately **not** reachable from the judge's MCP tools, which must not be able to look up which variant produced which response.
 
 ### `GET /api/v1/eval/runs/{id}/samples`
 
