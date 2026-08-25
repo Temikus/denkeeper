@@ -98,7 +98,7 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp \
   --header "Authorization: Bearer $DENKEEPER_JUDGE_KEY"
 ```
 
-The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call.
+The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
 **Calibrate a new rubric before trusting it headless.** Judge a random ~20-item subset yourself and record your own call alongside the judge's (`judge_ident: "operator"`). Operator marks sit beside the judge's rather than replacing it, are excluded from the win rate, and feed only the agreement figure `eval_summary` reports. Below roughly 80 % agreement, fix the rubric first — a drifted rubric quietly devalues every later run.
