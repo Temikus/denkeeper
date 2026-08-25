@@ -479,3 +479,65 @@ export const api = {
   resume: () => apiFetch('/api/v1/resume', { method: 'POST' }),
   panicStatus: () => apiFetch('/api/v1/panic'),
 }
+
+// --- Eval trace adapter ----------------------------------------------------
+// An eval sample stores its trace as raw []agent.ToolCallRecord JSON
+// (tool_name, outcome "suppressed", duration_ms) with cost and latency on the
+// sample itself, while DryRunTranscript renders the dry-run transcript shape
+// (tool, suppressed bool, duration_ms, cost_usd — internal/api/dryrun.go).
+// The mapping lives here so the component stays one component: forking it for
+// evals would mean every future transcript change has two homes.
+
+/**
+ * Decodes a sample's trace into DryRunTranscript's tool-call shape.
+ * Accepts the stored JSON string or an already-decoded array; an unparseable
+ * or absent trace yields an empty list rather than throwing — a sample with a
+ * broken trace should still render its response.
+ */
+export function evalTraceCalls(trace) {
+  let records = trace
+  if (typeof trace === 'string') {
+    if (trace.trim() === '') return []
+    try {
+      records = JSON.parse(trace)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(records)) return []
+  return records.map(r => ({
+    tool: r.tool_name || '',
+    server: r.server_name || '',
+    round: r.round || 0,
+    // Records written before outcome existed carry success only.
+    outcome: r.outcome || (r.success === false ? 'failed' : 'ok'),
+    suppressed: r.outcome === 'suppressed',
+    duration_ms: r.duration_ms || 0,
+    arguments: r.arguments || '',
+    result: r.result || '',
+    error: r.error_msg || '',
+  }))
+}
+
+/**
+ * Adapts one eval sample to a dry-run transcript for DryRunTranscript.
+ * opts.model / opts.requestedModel name the model that answered — a sample
+ * does not carry one, so the caller passes the variant's overlay model.
+ */
+export function evalSampleTranscript(sample, opts = {}) {
+  const smp = sample || {}
+  const calls = evalTraceCalls(smp.trace)
+  return {
+    model: opts.model || '',
+    requested_model: opts.requestedModel || '',
+    response: smp.response || '',
+    rounds: smp.rounds || 0,
+    stop_reason: smp.stop_reason || '',
+    duration_ms: smp.latency_ms || 0,
+    cost_usd: smp.cost || 0,
+    // The sample's own counter is authoritative: the trace is trimmed for
+    // rendering, the counts are not.
+    suppressed_count: smp.outcome_suppressed ?? calls.filter(c => c.suppressed).length,
+    tool_calls: calls,
+  }
+}
