@@ -114,6 +114,18 @@
     return taskSets.find(t => t.id === id)?.name || `#${id}`
   }
 
+  /**
+   * A Quick check drew a subset of the set. task_ids is the authoritative
+   * signal — the server records the drawn ids and leaves it unset for a whole-
+   * set run — so a Quick check over a set of ten or fewer cases is still
+   * recognised, which the count comparison alone misses. The comparison stays
+   * as the fallback for runs created before the ids were pinned.
+   */
+  function isQuickCheck(run, setCases) {
+    if (Array.isArray(run.task_ids)) return run.task_ids.length > 0
+    return run.task_count != null && setCases != null && run.task_count < setCases
+  }
+
   /** Total cases in the run's set, when that set is still around to ask. */
   function setTotal(id) {
     return taskSets.find(t => t.id === id)?.task_count ?? null
@@ -669,7 +681,7 @@
           <div class="results-panel" id="results-panel-{run.id}" data-testid="results-panel-{run.id}">
             <EvalResults {run}
               agent={agents.find(a => a.name === run.base_agent) || null}
-              quick={run.task_count != null && setCases != null && run.task_count < setCases}
+              quick={isQuickCheck(run, setCases)}
               onapplied={reloadAgents}
               onrunfull={runFull} />
           </div>
