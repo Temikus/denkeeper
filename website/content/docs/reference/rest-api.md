@@ -529,7 +529,7 @@ Cancel an active run. In-flight calls die on the context, queued samples never s
 
 **Scope:** `eval:read`
 
-The objective scorecard. Rates are tool-call level with cached and suppressed calls excluded, because nothing executed in either case. A run below `[eval] completeness_floor` still reports its numbers but is flagged inconclusive.
+The objective scorecard. Rates are tool-call level with cached and suppressed calls excluded, because nothing executed in either case. A run below `[eval] completeness_floor` still reports its numbers but is flagged inconclusive. The judgment block carries the win rate against its threshold, the operator agreement figure when calibration marks exist, and `rubric_versions`, the distinct set of rubric revisions the counted verdicts were made under.
 
 ### `GET /api/v1/eval/runs/{id}/pairs`
 

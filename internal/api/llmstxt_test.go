@@ -33,6 +33,8 @@ func TestLLMsTxt_NoAuth(t *testing.T) {
 	for _, want := range []string{
 		"/api/v1/openapi.json",
 		"POST /api/v1/chat",
+		"POST /api/v1/schedules/{name}/dry-run",
+		"POST /api/v1/skills/{name}/dry-run",
 		"# Denkeeper",
 	} {
 		if !strings.Contains(body, want) {
@@ -66,6 +68,9 @@ func TestLLMsTxt_ListsEvalEndpoints(t *testing.T) {
 		"GET  /api/v1/eval/runs/{id}/summary",
 		"POST /api/v1/eval/estimate",
 		"GET  /api/v1/eval/config",
+		"GET  /api/v1/eval/suggest",
+		"GET  /api/v1/eval/runs/{id}/pairs",
+		"POST /api/v1/eval/runs/{id}/stop",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)

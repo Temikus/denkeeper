@@ -60,9 +60,11 @@ describe('EvalResults — verdict banner', () => {
     expect(screen.getByTestId('agreement-4')).toHaveTextContent('4 of 5 spot checks')
     expect(screen.getByTestId('rubric-4')).toHaveTextContent('Rubric v1')
 
+    // Categories are labelled, not shown as their stored slugs.
     const cats = screen.getByTestId('categories-4')
-    expect(cats).toHaveTextContent('tool_heavy')
-    expect(cats).toHaveTextContent('chat')
+    expect(cats).toHaveTextContent('Tool-heavy')
+    expect(cats).toHaveTextContent('Chat / persona')
+    expect(cats).not.toHaveTextContent('tool_heavy')
   })
 
   test('flags a failed gate and a regressed category, and appends divergence', async () => {
@@ -295,6 +297,75 @@ describe('EvalResults — per-task diffs', () => {
     await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
   })
 
+  test('a row carries cost, rounds and latency, each with its own delta', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    const row = await screen.findByTestId('task-row-11')
+    // Current: $0.02, 3 rounds, 5 s. Candidate: cheaper, a round shorter,
+    // 900 ms faster — all three deltas signed against the current model.
+    expect(row).toHaveTextContent('3.0 rounds')
+    expect(row).toHaveTextContent('5.0 s')
+    expect(row).toHaveTextContent('2.0 rounds')
+    expect(row).toHaveTextContent('4.1 s')
+    expect(row).toHaveTextContent('-1.0')
+    expect(row).toHaveTextContent('-900 ms')
+  })
+
+  test('labels the test case kind rather than showing its slug', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    const row = await screen.findByTestId('task-row-11')
+    expect(row).toHaveTextContent('Tool-heavy')
+    expect(row).not.toHaveTextContent('tool_heavy')
+  })
+
+  test('resolves each dimension letter to the model that won it', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    const dims = [...screen.getByTestId('pair-judgment-71').querySelectorAll('.dimensions li')]
+      .map(li => li.textContent.replace(/\s+/g, ' ').trim())
+    // The letters are the blinded presentation order, not a model. Both
+    // orders named the candidate, so every non-tie dimension resolves to it.
+    expect(dims).toEqual([
+      'correctness: anthropic/claude-3-opus',
+      'tool_use: anthropic/claude-3-opus',
+      'tone: tie',
+      'correctness: anthropic/claude-3-opus',
+    ])
+  })
+
+  test('keeps the raw letter when nothing on the item can unblind it', async () => {
+    server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
+      ...evalPairs,
+      pairs: [{
+        ...evalPairs.pairs[0],
+        outcome: 'tie',
+        items: [{
+          item_id: 141, presentation_order: 'ab', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'tie', winner_variant: '',
+            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-17T10:00:00Z',
+          }],
+        }],
+      }],
+    })))
+
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    const judgment = screen.getByTestId('pair-judgment-71')
+    expect(judgment).toHaveTextContent('called it a tie')
+    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: a')
+  })
+
   test('an unjudged comparison says so rather than showing nothing', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
@@ -364,36 +435,130 @@ describe('EvalResults — apply to agent', () => {
   })
 })
 
-describe('EvalResults — honest labels and offerable actions', () => {
-  test('a variant named by the operator still reads as the model it ran', async () => {
+describe('EvalResults — variant naming', () => {
+  /** A run created over the API or MCP, whose variants carry arbitrary names. */
+  function apiNamedRun() {
     withSummary({
+      baseline_variant: 'baseline',
       variants: [
-        evalSummary.variants[0],
-        { ...evalSummary.variants[1], name: 'variant-b' },
+        { ...evalSummary.variants[0], name: 'baseline' },
+        { ...evalSummary.variants[1], name: 'variant-a' },
       ],
-      verdicts: [{ ...evalSummary.verdicts[0], variant: 'variant-b' }],
-      per_task: [],
+      verdicts: [{ ...evalSummary.verdicts[0], variant: 'variant-a', baseline: 'baseline' }],
     })
+  }
+
+  test('names the model a variant ran, never the raw variant name', async () => {
+    apiNamedRun()
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
     await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
-    // The overlay's model, not the free-text name the API run was created with.
     expect(screen.getByTestId('verdict-4')).toHaveTextContent('anthropic/claude-3-opus')
-    expect(screen.getByTestId('verdict-4')).not.toHaveTextContent('variant-b')
-    expect(screen.getByTestId('objective-table')).toHaveTextContent('anthropic/claude-3-opus')
+    expect(screen.getByTestId('verdict-4').textContent).not.toContain('variant-a')
   })
 
-  test('a candidate with no model to patch is not offered for applying', async () => {
+  test('applying sends the model, not the variant name', async () => {
+    let patched = null
+    apiNamedRun()
+    server.use(
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patched = await request.json()
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+    await fireEvent.click(await screen.findByTestId('apply-confirm-btn'))
+
+    await waitFor(() => expect(patched).not.toBeNull())
+    expect(patched.llm_model).toBe('anthropic/claude-3-opus')
+  })
+
+  test('a variant with no model behind it cannot be applied', async () => {
     withSummary({
-      // An API-created run that renamed the incumbent: nothing to switch to.
       variants: [evalSummary.variants[0], { ...evalSummary.variants[1], overlay: {} }],
     })
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
-    await waitFor(() => expect(screen.getByTestId('verdict-label-4')).toHaveTextContent('Upgrade'))
-    expect(screen.queryByTestId('apply-4')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    expect(screen.getByTestId('apply-4')).toBeDisabled()
+    expect(screen.getByTestId('apply-blocker-4')).toHaveTextContent('did not record a model')
   })
 
+  test('nor escalated to a full eval', async () => {
+    withSummary({
+      variants: [evalSummary.variants[0], { ...evalSummary.variants[1], overlay: {} }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT, quick: true } })
+
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.queryByTestId('escalate-4')).not.toBeInTheDocument()
+  })
+})
+
+describe('EvalResults — apply confirm placement', () => {
+  test('confirms inline, leaving the gate table on screen', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+
+    await waitFor(() => expect(screen.getByTestId('apply-confirm')).toBeInTheDocument())
+    // The evidence for the decision must stay visible while it is made.
+    expect(document.querySelector('.overlay')).toBeNull()
+    expect(screen.getByTestId('gates-4')).toBeVisible()
+  })
+
+  test('the confirm sits in the verdict it belongs to', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+
+    const confirm = await screen.findByTestId('apply-confirm')
+    expect(screen.getByTestId('verdict-4')).toContainElement(confirm)
+  })
+})
+
+describe('EvalResults — accessible tables', () => {
+  test('the gate and category tables carry captions', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('gates-4')).toBeInTheDocument())
+    expect(screen.getByTestId('gates-4').querySelector('caption'))
+      .toHaveTextContent('Objective checks for anthropic/claude-3-opus')
+    expect(screen.getByTestId('categories-4').querySelector('caption'))
+      .toHaveTextContent('Per-category results for anthropic/claude-3-opus')
+  })
+})
+
+describe('evalSampleTranscript', () => {
+  test('maps a sample onto the dry-run transcript shape', () => {
+    const t = evalSampleTranscript(evalSamples[0], 'kimi-k2.6')
+    expect(t.model).toBe('kimi-k2.6')
+    expect(t.rounds).toBe(3)
+    expect(t.cost_usd).toBe(0.02)
+    expect(t.duration_ms).toBe(5000)
+    expect(t.suppressed_count).toBe(1)
+    expect(t.tool_calls).toHaveLength(2)
+    expect(t.tool_calls[0]).toMatchObject({
+      tool: 'kv_list', round: 1, outcome: 'ok', suppressed: false, duration_ms: 120,
+    })
+    // outcome "suppressed" becomes the boolean the transcript renders on.
+    expect(t.tool_calls[1].suppressed).toBe(true)
+  })
+
+  test('an unreadable trace is no trace, not a broken view', () => {
+    expect(evalSampleTranscript({ trace: 'not json' }).tool_calls).toEqual([])
+    expect(evalSampleTranscript({ trace: '{"not":"an array"}' }).tool_calls).toEqual([])
+    expect(evalSampleTranscript({}).tool_calls).toEqual([])
+    expect(evalSampleTranscript(null).rounds).toBe(0)
+  })
+})
+
+describe('EvalResults — gate thresholds', () => {
   test('the allowed column reads as a ceiling, not another measurement', async () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
@@ -427,29 +592,5 @@ describe('EvalResults — copy feedback', () => {
     await waitFor(() => expect(screen.getByTestId('copy-command-4')).toHaveTextContent('Copied'))
     expect(screen.getByTestId('copy-command-5')).toHaveTextContent('Copy')
     expect(screen.getByTestId('copy-command-5')).not.toHaveTextContent('Copied')
-  })
-})
-
-describe('evalSampleTranscript', () => {
-  test('maps a sample onto the dry-run transcript shape', () => {
-    const t = evalSampleTranscript(evalSamples[0], 'kimi-k2.6')
-    expect(t.model).toBe('kimi-k2.6')
-    expect(t.rounds).toBe(3)
-    expect(t.cost_usd).toBe(0.02)
-    expect(t.duration_ms).toBe(5000)
-    expect(t.suppressed_count).toBe(1)
-    expect(t.tool_calls).toHaveLength(2)
-    expect(t.tool_calls[0]).toMatchObject({
-      tool: 'kv_list', round: 1, outcome: 'ok', suppressed: false, duration_ms: 120,
-    })
-    // outcome "suppressed" becomes the boolean the transcript renders on.
-    expect(t.tool_calls[1].suppressed).toBe(true)
-  })
-
-  test('an unreadable trace is no trace, not a broken view', () => {
-    expect(evalSampleTranscript({ trace: 'not json' }).tool_calls).toEqual([])
-    expect(evalSampleTranscript({ trace: '{"not":"an array"}' }).tool_calls).toEqual([])
-    expect(evalSampleTranscript({}).tool_calls).toEqual([])
-    expect(evalSampleTranscript(null).rounds).toBe(0)
   })
 })

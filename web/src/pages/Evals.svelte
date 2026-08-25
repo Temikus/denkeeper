@@ -118,6 +118,18 @@
     return taskSets.find(t => t.id === id)?.name || `#${id}`
   }
 
+  /**
+   * A Quick check drew a subset of the set. task_ids is the authoritative
+   * signal — the server records the drawn ids and leaves it unset for a whole-
+   * set run — so a Quick check over a set of ten or fewer cases is still
+   * recognised. Comparing the run's task count against the set's current size
+   * would instead call an old full run a Quick check as soon as a case is
+   * added to the set.
+   */
+  function isQuickCheck(run) {
+    return Array.isArray(run.task_ids) && run.task_ids.length > 0
+  }
+
   /** Total cases in the run's set, when that set is still around to ask. */
   function setTotal(id) {
     return taskSets.find(t => t.id === id)?.task_count ?? null
@@ -423,17 +435,6 @@
       // The banner in the results view already reported the applied change;
       // a stale "current" line is not worth failing the page over.
     }
-  }
-
-  /**
-   * A Quick check is the preset that draws a subset and runs each case once, so
-   * a run is identified by both halves: a pinned task list (task_ids is only
-   * set when the server drew one) and k = 1. Comparing the run's task count
-   * against the set's current size would instead call an old full run a Quick
-   * check as soon as a case is added to the set.
-   */
-  function isQuickCheck(run) {
-    return run.k === 1 && Array.isArray(run.task_ids) && run.task_ids.length > 0
   }
 
   /** Refills the launcher from a result and switches it to the full preset. */

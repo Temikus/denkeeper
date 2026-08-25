@@ -35,7 +35,7 @@ Pinned history is captured at save time rather than re-read from the source conv
 There are three fill paths:
 
 - **Save as test case** in the Chat page's message menu, optionally pinning the preceding turns.
-- **Suggest from history** — `GET /api/v1/eval/suggest` mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
 - **Import JSONL** — `POST /api/v1/eval/task-sets/{name}/import`, one case per line, all-or-none so a typo halfway down leaves the set untouched. `GET .../export` is the other half, so a curated set can be hand-edited or committed to git.
 
 A test set is an appreciating asset: the next candidate model starts here rather than at a blank page.
@@ -98,7 +98,7 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp \
   --header "Authorization: Bearer $DENKEEPER_JUDGE_KEY"
 ```
 
-The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call.
+The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
 **Calibrate a new rubric before trusting it headless.** Judge a random ~20-item subset yourself and record your own call alongside the judge's (`judge_ident: "operator"`). Operator marks sit beside the judge's rather than replacing it, are excluded from the win rate, and feed only the agreement figure `eval_summary` reports. Below roughly 80 % agreement, fix the rubric first — a drifted rubric quietly devalues every later run.
@@ -132,15 +132,46 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
 
 ## In the dashboard
 
-The **Evals** page carries the loop as far as it has shipped: an empty state that explains it, an inline JSONL importer, a launcher, and the run list.
+The **Evals** page drives the loop, and everything it does is REST underneath — see the [REST API reference](/docs/reference/rest-api/) for the request and response shapes.
 
-The launcher is the simple case — "compare current vs candidate on a test set": pick the agent (its current model is shown), pick a candidate model with its pricing, pick a test set, then choose **Quick check** (10 cases, one run each) or **Full eval** (the whole set at `[eval] default_k`). The cost cap is editable and sits next to the live estimate, so it is never a mystery whether you are about to spend $0.10 or $2.
+With no test set saved yet, the page opens on an empty state that explains the loop and offers the two ways in: **Suggest from history**, or an inline JSONL import.
 
-Each run shows a status chip, a progress bar of turns done against expected, spend against the cap, an ETA while active, and a Stop button behind a confirm. Progress is polled and nudged by the `eval_progress` WebSocket frame, which is a droppable convenience — `GET /api/v1/eval/runs/{id}` is the authoritative view. Leaving the page loses nothing; a run continues in the background.
+### Filling a set from history
 
-{{< callout context="caution" >}}
-The in-page results view is still in flight. Today the run card's **Results** panel is a placeholder: read the scorecard and verdict through `GET /api/v1/eval/runs/{id}/summary` and the judged pairs through `GET /api/v1/eval/runs/{id}/pairs`. The suggest-from-history cards are likewise API-only for now (`GET /api/v1/eval/suggest`).
-{{< /callout >}}
+**Suggest from history** opens a panel of past turns worth keeping, each card carrying the prompt, its category, and the reason it was offered — a tool call was rejected or failed, the turn took three or more rounds, it cost in the top ten per cent, or a skill command triggered it. Select the ones you want, choose an existing set or name a new one, and add them in a batch.
+
+Accepting a candidate writes the same shape the Chat page's "Save as test case" does, pinned history included, captured at that moment rather than re-read at run time. Rejecting a candidate writes nothing at all: it is hidden for the session, so reloading the page offers it again.
+
+### Launching a run
+
+The launcher covers the common case — "compare current against a candidate on a test set". Pick the agent, and its current model is shown beside it; pick a candidate model, with its pricing; pick a test set; then choose one of two presets:
+
+| Preset | What it runs |
+|---|---|
+| **Quick check** | 10 test cases sampled, one run each — the cheap first signal |
+| **Full eval** | The whole set at `[eval] default_k` runs per case |
+
+The cost cap is editable and sits next to a live estimate that updates as you change the shape of the run, so it is never a mystery whether you are about to spend ten cents or two dollars. When a run cannot be priced, the estimate says so rather than guessing, and the cap is shown alone.
+
+### Watching a run
+
+Each run gets a card with a status chip, a progress bar of turns done against expected, spend against the cap, an ETA while it is active, and a Stop button behind a confirmation dialogue that spells out what stopping keeps.
+
+Progress is polled, and the `eval_progress` WebSocket frame nudges the page to refresh sooner. The frame is a droppable convenience: `GET /api/v1/eval/runs/{id}` is the authoritative view, and if progress readings stop arriving the card says it is showing the last reading rather than freezing on a stale number. Leaving the page loses nothing — a run continues in the background, and stopping one keeps the work already finished.
+
+### Reading the results
+
+Expanding a finished run's **Results** panel lays the evidence out in the three layers the decision rule uses.
+
+**The verdict, with its work.** One block per candidate: the label, the one-line reason, the divergence note when a candidate wins overall while regressing on a category, the gate table with each gate's value, delta, threshold, and pass mark, the judgment tally against the win threshold, the rubric versions the counted verdicts were made under, and the per-category breakdown. Never a bare label.
+
+When the objective half is in but the pairs are not all judged, the block says how many are outstanding, states plainly that the verdict rests on the objective checks alone until they are, and gives the next step: the `/judge-eval` invocation, or a copyable `claude -p` command, with a reminder to use a key scoped to `eval:read` and `eval:write` and nothing else. A run cannot silently dead-end.
+
+An `upgrade` offers **Apply to agent**, which switches the base agent's model through `PATCH /api/v1/agents/{name}` behind a confirmation naming the agent and both models. A quick check that cleared its gates offers to set up the full eval instead, pre-filled with the same candidate and test set.
+
+**The scorecard.** Each variant is a column, the objective metrics are rows, and a completeness line underneath reports turns finished, comparisons judged, and whether that clears the floor.
+
+**Test case by test case.** Every test case is a row with each variant's cost, rounds, and latency; expanding one puts the responses side by side with their tool traces and the judge's verdict for that pair, its per-dimension winners, notes, and rubric version.
 
 ## Configuration
 

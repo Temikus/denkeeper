@@ -519,6 +519,40 @@ describe('Evals page — results panel', () => {
     expect(listCalls).toBe(1)
     expect(screen.getByTestId('launcher')).toHaveTextContent('anthropic/claude-3-opus')
   })
+
+  test('a Quick check over a whole small set still earns the CTA', async () => {
+    // The set has 8 cases and the Quick check drew all 8, so the counts match
+    // and only the pinned task list can tell this apart from a Full eval.
+    server.use(
+      http.get('/api/v1/eval/runs/:id', ({ params }) => {
+        const run = evalRuns.find(r => String(r.id) === params.id)
+        return run
+          ? HttpResponse.json({ ...run, task_set_id: 2, task_count: 8, task_ids: [1, 2, 3, 4, 5, 6, 7, 8] })
+          : new HttpResponse(null, { status: 404 })
+      }),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('escalate-4')).toBeInTheDocument())
+  })
+
+  test('a whole-set run is not mistaken for a Quick check', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id', ({ params }) => {
+        const run = evalRuns.find(r => String(r.id) === params.id)
+        // No task_ids: the server did not draw a subset.
+        return run ? HttpResponse.json({ ...run, task_count: 37 }) : new HttpResponse(null, { status: 404 })
+      }),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.queryByTestId('escalate-4')).not.toBeInTheDocument()
+  })
 })
 
 describe('Evals page — suggestions', () => {
