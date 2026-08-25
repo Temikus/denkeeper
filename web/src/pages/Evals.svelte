@@ -8,6 +8,7 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import FilterChips from '../components/FilterChips.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
+  import EvalResults from '../components/EvalResults.svelte'
   import SuggestCases from '../components/SuggestCases.svelte'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
@@ -405,6 +406,28 @@
     confirmStop = id
   }
 
+  /** Re-reads the agent list so "current" reflects a just-applied model. */
+  async function reloadAgents() {
+    try {
+      agents = (await api.agents()) || []
+    } catch {
+      // The banner in the results view already reported the applied change;
+      // a stale "current" line is not worth failing the page over.
+    }
+  }
+
+  /** Refills the launcher from a result and switches it to the full preset. */
+  function runFull(pick) {
+    candidate = pick.model
+    candidateProvider = pick.provider || ''
+    providerFor = pick.model
+    // Only re-select a set the launcher can still offer — a deleted one would
+    // leave the select showing a name it cannot start.
+    if (pick.taskSet && taskSets.some(t => t.name === pick.taskSet)) taskSetName = pick.taskSet
+    preset = 'full'
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   function toggleResults(id) {
     expandedRun = expandedRun === id ? null : id
   }
@@ -644,8 +667,11 @@
 
         {#if expandedRun === run.id}
           <div class="results-panel" id="results-panel-{run.id}" data-testid="results-panel-{run.id}">
-            <!-- D2: EvalResults mounts here -->
-            <p class="muted">The scorecard and judged pairs land in the next update.</p>
+            <EvalResults {run}
+              agent={agents.find(a => a.name === run.base_agent) || null}
+              quick={run.task_count != null && setCases != null && run.task_count < setCases}
+              onapplied={reloadAgents}
+              onrunfull={runFull} />
           </div>
         {/if}
       </article>
