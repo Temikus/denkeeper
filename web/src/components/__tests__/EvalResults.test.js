@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
@@ -6,6 +6,11 @@ import { evalSummary, evalSamples, evalPairs } from '../../test/handlers.js'
 import { token, authMode } from '../../store.js'
 import { evalSampleTranscript } from '../../api.js'
 import EvalResults from '../EvalResults.svelte'
+
+// The pending block hands over a command, so the button needs a clipboard.
+Object.assign(navigator, {
+  clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+})
 
 const RUN = {
   id: 2,
@@ -115,7 +120,7 @@ describe('EvalResults — judgment pending', () => {
 
     await waitFor(() => expect(screen.getByTestId('judgment-pending-4')).toBeInTheDocument())
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('12 of 37 comparisons are judged')
-    expect(screen.getByTestId('judge-command')).toHaveTextContent(
+    expect(screen.getByTestId('judge-command-4')).toHaveTextContent(
       'claude -p "judge pending pairs for eval run 2"')
     // The least-privilege note travels with the command.
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('eval:read')
@@ -316,8 +321,8 @@ describe('EvalResults — apply to agent', () => {
         return HttpResponse.json({ ok: true })
       }),
     )
-    let reloaded = 0
-    render(EvalResults, { props: { run: RUN, agent: AGENT, onapplied: () => { reloaded++ } } })
+    let reloaded = null
+    render(EvalResults, { props: { run: RUN, agent: AGENT, onapplied: (name) => { reloaded = name } } })
 
     await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
     await fireEvent.click(screen.getByTestId('apply-4'))
@@ -335,7 +340,8 @@ describe('EvalResults — apply to agent', () => {
       name: 'default',
       body: { llm_model: 'anthropic/claude-3-opus', llm_provider: 'openrouter' },
     })
-    expect(reloaded).toBe(1)
+    // The page is told which agent to re-read, not to re-read the lot.
+    expect(reloaded).toBe('default')
     // The button cannot fire the same switch twice.
     expect(screen.getByTestId('apply-4')).toBeDisabled()
     expect(screen.getByTestId('apply-4')).toHaveTextContent('Applied')
@@ -355,6 +361,72 @@ describe('EvalResults — apply to agent', () => {
     await waitFor(() => expect(screen.getByTestId('apply-error')).toHaveTextContent('model not available'))
     expect(screen.getByTestId('apply-confirm')).toBeInTheDocument()
     expect(screen.queryByTestId('apply-ok')).not.toBeInTheDocument()
+  })
+})
+
+describe('EvalResults — honest labels and offerable actions', () => {
+  test('a variant named by the operator still reads as the model it ran', async () => {
+    withSummary({
+      variants: [
+        evalSummary.variants[0],
+        { ...evalSummary.variants[1], name: 'variant-b' },
+      ],
+      verdicts: [{ ...evalSummary.verdicts[0], variant: 'variant-b' }],
+      per_task: [],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    // The overlay's model, not the free-text name the API run was created with.
+    expect(screen.getByTestId('verdict-4')).toHaveTextContent('anthropic/claude-3-opus')
+    expect(screen.getByTestId('verdict-4')).not.toHaveTextContent('variant-b')
+    expect(screen.getByTestId('objective-table')).toHaveTextContent('anthropic/claude-3-opus')
+  })
+
+  test('a candidate with no model to patch is not offered for applying', async () => {
+    withSummary({
+      // An API-created run that renamed the incumbent: nothing to switch to.
+      variants: [evalSummary.variants[0], { ...evalSummary.variants[1], overlay: {} }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('verdict-label-4')).toHaveTextContent('Upgrade'))
+    expect(screen.queryByTestId('apply-4')).not.toBeInTheDocument()
+  })
+
+  test('the allowed column reads as a ceiling, not another measurement', async () => {
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('gates-4')).toBeInTheDocument())
+    expect(screen.getByTestId('gates-4')).toHaveTextContent('≤ +2.0 pp')
+    expect(screen.getByTestId('gates-4')).toHaveTextContent('≤ +25%')
+  })
+})
+
+describe('EvalResults — copy feedback', () => {
+  test('only the button that was pressed says Copied', async () => {
+    const pending = { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 }
+    withSummary({
+      variants: [
+        evalSummary.variants[0],
+        evalSummary.variants[1],
+        { ...evalSummary.variants[1], variant_id: 5, name: 'openai/gpt-4o',
+          overlay: { llm_model: 'openai/gpt-4o', llm_provider: 'openrouter' } },
+      ],
+      verdicts: [
+        { ...evalSummary.verdicts[0], judgment: pending },
+        { ...evalSummary.verdicts[0], variant_id: 5, variant: 'openai/gpt-4o', judgment: pending },
+      ],
+      per_task: [],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('copy-command-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('copy-command-4'))
+
+    await waitFor(() => expect(screen.getByTestId('copy-command-4')).toHaveTextContent('Copied'))
+    expect(screen.getByTestId('copy-command-5')).toHaveTextContent('Copy')
+    expect(screen.getByTestId('copy-command-5')).not.toHaveTextContent('Copied')
   })
 })
 
