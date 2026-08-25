@@ -31,7 +31,7 @@ afterEach(() => {
 })
 
 describe('Evals page — empty state', () => {
-  test('teaches the loop and offers Chat and import, but not suggest', async () => {
+  test('teaches the loop and offers all three CTAs', async () => {
     emptyInstance()
     render(Evals)
 
@@ -39,10 +39,21 @@ describe('Evals page — empty state', () => {
     expect(
       screen.getByText(/Save real conversations as test cases, then compare your current model against a candidate on them/)
     ).toBeInTheDocument()
+    expect(screen.getByTestId('empty-suggest-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-chat-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-import-cta')).toBeInTheDocument()
-    // "Suggest from history" ships in a later slice — absent, not disabled.
-    expect(screen.queryByText(/Suggest/i)).not.toBeInTheDocument()
+  })
+
+  test('the suggest CTA opens the candidate cards', async () => {
+    emptyInstance()
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    expect(screen.queryByTestId('suggest-panel')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByTestId('empty-suggest-cta'))
+    await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
+    expect(screen.getByText('/digest yesterday')).toBeInTheDocument()
   })
 
   test('hides the launcher and runs list until something exists', async () => {
@@ -395,5 +406,56 @@ describe('Evals page — runs list', () => {
 
     await waitFor(() => expect(detailReads).toBeGreaterThan(before))
     await waitFor(() => expect(screen.getByTestId('progress-1')).toHaveTextContent('17 / 20'))
+  })
+})
+
+describe('Evals page — suggestions', () => {
+  test('the header toggle mounts the panel above the launcher and closes it again', async () => {
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('suggest-toggle'))
+    await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
+
+    const panel = screen.getByTestId('suggest-panel')
+    const launcher = screen.getByTestId('launcher')
+    // Node.compareDocumentPosition: 4 = launcher follows the panel.
+    expect(panel.compareDocumentPosition(launcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await fireEvent.click(screen.getByTestId('suggest-close'))
+    await waitFor(() => expect(screen.queryByTestId('suggest-panel')).not.toBeInTheDocument())
+  })
+
+  test('accepting a case re-reads the test sets and points the launcher at it', async () => {
+    let listCalls = 0
+    server.use(
+      http.get('/api/v1/eval/task-sets', () => {
+        listCalls++
+        return HttpResponse.json(
+          listCalls === 1
+            ? [{ id: 1, name: 'golden-set', description: '', task_count: 37 }]
+            : [
+                { id: 1, name: 'golden-set', description: '', task_count: 37 },
+                { id: 9, name: 'fresh-set', description: '', task_count: 1 },
+              ]
+        )
+      }),
+      http.post('/api/v1/eval/task-sets', async ({ request }) => {
+        const body = await request.json()
+        return HttpResponse.json({ id: 9, name: body.name, description: '', task_count: 0 }, { status: 201 })
+      }),
+      http.post('/api/v1/eval/task-sets/:name/tasks', () => HttpResponse.json({ id: 1 }, { status: 201 })),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('suggest-toggle'))
+    await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByText('New set…'))
+    await fireEvent.input(screen.getByTestId('suggest-new-set'), { target: { value: 'fresh-set' } })
+    await fireEvent.click(screen.getByTestId('accept-chan:ops:101'))
+
+    await waitFor(() => expect(screen.getByTestId('task-set-select')).toHaveValue('fresh-set'))
   })
 })
