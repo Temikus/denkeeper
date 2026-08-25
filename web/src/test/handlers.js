@@ -41,6 +41,39 @@ export const evalEstimate = {
   ],
 }
 
+// One candidate per category, the stratified shape GET /eval/suggest returns.
+export const evalSuggestions = {
+  candidates: [
+    {
+      prompt: 'Summarise the on-call handover for this week',
+      category: 'chat',
+      conversation_id: 'chan:ops',
+      message_id: 101,
+      created_at: '2026-08-20T09:00:00Z',
+      signals: ['high_cost'],
+      preceding: [{ role: 'user', content: 'morning' }, { role: 'assistant', content: 'hi' }],
+    },
+    {
+      prompt: '/digest yesterday',
+      category: 'skill_command',
+      conversation_id: 'chan:ops',
+      message_id: 102,
+      created_at: '2026-08-21T09:00:00Z',
+      signals: ['command_skill', 'many_rounds'],
+      preceding: [],
+    },
+    {
+      prompt: 'Fetch the release notes and diff them against the changelog',
+      category: 'tool_heavy',
+      conversation_id: 'chan:dev',
+      message_id: 103,
+      created_at: '2026-08-22T09:00:00Z',
+      signals: ['tool_fault', 'many_rounds'],
+      preceding: [],
+    },
+  ],
+}
+
 export const evalRuns = [
   {
     id: 1,
@@ -513,7 +546,7 @@ export const handlers = [
   http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json(evalSummary)),
   http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json(evalSamples)),
   http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json(evalPairs)),
-  http.get('/api/v1/eval/suggest', () => HttpResponse.json([])),
+  http.get('/api/v1/eval/suggest', () => HttpResponse.json(evalSuggestions)),
 
   // Setup
   http.get('/api/v1/setup', () => HttpResponse.json({ needs_setup: false, has_account: true })),

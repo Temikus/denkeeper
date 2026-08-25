@@ -2,7 +2,7 @@
 title: "Web Dashboard"
 description: "The built-in browser UI for chat, approvals, configuration, and audit."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-08-25T00:00:00+00:00
 draft: false
 weight: 5
 toc: true
@@ -39,6 +39,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Tools** | MCP servers: health, enable/disable, restart, OAuth |
 | **Browser** | Browser profiles and active sessions |
 | **Approvals** | Pending approvals and auto-approve rules |
+| **Evals** | Compare a candidate model against your current one on saved test cases |
 | **Audit Log** | Filterable event history |
 | **Costs** | Spend by agent, model, and time range |
 | **KV** | Inspect and edit the agent key-value store |

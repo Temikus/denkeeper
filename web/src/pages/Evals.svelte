@@ -9,6 +9,7 @@
   import FilterChips from '../components/FilterChips.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
   import EvalResults from '../components/EvalResults.svelte'
+  import SuggestCases from '../components/SuggestCases.svelte'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
   const QUICK_TASKS = 10
@@ -50,6 +51,25 @@
   let importing = $state(false)
   let importError = $state('')
   let importOk = $state('')
+
+  // --- Suggestions ---
+  let showSuggest = $state(false)
+
+  function toggleSuggest() {
+    showSuggest = !showSuggest
+    // Two stacked panels above the launcher push it off screen, so they take
+    // turns.
+    if (showSuggest) showImport = false
+  }
+
+  // A suggestion accepted into a set changes its case count, and may have
+  // created the set the launcher should now be pointing at.
+  async function onSuggestAccepted(name) {
+    try {
+      await loadTaskSets()
+      if (name) taskSetName = name
+    } catch { /* the panel already reported the write; the count can lag */ }
+  }
 
   // --- Runs ---
   let expandedRun = $state(null)
@@ -258,6 +278,7 @@
 
   function toggleImport() {
     showImport = !showImport
+    if (showImport) showSuggest = false
     importError = ''
     importOk = ''
   }
@@ -420,6 +441,9 @@
 <div class="page-header">
   <h1 class="page-title">Evals</h1>
   {#if !isEmpty}
+    <button class="btn-ghost btn-sm" onclick={toggleSuggest}
+      aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
+      data-testid="suggest-toggle">Suggest from history</button>
     <button class="btn-ghost btn-sm" onclick={toggleImport}
       aria-expanded={showImport} aria-controls="eval-import-panel"
       data-testid="import-toggle">Import JSONL</button>
@@ -437,7 +461,10 @@
       candidate on them.
     </p>
     <div class="empty-actions">
-      <button class="btn-primary" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>
+      <button class="btn-primary" onclick={toggleSuggest}
+        aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
+        data-testid="empty-suggest-cta">Suggest from history</button>
+      <button class="btn-ghost" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>
       <button class="btn-ghost" onclick={toggleImport} data-testid="empty-import-cta"
         aria-expanded={showImport} aria-controls="eval-import-panel">Import JSONL</button>
     </div>
@@ -470,6 +497,23 @@
         <button class="btn-ghost" onclick={toggleImport} disabled={importing}>Close</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Collapses like the import panel above it. The wrapper always exists so the
+     triggers' aria-controls resolves; the component itself is gated, so nothing
+     is fetched until the panel is opened. -->
+<div class="inline-panel" id="eval-suggest-panel" class:open={showSuggest} use:inert={!showSuggest}>
+  <div class="inline-panel-inner">
+    {#if showSuggest}
+      <SuggestCases
+        agent={baseAgent}
+        sets={taskSets}
+        defaultSet={taskSetName}
+        onaccepted={onSuggestAccepted}
+        onclose={() => (showSuggest = false)}
+      />
+    {/if}
   </div>
 </div>
 

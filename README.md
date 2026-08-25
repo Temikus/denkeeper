@@ -385,28 +385,34 @@ audit = "summary"   # lifecycle events and errors only; default is "full"
 
 #### Evals — "is this candidate model actually better for *my* agent?"
 
-A dry run answers one question once. An eval asks it thirty times and does the arithmetic. Save real turns as test cases from the Chat page's message menu ("Save as test case", optionally pinning the preceding turns as context), then compare your current config against a candidate over the whole set:
+A dry run answers one question once. An eval asks it across a saved set of real turns, on both your current config and a candidate, and does the arithmetic. What is being measured is the model **inside your harness** — your persona, your skills, your tools — which is the thing a leaderboard cannot tell you.
+
+The **Evals** page in the dashboard drives the loop; everything it does is REST underneath.
+
+**1. Build a test set.** Three fill paths: "Save as test case" from the Chat page's message menu (optionally pinning the preceding turns as context), `GET /api/v1/eval/suggest` for candidates mined from past turns (failed or rejected tool calls, three-plus rounds, top-decile cost, command-triggered skills — stratified across the four categories, not ranked overall), or JSONL import. Sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances. A test set is an appreciating asset — the next candidate model starts here rather than at a blank page.
+
+**2. Run it.** Pick the agent, a candidate model, and a test set, then **Quick check** (10 cases sampled, one run each) or **Full eval** (the whole set at `[eval] default_k`). The launcher shows a cost estimate beside the editable cap; `POST /api/v1/eval/estimate` prices it from the tasks' own history where there is telemetry, list price otherwise, and says `unknown` rather than fabricating a number. The same run over curl:
 
 ```bash
 curl -X POST localhost:8080/api/v1/eval/runs \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"task_set":"regression","base_agent":"pamela","k":3,
+  -d '{"task_set":"regression","base_agent":"pamela","k":3,"sample_tasks":10,
        "variants":[{"name":"incumbent"},{"name":"candidate","llm_model":"moonshotai/kimi-k3"}]}'
 ```
 
-The run proceeds in the background on the agent's **live** engine — real persona, real skills, real tools — under the same policy dry runs use, so reads happen and writes do not. `GET /eval/runs/{id}/summary` then reports the objective half of the verdict, no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent. A test set is an appreciating asset — the next candidate model starts here rather than at a blank page.
+The run proceeds in the background on the agent's **live** engine — real persona, real skills, real tools — under the same policy dry runs use, so reads happen and writes do not. `sample_tasks` draws a stratified subset server-side and pins the drawn ids on the run, so a task added later cannot retroactively change what it measured.
 
 Runs are bounded twice, by spend and by rate. Crossing `cost_cap` stops dispatching new samples, lets the in-flight ones finish, and keeps the partial results as `capped` — never a silent truncation. `POST /api/v1/panic` cancels active runs along with everything else, and resume deliberately does not revive them: a panic is not a pause. A sample that fails takes only itself down; the summary says how many of the expected samples landed and calls the run inconclusive below `completeness_floor` rather than reading a verdict off thin data.
 
-Task sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances.
+**3. Read the scorecard.** `GET /eval/runs/{id}/summary` reports the objective half with no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent.
 
 #### Judging — blinded A/B pairs, scored from Claude Code
 
 The objective half can reject a candidate on its own, but it can't promote one: "cheap and quiet" is not the same as "better". When a run finishes it pairs the incumbent and candidate samples for each test case, assigns each pair a random A/B identity that never leaves the server, and queues **two** judgment items per pair with the presentation order swapped — so position bias splits the vote instead of deciding it. A pair only counts once both orders have been judged, and if the two calls name different sides the pair records as a tie.
 
-The judge is Claude Code over Denkeeper's MCP server, working the queue with `eval_pending` → `eval_get_pair` → `eval_verdict`, then reading `eval_summary`. Everything that would identify a side — model, provider, variant name, cost, latency, token usage, even the sample's conversation id — is withheld; the payload is built from scratch rather than filtered, so a new field can't leak into it by default. Give the judge a key scoped to `eval:read,eval:write` and nothing more.
+The judge is Claude Code over Denkeeper's MCP server, driven by the [`/judge-eval`](.claude/skills/judge-eval/SKILL.md) skill, which works the queue with `eval_pending` → `eval_get_pair` → `eval_verdict` and then reads `eval_summary`. Everything that would identify a side — model, provider, variant name, cost, latency, token usage, even the sample's conversation id — is withheld; the payload is built from scratch rather than filtered, so a new field can't leak into it by default. Give the judge a key scoped to `eval:read,eval:write` and nothing more.
 
-The rubric lives in [`.claude/skills/judge-eval/SKILL.md`](.claude/skills/judge-eval/SKILL.md), where you can read and edit it: four dimensions in priority order (`task_success`, `tool_path`, `persona_fit`, `length`), with instructions to cite the specific persona or skill clause behind any deduction. On a new rubric, judge a random ~20-item calibration subset interactively and record your own call alongside the judge's (`judge_ident: "operator"`); `eval_summary` reports the agreement rate. Below roughly 80 %, fix the rubric before letting it run headless — a drifted rubric quietly devalues every later run.
+The rubric lives in that same skill file, where you can read and edit it: four dimensions in priority order (`task_success`, `tool_path`, `persona_fit`, `length`), with instructions to cite the specific persona or skill clause behind any deduction. On a new rubric, judge a random ~20-item calibration subset interactively and record your own call alongside the judge's (`judge_ident: "operator"`); `eval_summary` reports the agreement rate. Below roughly 80 %, fix the rubric before letting it run headless — a drifted rubric quietly devalues every later run.
 
 `GET /eval/runs/{id}/summary` then returns the verdict **with its work**: the gate table (each value, delta, threshold and pass/fail), a one-line reason, the win-rate, and a per-category breakdown. The rule is conjunctive and asymmetric — a candidate is an *upgrade* only if the judge win-rate reaches `win_threshold` **and** no objective gate regressed; a failed gate is a *downgrade* whatever the judge thought. A candidate that wins overall while regressing on tool-heavy tasks says so out loud rather than hiding inside an average:
 
@@ -415,6 +421,11 @@ downgrade: mean rounds regressed +35.0% against a +20.0% threshold
 upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and no objective gate regressed
   ↳ wins overall; regresses on tool_heavy
 ```
+
+`GET /eval/runs/{id}/pairs` is the unblinded view of the same evidence — which variant produced each side, every verdict with its dimensions and notes, and the resolved outcome per pair. It is REST-only on purpose: the judge's MCP tools must not be able to look up which side was which.
+
+The dashboard's results view and suggest-from-history cards are still landing; until they do, read the verdict and the pairs through the two endpoints above. Full docs: [Evals](https://denkeeper.io/docs/concepts/evals/).
+
 
 ### REST API
 
