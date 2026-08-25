@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
+import { evalRuns } from '../../test/handlers.js'
 import { token, authMode } from '../../store.js'
 import { evalProgress } from '../../wsStore.js'
 import Evals from '../../pages/Evals.svelte'
@@ -406,6 +407,38 @@ describe('Evals page — runs list', () => {
 
     await waitFor(() => expect(detailReads).toBeGreaterThan(before))
     await waitFor(() => expect(screen.getByTestId('progress-1')).toHaveTextContent('17 / 20'))
+  })
+})
+
+describe('Evals page — results panel', () => {
+  test('mounts the results view for a finished run', async () => {
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.getByTestId('objective-table')).toBeInTheDocument()
+    expect(screen.getByTestId('per-task-table')).toBeInTheDocument()
+  })
+
+  test('"Run full eval" refills the launcher with the same candidate', async () => {
+    // Run 2 covered 37 of 37 cases, so make it a subset to earn the CTA.
+    server.use(
+      http.get('/api/v1/eval/runs/:id', ({ params }) => {
+        const run = evalRuns.find(r => String(r.id) === params.id)
+        return run ? HttpResponse.json({ ...run, task_count: 10 }) : new HttpResponse(null, { status: 404 })
+      }),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('escalate-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('escalate-4'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('preset-hint')).toHaveTextContent(/All \d+ cases/))
   })
 })
 

@@ -117,6 +117,131 @@ export const evalRuns = [
   },
 ]
 
+// A judged two-variant run: the shape GET /eval/runs/{id}/summary returns.
+export const evalSummary = {
+  run_id: 2,
+  status: 'done',
+  base_agent: 'default',
+  task_set: 'golden-set',
+  k: 1,
+  cost_cap: 2,
+  cost_spent: 1.04,
+  baseline_variant: 'current',
+  variants: [
+    {
+      variant_id: 3, name: 'current', overlay: {},
+      rejected_rate: 0.02, failed_rate: 0.01, tool_calls: 100,
+      mean_rounds: 2.4, wrapup_count: 1, mean_cost_per_task: 0.012,
+      mean_latency_ms: 4200, total_cost: 0.44, samples_ok: 37, samples_failed: 0,
+    },
+    {
+      variant_id: 4, name: 'anthropic/claude-3-opus',
+      overlay: { llm_model: 'anthropic/claude-3-opus', llm_provider: 'openrouter' },
+      rejected_rate: 0.01, failed_rate: 0.01, tool_calls: 96,
+      mean_rounds: 2.2, wrapup_count: 0, mean_cost_per_task: 0.013,
+      mean_latency_ms: 3900, total_cost: 0.48, samples_ok: 36, samples_failed: 1,
+    },
+  ],
+  per_task: [
+    {
+      task_id: 11, prompt: 'Summarise yesterday and file the follow-ups', category: 'tool_heavy',
+      variants: [
+        { variant_id: 3, name: 'current', samples_ok: 1, mean_cost: 0.02, mean_rounds: 3, mean_latency_ms: 5000, delta_cost: 0, delta_rounds: 0, delta_latency_ms: 0 },
+        { variant_id: 4, name: 'anthropic/claude-3-opus', samples_ok: 1, mean_cost: 0.018, mean_rounds: 2, mean_latency_ms: 4100, delta_cost: -0.002, delta_rounds: -1, delta_latency_ms: -900 },
+      ],
+    },
+  ],
+  completeness: {
+    samples_ok: 73, samples_expected: 74, ratio: 0.986, floor: 0.8,
+    conclusive: true, pairs: 37, pairs_judged: 37,
+  },
+  verdicts: [
+    {
+      variant_id: 4, variant: 'anthropic/claude-3-opus', baseline: 'current',
+      verdict: 'upgrade',
+      reason: 'upgrade: no gate regressed and the judge preferred the candidate on 62% of judged pairs',
+      gates: [
+        { name: 'rejected_rate', baseline: 0.02, value: 0.01, delta: -1, threshold: 2, unit: 'pp', pass: true },
+        { name: 'mean_rounds', baseline: 2.4, value: 2.2, delta: -8.3, threshold: 20, unit: '%', pass: true },
+        { name: 'mean_cost_per_task', baseline: 0.012, value: 0.013, delta: 8.3, threshold: 25, unit: '%', pass: true },
+      ],
+      judgment: {
+        pairs: 37, judged_pairs: 37, wins: 23, losses: 9, ties: 5,
+        win_rate: 0.62, win_threshold: 0.55,
+        operator_agreement: { items: 5, agreed: 4, rate: 0.8 },
+        rubric_versions: ['v1'],
+      },
+      categories: [
+        { category: 'tool_heavy', judged_pairs: 12, wins: 8, losses: 3, ties: 1, win_rate: 0.67, delta_rejected_pp: -1, delta_rounds_pct: -8, delta_cost_pct: 4, regressed: false },
+        { category: 'chat', judged_pairs: 25, wins: 15, losses: 6, ties: 4, win_rate: 0.6, delta_rejected_pp: 0, delta_rounds_pct: -2, delta_cost_pct: 10, regressed: false },
+      ],
+      divergence: '',
+    },
+  ],
+}
+
+// Two turns of one test case, with the raw []agent.ToolCallRecord trace the
+// results view adapts for the transcript component.
+export const evalSamples = [
+  {
+    id: 501, run_id: 2, variant_id: 3, task_id: 11, k_index: 0, status: 'ok',
+    response: 'Filed three follow-ups.',
+    trace: JSON.stringify([
+      { tool_name: 'kv_list', server_name: '', round: 1, duration_ms: 120, outcome: 'ok', arguments: '{"prefix":"todo"}', result: 'three keys' },
+      { tool_name: 'kv_set', server_name: '', round: 2, duration_ms: 0, outcome: 'suppressed', arguments: '{"key":"todo/1"}', result: '' },
+    ]),
+    rounds: 3, stop_reason: '', outcome_ok: 1, outcome_rejected: 0, outcome_failed: 0,
+    outcome_denied: 0, outcome_cached: 0, outcome_suppressed: 1,
+    tokens_prompt: 900, tokens_completion: 120, cost: 0.02, latency_ms: 5000,
+    created_at: '2026-08-17T09:10:00Z',
+  },
+  {
+    id: 502, run_id: 2, variant_id: 4, task_id: 11, k_index: 0, status: 'ok',
+    response: 'Filed three follow-ups and flagged one blocker.',
+    trace: JSON.stringify([
+      { tool_name: 'kv_list', server_name: '', round: 1, duration_ms: 90, outcome: 'ok', arguments: '{"prefix":"todo"}', result: 'three keys' },
+    ]),
+    rounds: 2, stop_reason: '', outcome_ok: 1, outcome_rejected: 0, outcome_failed: 0,
+    outcome_denied: 0, outcome_cached: 0, outcome_suppressed: 0,
+    tokens_prompt: 880, tokens_completion: 140, cost: 0.018, latency_ms: 4100,
+    created_at: '2026-08-17T09:10:00Z',
+  },
+]
+
+// The unblinded judging grid for the same run.
+export const evalPairs = {
+  run_id: 2,
+  baseline_variant: 'current',
+  pairs: [
+    {
+      pair_id: 71, task_id: 11, task_prompt: 'Summarise yesterday and file the follow-ups',
+      category: 'tool_heavy', k: 0,
+      baseline: { variant_id: 3, variant: 'current', sample_id: 501 },
+      candidate: { variant_id: 4, variant: 'anthropic/claude-3-opus', sample_id: 502 },
+      items: [
+        {
+          item_id: 141, presentation_order: 'ab', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'B', winner_variant: 'anthropic/claude-3-opus',
+            dimensions: { correctness: 'B', tool_use: 'B', tone: 'tie' },
+            notes: 'Caught the blocker the other answer missed.',
+            rubric_version: 'v1', created_at: '2026-08-17T10:00:00Z',
+          }],
+        },
+        {
+          item_id: 142, presentation_order: 'ba', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'A', winner_variant: 'anthropic/claude-3-opus',
+            dimensions: { correctness: 'A' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-17T10:01:00Z',
+          }],
+        },
+      ],
+      outcome: 'win',
+    },
+  ],
+}
+
 export const handlers = [
   // Health
   http.get('/api/v1/health', () => HttpResponse.json({ status: 'ok' })),
@@ -418,9 +543,9 @@ export const handlers = [
     }, { status: 201 })
   }),
   http.post('/api/v1/eval/runs/:id/stop', () => HttpResponse.json({ status: 'stopping' })),
-  http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json({ variants: [], per_task: [], completeness: {}, verdicts: [] })),
-  http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([])),
-  http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json([])),
+  http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json(evalSummary)),
+  http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json(evalSamples)),
+  http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json(evalPairs)),
   http.get('/api/v1/eval/suggest', () => HttpResponse.json(evalSuggestions)),
 
   // Setup
