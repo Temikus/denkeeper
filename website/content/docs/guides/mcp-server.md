@@ -3,7 +3,7 @@ title: "Denkeeper as an MCP Server"
 description: "Expose your instance to other MCP clients — Claude Code, IDEs, or another agent."
 slug: "mcp-server"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-08-25T00:00:00+00:00
 draft: false
 weight: 40
 toc: true
@@ -78,7 +78,7 @@ They are also journaled. Before any skill write, the file's exact prior bytes ar
 
 **Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask.
 
-**Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop.
+**Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop. See [Evals](/docs/concepts/evals/) for the loop these tools sit inside.
 
 **Resolving approvals from wherever you are.** `approval_list` and `approval_resolve` mean a client already on your screen can clear a queue without opening the dashboard.
 
