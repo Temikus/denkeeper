@@ -406,7 +406,7 @@ Leaving the page loses nothing. The run's card shows a status chip, turns done a
 
 Runs are bounded twice, by spend and by rate. Crossing `cost_cap` stops dispatching new samples, lets the in-flight ones finish, and keeps the partial results as `capped` — never a silent truncation. `POST /api/v1/panic` cancels active runs along with everything else, and resume deliberately does not revive them: a panic is not a pause. A sample that fails takes only itself down; the summary says how many of the expected samples landed and calls the run inconclusive below `completeness_floor` rather than reading a verdict off thin data.
 
-**3. Read the scorecard.** `GET /eval/runs/{id}/summary` reports the objective half with no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent. The in-page results panel is still in flight, so for now this is where the scorecard is read; `GET /eval/runs/{id}/pairs` is the matching unblinded view of the judged pairs.
+**3. Read the scorecard.** `GET /eval/runs/{id}/summary` reports the objective half with no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent. The Evals page shows the same thing in three layers — the verdict with its gate table and reason, the scorecard with a completeness line, and a row per test case expanding to the two responses side by side with their tool traces and the judge's call on that pair. An `upgrade` offers **Apply to agent**; a run with pairs still outstanding says so and hands you the command to judge them.
 
 #### Judging — blinded A/B pairs, scored from Claude Code
 

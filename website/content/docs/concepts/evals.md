@@ -159,9 +159,19 @@ Each run gets a card with a status chip, a progress bar of turns done against ex
 
 Progress is polled, and the `eval_progress` WebSocket frame nudges the page to refresh sooner. The frame is a droppable convenience: `GET /api/v1/eval/runs/{id}` is the authoritative view, and if progress readings stop arriving the card says it is showing the last reading rather than freezing on a stale number. Leaving the page loses nothing — a run continues in the background, and stopping one keeps the work already finished.
 
-{{< callout context="caution" >}}
-The in-page results view is still in flight. Expanding a run's **Results** panel today shows a placeholder: read the scorecard and verdict through `GET /api/v1/eval/runs/{id}/summary`, and the judged pairs through `GET /api/v1/eval/runs/{id}/pairs`.
-{{< /callout >}}
+### Reading the results
+
+Expanding a finished run's **Results** panel lays the evidence out in the three layers the decision rule uses.
+
+**The verdict, with its work.** One block per candidate: the label, the one-line reason, the divergence note when a candidate wins overall while regressing on a category, the gate table with each gate's value, delta, threshold, and pass mark, the judgment tally against the win threshold, the rubric versions the counted verdicts were made under, and the per-category breakdown. Never a bare label.
+
+When the objective half is in but the pairs are not all judged, the block says how many are outstanding, states plainly that the verdict rests on the objective checks alone until they are, and gives the next step: the `/judge-eval` invocation, or a copyable `claude -p` command, with a reminder to use a key scoped to `eval:read` and `eval:write` and nothing else. A run cannot silently dead-end.
+
+An `upgrade` offers **Apply to agent**, which switches the base agent's model through `PATCH /api/v1/agents/{name}` behind a confirmation naming the agent and both models. A quick check that cleared its gates offers to set up the full eval instead, pre-filled with the same candidate and test set.
+
+**The scorecard.** Each variant is a column, the objective metrics are rows, and a completeness line underneath reports turns finished, comparisons judged, and whether that clears the floor.
+
+**Test case by test case.** Every test case is a row with each variant's cost, rounds, and latency; expanding one puts the responses side by side with their tool traces and the judge's verdict for that pair, its per-dimension winners, notes, and rubric version.
 
 ## Configuration
 
