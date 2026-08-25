@@ -389,7 +389,7 @@ A dry run answers one question once. An eval asks it across a saved set of real 
 
 The **Evals** page in the dashboard drives the loop; everything it does is REST underneath.
 
-**1. Build a test set.** Three fill paths: "Save as test case" from the Chat page's message menu (optionally pinning the preceding turns as context), `GET /api/v1/eval/suggest` for candidates mined from past turns (failed or rejected tool calls, three-plus rounds, top-decile cost, command-triggered skills — stratified across the four categories, not ranked overall), or JSONL import. Sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances. A test set is an appreciating asset — the next candidate model starts here rather than at a blank page.
+**1. Build a test set.** Three fill paths: "Save as test case" from the Chat page's message menu (optionally pinning the preceding turns as context), **Suggest from history** on the Evals page, which offers past turns worth keeping (failed or rejected tool calls, three-plus rounds, top-decile cost, command-triggered skills — stratified across the four categories, not ranked overall, and backed by `GET /api/v1/eval/suggest`), or JSONL import. Sets export and import as JSONL (`GET`/`POST /eval/task-sets/{name}/export|import`), so a curated set can be hand-edited, committed to git, or moved between instances. A test set is an appreciating asset — the next candidate model starts here rather than at a blank page.
 
 **2. Run it.** Pick the agent, a candidate model, and a test set, then **Quick check** (10 cases sampled, one run each) or **Full eval** (the whole set at `[eval] default_k`). The launcher shows a cost estimate beside the editable cap; `POST /api/v1/eval/estimate` prices it from the tasks' own history where there is telemetry, list price otherwise, and says `unknown` rather than fabricating a number. The same run over curl:
 
@@ -402,9 +402,11 @@ curl -X POST localhost:8080/api/v1/eval/runs \
 
 The run proceeds in the background on the agent's **live** engine — real persona, real skills, real tools — under the same policy dry runs use, so reads happen and writes do not. `sample_tasks` draws a stratified subset server-side and pins the drawn ids on the run, so a task added later cannot retroactively change what it measured.
 
+Leaving the page loses nothing. The run's card shows a status chip, turns done against expected, spend against the cap, and an ETA while it is active, with a Stop button behind a confirmation. `GET /api/v1/eval/runs/{id}` is the authoritative view; the `eval_progress` WebSocket frame only nudges the page to refresh sooner.
+
 Runs are bounded twice, by spend and by rate. Crossing `cost_cap` stops dispatching new samples, lets the in-flight ones finish, and keeps the partial results as `capped` — never a silent truncation. `POST /api/v1/panic` cancels active runs along with everything else, and resume deliberately does not revive them: a panic is not a pause. A sample that fails takes only itself down; the summary says how many of the expected samples landed and calls the run inconclusive below `completeness_floor` rather than reading a verdict off thin data.
 
-**3. Read the scorecard.** `GET /eval/runs/{id}/summary` reports the objective half with no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent.
+**3. Read the scorecard.** `GET /eval/runs/{id}/summary` reports the objective half with no judge involved: per-variant rejected and failed tool-call rates, mean rounds, wrap-up count, cost per task, latency, and per-task deltas against the incumbent. The in-page results panel is still in flight, so for now this is where the scorecard is read; `GET /eval/runs/{id}/pairs` is the matching unblinded view of the judged pairs.
 
 #### Judging — blinded A/B pairs, scored from Claude Code
 

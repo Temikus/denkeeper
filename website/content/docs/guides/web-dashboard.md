@@ -39,7 +39,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Tools** | MCP servers: health, enable/disable, restart, OAuth |
 | **Browser** | Browser profiles and active sessions |
 | **Approvals** | Pending approvals and auto-approve rules |
-| **Evals** | Compare a candidate model against your current one on saved test cases |
+| **Evals** | Compare a candidate model against your current one on saved test cases ([Evals](/docs/concepts/evals/)) |
 | **Audit Log** | Filterable event history |
 | **Costs** | Spend by agent, model, and time range |
 | **KV** | Inspect and edit the agent key-value store |
