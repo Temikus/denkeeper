@@ -479,3 +479,50 @@ export const api = {
   resume: () => apiFetch('/api/v1/resume', { method: 'POST' }),
   panicStatus: () => apiFetch('/api/v1/panic'),
 }
+
+/**
+ * Renders an eval sample as a DryRunTranscript transcript.
+ *
+ * The two shapes are close but not identical: a sample's trace is raw
+ * []agent.ToolCallRecord JSON (`tool_name`, `outcome: "suppressed"`) while the
+ * transcript speaks the dry-run vocabulary (`tool`, `suppressed: bool`,
+ * `duration_ms`, `cost_usd`). Mapping here rather than in the component keeps
+ * one transcript renderer for previews and evals alike.
+ */
+export function evalSampleTranscript(sample, model = '') {
+  const calls = parseTrace(sample?.trace)
+  return {
+    model: model || '',
+    response: sample?.response || '',
+    rounds: sample?.rounds ?? 0,
+    stop_reason: sample?.stop_reason || '',
+    duration_ms: sample?.latency_ms ?? 0,
+    cost_usd: sample?.cost ?? 0,
+    // The sample carries the suppression count as its own column; deriving it
+    // from the trace would undercount a trace trimmed for transport.
+    suppressed_count: sample?.outcome_suppressed ?? 0,
+    tool_calls: calls.map(c => ({
+      tool: c.tool_name || c.tool || '',
+      server: c.server_name || '',
+      round: c.round ?? 0,
+      outcome: c.outcome || 'ok',
+      suppressed: c.outcome === 'suppressed',
+      duration_ms: c.duration_ms ?? 0,
+      arguments: c.arguments || '',
+      result: c.result || '',
+      error: c.error || '',
+    })),
+  }
+}
+
+/** A trace that will not decode is no trace, not a broken results page. */
+function parseTrace(raw) {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw !== 'string' || raw.trim() === '') return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
