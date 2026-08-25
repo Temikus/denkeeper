@@ -420,7 +420,13 @@ export const handlers = [
   http.post('/api/v1/eval/runs/:id/stop', () => HttpResponse.json({ status: 'stopping' })),
   http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json({ variants: [], per_task: [], completeness: {}, verdicts: [] })),
   http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([])),
-  http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json([])),
+  // The whole judging grid, not a bare list — eval.PairView. Empty by default;
+  // tests that need judged pairs override this with their own.
+  http.get('/api/v1/eval/runs/:id/pairs', ({ params }) => HttpResponse.json({
+    run_id: Number(params.id),
+    baseline_variant: 'current',
+    pairs: [],
+  })),
   http.get('/api/v1/eval/suggest', () => HttpResponse.json(evalSuggestions)),
 
   // Setup
