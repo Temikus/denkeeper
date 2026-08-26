@@ -48,6 +48,7 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - POST /api/v1/eval/runs/{id}/stop     (scope: eval:write)      Stop a run; finished samples are kept
 - GET  /api/v1/eval/runs/{id}/summary  (scope: eval:read)       Scorecard, gate table and verdict for a run
 - GET  /api/v1/eval/runs/{id}/pairs    (scope: eval:read)       Judged pairs, unblinded: verdicts, dimensions and outcomes
+- POST /api/v1/eval/runs/{id}/judge    (scope: eval:write)      Judge a run's pending pairs with the internal judge_model
 - POST /api/v1/eval/estimate           (scope: eval:read)       Cost range for a run before starting it
 - GET  /api/v1/eval/config             (scope: eval:read)       Eval defaults and verdict thresholds
 - POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests

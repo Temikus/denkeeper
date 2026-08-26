@@ -1499,6 +1499,27 @@ func buildEvalRunner(cfg *config.Config, store *eval.Store, dispatcher *agent.Di
 	}, logger)
 }
 
+// buildEvalJudge wires the internal judge over the same live engines the
+// runner uses, for its router: the judge overlay is a WithModel/WithProvider
+// clone, so judging bills to the agent's own cost tracker and honours its
+// pricing and fallback rules. It is unavailable — not absent — when
+// [eval] judge_model is unset, so the endpoint can say why.
+func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) *eval.Judge {
+	source := func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}
+	return eval.NewJudge(store, source, auditor, eval.JudgeConfig{
+		Model:         cfg.Eval.JudgeModel,
+		Provider:      cfg.Eval.JudgeProvider,
+		MaxCost:       cfg.Eval.JudgeMaxCostPerRun,
+		MaxConcurrent: cfg.Eval.MaxConcurrent,
+	}, logger)
+}
+
 func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, parent *agent.Engine, p *persona.Persona, abc agentBuildCtx) (*agent.Engine, error) {
 	revProvider := ac.LLMProvider
 	if ac.ReviewerProvider != "" {
@@ -1679,6 +1700,7 @@ type startAPIWithMCPArgs struct {
 	auditor         audit.Emitter
 	evalStore       *eval.Store
 	evalRunner      *eval.Runner
+	evalJudge       *eval.Judge
 	oauthDeps       *api.OAuthDeps
 	abc             agentBuildCtx
 	path            string
@@ -1711,7 +1733,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Logger:          a.logger,
 	})
 
-	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, api.Deps{
+	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, a.evalJudge, api.Deps{
 		Dispatcher:        a.dispatcher,
 		Scheduler:         a.sched,
 		CostTracker:       a.cost,
@@ -1728,6 +1750,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Auditor:           a.auditor,
 		EvalStore:         a.evalStore,
 		EvalRunner:        a.evalRunner,
+		EvalJudge:         a.evalJudge,
 		ConfigPath:        a.path,
 		ModelLister:       a.dispatcher.ListModels,
 		ModelDetailLister: a.dispatcher.ListModelDetails,
@@ -1795,7 +1818,7 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, hasA
 
 // startAPIAndWireBroadcast starts the API server and wires the adapter→WebSocket
 // broadcast so the web UI is notified when messages arrive via external adapters.
-func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, evalRunner *eval.Runner, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
+func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, evalRunner *eval.Runner, evalJudge *eval.Judge, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
 	apiServer, err := startAPIServer(ctx, cfg, deps, hasActiveKey, logger)
 	if err != nil {
 		return err
@@ -1841,6 +1864,11 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 		// OnResume: a panic is not a pause, and a stopped run stays stopped.
 		if evalRunner != nil {
 			evalRunner.StopAll()
+		}
+		// Judging spends real money on its own budget, and a pass is no more
+		// in inFlight than a run is, so the panic switch has to reach it too.
+		if evalJudge != nil {
+			evalJudge.StopAll()
 		}
 		if hub != nil {
 			hub.Broadcast(api.PanicStatusFrame{
@@ -2051,6 +2079,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// the live engines it owns. Construction starts no goroutine.
 	evalRunner := buildEvalRunner(cfg, st.evalStore, dispatcher, auditor, logger)
 	defer evalRunner.Shutdown()
+	evalJudge := buildEvalJudge(cfg, st.evalStore, dispatcher, auditor, logger)
+	defer evalJudge.Shutdown()
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
 		return err
@@ -2074,6 +2104,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			auditor:         auditor,
 			evalStore:       st.evalStore,
 			evalRunner:      evalRunner,
+			evalJudge:       evalJudge,
 			oauthDeps:       oauthDeps,
 			abc:             abc,
 			path:            path,

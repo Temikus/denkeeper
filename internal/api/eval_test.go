@@ -1047,3 +1047,177 @@ func TestEvalRuns_GetTotalsIgnoreTasksAddedAfterAPinnedRun(t *testing.T) {
 		t.Errorf("samples_total = %d, want 1 pinned task x 2 variants x k=1 = 2", detail.SamplesTotal)
 	}
 }
+
+// --- Internal judge endpoint ---
+
+// evalJudgeServer is evalTestServer with an internal judge wired. An empty
+// model leaves the judge configured-but-unavailable, which is the state a
+// server with no [eval] judge_model is in.
+func evalJudgeServer(t *testing.T, model string) (*Server, *eval.Store) {
+	t.Helper()
+	srv, store := evalTestServer(t)
+	dispatcher := srv.deps.Dispatcher
+	judge := eval.NewJudge(store, func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}, nil, eval.JudgeConfig{Model: model, MaxCost: 1.0, MaxConcurrent: 1}, testLogger())
+	t.Cleanup(judge.Shutdown)
+	srv.deps.EvalJudge = judge
+	return srv, store
+}
+
+// seedJudgeableRun leaves a terminal run whose grid is filled and paired, so
+// its queue has items waiting.
+func seedJudgeableRun(t *testing.T, store *eval.Store) *eval.Run {
+	t.Helper()
+	ctx := context.Background()
+	set := seedTaskSet(t, store, "judgeable", "what is the time")
+	tasks, err := store.ListTasks(ctx, set.ID)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	run, variants, err := store.CreateRun(ctx, eval.Run{
+		TaskSetID: set.ID, BaseAgent: "default", K: 1, CostCap: 1.0, AsOf: time.Now().UTC(),
+	}, []eval.Variant{{Name: "current"}, {Name: "candidate", Overlay: `{"llm_model":"m2"}`}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for _, v := range variants {
+		if _, err := store.AddSample(ctx, eval.Sample{
+			RunID: run.ID, VariantID: v.ID, TaskID: tasks[0].ID, KIndex: 0,
+			Status: eval.SampleOK, Response: v.Name + " said something", Rounds: 1,
+		}); err != nil {
+			t.Fatalf("AddSample: %v", err)
+		}
+	}
+	if _, err := store.CreatePairs(ctx, run.ID); err != nil {
+		t.Fatalf("CreatePairs: %v", err)
+	}
+	if err := store.FinishRun(ctx, run.ID, eval.StatusDone, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	return run
+}
+
+func TestJudgeEvalRun_UnconfiguredJudgeIs503(t *testing.T) {
+	srv, store := evalJudgeServer(t, "")
+	run := seedJudgeableRun(t, store)
+
+	rec := evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 without [eval] judge_model", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "judge_model") {
+		t.Errorf("the error should name the key to set: %s", rec.Body.String())
+	}
+	// The MCP path is untouched: the queue is still waiting for Claude Code.
+	pending, err := store.ListPending(context.Background(), run.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) == 0 {
+		t.Error("the judging queue must survive an unconfigured internal judge")
+	}
+}
+
+func TestJudgeEvalRun_StartsAPassOverThePendingQueue(t *testing.T) {
+	srv, store := evalJudgeServer(t, "judge-model")
+	run := seedJudgeableRun(t, store)
+
+	rec := evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	var pass eval.JudgePass
+	if err := json.Unmarshal(rec.Body.Bytes(), &pass); err != nil {
+		t.Fatalf("decoding pass: %v", err)
+	}
+	if pass.Items != 2 {
+		t.Errorf("items = %d, want the pair's two presentation orders", pass.Items)
+	}
+	if pass.Model != "judge-model" || pass.JudgeIdent != eval.JudgeInternal {
+		t.Errorf("pass = %+v", pass)
+	}
+	if pass.RubricVersion != eval.RubricVersion {
+		t.Errorf("rubric_version = %q, want %q", pass.RubricVersion, eval.RubricVersion)
+	}
+}
+
+func TestJudgeEvalRun_RejectsARunStillInFlight(t *testing.T) {
+	srv, store := evalJudgeServer(t, "judge-model")
+	run := seedJudgeableRun(t, store)
+	if err := store.SetRunStatus(context.Background(), run.ID, eval.StatusRunning, ""); err != nil {
+		t.Fatalf("SetRunStatus: %v", err)
+	}
+
+	rec := evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 for a run that is still producing samples", rec.Code)
+	}
+}
+
+func TestJudgeEvalRun_UnknownRunIs404(t *testing.T) {
+	srv, _ := evalJudgeServer(t, "judge-model")
+
+	rec := evalRequest(t, srv, http.MethodPost, "/api/v1/eval/runs/999/judge", "", "dk-test-key")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestJudgeEvalRun_RejectsNegativeSampleN(t *testing.T) {
+	srv, store := evalJudgeServer(t, "judge-model")
+	run := seedJudgeableRun(t, store)
+
+	rec := evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), `{"sample_n":-1}`, "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// Judging spends real money, so it must sit behind eval:write like the run
+// endpoints rather than on the read side with the pair views.
+func TestJudgeEvalRun_ReadScopeCannotJudge(t *testing.T) {
+	srv, store := evalTestServer(t, allScopesKey(), evalReadOnlyKey())
+	run := seedJudgeableRun(t, store)
+
+	rec := evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), "", "dk-eval-readonly")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 — judging needs eval:write", rec.Code)
+	}
+}
+
+func TestEvalConfig_AdvertisesTheInternalJudgeOnlyWhenConfigured(t *testing.T) {
+	off, _ := evalJudgeServer(t, "")
+	rec := evalRequest(t, off, http.MethodGet, "/api/v1/eval/config", "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding config: %v", err)
+	}
+	if _, ok := body["judge_model"]; ok {
+		t.Errorf("judge_model must be omitted when there is no internal judge: %v", body)
+	}
+
+	on, _ := evalJudgeServer(t, "judge-model")
+	rec = evalRequest(t, on, http.MethodGet, "/api/v1/eval/config", "", "dk-test-key")
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding config: %v", err)
+	}
+	if body["judge_model"] != "judge-model" {
+		t.Errorf("judge_model = %v, want judge-model", body["judge_model"])
+	}
+	if body["rubric_version"] != eval.RubricVersion {
+		t.Errorf("rubric_version = %v, want %q", body["rubric_version"], eval.RubricVersion)
+	}
+}
