@@ -165,6 +165,16 @@ func (c *AuditConfig) AuditEnabled() bool {
 	return *c.Enabled
 }
 
+// Trace capture bounds. DefaultMaxTraceBytes matches agent.DefaultMaxTraceBytes;
+// it is restated here so the config package does not depend on the agent
+// package for a number an operator reads out of TOML. MinTraceBytes rejects a
+// cap so small that every trace would arrive at the inspector empty — that is
+// a typo, not a policy.
+const (
+	DefaultMaxTraceBytes = 256 * 1024
+	MinTraceBytes        = 4 * 1024
+)
+
 // EvalConfig controls the eval subsystem and the dry-run execution policy it
 // is built on.
 type EvalConfig struct {
@@ -206,6 +216,35 @@ type EvalConfig struct {
 	// GateCostPct is the largest tolerated relative rise in mean cost per task,
 	// in percent. Default: 25.
 	GateCostPct float64 `toml:"gate_cost_pct"`
+	// Capture turns on L1 trace capture for *live* turns: the built system
+	// prompt, the history window as sent, every tool call with its arguments
+	// and result, and the final response are recorded to turn_traces and shown
+	// in the turn inspector.
+	//
+	// Default false, deliberately. A trace holds everything the model saw,
+	// which is the most sensitive data in the system, so recording it is an
+	// operator decision rather than something an upgrade switches on. Eval
+	// samples are captured either way — the judge reads their trace — and they
+	// never touch a live conversation.
+	Capture bool `toml:"capture"`
+	// MaxTraceBytes caps one trace's stored payload. Over it, the oldest
+	// tool-call rounds are dropped first, then the oldest history messages;
+	// the trace records what went. Default: 262144 (256 KiB). There is no
+	// "unbounded" value — one pathological turn would fill the table.
+	MaxTraceBytes int `toml:"max_trace_bytes"`
+	// RetentionDays is how long captured traces are kept, matching the audit
+	// log's default of 30. Traces get their own knob rather than riding on
+	// [memory] retention because they are the most sensitive rows in the
+	// database. 0 takes the default; a negative value is rejected.
+	RetentionDays int `toml:"retention_days"`
+}
+
+// TraceBytesCap returns the effective per-trace payload cap.
+func (c *EvalConfig) TraceBytesCap() int {
+	if c.MaxTraceBytes <= 0 {
+		return DefaultMaxTraceBytes
+	}
+	return c.MaxTraceBytes
 }
 
 // AuditMode returns the configured eval audit mode, defaulting to "full".
@@ -1521,6 +1560,12 @@ func applyEvalDefaults(cfg *Config) {
 	if cfg.Eval.GateRoundsPct == 0 {
 		cfg.Eval.GateRoundsPct = 20
 	}
+	if cfg.Eval.MaxTraceBytes == 0 {
+		cfg.Eval.MaxTraceBytes = DefaultMaxTraceBytes
+	}
+	if cfg.Eval.RetentionDays == 0 {
+		cfg.Eval.RetentionDays = 30
+	}
 	if cfg.Eval.GateCostPct == 0 {
 		cfg.Eval.GateCostPct = 25
 	}
@@ -2245,6 +2290,18 @@ func validateEval(e *EvalConfig) error {
 		if g.val < 0 {
 			return fmt.Errorf("%s must not be negative, got %v", g.key, g.val)
 		}
+	}
+	// Capture needs no validation — a bool has no wrong value, and its default
+	// is the safe one. The two trace bounds do: a negative cap or retention is
+	// meaningless, and a written 0 takes the default like every other key here.
+	if e.MaxTraceBytes < 0 {
+		return fmt.Errorf("max_trace_bytes must not be negative, got %d", e.MaxTraceBytes)
+	}
+	if e.MaxTraceBytes > 0 && e.MaxTraceBytes < MinTraceBytes {
+		return fmt.Errorf("max_trace_bytes must be at least %d, got %d", MinTraceBytes, e.MaxTraceBytes)
+	}
+	if e.RetentionDays < 0 {
+		return fmt.Errorf("retention_days must not be negative, got %d", e.RetentionDays)
 	}
 	return nil
 }
