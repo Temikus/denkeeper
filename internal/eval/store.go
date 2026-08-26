@@ -38,11 +38,19 @@ var ErrNameTaken = errors.New("eval: task set name already exists")
 // Task categories. The curation axis from design/eval-subsystem.md §4.3 —
 // validated in Go rather than by a SQL CHECK constraint, matching the house
 // style (there are no CHECK constraints anywhere in the schema).
+//
+// The first four are the bottom-up axis: what the agent has actually been
+// asked to do. CategoryProbe is the top-down one (Stage E item 2) and is
+// deliberately its own value rather than folded into chat or tool_heavy: a
+// probe is generated from written intent, not sampled from history, so mixing
+// the two would let a regression on specified behaviour hide inside a chat win
+// rate — and the per-category breakdown exists to keep those questions apart.
 const (
 	CategoryChat         = "chat"
 	CategorySkillCommand = "skill_command"
 	CategoryScheduled    = "scheduled"
 	CategoryToolHeavy    = "tool_heavy"
+	CategoryProbe        = "probe"
 )
 
 // Run statuses.
@@ -112,18 +120,28 @@ func Dimensions() []string {
 	return []string{DimTaskSuccess, DimToolPath, DimPersonaFit, DimLength}
 }
 
-// ValidCategory reports whether c is one of the four curation categories.
+// ValidCategory reports whether c is one of the five curation categories.
 func ValidCategory(c string) bool {
 	switch c {
-	case CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy:
+	case CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy, CategoryProbe:
 		return true
 	}
 	return false
 }
 
-// Categories returns the four valid task categories, in the order the docs
-// list them.
+// Categories returns the five valid task categories, in the order the docs
+// list them. Every stratified draw and per-category breakdown cycles this
+// slice, so adding a value here is what widens the axis everywhere.
 func Categories() []string {
+	return []string{CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy, CategoryProbe}
+}
+
+// HistoryCategories returns the categories a turn sampled from history can
+// land in — Categories() minus CategoryProbe, which is generated from written
+// intent and never inferred from a turn. Suggest stratifies across these
+// rather than all of Categories(): a share reserved for a family the pass can
+// never fill would just shrink the pass.
+func HistoryCategories() []string {
 	return []string{CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy}
 }
 

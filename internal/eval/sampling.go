@@ -2,7 +2,7 @@ package eval
 
 import "sort"
 
-// DrawStratified picks n task ids spread across the four curation categories,
+// DrawStratified picks n task ids spread across the curation categories,
 // for the "quick check" shape: a cheap first signal that still touches every
 // kind of turn the set covers.
 //
@@ -53,7 +53,7 @@ func DrawStratified(tasks []Task, n int) TaskIDList {
 }
 
 // bucketByCategory groups task ids by category and returns the cycle order:
-// the four canonical categories first, then anything unrecognised, sorted. A
+// the canonical categories first, then anything unrecognised, sorted. A
 // stored category is validated on write, so the tail is defensive — but a task
 // the draw cannot classify must still be drawable.
 func bucketByCategory(tasks []Task) ([]string, map[string][]int64) {

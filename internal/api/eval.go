@@ -90,7 +90,7 @@ type evalImportResult struct {
 }
 
 // evalSuggestResult is the cold-start fill path's response: past turns worth
-// saving as test cases, stratified across the four categories.
+// saving as test cases, stratified across the history categories.
 type evalSuggestResult struct {
 	Candidates []eval.Candidate `json:"candidates"`
 }
@@ -948,7 +948,7 @@ func (s *Server) handleEvalRunSamples(w http.ResponseWriter, r *http.Request) {
 
 const (
 	// suggestDefaultLimit is how many candidates a suggestion pass returns —
-	// enough to fill the four category columns without a wall of cards.
+	// enough to fill the category columns without a wall of cards.
 	suggestDefaultLimit = 20
 	suggestMaxLimit     = 100
 	// suggestDefaultWindow is how far back the telemetry query looks.
@@ -987,7 +987,7 @@ func suggestParams(w http.ResponseWriter, r *http.Request) (agentName string, si
 
 // handleEvalSuggest godoc
 // @Summary Suggest eval test cases from history
-// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
+// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth

@@ -87,7 +87,7 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 	}
 
 	threshold := topDecileCost(turns)
-	byCategory := make(map[string][]scored, len(Categories()))
+	byCategory := make(map[string][]scored, len(HistoryCategories()))
 	for _, t := range turns {
 		if _, seen := opts.Exclude[SourceKey(t.ConversationID, t.MessageID)]; seen {
 			continue
@@ -123,11 +123,11 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 	return stratify(byCategory, limit)
 }
 
-// stratify draws limit/len(Categories()) from each category, then hands the
-// leftover slots round-robin to whichever categories still have surplus, so a
-// thin category costs the total nothing.
+// stratify draws limit/len(HistoryCategories()) from each category, then hands
+// the leftover slots round-robin to whichever categories still have surplus, so
+// a thin category costs the total nothing.
 func stratify(byCategory map[string][]scored, limit int) []Candidate {
-	cats := Categories()
+	cats := HistoryCategories()
 	share := limit / len(cats)
 	taken := make(map[string]int, len(cats))
 	out := make([]Candidate, 0, limit)
@@ -180,7 +180,8 @@ func signalsFor(t agent.InterestingTurn, costThreshold float64) []string {
 	return signals
 }
 
-// categoryFor infers which of the four curation categories a turn belongs to.
+// categoryFor infers which history category a turn belongs to. CategoryProbe
+// is never inferred: a probe is generated from written intent, not sampled.
 // The order is the discriminating one: a command match is what the turn *was*,
 // while tool weight is only how it went.
 func categoryFor(t agent.InterestingTurn) string {
