@@ -268,6 +268,18 @@ describe('Evals page — launcher', () => {
   })
 })
 
+/** Pins run 2 into the shape of a Quick check: a drawn subset at k = 1. */
+function quickCheckRun2() {
+  server.use(
+    http.get('/api/v1/eval/runs/:id', ({ params }) => {
+      const run = evalRuns.find(r => String(r.id) === params.id)
+      if (!run) return new HttpResponse(null, { status: 404 })
+      const pinned = { ...run, k: 1, task_ids: [11, 12, 13], task_count: 3 }
+      return HttpResponse.json(String(run.id) === '2' ? pinned : run)
+    }),
+  )
+}
+
 describe('Evals page — runs list', () => {
   test('renders status, progress, spend and the test set for each run', async () => {
     render(Evals)
@@ -423,13 +435,8 @@ describe('Evals page — results panel', () => {
   })
 
   test('"Run full eval" refills the launcher with the same candidate', async () => {
-    // Run 2 covered 37 of 37 cases, so make it a subset to earn the CTA.
-    server.use(
-      http.get('/api/v1/eval/runs/:id', ({ params }) => {
-        const run = evalRuns.find(r => String(r.id) === params.id)
-        return run ? HttpResponse.json({ ...run, task_count: 10 }) : new HttpResponse(null, { status: 404 })
-      }),
-    )
+    // Run 2 ran the whole set at k = 3, so pin it into a quick check.
+    quickCheckRun2()
     render(Evals)
 
     await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
@@ -439,6 +446,78 @@ describe('Evals page — results panel', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('preset-hint')).toHaveTextContent(/All \d+ cases/))
+    expect(document.querySelector('.model-selector input'))
+      .toHaveValue('anthropic/claude-3-opus')
+    // Focus follows the escalation: the button that was clicked is now gone.
+    expect(document.activeElement).toBe(screen.getByTestId('launcher'))
+  })
+
+  test('a full run at k = 1 is not mistaken for a quick check', async () => {
+    // The old test was "fewer cases than the set holds", which called any run
+    // predating a set that has since grown a quick check.
+    server.use(
+      http.get('/api/v1/eval/runs/:id', ({ params }) => {
+        const run = evalRuns.find(r => String(r.id) === params.id)
+        return run
+          ? HttpResponse.json({ ...run, k: 1, task_ids: undefined, task_count: 10 })
+          : new HttpResponse(null, { status: 404 })
+      }),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('verdict-4')).toBeInTheDocument())
+    expect(screen.queryByTestId('escalate-4')).not.toBeInTheDocument()
+  })
+
+  test('escalating onto a test set that is gone says so instead of running the wrong one', async () => {
+    quickCheckRun2()
+    // The set the run used is no longer on offer, so the launcher cannot
+    // reproduce the comparison.
+    server.use(
+      http.get('/api/v1/eval/task-sets', () =>
+        HttpResponse.json([{ id: 2, name: 'tool-heavy', description: '', task_count: 8 }])),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('escalate-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('escalate-4'))
+
+    await waitFor(() => expect(screen.getByTestId('launcher'))
+      .toHaveTextContent(/golden-set.*no longer available/))
+    expect(screen.getByTestId('task-set-select')).toHaveValue('tool-heavy')
+  })
+
+  test('applying a model re-reads only the agent that changed', async () => {
+    quickCheckRun2()
+    let listCalls = 0
+    let read = ''
+    server.use(
+      http.get('/api/v1/agents', () => {
+        listCalls++
+        return HttpResponse.json(AGENTS)
+      }),
+      http.patch('/api/v1/agents/:name', () => HttpResponse.json({ ok: true })),
+      http.get('/api/v1/agents/:name', ({ params }) => {
+        read = params.name
+        return HttpResponse.json({ ...AGENTS[0], model: 'anthropic/claude-3-opus' })
+      }),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('results-2')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('results-2'))
+    await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('apply-4'))
+    await fireEvent.click(screen.getByTestId('apply-confirm-btn'))
+
+    await waitFor(() => expect(read).toBe('default'))
+    // One list read on mount and no second one: the page patched the one row.
+    expect(listCalls).toBe(1)
+    expect(screen.getByTestId('launcher')).toHaveTextContent('anthropic/claude-3-opus')
   })
 
   test('a Quick check over a whole small set still earns the CTA', async () => {

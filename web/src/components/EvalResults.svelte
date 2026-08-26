@@ -5,7 +5,7 @@
   // Terminology: the API's task_set/variant/sample are "test set", "current vs
   // candidate" and "turns" here — six new nouns is a teaching tax this page
   // should not charge.
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { api, evalSampleTranscript } from '../api.js'
   import ErrorBanner from './ErrorBanner.svelte'
   import DryRunTranscript from './DryRunTranscript.svelte'
@@ -39,8 +39,11 @@
   // The candidate this view has already switched the agent to, so the button
   // cannot be clicked twice for the same change.
   let appliedVariant = $state('')
-  // '' | 'ok' | 'failed' — a silently dead Copy button reads as broken.
-  let copyState = $state('')
+  // { variant_id, state: 'ok' | 'failed' } — a silently dead Copy button reads
+  // as broken. Carrying the variant keeps a multi-candidate run honest: one
+  // pending block per verdict, and copying in one must not flip every button.
+  let copyFeedback = $state(null)
+  let copyTimer = null
 
   const VERDICT_LABEL = {
     upgrade: 'Upgrade',
@@ -117,6 +120,14 @@
     return `${sign}${v.toFixed(1)}${unit === 'pp' ? ' pp' : '%'}`
   }
 
+  /** The allowed column is a ceiling, not a measurement, so it reads as one. */
+  function fmtThreshold(gate) {
+    if (gate.threshold == null) return '—'
+    return gate.unit === 'pp'
+      ? `≤ +${gate.threshold.toFixed(1)} pp`
+      : `≤ +${gate.threshold.toFixed(0)}%`
+  }
+
   /** Gate values are rates for the pp gate and magnitudes for the rest. */
   function fmtGateValue(gate, v) {
     if (gate.unit === 'pp') return fmtPct(v)
@@ -150,16 +161,23 @@
 
   let judgeCommand = $derived(`claude -p "judge pending pairs for eval run ${run?.id}"`)
 
-  async function copyCommand() {
+  async function copyCommand(variantID) {
     try {
       await navigator.clipboard.writeText(judgeCommand)
-      copyState = 'ok'
-      setTimeout(() => (copyState = ''), 2000)
+      copyFeedback = { variant_id: variantID, state: 'ok' }
+      clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => (copyFeedback = null), 2000)
     } catch {
       // Clipboard access denied or unavailable: the command is on screen and
       // selectable, so the button says to select it rather than dying quietly.
-      copyState = 'failed'
+      copyFeedback = { variant_id: variantID, state: 'failed' }
     }
+  }
+
+  /** Feedback belongs to the button that was pressed, not to every button. */
+  function copyLabel(variantID) {
+    if (copyFeedback?.variant_id !== variantID) return 'Copy'
+    return copyFeedback.state === 'ok' ? 'Copied' : 'Select it above'
   }
 
   async function load() {
@@ -182,6 +200,7 @@
   }
 
   onMount(load)
+  onDestroy(() => clearTimeout(copyTimer))
 
   async function toggleTask(taskID) {
     if (expandedTask === taskID) {
@@ -282,11 +301,11 @@
   function askApply(verdict) {
     applyError = ''
     applyOk = ''
-    const m = metricsFor(verdict.variant)
+    const overlay = metricsFor(verdict.variant)?.overlay || {}
     confirmApply = {
       variant: verdict.variant,
       model: modelOf(verdict),
-      provider: m?.overlay?.llm_provider || '',
+      provider: overlay.llm_provider || '',
     }
   }
 
@@ -301,7 +320,7 @@
       appliedVariant = confirmApply.variant
       confirmApply = null
       // The page owns the agent list, so it re-reads and "current" updates.
-      onapplied()
+      onapplied(run.base_agent)
     } catch (e) {
       // Kept inside the dialog: closing it on failure would read as success.
       applyError = e.message
@@ -311,10 +330,12 @@
   }
 
   function escalate(verdict) {
-    const m = metricsFor(verdict.variant)
+    const overlay = metricsFor(verdict.variant)?.overlay || {}
     onrunfull({
+      // Only a real model id, never the raw variant name: the launcher's
+      // candidate field is what the next run is built from.
       model: modelOf(verdict),
-      provider: m?.overlay?.llm_provider || '',
+      provider: overlay.llm_provider || '',
       taskSet: summary?.task_set || '',
     })
   }
@@ -331,7 +352,7 @@
 </script>
 
 {#if loading}
-  <p class="muted" data-testid="results-loading">Loading results…</p>
+  <p class="muted" role="status" data-testid="results-loading">Loading results…</p>
 {:else if error}
   <ErrorBanner message={error} />
   <button class="btn-sm" onclick={load} data-testid="results-retry">Try again</button>
@@ -365,9 +386,9 @@
           </p>
           <p class="pending-step">Judge them from Claude Code with <code>/judge-eval</code>, or run:</p>
           <div class="cmd-row">
-            <code class="cmd" data-testid="judge-command">{judgeCommand}</code>
-            <button class="btn-sm" onclick={copyCommand} data-testid="copy-command">
-              {#if copyState === 'ok'}Copied{:else if copyState === 'failed'}Select it above{:else}Copy{/if}
+            <code class="cmd" data-testid="judge-command-{v.variant_id}">{judgeCommand}</code>
+            <button class="btn-sm" onclick={() => copyCommand(v.variant_id)} data-testid="copy-command-{v.variant_id}">
+              {copyLabel(v.variant_id)}
             </button>
           </div>
           <p class="hint">
@@ -398,7 +419,7 @@
                 <td>{fmtGateValue(g, g.baseline)}</td>
                 <td>{fmtGateValue(g, g.value)}</td>
                 <td>{fmtDelta(g.delta, g.unit)}</td>
-                <td>{fmtDelta(g.threshold, g.unit)}</td>
+                <td>{fmtThreshold(g)}</td>
                 <td>
                   <span class="gate-mark" class:pass={g.pass} data-testid="gate-{g.name}-{v.variant_id}">
                     {g.pass ? 'pass' : 'fail'}
@@ -502,7 +523,7 @@
       {/if}
 
       <div class="verdict-actions">
-        {#if v.verdict === 'upgrade'}
+        {#if v.verdict === 'upgrade' && run?.base_agent}
           <button class="btn-primary" onclick={() => askApply(v)}
             disabled={appliedVariant === v.variant || !modelOf(v)} data-testid="apply-{v.variant_id}">
             {appliedVariant === v.variant ? 'Applied' : `Apply to ${run.base_agent}`}
@@ -543,7 +564,7 @@
             <th>Measure</th>
             {#each variants as v (v.variant_id)}
               <th class="mono">
-                {v.name}
+                {displayName(v.name)}
                 <span class="flag">{v.name === baselineName ? 'current' : 'candidate'}</span>
               </th>
             {/each}
@@ -608,7 +629,7 @@
               <th>Kind</th>
               {#each variants as v (v.variant_id)}
                 <th class="mono">
-                  {v.name}
+                  {displayName(v.name)}
                   <span class="flag">{v.name === baselineName ? 'current' : 'candidate'}</span>
                 </th>
               {/each}

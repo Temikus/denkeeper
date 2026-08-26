@@ -85,6 +85,8 @@ export const evalRuns = [
     cost_spent: 0.31,
     as_of: '2026-08-18T09:00:00Z',
     created_at: '2026-08-18T09:00:00Z',
+    // A Quick check pins the subset it drew; task_ids is what identifies it.
+    task_ids: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     task_count: 10,
     variants: [
       { id: 1, run_id: 1, name: 'current', overlay: '{}' },
@@ -535,6 +537,9 @@ export const handlers = [
       cost_cap: body.cost_cap ?? 2,
       cost_spent: 0,
       created_at: '2026-08-19T09:00:00Z',
+      ...(body.sample_tasks
+        ? { task_ids: Array.from({ length: body.sample_tasks }, (_, i) => 11 + i) }
+        : {}),
       task_count: body.sample_tasks || 37,
       variants: (body.variants || []).map((v, i) => ({ id: 10 + i, run_id: 3, name: v.name, overlay: '{}' })),
       samples_done: 0,

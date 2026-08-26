@@ -71,6 +71,10 @@
     } catch { /* the panel already reported the write; the count can lag */ }
   }
 
+  // The launcher section, so an escalation from a result can move focus and
+  // the viewport back to it.
+  let launcherEl = $state(null)
+
   // --- Runs ---
   let expandedRun = $state(null)
   let confirmStop = $state(null)
@@ -118,12 +122,12 @@
    * A Quick check drew a subset of the set. task_ids is the authoritative
    * signal — the server records the drawn ids and leaves it unset for a whole-
    * set run — so a Quick check over a set of ten or fewer cases is still
-   * recognised, which the count comparison alone misses. The comparison stays
-   * as the fallback for runs created before the ids were pinned.
+   * recognised. Comparing the run's task count against the set's current size
+   * would instead call an old full run a Quick check as soon as a case is
+   * added to the set.
    */
-  function isQuickCheck(run, setCases) {
-    if (Array.isArray(run.task_ids)) return run.task_ids.length > 0
-    return run.task_count != null && setCases != null && run.task_count < setCases
+  function isQuickCheck(run) {
+    return Array.isArray(run.task_ids) && run.task_ids.length > 0
   }
 
   /** Total cases in the run's set, when that set is still around to ask. */
@@ -418,10 +422,15 @@
     confirmStop = id
   }
 
-  /** Re-reads the agent list so "current" reflects a just-applied model. */
-  async function reloadAgents() {
+  /**
+   * Re-reads the one agent that changed so "current" reflects a just-applied
+   * model. Only that agent: a full list re-read would also discard whatever
+   * the rest of the page holds for the others.
+   */
+  async function reloadAgents(name) {
     try {
-      agents = (await api.agents()) || []
+      const fresh = await api.agent(name)
+      agents = agents.map(a => (a.name === name ? { ...a, ...fresh } : a))
     } catch {
       // The banner in the results view already reported the applied change;
       // a stale "current" line is not worth failing the page over.
@@ -430,14 +439,27 @@
 
   /** Refills the launcher from a result and switches it to the full preset. */
   function runFull(pick) {
+    launchError = ''
     candidate = pick.model
     candidateProvider = pick.provider || ''
     providerFor = pick.model
-    // Only re-select a set the launcher can still offer — a deleted one would
-    // leave the select showing a name it cannot start.
-    if (pick.taskSet && taskSets.some(t => t.name === pick.taskSet)) taskSetName = pick.taskSet
+    if (pick.taskSet) {
+      if (taskSets.some(t => t.name === pick.taskSet)) {
+        taskSetName = pick.taskSet
+      } else {
+        // Launching against a different corpus than the quick check ran on is
+        // not the same comparison, so say so rather than silently keeping
+        // whatever set the select happened to hold.
+        launchError = `The test set that quick check used ("${pick.taskSet}") is no longer available — pick one below.`
+      }
+    }
     preset = 'full'
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    // The button that had focus lives in the results panel, so focus moves to
+    // the launcher explicitly; without it a keyboard user lands on <body>.
+    launcherEl?.focus?.({ preventScroll: true })
+    // A JS scroll ignores the stylesheet's reduced-motion block on its own.
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    launcherEl?.scrollIntoView?.({ behavior: still ? 'auto' : 'smooth', block: 'start' })
   }
 
   function toggleResults(id) {
@@ -530,7 +552,7 @@
 </div>
 
 {#if !loading && !isEmpty}
-  <section class="launcher" data-testid="launcher">
+  <section class="launcher" data-testid="launcher" bind:this={launcherEl} tabindex="-1">
     <h2 class="section-title">Compare current vs candidate</h2>
     {#if launchError}<div class="inline-error" role="alert">{launchError}</div>{/if}
 
@@ -681,7 +703,7 @@
           <div class="results-panel" id="results-panel-{run.id}" data-testid="results-panel-{run.id}">
             <EvalResults {run}
               agent={agents.find(a => a.name === run.base_agent) || null}
-              quick={isQuickCheck(run, setCases)}
+              quick={isQuickCheck(run)}
               onapplied={reloadAgents}
               onrunfull={runFull} />
           </div>
@@ -757,6 +779,8 @@
   /* Launcher */
   .launcher {
     background: var(--surface);
+    /* Focused programmatically after an escalation; the ring would be noise. */
+    outline: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 18px;
