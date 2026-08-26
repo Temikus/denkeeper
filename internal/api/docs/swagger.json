@@ -2739,7 +2739,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.",
+                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead. Pass 'task_id' to fetch one test case's samples rather than the whole run — a full run is task_count x variants x k samples, each carrying a trace.",
                 "produces": [
                     "application/json"
                 ],
@@ -2754,6 +2754,12 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only return samples for this task",
+                        "name": "task_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2767,7 +2773,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad run id",
+                        "description": "Bad run id or task_id",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

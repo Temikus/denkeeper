@@ -234,6 +234,33 @@ describe('EvalResults — per-task diffs', () => {
     expect(judgment).toHaveTextContent('rubric v1')
   })
 
+  // The whole point of the endpoint's task_id filter: a full run is
+  // task_count x variants x k samples and each carries a trace.
+  test('fetches only the expanded test case, and only once', async () => {
+    const asked = []
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('task_id'))
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    // Nothing is fetched until a row opens.
+    expect(asked).toEqual([])
+
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
+
+    // Collapse and reopen: the cache is per task, so nothing is refetched.
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
+  })
+
   test('collapses again and reports a failed turn instead of an empty column', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([

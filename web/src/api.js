@@ -460,7 +460,12 @@ export const api = {
   stopEvalRun: (id) =>
     apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   evalRunSummary: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/summary`),
-  evalRunSamples: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/samples`),
+  // taskID narrows to one test case: a full run is task_count x variants x k
+  // samples, each carrying a trace, and the results view opens one row at a
+  // time.
+  evalRunSamples: (id, taskID = 0) => apiFetch(
+    `/api/v1/eval/runs/${encodeURIComponent(id)}/samples`
+    + (taskID ? `?task_id=${encodeURIComponent(taskID)}` : '')),
   evalRunPairs: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/pairs`),
   evalEstimate: (body) =>
     apiFetch('/api/v1/eval/estimate', { method: 'POST', body: JSON.stringify(body) }),

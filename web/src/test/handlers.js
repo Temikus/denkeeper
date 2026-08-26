@@ -556,7 +556,14 @@ export const handlers = [
   }),
   http.post('/api/v1/eval/runs/:id/stop', () => HttpResponse.json({ status: 'stopping' })),
   http.get('/api/v1/eval/runs/:id/summary', () => HttpResponse.json(evalSummary)),
-  http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json(evalSamples)),
+  http.get('/api/v1/eval/runs/:id/samples', ({ request }) => {
+    // Mirrors the endpoint's own filter, so a component that forgets to narrow
+    // is not handed a full run it never asked for.
+    const taskID = new URL(request.url).searchParams.get('task_id')
+    return HttpResponse.json(taskID
+      ? evalSamples.filter(s => String(s.task_id) === taskID)
+      : evalSamples)
+  }),
   http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json(evalPairs)),
   http.get('/api/v1/eval/suggest', () => HttpResponse.json(evalSuggestions)),
 

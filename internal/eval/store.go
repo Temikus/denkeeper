@@ -1030,13 +1030,33 @@ func (s *Store) AddSample(ctx context.Context, smp Sample) (*Sample, error) {
 
 // ListSamples returns a run's samples in insertion order.
 func (s *Store) ListSamples(ctx context.Context, runID int64) ([]Sample, error) {
+	return s.listSamples(ctx, runID, 0)
+}
+
+// ListTaskSamples returns one task's samples within a run. The results view
+// expands one test case at a time, and a full run's samples carry a trace each
+// — fetching all of them to render one row is the whole reason this exists.
+func (s *Store) ListTaskSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
+	return s.listSamples(ctx, runID, taskID)
+}
+
+// listSamples reads a run's samples, narrowed to one task when taskID > 0. The
+// column list lives here once: a sample gained a column twice already, and two
+// copies of it is how one reader silently stops carrying it.
+func (s *Store) listSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
 	out := []Sample{}
-	if err := s.db.SelectContext(ctx, &out,
-		`SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
-		        rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
-		        outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
-		        tokens_completion, cost, latency_ms, created_at
-		 FROM eval_samples WHERE run_id = ? ORDER BY id`, runID); err != nil {
+	query := `SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
+	                 rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
+	                 outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
+	                 tokens_completion, cost, latency_ms, created_at
+	          FROM eval_samples WHERE run_id = ?`
+	args := []any{runID}
+	if taskID > 0 {
+		query += ` AND task_id = ?`
+		args = append(args, taskID)
+	}
+	query += ` ORDER BY id`
+	if err := s.db.SelectContext(ctx, &out, query, args...); err != nil {
 		return nil, fmt.Errorf("listing samples of run %d: %w", runID, err)
 	}
 	return out, nil

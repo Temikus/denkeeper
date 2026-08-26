@@ -26,8 +26,10 @@
   let pairView = $state(null)
 
   // Turn transcripts are large and only wanted once a row opens, so they load
-  // on the first expansion and are kept for the rest of the session.
-  let samples = $state(null)
+  // per test case on its first expansion and are kept for the rest of the
+  // session. Keyed by task id: fetching the whole run to render one row pulls
+  // every other row's traces with it.
+  let samplesByTask = $state({})
   let samplesLoading = $state(false)
   let samplesError = $state('')
   let expandedTask = $state(null)
@@ -208,15 +210,17 @@
       return
     }
     expandedTask = taskID
-    if (samples || samplesLoading) return
-    await loadSamples()
+    // A failed fetch left no entry, so reopening the row retries on its own.
+    samplesError = ''
+    if (samplesByTask[taskID]) return
+    await loadSamples(taskID)
   }
 
-  async function loadSamples() {
+  async function loadSamples(taskID) {
     samplesLoading = true
     samplesError = ''
     try {
-      samples = (await api.evalRunSamples(run.id)) || []
+      samplesByTask[taskID] = (await api.evalRunSamples(run.id, taskID)) || []
     } catch (e) {
       samplesError = e.message
     } finally {
@@ -226,7 +230,7 @@
 
   /** The (k, variantID) grid for one test case, in k then variant order. */
   function turnsFor(taskID) {
-    const rows = (samples || []).filter(s => s.task_id === taskID)
+    const rows = samplesByTask[taskID] || []
     const ks = [...new Set(rows.map(s => s.k_index))].sort((a, b) => a - b)
     return ks.map(k => ({
       k,
@@ -669,7 +673,7 @@
                       <p class="muted" role="status" data-testid="turns-loading">Loading turns…</p>
                     {:else if samplesError}
                       <ErrorBanner message={samplesError} />
-                      <button class="btn-sm" onclick={() => loadSamples()} data-testid="turns-retry">Try again</button>
+                      <button class="btn-sm" onclick={() => loadSamples(t.task_id)} data-testid="turns-retry">Try again</button>
                     {:else}
                       {#each turnsFor(t.task_id) as turn (turn.k)}
                         {@const pair = pairFor(t.task_id, turn.k)}

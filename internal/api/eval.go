@@ -894,15 +894,9 @@ func (s *Server) handleEvalRunPairs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var taskID int64
-	if raw := r.URL.Query().Get("task_id"); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || parsed <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "task_id must be a positive integer"})
-			return
-		}
-		taskID = parsed
+	taskID, ok := evalTaskFilter(w, r)
+	if !ok {
+		return
 	}
 	view, err := s.deps.EvalStore.PairDetails(r.Context(), id, taskID)
 	if err != nil {
@@ -914,13 +908,14 @@ func (s *Server) handleEvalRunPairs(w http.ResponseWriter, r *http.Request) {
 
 // handleEvalRunSamples godoc
 // @Summary Get an eval run's per-sample transcripts
-// @Description Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.
+// @Description Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead. Pass 'task_id' to fetch one test case's samples rather than the whole run — a full run is task_count x variants x k samples, each carrying a trace.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
 // @Param id path int true "Run id"
+// @Param task_id query int false "Only return samples for this task"
 // @Success 200 {array} eval.Sample "Samples"
-// @Failure 400 {object} map[string]string "Bad run id"
+// @Failure 400 {object} map[string]string "Bad run id or task_id"
 // @Failure 404 {object} map[string]string "Run not found"
 // @Failure 503 {object} map[string]string "Eval subsystem not configured"
 // @Router /eval/runs/{id}/samples [get]
@@ -932,16 +927,37 @@ func (s *Server) handleEvalRunSamples(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	taskID, ok := evalTaskFilter(w, r)
+	if !ok {
+		return
+	}
 	if _, err := s.deps.EvalStore.GetRun(r.Context(), id); err != nil {
 		writeEvalError(w, err)
 		return
 	}
-	samples, err := s.deps.EvalStore.ListSamples(r.Context(), id)
+	samples, err := s.deps.EvalStore.ListTaskSamples(r.Context(), id, taskID)
 	if err != nil {
 		writeEvalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, samples)
+}
+
+// evalTaskFilter reads the optional task_id narrowing shared by the pairs and
+// samples endpoints. 0 means every task; a false second return means the reply
+// has already been written.
+func evalTaskFilter(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.URL.Query().Get("task_id")
+	if raw == "" {
+		return 0, true
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "task_id must be a positive integer"})
+		return 0, false
+	}
+	return parsed, true
 }
 
 // --- Suggestions ---
