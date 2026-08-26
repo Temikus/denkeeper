@@ -761,14 +761,18 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 24px;
-    max-width: 620px;
+    /* Padding and trailing gap match .launcher and SuggestCases' .suggest so
+       the card lines up with whichever panel opens under it. */
+    padding: 18px;
+    margin-bottom: 24px;
   }
   .empty-lead {
     font-size: 14px;
     color: var(--text);
     margin-bottom: 16px;
     line-height: 1.6;
+    /* Card is full width; the prose is not. */
+    max-width: 620px;
   }
   .empty-actions {
     display: flex;
