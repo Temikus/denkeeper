@@ -106,6 +106,7 @@ Every user-facing feature gets thoughtful UX:
 | Dry run / evals | `internal/agent/execpolicy.go`, `internal/api/dryrun.go` | `[eval]` |
 | Eval task sets & runner | `internal/eval/` | `[eval]` |
 | Eval pairing, judging, verdict | `internal/eval/pairing.go`, `judging.go`, `verdict.go`, `internal/mcpserver/tools_eval.go` | `[eval]` |
+| Internal judge (`judge_model`) | `internal/eval/judge.go`, `rubric.go` | `[eval]` |
 | Skill undo journal | `internal/skilleffect/` | (none — on whenever a SQLite store is wired) |
 
 ## Detailed Invariants

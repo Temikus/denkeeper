@@ -353,13 +353,13 @@ func (l TaskIDList) Value() (driver.Value, error) {
 
 // Run is one comparison run.
 type Run struct {
-	ID        int64     `db:"id"          json:"id"`
-	TaskSetID int64     `db:"task_set_id" json:"task_set_id"`
-	BaseAgent string    `db:"base_agent"  json:"base_agent"`
-	Status    string    `db:"status"      json:"status"`
-	K         int       `db:"k"           json:"k"`
-	CostCap   float64   `db:"cost_cap"    json:"cost_cap"`
-	CostSpent float64   `db:"cost_spent"  json:"cost_spent"`
+	ID        int64   `db:"id"          json:"id"`
+	TaskSetID int64   `db:"task_set_id" json:"task_set_id"`
+	BaseAgent string  `db:"base_agent"  json:"base_agent"`
+	Status    string  `db:"status"      json:"status"`
+	K         int     `db:"k"           json:"k"`
+	CostCap   float64 `db:"cost_cap"    json:"cost_cap"`
+	CostSpent float64 `db:"cost_spent"  json:"cost_spent"`
 	// JudgeCost is what the internal judge has spent grading this run, kept
 	// apart from CostSpent: it is a separate budget spent by a separate
 	// decision, and adding it to the sample spend would read as a blown cap.
