@@ -860,11 +860,7 @@
     font-weight: 600;
     margin-bottom: 12px;
   }
-  .inline-error {
-    color: var(--danger, #d32f2f);
-    font-size: 12px;
-    margin-bottom: 8px;
-  }
+  .inline-error { margin-bottom: 8px; }
 
   /* Delete */
   .btn-danger-text {

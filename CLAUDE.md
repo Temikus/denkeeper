@@ -74,6 +74,8 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 Every user-facing feature gets thoughtful UX:
 
 - **Web (Svelte)**: loading spinners, empty states with CTAs, inline errors, confirm destructive actions, success feedback, disabled buttons in-flight, responsive ≥320px, existing CSS variables (`--accent`, `--surface`, `--border`, `--text-muted`, `--danger`).
+- **Confirm pattern**: overlay (`.overlay` + `.confirm-modal`) for **irreversible** actions only; **inline** confirm rendered in place inside the card for reversible config writes (`Providers.svelte` is the reference). An overlay over the evidence for the decision is the failure mode. Full rule in `web/src/shared.css` above `.overlay`.
+- **Shared classes before local ones**: `.sr-only`, `.table-wrap`, `.inline-error`, `.btn-*`, `.table`, `.hint`, `.pill` and friends live in `web/src/shared.css` (imported globally by `App.svelte`). Redefine one locally only to add a margin or a genuinely different shape, and say why. A `.table-wrap` needs `tabindex="0"`, `role="region"` and an `aria-label` on the wrapper, or its off-screen columns are pointer-only.
 - **CLI (Cobra)**: progress feedback for >500ms ops, `tabwriter` tables, actionable errors, non-zero exits via `RunE`.
 - **Adapters**: typing indicators before LLM calls, platform-native formatting, inline keyboards for approvals. Telegram registers built-in commands (`/start`, `/help`, `/stop`, `/panic`, `/resume`, `/debug`, `/clear`, `/compact`) plus skill `command:` triggers via `setMyCommands` (`RegisterSkillCommands`).
 

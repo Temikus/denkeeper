@@ -382,7 +382,9 @@
       {/if}
 
       <h3 class="block-title">Objective checks</h3>
-      <div class="table-wrapper">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+      <div class="table-wrap" tabindex="0" role="region"
+        aria-label="Objective checks for {displayName(v.variant)}">
         <table class="table" data-testid="gates-{v.variant_id}">
           <caption class="sr-only">Objective checks for {displayName(v.variant)}</caption>
           <thead>
@@ -446,7 +448,9 @@
 
       {#if (v.categories || []).length > 0}
         <h3 class="block-title">By kind of test case</h3>
-        <div class="table-wrapper">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+        <div class="table-wrap" tabindex="0" role="region"
+          aria-label="Per-category results for {displayName(v.variant)}">
           <table class="table" data-testid="categories-{v.variant_id}">
             <caption class="sr-only">Per-category results for {displayName(v.variant)}</caption>
             <thead>
@@ -540,7 +544,8 @@
   <!-- Layer 2: the objective scorecard -->
   <section class="scorecard">
     <h3 class="block-title">Scorecard</h3>
-    <div class="table-wrapper">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Scorecard">
       <table class="table" data-testid="objective-table">
         <thead>
           <tr>
@@ -603,7 +608,8 @@
   {#if (summary.per_task || []).length > 0}
     <section class="per-task">
       <h3 class="block-title">Test case by test case</h3>
-      <div class="table-wrapper">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Test case by test case">
         <table class="table" data-testid="per-task-table">
           <thead>
             <tr>
@@ -775,18 +781,6 @@
     margin-top: 8px;
   }
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
   .block-title {
     font-size: 11px;
     font-weight: 500;
@@ -850,7 +844,6 @@
 
   .tally { font-size: 12px; color: var(--text); margin: 0 0 6px; line-height: 1.5; }
 
-  .table-wrapper { overflow-x: auto; }
   .gate-mark {
     font-size: 11px;
     text-transform: uppercase;
@@ -925,7 +918,7 @@
   .dim { color: var(--text); }
   .notes { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
 
-  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 10px; }
+  .inline-error { margin-bottom: 10px; }
 
   @media (max-width: 520px) {
     .columns { grid-template-columns: 1fr; }

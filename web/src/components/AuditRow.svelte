@@ -259,6 +259,8 @@
   .row-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
   .chevron { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
 
+  /* Deliberately not the shared .inline-error shape: this one is a truncated
+     monospace line indented under the row's own content column. */
   .inline-error {
     margin-top: 2px; padding-left: 48px;
     font-size: 11px; font-family: monospace; color: var(--danger);

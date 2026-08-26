@@ -503,6 +503,24 @@ describe('EvalResults — per-task diffs', () => {
   })
 })
 
+// A scroll container with nothing focusable inside it cannot be reached from
+// the keyboard, so its off-screen columns are pointer-only (WCAG 2.1.1). The
+// six-column gate and category tables are the ones that overflow in practice.
+describe('EvalResults — scrollable tables', () => {
+  test('every wide table sits in a focusable, labelled scroll region', async () => {
+    const { container } = render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('objective-table')).toBeInTheDocument())
+    const wraps = [...container.querySelectorAll('.table-wrap')]
+    expect(wraps.length).toBeGreaterThan(0)
+    for (const wrap of wraps) {
+      expect(wrap).toHaveAttribute('tabindex', '0')
+      expect(wrap).toHaveAttribute('role', 'region')
+      expect(wrap.getAttribute('aria-label')).toBeTruthy()
+    }
+  })
+})
+
 describe('EvalResults — apply to agent', () => {
   test('confirms with the agent and both models before patching', async () => {
     let patched = null

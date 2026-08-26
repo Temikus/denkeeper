@@ -1097,13 +1097,13 @@
     margin-bottom: 16px;
     font-size: 13px;
   }
-  .delete-confirm .inline-error { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
+  .delete-confirm .inline-error { margin: 8px 0 0; }
   .delete-actions { display: flex; gap: 8px; margin-top: 10px; }
   .btn-danger { background: var(--danger); color: #fff; border: none; padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
   .btn-danger:hover:not(:disabled) { opacity: 0.85; }
   .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
   .form-title { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
-  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 8px; }
+  .inline-error { margin-bottom: 8px; }
 
   /* Stat cards */
   .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
