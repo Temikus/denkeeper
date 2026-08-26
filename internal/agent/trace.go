@@ -268,7 +268,7 @@ type traceParams struct {
 // point of the trace is to show what the model actually produced.
 func (e *Engine) buildTurnTrace(p traceParams) *TurnTrace {
 	_, capture, maxBytes := e.traceSettings()
-	if !p.policy.active() && !(capture && e.hasTraceSink()) {
+	if !p.policy.active() && (!capture || !e.hasTraceSink()) {
 		return nil
 	}
 
