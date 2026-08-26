@@ -271,6 +271,13 @@ var evalMigrations = []string{
 	// rubric_version: which revision of the judging rubric produced the verdict.
 	// Empty on every pre-migration row, and on any judge that does not say.
 	`ALTER TABLE eval_verdicts ADD COLUMN rubric_version TEXT NOT NULL DEFAULT ''`,
+	// judge_cost: what the internal judge spent grading this run's pairs. Its
+	// own column rather than cost_spent, because the two answer different
+	// questions and share no cap: cost_spent is the sample budget the run was
+	// created with, judging is a later decision to spend under
+	// [eval] judge_max_cost_per_run. Folding them would make a judged run look
+	// like it had blown its cap.
+	`ALTER TABLE eval_runs ADD COLUMN judge_cost REAL NOT NULL DEFAULT 0`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -353,6 +360,10 @@ type Run struct {
 	K         int       `db:"k"           json:"k"`
 	CostCap   float64   `db:"cost_cap"    json:"cost_cap"`
 	CostSpent float64   `db:"cost_spent"  json:"cost_spent"`
+	// JudgeCost is what the internal judge has spent grading this run, kept
+	// apart from CostSpent: it is a separate budget spent by a separate
+	// decision, and adding it to the sample spend would read as a blown cap.
+	JudgeCost float64   `db:"judge_cost"  json:"judge_cost"`
 	AsOf      time.Time `db:"as_of"       json:"as_of"`
 	// TaskIDs pins the run's task list at creation; nil means the whole set.
 	// Pinning is what makes a sampled subset possible, and it also stops a task
@@ -820,7 +831,7 @@ func (s *Store) DeleteTask(ctx context.Context, setID, taskID int64) error {
 // runColumns is the shared select list for run reads. task_count comes back as
 // the *set's* current size; resolveTaskCount narrows it to the pin, which is
 // cheaper and clearer than counting a JSON array in SQL.
-const runColumns = `id, task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of,
+const runColumns = `id, task_set_id, base_agent, status, k, cost_cap, cost_spent, judge_cost, as_of,
 	        error, task_ids, created_at, finished_at,
 	        (SELECT COUNT(*) FROM eval_tasks t WHERE t.set_id = eval_runs.task_set_id) AS task_count`
 
@@ -994,6 +1005,18 @@ func (s *Store) AddRunCost(ctx context.Context, runID int64, cost float64) error
 		`UPDATE eval_runs SET cost_spent = cost_spent + ? WHERE id = ?`, cost, runID)
 	if err != nil {
 		return fmt.Errorf("adding cost to run %d: %w", runID, err)
+	}
+	return nil
+}
+
+// AddJudgeCost accumulates internal-judge spend on a run. Written per item for
+// the same reason sample cost is: a process that dies mid-pass still leaves an
+// honest figure behind.
+func (s *Store) AddJudgeCost(ctx context.Context, runID int64, cost float64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE eval_runs SET judge_cost = judge_cost + ? WHERE id = ?`, cost, runID)
+	if err != nil {
+		return fmt.Errorf("adding judge cost to run %d: %w", runID, err)
 	}
 	return nil
 }

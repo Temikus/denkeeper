@@ -379,6 +379,12 @@ eval_summary, eval_run_status) and never learns which side is which. The verdict
 is asymmetric: the objective gates below can declare a downgrade on their own,
 but calling a candidate an upgrade also needs the judge win-rate.
 
+Setting judge_model turns on the internal judge, which works the same queue
+through denkeeper's own router for unattended server-side runs. It is a one-shot
+completion with no tools, sees the same blinded payload the MCP judge does, and
+grades against the same rubric. Left unset there is no internal judge and the
+MCP path is the only one.
+
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)
     max_concurrent = 2               # eval samples running at once, process-wide
@@ -390,6 +396,12 @@ but calling a candidate an upgrade also needs the judge win-rate.
     gate_rejected_rate_pp = 2.0      # max rise in rejected tool-call rate (points)
     gate_rounds_pct = 20             # max rise in mean rounds per task (percent)
     gate_cost_pct = 25               # max rise in mean cost per task (percent)
+    judge_model = ""                 # model the internal judge grades with;
+                                     # empty means no internal judge
+    judge_provider = ""              # [[llm.providers]] name serving the judge;
+                                     # empty uses the base agent's own provider
+    judge_max_cost_per_run = 2.0     # USD ceiling for one judging pass;
+                                     # defaults to max_cost_per_run
 
 ### [safety]
 
