@@ -16,6 +16,12 @@
     // True when the run covered a subset of the set, i.e. a Quick check. A
     // clean Quick check earns the escalation CTA.
     quick = false,
+    // The internal judge's model, from GET /eval/config. Empty means [eval]
+    // judge_model is unset and Claude Code over MCP is the only judge path, so
+    // the server-side affordance is absent rather than disabled — there is
+    // nothing the operator could click to fix it from here.
+    judgeModel = '',
+    judgeCostCap = 0,
     onapplied = () => {},
     onrunfull = () => {},
   } = $props()
@@ -44,6 +50,12 @@
   // pending block per verdict, and copying in one must not flip every button.
   let copyFeedback = $state(null)
   let copyTimer = null
+
+  // Polling cadence for a background judging pass. Bounded so a wedged pass
+  // cannot leave the page polling forever.
+  const JUDGE_POLL_MS = 2000
+  const JUDGE_POLL_LIMIT = 150
+  let destroyed = false
 
   const VERDICT_LABEL = {
     upgrade: 'Upgrade',
@@ -161,6 +173,51 @@
 
   let judgeCommand = $derived(`claude -p "judge pending pairs for eval run ${run?.id}"`)
 
+  // { state: 'running' | 'done' | 'failed', items, message } for the current
+  // server-side pass. The pass is background work, so the button reports what
+  // it started and the numbers arrive through the ordinary reload.
+  let serverJudge = $state(null)
+
+  async function judgeOnServer() {
+    serverJudge = { state: 'running' }
+    try {
+      const pass = await api.evalJudgeRun(run.id)
+      if (!pass?.items) {
+        serverJudge = { state: 'done', items: 0, message: 'Nothing left to judge.' }
+        return
+      }
+      serverJudge = {
+        state: 'running',
+        items: pass.items,
+        message: `Judging ${pass.items} comparison${pass.items === 1 ? '' : 's'} on ${pass.model}.`,
+      }
+      // The pass runs in the background; a reload is what turns it into
+      // numbers, so poll the same summary the view is already built on rather
+      // than inventing a second progress channel.
+      await pollJudging()
+    } catch (e) {
+      serverJudge = { state: 'failed', message: e.message }
+    }
+  }
+
+  async function pollJudging() {
+    for (let i = 0; i < JUDGE_POLL_LIMIT; i++) {
+      await new Promise(r => setTimeout(r, JUDGE_POLL_MS))
+      if (destroyed) return
+      let detail = null
+      try {
+        detail = await api.evalRun(run.id)
+      } catch {
+        // A failed poll is not a failed pass: keep waiting.
+        continue
+      }
+      if (!detail?.judging) break
+    }
+    if (destroyed) return
+    await load()
+    serverJudge = { state: 'done', message: 'Judging finished.' }
+  }
+
   async function copyCommand(variantID) {
     try {
       await navigator.clipboard.writeText(judgeCommand)
@@ -200,7 +257,10 @@
   }
 
   onMount(load)
-  onDestroy(() => clearTimeout(copyTimer))
+  onDestroy(() => {
+    destroyed = true
+    clearTimeout(copyTimer)
+  })
 
   async function toggleTask(taskID) {
     if (expandedTask === taskID) {
@@ -384,7 +444,28 @@
             {v.judgment.judged_pairs} of {v.judgment.pairs} comparisons are judged. The rest are
             waiting — until they are done, this verdict rests on the objective checks alone.
           </p>
-          <p class="pending-step">Judge them from Claude Code with <code>/judge-eval</code>, or run:</p>
+          {#if judgeModel}
+            <div class="judge-here">
+              <button class="btn-primary btn-sm"
+                onclick={judgeOnServer}
+                disabled={serverJudge?.state === 'running'}
+                data-testid="judge-here-{v.variant_id}">
+                {serverJudge?.state === 'running' ? 'Judging…' : 'Judge on the server'}
+              </button>
+              <span class="hint">
+                <span class="mono">{judgeModel}</span> grades them here, unattended
+                {#if judgeCostCap > 0}· up to ${judgeCostCap.toFixed(2)}{/if}
+              </span>
+            </div>
+            {#if serverJudge?.message}
+              <p class="hint" class:judge-failed={serverJudge.state === 'failed'}
+                data-testid="judge-here-status-{v.variant_id}">{serverJudge.message}</p>
+            {/if}
+          {/if}
+          <p class="pending-step">
+            {judgeModel ? 'Or judge them' : 'Judge them'} from Claude Code with
+            <code>/judge-eval</code>, or run:
+          </p>
           <div class="cmd-row">
             <code class="cmd" data-testid="judge-command-{v.variant_id}">{judgeCommand}</code>
             <button class="btn-sm" onclick={() => copyCommand(v.variant_id)} data-testid="copy-command-{v.variant_id}">
@@ -853,6 +934,9 @@
   }
   .pending p { font-size: 12px; color: var(--text); margin: 0 0 8px; line-height: 1.5; }
   .pending-step { color: var(--text-muted); }
+  .judge-here { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .judge-here .hint { margin: 0; }
+  .judge-failed { color: var(--danger); }
   .cmd-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
   .cmd {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

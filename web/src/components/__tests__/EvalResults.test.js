@@ -128,6 +128,79 @@ describe('EvalResults — judgment pending', () => {
     expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('eval:read')
   })
 
+  test('offers no server-side judging when no judge model is configured', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('judgment-pending-4')).toBeInTheDocument())
+    // Absent rather than disabled: nothing the operator can click would fix an
+    // unset [eval] judge_model, and Claude Code is still offered.
+    expect(screen.queryByTestId('judge-here-4')).not.toBeInTheDocument()
+    expect(screen.getByTestId('judge-command-4')).toBeInTheDocument()
+  })
+
+  test('starts a server-side pass and reloads when it finishes', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    let started = null
+    server.use(
+      http.post('/api/v1/eval/runs/:id/judge', async ({ params }) => {
+        started = params.id
+        return HttpResponse.json({
+          run_id: 2, items: 50, model: 'judge-model',
+          judge_ident: 'judge_model', rubric_version: 'v1', cost_cap: 0.5,
+        }, { status: 202 })
+      }),
+      // The pass is background work, so the view polls the run detail until it
+      // stops reporting itself as judging.
+      http.get('/api/v1/eval/runs/:id', () =>
+        HttpResponse.json({ id: 2, status: 'done', judging: false })),
+    )
+    render(EvalResults, {
+      props: { run: RUN, agent: AGENT, judgeModel: 'judge-model', judgeCostCap: 0.5 },
+    })
+
+    await waitFor(() => expect(screen.getByTestId('judge-here-4')).toBeInTheDocument())
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('judge-model')
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('$0.50')
+
+    await fireEvent.click(screen.getByTestId('judge-here-4'))
+    await waitFor(() => expect(started).toBe('2'))
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('Judging 50 comparisons on judge-model'))
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('Judging finished'), { timeout: 5000 })
+  })
+
+  test('surfaces the reason a server-side pass was refused', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    server.use(
+      http.post('/api/v1/eval/runs/:id/judge', () =>
+        HttpResponse.json({ error: 'run 2 is running: eval: run is not terminal' },
+          { status: 409 })),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT, judgeModel: 'judge-model' } })
+
+    await waitFor(() => expect(screen.getByTestId('judge-here-4')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('judge-here-4'))
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('not terminal'))
+  })
+
   test('a clean quick check offers the full eval with the same candidate', async () => {
     let picked = null
     render(EvalResults, {
