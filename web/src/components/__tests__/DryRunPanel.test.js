@@ -285,3 +285,15 @@ describe('DryRunPanel — cut-short turns', () => {
       .toHaveTextContent('budget_exhausted'))
   })
 })
+
+// The serving upstream is an eval-only field: a schedule or skill preview's
+// payload has no such thing, and the head must not sprout an empty chip.
+describe('DryRunPanel — serving upstream', () => {
+  test('a preview transcript shows no upstream', async () => {
+    render(DryRunPanel, { props: { run: okRun } })
+    await clickRun()
+    await screen.findByText(/Morning\. Nothing needs you/)
+
+    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+  })
+})

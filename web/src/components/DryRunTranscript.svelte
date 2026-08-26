@@ -46,6 +46,19 @@
   let stopLabel = $derived(transcript.stop_reason
     ? (STOP_LABEL[transcript.stop_reason] || transcript.stop_reason)
     : '')
+
+  // The provider-reported serving upstream, set only on eval transcripts and
+  // only for providers that route (OpenRouter). A candidate served by
+  // different upstreams between turns explains latency or quality variance
+  // within one variant, which is otherwise invisible. Suppressed when it just
+  // repeats the model line — "openrouter/kimi-k3 · OpenRouter" says nothing.
+  let upstream = $derived.by(() => {
+    const via = (transcript.upstream || '').trim()
+    if (!via) return ''
+    const model = (transcript.model || transcript.requested_model || '').toLowerCase()
+    const low = via.toLowerCase()
+    return model === low || model.startsWith(`${low}/`) ? '' : via
+  })
 </script>
 
 <div class="column">
@@ -54,6 +67,10 @@
     <span class="model">{transcript.model || transcript.requested_model || 'unknown'}</span>
     {#if label}
       <span class="label" class:accent>{label}</span>
+    {/if}
+    {#if upstream}
+      <span class="upstream" title="The provider that actually served this turn."
+        data-testid="upstream">via {upstream}</span>
     {/if}
     <span class="summary">{summary}</span>
     {#if stopLabel}
@@ -131,6 +148,10 @@
   }
   .label.accent { color: var(--accent); border-color: var(--accent); }
   .summary { font-size: 11px; color: var(--text-muted); }
+  .upstream {
+    font-size: 10px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+  }
   .cut-short {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
     color: var(--warn); border: 1px solid var(--warn);

@@ -281,6 +281,46 @@ describe('EvalResults — per-task diffs', () => {
     expect(badges[0]).toHaveTextContent('hit the round limit')
   })
 
+  // Two turns of one variant served by different upstreams is a plausible
+  // explanation for latency or quality variance the operator otherwise
+  // cannot see happened.
+  test('names the serving upstream when it is not just the model again', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: 'Fireworks' },
+        { ...evalSamples[1], upstream: '' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    const shown = screen.getAllByTestId('upstream')
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toHaveTextContent('via Fireworks')
+  })
+
+  // "anthropic/claude-3-opus · via anthropic" is a line that says nothing.
+  test('drops an upstream that only repeats the model line', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: 'kimi-k2.6' },
+        { ...evalSamples[1], upstream: 'Anthropic' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    // The candidate ran anthropic/claude-3-opus on Anthropic, the current
+    // model ran kimi-k2.6 on kimi-k2.6 — neither adds anything.
+    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+  })
+
   test('collapses again and reports a failed turn instead of an empty column', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
@@ -628,6 +668,12 @@ describe('evalSampleTranscript', () => {
     })
     // outcome "suppressed" becomes the boolean the transcript renders on.
     expect(t.tool_calls[1].suppressed).toBe(true)
+  })
+
+  test('carries the serving upstream through as an optional field', () => {
+    expect(evalSampleTranscript({ upstream: 'Fireworks' }).upstream).toBe('Fireworks')
+    // Most providers have no such concept, and the field is omitted then.
+    expect(evalSampleTranscript({}).upstream).toBe('')
   })
 
   test('an unreadable trace is no trace, not a broken view', () => {

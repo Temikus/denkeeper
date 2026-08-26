@@ -501,6 +501,9 @@ export function evalSampleTranscript(sample, model = '') {
     response: sample?.response || '',
     rounds: sample?.rounds ?? 0,
     stop_reason: sample?.stop_reason || '',
+    // The provider-reported serving upstream, empty for providers without the
+    // concept. Eval-only: a schedule or skill preview has none to show.
+    upstream: sample?.upstream || '',
     duration_ms: sample?.latency_ms ?? 0,
     cost_usd: sample?.cost ?? 0,
     // The sample carries the suppression count as its own column; deriving it
