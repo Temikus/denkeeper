@@ -261,6 +261,26 @@ describe('EvalResults — per-task diffs', () => {
     expect(asked).toEqual(['11'])
   })
 
+  // A flaily candidate is the thing a side-by-side is being read for, and
+  // wrapup_count in the scorecard cannot say which of the two flailed.
+  test('marks the side whose tool loop was cut short', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        evalSamples[0],
+        { ...evalSamples[1], stop_reason: 'max_rounds' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    const badges = screen.getAllByTestId('stop-reason')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveTextContent('hit the round limit')
+  })
+
   test('collapses again and reports a failed turn instead of an empty column', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
