@@ -903,3 +903,74 @@ func TestRunner_PinnedRunWhoseTasksAllVanishedFails(t *testing.T) {
 		t.Errorf("error = %q, want it to name the vanished pin", got.Error)
 	}
 }
+
+// Eval samples are captured unconditionally — the judge reads the trace and a
+// verdict has to stay re-checkable — so this does not depend on [eval] capture,
+// which gates live turns only.
+func TestRunner_PersistsEachSampleTurnTrace(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a")
+	f.engine.respond = func(_ int, policy agent.ExecPolicy) (*agent.TurnResult, error) {
+		return &agent.TurnResult{
+			ConversationID: policy.ConvID,
+			Response:       "done",
+			Rounds:         1,
+			Trace: &agent.TurnTrace{
+				Agent:          "pamela",
+				ConversationID: policy.ConvID,
+				Source:         agent.TraceSourceEval,
+				RequestedModel: policy.Model,
+				Payload: agent.TracePayload{
+					SystemPrompt: "you are pamela",
+					Prompt:       "a",
+					Response:     "done",
+				},
+			},
+		}, nil
+	}
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForTerminal(t, f.store, run.ID)
+
+	traces, err := f.store.ListTraces(context.Background(), TraceFilter{Source: agent.TraceSourceEval})
+	if err != nil {
+		t.Fatalf("ListTraces: %v", err)
+	}
+	if len(traces) != 2 {
+		t.Fatalf("stored %d traces, want one per sample (2)", len(traces))
+	}
+	_, payload, err := f.store.GetTrace(context.Background(), traces[0].ID)
+	if err != nil {
+		t.Fatalf("GetTrace: %v", err)
+	}
+	if payload.SystemPrompt != "you are pamela" {
+		t.Errorf("system prompt = %q, want the built prompt the sample ran under", payload.SystemPrompt)
+	}
+}
+
+// A failed sample has no turn result, so there is nothing to record and the
+// run must not trip over it.
+func TestRunner_FailedSampleStoresNoTrace(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a")
+	f.engine.respond = func(_ int, _ agent.ExecPolicy) (*agent.TurnResult, error) {
+		return nil, fmt.Errorf("provider hiccup")
+	}
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForTerminal(t, f.store, run.ID)
+
+	n, err := f.store.CountTraces(context.Background())
+	if err != nil {
+		t.Fatalf("CountTraces: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("stored %d traces for failed samples, want 0", n)
+	}
+}

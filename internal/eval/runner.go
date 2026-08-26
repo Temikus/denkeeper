@@ -501,7 +501,26 @@ func (r *Runner) runSample(ctx context.Context, st *runState, task Task, k int, 
 	if _, err := r.store.AddSample(bookkeeping, smp); err != nil {
 		r.logger.Error("persisting eval sample failed", "run", st.run.ID, "task", task.ID, "error", err)
 	}
+	r.saveSampleTrace(bookkeeping, result)
 	return smp
+}
+
+// saveSampleTrace records the sample's full turn trace. Eval samples are
+// captured unconditionally — that is what the judge reads and what makes a
+// verdict re-checkable — so this does not consult [eval] capture, which gates
+// *live* turns only. The engine builds and caps the trace but never persists
+// one (a policy turn's isolation is structural), so this is where an eval
+// sample's trace is written.
+//
+// A trace failure never touches the sample: the run's numbers stand without it.
+func (r *Runner) saveSampleTrace(ctx context.Context, result *agent.TurnResult) {
+	if result == nil || result.Trace == nil {
+		return
+	}
+	if err := r.store.SaveTrace(ctx, *result.Trace); err != nil {
+		r.logger.Warn("persisting eval sample trace failed",
+			"conversation", result.ConversationID, "error", err)
+	}
 }
 
 // applyResult folds a turn result into the sample row.

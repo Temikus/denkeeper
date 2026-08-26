@@ -138,10 +138,11 @@ func IsTerminal(status string) bool {
 }
 
 // schema holds the five Stage B tables plus the three Stage C judging tables.
+// turn_traces (Stage E, L1) lives beside them in traceSchema.
 //
-// Deliberately absent: turn_traces, which lands with L1 live capture. Eval
-// samples self-capture their trace inline in eval_samples.trace, which is why
-// neither stage needs it.
+// eval_samples.trace and turn_traces answer different questions and both stay:
+// the sample's inline trace is the tool path the judge reads, the turn trace is
+// the whole turn including the system prompt and the history window.
 const schema = `
 CREATE TABLE IF NOT EXISTS eval_task_sets (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -522,6 +523,9 @@ func NewInMemoryStore() (*Store, error) {
 func initEvalDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("initializing eval schema: %w", err)
+	}
+	if _, err := db.Exec(traceSchema); err != nil {
+		return fmt.Errorf("initializing turn trace schema: %w", err)
 	}
 	for _, m := range evalMigrations {
 		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
