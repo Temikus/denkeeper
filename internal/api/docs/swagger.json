@@ -2471,6 +2471,88 @@
                 }
             }
         },
+        "/eval/probes": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Generate spec-derived behavioural probes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent whose configuration is read as the spec",
+                        "name": "agent",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Task set to exclude probes already saved in",
+                        "name": "set",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Probes returned across all families (max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Generated probes",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalProbesResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Missing agent or bad limit",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent or task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs": {
             "get": {
                 "security": [
@@ -2937,7 +3019,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -8299,6 +8381,41 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Probe": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind is the behaviour family, one of ProbeKinds().",
+                    "type": "string"
+                },
+                "notes": {
+                    "description": "Notes is free-text \"what good looks like\", stored on the task and\nsurfaced to the judge as context. Never parsed (§2, no-DSL).",
+                    "type": "string"
+                },
+                "preceding": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PrecedingMessage"
+                    }
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source names the written intent this probe was derived from —\n\"tier:supervised\", \"skill:briefing\", \"persona:soul\" — so an operator\nreading a card can go and check the spec it came from.",
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Run": {
             "type": "object",
             "properties": {
@@ -9303,6 +9420,24 @@
             "properties": {
                 "imported": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api.evalProbesResult": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "permission_tier": {
+                    "description": "PermissionTier is echoed because half the probes are written against it,\nand an operator reading the cards should see which tier they assume.",
+                    "type": "string"
+                },
+                "probes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Probe"
+                    }
                 }
             }
         },

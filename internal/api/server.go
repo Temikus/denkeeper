@@ -296,6 +296,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/eval/estimate", s.RequireScope("eval:read", s.handleEvalEstimate))
 	mux.HandleFunc("GET /api/v1/eval/config", s.RequireScope("eval:read", s.handleEvalConfig))
 	mux.HandleFunc("GET /api/v1/eval/suggest", s.RequireScope("eval:read", s.handleEvalSuggest))
+	// Generating probes reads config and writes nothing; accepting one is an
+	// ordinary task create.
+	mux.HandleFunc("GET /api/v1/eval/probes", s.RequireScope("eval:read", s.handleEvalProbes))
 
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))
