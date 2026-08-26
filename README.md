@@ -184,11 +184,13 @@ just build
 ./pkg/bin/denkeeper serve
 ```
 
-Or run directly without building:
+Or run directly without building (builds the dashboard, then serves it and the API on `:8080`):
 
 ```bash
 just serve
 ```
+
+For frontend work, `just dev` runs the Go server on `:8080` and the Vite dev server on `:5173` (hot module reload, proxying `/api` and `/auth` to the backend).
 
 ### Configuration
 
@@ -619,8 +621,9 @@ The API key must have scopes matching the tools you want to use (e.g. `chat`, `a
 just build           # Build the denkeeper binary (requires web/dist/ to exist)
 just build-ui        # Build the Svelte web dashboard (requires Node.js)
 just build-full      # Build web dashboard then Go binary in one step
-just serve           # Start the agent (just serve ./path/to/config.toml)
-just web-dev         # Start Vite dev server for dashboard hot-reload
+just serve           # Serve dashboard + API on :8080 (just serve ./path/to/config.toml)
+just dev             # Backend on :8080 plus Vite dev server on :5173 (hot reload)
+just dev-ui          # Vite dev server only (expects a backend on :8080)
 just test            # Run all tests with race detector
 just test-v          # Verbose test output
 just test-pkg <pkg>  # Test a single package (e.g. just test-pkg internal/agent)
