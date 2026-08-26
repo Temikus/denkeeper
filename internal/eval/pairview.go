@@ -46,9 +46,9 @@ type PairVerdict struct {
 	// "tie". Same key set as Dimensions; a value that is neither a letter nor
 	// a tie is carried through unchanged rather than dropped.
 	DimensionsVariant map[string]string `json:"dimensions_variant,omitempty"`
-	Notes         string            `json:"notes,omitempty"`
-	RubricVersion string            `json:"rubric_version,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
+	Notes             string            `json:"notes,omitempty"`
+	RubricVersion     string            `json:"rubric_version,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
 }
 
 // PairItem is one presentation order of a pair with the verdicts against it.
