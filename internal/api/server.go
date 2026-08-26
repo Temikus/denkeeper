@@ -297,6 +297,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/eval/config", s.RequireScope("eval:read", s.handleEvalConfig))
 	mux.HandleFunc("GET /api/v1/eval/suggest", s.RequireScope("eval:read", s.handleEvalSuggest))
 
+	// Turn traces sit under sessions:read, not eval:read — a trace is turn
+	// content, and the eval scopes exist for a judge that must never read live
+	// prompts.
+	mux.HandleFunc("GET /api/v1/traces", s.RequireScope("sessions:read", s.handleListTraces))
+	mux.HandleFunc("GET /api/v1/traces/{id}", s.RequireScope("sessions:read", s.handleGetTrace))
+
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))
 	mux.HandleFunc("GET /api/v1/browser/profiles/{name}", s.RequireScope("browser:read", s.handleGetBrowserProfile))
