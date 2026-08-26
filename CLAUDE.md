@@ -8,7 +8,8 @@ Tooling: `just` (user-facing) → Task (`Taskfile.yml`, per-target fingerprint c
 
 ```bash
 just build                    # Build binary → pkg/bin/denkeeper
-just serve                    # go run (optional config path)
+just serve                    # Build UI, then serve dashboard + API on :8080 (live reload)
+just dev                      # Backend :8080 + Vite dev server :5173 (hot reload)
 just test                     # All Go tests with -race
 just test-v                   # Verbose test output
 just test-pkg internal/agent  # Single package
@@ -22,7 +23,7 @@ just build-ui                 # Build web UI (auto-run by build/test/vet/lint wh
 just build-full               # Build web then binary
 just openapi                  # Generate OpenAPI spec (requires swag CLI)
 just openapi-check            # Fail if the committed spec is stale (CI gate)
-just web-dev                  # Vite dev server (hot reload)
+just dev-ui                   # Vite dev server only (hot reload)
 just test-integration         # E2E integration tests
 ```
 

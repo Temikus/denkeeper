@@ -40,8 +40,10 @@ test-integration:
 test-pkg pkg: ensure-web-dist
     go test -race -count=1 -v ./{{pkg}}/...
 
-# Start the agent with live reload (optionally pass config path: just serve ./denkeeper.toml)
-serve config="":
+# Builds the dashboard, then runs the Go server with live reload on Go changes.
+# Optionally pass a config path: just serve ./denkeeper.toml
+# Serve UI and API together on :8080 (embedded dashboard, live reload)
+serve config="": ensure-web-dist
     #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
         air -- serve --config "{{config}}"
@@ -49,8 +51,26 @@ serve config="":
         air
     fi
 
+# Go server on :8080 (live reload) and the Vite dev server on :5173 (hot module
+# reload, proxying /api and /auth to :8080). Ctrl-C stops both.
+# Run backend and UI as separate processes with hot reload
+dev config="": ensure-web-dist
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mise x -- task ui:install
+    if [ -n "{{config}}" ]; then
+        air -- serve --config "{{config}}" &
+    else
+        air &
+    fi
+    api_pid=$!
+    (cd web && npm run dev) &
+    ui_pid=$!
+    trap 'kill "$api_pid" "$ui_pid" 2>/dev/null || true' EXIT INT TERM
+    wait
+
 # Run with debug logging and live reload
-serve-debug config="":
+serve-debug config="": ensure-web-dist
     #!/usr/bin/env sh
     export DENKEEPER_LOG_LEVEL=debug
     if [ -n "{{config}}" ]; then
@@ -60,7 +80,7 @@ serve-debug config="":
     fi
 
 # Start the agent without live reload (optionally pass config path)
-serve-once config="":
+serve-once config="": ensure-web-dist
     #!/usr/bin/env sh
     if [ -n "{{config}}" ]; then
         go run ./cmd/denkeeper serve --config "{{config}}"
@@ -161,7 +181,8 @@ openapi:
 openapi-check:
     @mise x -- task openapi:check
 
-# Run the Vite dev server (proxies /api to localhost:8080)
+# See `just dev` to run it alongside the backend.
+# Run only the Vite dev server (proxies /api to localhost:8080)
 dev-ui:
     @mise x -- task ui:install
     cd web && npm run dev
