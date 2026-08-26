@@ -26,19 +26,41 @@ A test set is a named collection of test cases. A case is a prompt, a category, 
 | Field | Meaning |
 |---|---|
 | `prompt` | The user turn to replay |
-| `category` | One of `chat`, `skill_command`, `scheduled`, `tool_heavy` (default `chat`) |
+| `category` | One of `chat`, `skill_command`, `scheduled`, `tool_heavy`, `probe` (default `chat`) |
 | `pinned_history` | `{role, content}` turns replayed verbatim as the context preceding the prompt |
 | `notes` | Judge context. Never parsed as assertions — there is no assertion DSL |
 
 Pinned history is captured at save time rather than re-read from the source conversation at run time, because the source drifts: clearing a session empties it, retention prunes it, and its latest window is not the window that preceded the saved message. A test case that silently re-scopes itself between runs is not a test case.
 
-There are three fill paths:
+There are four fill paths:
 
 - **Save as test case** in the Chat page's message menu, optionally pinning the preceding turns.
-- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four history categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Generate probes** on the Evals page (`GET /api/v1/eval/probes`) works the other way round: top-down from the agent's own written intent rather than bottom-up from its history. See [Behaviour probes](#behaviour-probes) below.
 - **Import JSONL** — `POST /api/v1/eval/task-sets/{name}/import`, one case per line, all-or-none so a typo halfway down leaves the set untouched. `GET .../export` is the other half, so a curated set can be hand-edited or committed to git.
 
 A test set is an appreciating asset: the next candidate model starts here rather than at a blank page.
+
+## Behaviour probes
+
+The first four categories are the *history* axis: what the agent has actually been asked to do. That gives ecological validity and one structural blind spot — a set mined from history can only contain behaviours that have already happened, and the behaviours that separate a worse candidate from the incumbent are mostly ones a well-behaved incumbent never produced. It never retried a denied tool call, so no turn in your history shows a denial being respected.
+
+`probe` is the *spec* axis. `GET /api/v1/eval/probes` reads denkeeper's own written intent — the agent's permission tier, its auto-approve policy, its persona sections, and its skill frontmatter — and generates test cases from it. Six families:
+
+| Family | The question it asks |
+|---|---|
+| `denial_compliance` | The operator refused something. Does the candidate accept the refusal, or reach the same effect another way? |
+| `tier_boundary` | Does it act within the tier it is actually on, and describe that tier honestly when asked? |
+| `budget_hint` | "One sentence, no tools." Does it honour the bound? |
+| `approval_policy` | Does it treat a chat request as standing consent for a tool you never blessed? |
+| `skill_instruction` | Does it follow the skill you wrote — and leave it unfired when a message only mentions the command? |
+| `persona_fidelity` | Does it hold the persona sections you wrote? |
+
+The first three are canned and ship with denkeeper; they need no configuration, so a fresh install gets them. The other three are derived from your agent's config and are absent when there is nothing to derive them from.
+
+Probes carry the same free-text `notes` every other test case does — "what good looks like", handed to the judge as context. There is still no assertion DSL, and nothing parses them.
+
+Probes get their own category rather than being filed under `chat` or `tool_heavy` deliberately: the per-category breakdown in a run's verdict is what tells you *where* a candidate regressed, and folding the two axes together would let a regression on specified behaviour hide inside a chat win rate. It also means the stratified Quick check draw always reaches for a probe when your set carries one.
 
 ## Runs
 
@@ -134,13 +156,17 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
 
 The **Evals** page drives the loop, and everything it does is REST underneath — see the [REST API reference](/docs/reference/rest-api/) for the request and response shapes.
 
-With no test set saved yet, the page opens on an empty state that explains the loop and offers the two ways in: **Suggest from history**, or an inline JSONL import.
+With no test set saved yet, the page opens on an empty state that explains the loop and offers the ways in: **Suggest from history**, **Generate probes**, or an inline JSONL import.
 
 ### Filling a set from history
 
 **Suggest from history** opens a panel of past turns worth keeping, each card carrying the prompt, its category, and the reason it was offered — a tool call was rejected or failed, the turn took three or more rounds, it cost in the top ten per cent, or a skill command triggered it. Select the ones you want, choose an existing set or name a new one, and add them in a batch.
 
 Accepting a candidate writes the same shape the Chat page's "Save as test case" does, pinned history included, captured at that moment rather than re-read at run time. Rejecting a candidate writes nothing at all: it is hidden for the session, so reloading the page offers it again.
+
+### Filling a set from the spec
+
+**Generate probes** opens the same shape of panel, filled from the agent's configuration instead. Each card names the behaviour family, the piece of config it came from, and — collapsed — the notes the judge will read. The panel sends the target set with each pass, so probes that set already carries are not offered again; changing the set re-runs the pass. Accept and reject work exactly as they do for suggestions.
 
 ### Launching a run
 
