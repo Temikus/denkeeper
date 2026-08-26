@@ -27,6 +27,7 @@
     { value: 'skill_command', label: 'Skill command' },
     { value: 'scheduled', label: 'Scheduled' },
     { value: 'tool_heavy', label: 'Tool-heavy' },
+    { value: 'probe', label: 'Behaviour probe' },
   ]
 
   let sets = $state([])
