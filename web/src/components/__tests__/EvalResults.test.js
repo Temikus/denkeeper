@@ -319,7 +319,7 @@ describe('EvalResults — per-task diffs', () => {
     expect(row).not.toHaveTextContent('tool_heavy')
   })
 
-  test('resolves each dimension letter to the model that won it', async () => {
+  test('names the model behind each dimension, from the resolved map', async () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
     await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
@@ -328,8 +328,8 @@ describe('EvalResults — per-task diffs', () => {
     await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
     const dims = [...screen.getByTestId('pair-judgment-71').querySelectorAll('.dimensions li')]
       .map(li => li.textContent.replace(/\s+/g, ' ').trim())
-    // The letters are the blinded presentation order, not a model. Both
-    // orders named the candidate, so every non-tie dimension resolves to it.
+    // The stored letters are the blinded presentation order, not a model, and
+    // the two orders wrote different letters for the same winner.
     expect(dims).toEqual([
       'correctness: anthropic/claude-3-opus',
       'tool_use: anthropic/claude-3-opus',
@@ -338,7 +338,10 @@ describe('EvalResults — per-task diffs', () => {
     ])
   })
 
-  test('keeps the raw letter when nothing on the item can unblind it', async () => {
+  // The item nothing client-side could ever unblind: every verdict on it is a
+  // tie, so no winner_variant on the item names a letter. Only the server's
+  // assignment can resolve it, and it does.
+  test('resolves dimensions on an item every judge called a tie', async () => {
     server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
       ...evalPairs,
       pairs: [{
@@ -348,7 +351,9 @@ describe('EvalResults — per-task diffs', () => {
           item_id: 141, presentation_order: 'ab', status: 'judged',
           verdicts: [{
             judge_ident: 'claude-code', winner: 'tie', winner_variant: '',
-            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
+            dimensions: { correctness: 'a' },
+            dimensions_variant: { correctness: 'current' },
+            notes: '', rubric_version: 'v1',
             created_at: '2026-08-17T10:00:00Z',
           }],
         }],
@@ -363,7 +368,35 @@ describe('EvalResults — per-task diffs', () => {
     await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
     const judgment = screen.getByTestId('pair-judgment-71')
     expect(judgment).toHaveTextContent('called it a tie')
-    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: a')
+    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: current')
+  })
+
+  // An older run judged before the resolved map shipped, or a value the server
+  // could not read: the raw record is still the judge's answer and is shown.
+  test('falls back to the raw letter when the server resolved nothing', async () => {
+    server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
+      ...evalPairs,
+      pairs: [{
+        ...evalPairs.pairs[0],
+        items: [{
+          item_id: 141, presentation_order: 'ab', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'b', winner_variant: 'anthropic/claude-3-opus',
+            dimensions: { correctness: 'b' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-17T10:00:00Z',
+          }],
+        }],
+      }],
+    })))
+
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    expect(screen.getByTestId('pair-judgment-71').querySelector('.dimensions li'))
+      .toHaveTextContent('correctness: b')
   })
 
   test('an unjudged comparison says so rather than showing nothing', async () => {

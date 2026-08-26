@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -36,8 +37,15 @@ type PairVerdict struct {
 	// order and the pair's assignment. Empty on a tie.
 	WinnerVariant string `json:"winner_variant,omitempty"`
 	// Dimensions is the stored per-dimension map, omitted when the judge
-	// recorded none or the stored value will not decode.
-	Dimensions    map[string]string `json:"dimensions,omitempty"`
+	// recorded none or the stored value will not decode. Values are the
+	// presented letters — what the judge actually saw — and are kept so an
+	// audit can check the call against the queue it was answering.
+	Dimensions map[string]string `json:"dimensions,omitempty"`
+	// DimensionsVariant is Dimensions with every letter resolved through the
+	// item's presentation order and the pair's assignment, ties preserved as
+	// "tie". Same key set as Dimensions; a value that is neither a letter nor
+	// a tie is carried through unchanged rather than dropped.
+	DimensionsVariant map[string]string `json:"dimensions_variant,omitempty"`
 	Notes         string            `json:"notes,omitempty"`
 	RubricVersion string            `json:"rubric_version,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
@@ -228,8 +236,34 @@ func pairVerdicts(a Assignment, it JudgmentItem, rows []Verdict, names map[int64
 		var dims map[string]string
 		if err := json.Unmarshal([]byte(v.Dimensions), &dims); err == nil && len(dims) > 0 {
 			pv.Dimensions = dims
+			pv.DimensionsVariant = resolveDimensions(a, it.PresentationOrder, dims, names)
 		}
 		out = append(out, pv)
+	}
+	return out
+}
+
+// resolveDimensions names the variant behind each per-dimension letter, using
+// the same VariantFor resolver the overall winner goes through. A tie stays a
+// tie (there is no variant to name), and anything the judge wrote that is
+// neither a letter nor a tie is passed through: a value this cannot read is
+// still the judge's own answer, and dropping it would hide it from the reader.
+func resolveDimensions(a Assignment, order string, dims map[string]string, names map[int64]string) map[string]string {
+	out := make(map[string]string, len(dims))
+	for dim, raw := range dims {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		switch value {
+		case WinnerTie:
+			out[dim] = WinnerTie
+		case WinnerA, WinnerB:
+			if name := names[VariantFor(a, order, value)]; name != "" {
+				out[dim] = name
+			} else {
+				out[dim] = raw
+			}
+		default:
+			out[dim] = raw
+		}
 	}
 	return out
 }

@@ -226,6 +226,11 @@ export const evalPairs = {
           verdicts: [{
             judge_ident: 'claude-code', winner: 'B', winner_variant: 'anthropic/claude-3-opus',
             dimensions: { correctness: 'B', tool_use: 'B', tone: 'tie' },
+            dimensions_variant: {
+              correctness: 'anthropic/claude-3-opus',
+              tool_use: 'anthropic/claude-3-opus',
+              tone: 'tie',
+            },
             notes: 'Caught the blocker the other answer missed.',
             rubric_version: 'v1', created_at: '2026-08-17T10:00:00Z',
           }],
@@ -234,7 +239,9 @@ export const evalPairs = {
           item_id: 142, presentation_order: 'ba', status: 'judged',
           verdicts: [{
             judge_ident: 'claude-code', winner: 'A', winner_variant: 'anthropic/claude-3-opus',
-            dimensions: { correctness: 'A' }, notes: '', rubric_version: 'v1',
+            dimensions: { correctness: 'A' },
+            dimensions_variant: { correctness: 'anthropic/claude-3-opus' },
+            notes: '', rubric_version: 'v1',
             created_at: '2026-08-17T10:01:00Z',
           }],
         },

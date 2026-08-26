@@ -2672,7 +2672,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
+                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners both as the raw presented letters and resolved to variant names ('dimensions_variant', ties preserved as 'tie'), notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
                 "produces": [
                     "application/json"
                 ],
@@ -8244,7 +8244,14 @@
                     "type": "string"
                 },
                 "dimensions": {
-                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode.",
+                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode. Values are the\npresented letters — what the judge actually saw — and are kept so an\naudit can check the call against the queue it was answering.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "dimensions_variant": {
+                    "description": "DimensionsVariant is Dimensions with every letter resolved through the\nitem's presentation order and the pair's assignment, ties preserved as\n\"tie\". Same key set as Dimensions; a value that is neither a letter nor\na tie is carried through unchanged rather than dropped.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"

@@ -240,41 +240,20 @@
 
   /** Judge calls only — the operator's calibration marks are shown apart. */
   function judgeVerdicts(pair) {
-    return (pair?.items || []).flatMap(it => {
-      const key = letterKey(it, pair)
-      return (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order, key }))
-    })
+    return (pair?.items || []).flatMap(it =>
+      (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order })))
   }
 
   // A judge names a presented letter, and only the pair's assignment — which
-  // never leaves the server — says which model that letter was. The pairs
-  // endpoint resolves the overall winner but leaves the per-dimension letters
-  // raw, so an unresolved "persona_fit: b" names nothing the reader can act
-  // on. A non-tie verdict on an item is itself the key for that item's
-  // letters: its winner letter is its winner_variant, so the other letter is
-  // the other side of the pair. An item everyone judged a tie stays
-  // unresolvable and keeps its letter.
-  function letterKey(item, pair) {
-    for (const v of item.verdicts || []) {
-      if (!v.winner_variant || !v.winner) continue
-      const won = v.winner.toLowerCase()
-      if (won !== 'a' && won !== 'b') continue
-      const other = v.winner_variant === pair.candidate?.variant
-        ? pair.baseline?.variant
-        : pair.candidate?.variant
-      return won === 'a'
-        ? { a: v.winner_variant, b: other }
-        : { a: other, b: v.winner_variant }
-    }
-    return null
-  }
-
-  /** One dimension's winner, as a model name where the letter resolves. */
-  function dimensionWinner(value, key) {
-    const v = (value || '').toLowerCase()
-    if (v === 'tie') return 'tie'
-    if (key && (v === 'a' || v === 'b')) return key[v] || value
-    return value
+  // never leaves the server — says which model that letter was, so the server
+  // resolves the per-dimension letters alongside the overall winner and sends
+  // both. `dimensions` is the raw record of what the judge saw; this view
+  // reads `dimensions_variant`, falling back to the letter if a value could
+  // not be resolved.
+  function dimensionEntries(verdict) {
+    const resolved = verdict.dimensions_variant || {}
+    return Object.entries(verdict.dimensions || {})
+      .map(([dim, raw]) => [dim, resolved[dim] || raw])
   }
 
   /** The model behind a variant, for the transcript header. */
@@ -741,8 +720,8 @@
                                   </div>
                                   {#if jv.dimensions}
                                     <ul class="dimensions">
-                                      {#each Object.entries(jv.dimensions) as [dim, who] (dim)}
-                                        <li><span class="dim">{dim}</span>: {dimensionWinner(who, jv.key)}</li>
+                                      {#each dimensionEntries(jv) as [dim, who] (dim)}
+                                        <li><span class="dim">{dim}</span>: {who}</li>
                                       {/each}
                                     </ul>
                                   {/if}
