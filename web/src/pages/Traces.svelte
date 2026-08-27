@@ -43,13 +43,18 @@
     { value: '',       label: 'All',      testid: 'source-all' },
     { value: 'live',   label: 'Live',     testid: 'source-live' },
     { value: 'eval',   label: 'Eval',     testid: 'source-eval' },
-    { value: 'dryrun', label: 'Dry run',  testid: 'source-dryrun' },
   ]
+  // No dry-run chip: a preview's trace rides out on its response and is never
+  // stored, so the filter would always come back empty.
 
   let agentItems = $derived([
     { value: '', label: 'All' },
     ...agents.map(a => ({ value: a, label: a })),
   ])
+
+  // Every list read carries a sequence number: a slow refresh landing after a
+  // newer one would otherwise overwrite the list the operator is looking at.
+  let listSeq = 0
 
   onMount(async () => {
     await refresh()
@@ -60,26 +65,31 @@
   })
 
   async function refresh() {
+    const seq = ++listSeq
     refreshing = true
     error = ''
     offset = 0
     collapse()
     try {
       const res = await api.traces({ limit, source, agent: agentFilter })
+      if (seq !== listSeq) return
       traces = res.traces || []
       total = res.total || 0
       capture = !!res.capture
       retentionDays = res.retention_days || 0
       loaded = true
     } catch (e) {
-      error = e.message
+      if (seq === listSeq) error = e.message
     } finally {
-      loading = false
-      refreshing = false
+      if (seq === listSeq) {
+        loading = false
+        refreshing = false
+      }
     }
   }
 
   async function loadMore() {
+    const seq = ++listSeq
     loadingMore = true
     error = ''
     // The offset only advances once the page it asked for is in hand: a failed
@@ -87,14 +97,24 @@
     const next = offset + limit
     try {
       const res = await api.traces({ limit, offset: next, source, agent: agentFilter })
-      traces = [...traces, ...(res.traces || [])]
+      if (seq !== listSeq) return
+      traces = appendNewRows(traces, res.traces || [])
       total = res.total || 0
       offset = next
     } catch (e) {
-      error = e.message
+      if (seq === listSeq) error = e.message
     } finally {
-      loadingMore = false
+      if (seq === listSeq) loadingMore = false
     }
+  }
+
+  // Offset paging over a table that is still being written to shifts rows down
+  // a page, so a row already on screen can come back in the next one. The each
+  // block is keyed by id, and a duplicate key is a hard Svelte error, so the
+  // overlap is dropped here.
+  function appendNewRows(current, incoming) {
+    const seen = new Set(current.map(r => r.id))
+    return [...current, ...incoming.filter(r => !seen.has(r.id))]
   }
 
   function setSource(v) {
@@ -141,7 +161,7 @@
   }
 
   function fmtDuration(ms) {
-    if (!ms) return '—'
+    if (typeof ms !== 'number' || ms < 0) return '—'
     return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`
   }
 

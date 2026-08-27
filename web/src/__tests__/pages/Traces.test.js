@@ -157,10 +157,33 @@ describe('Turn inspector — list', () => {
     render(Traces)
     await waitFor(() => expect(screen.getByTestId('trace-rows')).toBeInTheDocument())
 
-    await fireEvent.click(screen.getByTestId('source-dryrun'))
+    await fireEvent.click(screen.getByTestId('source-eval'))
     await waitFor(() => expect(screen.getByTestId('traces-empty')).toBeInTheDocument())
     expect(screen.getByText(/No turns recorded match this filter/)).toBeInTheDocument()
     expect(screen.getByTestId('clear-filters')).toBeInTheDocument()
+  })
+})
+
+describe('Turn inspector — rows', () => {
+  test('offers no dry-run source filter', async () => {
+    render(Traces)
+    await waitFor(() => expect(screen.getByTestId('trace-rows')).toBeInTheDocument())
+    // A preview's trace rides out on its response and is never stored, so the
+    // chip would only ever return an empty list.
+    expect(screen.queryByTestId('source-dryrun')).not.toBeInTheDocument()
+  })
+
+  test('renders a zero-millisecond turn as a duration, not a dash', async () => {
+    server.use(
+      http.get('/api/v1/traces', () => HttpResponse.json({
+        ...traceList,
+        traces: [{ ...traceRows[0], latency_ms: 0 }],
+        total: 1,
+      })),
+    )
+    render(Traces)
+    await waitFor(() => expect(screen.getByTestId('trace-rows')).toBeInTheDocument())
+    expect(screen.getByText(/0 ms/)).toBeInTheDocument()
   })
 })
 
@@ -284,6 +307,27 @@ describe('Turn inspector — paging', () => {
 
     await fireEvent.click(screen.getByTestId('load-more'))
     await waitFor(() => expect(screen.getAllByTestId('trace-row')).toHaveLength(3))
+  })
+
+  test('drops rows a shifted page repeats instead of duplicating keys', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/v1/traces', () => {
+        calls++
+        if (calls === 1) return HttpResponse.json({ ...traceList, total: 3 })
+        // A turn recorded between the two reads pushes row 1 onto page two.
+        return HttpResponse.json({
+          traces: [traceRows[1], { ...traceRows[1], id: 0, agent: 'archivist' }],
+          total: 3, limit: 50, offset: 50, capture: true,
+        })
+      }),
+    )
+    render(Traces)
+    await waitFor(() => expect(screen.getByTestId('load-more')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('load-more'))
+    await waitFor(() => expect(screen.getAllByTestId('trace-row')).toHaveLength(3))
+    expect(screen.getByText('archivist')).toBeInTheDocument()
   })
 
   test('hides the load-more control when everything is shown', async () => {
