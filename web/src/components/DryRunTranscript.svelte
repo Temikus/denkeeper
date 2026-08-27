@@ -32,6 +32,35 @@
     `$${(transcript.cost_usd || 0).toFixed(4)}`,
     duration(transcript.duration_ms),
   ].filter(Boolean).join(' · '))
+
+  // A stop reason means the tool loop was cut short, so the response below is
+  // a wrap-up rather than an answer the model chose to finish on. Without it a
+  // turn that exhausted its round budget reads exactly like one that did.
+  const STOP_LABEL = {
+    max_rounds: 'hit the round limit',
+    repeated_calls: 'repeated the same call',
+    stop_requested: 'stopped on request',
+  }
+
+  // An unknown slug is still a cut-short turn: naming it beats hiding it.
+  let stopLabel = $derived(transcript.stop_reason
+    ? (STOP_LABEL[transcript.stop_reason] || transcript.stop_reason)
+    : '')
+
+  // The provider-reported serving upstream, set only on eval transcripts and
+  // only for providers that route (OpenRouter). A candidate served by
+  // different upstreams between turns explains latency or quality variance
+  // within one variant, which is otherwise invisible. Suppressed only when it
+  // is exactly the model line. A vendor prefix is not a match: OpenRouter's
+  // "anthropic/..." names the model's maker, and the same model can be served
+  // by Anthropic, Vertex, or Bedrock — suppressing on the prefix would hide
+  // one side of the variance the chip exists to show.
+  let upstream = $derived.by(() => {
+    const via = (transcript.upstream || '').trim()
+    if (!via) return ''
+    const model = (transcript.model || transcript.requested_model || '').toLowerCase()
+    return model === via.toLowerCase() ? '' : via
+  })
 </script>
 
 <div class="column">
@@ -41,7 +70,15 @@
     {#if label}
       <span class="label" class:accent>{label}</span>
     {/if}
+    {#if upstream}
+      <span class="upstream" title="The provider that actually served this turn."
+        data-testid="upstream">via {upstream}</span>
+    {/if}
     <span class="summary">{summary}</span>
+    {#if stopLabel}
+      <span class="cut-short" title="The response below is a wrap-up, not a completed answer."
+        data-testid="stop-reason">Cut short: {stopLabel}</span>
+    {/if}
   </div>
 
   {#if transcript.tool_calls.length > 0}
@@ -113,6 +150,15 @@
   }
   .label.accent { color: var(--accent); border-color: var(--accent); }
   .summary { font-size: 11px; color: var(--text-muted); }
+  .upstream {
+    font-size: 10px; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+  }
+  .cut-short {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+    color: var(--warn); border: 1px solid var(--warn);
+    border-radius: 4px; padding: 1px 5px;
+  }
 
   .rows {
     display: flex; flex-direction: column;

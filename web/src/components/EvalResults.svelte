@@ -26,10 +26,14 @@
   let pairView = $state(null)
 
   // Turn transcripts are large and only wanted once a row opens, so they load
-  // on the first expansion and are kept for the rest of the session.
-  let samples = $state(null)
-  let samplesLoading = $state(false)
-  let samplesError = $state('')
+  // per test case on its first expansion and are kept for the rest of the
+  // session. Keyed by task id: fetching the whole run to render one row pulls
+  // every other row's traces with it.
+  let samplesByTask = $state({})
+  // Loading and error are keyed by task id: several rows can be in flight at
+  // once, and each detail row must read only its own state.
+  let samplesLoading = $state({})
+  let samplesError = $state({})
   let expandedTask = $state(null)
 
   let confirmApply = $state(null)
@@ -208,25 +212,26 @@
       return
     }
     expandedTask = taskID
-    if (samples || samplesLoading) return
-    await loadSamples()
+    // A failed fetch left no entry, so reopening the row retries on its own.
+    if (samplesByTask[taskID] || samplesLoading[taskID]) return
+    await loadSamples(taskID)
   }
 
-  async function loadSamples() {
-    samplesLoading = true
-    samplesError = ''
+  async function loadSamples(taskID) {
+    samplesLoading[taskID] = true
+    samplesError[taskID] = ''
     try {
-      samples = (await api.evalRunSamples(run.id)) || []
+      samplesByTask[taskID] = (await api.evalRunSamples(run.id, taskID)) || []
     } catch (e) {
-      samplesError = e.message
+      samplesError[taskID] = e.message
     } finally {
-      samplesLoading = false
+      samplesLoading[taskID] = false
     }
   }
 
   /** The (k, variantID) grid for one test case, in k then variant order. */
   function turnsFor(taskID) {
-    const rows = (samples || []).filter(s => s.task_id === taskID)
+    const rows = samplesByTask[taskID] || []
     const ks = [...new Set(rows.map(s => s.k_index))].sort((a, b) => a - b)
     return ks.map(k => ({
       k,
@@ -240,41 +245,20 @@
 
   /** Judge calls only — the operator's calibration marks are shown apart. */
   function judgeVerdicts(pair) {
-    return (pair?.items || []).flatMap(it => {
-      const key = letterKey(it, pair)
-      return (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order, key }))
-    })
+    return (pair?.items || []).flatMap(it =>
+      (it.verdicts || []).map(v => ({ ...v, order: it.presentation_order })))
   }
 
   // A judge names a presented letter, and only the pair's assignment — which
-  // never leaves the server — says which model that letter was. The pairs
-  // endpoint resolves the overall winner but leaves the per-dimension letters
-  // raw, so an unresolved "persona_fit: b" names nothing the reader can act
-  // on. A non-tie verdict on an item is itself the key for that item's
-  // letters: its winner letter is its winner_variant, so the other letter is
-  // the other side of the pair. An item everyone judged a tie stays
-  // unresolvable and keeps its letter.
-  function letterKey(item, pair) {
-    for (const v of item.verdicts || []) {
-      if (!v.winner_variant || !v.winner) continue
-      const won = v.winner.toLowerCase()
-      if (won !== 'a' && won !== 'b') continue
-      const other = v.winner_variant === pair.candidate?.variant
-        ? pair.baseline?.variant
-        : pair.candidate?.variant
-      return won === 'a'
-        ? { a: v.winner_variant, b: other }
-        : { a: other, b: v.winner_variant }
-    }
-    return null
-  }
-
-  /** One dimension's winner, as a model name where the letter resolves. */
-  function dimensionWinner(value, key) {
-    const v = (value || '').toLowerCase()
-    if (v === 'tie') return 'tie'
-    if (key && (v === 'a' || v === 'b')) return key[v] || value
-    return value
+  // never leaves the server — says which model that letter was, so the server
+  // resolves the per-dimension letters alongside the overall winner and sends
+  // both. `dimensions` is the raw record of what the judge saw; this view
+  // reads `dimensions_variant`, falling back to the letter if a value could
+  // not be resolved.
+  function dimensionEntries(verdict) {
+    const resolved = verdict.dimensions_variant || {}
+    return Object.entries(verdict.dimensions || {})
+      .map(([dim, raw]) => [dim, resolved[dim] || raw])
   }
 
   /** The model behind a variant, for the transcript header. */
@@ -399,7 +383,9 @@
       {/if}
 
       <h3 class="block-title">Objective checks</h3>
-      <div class="table-wrapper">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+      <div class="table-wrap" tabindex="0" role="region"
+        aria-label="Objective checks for {displayName(v.variant)}">
         <table class="table" data-testid="gates-{v.variant_id}">
           <caption class="sr-only">Objective checks for {displayName(v.variant)}</caption>
           <thead>
@@ -463,7 +449,9 @@
 
       {#if (v.categories || []).length > 0}
         <h3 class="block-title">By kind of test case</h3>
-        <div class="table-wrapper">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+        <div class="table-wrap" tabindex="0" role="region"
+          aria-label="Per-category results for {displayName(v.variant)}">
           <table class="table" data-testid="categories-{v.variant_id}">
             <caption class="sr-only">Per-category results for {displayName(v.variant)}</caption>
             <thead>
@@ -557,7 +545,8 @@
   <!-- Layer 2: the objective scorecard -->
   <section class="scorecard">
     <h3 class="block-title">Scorecard</h3>
-    <div class="table-wrapper">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Scorecard">
       <table class="table" data-testid="objective-table">
         <thead>
           <tr>
@@ -620,7 +609,8 @@
   {#if (summary.per_task || []).length > 0}
     <section class="per-task">
       <h3 class="block-title">Test case by test case</h3>
-      <div class="table-wrapper">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Test case by test case">
         <table class="table" data-testid="per-task-table">
           <thead>
             <tr>
@@ -686,11 +676,11 @@
               {#if expandedTask === t.task_id}
                 <tr class="detail-row">
                   <td colspan={3 + variants.length} id="task-detail-{t.task_id}" aria-live="polite">
-                    {#if samplesLoading}
+                    {#if samplesLoading[t.task_id]}
                       <p class="muted" role="status" data-testid="turns-loading">Loading turns…</p>
-                    {:else if samplesError}
-                      <ErrorBanner message={samplesError} />
-                      <button class="btn-sm" onclick={() => loadSamples()} data-testid="turns-retry">Try again</button>
+                    {:else if samplesError[t.task_id]}
+                      <ErrorBanner message={samplesError[t.task_id]} />
+                      <button class="btn-sm" onclick={() => loadSamples(t.task_id)} data-testid="turns-retry">Try again</button>
                     {:else}
                       {#each turnsFor(t.task_id) as turn (turn.k)}
                         {@const pair = pairFor(t.task_id, turn.k)}
@@ -741,8 +731,8 @@
                                   </div>
                                   {#if jv.dimensions}
                                     <ul class="dimensions">
-                                      {#each Object.entries(jv.dimensions) as [dim, who] (dim)}
-                                        <li><span class="dim">{dim}</span>: {dimensionWinner(who, jv.key)}</li>
+                                      {#each dimensionEntries(jv) as [dim, who] (dim)}
+                                        <li><span class="dim">{dim}</span>: {who}</li>
                                       {/each}
                                     </ul>
                                   {/if}
@@ -790,18 +780,6 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 8px;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 
   .block-title {
@@ -867,7 +845,6 @@
 
   .tally { font-size: 12px; color: var(--text); margin: 0 0 6px; line-height: 1.5; }
 
-  .table-wrapper { overflow-x: auto; }
   .gate-mark {
     font-size: 11px;
     text-transform: uppercase;
@@ -942,7 +919,7 @@
   .dim { color: var(--text); }
   .notes { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
 
-  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 10px; }
+  .inline-error { margin-bottom: 10px; }
 
   @media (max-width: 520px) {
     .columns { grid-template-columns: 1fr; }

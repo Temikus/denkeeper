@@ -460,7 +460,12 @@ export const api = {
   stopEvalRun: (id) =>
     apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   evalRunSummary: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/summary`),
-  evalRunSamples: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/samples`),
+  // taskID narrows to one test case: a full run is task_count x variants x k
+  // samples, each carrying a trace, and the results view opens one row at a
+  // time.
+  evalRunSamples: (id, taskID = 0) => apiFetch(
+    `/api/v1/eval/runs/${encodeURIComponent(id)}/samples`
+    + (taskID ? `?task_id=${encodeURIComponent(taskID)}` : '')),
   evalRunPairs: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/pairs`),
   evalEstimate: (body) =>
     apiFetch('/api/v1/eval/estimate', { method: 'POST', body: JSON.stringify(body) }),
@@ -511,6 +516,9 @@ export function evalSampleTranscript(sample, model = '') {
     response: sample?.response || '',
     rounds: sample?.rounds ?? 0,
     stop_reason: sample?.stop_reason || '',
+    // The provider-reported serving upstream, empty for providers without the
+    // concept. Eval-only: a schedule or skill preview has none to show.
+    upstream: sample?.upstream || '',
     duration_ms: sample?.latency_ms ?? 0,
     cost_usd: sample?.cost ?? 0,
     // The sample carries the suppression count as its own column; deriving it

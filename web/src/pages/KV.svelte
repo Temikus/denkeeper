@@ -176,7 +176,8 @@
 {:else if entries.length === 0}
   <p class="muted">No keys stored{prefix ? ` matching prefix "${prefix}"` : ''} for this agent.</p>
 {:else}
-  <div class="table-wrapper">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+  <div class="table-wrapper table-wrap" tabindex="0" role="region" aria-label="Stored keys">
     <table>
       <thead>
         <tr>
@@ -247,7 +248,7 @@
   .form-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
   .table-wrapper {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); overflow-x: auto;
+    border-radius: var(--radius);
   }
   table { width: 100%; border-collapse: collapse; }
   th {
