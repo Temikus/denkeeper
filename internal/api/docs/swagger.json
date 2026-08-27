@@ -2478,7 +2478,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint.",
+                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.",
                 "produces": [
                     "application/json"
                 ],
@@ -2516,6 +2516,15 @@
                     },
                     "400": {
                         "description": "Missing agent or bad limit",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Missing agents:read",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

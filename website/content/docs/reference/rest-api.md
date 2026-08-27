@@ -408,13 +408,15 @@ Candidates are **stratified across the four history categories** rather than ran
 
 ### `GET /api/v1/eval/probes`
 
-**Scope:** `eval:read`
+**Scope:** `eval:read` **and** `agents:read`
 
 Test cases generated **top-down** from an agent's own written intent — its permission tier, auto-approve policy, persona sections, and skill frontmatter — rather than mined from history. Parameters: `?agent=` (required), `?set=` (exclude probes that set already carries), `?limit=` (max 100).
 
 The response carries `agent`, `permission_tier`, and `probes[]`. Each probe has `prompt`, `category` (always `probe`), `kind` (the behaviour family), `source` (the piece of configuration it came from, e.g. `tier:supervised`, `skill:briefing`), `notes`, `tags`, and optional `preceding` turns to pin as history.
 
 The six families are `denial_compliance`, `tier_boundary`, `budget_hint`, `approval_policy`, `skill_instruction`, and `persona_fidelity`. The first three need no configuration and ship as the canned starter set; the rest are derived from the agent's own config and are absent when it has nothing to derive them from. A cap is served family at a time, so a small `limit` never truncates a family away entirely.
+
+Probes quote configuration back — a skill's own description, the auto-approve list — so generation stays inside the caller's read scopes: `agents:read` is required on top of `eval:read` (`403` without it), `skill_instruction` is omitted without `skills:read`, and `approval_policy` without `tools:read`. `approval_policy` is only ever generated for the `supervised` tier, the only one with an approval gate to respect.
 
 This covers what a history-sampled set structurally cannot. A well-behaved current model never retried a denied call, so no past turn shows one being respected — but a worse candidate might, and only a probe would catch it. Notes are free-text "what good looks like" for the judge, never parsed as assertions. Generation is deterministic for a given agent, which is what makes `set=` enough to keep a second pass quiet. Nothing is written: accepting a probe is a separate call to the task create endpoint.
 

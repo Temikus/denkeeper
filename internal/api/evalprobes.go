@@ -25,6 +25,32 @@ const (
 	probeMaxLimit = 100
 )
 
+// probeScopeSkips reports the probe families the caller may not read, and
+// whether the request may proceed at all. Generation reads agent configuration
+// and quotes it back — the auto-approve list, a skill's own description — so a
+// probe pass must not become a way to read config a credential is not scoped
+// for. The endpoint itself needs agents:read on top of eval:read (it reports
+// the permission tier and probes the persona); the two families sourced from
+// other subsystems are dropped when the caller lacks their read scope.
+func (s *Server) probeScopeSkips(w http.ResponseWriter, r *http.Request) (map[string]struct{}, bool) {
+	if _, ok, _ := s.authenticate(r.Context(), r, "agents:read"); !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "insufficient scope: probes read agent configuration, so agents:read is required alongside eval:read",
+		})
+		return nil, false
+	}
+	skips := map[string]struct{}{}
+	if _, ok, _ := s.authenticate(r.Context(), r, "skills:read"); !ok {
+		skips[eval.ProbeSkillInstruction] = struct{}{}
+	}
+	if _, ok, _ := s.authenticate(r.Context(), r, "tools:read"); !ok {
+		// The approval-policy probe names a tool and quotes the auto-approve
+		// list, both of which live behind tools:read.
+		skips[eval.ProbeApprovalPolicy] = struct{}{}
+	}
+	return skips, true
+}
+
 // autoApproveTools returns the tool names this agent may run unattended:
 // TOML-declared config rules plus persisted permanent ones. Session rules are
 // deliberately excluded — they expire, and a probe written around a rule that
@@ -52,7 +78,7 @@ func (s *Server) autoApproveTools(ctx context.Context, agentName string) []strin
 
 // handleEvalProbes godoc
 // @Summary Generate spec-derived behavioural probes
-// @Description Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint.
+// @Description Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -61,6 +87,7 @@ func (s *Server) autoApproveTools(ctx context.Context, agentName string) []strin
 // @Param limit query int false "Probes returned across all families (max 100)"
 // @Success 200 {object} evalProbesResult "Generated probes"
 // @Failure 400 {object} map[string]string "Missing agent or bad limit"
+// @Failure 403 {object} map[string]string "Missing agents:read"
 // @Failure 404 {object} map[string]string "Agent or task set not found"
 // @Failure 500 {object} map[string]string "Store error"
 // @Failure 503 {object} map[string]string "Eval subsystem not configured"
@@ -90,6 +117,10 @@ func (s *Server) handleEvalProbes(w http.ResponseWriter, r *http.Request) {
 		limit = min(n, probeMaxLimit)
 	}
 
+	skips, ok := s.probeScopeSkips(w, r)
+	if !ok {
+		return
+	}
 	exclude, ok := s.probeExclusions(w, r)
 	if !ok {
 		return
@@ -100,6 +131,7 @@ func (s *Server) handleEvalProbes(w http.ResponseWriter, r *http.Request) {
 		PermissionTier: e.PermissionTier(),
 		Probes: eval.GenerateProbes(e, eval.ProbeOpts{
 			AutoApproveTools: s.autoApproveTools(r.Context(), agentName),
+			SkipKinds:        skips,
 			Limit:            limit,
 			Exclude:          exclude,
 		}),

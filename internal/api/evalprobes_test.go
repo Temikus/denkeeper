@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/eval"
 )
 
@@ -158,15 +159,57 @@ func TestEvalProbes_UnknownTargetSetIs404(t *testing.T) {
 	}
 }
 
-func TestEvalProbes_ReadScopeIsEnough(t *testing.T) {
-	// Generation writes nothing — accepting a probe is an ordinary task create
-	// behind eval:write.
-	srv, _ := evalTestServer(t, allScopesKey(), evalReadOnlyKey(), noEvalKey())
+// probeConfigKey reads evals and agent config, but not skills or tools.
+func probeConfigKey() config.APIKeyConfig {
+	return config.APIKeyConfig{
+		Name:   "probe-config",
+		Key:    "dk-probe-config",
+		Scopes: []string{"eval:read", "eval:write", "agents:read"},
+	}
+}
 
-	if rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/probes?agent=default", "", "dk-eval-readonly"); rec.Code != http.StatusOK {
-		t.Errorf("eval:read status = %d, want 200: %s", rec.Code, rec.Body.String())
+func TestEvalProbes_NeedsAgentsReadOnTopOfEvalRead(t *testing.T) {
+	// Generation writes nothing, but it reads agent configuration and quotes it
+	// back, so eval:read alone must not become a way around agents:read.
+	srv, _ := evalTestServer(t, allScopesKey(), evalReadOnlyKey(), noEvalKey(), probeConfigKey())
+
+	if rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/probes?agent=default", "", "dk-eval-readonly"); rec.Code != http.StatusForbidden {
+		t.Errorf("eval:read-only status = %d, want 403: %s", rec.Code, rec.Body.String())
 	}
 	if rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/probes?agent=default", "", "dk-chat-only"); rec.Code != http.StatusForbidden {
 		t.Errorf("chat-only status = %d, want 403", rec.Code)
+	}
+	if rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/probes?agent=default", "", "dk-probe-config"); rec.Code != http.StatusOK {
+		t.Errorf("eval:read + agents:read status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEvalProbes_OmitsFamiliesTheCallerCannotRead(t *testing.T) {
+	// A skill probe quotes the skill's own frontmatter; the approval probe
+	// names a tool and its auto-approve policy. Neither may reach a credential
+	// that could not read those endpoints directly.
+	srv, _ := evalTestServer(t, allScopesKey(), probeConfigKey())
+
+	full := decodeProbes(t, evalRequest(t, srv, http.MethodGet,
+		"/api/v1/eval/probes?agent=default", "", "dk-test-key").Body.Bytes())
+	var sawSkill bool
+	for _, p := range full.Probes {
+		if p.Kind == eval.ProbeSkillInstruction {
+			sawSkill = true
+		}
+	}
+	if !sawSkill {
+		t.Fatal("fully-scoped caller got no skill probe, so the narrowing test proves nothing")
+	}
+
+	narrowed := decodeProbes(t, evalRequest(t, srv, http.MethodGet,
+		"/api/v1/eval/probes?agent=default", "", "dk-probe-config").Body.Bytes())
+	if len(narrowed.Probes) == 0 {
+		t.Fatal("no probes for a caller with eval:read + agents:read")
+	}
+	for _, p := range narrowed.Probes {
+		if p.Kind == eval.ProbeSkillInstruction || p.Kind == eval.ProbeApprovalPolicy {
+			t.Errorf("probe of kind %q reached a caller without skills:read/tools:read: %q", p.Kind, p.Prompt)
+		}
 	}
 }
