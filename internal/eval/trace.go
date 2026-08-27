@@ -146,7 +146,34 @@ func (s *Store) SaveTrace(ctx context.Context, t agent.TurnTrace) error {
 
 // ListTraces returns trace headers newest first, without payloads.
 func (s *Store) ListTraces(ctx context.Context, f TraceFilter) ([]TraceRow, error) {
-	q := `SELECT ` + traceColumns + ` FROM turn_traces WHERE 1 = 1`
+	where, args := traceWhere(f)
+	q := `SELECT ` + traceColumns + ` FROM turn_traces` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
+	args = append(args, BoundTraceLimit(f.Limit), max(f.Offset, 0))
+
+	rows := []TraceRow{}
+	if err := s.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("listing turn traces: %w", err)
+	}
+	return rows, nil
+}
+
+// CountTraces returns how many traces match the filter, so a list view can say
+// whether there is more behind the page it is showing. It takes the same
+// filter as ListTraces deliberately: an unfiltered count beside a filtered
+// page makes "load more" ask for rows that do not exist and never terminate.
+func (s *Store) CountTraces(ctx context.Context, f TraceFilter) (int, error) {
+	where, args := traceWhere(f)
+	var n int
+	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM turn_traces`+where, args...); err != nil {
+		return 0, fmt.Errorf("counting turn traces: %w", err)
+	}
+	return n, nil
+}
+
+// traceWhere builds the predicate shared by listing and counting. Paging and
+// ordering stay out of it: only the row-selecting half is shared.
+func traceWhere(f TraceFilter) (string, []any) {
+	q := ` WHERE 1 = 1`
 	var args []any
 	if f.Agent != "" {
 		q += ` AND agent = ?`
@@ -168,31 +195,18 @@ func (s *Store) ListTraces(ctx context.Context, f TraceFilter) ([]TraceRow, erro
 		q += ` AND created_at <= ?`
 		args = append(args, f.Until.UTC())
 	}
-	limit := f.Limit
-	if limit <= 0 {
-		limit = traceDefaultLimit
-	}
-	if limit > traceMaxLimit {
-		limit = traceMaxLimit
-	}
-	q += ` ORDER BY id DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, max(f.Offset, 0))
-
-	rows := []TraceRow{}
-	if err := s.db.SelectContext(ctx, &rows, q, args...); err != nil {
-		return nil, fmt.Errorf("listing turn traces: %w", err)
-	}
-	return rows, nil
+	return q, args
 }
 
-// CountTraces returns how many traces are stored, so a list view can say
-// whether there is more behind the page it is showing.
-func (s *Store) CountTraces(ctx context.Context) (int, error) {
-	var n int
-	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM turn_traces`); err != nil {
-		return 0, fmt.Errorf("counting turn traces: %w", err)
+// BoundTraceLimit resolves a requested page size to the one a listing will
+// actually use. Exported so a caller can echo the effective limit rather than
+// the one it asked for: a pager that trusts its own request walks past rows
+// when the store clamped it.
+func BoundTraceLimit(n int) int {
+	if n <= 0 {
+		return traceDefaultLimit
 	}
-	return n, nil
+	return min(n, traceMaxLimit)
 }
 
 // GetTrace returns one trace with its payload decoded.

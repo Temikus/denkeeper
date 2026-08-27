@@ -142,6 +142,50 @@ func TestTraces_ListFiltersByAgentSourceAndConversation(t *testing.T) {
 	}
 }
 
+// The page's "load older turns" reads total: an unfiltered total beside a
+// filtered page would keep offering a page that can never arrive.
+func TestTraces_ListTotalCountsTheFilteredSet(t *testing.T) {
+	srv, store := evalTestServer(t)
+	seedTrace(t, store, liveTrace())
+	other := liveTrace()
+	other.Agent = "pamela"
+	other.Source = agent.TraceSourceEval
+	seedTrace(t, store, other)
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/traces?agent=pamela", "", "dk-test-key")
+	var out traceListResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if out.Total != 1 || len(out.Traces) != 1 {
+		t.Errorf("filtered listing returned %d rows with total %d, want 1/1", len(out.Traces), out.Total)
+	}
+}
+
+// A caller paging on the echoed limit walks past rows when the echo is the
+// value it asked for rather than the one the store applied.
+func TestTraces_ListEchoesTheEffectiveLimit(t *testing.T) {
+	srv, _ := evalTestServer(t)
+
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"", 50},
+		{"?limit=5", 5},
+		{"?limit=5000", 200},
+	} {
+		rec := evalRequest(t, srv, http.MethodGet, "/api/v1/traces"+tc.query, "", "dk-test-key")
+		var out traceListResult
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%s: decoding: %v", tc.query, err)
+		}
+		if out.Limit != tc.want {
+			t.Errorf("%s: limit echoed as %d, want %d", tc.query, out.Limit, tc.want)
+		}
+	}
+}
+
 func TestTraces_ListRejectsMalformedQuery(t *testing.T) {
 	srv, _ := evalTestServer(t)
 	for _, q := range []string{"?since=yesterday", "?until=soon", "?limit=0", "?limit=abc", "?offset=-1"} {

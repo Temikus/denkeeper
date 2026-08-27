@@ -15,20 +15,8 @@ import (
 // same class of data as GET /sessions/{id}/tool-calls — and the eval scopes
 // exist for a judge, which must never be able to read live prompts.
 
-// traceToolCall is one call in a trace, flattened out of its round so the
-// response drops straight into the dry-run transcript renderer the dashboard
-// already has. Same field names deliberately: one renderer, not two.
-type traceToolCall struct {
-	Tool       string `json:"tool"`
-	Server     string `json:"server,omitempty"`
-	Round      int    `json:"round"`
-	Outcome    string `json:"outcome"`
-	Suppressed bool   `json:"suppressed"`
-	DurationMs int64  `json:"duration_ms"`
-	Arguments  string `json:"arguments,omitempty"`
-	Result     string `json:"result,omitempty"`
-	Error      string `json:"error,omitempty"`
-}
+// A trace's tool calls reuse dryRunToolCall: same fields, same JSON names, and
+// the dashboard renders both through DryRunTranscript. One renderer, one shape.
 
 // traceDetail is one trace with its payload unpacked.
 type traceDetail struct {
@@ -37,7 +25,7 @@ type traceDetail struct {
 	History      []agent.TraceMessage `json:"history"`
 	Prompt       string               `json:"prompt"`
 	Response     string               `json:"response"`
-	ToolCalls    []traceToolCall      `json:"tool_calls"`
+	ToolCalls    []dryRunToolCall     `json:"tool_calls"`
 	SuppressedN  int                  `json:"suppressed_count"`
 	// DurationMs mirrors latency_ms under the name the transcript renderer
 	// reads, so the mapping lives here rather than in three UI call sites.
@@ -79,7 +67,7 @@ func (s *Server) traceStoreRequired(w http.ResponseWriter) bool {
 // @Security BearerAuth
 // @Param agent query string false "Filter by agent name"
 // @Param conversation_id query string false "Filter by conversation id"
-// @Param source query string false "Filter by source (live, dryrun, eval)"
+// @Param source query string false "Filter by source (live, eval)"
 // @Param since query string false "Start of time range (RFC3339 format)"
 // @Param until query string false "End of time range (RFC3339 format)"
 // @Param limit query integer false "Maximum number of traces to return (default 50, max 200)"
@@ -98,13 +86,19 @@ func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Echo what the store will actually use, not what the caller asked for: a
+	// pager that trusts a clamped limit skips rows.
+	filter.Limit = eval.BoundTraceLimit(filter.Limit)
+
 	rows, err := s.deps.EvalStore.ListTraces(r.Context(), filter)
 	if err != nil {
 		s.logger.Error("listing turn traces", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
-	total, err := s.deps.EvalStore.CountTraces(r.Context())
+	// Counted through the same filter, so "load more" stops when the filtered
+	// set runs out rather than chasing rows another filter would have shown.
+	total, err := s.deps.EvalStore.CountTraces(r.Context(), filter)
 	if err != nil {
 		s.logger.Error("counting turn traces", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
@@ -207,17 +201,13 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 
 // buildTraceDetail unpacks a stored trace into the response shape.
 func buildTraceDetail(row *eval.TraceRow, payload agent.TracePayload) traceDetail {
-	// The payload column has already been decoded; sending it twice would
-	// double the response for nothing.
-	row.Payload = ""
-
 	d := traceDetail{
 		TraceRow:     *row,
 		SystemPrompt: payload.SystemPrompt,
 		History:      payload.History,
 		Prompt:       payload.Prompt,
 		Response:     payload.Response,
-		ToolCalls:    make([]traceToolCall, 0, 4),
+		ToolCalls:    make([]dryRunToolCall, 0, 4),
 		DurationMs:   row.LatencyMs,
 		Truncation:   payload.Truncation,
 	}
@@ -226,7 +216,7 @@ func buildTraceDetail(row *eval.TraceRow, payload agent.TracePayload) traceDetai
 	}
 	for _, round := range payload.Rounds {
 		for _, call := range round.ToolCalls {
-			tc := traceToolCall{
+			tc := dryRunToolCall{
 				Tool:       call.Tool,
 				Server:     call.Server,
 				Round:      round.Round,

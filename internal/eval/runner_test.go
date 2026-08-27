@@ -966,7 +966,7 @@ func TestRunner_FailedSampleStoresNoTrace(t *testing.T) {
 	}
 	waitForTerminal(t, f.store, run.ID)
 
-	n, err := f.store.CountTraces(context.Background())
+	n, err := f.store.CountTraces(context.Background(), TraceFilter{})
 	if err != nil {
 		t.Fatalf("CountTraces: %v", err)
 	}

@@ -7587,7 +7587,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "Filter by source (live, dryrun, eval)",
+                        "description": "Filter by source (live, eval)",
                         "name": "source",
                         "in": "query"
                     },
@@ -10324,7 +10324,7 @@
                 "tool_calls": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_api.traceToolCall"
+                        "$ref": "#/definitions/internal_api.dryRunToolCall"
                     }
                 },
                 "truncated": {
@@ -10369,38 +10369,6 @@
                     "items": {
                         "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TraceRow"
                     }
-                }
-            }
-        },
-        "internal_api.traceToolCall": {
-            "type": "object",
-            "properties": {
-                "arguments": {
-                    "type": "string"
-                },
-                "duration_ms": {
-                    "type": "integer"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "outcome": {
-                    "type": "string"
-                },
-                "result": {
-                    "type": "string"
-                },
-                "round": {
-                    "type": "integer"
-                },
-                "server": {
-                    "type": "string"
-                },
-                "suppressed": {
-                    "type": "boolean"
-                },
-                "tool": {
-                    "type": "string"
                 }
             }
         }

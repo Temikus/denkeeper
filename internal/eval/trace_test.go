@@ -221,7 +221,7 @@ func TestListTraces_PagesWithLimitAndOffset(t *testing.T) {
 		t.Errorf("offset page did not continue the listing: %+v then %+v", page, next)
 	}
 
-	n, err := store.CountTraces(ctx)
+	n, err := store.CountTraces(ctx, TraceFilter{})
 	if err != nil {
 		t.Fatalf("CountTraces: %v", err)
 	}
@@ -246,6 +246,64 @@ func TestListTraces_LimitIsBounded(t *testing.T) {
 	}
 }
 
+// A filtered page counted against the whole table tells a pager there is more
+// behind it than the filter can ever return, so "load more" never terminates.
+func TestCountTraces_HonoursTheSameFilterAsTheListing(t *testing.T) {
+	store := newTraceStore(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := store.SaveTrace(ctx, agent.TurnTrace{Agent: "pamela", Source: agent.TraceSourceLive}); err != nil {
+			t.Fatalf("SaveTrace: %v", err)
+		}
+	}
+	if err := store.SaveTrace(ctx, agent.TurnTrace{Agent: "default", Source: agent.TraceSourceEval}); err != nil {
+		t.Fatalf("SaveTrace: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter TraceFilter
+		want   int
+	}{
+		{"unfiltered", TraceFilter{}, 4},
+		{"by agent", TraceFilter{Agent: "pamela"}, 3},
+		{"by source", TraceFilter{Source: agent.TraceSourceEval}, 1},
+		{"no match", TraceFilter{Agent: "nobody"}, 0},
+	} {
+		n, err := store.CountTraces(ctx, tc.filter)
+		if err != nil {
+			t.Fatalf("%s: CountTraces: %v", tc.name, err)
+		}
+		if n != tc.want {
+			t.Errorf("%s: count = %d, want %d", tc.name, n, tc.want)
+		}
+	}
+	// Paging fields are not part of the count: they say which slice to show,
+	// not how many rows exist.
+	n, err := store.CountTraces(ctx, TraceFilter{Limit: 1, Offset: 2})
+	if err != nil {
+		t.Fatalf("CountTraces(paged): %v", err)
+	}
+	if n != 4 {
+		t.Errorf("count with paging fields = %d, want 4", n)
+	}
+}
+
+func TestBoundTraceLimit_ResolvesWhatTheListingWillUse(t *testing.T) {
+	if got := BoundTraceLimit(0); got != traceDefaultLimit {
+		t.Errorf("BoundTraceLimit(0) = %d, want the default %d", got, traceDefaultLimit)
+	}
+	if got := BoundTraceLimit(-5); got != traceDefaultLimit {
+		t.Errorf("BoundTraceLimit(-5) = %d, want the default %d", got, traceDefaultLimit)
+	}
+	if got := BoundTraceLimit(7); got != 7 {
+		t.Errorf("BoundTraceLimit(7) = %d, want 7", got)
+	}
+	if got := BoundTraceLimit(traceMaxLimit + 1); got != traceMaxLimit {
+		t.Errorf("BoundTraceLimit(over) = %d, want the cap %d", got, traceMaxLimit)
+	}
+}
+
 func TestPruneTracesBefore_DeletesOnlyOlderRows(t *testing.T) {
 	store := newTraceStore(t)
 	ctx := context.Background()
@@ -266,7 +324,7 @@ func TestPruneTracesBefore_DeletesOnlyOlderRows(t *testing.T) {
 	if n != 2 {
 		t.Errorf("pruned %d rows, want 2", n)
 	}
-	left, err := store.CountTraces(ctx)
+	left, err := store.CountTraces(ctx, TraceFilter{})
 	if err != nil {
 		t.Fatalf("CountTraces: %v", err)
 	}
