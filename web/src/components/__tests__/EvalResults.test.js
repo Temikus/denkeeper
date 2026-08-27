@@ -302,11 +302,30 @@ describe('EvalResults — per-task diffs', () => {
     expect(shown[0]).toHaveTextContent('via Fireworks')
   })
 
-  // "anthropic/claude-3-opus · via anthropic" is a line that says nothing.
+  // "kimi-k2.6 · via kimi-k2.6" is a line that says nothing.
   test('drops an upstream that only repeats the model line', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
         { ...evalSamples[0], upstream: 'kimi-k2.6' },
+        { ...evalSamples[1], upstream: '' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+  })
+
+  // A model id's vendor prefix names the maker, not the server: the same
+  // anthropic/... model can come from Anthropic, Vertex, or Bedrock, so
+  // suppressing on the prefix would hide half of that variance.
+  test('keeps an upstream that matches only the model vendor prefix', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: '' },
         { ...evalSamples[1], upstream: 'Anthropic' },
       ])),
     )
@@ -316,9 +335,9 @@ describe('EvalResults — per-task diffs', () => {
     await fireEvent.click(screen.getByTestId('task-row-11'))
 
     await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
-    // The candidate ran anthropic/claude-3-opus on Anthropic, the current
-    // model ran kimi-k2.6 on kimi-k2.6 — neither adds anything.
-    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+    const shown = screen.getAllByTestId('upstream')
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toHaveTextContent('via Anthropic')
   })
 
   test('collapses again and reports a failed turn instead of an empty column', async () => {
@@ -362,6 +381,101 @@ describe('EvalResults — per-task diffs', () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
     await waitFor(() => expect(screen.getByTestId('task-row-11')).toHaveTextContent('-$0.0034'))
+  })
+
+  // Loading and error are per task: one slow row must not describe another.
+  const TWO_TASKS = {
+    per_task: [
+      evalSummary.per_task[0],
+      { ...evalSummary.per_task[0], task_id: 12, prompt: 'Draft the standup note' },
+    ],
+  }
+  const task12Samples = evalSamples.map(s => ({ ...s, id: s.id + 100, task_id: 12 }))
+
+  /** Opens a row, waits for its turns, then collapses it again. */
+  async function loadRow(taskID) {
+    await fireEvent.click(screen.getByTestId(`task-row-${taskID}`))
+    await waitFor(() => expect(screen.getByTestId(`turn-${taskID}-0`)).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId(`task-row-${taskID}`))
+  }
+
+  test("a stalled row's spinner does not follow another row", async () => {
+    withSummary(TWO_TASKS)
+    let releaseFirst
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        const taskID = new URL(request.url).searchParams.get('task_id')
+        if (taskID !== '11') return HttpResponse.json(task12Samples)
+        await new Promise(resolve => { releaseFirst = resolve })
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-12')).toBeInTheDocument())
+    await loadRow(12)
+
+    // Stall task 11's fetch, then come back to the row that is already cached.
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-12'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('turns-loading')).not.toBeInTheDocument()
+
+    releaseFirst()
+  })
+
+  test("a stalled row's failure does not land under another row", async () => {
+    withSummary(TWO_TASKS)
+    let failFirst
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        const taskID = new URL(request.url).searchParams.get('task_id')
+        if (taskID !== '11') return HttpResponse.json(task12Samples)
+        await new Promise(resolve => { failFirst = resolve })
+        return HttpResponse.json({ error: 'store busy' }, { status: 500 })
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-12')).toBeInTheDocument())
+    await loadRow(12)
+
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-12'))
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+
+    // Task 11's read fails only now, with task 12's row on screen.
+    failFirst()
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('turns-retry')).not.toBeInTheDocument()
+  })
+
+  test('reopening a row mid-flight does not fetch it twice', async () => {
+    const asked = []
+    let release
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('task_id'))
+        await new Promise(resolve => { release = resolve })
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    release()
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
   })
 
   test('a failed transcript read offers a retry that recovers', async () => {
@@ -458,8 +572,8 @@ describe('EvalResults — per-task diffs', () => {
     expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: current')
   })
 
-  // An older run judged before the resolved map shipped, or a value the server
-  // could not read: the raw record is still the judge's answer and is shown.
+  // A value the server carried through unresolved, or a variant it could not
+  // name: the raw record is still the judge's answer and is shown.
   test('falls back to the raw letter when the server resolved nothing', async () => {
     server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
       ...evalPairs,

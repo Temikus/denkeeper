@@ -30,8 +30,10 @@
   // session. Keyed by task id: fetching the whole run to render one row pulls
   // every other row's traces with it.
   let samplesByTask = $state({})
-  let samplesLoading = $state(false)
-  let samplesError = $state('')
+  // Loading and error are keyed by task id: several rows can be in flight at
+  // once, and each detail row must read only its own state.
+  let samplesLoading = $state({})
+  let samplesError = $state({})
   let expandedTask = $state(null)
 
   let confirmApply = $state(null)
@@ -211,20 +213,19 @@
     }
     expandedTask = taskID
     // A failed fetch left no entry, so reopening the row retries on its own.
-    samplesError = ''
-    if (samplesByTask[taskID]) return
+    if (samplesByTask[taskID] || samplesLoading[taskID]) return
     await loadSamples(taskID)
   }
 
   async function loadSamples(taskID) {
-    samplesLoading = true
-    samplesError = ''
+    samplesLoading[taskID] = true
+    samplesError[taskID] = ''
     try {
       samplesByTask[taskID] = (await api.evalRunSamples(run.id, taskID)) || []
     } catch (e) {
-      samplesError = e.message
+      samplesError[taskID] = e.message
     } finally {
-      samplesLoading = false
+      samplesLoading[taskID] = false
     }
   }
 
@@ -675,10 +676,10 @@
               {#if expandedTask === t.task_id}
                 <tr class="detail-row">
                   <td colspan={3 + variants.length} id="task-detail-{t.task_id}" aria-live="polite">
-                    {#if samplesLoading}
+                    {#if samplesLoading[t.task_id]}
                       <p class="muted" role="status" data-testid="turns-loading">Loading turns…</p>
-                    {:else if samplesError}
-                      <ErrorBanner message={samplesError} />
+                    {:else if samplesError[t.task_id]}
+                      <ErrorBanner message={samplesError[t.task_id]} />
                       <button class="btn-sm" onclick={() => loadSamples(t.task_id)} data-testid="turns-retry">Try again</button>
                     {:else}
                       {#each turnsFor(t.task_id) as turn (turn.k)}

@@ -50,14 +50,16 @@
   // The provider-reported serving upstream, set only on eval transcripts and
   // only for providers that route (OpenRouter). A candidate served by
   // different upstreams between turns explains latency or quality variance
-  // within one variant, which is otherwise invisible. Suppressed when it just
-  // repeats the model line — "openrouter/kimi-k3 · OpenRouter" says nothing.
+  // within one variant, which is otherwise invisible. Suppressed only when it
+  // is exactly the model line. A vendor prefix is not a match: OpenRouter's
+  // "anthropic/..." names the model's maker, and the same model can be served
+  // by Anthropic, Vertex, or Bedrock — suppressing on the prefix would hide
+  // one side of the variance the chip exists to show.
   let upstream = $derived.by(() => {
     const via = (transcript.upstream || '').trim()
     if (!via) return ''
     const model = (transcript.model || transcript.requested_model || '').toLowerCase()
-    const low = via.toLowerCase()
-    return model === low || model.startsWith(`${low}/`) ? '' : via
+    return model === via.toLowerCase() ? '' : via
   })
 </script>
 
