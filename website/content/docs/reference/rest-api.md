@@ -392,7 +392,7 @@ Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` fi
 
 **Scope:** `sessions:read`
 
-Turn trace headers, newest first, without their payloads. Filters: `?agent=`, `?conversation_id=`, `?source=` (`live`/`dryrun`/`eval`), `?since=`/`?until=` (RFC3339), `?limit=` (default 50, max 200), `?offset=`.
+Turn trace headers, newest first, without their payloads. `total` counts the filtered set, and `limit` echoes the effective page size after clamping. Filters: `?agent=`, `?conversation_id=`, `?source=` (`live`/`eval` — a dry run's trace rides out on its response and is never stored), `?since=`/`?until=` (RFC3339), `?limit=` (default 50, max 200), `?offset=`.
 
 The response repeats `capture`, `retention_days` and `max_trace_bytes` alongside the rows, so a caller can tell "nothing recorded yet" from "recording is off" without a second request.
 

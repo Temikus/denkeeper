@@ -2419,38 +2419,27 @@ func initAuditor(ctx context.Context, store *audit.SQLiteStore, cfg *config.Conf
 // since one sweep interval per instance is plenty and a second knob would only
 // be another thing to get wrong.
 func startTraceCleanupWorker(ctx context.Context, store *eval.Store, retentionDays int, interval string, logger *slog.Logger) {
-	if store == nil || retentionDays <= 0 {
-		return // unlimited retention
+	if store == nil {
+		return
 	}
-	dur, err := time.ParseDuration(interval)
-	if err != nil {
-		dur = time.Hour
-	}
-
-	go func() {
-		ticker := time.NewTicker(dur)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-				n, pruneErr := store.PruneTracesBefore(ctx, cutoff)
-				if pruneErr != nil {
-					logger.Warn("turn trace retention prune failed", "error", pruneErr)
-				} else if n > 0 {
-					logger.Info("pruned turn traces", "count", n, "retention_days", retentionDays)
-				}
-			}
-		}
-	}()
+	startRetentionWorker(ctx, "turn trace", retentionDays, interval, logger, store.PruneTracesBefore)
 }
 
 // startAuditCleanupWorker runs periodic retention enforcement on the audit store.
 func startAuditCleanupWorker(ctx context.Context, store *audit.SQLiteStore, retentionDays int, interval string, logger *slog.Logger) {
+	startRetentionWorker(ctx, "audit event", retentionDays, interval, logger, store.PruneBefore)
+}
+
+// startRetentionWorker sweeps rows older than retentionDays on the given
+// cadence. The loop is identical for every store that ages rows out, so it
+// lives once and takes the prune as a function.
+//
+// A non-positive retention means unlimited: the config layer defaults both
+// current callers to a positive value, so this is a guard for a caller that
+// does not, not a supported setting.
+func startRetentionWorker(ctx context.Context, what string, retentionDays int, interval string, logger *slog.Logger, prune func(context.Context, time.Time) (int, error)) {
 	if retentionDays <= 0 {
-		return // unlimited retention
+		return
 	}
 	dur, err := time.ParseDuration(interval)
 	if err != nil {
@@ -2466,11 +2455,11 @@ func startAuditCleanupWorker(ctx context.Context, store *audit.SQLiteStore, rete
 				return
 			case <-ticker.C:
 				cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-				n, pruneErr := store.PruneBefore(ctx, cutoff)
+				n, pruneErr := prune(ctx, cutoff)
 				if pruneErr != nil {
-					logger.Warn("audit retention prune failed", "error", pruneErr)
+					logger.Warn(what+" retention prune failed", "error", pruneErr)
 				} else if n > 0 {
-					logger.Info("pruned audit events", "count", n, "retention_days", retentionDays)
+					logger.Info("pruned old rows", "kind", what, "count", n, "retention_days", retentionDays)
 				}
 			}
 		}
