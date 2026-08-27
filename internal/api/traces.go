@@ -48,6 +48,30 @@ type traceListResult struct {
 	MaxTraceBytes int             `json:"max_trace_bytes"`
 }
 
+// traceSettings is the snapshot of the [eval] knobs the trace listing echoes.
+// The handlers read it instead of deps.Config.Eval: hot reload overwrites the
+// whole config struct in place, so a request-time read of the struct would
+// race that write.
+type traceSettings struct {
+	capture       bool
+	retentionDays int
+	maxTraceBytes int
+}
+
+// refreshTraceSettings re-reads the [eval] knobs into the snapshot the trace
+// handlers serve. Called at construction and after each successful config
+// reload — both places where reading deps.Config cannot race the reload's
+// whole-struct overwrite.
+func (s *Server) refreshTraceSettings() {
+	ts := &traceSettings{}
+	if s.deps.Config != nil {
+		ts.capture = s.deps.Config.Eval.Capture
+		ts.retentionDays = s.deps.Config.Eval.RetentionDays
+		ts.maxTraceBytes = s.deps.Config.Eval.TraceBytesCap()
+	}
+	s.traceCfg.Store(ts)
+}
+
 // traceStoreRequired writes a 503 when trace storage is not wired. The runner
 // is deliberately not required: traces outlive any eval run and a live turn
 // never touches it.
@@ -111,10 +135,10 @@ func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {
 		Limit:  filter.Limit,
 		Offset: filter.Offset,
 	}
-	if s.deps.Config != nil {
-		out.Capture = s.deps.Config.Eval.Capture
-		out.RetentionDays = s.deps.Config.Eval.RetentionDays
-		out.MaxTraceBytes = s.deps.Config.Eval.TraceBytesCap()
+	if ts := s.traceCfg.Load(); ts != nil {
+		out.Capture = ts.capture
+		out.RetentionDays = ts.retentionDays
+		out.MaxTraceBytes = ts.maxTraceBytes
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -93,10 +93,9 @@ func TestTraces_ListReportsTheCaptureSwitch(t *testing.T) {
 }
 
 func TestTraces_ListReportsCaptureOnWhenConfigured(t *testing.T) {
-	srv, _ := evalTestServer(t)
-	srv.deps.Config.Eval.Capture = true
-	srv.deps.Config.Eval.RetentionDays = 14
-	srv.deps.Config.Eval.MaxTraceBytes = 65536
+	srv, _ := tracesTestServer(t, config.EvalConfig{
+		Capture: true, RetentionDays: 14, MaxTraceBytes: 65536,
+	}, nil)
 
 	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/traces", "", "dk-test-key")
 	var out traceListResult
@@ -106,6 +105,96 @@ func TestTraces_ListReportsCaptureOnWhenConfigured(t *testing.T) {
 	if !out.Capture || out.RetentionDays != 14 || out.MaxTraceBytes != 65536 {
 		t.Errorf("capture settings = %+v", out)
 	}
+}
+
+// tracesTestServer is evalTestServer without the runner, with the [eval]
+// section supplied before New runs: the settings the listing echoes are
+// snapshotted at construction and after each reload, not read per request.
+// A non-nil reload becomes the server's ReloadFunc, handed the same config
+// struct hot reload overwrites in place.
+func tracesTestServer(t *testing.T, evalCfg config.EvalConfig, reload func(cfg *config.Config) error) (*Server, *eval.Store) {
+	t.Helper()
+	deps := testDeps()
+	store, err := eval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating eval store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	deps.EvalStore = store
+	deps.Config.Eval = evalCfg
+	if reload != nil {
+		cfg := deps.Config
+		deps.ReloadFunc = func() error { return reload(cfg) }
+	}
+	return New(testConfig(allScopesKey()), deps, testLogger()), store
+}
+
+// Hot reload replaces the config struct's contents in place. The listing must
+// serve the new [eval] settings afterwards, and it must get them from its
+// snapshot — refreshed as part of the reload request — rather than by reading
+// the struct a concurrent reload could be overwriting.
+func TestTraces_ListServesReloadedCaptureSettings(t *testing.T) {
+	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(cfg *config.Config) error {
+		// What buildReloadFunc does: overwrite the whole struct.
+		next := *cfg
+		next.Eval.Capture = true
+		next.Eval.RetentionDays = 7
+		next.Eval.MaxTraceBytes = 65536
+		*cfg = next
+		return nil
+	})
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/traces", "", "dk-test-key")
+	var out traceListResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if out.Capture {
+		t.Fatal("capture reported on before the reload")
+	}
+
+	rec = evalRequest(t, srv, http.MethodPost, "/api/v1/server/reload", "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reload status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = evalRequest(t, srv, http.MethodGet, "/api/v1/traces", "", "dk-test-key")
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if !out.Capture || out.RetentionDays != 7 || out.MaxTraceBytes != 65536 {
+		t.Errorf("reloaded settings not served: capture=%v retention=%d cap=%d",
+			out.Capture, out.RetentionDays, out.MaxTraceBytes)
+	}
+}
+
+// A listing that overlaps a config reload must not touch the config struct the
+// reload is overwriting. The race detector is the assertion here: before the
+// snapshot, this test failed under -race.
+func TestTraces_ListDoesNotRaceConfigReload(t *testing.T) {
+	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(cfg *config.Config) error {
+		next := *cfg
+		next.Eval.Capture = !cfg.Eval.Capture
+		next.Eval.RetentionDays++
+		*cfg = next
+		return nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 25; i++ {
+			evalRequest(t, srv, http.MethodPost, "/api/v1/server/reload", "", "dk-test-key")
+		}
+	}()
+	for i := 0; i < 25; i++ {
+		rec := evalRequest(t, srv, http.MethodGet, "/api/v1/traces", "", "dk-test-key")
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d", rec.Code)
+			break
+		}
+	}
+	<-done
 }
 
 func TestTraces_ListFiltersByAgentSourceAndConversation(t *testing.T) {

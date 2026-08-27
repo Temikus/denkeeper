@@ -330,6 +330,39 @@ describe('Turn inspector — paging', () => {
     expect(screen.getByText('archivist')).toBeInTheDocument()
   })
 
+  test('drops a late older-page read after the filter has changed', async () => {
+    server.use(
+      http.get('/api/v1/traces', async ({ request }) => {
+        const url = new URL(request.url)
+        // The older page is the slow read; the operator abandons it by
+        // switching the source filter while it is still in flight.
+        if (url.searchParams.get('offset') === '50') {
+          await new Promise(r => setTimeout(r, 60))
+          return HttpResponse.json({
+            traces: [{ ...traceRows[1], id: 99, agent: 'stale-agent' }],
+            total: 3, limit: 50, offset: 50, capture: true,
+          })
+        }
+        if (url.searchParams.get('source') === 'eval') {
+          return HttpResponse.json({ traces: [traceRows[1]], total: 1, limit: 50, offset: 0, capture: true })
+        }
+        return HttpResponse.json({ ...traceList, total: 3 })
+      }),
+    )
+    render(Traces)
+    await waitFor(() => expect(screen.getByTestId('load-more')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('load-more'))
+    await fireEvent.click(screen.getByTestId('source-eval'))
+    await waitFor(() => expect(screen.getAllByTestId('trace-row')).toHaveLength(1))
+
+    // Long enough for the abandoned page to land; it must not be appended to
+    // the filtered list it no longer belongs to.
+    await new Promise(r => setTimeout(r, 120))
+    expect(screen.queryByText('stale-agent')).not.toBeInTheDocument()
+    expect(screen.getAllByTestId('trace-row')).toHaveLength(1)
+  })
+
   test('hides the load-more control when everything is shown', async () => {
     render(Traces)
     await waitFor(() => expect(screen.getByTestId('trace-rows')).toBeInTheDocument())

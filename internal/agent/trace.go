@@ -28,11 +28,12 @@ import (
 const DefaultMaxTraceBytes = 256 * 1024
 
 // Trace sources. They mirror ExecKind, with "live" standing in for the zero
-// value so a stored row never carries an empty discriminator.
+// value so a stored row never carries an empty discriminator. A dry-run turn's
+// trace carries string(ExecDryRun) but gets no named constant: that trace only
+// ever rides out on its TurnResult, so nothing stores it or filters on it.
 const (
-	TraceSourceLive   = "live"
-	TraceSourceDryRun = string(ExecDryRun)
-	TraceSourceEval   = string(ExecEval)
+	TraceSourceLive = "live"
+	TraceSourceEval = string(ExecEval)
 )
 
 // TraceSink persists captured turn traces. The eval store implements it;
