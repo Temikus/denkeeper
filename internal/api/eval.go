@@ -1074,14 +1074,12 @@ func (s *Server) handleJudgeEvalRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An empty body is the ordinary case — judge everything outstanding — and
+	// decodeEvalBody already accepts one. A ContentLength guard here would miss
+	// a chunked request, silently dropping its sample_n.
 	var in evalJudgeInput
-	// An empty body is the ordinary case — judge everything outstanding — so it
-	// must not be an error.
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
-			return
-		}
+	if !decodeEvalBody(w, r, &in) {
+		return
 	}
 	if in.SampleN < 0 || in.Limit < 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{

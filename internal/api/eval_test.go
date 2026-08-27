@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -1219,5 +1220,39 @@ func TestEvalConfig_AdvertisesTheInternalJudgeOnlyWhenConfigured(t *testing.T) {
 	}
 	if body["rubric_version"] != eval.RubricVersion {
 		t.Errorf("rubric_version = %v, want %q", body["rubric_version"], eval.RubricVersion)
+	}
+}
+
+// A client that streams its body (chunked transfer encoding, ContentLength -1)
+// must still be read. Judging is the one eval endpoint whose body decides how
+// much money the pass spends, so dropping it silently judges the whole queue
+// when the caller asked for a calibration subset.
+func TestJudgeEvalRun_ReadsAChunkedBody(t *testing.T) {
+	srv, store := evalJudgeServer(t, "judge-model")
+	run := seedJudgeableRun(t, store)
+
+	// iotest.OneByteReader is not one of the types httptest.NewRequest can
+	// measure, so the request goes out with an unknown length.
+	body := iotest.OneByteReader(strings.NewReader(`{"sample_n":1}`))
+	req := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), body)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	if req.ContentLength >= 0 {
+		t.Fatalf("test setup: ContentLength = %d, want an unmeasured body", req.ContentLength)
+	}
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	var pass eval.JudgePass
+	if err := json.Unmarshal(rec.Body.Bytes(), &pass); err != nil {
+		t.Fatalf("decoding pass: %v", err)
+	}
+	// The run's queue holds both presentation orders; sample_n asked for one.
+	if pass.Items != 1 {
+		t.Errorf("items = %d, want the requested sample_n of 1", pass.Items)
 	}
 }
