@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/audit"
@@ -24,6 +26,9 @@ var (
 	ErrRunNotTerminal = errors.New("eval: run is not terminal")
 	// ErrJudgeActive means a judging pass is already working this run's queue.
 	ErrJudgeActive = errors.New("eval: run is already being judged")
+	// ErrJudgeModelSwapped means the completion came back from a model other
+	// than the configured one — a router cost_limit fallback, most likely.
+	ErrJudgeModelSwapped = errors.New("eval: judge completion served by a different model")
 )
 
 // judgeLLM is the entire capability the internal judge is given: one
@@ -40,6 +45,28 @@ type judgeLLM interface {
 	CompleteFinal(ctx context.Context, sessionID string, messages []llm.Message) (*llm.ChatResponse, error)
 }
 
+// judgeSession is one pass's whole view of the router: the completion call and
+// the cost tracker behind it, both resolved once at Start.
+//
+// Resolved once rather than per item because the engine can be deleted or
+// rebuilt mid-pass: re-resolving would silently start reading zero, which
+// disables the cost cap (spend never grows) and loses the judge_cost deltas
+// (a negative delta is never written) for the rest of the pass.
+type judgeSession struct {
+	llm     judgeLLM
+	tracker *llm.CostTracker
+}
+
+// cost reads the pass's true spend, for the same reason a sample does:
+// provider-reported cost is only filled in by OpenRouter, so a cap keyed on it
+// would never trip elsewhere.
+func (s judgeSession) cost(convID string) float64 {
+	if s.tracker == nil {
+		return 0
+	}
+	return s.tracker.SessionCost(convID)
+}
+
 // JudgeConfig is the judge's snapshot of the [eval] judge keys.
 type JudgeConfig struct {
 	// Model is the judging model. Empty disables the internal judge entirely.
@@ -49,9 +76,10 @@ type JudgeConfig struct {
 	Provider string
 	// MaxCost caps one judging pass in USD.
 	MaxCost float64
-	// MaxConcurrent bounds items in flight, shared with nothing: the runner's
-	// semaphore guards sample dispatch, and a judging pass runs after a run has
-	// finished.
+	// MaxConcurrent bounds items in flight across every pass. Fixed at
+	// construction — SetConfig does not resize the semaphore — because the
+	// point of the bound is the provider's rate limit, and a live resize would
+	// hand an in-flight pass more slots than the operator asked for.
 	MaxConcurrent int
 }
 
@@ -67,8 +95,17 @@ type Judge struct {
 	store   *Store
 	engines EngineSource
 	auditor audit.Emitter
-	cfg     JudgeConfig
 	logger  *slog.Logger
+
+	// sem bounds in-flight completions process-wide, not per pass: judging
+	// three finished runs at once must not multiply max_concurrent by three
+	// against a rate-limited provider.
+	sem chan struct{}
+	// passSeq numbers passes so each gets its own cost-tracker session key.
+	passSeq atomic.Int64
+
+	cfgMu sync.RWMutex
+	cfg   JudgeConfig
 
 	mu     sync.Mutex
 	active map[int64]*activeRun
@@ -90,16 +127,41 @@ func NewJudge(store *Store, engines EngineSource, auditor audit.Emitter, cfg Jud
 		auditor: auditor,
 		cfg:     cfg,
 		logger:  logger,
+		sem:     make(chan struct{}, cfg.MaxConcurrent),
 		active:  make(map[int64]*activeRun),
 	}
 }
 
 // Available reports whether an internal judge is configured.
-func (j *Judge) Available() bool { return j != nil && j.cfg.Model != "" }
+func (j *Judge) Available() bool { return j != nil && j.Config().Model != "" }
 
 // Config returns the resolved settings, so a handler can report the model and
 // cap a pass will run under.
-func (j *Judge) Config() JudgeConfig { return j.cfg }
+func (j *Judge) Config() JudgeConfig {
+	if j == nil {
+		return JudgeConfig{}
+	}
+	j.cfgMu.RLock()
+	defer j.cfgMu.RUnlock()
+	return j.cfg
+}
+
+// SetConfig applies a reloaded [eval] judge block, so turning the judge on,
+// pointing it at another model, or moving its cap takes effect on the next
+// pass instead of at the next restart. MaxConcurrent is deliberately not
+// re-read: the semaphore is process-wide and sized once.
+//
+// A pass in flight keeps the config it started under — it has already told the
+// caller which model and cap it is running against.
+func (j *Judge) SetConfig(cfg JudgeConfig) {
+	if j == nil {
+		return
+	}
+	j.cfgMu.Lock()
+	defer j.cfgMu.Unlock()
+	cfg.MaxConcurrent = j.cfg.MaxConcurrent
+	j.cfg = cfg
+}
 
 // JudgeOpts scopes one pass over a run's queue.
 type JudgeOpts struct {
@@ -131,7 +193,8 @@ type JudgePass struct {
 // work shows up in: completeness.pairs_judged on the summary, and the pair
 // view's per-item verdicts.
 func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgePass, error) {
-	if !j.Available() {
+	cfg := j.Config()
+	if cfg.Model == "" {
 		return nil, ErrJudgeNotConfigured
 	}
 	run, err := j.store.GetRun(ctx, runID)
@@ -141,7 +204,7 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	if !IsTerminal(run.Status) {
 		return nil, fmt.Errorf("run %d is %s: %w", runID, run.Status, ErrRunNotTerminal)
 	}
-	client, err := j.clientFor(run.BaseAgent)
+	session, err := j.sessionFor(run.BaseAgent, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -153,11 +216,11 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	pass := &JudgePass{
 		RunID:         runID,
 		Items:         len(items),
-		Model:         j.cfg.Model,
-		Provider:      j.cfg.Provider,
+		Model:         cfg.Model,
+		Provider:      cfg.Provider,
 		JudgeIdent:    JudgeInternal,
 		RubricVersion: RubricVersion,
-		CostCap:       j.cfg.MaxCost,
+		CostCap:       cfg.MaxCost,
 	}
 	if len(items) == 0 {
 		// Nothing to do is not an error and must not register an active pass:
@@ -180,6 +243,20 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	j.active[runID] = handle
 	j.mu.Unlock()
 
+	st := &passState{
+		cfg:     cfg,
+		session: session,
+		convID:  JudgeConvID(runID, j.passSeq.Add(1)),
+	}
+	// Register the session under the eval pseudo-identity before the first
+	// call. Without it the tracker prefix-parses "eval:judge:..." to an agent
+	// literally named "eval" — a valid resource name someone may actually
+	// have — merging judge spend into that agent's totals and applying its
+	// [costs] overrides to judging.
+	if session.tracker != nil {
+		session.tracker.RegisterSessionAgent(st.convID, JudgeAgentIdent(run.BaseAgent))
+	}
+
 	j.wg.Add(1)
 	go func() {
 		defer j.wg.Done()
@@ -190,31 +267,34 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 			delete(j.active, runID)
 			j.mu.Unlock()
 		}()
-		j.run(passCtx, run, client, items)
+		j.run(passCtx, run, st, items)
 	}()
 	return pass, nil
 }
 
-// clientFor resolves the base agent's router and applies the judge overlay.
+// sessionFor resolves the base agent's router and applies the judge overlay.
 //
 // The overlay is the same WithModel/WithProvider clone an eval variant uses, so
 // the judge bills to the agent's own cost tracker and honours its pricing and
 // fallback rules — only the target differs. An unknown provider is rejected
 // here rather than at request time, where it would fail every item instead of
 // the pass.
-func (j *Judge) clientFor(baseAgent string) (judgeLLM, error) {
+func (j *Judge) sessionFor(baseAgent string, cfg JudgeConfig) (judgeSession, error) {
 	e, ok := j.engines(baseAgent)
 	if !ok || e == nil {
-		return nil, fmt.Errorf("agent %q not found", baseAgent)
+		return judgeSession{}, fmt.Errorf("agent %q not found", baseAgent)
 	}
 	router := e.LLMRouter()
 	if router == nil {
-		return nil, fmt.Errorf("agent %q has no LLM router", baseAgent)
+		return judgeSession{}, fmt.Errorf("agent %q has no LLM router", baseAgent)
 	}
-	if j.cfg.Provider != "" && !router.HasProvider(j.cfg.Provider) {
-		return nil, fmt.Errorf("judge provider %q is not registered", j.cfg.Provider)
+	if cfg.Provider != "" && !router.HasProvider(cfg.Provider) {
+		return judgeSession{}, fmt.Errorf("judge provider %q is not registered", cfg.Provider)
 	}
-	return router.WithModel(j.cfg.Model).WithProvider(j.cfg.Provider), nil
+	return judgeSession{
+		llm:     router.WithModel(cfg.Model).WithProvider(cfg.Provider),
+		tracker: router.CostTracker(),
+	}, nil
 }
 
 // Stop cancels an active pass. Reports whether one was running.
@@ -261,18 +341,35 @@ func (j *Judge) IsActive(runID int64) bool {
 	return ok
 }
 
-// JudgeConvID is the cost tracker's session key for a run's judging spend,
-// distinct from every eval:{run}:{task}:{k}:{variant} sample key so judge cost
-// can never be mistaken for a sample's.
-func JudgeConvID(runID int64) string { return fmt.Sprintf("eval:judge:%d", runID) }
+// JudgeConvID is the cost tracker's session key for one judging pass, distinct
+// from every eval:{run}:{task}:{k}:{variant} sample key so judge cost can never
+// be mistaken for a sample's.
+//
+// The pass number is part of it because the key is also what the router's own
+// session guards read: a key shared across passes accumulates forever, so a
+// [llm.fallbacks] cost_limit rule would eventually swap the judge model out
+// from under the rubric, and a [costs] hard limit would refuse every later
+// pass. One key per pass keeps both guards measuring the pass in front of them.
+func JudgeConvID(runID, pass int64) string {
+	return fmt.Sprintf("eval:judge:%d:%d", runID, pass)
+}
 
-// passState is one pass's bookkeeping.
+// JudgeAgentIdent is the pseudo-identity judging spend and audit events are
+// attributed to. "#" is rejected by the resource-name validator, so it can
+// never collide with a real agent and never lands in one's totals.
+func JudgeAgentIdent(baseAgent string) string {
+	return baseAgent + "#" + string(agent.ExecEval) + ":judge"
+}
+
+// passState is one pass's bookkeeping, including the config and router session
+// it started under — a reload mid-pass must not move the cap a caller was
+// already told about.
 type passState struct {
+	cfg     JudgeConfig
+	session judgeSession
+	convID  string
+
 	mu sync.Mutex
-	// baseline is the tracker's total for this key when the pass started. The
-	// key is stable across passes, so spend is measured from here rather than
-	// from zero — otherwise a second pass would open already over its cap.
-	baseline float64
 	// recorded is what has been written to eval_runs.judge_cost so far, so each
 	// item persists only its own delta.
 	recorded float64
@@ -282,15 +379,10 @@ type passState struct {
 }
 
 // run works the queue.
-func (j *Judge) run(ctx context.Context, run *Run, client judgeLLM, items []PendingItem) {
+func (j *Judge) run(ctx context.Context, run *Run, st *passState, items []PendingItem) {
 	bookkeeping := context.WithoutCancel(ctx)
-	convID := JudgeConvID(run.ID)
-	st := &passState{baseline: j.sessionCost(run.BaseAgent, convID)}
-	st.recorded = st.baseline
-
 	j.emitLifecycle(bookkeeping, run, "eval_judge_start", len(items), st)
 
-	sem := make(chan struct{}, j.cfg.MaxConcurrent)
 	var wg sync.WaitGroup
 	for _, item := range items {
 		if ctx.Err() != nil {
@@ -299,11 +391,11 @@ func (j *Judge) run(ctx context.Context, run *Run, client judgeLLM, items []Pend
 		// Checked before dispatch, never mid-flight: an item already asking the
 		// model has been paid for, and its verdict is data. Same rule as the
 		// runner's cap.
-		if j.overCap(run.BaseAgent, convID, st) {
+		if overCap(st) {
 			break
 		}
 		select {
-		case sem <- struct{}{}:
+		case j.sem <- struct{}{}:
 		case <-ctx.Done():
 		}
 		if ctx.Err() != nil {
@@ -312,22 +404,21 @@ func (j *Judge) run(ctx context.Context, run *Run, client judgeLLM, items []Pend
 		wg.Add(1)
 		go func(item PendingItem) {
 			defer wg.Done()
-			defer func() { <-sem }()
-			j.judgeItem(ctx, run, client, convID, item, st)
+			defer func() { <-j.sem }()
+			j.judgeItem(ctx, run, item, st)
 		}(item)
 	}
 	wg.Wait()
 
 	j.emitLifecycle(bookkeeping, run, "eval_judge_finish", len(items), st)
-	j.logger.Info("eval judging pass finished", "run", run.ID, "model", j.cfg.Model,
+	j.logger.Info("eval judging pass finished", "run", run.ID, "model", st.cfg.Model,
 		"items", len(items), "judged", st.judged, "failed", st.failed, "capped", st.capped)
 }
 
 // overCap reports whether the pass has spent its budget, recording the fact so
 // the finish event can say why it stopped short.
-func (j *Judge) overCap(baseAgent, convID string, st *passState) bool {
-	spent := j.sessionCost(baseAgent, convID) - st.baseline
-	if spent < j.cfg.MaxCost {
+func overCap(st *passState) bool {
+	if st.session.cost(st.convID) < st.cfg.MaxCost {
 		return false
 	}
 	st.mu.Lock()
@@ -341,9 +432,9 @@ func (j *Judge) overCap(baseAgent, convID string, st *passState) bool {
 // A failure is per item: an unreadable reply or a provider hiccup costs that
 // item's verdict, never the pass. The item stays pending, so a later pass —
 // internal or from Claude Code — picks it up again.
-func (j *Judge) judgeItem(ctx context.Context, run *Run, client judgeLLM, convID string, item PendingItem, st *passState) {
+func (j *Judge) judgeItem(ctx context.Context, run *Run, item PendingItem, st *passState) {
 	bookkeeping := context.WithoutCancel(ctx)
-	defer j.recordCost(bookkeeping, run, convID, st)
+	defer j.recordCost(bookkeeping, run, st)
 
 	blinded, err := j.store.GetBlindedItem(ctx, item.ItemID)
 	if err != nil {
@@ -360,9 +451,17 @@ func (j *Judge) judgeItem(ctx context.Context, run *Run, client judgeLLM, convID
 		wire = append(wire, llm.Message{Role: m.Role, Content: m.Content})
 	}
 
-	resp, err := client.CompleteFinal(ctx, convID, wire)
+	resp, err := st.session.llm.CompleteFinal(ctx, st.convID, wire)
 	if err != nil {
 		j.itemFailed(st, item, "judging item", err)
+		return
+	}
+	// A cost_limit fallback rule reroutes silently, and a verdict stamped
+	// judge_model + rubric v1 that a different model actually produced is a
+	// lie the results table cannot detect later. Fail the item instead.
+	if !servedByJudgeModel(st.cfg.Model, resp.Model) {
+		j.itemFailed(st, item, "checking the serving model",
+			fmt.Errorf("%w: wanted %q, got %q", ErrJudgeModelSwapped, st.cfg.Model, resp.Model))
 		return
 	}
 	call, err := parseJudgeCall(resp.Content)
@@ -387,6 +486,19 @@ func (j *Judge) judgeItem(ctx context.Context, run *Run, client judgeLLM, convID
 	st.mu.Unlock()
 }
 
+// servedByJudgeModel reports whether got is the model the pass asked for.
+//
+// A provider that reports no model at all is trusted — several do not — and a
+// dated or aliased variant of the same name ("claude-x" vs "claude-x-20260101")
+// counts as a match. What must not pass is a genuinely different model, which
+// is what a fallback swap looks like.
+func servedByJudgeModel(want, got string) bool {
+	if got == "" || got == want {
+		return true
+	}
+	return strings.HasPrefix(got, want) || strings.HasPrefix(want, got)
+}
+
 func (j *Judge) itemFailed(st *passState, item PendingItem, what string, err error) {
 	st.mu.Lock()
 	st.failed++
@@ -402,8 +514,8 @@ func (j *Judge) itemFailed(st *passState, item PendingItem, what string, err err
 // does. Written per item rather than once at the end so a process that dies
 // mid-pass still leaves an honest figure behind — the same reason
 // AddRunCost fires after every sample.
-func (j *Judge) recordCost(ctx context.Context, run *Run, convID string, st *passState) {
-	total := j.sessionCost(run.BaseAgent, convID)
+func (j *Judge) recordCost(ctx context.Context, run *Run, st *passState) {
+	total := st.session.cost(st.convID)
 	st.mu.Lock()
 	delta := total - st.recorded
 	st.recorded = total
@@ -416,36 +528,25 @@ func (j *Judge) recordCost(ctx context.Context, run *Run, convID string, st *pas
 	}
 }
 
-// sessionCost reads the pass's true spend from the agent router's cost
-// tracker, for the same reason a sample does: provider-reported cost is only
-// filled in by OpenRouter, so a cap keyed on it would never trip elsewhere.
-func (j *Judge) sessionCost(baseAgent, convID string) float64 {
-	e, ok := j.engines(baseAgent)
-	if !ok || e == nil {
-		return 0
-	}
-	return sessionCost(e, convID)
-}
-
 // emitLifecycle records the pass's anchor events under the same eval
-// pseudo-identity a run uses, so judge spend is attributable and excluded from
-// the real agent's totals by the existing marking.
+// pseudo-identity judging spend is attributed to, so it is excluded from the
+// real agent's totals by the existing marking.
 func (j *Judge) emitLifecycle(ctx context.Context, run *Run, action string, items int, st *passState) {
 	st.mu.Lock()
 	detail := map[string]any{
 		"run_id":         run.ID,
 		"items":          items,
-		"model":          j.cfg.Model,
-		"provider":       j.cfg.Provider,
+		"model":          st.cfg.Model,
+		"provider":       st.cfg.Provider,
 		"judge_ident":    JudgeInternal,
 		"rubric_version": RubricVersion,
-		"cost_cap":       j.cfg.MaxCost,
+		"cost_cap":       st.cfg.MaxCost,
 	}
 	if action == "eval_judge_finish" {
 		detail["judged"] = st.judged
 		detail["failed"] = st.failed
 		detail["capped"] = st.capped
-		detail["cost_spent"] = st.recorded - st.baseline
+		detail["cost_spent"] = st.recorded
 	}
 	st.mu.Unlock()
 	body, _ := json.Marshal(detail)
@@ -457,11 +558,11 @@ func (j *Judge) emitLifecycle(ctx context.Context, run *Run, action string, item
 	j.auditor.Emit(ctx, audit.Event{
 		Category:       audit.CategoryEval,
 		Action:         action,
-		Agent:          run.BaseAgent + "#" + string(agent.ExecEval),
+		Agent:          JudgeAgentIdent(run.BaseAgent),
 		Summary:        fmt.Sprintf("Internal judging of eval run %d %s", run.ID, verb),
 		Detail:         string(body),
 		Status:         audit.StatusOK,
 		Source:         string(agent.ExecEval),
-		ConversationID: JudgeConvID(run.ID),
+		ConversationID: st.convID,
 	})
 }

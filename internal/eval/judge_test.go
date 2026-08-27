@@ -638,3 +638,166 @@ func TestJudgeInternal_IsNotTheOperatorIdent(t *testing.T) {
 		t.Fatal("the internal judge must not share the operator's calibration identity")
 	}
 }
+
+// --- Router session guards and attribution ---
+
+func TestJudge_ModelSwappedUnderneathFailsTheItem(t *testing.T) {
+	f := newJudgeFixture(t)
+	// What a [llm.fallbacks] cost_limit rule looks like from here: a perfectly
+	// well-formed verdict served by a model nobody asked for.
+	f.provider.reply = func(int) (*llm.ChatResponse, error) {
+		return &llm.ChatResponse{
+			Content: `{"winner":"a","dimensions":{},"notes":"cheap and cheerful"}`,
+			Model:   "budget-fallback",
+		}, nil
+	}
+	j := f.judge(t, JudgeConfig{Model: "judge-model"})
+
+	if _, err := j.Start(context.Background(), f.run.ID, JudgeOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.awaitPass(t, j)
+
+	if got := len(f.verdicts(t)); got != 0 {
+		t.Fatalf("recorded %d verdicts from a model that is not the judge; a verdict stamped %s under rubric %s must have come from %q",
+			got, JudgeInternal, RubricVersion, "judge-model")
+	}
+	pending, err := f.store.ListPending(context.Background(), f.run.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) == 0 {
+		t.Error("a refused item must stay pending so a later pass can pick it up")
+	}
+}
+
+func TestServedByJudgeModel_ToleratesAliasesAndSilence(t *testing.T) {
+	cases := []struct {
+		want, got string
+		ok        bool
+	}{
+		{"judge-model", "judge-model", true},
+		{"judge-model", "", true},
+		{"claude-x", "claude-x-20260101", true},
+		{"claude-x-20260101", "claude-x", true},
+		{"judge-model", "budget-fallback", false},
+		{"judge-model", "judge", true},
+	}
+	for _, c := range cases {
+		if got := servedByJudgeModel(c.want, c.got); got != c.ok {
+			t.Errorf("servedByJudgeModel(%q, %q) = %v, want %v", c.want, c.got, got, c.ok)
+		}
+	}
+}
+
+func TestJudge_SpendIsAttributedToTheEvalPseudoAgent(t *testing.T) {
+	f := newJudgeFixture(t)
+	f.provider.costPerCall = 0.01
+	j := f.judge(t, JudgeConfig{Model: "judge-model"})
+
+	if _, err := j.Start(context.Background(), f.run.ID, JudgeOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.awaitPass(t, j)
+
+	want := JudgeAgentIdent(f.engine.name)
+	var found bool
+	for _, a := range f.engine.tracker.AgentCosts() {
+		switch a.Agent {
+		case want:
+			found = true
+		case "eval":
+			// The session key's prefix, taken literally. "eval" is a valid
+			// resource name, so an operator can own that agent and would
+			// inherit judging spend and its [costs] overrides.
+			t.Errorf("judge spend landed on an agent literally named %q", a.Agent)
+		case f.engine.name:
+			t.Errorf("judge spend landed in the real agent %q's totals", a.Agent)
+		}
+	}
+	if !found {
+		t.Errorf("no spend attributed to %q; got %+v", want, f.engine.tracker.AgentCosts())
+	}
+}
+
+func TestJudge_EachPassSpendsUnderItsOwnSessionKey(t *testing.T) {
+	f := newJudgeFixture(t)
+	f.provider.costPerCall = 0.01
+	j := f.judge(t, JudgeConfig{Model: "judge-model"})
+
+	for range 2 {
+		if _, err := j.Start(context.Background(), f.run.ID, JudgeOpts{Limit: 1}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		f.awaitPass(t, j)
+	}
+
+	keys := make([]string, 0, 2)
+	for id, cost := range f.engine.tracker.AllSessionCosts() {
+		if strings.HasPrefix(id, "eval:judge:") && cost > 0 {
+			keys = append(keys, id)
+		}
+	}
+	// One key per pass, because the key is also what the router's own
+	// cost_limit fallback and hard-limit guards measure: a key shared across
+	// passes accumulates forever and eventually swaps the judge model out or
+	// refuses every call.
+	if len(keys) != 2 {
+		t.Fatalf("judging sessions = %v, want one per pass", keys)
+	}
+	if keys[0] == keys[1] {
+		t.Errorf("both passes billed to %q", keys[0])
+	}
+}
+
+func TestJudge_ConcurrencyBoundIsProcessWide(t *testing.T) {
+	f := newJudgeFixture(t)
+	j := f.judge(t, JudgeConfig{Model: "judge-model", MaxConcurrent: 2})
+
+	// The semaphore is the Judge's, not the pass's: judging several finished
+	// runs at once must not multiply max_concurrent by the number of passes
+	// against a rate-limited provider.
+	if got := cap(j.sem); got != 2 {
+		t.Fatalf("semaphore capacity = %d, want max_concurrent 2", got)
+	}
+	before := j.sem
+	if _, err := j.Start(context.Background(), f.run.ID, JudgeOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.awaitPass(t, j)
+	if j.sem != before {
+		t.Error("a pass minted its own semaphore, so concurrent passes would not share the bound")
+	}
+}
+
+func TestJudge_SetConfigTurnsTheJudgeOnWithoutARestart(t *testing.T) {
+	f := newJudgeFixture(t)
+	j := f.judge(t, JudgeConfig{MaxConcurrent: 3})
+
+	if j.Available() {
+		t.Fatal("judge with no model must start unavailable")
+	}
+	j.SetConfig(JudgeConfig{Model: "judge-model", MaxCost: 1.5})
+
+	if !j.Available() {
+		t.Fatal("a reloaded judge_model must take effect without a restart")
+	}
+	got := j.Config()
+	if got.Model != "judge-model" || got.MaxCost != 1.5 {
+		t.Errorf("Config() = %+v, want the reloaded model and cap", got)
+	}
+	// The semaphore is sized once, so the bound an in-flight pass runs under
+	// cannot be widened underneath it.
+	if got.MaxConcurrent != 3 {
+		t.Errorf("MaxConcurrent = %d, want the construction-time 3", got.MaxConcurrent)
+	}
+
+	pass, err := j.Start(context.Background(), f.run.ID, JudgeOpts{})
+	if err != nil {
+		t.Fatalf("Start after reload: %v", err)
+	}
+	f.awaitPass(t, j)
+	if pass.Items == 0 || len(f.verdicts(t)) == 0 {
+		t.Error("the reloaded judge did not judge anything")
+	}
+}
