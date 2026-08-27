@@ -115,14 +115,13 @@ func TestTraceCapture_LiveTurnRecordsPromptHistoryAndToolPayloads(t *testing.T) 
 	if tr.Payload.Response != "all done" {
 		t.Errorf("response = %q", tr.Payload.Response)
 	}
-	// A live turn reaches the model through the store-then-read-back round
-	// trip, so its own message is the last history entry.
-	if len(tr.Payload.History) == 0 {
-		t.Fatal("history window is empty")
-	}
-	last := tr.Payload.History[len(tr.Payload.History)-1]
-	if last.Role != "user" || last.Content != "please read y" {
-		t.Errorf("last history message = %+v, want the user's turn", last)
+	// The turn's own message reaches the model as the last wire message, but
+	// the history window records preceding context only — the prompt has its
+	// own field and the inspector renders it above the history block.
+	for _, m := range tr.Payload.History {
+		if m.Role == "user" && m.Content == "please read y" {
+			t.Errorf("history repeats the turn's own message: %+v", tr.Payload.History)
+		}
 	}
 	if tr.Rounds != 1 {
 		t.Errorf("rounds = %d, want 1", tr.Rounds)
@@ -152,6 +151,32 @@ func TestTraceCapture_LiveTurnRecordsPromptHistoryAndToolPayloads(t *testing.T) 
 }
 
 // A sink failure is bookkeeping, not the turn: the user still gets an answer.
+// The history window is preceding context, so the first turn has none and a
+// later one has the earlier exchange but never its own message.
+func TestTraceCapture_HistoryIsPrecedingContextOnly(t *testing.T) {
+	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
+		{Content: "first answer", FinishReason: "stop", Model: "test-model"},
+		{Content: "second answer", FinishReason: "stop", Model: "test-model"},
+	}, "autonomous")
+	sink := &recordingSink{}
+	e.SetTraceSink(sink)
+	e.SetTraceCapture(true, 0)
+
+	liveTurn(t, e, "first question")
+	if got := sink.last().Payload.History; len(got) != 0 {
+		t.Fatalf("first turn history = %+v, want none", got)
+	}
+
+	liveTurn(t, e, "second question")
+	hist := sink.last().Payload.History
+	if len(hist) != 2 {
+		t.Fatalf("second turn history = %+v, want the first exchange", hist)
+	}
+	if hist[0].Content != "first question" || hist[1].Content != "first answer" {
+		t.Errorf("history = %+v, want the earlier user turn then the reply", hist)
+	}
+}
+
 func TestTraceCapture_SinkFailureDoesNotFailTheTurn(t *testing.T) {
 	e, _, _, _ := newPolicyTestEngine(t, []*llm.ChatResponse{
 		{Content: "hello", FinishReason: "stop", Model: "test-model"},
@@ -311,6 +336,34 @@ func TestTruncateTracePayload_ZeroCapUsesTheDefault(t *testing.T) {
 	}
 	if payloadSize(out) > DefaultMaxTraceBytes {
 		t.Fatalf("payload = %d bytes, over the default cap", payloadSize(out))
+	}
+}
+
+// The cap is hard, not advisory: JSON escaping inflates text and the
+// truncation note itself lands inside the payload, so both have to be paid for
+// before the trace is stored.
+func TestTruncateTracePayload_EncodedFormNeverExceedsTheCap(t *testing.T) {
+	// Control characters cost six encoded bytes each, so a raw-byte clamp
+	// would land several times over the cap.
+	escaped := strings.Repeat("\x01\x02", 4000)
+	for _, cap := range []int{4096, 1024, 256} {
+		p := TracePayload{
+			SystemPrompt: escaped,
+			Response:     escaped,
+			Prompt:       escaped,
+			History:      []TraceMessage{{Role: "user", Content: escaped}},
+			Rounds:       []TraceRound{{Round: 1, ToolCalls: []TraceToolCall{{Tool: "t", Result: escaped}}}},
+		}
+		got, truncated := truncateTracePayload(p, cap)
+		if !truncated {
+			t.Fatalf("cap %d: payload reported untruncated", cap)
+		}
+		if n := payloadSize(got); n > cap {
+			t.Errorf("cap %d: stored payload is %d bytes", cap, n)
+		}
+		if got.Truncation == nil || got.Truncation.Note == "" {
+			t.Errorf("cap %d: truncation went unreported: %+v", cap, got.Truncation)
+		}
 	}
 }
 
