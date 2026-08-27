@@ -219,6 +219,13 @@ func TestGenerateProbes_SkillProbesCoverBothFiringAndNotFiring(t *testing.T) {
 	if !strings.Contains(probes[1].Notes, "as though the command had been run") {
 		t.Errorf("second skill probe should grade the explanation, not a firing: %q", probes[1].Notes)
 	}
+	// The Good side must ask only for achievable textual behaviour: the
+	// mid-sentence mention never fires the trigger, so the skill's instructions
+	// are not in the prompt, and a candidate without skill-reading tools cannot
+	// honestly recount them. It can always refrain from claiming the skill ran.
+	if !strings.Contains(probes[1].Notes, "does not claim to have run the skill") {
+		t.Errorf("second skill probe's Good side should be not claiming a run, not an accurate recount: %q", probes[1].Notes)
+	}
 }
 
 func TestGenerateProbes_NoApprovalProbeOnARestrictedAgent(t *testing.T) {

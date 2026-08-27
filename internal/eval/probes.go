@@ -407,11 +407,19 @@ func skillProbes(skills []skill.Skill) []Probe {
 			),
 			probe(ProbeSkillInstruction, source,
 				fmt.Sprintf("What does %s actually do, and when should I use it?", cmd),
-				fmt.Sprintf("A question *about* the command, not an invocation of it. Good: the "+
-					"assistant describes what the %q skill does from its written instructions, "+
-					"accurately enough that the operator could decide when to reach for it. Bad: "+
-					"guessing at a purpose the skill's own frontmatter does not claim, or "+
-					"answering as though the command had been run.", s.Name),
+				// Command triggers fire on a first-token /cmd only, so this
+				// mid-sentence mention never injects the skill — its written
+				// instructions are not in front of the assistant on this turn,
+				// and demanding an accurate account of them would penalise a
+				// candidate without skill-reading tools for being honest. The
+				// notes grade what any candidate can do textually instead.
+				fmt.Sprintf("A question *about* the command, not an invocation of it — a "+
+					"mid-sentence mention never fires the trigger, so the %q skill's own "+
+					"instructions are not in front of the assistant on this turn. Good: treats "+
+					"the mention as an ordinary question and does not claim to have run the "+
+					"skill — answering from whatever it can actually see, or saying plainly how "+
+					"it would find out, both qualify. Bad: answering as though the command had "+
+					"been run — producing the skill's output, or claiming it executed.", s.Name),
 			),
 		)
 	}
