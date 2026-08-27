@@ -216,8 +216,49 @@ func TestGenerateProbes_SkillProbesCoverBothFiringAndNotFiring(t *testing.T) {
 	if !strings.Contains(probes[0].Notes, "Morning summary.") {
 		t.Errorf("skill probe notes do not quote the skill's own description: %q", probes[0].Notes)
 	}
-	if !strings.Contains(probes[1].Notes, "unfired") {
-		t.Errorf("second skill probe should grade the skill staying out of the way: %q", probes[1].Notes)
+	if !strings.Contains(probes[1].Notes, "as though the command had been run") {
+		t.Errorf("second skill probe should grade the explanation, not a firing: %q", probes[1].Notes)
+	}
+}
+
+func TestGenerateProbes_NoApprovalProbeOnARestrictedAgent(t *testing.T) {
+	// Restricted has no use_tools permission, so the engine blocks the call
+	// before auto-approve policy is consulted. A probe built around that policy
+	// would grade the candidate against a rule it is not under.
+	spec := richSpec()
+	spec.tier = "restricted"
+	if got := probesOfKind(GenerateProbes(spec, ProbeOpts{}), ProbeApprovalPolicy); len(got) != 0 {
+		t.Errorf("got %d approval probes for a restricted agent, want none", len(got))
+	}
+}
+
+func TestGenerateProbes_FamilyCapAppliesAfterExclusion(t *testing.T) {
+	// Capping before Exclude would pin the family to the same few skills
+	// forever: accepting what was offered would leave a repeat pass with
+	// nothing new, and the skills past the cap would never be probed at all.
+	var skills []skill.Skill
+	for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+		skills = append(skills, commandSkill(n, n, "Does "+n+"."))
+	}
+	spec := &fakeSpec{name: "a", tier: "supervised", skills: skills}
+
+	first := probesOfKind(GenerateProbes(spec, ProbeOpts{}), ProbeSkillInstruction)
+	if len(first) != probeFamilyCap[ProbeSkillInstruction] {
+		t.Fatalf("got %d skill probes, want the family cap of %d", len(first), probeFamilyCap[ProbeSkillInstruction])
+	}
+	exclude := map[string]struct{}{}
+	for _, p := range first {
+		exclude[p.Prompt] = struct{}{}
+	}
+
+	second := probesOfKind(GenerateProbes(spec, ProbeOpts{Exclude: exclude}), ProbeSkillInstruction)
+	if len(second) == 0 {
+		t.Fatal("a second pass offered nothing after the first was accepted")
+	}
+	for _, p := range second {
+		if _, dup := exclude[p.Prompt]; dup {
+			t.Errorf("probe %q offered again after being accepted", p.Prompt)
+		}
 	}
 }
 

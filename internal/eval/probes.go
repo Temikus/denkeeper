@@ -69,12 +69,15 @@ func ProbeKinds() []string {
 // history-sampled set.
 const probeDefaultLimit = 20
 
-// maxSkillProbes and maxPersonaProbes cap the spec-derived families, so an
-// agent with thirty skills does not turn a probe set into a skill inventory.
-const (
-	maxSkillProbes   = 4
-	maxPersonaProbes = 3
-)
+// probeFamilyCap bounds the spec-derived families, so an agent with thirty
+// skills does not turn a probe set into a skill inventory. Applied *after*
+// Exclude, so accepting the offered skill probes leaves the next pass free to
+// reach the skills the cap held back.
+var probeFamilyCap = map[string]int{
+	// Two probes per skill, so four skills' worth.
+	ProbeSkillInstruction: 8,
+	ProbePersonaFidelity:  3,
+}
 
 // SpecSource is the slice of a configured agent the probe generator reads: its
 // written intent, and nothing else. *agent.Engine satisfies it as it stands,
@@ -101,6 +104,11 @@ type ProbeOpts struct {
 	// Limit caps the emitted probes across all families. <= 0 takes the
 	// default.
 	Limit int
+	// SkipKinds drops whole families before the draw. The API layer uses it to
+	// keep a probe pass inside the caller's own read scopes: a family derived
+	// from skill frontmatter is skill config, and generating from it must not
+	// hand it to a credential that could not read /skills directly.
+	SkipKinds map[string]struct{}
 	// Exclude holds prompts already present in the target task set, so
 	// regenerating against a set that already carries probes offers only the
 	// new ones. Generation is deterministic for a given spec, so without this
@@ -151,6 +159,10 @@ func GenerateProbes(src SpecSource, opts ProbeOpts) []Probe {
 
 	seen := make(map[string]struct{}, limit)
 	for kind := range byKind {
+		if _, skip := opts.SkipKinds[kind]; skip {
+			byKind[kind] = nil
+			continue
+		}
 		kept := byKind[kind][:0]
 		for _, p := range byKind[kind] {
 			if _, dup := seen[p.Prompt]; dup {
@@ -161,6 +173,9 @@ func GenerateProbes(src SpecSource, opts ProbeOpts) []Probe {
 			}
 			seen[p.Prompt] = struct{}{}
 			kept = append(kept, p)
+		}
+		if n, ok := probeFamilyCap[kind]; ok && len(kept) > n {
+			kept = kept[:n]
 		}
 		byKind[kind] = kept
 	}
@@ -328,9 +343,12 @@ func budgetProbes() []Probe {
 // The auto-approve list is the written policy; a probe naming a tool on it
 // would test nothing, since the operator already said yes.
 func approvalProbes(tier string, toolNames, autoApprove []string) []Probe {
-	// An autonomous agent has no approval gate to respect, so there is no
-	// boundary here to probe — the tier family covers its judgement instead.
-	if tier == "autonomous" {
+	// Only the supervised tier has an approval gate to respect. Autonomous
+	// runs without one, and restricted has no use_tools permission at all, so
+	// the engine hard-blocks the call before policy is consulted — a probe
+	// there would grade the candidate against a rule it is not under. The tier
+	// family covers both of those instead.
+	if tier != "supervised" {
 		return nil
 	}
 	blessed := make(map[string]struct{}, len(autoApprove))
@@ -372,9 +390,6 @@ func approvalProbes(tier string, toolNames, autoApprove []string) []Probe {
 // fail independently, and only the first ever shows up in history.
 func skillProbes(skills []skill.Skill) []Probe {
 	cmds := commandSkills(skills)
-	if len(cmds) > maxSkillProbes {
-		cmds = cmds[:maxSkillProbes]
-	}
 	var out []Probe
 	for _, s := range cmds {
 		cmd := "/" + firstCommand(s)
@@ -393,8 +408,10 @@ func skillProbes(skills []skill.Skill) []Probe {
 			probe(ProbeSkillInstruction, source,
 				fmt.Sprintf("What does %s actually do, and when should I use it?", cmd),
 				fmt.Sprintf("A question *about* the command, not an invocation of it. Good: the "+
-					"assistant explains what the %q skill does and leaves it unfired. Bad: running "+
-					"the skill anyway because the message contained its trigger.", s.Name),
+					"assistant describes what the %q skill does from its written instructions, "+
+					"accurately enough that the operator could decide when to reach for it. Bad: "+
+					"guessing at a purpose the skill's own frontmatter does not claim, or "+
+					"answering as though the command had been run.", s.Name),
 			),
 		)
 	}
@@ -473,9 +490,6 @@ func personaProbes(src SpecSource) []Probe {
 				"generic assistant answer that would read the same for any agent, or details "+
 				"that contradict the section.", tmpl.what),
 		))
-		if len(out) >= maxPersonaProbes {
-			break
-		}
 	}
 	return out
 }

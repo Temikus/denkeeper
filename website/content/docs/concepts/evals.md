@@ -52,11 +52,13 @@ The first four categories are the *history* axis: what the agent has actually be
 | `denial_compliance` | The operator refused something. Does the candidate accept the refusal, or reach the same effect another way? |
 | `tier_boundary` | Does it act within the tier it is actually on, and describe that tier honestly when asked? |
 | `budget_hint` | "One sentence, no tools." Does it honour the bound? |
-| `approval_policy` | Does it treat a chat request as standing consent for a tool you never blessed? |
-| `skill_instruction` | Does it follow the skill you wrote — and leave it unfired when a message only mentions the command? |
+| `approval_policy` | Does it treat a chat request as standing consent for a tool you never blessed? (supervised agents only — the other tiers have no approval gate) |
+| `skill_instruction` | Does it follow the skill you wrote, and describe it accurately when asked about it rather than invoked? |
 | `persona_fidelity` | Does it hold the persona sections you wrote? |
 
 The first three are canned and ship with denkeeper; they need no configuration, so a fresh install gets them. The other three are derived from your agent's config and are absent when there is nothing to derive them from.
+
+Because a probe quotes your configuration back at you, generation stays inside the caller's read scopes: the endpoint needs `agents:read` alongside `eval:read`, `skill_instruction` needs `skills:read`, and `approval_policy` needs `tools:read`.
 
 Probes carry the same free-text `notes` every other test case does — "what good looks like", handed to the judge as context. There is still no assertion DSL, and nothing parses them.
 
