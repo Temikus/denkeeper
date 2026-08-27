@@ -201,6 +201,7 @@
   }
 
   async function pollJudging() {
+    let finished = false
     for (let i = 0; i < JUDGE_POLL_LIMIT; i++) {
       await new Promise(r => setTimeout(r, JUDGE_POLL_MS))
       if (destroyed) return
@@ -211,11 +212,35 @@
         // A failed poll is not a failed pass: keep waiting.
         continue
       }
-      if (!detail?.judging) break
+      if (!detail?.judging) {
+        finished = true
+        break
+      }
     }
     if (destroyed) return
     await load()
-    serverJudge = { state: 'done', message: 'Judging finished.' }
+    // Running out of poll budget is not the pass finishing. Saying so would
+    // re-enable the button on a pass that is still spending, and the second
+    // click would come back 409.
+    serverJudge = finished
+      ? { state: 'done', message: 'Judging finished.' }
+      : { state: 'running', message: 'Still judging on the server. Reload the page for the latest count.' }
+  }
+
+  // A pass outlives the page that started it, so a reload mid-pass has to pick
+  // the state back up from the server rather than showing an idle button whose
+  // next click is a 409.
+  async function resumeJudging() {
+    if (!judgeModel) return
+    let detail = null
+    try {
+      detail = await api.evalRun(run.id)
+    } catch {
+      return
+    }
+    if (destroyed || !detail?.judging) return
+    serverJudge = { state: 'running', message: 'Judging on the server.' }
+    await pollJudging()
   }
 
   async function copyCommand(variantID) {
@@ -256,7 +281,10 @@
     }
   }
 
-  onMount(load)
+  onMount(async () => {
+    await load()
+    resumeJudging()
+  })
   onDestroy(() => {
     destroyed = true
     clearTimeout(copyTimer)

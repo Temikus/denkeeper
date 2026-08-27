@@ -201,6 +201,31 @@ describe('EvalResults — judgment pending', () => {
       .toHaveTextContent('not terminal'))
   })
 
+  test('picks a running pass back up after a page reload', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    // A pass outlives the page that started it: the run reports itself as
+    // judging, so the view must not offer a button whose click is a 409.
+    let polls = 0
+    server.use(
+      http.get('/api/v1/eval/runs/:id', () => {
+        polls += 1
+        return HttpResponse.json({ id: 2, status: 'done', judging: polls < 2 })
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT, judgeModel: 'judge-model' } })
+
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('Judging on the server'))
+    expect(screen.getByTestId('judge-here-4')).toBeDisabled()
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('Judging finished'), { timeout: 5000 })
+  })
+
   test('a clean quick check offers the full eval with the same candidate', async () => {
     let picked = null
     render(EvalResults, {
