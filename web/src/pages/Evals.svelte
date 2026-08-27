@@ -828,7 +828,7 @@
   .field select:focus,
   .field input:focus { outline: none; border-color: var(--accent); }
 
-  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 10px; }
+  .inline-error { margin-bottom: 10px; }
 
   /* Runs */
   .run-card {

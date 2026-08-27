@@ -449,7 +449,7 @@
     color: var(--text);
   }
   .activate-form input:focus { border-color: var(--accent); outline: none; }
-  .inline-error { color: var(--danger); font-size: 12px; margin-bottom: 8px; }
+  .inline-error { margin-bottom: 8px; }
 
   .muted { color: var(--text-muted); }
   .empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }

@@ -644,6 +644,67 @@ func TestEvalRuns_SummaryUnknownRunIs404(t *testing.T) {
 	}
 }
 
+// getSamples reads a run's samples with an optional query string.
+func getSamples(t *testing.T, srv *Server, runID int64, query string) []eval.Sample {
+	t.Helper()
+	rec := evalRequest(t, srv, http.MethodGet,
+		fmt.Sprintf("/api/v1/eval/runs/%d/samples%s", runID, query), "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var samples []eval.Sample
+	if err := json.NewDecoder(rec.Body).Decode(&samples); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return samples
+}
+
+// The results view expands one test case at a time; without this it pulls the
+// whole run's traces to render one row.
+func TestEvalRuns_SamplesFilterByTask(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+
+	all := getSamples(t, srv, run.ID, "")
+	if len(all) != 4 {
+		t.Fatalf("got %d samples unfiltered, want 4 (2 tasks × 2 variants)", len(all))
+	}
+	target := all[0].TaskID
+	filtered := getSamples(t, srv, run.ID, fmt.Sprintf("?task_id=%d", target))
+	if len(filtered) != 2 {
+		t.Fatalf("got %d samples for task %d, want 2 (one per variant)", len(filtered), target)
+	}
+	for _, smp := range filtered {
+		if smp.TaskID != target {
+			t.Errorf("sample %d carries task %d, want only %d", smp.ID, smp.TaskID, target)
+		}
+	}
+}
+
+// A task the run never covered is an empty list, not an error: the client asked
+// a well-formed question and the answer is "none".
+func TestEvalRuns_SamplesFilterOnAnAbsentTaskIsEmpty(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+
+	if got := getSamples(t, srv, run.ID, "?task_id=999999"); len(got) != 0 {
+		t.Errorf("got %d samples for a task not in the run, want none", len(got))
+	}
+}
+
+func TestEvalRuns_SamplesBadTaskIDIs400(t *testing.T) {
+	srv, store := evalTestServer(t)
+	run, _ := seedPairedRun(t, store)
+
+	for _, raw := range []string{"nope", "0", "-3"} {
+		rec := evalRequest(t, srv, http.MethodGet,
+			fmt.Sprintf("/api/v1/eval/runs/%d/samples?task_id=%s", run.ID, raw), "", "dk-test-key")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("task_id=%s: status = %d, want 400", raw, rec.Code)
+		}
+	}
+}
+
 func TestEvalRuns_SamplesUnknownRunIs404(t *testing.T) {
 	srv, _ := evalTestServer(t)
 

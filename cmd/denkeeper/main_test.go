@@ -525,3 +525,14 @@ func TestBuildScheduledMessage_IsolatedConversationID(t *testing.T) {
 		t.Errorf("SessionTier = %q, want restricted (entry override)", msg.SessionTier)
 	}
 }
+
+// The two packages state the same cap independently — config so an operator
+// reads the number out of TOML documentation, agent so the engine can truncate
+// without importing config. main is the one place that sees both, so this is
+// where the drift is caught.
+func TestTraceCapDefaultsAgree(t *testing.T) {
+	if config.DefaultMaxTraceBytes != agent.DefaultMaxTraceBytes {
+		t.Errorf("config default %d != agent default %d",
+			config.DefaultMaxTraceBytes, agent.DefaultMaxTraceBytes)
+	}
+}

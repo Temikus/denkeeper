@@ -386,6 +386,24 @@ List audit events. Filters: `?category=`, `?agent=`, `?status=`, `?source=`, `?s
 
 Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` filter as the list endpoint.
 
+## Turn traces
+
+### `GET /api/v1/traces`
+
+**Scope:** `sessions:read`
+
+Turn trace headers, newest first, without their payloads. `total` counts the filtered set, and `limit` echoes the effective page size after clamping. Filters: `?agent=`, `?conversation_id=`, `?source=` (`live`/`eval` — a dry run's trace rides out on its response and is never stored), `?since=`/`?until=` (RFC3339), `?limit=` (default 50, max 200), `?offset=`.
+
+The response repeats `capture`, `retention_days` and `max_trace_bytes` alongside the rows, so a caller can tell "nothing recorded yet" from "recording is off" without a second request.
+
+### `GET /api/v1/traces/{id}`
+
+**Scope:** `sessions:read`
+
+One trace in full: `system_prompt` as it was assembled post-skill-injection, `history` as it went on the wire, `prompt`, `response`, and `tool_calls` with each call's round, arguments, result and outcome. When the trace exceeded `[eval] max_trace_bytes`, `truncation` reports what was dropped — oldest rounds first — so a trimmed trace is never read as a short turn.
+
+Traces sit behind `sessions:read`, not `eval:read`: a trace is turn content, and the eval scopes exist for a judge that must never resolve a live prompt. Live turns are recorded only when `[eval] capture` is on; eval samples always are.
+
 ## Evals
 
 An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. The loop these endpoints serve is described in [Evals](/docs/concepts/evals/). Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.

@@ -332,6 +332,112 @@ describe('EvalResults — per-task diffs', () => {
     expect(judgment).toHaveTextContent('rubric v1')
   })
 
+  // The whole point of the endpoint's task_id filter: a full run is
+  // task_count x variants x k samples and each carries a trace.
+  test('fetches only the expanded test case, and only once', async () => {
+    const asked = []
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('task_id'))
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    // Nothing is fetched until a row opens.
+    expect(asked).toEqual([])
+
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
+
+    // Collapse and reopen: the cache is per task, so nothing is refetched.
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
+  })
+
+  // A flaily candidate is the thing a side-by-side is being read for, and
+  // wrapup_count in the scorecard cannot say which of the two flailed.
+  test('marks the side whose tool loop was cut short', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        evalSamples[0],
+        { ...evalSamples[1], stop_reason: 'max_rounds' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    const badges = screen.getAllByTestId('stop-reason')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]).toHaveTextContent('hit the round limit')
+  })
+
+  // Two turns of one variant served by different upstreams is a plausible
+  // explanation for latency or quality variance the operator otherwise
+  // cannot see happened.
+  test('names the serving upstream when it is not just the model again', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: 'Fireworks' },
+        { ...evalSamples[1], upstream: '' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    const shown = screen.getAllByTestId('upstream')
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toHaveTextContent('via Fireworks')
+  })
+
+  // "kimi-k2.6 · via kimi-k2.6" is a line that says nothing.
+  test('drops an upstream that only repeats the model line', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: 'kimi-k2.6' },
+        { ...evalSamples[1], upstream: '' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+  })
+
+  // A model id's vendor prefix names the maker, not the server: the same
+  // anthropic/... model can come from Anthropic, Vertex, or Bedrock, so
+  // suppressing on the prefix would hide half of that variance.
+  test('keeps an upstream that matches only the model vendor prefix', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
+        { ...evalSamples[0], upstream: '' },
+        { ...evalSamples[1], upstream: 'Anthropic' },
+      ])),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    const shown = screen.getAllByTestId('upstream')
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toHaveTextContent('via Anthropic')
+  })
+
   test('collapses again and reports a failed turn instead of an empty column', async () => {
     server.use(
       http.get('/api/v1/eval/runs/:id/samples', () => HttpResponse.json([
@@ -373,6 +479,101 @@ describe('EvalResults — per-task diffs', () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
     await waitFor(() => expect(screen.getByTestId('task-row-11')).toHaveTextContent('-$0.0034'))
+  })
+
+  // Loading and error are per task: one slow row must not describe another.
+  const TWO_TASKS = {
+    per_task: [
+      evalSummary.per_task[0],
+      { ...evalSummary.per_task[0], task_id: 12, prompt: 'Draft the standup note' },
+    ],
+  }
+  const task12Samples = evalSamples.map(s => ({ ...s, id: s.id + 100, task_id: 12 }))
+
+  /** Opens a row, waits for its turns, then collapses it again. */
+  async function loadRow(taskID) {
+    await fireEvent.click(screen.getByTestId(`task-row-${taskID}`))
+    await waitFor(() => expect(screen.getByTestId(`turn-${taskID}-0`)).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId(`task-row-${taskID}`))
+  }
+
+  test("a stalled row's spinner does not follow another row", async () => {
+    withSummary(TWO_TASKS)
+    let releaseFirst
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        const taskID = new URL(request.url).searchParams.get('task_id')
+        if (taskID !== '11') return HttpResponse.json(task12Samples)
+        await new Promise(resolve => { releaseFirst = resolve })
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-12')).toBeInTheDocument())
+    await loadRow(12)
+
+    // Stall task 11's fetch, then come back to the row that is already cached.
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-12'))
+
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('turns-loading')).not.toBeInTheDocument()
+
+    releaseFirst()
+  })
+
+  test("a stalled row's failure does not land under another row", async () => {
+    withSummary(TWO_TASKS)
+    let failFirst
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        const taskID = new URL(request.url).searchParams.get('task_id')
+        if (taskID !== '11') return HttpResponse.json(task12Samples)
+        await new Promise(resolve => { failFirst = resolve })
+        return HttpResponse.json({ error: 'store busy' }, { status: 500 })
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-12')).toBeInTheDocument())
+    await loadRow(12)
+
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-12'))
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+
+    // Task 11's read fails only now, with task 12's row on screen.
+    failFirst()
+    await waitFor(() => expect(screen.getByTestId('turn-12-0')).toBeInTheDocument())
+    expect(screen.queryByTestId('turns-retry')).not.toBeInTheDocument()
+  })
+
+  test('reopening a row mid-flight does not fetch it twice', async () => {
+    const asked = []
+    let release
+    server.use(
+      http.get('/api/v1/eval/runs/:id/samples', async ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('task_id'))
+        await new Promise(resolve => { release = resolve })
+        return HttpResponse.json(evalSamples)
+      }),
+    )
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await waitFor(() => expect(screen.getByTestId('turns-loading')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    release()
+    await waitFor(() => expect(screen.getByTestId('turn-11-0')).toBeInTheDocument())
+    expect(asked).toEqual(['11'])
   })
 
   test('a failed transcript read offers a retry that recovers', async () => {
@@ -417,7 +618,7 @@ describe('EvalResults — per-task diffs', () => {
     expect(row).not.toHaveTextContent('tool_heavy')
   })
 
-  test('resolves each dimension letter to the model that won it', async () => {
+  test('names the model behind each dimension, from the resolved map', async () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT } })
 
     await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
@@ -426,8 +627,8 @@ describe('EvalResults — per-task diffs', () => {
     await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
     const dims = [...screen.getByTestId('pair-judgment-71').querySelectorAll('.dimensions li')]
       .map(li => li.textContent.replace(/\s+/g, ' ').trim())
-    // The letters are the blinded presentation order, not a model. Both
-    // orders named the candidate, so every non-tie dimension resolves to it.
+    // The stored letters are the blinded presentation order, not a model, and
+    // the two orders wrote different letters for the same winner.
     expect(dims).toEqual([
       'correctness: anthropic/claude-3-opus',
       'tool_use: anthropic/claude-3-opus',
@@ -436,7 +637,10 @@ describe('EvalResults — per-task diffs', () => {
     ])
   })
 
-  test('keeps the raw letter when nothing on the item can unblind it', async () => {
+  // The item nothing client-side could ever unblind: every verdict on it is a
+  // tie, so no winner_variant on the item names a letter. Only the server's
+  // assignment can resolve it, and it does.
+  test('resolves dimensions on an item every judge called a tie', async () => {
     server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
       ...evalPairs,
       pairs: [{
@@ -446,7 +650,9 @@ describe('EvalResults — per-task diffs', () => {
           item_id: 141, presentation_order: 'ab', status: 'judged',
           verdicts: [{
             judge_ident: 'claude-code', winner: 'tie', winner_variant: '',
-            dimensions: { correctness: 'a' }, notes: '', rubric_version: 'v1',
+            dimensions: { correctness: 'a' },
+            dimensions_variant: { correctness: 'current' },
+            notes: '', rubric_version: 'v1',
             created_at: '2026-08-17T10:00:00Z',
           }],
         }],
@@ -461,7 +667,35 @@ describe('EvalResults — per-task diffs', () => {
     await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
     const judgment = screen.getByTestId('pair-judgment-71')
     expect(judgment).toHaveTextContent('called it a tie')
-    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: a')
+    expect(judgment.querySelector('.dimensions li')).toHaveTextContent('correctness: current')
+  })
+
+  // A value the server carried through unresolved, or a variant it could not
+  // name: the raw record is still the judge's answer and is shown.
+  test('falls back to the raw letter when the server resolved nothing', async () => {
+    server.use(http.get('/api/v1/eval/runs/:id/pairs', () => HttpResponse.json({
+      ...evalPairs,
+      pairs: [{
+        ...evalPairs.pairs[0],
+        items: [{
+          item_id: 141, presentation_order: 'ab', status: 'judged',
+          verdicts: [{
+            judge_ident: 'claude-code', winner: 'b', winner_variant: 'anthropic/claude-3-opus',
+            dimensions: { correctness: 'b' }, notes: '', rubric_version: 'v1',
+            created_at: '2026-08-17T10:00:00Z',
+          }],
+        }],
+      }],
+    })))
+
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('task-row-11')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('task-row-11'))
+
+    await waitFor(() => expect(screen.getByTestId('pair-judgment-71')).toBeInTheDocument())
+    expect(screen.getByTestId('pair-judgment-71').querySelector('.dimensions li'))
+      .toHaveTextContent('correctness: b')
   })
 
   test('an unjudged comparison says so rather than showing nothing', async () => {
@@ -478,6 +712,24 @@ describe('EvalResults — per-task diffs', () => {
 
     await waitFor(() => expect(screen.getByTestId('pair-unjudged-71')).toBeInTheDocument())
     expect(screen.getByTestId('outcome-11-0')).toHaveTextContent('not judged yet')
+  })
+})
+
+// A scroll container with nothing focusable inside it cannot be reached from
+// the keyboard, so its off-screen columns are pointer-only (WCAG 2.1.1). The
+// six-column gate and category tables are the ones that overflow in practice.
+describe('EvalResults — scrollable tables', () => {
+  test('every wide table sits in a focusable, labelled scroll region', async () => {
+    const { container } = render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('objective-table')).toBeInTheDocument())
+    const wraps = [...container.querySelectorAll('.table-wrap')]
+    expect(wraps.length).toBeGreaterThan(0)
+    for (const wrap of wraps) {
+      expect(wrap).toHaveAttribute('tabindex', '0')
+      expect(wrap).toHaveAttribute('role', 'region')
+      expect(wrap.getAttribute('aria-label')).toBeTruthy()
+    }
   })
 })
 
@@ -646,6 +898,12 @@ describe('evalSampleTranscript', () => {
     })
     // outcome "suppressed" becomes the boolean the transcript renders on.
     expect(t.tool_calls[1].suppressed).toBe(true)
+  })
+
+  test('carries the serving upstream through as an optional field', () => {
+    expect(evalSampleTranscript({ upstream: 'Fireworks' }).upstream).toBe('Fireworks')
+    // Most providers have no such concept, and the field is omitted then.
+    expect(evalSampleTranscript({}).upstream).toBe('')
   })
 
   test('an unreadable trace is no trace, not a broken view', () => {

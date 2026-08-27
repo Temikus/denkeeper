@@ -2753,7 +2753,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
+                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners both as the raw presented letters and resolved to variant names ('dimensions_variant', ties preserved as 'tie'), notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
                 "produces": [
                     "application/json"
                 ],
@@ -2820,7 +2820,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.",
+                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead. Pass 'task_id' to fetch one test case's samples rather than the whole run — a full run is task_count x variants x k samples, each carrying a trace.",
                 "produces": [
                     "application/json"
                 ],
@@ -2835,6 +2835,12 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only return samples for this task",
+                        "name": "task_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2848,7 +2854,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad run id",
+                        "description": "Bad run id or task_id",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7637,6 +7643,172 @@
                     }
                 }
             }
+        },
+        "/traces": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns turn trace headers, newest first, without their payloads. A trace records what a turn actually saw — the built system prompt, the history window as sent, the per-round tool calls with arguments and results, and the final response. Live turns are captured only when [eval] capture is on (off by default, since a trace holds everything the model saw); eval samples are always captured. The response repeats the capture switch and the retention window so a caller can tell \"nothing recorded yet\" from \"recording is off\".",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces"
+                ],
+                "summary": "List captured turn traces",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by agent name",
+                        "name": "agent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by conversation id",
+                        "name": "conversation_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by source (live, eval)",
+                        "name": "source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start of time range (RFC3339 format)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End of time range (RFC3339 format)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of traces to return (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of traces to skip for pagination",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Trace headers plus the capture settings",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.traceListResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid query parameter (since, until, limit, or offset)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Turn traces not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/traces/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the full trace: the built system prompt as it was assembled post-skill-injection, the history window as it went on the wire, every tool call with its arguments and the result the model read, and the final response. When the trace exceeded [eval] max_trace_bytes it also reports what was dropped — oldest rounds first — so a trimmed trace is not mistaken for a short turn.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces"
+                ],
+                "summary": "Get one turn trace with its payload",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Trace id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Turn trace",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.traceDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad trace id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Trace not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Turn traces not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -7732,6 +7904,34 @@
                     "type": "boolean"
                 },
                 "tool_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_agent.TraceMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_agent.TraceTruncation": {
+            "type": "object",
+            "properties": {
+                "clamped_text": {
+                    "type": "boolean"
+                },
+                "dropped_history": {
+                    "type": "integer"
+                },
+                "dropped_rounds": {
+                    "type": "integer"
+                },
+                "note": {
                     "type": "string"
                 }
             }
@@ -8351,7 +8551,14 @@
                     "type": "string"
                 },
                 "dimensions": {
-                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode.",
+                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode. Values are the\npresented letters — what the judge actually saw — and are kept so an\naudit can check the call against the queue it was answering.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "dimensions_variant": {
+                    "description": "DimensionsVariant is Dimensions with every letter resolved through the\nitem's presentation order and the pair's assignment, ties preserved as\n\"tie\". Same key set as Dimensions; a value that is neither a letter nor\na tie is carried through unchanged rather than dropped.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -8694,6 +8901,71 @@
                 },
                 "variant_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.TraceRow": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "cost_usd": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "stop_reason": {
+                    "type": "string"
+                },
+                "tokens_cached": {
+                    "type": "integer"
+                },
+                "tokens_completion": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "tokens_total": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "upstream": {
+                    "type": "string"
                 }
             }
         },
@@ -10128,6 +10400,136 @@
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.traceDetail": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "cost_usd": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "description": "DurationMs mirrors latency_ms under the name the transcript renderer\nreads, so the mapping lives here rather than in three UI call sites.",
+                    "type": "integer"
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.TraceMessage"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "type": "string"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "stop_reason": {
+                    "type": "string"
+                },
+                "suppressed_count": {
+                    "type": "integer"
+                },
+                "system_prompt": {
+                    "type": "string"
+                },
+                "tokens_cached": {
+                    "type": "integer"
+                },
+                "tokens_completion": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "tokens_total": {
+                    "type": "integer"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.dryRunToolCall"
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "truncation": {
+                    "description": "Truncation says what the byte cap removed, so a trimmed trace is never\nmistaken for a short turn.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.TraceTruncation"
+                        }
+                    ]
+                },
+                "upstream": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.traceListResult": {
+            "type": "object",
+            "properties": {
+                "capture": {
+                    "type": "boolean"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "max_trace_bytes": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "retention_days": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "traces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TraceRow"
+                    }
                 }
             }
         }

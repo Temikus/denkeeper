@@ -50,6 +50,7 @@
         { id: 'schedules', label: 'Schedules' },
         { id: 'approvals', label: 'Approvals' },
         { id: 'audit',     label: 'Audit Log' },
+        { id: 'traces',    label: 'Turn inspector' },
       ],
     },
     {

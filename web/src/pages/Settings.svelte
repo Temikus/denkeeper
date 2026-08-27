@@ -267,7 +267,8 @@
       {#if sessions.length === 0}
         <p class="empty-state">No active sessions to display.</p>
       {:else}
-        <div class="table-wrap">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Active sessions">
           <table class="session-table">
             <thead>
               <tr>
@@ -402,10 +403,6 @@
   .empty-state {
     color: var(--text-muted);
     font-size: 13px;
-  }
-
-  .table-wrap {
-    overflow-x: auto;
   }
 
   .session-table {

@@ -72,7 +72,18 @@
 .btn-save:hover { background: var(--accent-hover); }
 .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ---------- Confirmation modal (destructive actions) --------------------- */
+/* ---------- Confirmation modal (destructive actions) ---------------------
+
+   House rule, both halves:
+
+   - Overlay (.overlay + .confirm-modal) for IRREVERSIBLE actions only —
+     deleting a schedule, stopping an eval run that has already spent money.
+     An overlay is worth the interruption when the click cannot be taken back.
+   - Inline confirm, rendered in place inside the card, for REVERSIBLE config
+     writes. Providers.svelte is the reference. An overlay here hides the very
+     thing the operator is deciding from: the Evals "Apply to agent" confirm
+     was an overlay first, and it covered the gate table that justified the
+     change.                                                                 */
 
 .overlay {
   position: fixed;
@@ -374,6 +385,39 @@
   font-size: 12px;
   color: var(--success);
   font-weight: 500;
+}
+
+/* Visually hidden, still read aloud. Used for table captions and labels that
+   would be redundant on screen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Scroll container for a table wider than its column. Give it tabindex="0",
+   role="region" and an aria-label: a scroll region with nothing focusable
+   inside it cannot be reached from the keyboard at all (WCAG 2.1.1), and the
+   off-screen columns are then unreadable without a pointer. */
+.table-wrap {
+  overflow-x: auto;
+}
+.table-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A validation or save failure shown beside the control that caused it.
+   Components set their own margin; everything else comes from here. */
+.inline-error {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 /* ---------- Page layout -------------------------------------------------- */
