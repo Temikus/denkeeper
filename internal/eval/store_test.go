@@ -489,3 +489,72 @@ func TestStore_ImportJSONLDefaultsCategoryToChat(t *testing.T) {
 		t.Errorf("category = %q, want the %q default", tasks[0].Category, CategoryChat)
 	}
 }
+
+// The narrowed read must carry every column the unnarrowed one does, and stay
+// scoped to its own run: a task id is unique across sets, but a stale filter
+// reaching another run's rows would be silent.
+func TestStore_ListTaskSamplesNarrowsWithoutLosingColumns(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	set := mustTaskSet(t, s, "set")
+	first := mustTask(t, s, set.ID, "first prompt")
+	second := mustTask(t, s, set.ID, "second prompt")
+	run, variants, err := s.CreateRun(ctx,
+		Run{TaskSetID: set.ID, BaseAgent: "p", K: 1, CostCap: 1, AsOf: time.Now()},
+		[]Variant{{Name: "a"}, {Name: "b"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	other, _, err := s.CreateRun(ctx,
+		Run{TaskSetID: set.ID, BaseAgent: "p", K: 1, CostCap: 1, AsOf: time.Now()},
+		[]Variant{{Name: "a"}, {Name: "b"}})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	for _, task := range []*Task{first, second} {
+		for _, v := range variants {
+			if _, err := s.AddSample(ctx, Sample{
+				RunID: run.ID, VariantID: v.ID, TaskID: task.ID, KIndex: 0,
+				Status: SampleOK, Response: "answer", Rounds: 2, StopReason: "max_rounds",
+				Upstream: "Fireworks", OutcomeOK: 3, OutcomeSuppressed: 5,
+				TokensPrompt: 100, Cost: 0.5, LatencyMs: 1200,
+			}); err != nil {
+				t.Fatalf("AddSample: %v", err)
+			}
+		}
+	}
+	if _, err := s.AddSample(ctx, Sample{
+		RunID: other.ID, VariantID: variants[0].ID, TaskID: first.ID, KIndex: 0,
+		Status: SampleOK, Response: "another run's answer",
+	}); err != nil {
+		t.Fatalf("AddSample: %v", err)
+	}
+
+	got, err := s.ListTaskSamples(ctx, run.ID, first.ID)
+	if err != nil {
+		t.Fatalf("ListTaskSamples: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d samples, want 2 (one per variant of one task)", len(got))
+	}
+	for _, smp := range got {
+		if smp.RunID != run.ID || smp.TaskID != first.ID {
+			t.Errorf("sample %d is run %d task %d, want run %d task %d",
+				smp.ID, smp.RunID, smp.TaskID, run.ID, first.ID)
+		}
+		if smp.StopReason != "max_rounds" || smp.Upstream != "Fireworks" ||
+			smp.OutcomeSuppressed != 5 || smp.Cost != 0.5 || smp.LatencyMs != 1200 {
+			t.Errorf("sample %d lost a column in the narrowed read: %+v", smp.ID, smp)
+		}
+	}
+
+	// Task 0 is the every-task case, and must not read as "no task matches".
+	all, err := s.ListTaskSamples(ctx, run.ID, 0)
+	if err != nil {
+		t.Fatalf("ListTaskSamples(0): %v", err)
+	}
+	if len(all) != 4 {
+		t.Errorf("got %d samples for task 0, want every sample in the run", len(all))
+	}
+}

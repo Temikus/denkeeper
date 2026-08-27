@@ -806,6 +806,7 @@ type agentBuildCtx struct {
 	adapters        []adapter.Adapter
 	dispatcher      *agent.Dispatcher
 	auditor         audit.Emitter
+	evalStore       *eval.Store
 	scriptSem       chan struct{}
 	logger          *slog.Logger
 }
@@ -1365,6 +1366,13 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	applySupervisorKnobs(e, ac)
 	e.SetLocation(agentLocation(abc.cfg, ac))
 	e.SetReplyGuard(replyGuardFrom(abc.cfg))
+	// Nil-check before boxing: a typed-nil *eval.Store in the TraceSink
+	// interface reads as non-nil, which would turn every capture into a nil
+	// dereference the first time an operator switched it on.
+	if abc.evalStore != nil {
+		e.SetTraceSink(abc.evalStore)
+	}
+	e.SetTraceCapture(abc.cfg.Eval.Capture, abc.cfg.Eval.TraceBytesCap())
 
 	if err := connectConfigMCP(ctx, ac.Name, sr.agentSkillsDir, e, agentRouter, agentToolMgr, abc); err != nil {
 		return nil, nil, err
@@ -1959,6 +1967,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
 	startMemoryCleanupWorker(ctx, st.memory, &cfg.Memory, logger)
+	startTraceCleanupWorker(ctx, st.evalStore, cfg.Eval.RetentionDays, cfg.Audit.CleanupInterval, logger)
 
 	// Audit emitter — wired into engines, dispatcher, scheduler, and tool manager.
 	auditor, auditCloser := initAuditor(ctx, st.auditStore, cfg, logger)
@@ -2021,6 +2030,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		adapters:        adapters,
 		dispatcher:      dispatcher,
 		auditor:         auditor,
+		evalStore:       st.evalStore,
 		scriptSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrent),
 		logger:          logger,
 	}
@@ -2161,6 +2171,7 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
 			e.SetReplyGuard(replyGuardFrom(cfg))
+			e.SetTraceCapture(cfg.Eval.Capture, cfg.Eval.TraceBytesCap())
 			warnUnadvertisedAutoApprove(ac.Name, ac.AutoApproveTools, e.ToolNames(), logger)
 		}
 
@@ -2402,10 +2413,33 @@ func initAuditor(ctx context.Context, store *audit.SQLiteStore, cfg *config.Conf
 	return be, be.Close
 }
 
+// startTraceCleanupWorker runs periodic retention enforcement on captured turn
+// traces. They carry their own [eval] retention_days because they are the most
+// sensitive rows in the database; the cleanup *cadence* is shared with audit,
+// since one sweep interval per instance is plenty and a second knob would only
+// be another thing to get wrong.
+func startTraceCleanupWorker(ctx context.Context, store *eval.Store, retentionDays int, interval string, logger *slog.Logger) {
+	if store == nil {
+		return
+	}
+	startRetentionWorker(ctx, "turn trace", retentionDays, interval, logger, store.PruneTracesBefore)
+}
+
 // startAuditCleanupWorker runs periodic retention enforcement on the audit store.
 func startAuditCleanupWorker(ctx context.Context, store *audit.SQLiteStore, retentionDays int, interval string, logger *slog.Logger) {
+	startRetentionWorker(ctx, "audit event", retentionDays, interval, logger, store.PruneBefore)
+}
+
+// startRetentionWorker sweeps rows older than retentionDays on the given
+// cadence. The loop is identical for every store that ages rows out, so it
+// lives once and takes the prune as a function.
+//
+// A non-positive retention means unlimited: the config layer defaults both
+// current callers to a positive value, so this is a guard for a caller that
+// does not, not a supported setting.
+func startRetentionWorker(ctx context.Context, what string, retentionDays int, interval string, logger *slog.Logger, prune func(context.Context, time.Time) (int, error)) {
 	if retentionDays <= 0 {
-		return // unlimited retention
+		return
 	}
 	dur, err := time.ParseDuration(interval)
 	if err != nil {
@@ -2421,11 +2455,11 @@ func startAuditCleanupWorker(ctx context.Context, store *audit.SQLiteStore, rete
 				return
 			case <-ticker.C:
 				cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-				n, pruneErr := store.PruneBefore(ctx, cutoff)
+				n, pruneErr := prune(ctx, cutoff)
 				if pruneErr != nil {
-					logger.Warn("audit retention prune failed", "error", pruneErr)
+					logger.Warn(what+" retention prune failed", "error", pruneErr)
 				} else if n > 0 {
-					logger.Info("pruned audit events", "count", n, "retention_days", retentionDays)
+					logger.Info("pruned old rows", "kind", what, "count", n, "retention_days", retentionDays)
 				}
 			}
 		}

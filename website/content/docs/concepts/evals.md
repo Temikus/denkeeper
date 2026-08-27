@@ -201,6 +201,14 @@ An `upgrade` offers **Apply to agent**, which switches the base agent's model th
 
 **Test case by test case.** Every test case is a row with each variant's cost, rounds, and latency; expanding one puts the responses side by side with their tool traces and the judge's verdict for that pair, its per-dimension winners, notes, and rubric version.
 
+## Turn traces and the inspector
+
+A turn trace is the whole turn as the model saw it: the system prompt as it was assembled after skill injection, the history window as it went on the wire, every tool call with its arguments and the result that came back, the final response, timings and usage. The **Turn inspector** page renders them — rows expanding inline into the same transcript the dry-run previews use.
+
+This is the answer to "why did it do that". The audit log records that a turn took four rounds and that one tool call failed; the trace records the prompt that produced them and the payload the model read.
+
+Eval samples are always traced — the judge reads the trace, and a verdict nobody can re-check is not evidence. **Live turns are recorded only when `[eval] capture = true`, which is off by default**: a trace holds everything the model saw, which is the most sensitive data Denkeeper stores, so recording live conversations stays an explicit operator decision rather than something an upgrade switches on. Traces are capped at `[eval] max_trace_bytes` (256 KiB, oldest rounds dropped first, with the trace saying what went) and kept for `[eval] retention_days` (30, matching the audit log).
+
 ## Configuration
 
 Every `[eval]` key has a default, so the subsystem needs no configuration to work — see the [`[eval]` reference](/docs/reference/config/) for the table. `GET /api/v1/eval/config` returns the same values at runtime, which is how the dashboard shows the policy the server actually judges against instead of hardcoding a copy. Thresholds are TOML plus a reload; there is no runtime writer, and every verdict carries the thresholds it was measured against.

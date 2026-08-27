@@ -460,7 +460,12 @@ export const api = {
   stopEvalRun: (id) =>
     apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   evalRunSummary: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/summary`),
-  evalRunSamples: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/samples`),
+  // taskID narrows to one test case: a full run is task_count x variants x k
+  // samples, each carrying a trace, and the results view opens one row at a
+  // time.
+  evalRunSamples: (id, taskID = 0) => apiFetch(
+    `/api/v1/eval/runs/${encodeURIComponent(id)}/samples`
+    + (taskID ? `?task_id=${encodeURIComponent(taskID)}` : '')),
   evalRunPairs: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/pairs`),
   evalEstimate: (body) =>
     apiFetch('/api/v1/eval/estimate', { method: 'POST', body: JSON.stringify(body) }),
@@ -483,6 +488,21 @@ export const api = {
     const qs = params.toString()
     return apiFetch(`/api/v1/eval/probes${qs ? `?${qs}` : ''}`)
   },
+
+  // Turn traces — what a live turn actually saw. Recorded only when
+  // [eval] capture is on, which is why the list response repeats the switch.
+  traces: (opts = {}) => {
+    const params = new URLSearchParams()
+    if (opts.agent) params.set('agent', opts.agent)
+    if (opts.conversationId) params.set('conversation_id', opts.conversationId)
+    if (opts.source) params.set('source', opts.source)
+    if (opts.since) params.set('since', opts.since)
+    if (opts.limit) params.set('limit', String(opts.limit))
+    if (opts.offset) params.set('offset', String(opts.offset))
+    const qs = params.toString()
+    return apiFetch(`/api/v1/traces${qs ? `?${qs}` : ''}`)
+  },
+  trace: (id) => apiFetch(`/api/v1/traces/${encodeURIComponent(id)}`),
 
   // Safety — stop/panic/resume.
   stopSession: (id) => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
@@ -507,6 +527,9 @@ export function evalSampleTranscript(sample, model = '') {
     response: sample?.response || '',
     rounds: sample?.rounds ?? 0,
     stop_reason: sample?.stop_reason || '',
+    // The provider-reported serving upstream, empty for providers without the
+    // concept. Eval-only: a schedule or skill preview has none to show.
+    upstream: sample?.upstream || '',
     duration_ms: sample?.latency_ms ?? 0,
     cost_usd: sample?.cost ?? 0,
     // The sample carries the suppression count as its own column; deriving it
@@ -535,5 +558,27 @@ function parseTrace(raw) {
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
+  }
+}
+
+/**
+ * Renders a turn trace as a DryRunTranscript transcript.
+ *
+ * The endpoint already speaks the transcript's tool-call vocabulary, so this
+ * only picks the fields the renderer reads. It exists for the same reason
+ * evalSampleTranscript does: one transcript renderer for previews, evals and
+ * live turns rather than three that drift apart.
+ */
+export function traceTranscript(detail) {
+  return {
+    model: detail?.model || '',
+    requested_model: detail?.requested_model || '',
+    response: detail?.response || '',
+    rounds: detail?.rounds ?? 0,
+    stop_reason: detail?.stop_reason || '',
+    duration_ms: detail?.duration_ms ?? detail?.latency_ms ?? 0,
+    cost_usd: detail?.cost_usd ?? 0,
+    suppressed_count: detail?.suppressed_count ?? 0,
+    tool_calls: detail?.tool_calls ?? [],
   }
 }

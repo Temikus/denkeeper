@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
@@ -108,6 +109,13 @@ type Server struct {
 	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
 	wsHub *WSHub
 
+	// traceCfg is the reload-safe snapshot of the [eval] knobs the trace
+	// listing echoes. Hot reload overwrites the whole config struct in place
+	// (*cfg = *newCfg in buildReloadFunc), so a handler reading deps.Config
+	// mid-request races it; the trace handlers read this snapshot instead,
+	// seeded at construction and refreshed after each successful reload.
+	traceCfg atomic.Pointer[traceSettings]
+
 	// bcryptCost controls the bcrypt cost factor for password hashing.
 	// Defaults to 13; tests override to bcrypt.MinCost for speed.
 	bcryptCost int
@@ -145,6 +153,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 		setupPIN:     deps.SetupPIN,
 		bcryptCost:   13,
 	}
+	s.refreshTraceSettings()
 
 	mux := http.NewServeMux()
 
@@ -299,6 +308,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Generating probes reads config and writes nothing; accepting one is an
 	// ordinary task create.
 	mux.HandleFunc("GET /api/v1/eval/probes", s.RequireScope("eval:read", s.handleEvalProbes))
+
+	// Turn traces sit under sessions:read, not eval:read — a trace is turn
+	// content, and the eval scopes exist for a judge that must never read live
+	// prompts.
+	mux.HandleFunc("GET /api/v1/traces", s.RequireScope("sessions:read", s.handleListTraces))
+	mux.HandleFunc("GET /api/v1/traces/{id}", s.RequireScope("sessions:read", s.handleGetTrace))
 
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))

@@ -25,6 +25,7 @@
   import Providers from './pages/Providers.svelte'
   import Settings from './pages/Settings.svelte'
   import AuditLog from './pages/AuditLog.svelte'
+  import Traces from './pages/Traces.svelte'
   import Channels from './pages/Channels.svelte'
   import Evals from './pages/Evals.svelte'
   import MoreMenu from './pages/MoreMenu.svelte'
@@ -111,6 +112,8 @@
         <Channels />
       {:else if route === 'audit'}
         <AuditLog />
+      {:else if route === 'traces'}
+        <Traces />
       {:else if route === 'evals'}
         <Evals />
       {:else if route === 'settings'}

@@ -444,7 +444,7 @@
     letter-spacing: 0.3px;
   }
 
-  .inline-error { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
+  .inline-error { margin: 0 0 10px; }
 
   .controls {
     display: flex;

@@ -150,6 +150,21 @@ format = "text"
 # [eval]
 # audit = "full"      # "full" (default) records the turn exactly as it ran;
 #                     # "summary" keeps only lifecycle events and errors
+#
+# Turn traces record what a turn actually saw — the built system prompt, the
+# history window as sent, every tool call with its arguments and result, and the
+# final response — and the dashboard's Turn inspector renders them. This is what
+# answers "why did it do that"; the audit log has rounds and outcomes but never
+# the payloads.
+#
+# capture is off by default and should stay off unless you want that record: a
+# trace holds everything the model saw, which is the most sensitive data here.
+# Eval samples are traced either way — the judge reads their trace — and never
+# touch a live conversation.
+#
+# capture = false           # record live turns too
+# max_trace_bytes = 262144  # per-trace cap (256 KiB); oldest rounds dropped first
+# retention_days = 30       # how long captured traces are kept
 
 # ---------------------------------------------------------------------------
 # Reply sanity guard

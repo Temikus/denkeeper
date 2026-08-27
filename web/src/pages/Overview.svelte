@@ -125,7 +125,8 @@
 
   {#if sortedSessions.length > 0}
     <h2 class="section-title">Cost Breakdown</h2>
-    <div class="cost-table-wrapper">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+    <div class="cost-table-wrapper table-wrap" tabindex="0" role="region" aria-label="Cost breakdown by session">
       <table class="cost-table">
         <thead>
           <tr>
@@ -198,7 +199,6 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow-x: auto;
   }
   .cost-table { width: 100%; border-collapse: collapse; }
   .cost-table th {

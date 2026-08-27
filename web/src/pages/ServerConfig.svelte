@@ -675,7 +675,7 @@
   }
   .config-label { flex: 1; }
   .config-name { font-weight: 600; font-size: 14px; display: block; }
-  .inline-error { color: var(--danger); font-size: 12px; margin-top: 6px; }
+  .inline-error { margin-top: 6px; }
   .config-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
 
   .config-value-row {

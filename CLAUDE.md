@@ -74,12 +74,14 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 Every user-facing feature gets thoughtful UX:
 
 - **Web (Svelte)**: loading spinners, empty states with CTAs, inline errors, confirm destructive actions, success feedback, disabled buttons in-flight, responsive ≥320px, existing CSS variables (`--accent`, `--surface`, `--border`, `--text-muted`, `--danger`).
+- **Confirm pattern**: overlay (`.overlay` + `.confirm-modal`) for **irreversible** actions only; **inline** confirm rendered in place inside the card for reversible config writes (`Providers.svelte` is the reference). An overlay over the evidence for the decision is the failure mode. Full rule in `web/src/shared.css` above `.overlay`.
+- **Shared classes before local ones**: `.sr-only`, `.table-wrap`, `.inline-error`, `.btn-*`, `.table`, `.hint`, `.pill` and friends live in `web/src/shared.css` (imported globally by `App.svelte`). Redefine one locally only to add a margin or a genuinely different shape, and say why. A `.table-wrap` needs `tabindex="0"`, `role="region"` and an `aria-label` on the wrapper, or its off-screen columns are pointer-only.
 - **CLI (Cobra)**: progress feedback for >500ms ops, `tabwriter` tables, actionable errors, non-zero exits via `RunE`.
 - **Adapters**: typing indicators before LLM calls, platform-native formatting, inline keyboards for approvals. Telegram registers built-in commands (`/start`, `/help`, `/stop`, `/panic`, `/resume`, `/debug`, `/clear`, `/compact`) plus skill `command:` triggers via `setMyCommands` (`RegisterSkillCommands`).
 
 ## Web Dashboard & WebSocket Transport
 
-`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 17 pages, roughly one per subsystem (routes in `web/src`).
+`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 18 pages, roughly one per subsystem (routes in `web/src`).
 
 **WebSocket** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to bidirectional WS; dashboard auto-connects and falls back to SSE after 3 failed reconnects. `WSHub` keeps a per-connection replay buffer. Config: `api.websocket_enabled` (true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl` (5m). Frame types in `wsframes.go`.
 
@@ -107,6 +109,7 @@ Every user-facing feature gets thoughtful UX:
 | Eval task sets & runner | `internal/eval/` | `[eval]` |
 | Eval pairing, judging, verdict | `internal/eval/pairing.go`, `judging.go`, `verdict.go`, `internal/mcpserver/tools_eval.go` | `[eval]` |
 | Eval acquisition (history + spec probes) | `internal/eval/suggest.go`, `probes.go`, `internal/api/evalprobes.go` | `[eval]` |
+| Turn traces & inspector | `internal/agent/trace.go`, `internal/eval/trace.go`, `internal/api/traces.go` | `[eval]` (`capture`, `max_trace_bytes`, `retention_days`) |
 | Skill undo journal | `internal/skilleffect/` | (none — on whenever a SQLite store is wired) |
 
 ## Detailed Invariants

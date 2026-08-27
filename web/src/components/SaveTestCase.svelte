@@ -344,11 +344,6 @@
     color: var(--accent);
   }
 
-  .inline-error {
-    color: var(--danger);
-    font-size: 0.8rem;
-  }
-
   .spinner {
     width: 12px;
     height: 12px;
