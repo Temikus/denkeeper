@@ -391,6 +391,18 @@ but calling a candidate an upgrade also needs the judge win-rate.
     gate_rounds_pct = 20             # max rise in mean rounds per task (percent)
     gate_cost_pct = 25               # max rise in mean cost per task (percent)
 
+Turn traces record what a turn actually saw: the built system prompt, the
+history window as sent, every tool call with its arguments and result, and the
+final response. The web dashboard's Turn inspector reads them, which is what
+answers "why did it do that" — the audit log has rounds and outcomes but never
+the payloads. Eval samples are always traced, since the judge reads the trace.
+Live turns are recorded only when capture is turned on: a trace holds
+everything the model saw, so it stays an operator decision.
+
+    capture = false                  # record live turns (off by default)
+    max_trace_bytes = 262144         # per-trace cap; oldest rounds dropped first
+    retention_days = 30              # how long captured traces are kept
+
 ### [safety]
 
 Runtime guardrails that hold back bad output. Distinct from [security], which

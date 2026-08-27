@@ -228,6 +228,12 @@ type TurnResult struct {
 	AsOf time.Time `json:"as_of"`
 	// DurationMs is wall-clock time for the whole turn.
 	DurationMs int64 `json:"duration_ms"`
+	// Trace is the full L1 turn trace — the built system prompt, the history
+	// window as sent, and the per-round tool calls with their payloads. A
+	// policy turn always builds one and never persists it: isolation is
+	// structural, so the caller decides where it goes (the eval runner stores
+	// it; a dry-run preview renders it and drops it).
+	Trace *TurnTrace `json:"trace,omitempty"`
 }
 
 // suppressedToolResult renders the synthetic result for a suppressed call.

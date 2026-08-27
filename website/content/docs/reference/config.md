@@ -366,10 +366,17 @@ Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 | `gate_rejected_rate_pp` | float | `2.0` | Largest tolerated rise in the rejected tool-call rate, in percentage points |
 | `gate_rounds_pct` | float | `20` | Largest tolerated rise in mean tool-call rounds per task, in percent |
 | `gate_cost_pct` | float | `25` | Largest tolerated rise in mean cost per task, in percent |
+| `capture` | bool | `false` | Record live turns as turn traces. Off by default — a trace holds everything the model saw |
+| `max_trace_bytes` | int | `262144` | Per-trace payload cap (256 KiB). Over it, the oldest tool-call rounds are dropped first, then the oldest history messages |
+| `retention_days` | int | `30` | How long captured traces are kept, matching the audit log |
 
 The last four are the decision rule, and it is deliberately asymmetric: the three gates can declare a *downgrade* on their own (a failed gate needs no judge to reject a candidate) or report that nothing regressed, but calling a candidate an *upgrade* also requires the judge win-rate to reach `win_threshold`. A judge's preference can never override an objective regression. `GET /api/v1/eval/runs/{id}/summary` returns the gate table with each value, delta, threshold and pass/fail alongside a one-line reason, plus a per-category breakdown so a candidate that wins on chat while regressing on tool-heavy tasks is visible rather than averaged away.
 
 An eval run is bounded twice, by spend (`max_cost_per_run`) and by rate (`max_concurrent`); both are always in force. Writing `0` for any of these keys is indistinguishable from omitting it and yields the default — set a real value to change one. A run that hits its cost cap stops dispatching new samples, lets the in-flight ones finish, and keeps its partial results rather than discarding them.
+
+`capture`, `max_trace_bytes` and `retention_days` are the turn-trace knobs. A trace records what a turn actually saw: the system prompt as it was assembled after skill injection, the history window as it went on the wire, every tool call with its arguments and the result the model read, the final response, timings and usage. The dashboard's **Turn inspector** renders them, which is what answers "why did it do that" — the audit log carries rounds and outcomes but never the payloads.
+
+Live capture is off by default and should stay off unless you want that record: a trace is the most sensitive data Denkeeper stores. Eval samples are traced regardless of the switch, because the judge reads the trace and a verdict has to stay re-checkable; those turns never touch a live conversation. Traces get their own `retention_days` rather than riding on `[memory]`'s for the same reason.
 
 Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only idempotent tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
 

@@ -5093,3 +5093,100 @@ on_oversized = "supress"
 		t.Errorf("error should name the offending key: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Trace capture config tests
+// ---------------------------------------------------------------------------
+
+// The default that matters most in this subsystem: a trace holds everything the
+// model saw, so capture must be off until an operator says otherwise.
+func TestParse_EvalCaptureDefaultsOff(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.Capture {
+		t.Error("capture = true with no [eval] section — live trace capture must be opt-in")
+	}
+	if cfg.Eval.MaxTraceBytes != DefaultMaxTraceBytes {
+		t.Errorf("max_trace_bytes = %d, want %d", cfg.Eval.MaxTraceBytes, DefaultMaxTraceBytes)
+	}
+	if cfg.Eval.RetentionDays != 30 {
+		t.Errorf("retention_days = %d, want 30 (matching audit)", cfg.Eval.RetentionDays)
+	}
+}
+
+// An [eval] section that configures anything else must not switch capture on
+// as a side effect.
+func TestParse_EvalCaptureStaysOffWhenSectionPresent(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[eval]
+default_k = 5
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.Capture {
+		t.Error("capture = true from an [eval] section that never mentions it")
+	}
+}
+
+func TestParse_EvalCaptureExplicitValues(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[eval]
+capture = true
+max_trace_bytes = 65536
+retention_days = 7
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !cfg.Eval.Capture {
+		t.Error("capture = false after an explicit true")
+	}
+	if cfg.Eval.MaxTraceBytes != 65536 {
+		t.Errorf("max_trace_bytes = %d, want 65536", cfg.Eval.MaxTraceBytes)
+	}
+	if cfg.Eval.RetentionDays != 7 {
+		t.Errorf("retention_days = %d, want 7", cfg.Eval.RetentionDays)
+	}
+	if cfg.Eval.TraceBytesCap() != 65536 {
+		t.Errorf("TraceBytesCap() = %d, want the configured cap", cfg.Eval.TraceBytesCap())
+	}
+}
+
+func TestValidateEval_RejectsNegativeTraceBounds(t *testing.T) {
+	base := EvalConfig{MaxConcurrent: 2, MaxCostPerRun: 2, DefaultK: 3, CompletenessFloor: 0.8, WinThreshold: 0.55}
+
+	neg := base
+	neg.MaxTraceBytes = -1
+	if err := validateEval(&neg); err == nil || !strings.Contains(err.Error(), "max_trace_bytes") {
+		t.Errorf("negative max_trace_bytes error = %v, want it named", err)
+	}
+
+	ret := base
+	ret.RetentionDays = -5
+	if err := validateEval(&ret); err == nil || !strings.Contains(err.Error(), "retention_days") {
+		t.Errorf("negative retention_days error = %v, want it named", err)
+	}
+}
+
+// A cap so small every trace would arrive empty is a typo, not a policy.
+func TestValidateEval_RejectsUselesslySmallTraceCap(t *testing.T) {
+	cfg := EvalConfig{MaxConcurrent: 2, MaxCostPerRun: 2, DefaultK: 3, CompletenessFloor: 0.8,
+		WinThreshold: 0.55, MaxTraceBytes: 128}
+	err := validateEval(&cfg)
+	if err == nil {
+		t.Fatal("expected error for a max_trace_bytes below the floor")
+	}
+	if !strings.Contains(err.Error(), "max_trace_bytes") {
+		t.Errorf("error should name the field: %v", err)
+	}
+}
+
+func TestEvalConfig_TraceBytesCapFallsBackToDefault(t *testing.T) {
+	var c EvalConfig
+	if got := c.TraceBytesCap(); got != DefaultMaxTraceBytes {
+		t.Errorf("TraceBytesCap() = %d on a zero value, want %d", got, DefaultMaxTraceBytes)
+	}
+}

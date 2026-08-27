@@ -260,6 +260,10 @@ func (s *Server) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "reload failed: " + err.Error()})
 		return
 	}
+	// The reload overwrote the config struct's contents in place; refresh the
+	// snapshot the trace handlers read so they serve the new [eval] settings
+	// without ever touching the struct concurrently.
+	s.refreshTraceSettings()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
