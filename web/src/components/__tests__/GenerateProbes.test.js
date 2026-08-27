@@ -36,7 +36,7 @@ beforeEach(() => {
 })
 
 async function renderPanel(props = {}) {
-  const r = render(GenerateProbes, { sets: SETS, defaultSet: 'golden-set', ...props })
+  const r = render(GenerateProbes, { agent: 'default', sets: SETS, defaultSet: 'golden-set', ...props })
   await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
   return r
 }
@@ -97,7 +97,7 @@ describe('GenerateProbes — listing', () => {
         return HttpResponse.json(evalProbeSet)
       }),
     )
-    render(GenerateProbes, { sets: SETS })
+    render(GenerateProbes, { agent: 'default', sets: SETS })
     expect(screen.getByTestId('probes-loading')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
   })
@@ -106,7 +106,7 @@ describe('GenerateProbes — listing', () => {
     server.use(
       http.get('/api/v1/eval/probes', () => HttpResponse.json({ error: 'boom' }, { status: 500 })),
     )
-    render(GenerateProbes, { sets: SETS })
+    render(GenerateProbes, { agent: 'default', sets: SETS })
     await waitFor(() => expect(screen.getByTestId('probes-error')).toBeInTheDocument())
     expect(screen.getByText('Try again')).toBeInTheDocument()
   })
@@ -116,7 +116,7 @@ describe('GenerateProbes — listing', () => {
       http.get('/api/v1/eval/probes', () =>
         HttpResponse.json({ agent: 'default', permission_tier: 'supervised', probes: [] })),
     )
-    render(GenerateProbes, { sets: SETS })
+    render(GenerateProbes, { agent: 'default', sets: SETS })
     await waitFor(() => expect(screen.getByTestId('probes-empty')).toBeInTheDocument())
     expect(screen.getByTestId('probes-empty')).toHaveTextContent(/already covers/)
   })
@@ -158,7 +158,7 @@ describe('GenerateProbes — accepting', () => {
   })
 
   test('creates the target set on the fly when a new name is given', async () => {
-    render(GenerateProbes, { sets: [] })
+    render(GenerateProbes, { agent: 'default', sets: [] })
     await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
 
     await fireEvent.input(screen.getByTestId('probes-new-set'), { target: { value: 'probes' } })
@@ -171,7 +171,7 @@ describe('GenerateProbes — accepting', () => {
   })
 
   test('blocks accepting until a set is chosen', async () => {
-    render(GenerateProbes, { sets: [] })
+    render(GenerateProbes, { agent: 'default', sets: [] })
     await waitFor(() => expect(screen.getByTestId('probes-blocker')).toBeInTheDocument())
 
     const key = `denial_compliance:${evalProbeSet.probes[0].prompt}`
@@ -214,6 +214,22 @@ describe('GenerateProbes — rejecting', () => {
   })
 })
 
+describe('GenerateProbes — no agent', () => {
+  test('says to pick an agent instead of firing a request that must 400', async () => {
+    let calls = 0
+    server.use(
+      http.get('/api/v1/eval/probes', () => {
+        calls++
+        return HttpResponse.json(evalProbeSet)
+      }),
+    )
+    render(GenerateProbes, { sets: SETS, agent: '' })
+    await waitFor(() => expect(screen.getByTestId('probes-error')).toBeInTheDocument())
+    expect(screen.getByTestId('probes-error')).toHaveTextContent(/Pick an agent first/)
+    expect(calls).toBe(0)
+  })
+})
+
 describe('GenerateProbes — target set', () => {
   test('changing the set re-generates against it', async () => {
     // Exclusion is server-side and keyed on the set, so the pass has to be
@@ -230,5 +246,49 @@ describe('GenerateProbes — target set', () => {
 
     await fireEvent.change(screen.getByTestId('probes-set-select'), { target: { value: 'smoke' } })
     await waitFor(() => expect(seen).toEqual(['golden-set', 'smoke']))
+  })
+
+  test('backing out of a new set re-generates against the set it falls back to', async () => {
+    // Falling back silently would leave cards drawn against the old target,
+    // and exclusion is keyed on the set server-side.
+    const seen = []
+    server.use(
+      http.get('/api/v1/eval/probes', ({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('set'))
+        return HttpResponse.json(evalProbeSet)
+      }),
+    )
+    await renderPanel({ agent: 'default', defaultSet: 'smoke' })
+    expect(seen).toEqual(['smoke'])
+
+    await fireEvent.click(screen.getByText('New set…'))
+    await fireEvent.click(screen.getByText('Use existing'))
+    await waitFor(() => expect(seen).toEqual(['smoke', 'golden-set']))
+  })
+})
+
+describe('GenerateProbes — batch failure', () => {
+  test('a probe written before the failure does not stay acceptable', async () => {
+    // Otherwise accepting the rest would write the successful one twice.
+    let n = 0
+    server.use(
+      http.post('/api/v1/eval/task-sets/:name/tasks', async ({ request, params }) => {
+        n++
+        if (n > 1) return HttpResponse.json({ error: 'nope' }, { status: 500 })
+        const body = await request.json()
+        addedTasks.push({ set: params.name, body })
+        return HttpResponse.json({ id: 10, ...body }, { status: 201 })
+      }),
+    )
+    await renderPanel({ agent: 'default' })
+
+    await fireEvent.click(screen.getByText('Select all'))
+    await fireEvent.click(screen.getByTestId('probes-accept-selected'))
+    await waitFor(() => expect(screen.getByTestId('probes-accept-error')).toBeInTheDocument())
+
+    const written = `denial_compliance:${evalProbeSet.probes[0].prompt}`
+    expect(screen.queryByTestId(`probe-accept-${written}`)).not.toBeInTheDocument()
+    const failed = `tier_boundary:${evalProbeSet.probes[1].prompt}`
+    expect(screen.getByTestId(`probe-accept-${failed}`)).toBeInTheDocument()
   })
 })

@@ -493,7 +493,8 @@
     <button class="btn-ghost btn-sm" onclick={toggleSuggest}
       aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
       data-testid="suggest-toggle">Suggest from history</button>
-    <button class="btn-ghost btn-sm" onclick={toggleProbes}
+    <button class="btn-ghost btn-sm" onclick={toggleProbes} disabled={!baseAgent}
+      title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
       aria-expanded={showProbes} aria-controls="eval-probes-panel"
       data-testid="probes-toggle">Generate probes</button>
     <button class="btn-ghost btn-sm" onclick={toggleImport}
@@ -516,7 +517,8 @@
       <button class="btn-primary" onclick={toggleSuggest}
         aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
         data-testid="empty-suggest-cta">Suggest from history</button>
-      <button class="btn-ghost" onclick={toggleProbes}
+      <button class="btn-ghost" onclick={toggleProbes} disabled={!baseAgent}
+        title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
         aria-expanded={showProbes} aria-controls="eval-probes-panel"
         data-testid="empty-probes-cta">Generate probes</button>
       <button class="btn-ghost" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>

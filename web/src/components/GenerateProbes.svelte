@@ -108,6 +108,15 @@
     error = ''
     acceptError = ''
     savedMsg = ''
+    // Probes are one agent's configuration, so without one there is nothing to
+    // read — the request would 400 and the operator would read it as a fault.
+    if (!agent) {
+      probes = []
+      tier = ''
+      error = "Pick an agent first — probes are generated from one agent’s configuration."
+      loading = false
+      return
+    }
     try {
       // Passing the target set is what keeps a second pass quiet: the server
       // drops probes that set already carries.
@@ -188,7 +197,11 @@
 
   function cancelNewSet() {
     creatingNew = false
-    if (allSets.length > 0) targetSet = allSets[0].name
+    if (allSets.length === 0 || allSets[0].name === targetSet) return
+    // Exclusion is server-side and keyed on the set, so a change of target has
+    // to re-run the pass rather than keep cards drawn against the old one.
+    targetSet = allSets[0].name
+    load()
   }
 
   async function ensureSet() {
@@ -253,13 +266,14 @@
       const done = new Set(hiddenKeys)
       for (const p of chosen) {
         // One failure stops the batch: a partial add the operator cannot see is
-        // worse than a short one.
+        // worse than a short one. What did get written is hidden as it goes, so
+        // a failure part-way cannot leave a saved probe re-acceptable.
         await addOne(setName, p)
         done.add(keyOf(p))
+        hiddenKeys = new Set(done)
         added++
         batchDone = added
       }
-      hiddenKeys = done
       savedMsg = `Added ${added} probe${added === 1 ? '' : 's'} to “${setName}”`
       onaccepted?.(setName)
     } catch (e) {

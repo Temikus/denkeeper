@@ -265,10 +265,10 @@
         // partial add the operator cannot see is worse than a short one.
         await addOne(setName, c)
         done.add(keyOf(c))
+        hiddenKeys = new Set(done)
         added++
         batchDone = added
       }
-      hiddenKeys = done
       savedMsg = `Added ${added} test case${added === 1 ? '' : 's'} to “${setName}”`
       onaccepted?.(setName)
     } catch (e) {
