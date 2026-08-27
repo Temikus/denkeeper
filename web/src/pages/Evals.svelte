@@ -761,9 +761,9 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    /* Padding and trailing gap match .launcher and SuggestCases' .suggest so
-       the card lines up with whichever panel opens under it. */
-    padding: 18px;
+    /* Shares --card-inset with .launcher and SuggestCases' .suggest so the
+       card lines up with whichever panel opens under it at every width. */
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
   .empty-lead {
@@ -787,7 +787,7 @@
     outline: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
   .launch-grid {
