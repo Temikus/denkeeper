@@ -422,7 +422,21 @@ Past turns worth saving as test cases: any rejected or failed tool call, three o
 
 Each candidate carries `prompt`, `category`, `conversation_id`, `message_id`, `created_at`, the `signals` that earned it a place, and `preceding` — the turns before it, ready to pin as the test case's history.
 
-Candidates are **stratified across the four categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
+Candidates are **stratified across the four history categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
+
+### `GET /api/v1/eval/probes`
+
+**Scope:** `eval:read` **and** `agents:read`
+
+Test cases generated **top-down** from an agent's own written intent — its permission tier, auto-approve policy, persona sections, and skill frontmatter — rather than mined from history. Parameters: `?agent=` (required), `?set=` (exclude probes that set already carries), `?limit=` (max 100).
+
+The response carries `agent`, `permission_tier`, and `probes[]`. Each probe has `prompt`, `category` (always `probe`), `kind` (the behaviour family), `source` (the piece of configuration it came from, e.g. `tier:supervised`, `skill:briefing`), `notes`, `tags`, and optional `preceding` turns to pin as history.
+
+The six families are `denial_compliance`, `tier_boundary`, `budget_hint`, `approval_policy`, `skill_instruction`, and `persona_fidelity`. The first three need no configuration and ship as the canned starter set; the rest are derived from the agent's own config and are absent when it has nothing to derive them from. A cap is served family at a time, so a small `limit` never truncates a family away entirely.
+
+Probes quote configuration back — a skill's own description, the auto-approve list — so generation stays inside the caller's read scopes: `agents:read` is required on top of `eval:read` (`403` without it), `skill_instruction` is omitted without `skills:read`, and `approval_policy` without `tools:read`. `approval_policy` is only ever generated for the `supervised` tier, the only one with an approval gate to respect.
+
+This covers what a history-sampled set structurally cannot. A well-behaved current model never retried a denied call, so no past turn shows one being respected — but a worse candidate might, and only a probe would catch it. Notes are free-text "what good looks like" for the judge, never parsed as assertions. Generation is deterministic for a given agent, which is what makes `set=` enough to keep a second pass quiet. Nothing is written: accepting a probe is a separate call to the task create endpoint.
 
 ### `POST /api/v1/eval/estimate`
 
@@ -479,7 +493,7 @@ Add a test case. This is what the Chat UI's "Save as test case" calls.
 }
 ```
 
-`category` is one of `chat`, `skill_command`, `scheduled`, `tool_heavy` (default `chat`). `pinned_history` is captured now and replayed verbatim at run time rather than re-read from the source conversation, which drifts. `notes` are judge context, never parsed as assertions.
+`category` is one of `chat`, `skill_command`, `scheduled`, `tool_heavy`, `probe` (default `chat`). The first four are the history axis; `probe` is the spec-derived one written by `GET /eval/probes`. `pinned_history` is captured now and replayed verbatim at run time rather than re-read from the source conversation, which drifts. `notes` are judge context, never parsed as assertions.
 
 ### `PATCH` / `DELETE /api/v1/eval/task-sets/{name}/tasks/{id}`
 

@@ -42,6 +42,7 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - POST /api/v1/skills/{name}/dry-run   (scope: skills:write)    Preview a skill as a message, command or scheduled fire
 - GET  /api/v1/eval/task-sets          (scope: eval:read)       Saved eval test sets
 - GET  /api/v1/eval/suggest            (scope: eval:read)       Suggest test cases from past turns, stratified by category
+- GET  /api/v1/eval/probes             (scope: eval:read+agents:read) Generate behaviour probes from an agent's own configuration
 - POST /api/v1/eval/task-sets/{name}/tasks (scope: eval:write)  Save a test case
 - POST /api/v1/eval/runs               (scope: eval:write)      Compare agent config variants on a test set
 - GET  /api/v1/eval/runs               (scope: eval:read)       List runs with status, progress and spend

@@ -81,6 +81,7 @@
     skill_command: 'Skill command',
     scheduled: 'Scheduled',
     tool_heavy: 'Tool-heavy',
+    probe: 'Behaviour probe',
   }
 
   const OUTCOME_LABEL = {

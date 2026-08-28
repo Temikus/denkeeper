@@ -154,7 +154,7 @@ func TestSuggest_StratifiesRatherThanRankingOverall(t *testing.T) {
 		t.Fatalf("candidates = %d, want 4", len(got))
 	}
 	counts := candidateCategories(got)
-	for _, cat := range Categories() {
+	for _, cat := range HistoryCategories() {
 		if counts[cat] != 1 {
 			t.Errorf("category %q = %d candidates, want 1 (stratified, not top-4 overall): %v", cat, counts[cat], counts)
 		}

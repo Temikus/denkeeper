@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
-import { evalRuns } from '../../test/handlers.js'
+import { evalRuns, evalProbeSet } from '../../test/handlers.js'
 import { token, authMode } from '../../store.js'
 import { evalProgress } from '../../wsStore.js'
 import Evals from '../../pages/Evals.svelte'
@@ -32,7 +32,7 @@ afterEach(() => {
 })
 
 describe('Evals page — empty state', () => {
-  test('teaches the loop and offers all three CTAs', async () => {
+  test('teaches the loop and offers every fill path', async () => {
     emptyInstance()
     render(Evals)
 
@@ -41,6 +41,7 @@ describe('Evals page — empty state', () => {
       screen.getByText(/Save real conversations as test cases, then compare your current model against a candidate on them/)
     ).toBeInTheDocument()
     expect(screen.getByTestId('empty-suggest-cta')).toBeInTheDocument()
+    expect(screen.getByTestId('empty-probes-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-chat-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-import-cta')).toBeInTheDocument()
   })
@@ -603,5 +604,63 @@ describe('Evals page — suggestions', () => {
     await fireEvent.click(screen.getByTestId('accept-chan:ops:101'))
 
     await waitFor(() => expect(screen.getByTestId('task-set-select')).toHaveValue('fresh-set'))
+  })
+})
+
+describe('Evals page — behaviour probes', () => {
+  test('the header toggle mounts the probe panel above the launcher and closes it again', async () => {
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('probes-toggle'))
+    await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
+
+    const panel = screen.getByTestId('probes-panel')
+    const launcher = screen.getByTestId('launcher')
+    expect(panel.compareDocumentPosition(launcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    await fireEvent.click(screen.getByTestId('probes-close'))
+    await waitFor(() => expect(screen.queryByTestId('probes-panel')).not.toBeInTheDocument())
+  })
+
+  test('the fill panels take turns rather than stacking the launcher off screen', async () => {
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('suggest-toggle'))
+    await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('probes-toggle'))
+    await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
+    expect(screen.queryByTestId('suggest-panel')).not.toBeInTheDocument()
+  })
+
+  test('the probe pass reads the agent the launcher is comparing on', async () => {
+    // Probes are that agent's configuration, so the wrong agent grades nothing.
+    let seen = null
+    server.use(
+      http.get('/api/v1/eval/probes', ({ request }) => {
+        seen = new URL(request.url).searchParams.get('agent')
+        return HttpResponse.json(evalProbeSet)
+      }),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('probes-toggle'))
+    await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
+    expect(seen).toBe('default')
+  })
+
+  test('the empty-state CTA opens the probe cards', async () => {
+    emptyInstance()
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    expect(screen.queryByTestId('probes-panel')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByTestId('empty-probes-cta'))
+    await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
+    expect(screen.getByText('Denial compliance')).toBeInTheDocument()
   })
 })

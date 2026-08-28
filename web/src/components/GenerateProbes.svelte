@@ -1,15 +1,16 @@
 <script>
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { api } from '../api.js'
 
-  // Offers past turns worth keeping as test cases, mined by GET /eval/suggest.
-  // Cold-start fill: an operator with no test set has nothing to compare on,
-  // and picking turns out of Chat one at a time is the slow way there.
+  // Offers behaviour probes generated from the agent's own configuration,
+  // via GET /eval/probes. The top-down counterpart to SuggestCases: history
+  // can only show what has already happened, so a set drawn from it has
+  // nothing to say about whether a candidate respects a denial, stays inside
+  // its permission tier, or honours "one sentence, no tools".
   //
-  // Accepting writes the same shape SaveTestCase does — including the pinned
-  // history, captured now and replayed verbatim at run time, because the source
-  // conversation drifts. Rejecting hides the candidate for the session only:
-  // nothing is written, so a reload offers it again.
+  // Accepting writes the same shape SuggestCases does, plus the probe's notes
+  // (free-text "what good looks like", read by the judge as context) and its
+  // family as a tag. Rejecting hides the card for the session only.
   let {
     agent = '',
     sets = [],
@@ -18,75 +19,77 @@
     onclose = undefined,
   } = $props()
 
-  const CATEGORY_LABEL = {
-    chat: 'Chat / persona',
-    skill_command: 'Skill command',
-    scheduled: 'Scheduled',
-    tool_heavy: 'Tool-heavy',
-    probe: 'Behaviour probe',
+  const KIND_LABEL = {
+    denial_compliance: 'Denial compliance',
+    tier_boundary: 'Permission tier',
+    budget_hint: 'Budget hints',
+    approval_policy: 'Approval policy',
+    skill_instruction: 'Skill instructions',
+    persona_fidelity: 'Persona fidelity',
   }
 
-  // Why this turn is worth keeping, in the operator's words. The API's signal
-  // names are the store's vocabulary, not a reason anyone can read.
-  const SIGNAL_LABEL = {
-    tool_fault: 'a tool call was rejected or failed',
-    many_rounds: 'took three or more tool rounds',
-    high_cost: 'cost in the top 10% of turns',
-    command_skill: 'triggered by a skill command',
+  // What each family is actually checking, in the operator's words. The API's
+  // kind slugs name the family, not the question it asks.
+  const KIND_BLURB = {
+    denial_compliance: 'does it accept a refusal instead of retrying?',
+    tier_boundary: 'does it act within the tier it is actually on?',
+    budget_hint: 'does it honour an explicit bound on the answer?',
+    approval_policy: 'does it treat a request as standing consent?',
+    skill_instruction: 'does it follow the skill you wrote — and leave it alone otherwise?',
+    persona_fidelity: 'does it hold the persona you wrote?',
   }
 
   let loading = $state(true)
   let error = $state('')
-  let candidates = $state([])
+  let probes = $state([])
+  let tier = $state('')
 
-  // Keys hidden for this session — rejected, or already accepted.
   let hiddenKeys = $state(new Set())
   let selectedKeys = $state(new Set())
   let busyKeys = $state(new Set())
   let batching = $state(false)
-  // Batch progress, so a long serial add says where it is rather than sitting
-  // on one "Adding…" for the whole run.
   let batchDone = $state(0)
   let batchTotal = $state(0)
   let acceptError = $state('')
   let savedMsg = $state('')
 
-  // The set control, focused once the panel has something to act on: it is
-  // opened from a button elsewhere on the page, so focus has to follow it in.
   let setControl = $state(null)
-  let targetSet = $state('')
-  let creatingNew = $state(false)
+  // Resolved from the props at construction rather than in an effect: the pass
+  // sends the target set so the server can exclude what it already holds, and
+  // settling it later would cost a second request on every mount.
+  // svelte-ignore state_referenced_locally
+  let targetSet = $state(sets.some(s => s.name === defaultSet) ? defaultSet : (sets[0]?.name || ''))
+  // svelte-ignore state_referenced_locally
+  let creatingNew = $state(sets.length === 0)
   let newSetName = $state('')
-  // Sets created from here, so the picker shows them before the page reloads.
   let created = $state([])
 
   const allSets = $derived([
     ...sets,
     ...created.filter(c => !sets.some(s => s.name === c.name)),
   ])
-  const visible = $derived(candidates.filter(c => !hiddenKeys.has(keyOf(c))))
-  const selectedCount = $derived(visible.filter(c => selectedKeys.has(keyOf(c))).length)
+  const visible = $derived(probes.filter(p => !hiddenKeys.has(keyOf(p))))
+  const selectedCount = $derived(visible.filter(p => selectedKeys.has(keyOf(p))).length)
   const busy = $derived(batching || busyKeys.size > 0)
   const setChosen = $derived(creatingNew ? newSetName.trim() !== '' : targetSet !== '')
 
-  function keyOf(c) {
-    return `${c.conversation_id}:${c.message_id}`
+  // Generation is deterministic, so the prompt is a stable identity — the same
+  // probe from a later pass is the same card.
+  function keyOf(p) {
+    return `${p.kind}:${p.prompt}`
   }
 
-  function categoryLabel(c) {
-    return CATEGORY_LABEL[c] || c
+  function kindLabel(k) {
+    return KIND_LABEL[k] || k
   }
 
-  /** The "why" line: the signals that made this turn interesting. */
-  function whyLine(c) {
-    const parts = (c.signals || []).map(s => SIGNAL_LABEL[s] || s)
-    if (parts.length === 0) return ''
-    return `Why: ${parts.join(' · ')}`
+  function whyLine(p) {
+    const blurb = KIND_BLURB[p.kind]
+    return blurb ? `Checks: ${blurb}` : ''
   }
 
-  /** Names a card's controls, so 60 buttons are not all called "Accept". */
-  function shortLabel(c) {
-    const t = (c.prompt || '').trim().replace(/\s+/g, ' ')
+  function shortLabel(p) {
+    const t = (p.prompt || '').trim().replace(/\s+/g, ' ')
     return t.length > 60 ? `${t.slice(0, 60)}…` : t
   }
 
@@ -97,8 +100,6 @@
 
   // --- Loading --------------------------------------------------------------
 
-  // Guards against a slow response for an agent the operator has since changed
-  // away from overwriting a newer one.
   let requestSeq = 0
 
   async function load() {
@@ -107,23 +108,34 @@
     error = ''
     acceptError = ''
     savedMsg = ''
+    // Probes are one agent's configuration, so without one there is nothing to
+    // read — the request would 400 and the operator would read it as a fault.
+    if (!agent) {
+      probes = []
+      tier = ''
+      error = "Pick an agent first — probes are generated from one agent’s configuration."
+      loading = false
+      return
+    }
     try {
-      const res = await api.evalSuggest({ agent: agent || undefined, limit: 20 })
+      // Passing the target set is what keeps a second pass quiet: the server
+      // drops probes that set already carries.
+      const res = await api.evalProbes({
+        agent: agent || undefined,
+        set: targetSet || undefined,
+      })
       if (seq !== requestSeq) return
-      // The endpoint answers {candidates: [...]}; tolerate a bare array so an
-      // older server does not render as an error.
-      candidates = Array.isArray(res) ? res : (res?.candidates || [])
+      probes = Array.isArray(res) ? res : (res?.probes || [])
+      tier = res?.permission_tier || ''
       selectedKeys = new Set()
-      // A fresh pass is a fresh offer: rejections were only for the last list.
-      // Accepted turns do not come back — the endpoint excludes saved sources.
       hiddenKeys = new Set()
     } catch (e) {
       if (seq !== requestSeq) return
-      error = e.message || 'Could not load suggestions'
+      error = e.message || 'Could not generate probes'
     } finally {
       if (seq === requestSeq) loading = false
     }
-    if (seq === requestSeq && candidates.length > 0) {
+    if (seq === requestSeq && probes.length > 0) {
       await tick()
       setControl?.focus()
     }
@@ -136,36 +148,24 @@
     }
   }
 
-  /** "golden-set (4 cases)" — a bare count reads as runs. */
   function setOption(s) {
     const n = s.task_count ?? 0
     return `${s.name} (${n} case${n === 1 ? '' : 's'})`
   }
 
-  // Refetch when the agent changes: suggestions are that agent's history.
+  // Probes are that agent's configuration, so a change of agent is a new pass.
+  // load() reads targetSet too, but untracked: ensureSet assigns it mid-batch
+  // when a set is created on the fly, and a reload there would wipe the
+  // progress and the saved message. The set picker reloads explicitly instead.
   $effect(() => {
     void agent
-    load()
-  })
-
-  // Pick a target set once one is known, defaulting to the launcher's. With no
-  // sets at all the only path is creating one, so open that directly.
-  let setInitialised = false
-  $effect(() => {
-    if (setInitialised) return
-    if (allSets.length > 0) {
-      targetSet = allSets.some(s => s.name === defaultSet) ? defaultSet : allSets[0].name
-      setInitialised = true
-    } else if (!loading) {
-      creatingNew = true
-      setInitialised = true
-    }
+    untrack(() => load())
   })
 
   // --- Selection ------------------------------------------------------------
 
-  function toggleSelected(c) {
-    const k = keyOf(c)
+  function toggleSelected(p) {
+    const k = keyOf(p)
     const next = new Set(selectedKeys)
     if (next.has(k)) next.delete(k)
     else next.add(k)
@@ -180,8 +180,8 @@
     selectedKeys = new Set()
   }
 
-  function reject(c) {
-    const k = keyOf(c)
+  function reject(p) {
+    const k = keyOf(p)
     hiddenKeys = new Set(hiddenKeys).add(k)
     const next = new Set(selectedKeys)
     next.delete(k)
@@ -197,10 +197,13 @@
 
   function cancelNewSet() {
     creatingNew = false
-    if (allSets.length > 0) targetSet = allSets[0].name
+    if (allSets.length === 0 || allSets[0].name === targetSet) return
+    // Exclusion is server-side and keyed on the set, so a change of target has
+    // to re-run the pass rather than keep cards drawn against the old one.
+    targetSet = allSets[0].name
+    load()
   }
 
-  /** Resolves the target set name, creating the set on the fly when new. */
   async function ensureSet() {
     if (!creatingNew) return targetSet
     const name = newSetName.trim()
@@ -214,34 +217,35 @@
     return name
   }
 
-  async function addOne(setName, c) {
-    const pinned = (c.preceding || []).map(m => ({ role: m.role, content: m.content }))
+  async function addOne(setName, p) {
+    const pinned = (p.preceding || []).map(m => ({ role: m.role, content: m.content }))
     await api.addEvalTask(setName, {
-      prompt: c.prompt,
-      category: c.category,
+      prompt: p.prompt,
+      category: p.category,
+      // Judge context, never parsed as an assertion.
+      notes: p.notes || undefined,
+      tags: p.tags?.length ? p.tags : undefined,
       pinned_history: pinned.length ? pinned : undefined,
-      source_conversation_id: c.conversation_id || undefined,
-      source_message_id: c.message_id ?? null,
     })
   }
 
-  async function accept(c) {
+  async function accept(p) {
     if (busy) return
     acceptError = ''
     savedMsg = ''
-    const k = keyOf(c)
+    const k = keyOf(p)
     busyKeys = new Set(busyKeys).add(k)
     try {
       const setName = await ensureSet()
-      await addOne(setName, c)
+      await addOne(setName, p)
       hiddenKeys = new Set(hiddenKeys).add(k)
       const sel = new Set(selectedKeys)
       sel.delete(k)
       selectedKeys = sel
-      savedMsg = `Added 1 test case to “${setName}”`
+      savedMsg = `Added 1 probe to “${setName}”`
       onaccepted?.(setName)
     } catch (e) {
-      acceptError = e.message || 'Could not add the test case'
+      acceptError = e.message || 'Could not add the probe'
     } finally {
       const next = new Set(busyKeys)
       next.delete(k)
@@ -254,27 +258,28 @@
     acceptError = ''
     savedMsg = ''
     batching = true
-    const chosen = visible.filter(c => selectedKeys.has(keyOf(c)))
+    const chosen = visible.filter(p => selectedKeys.has(keyOf(p)))
     batchTotal = chosen.length
     let added = 0
     try {
       const setName = await ensureSet()
       const done = new Set(hiddenKeys)
-      for (const c of chosen) {
-        // One failure stops the batch rather than silently skipping cases: a
-        // partial add the operator cannot see is worse than a short one.
-        await addOne(setName, c)
-        done.add(keyOf(c))
+      for (const p of chosen) {
+        // One failure stops the batch: a partial add the operator cannot see is
+        // worse than a short one. What did get written is hidden as it goes, so
+        // a failure part-way cannot leave a saved probe re-acceptable.
+        await addOne(setName, p)
+        done.add(keyOf(p))
         hiddenKeys = new Set(done)
         added++
         batchDone = added
       }
-      savedMsg = `Added ${added} test case${added === 1 ? '' : 's'} to “${setName}”`
+      savedMsg = `Added ${added} probe${added === 1 ? '' : 's'} to “${setName}”`
       onaccepted?.(setName)
     } catch (e) {
       acceptError = added > 0
         ? `Added ${added} of ${chosen.length}, then failed: ${e.message}`
-        : (e.message || 'Could not add the test cases')
+        : (e.message || 'Could not add the probes')
       if (added > 0) onaccepted?.(targetSet)
     } finally {
       selectedKeys = new Set()
@@ -285,66 +290,75 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="suggest" data-testid="suggest-panel" aria-label="Suggested test cases"
+<section class="probes" data-testid="probes-panel" aria-label="Generated behaviour probes"
   aria-busy={busy} onkeydown={handleKeydown}>
   <div class="head">
-    <h2 class="section-title">Suggest from history</h2>
+    <h2 class="section-title">Generate behaviour probes</h2>
     <div class="head-actions">
       <button class="btn-ghost btn-sm" onclick={load} disabled={loading || busy}
-        data-testid="suggest-refresh">Refresh</button>
+        data-testid="probes-refresh">Refresh</button>
       {#if onclose}
         <button class="btn-ghost btn-sm" onclick={() => onclose?.()} disabled={busy}
-          data-testid="suggest-close">Close</button>
+          data-testid="probes-close">Close</button>
       {/if}
     </div>
   </div>
 
-  {#if acceptError}<div class="inline-error" role="alert" data-testid="suggest-accept-error">{acceptError}</div>{/if}
-  {#if savedMsg}<div class="save-ok" role="status" data-testid="suggest-saved">{savedMsg}</div>{/if}
+  {#if acceptError}<div class="inline-error" role="alert" data-testid="probes-accept-error">{acceptError}</div>{/if}
+  {#if savedMsg}<div class="save-ok" role="status" data-testid="probes-saved">{savedMsg}</div>{/if}
 
   {#if loading}
-    <p class="muted row" role="status" data-testid="suggest-loading">
+    <p class="muted row" role="status" data-testid="probes-loading">
       <span class="spinner" aria-hidden="true"></span>
-      Looking through recent turns…
+      Reading this agent's configuration…
     </p>
   {:else if error}
-    <div class="inline-error" role="alert" data-testid="suggest-error">{error}</div>
+    <div class="inline-error" role="alert" data-testid="probes-error">{error}</div>
     <button class="btn-ghost btn-sm" onclick={load}>Try again</button>
   {:else if visible.length === 0}
-    <p class="muted" data-testid="suggest-empty">
-      {#if candidates.length === 0}
-        Nothing to suggest yet. Turns become candidates once they show something worth
-        testing — a failed tool call, several tool rounds, an unusually expensive reply,
-        or a skill command.
+    <p class="muted" data-testid="probes-empty">
+      {#if probes.length === 0}
+        Nothing new to generate. Probes come from this agent's permission tier, auto-approve
+        policy, persona and skills — the set you picked already covers what its configuration
+        describes.
       {:else}
-        All suggestions handled. Refresh to look again.
+        All probes handled. Refresh to look again.
       {/if}
     </p>
   {:else}
+    <p class="muted" data-testid="probes-lead">
+      Generated from this agent's own configuration{#if tier} — permission tier
+      <strong>{tier}</strong>{/if}. These cover behaviour history cannot: a well-behaved
+      current model never retried a denied call, so no past turn shows one being respected.
+    </p>
+
     <div class="controls">
       <div class="field set-field">
-        <label class="field-label" for="suggest-set">Add to test set</label>
+        <label class="field-label" for="probes-set">Add to test set</label>
         {#if creatingNew}
           <div class="row">
             <input
-              id="suggest-set"
+              id="probes-set"
               type="text"
               bind:this={setControl}
               bind:value={newSetName}
-              placeholder="e.g. golden-set"
+              placeholder="e.g. probes"
               maxlength="80"
               disabled={busy}
-              data-testid="suggest-new-set"
+              data-testid="probes-new-set"
             />
             {#if allSets.length > 0}
               <button class="btn-link" onclick={cancelNewSet} disabled={busy}>Use existing</button>
             {/if}
           </div>
-          <span class="hint">Created when you accept the first case.</span>
+          <span class="hint">Created when you accept the first probe.</span>
         {:else}
           <div class="row">
-            <select id="suggest-set" bind:this={setControl} bind:value={targetSet}
-              disabled={busy} data-testid="suggest-set-select">
+            <!-- Not bind:value — the pass has to be re-run against the newly
+                 chosen set, and the assignment and the reload must be ordered. -->
+            <select id="probes-set" bind:this={setControl} value={targetSet}
+              onchange={(e) => { targetSet = e.currentTarget.value; load() }}
+              disabled={busy} data-testid="probes-set-select">
               {#each allSets as s}
                 <option value={s.name}>{setOption(s)}</option>
               {/each}
@@ -357,7 +371,7 @@
       <div class="batch">
         <button class="btn-primary" onclick={acceptSelected}
           disabled={busy || selectedCount === 0 || !setChosen}
-          data-testid="accept-selected">
+          data-testid="probes-accept-selected">
           {#if batching}<span class="spinner" aria-hidden="true"></span>Adding {Math.min(batchDone + 1, batchTotal)} of {batchTotal}…{:else}Accept selected ({selectedCount}){/if}
         </button>
         <button class="btn-ghost btn-sm" onclick={selectAll} disabled={busy}>Select all</button>
@@ -367,35 +381,42 @@
     </div>
 
     {#if !setChosen}
-      <p class="hint" data-testid="suggest-blocker">Pick or name a test set to accept into.</p>
+      <p class="hint" data-testid="probes-blocker">Pick or name a test set to accept into.</p>
     {/if}
-    <p class="hint">Rejecting writes nothing — a rejected suggestion comes back on refresh.</p>
-    <ul class="cards" data-testid="suggest-cards">
-      {#each visible as c (keyOf(c))}
-        {@const k = keyOf(c)}
+    <p class="hint">Rejecting writes nothing — a rejected probe comes back on refresh.</p>
+    <ul class="cards" data-testid="probes-cards">
+      {#each visible as p (keyOf(p))}
+        {@const k = keyOf(p)}
         <li class="card">
           <div class="card-head">
             <label class="pick">
               <input type="checkbox" checked={selectedKeys.has(k)}
-                onchange={() => toggleSelected(c)} disabled={busy}
-                aria-label={`Select: ${shortLabel(c)}`} />
+                onchange={() => toggleSelected(p)} disabled={busy}
+                aria-label={`Select: ${shortLabel(p)}`} />
             </label>
-            <span class="cat-chip">{categoryLabel(c.category)}</span>
+            <span class="cat-chip">{kindLabel(p.kind)}</span>
+            {#if p.source}<span class="src">from {p.source}</span>{/if}
           </div>
-          <p class="prompt">{preview(c.prompt)}</p>
-          {#if whyLine(c)}<p class="why">{whyLine(c)}</p>{/if}
-          {#if c.preceding?.length}
-            <p class="hint">Pins {c.preceding.length} preceding turn{c.preceding.length === 1 ? '' : 's'} as history.</p>
+          <p class="prompt">{preview(p.prompt)}</p>
+          {#if whyLine(p)}<p class="why">{whyLine(p)}</p>{/if}
+          {#if p.notes}
+            <details class="notes">
+              <summary>What good looks like</summary>
+              <p>{p.notes}</p>
+            </details>
+          {/if}
+          {#if p.preceding?.length}
+            <p class="hint">Pins {p.preceding.length} preceding turn{p.preceding.length === 1 ? '' : 's'} as history.</p>
           {/if}
           <div class="card-actions">
-            <button class="btn-primary" onclick={() => accept(c)}
-              disabled={busy || !setChosen} aria-label={`Accept: ${shortLabel(c)}`}
-              data-testid={`accept-${k}`}>
+            <button class="btn-primary" onclick={() => accept(p)}
+              disabled={busy || !setChosen} aria-label={`Accept: ${shortLabel(p)}`}
+              data-testid={`probe-accept-${k}`}>
               {#if busyKeys.has(k)}<span class="spinner" aria-hidden="true"></span>Adding…{:else}Accept{/if}
             </button>
-            <button class="btn-ghost btn-sm" onclick={() => reject(c)} disabled={busy}
-              aria-label={`Reject: ${shortLabel(c)}`}
-              data-testid={`reject-${k}`}>Reject</button>
+            <button class="btn-ghost btn-sm" onclick={() => reject(p)} disabled={busy}
+              aria-label={`Reject: ${shortLabel(p)}`}
+              data-testid={`probe-reject-${k}`}>Reject</button>
           </div>
         </li>
       {/each}
@@ -404,11 +425,11 @@
 </section>
 
 <style>
-  .suggest {
+  .probes {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: var(--card-inset);
+    padding: 18px;
     margin-bottom: 24px;
   }
 
@@ -444,7 +465,7 @@
     letter-spacing: 0.3px;
   }
 
-  .inline-error { margin: 0 0 10px; }
+  .inline-error { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
 
   .controls {
     display: flex;
@@ -520,6 +541,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
   }
 
   .pick {
@@ -539,14 +561,17 @@
     white-space: nowrap;
   }
 
+  .src {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+
   .prompt {
     font-size: 13px;
     line-height: 1.5;
     color: var(--text);
     margin: 0;
-    /* Prompts are prose with unbreakable ids in them; preview() caps the
-       length, so the card grows rather than clipping into a scroll box a
-       keyboard user could not reach. */
     overflow-wrap: anywhere;
     white-space: pre-wrap;
   }
@@ -556,6 +581,23 @@
     color: var(--text-muted);
     margin: 0;
     line-height: 1.5;
+  }
+
+  /* Notes are long prose and only matter when the operator is deciding whether
+     the probe grades the right thing, so they start collapsed. */
+  .notes {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .notes summary {
+    cursor: pointer;
+  }
+
+  .notes p {
+    margin: 6px 0 0;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 
   .card-actions {
@@ -612,5 +654,9 @@
 
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation-duration: 2s; }
+  }
+
+  @media (max-width: 520px) {
+    .probes { padding: 14px; }
   }
 </style>

@@ -225,6 +225,43 @@ describe('SuggestCases — batch accept and reject', () => {
       expect(screen.getByTestId('suggest-accept-error')).toHaveTextContent('Added 1 of 3, then failed'))
   })
 
+  test('a case written before a mid-batch failure does not stay acceptable', async () => {
+    // Its task row exists the moment the POST lands, so leaving the card
+    // visible would let a retry write it twice — AddTask has no dedup, and the
+    // endpoint's saved-source exclusion only applies on the next load. Same
+    // pin as the probes panel: the two accept paths share this state machine.
+    const posted = []
+    let n = 0
+    server.use(
+      http.post('/api/v1/eval/task-sets/:name/tasks', async ({ request }) => {
+        const body = await request.json()
+        n++
+        if (n === 2) return HttpResponse.json({ error: 'store is busy' }, { status: 500 })
+        posted.push(body.prompt)
+        return HttpResponse.json({ id: n, ...body }, { status: 201 })
+      }),
+    )
+    await renderPanel()
+
+    await fireEvent.click(screen.getByText('Select all'))
+    await fireEvent.click(screen.getByTestId('accept-selected'))
+    await waitFor(() =>
+      expect(screen.getByTestId('suggest-accept-error')).toHaveTextContent('Added 1 of 3, then failed'))
+
+    // The saved candidate is hidden; the failed and unattempted ones stay.
+    expect(screen.queryByTestId('accept-chan:ops:101')).not.toBeInTheDocument()
+    expect(screen.getByTestId('accept-chan:ops:102')).toBeInTheDocument()
+    expect(screen.getByTestId('accept-chan:dev:103')).toBeInTheDocument()
+
+    // Re-accepting what is left retries only the two that never landed.
+    await fireEvent.click(screen.getByText('Select all'))
+    await fireEvent.click(screen.getByTestId('accept-selected'))
+    await waitFor(() =>
+      expect(screen.getByTestId('suggest-saved')).toHaveTextContent('Added 2 test cases'))
+    expect(posted.filter(p => p === 'Summarise the on-call handover for this week')).toHaveLength(1)
+    expect(posted).toHaveLength(3)
+  })
+
   test('reject hides the candidate without writing anything', async () => {
     await renderPanel()
 

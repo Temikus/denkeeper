@@ -10,6 +10,7 @@
   import ModelSelector from '../components/ModelSelector.svelte'
   import EvalResults from '../components/EvalResults.svelte'
   import SuggestCases from '../components/SuggestCases.svelte'
+  import GenerateProbes from '../components/GenerateProbes.svelte'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
   const QUICK_TASKS = 10
@@ -52,18 +53,29 @@
   let importError = $state('')
   let importOk = $state('')
 
-  // --- Suggestions ---
+  // --- Suggestions and probes ---
   let showSuggest = $state(false)
+  let showProbes = $state(false)
 
   function toggleSuggest() {
     showSuggest = !showSuggest
-    // Two stacked panels above the launcher push it off screen, so they take
-    // turns.
-    if (showSuggest) showImport = false
+    // Stacked panels above the launcher push it off screen, so they take turns.
+    if (showSuggest) {
+      showImport = false
+      showProbes = false
+    }
   }
 
-  // A suggestion accepted into a set changes its case count, and may have
-  // created the set the launcher should now be pointing at.
+  function toggleProbes() {
+    showProbes = !showProbes
+    if (showProbes) {
+      showImport = false
+      showSuggest = false
+    }
+  }
+
+  // A case accepted into a set changes its count, and may have created the set
+  // the launcher should now be pointing at. Shared by both fill paths.
   async function onSuggestAccepted(name) {
     try {
       await loadTaskSets()
@@ -294,7 +306,10 @@
 
   function toggleImport() {
     showImport = !showImport
-    if (showImport) showSuggest = false
+    if (showImport) {
+      showSuggest = false
+      showProbes = false
+    }
     importError = ''
     importOk = ''
   }
@@ -478,6 +493,10 @@
     <button class="btn-ghost btn-sm" onclick={toggleSuggest}
       aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
       data-testid="suggest-toggle">Suggest from history</button>
+    <button class="btn-ghost btn-sm" onclick={toggleProbes} disabled={!baseAgent}
+      title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
+      aria-expanded={showProbes} aria-controls="eval-probes-panel"
+      data-testid="probes-toggle">Generate probes</button>
     <button class="btn-ghost btn-sm" onclick={toggleImport}
       aria-expanded={showImport} aria-controls="eval-import-panel"
       data-testid="import-toggle">Import JSONL</button>
@@ -498,6 +517,10 @@
       <button class="btn-primary" onclick={toggleSuggest}
         aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
         data-testid="empty-suggest-cta">Suggest from history</button>
+      <button class="btn-ghost" onclick={toggleProbes} disabled={!baseAgent}
+        title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
+        aria-expanded={showProbes} aria-controls="eval-probes-panel"
+        data-testid="empty-probes-cta">Generate probes</button>
       <button class="btn-ghost" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>
       <button class="btn-ghost" onclick={toggleImport} data-testid="empty-import-cta"
         aria-expanded={showImport} aria-controls="eval-import-panel">Import JSONL</button>
@@ -546,6 +569,21 @@
         defaultSet={taskSetName}
         onaccepted={onSuggestAccepted}
         onclose={() => (showSuggest = false)}
+      />
+    {/if}
+  </div>
+</div>
+
+<!-- The top-down fill path, collapsing like the two above it. -->
+<div class="inline-panel" id="eval-probes-panel" class:open={showProbes} use:inert={!showProbes}>
+  <div class="inline-panel-inner">
+    {#if showProbes}
+      <GenerateProbes
+        agent={baseAgent}
+        sets={taskSets}
+        defaultSet={taskSetName}
+        onaccepted={onSuggestAccepted}
+        onclose={() => (showProbes = false)}
       />
     {/if}
   </div>
@@ -763,14 +801,18 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 24px;
-    max-width: 620px;
+    /* Shares --card-inset with .launcher and SuggestCases' .suggest so the
+       card lines up with whichever panel opens under it at every width. */
+    padding: var(--card-inset);
+    margin-bottom: 24px;
   }
   .empty-lead {
     font-size: 14px;
     color: var(--text);
     margin-bottom: 16px;
     line-height: 1.6;
+    /* Card is full width; the prose is not. */
+    max-width: 620px;
   }
   .empty-actions {
     display: flex;
@@ -785,7 +827,7 @@
     outline: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
   .launch-grid {
