@@ -2756,6 +2756,87 @@
                 }
             }
         },
+        "/eval/runs/{id}/judge": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model; without it the endpoint reports 503 and the MCP judge path is unaffected. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Judge a run's pending pairs with the internal judge",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional sample_n calibration subset and item limit",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalJudgeInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Pass started; items is how many it took",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.JudgePass"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id or body",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Run is not terminal, or is already being judged",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem or internal judge not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs/{id}/pairs": {
             "get": {
                 "security": [
@@ -8404,6 +8485,32 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.JudgePass": {
+            "type": "object",
+            "properties": {
+                "cost_cap": {
+                    "type": "number"
+                },
+                "items": {
+                    "type": "integer"
+                },
+                "judge_ident": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "rubric_version": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Judgment": {
             "type": "object",
             "properties": {
@@ -8658,6 +8765,10 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
                 },
                 "k": {
                     "type": "integer"
@@ -9660,11 +9771,23 @@
                 "gate_rounds_pct": {
                     "type": "number"
                 },
+                "judge_max_cost_per_run": {
+                    "description": "JudgeMaxCostPerRun is the ceiling for one judging pass, so a page can\nsay what it is about to authorise. Omitted with the model.",
+                    "type": "number"
+                },
+                "judge_model": {
+                    "description": "JudgeModel is the internal judge's model, omitted when [eval] judge_model\nis unset. Its presence is the signal a results view uses to decide\nwhether server-side judging is on offer at all — without it the only\njudge path is Claude Code over MCP.",
+                    "type": "string"
+                },
                 "max_concurrent": {
                     "type": "integer"
                 },
                 "max_cost_per_run": {
                     "type": "number"
+                },
+                "rubric_version": {
+                    "description": "RubricVersion names the rubric revision the internal judge grades under.",
+                    "type": "string"
                 },
                 "win_threshold": {
                     "type": "number"
@@ -9700,6 +9823,19 @@
             "type": "object",
             "properties": {
                 "imported": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.evalJudgeInput": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "description": "Limit caps how many items the pass takes. 0 is the whole queue.",
+                    "type": "integer"
+                },
+                "sample_n": {
+                    "description": "SampleN draws that many pending items at random instead of taking the\nhead of the queue — the calibration subset, the same knob eval_pending\ngives the MCP judge.",
                     "type": "integer"
                 }
             }
@@ -9748,6 +9884,10 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
                 },
                 "k": {
                     "type": "integer"
@@ -9809,6 +9949,14 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
+                },
+                "judging": {
+                    "description": "Judging is true while an internal-judge pass is working this run's\nqueue, so a page can say why pairs_judged is climbing on its own.",
+                    "type": "boolean"
                 },
                 "k": {
                     "type": "integer"

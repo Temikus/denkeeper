@@ -467,6 +467,14 @@ export const api = {
     `/api/v1/eval/runs/${encodeURIComponent(id)}/samples`
     + (taskID ? `?task_id=${encodeURIComponent(taskID)}` : '')),
   evalRunPairs: (id) => apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/pairs`),
+  // Starts a server-side judging pass over a run's outstanding pairs. 503 when
+  // [eval] judge_model is unset, which is why the results view only offers it
+  // once GET /eval/config reports a judge model.
+  evalJudgeRun: (id, body = {}) =>
+    apiFetch(`/api/v1/eval/runs/${encodeURIComponent(id)}/judge`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   evalEstimate: (body) =>
     apiFetch('/api/v1/eval/estimate', { method: 'POST', body: JSON.stringify(body) }),
   evalConfig: () => apiFetch('/api/v1/eval/config'),

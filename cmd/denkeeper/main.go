@@ -1489,22 +1489,49 @@ func reviewerConfigDeps(agentName string, parent *agent.Engine, tierFn func() st
 // variant's model/provider overlay is a per-turn router clone, so nothing
 // about the live engine is mutated.
 func buildEvalRunner(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) *eval.Runner {
-	source := func(name string) (eval.Engine, bool) {
-		e := dispatcher.Agent(name)
-		// Nil-check before boxing: Agent returns a typed *agent.Engine, and a
-		// nil one wrapped in the interface reads as non-nil to every caller.
-		if e == nil {
-			return nil, false
-		}
-		return e, true
-	}
-	return eval.NewRunner(store, source, auditor, eval.Config{
+	return eval.NewRunner(store, liveEngineSource(dispatcher), auditor, eval.Config{
 		MaxConcurrent:     cfg.Eval.MaxConcurrent,
 		MaxCostPerRun:     cfg.Eval.MaxCostPerRun,
 		DefaultK:          cfg.Eval.DefaultK,
 		CompletenessFloor: cfg.Eval.CompletenessFloor,
 		AuditMode:         cfg.Eval.AuditMode(),
 	}, logger)
+}
+
+// buildEvalJudge wires the internal judge over the same live engines the
+// runner uses, for its router: the judge overlay is a WithModel/WithProvider
+// clone, so judging bills to the agent's own cost tracker and honours its
+// pricing and fallback rules. It is unavailable — not absent — when
+// [eval] judge_model is unset, so the endpoint can say why.
+func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) *eval.Judge {
+	return eval.NewJudge(store, liveEngineSource(dispatcher), auditor, judgeConfigFrom(cfg), logger)
+}
+
+// judgeConfigFrom translates the [eval] judge block. Shared with the reload
+// path so a reloaded judge_model cannot mean one thing at boot and another
+// after SIGHUP.
+func judgeConfigFrom(cfg *config.Config) eval.JudgeConfig {
+	return eval.JudgeConfig{
+		Model:         cfg.Eval.JudgeModel,
+		Provider:      cfg.Eval.JudgeProvider,
+		MaxCost:       cfg.Eval.JudgeMaxCostPerRun,
+		MaxConcurrent: cfg.Eval.MaxConcurrent,
+	}
+}
+
+// liveEngineSource resolves an agent name to its live engine for the eval
+// runner and the internal judge alike. One closure, not two: the nil-check is
+// load-bearing — Agent returns a typed *agent.Engine, and a nil one wrapped in
+// the interface reads as non-nil to every caller — and a second copy of that
+// subtlety is a second thing to get wrong later.
+func liveEngineSource(dispatcher *agent.Dispatcher) eval.EngineSource {
+	return func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}
 }
 
 func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, parent *agent.Engine, p *persona.Persona, abc agentBuildCtx) (*agent.Engine, error) {
@@ -1687,6 +1714,7 @@ type startAPIWithMCPArgs struct {
 	auditor         audit.Emitter
 	evalStore       *eval.Store
 	evalRunner      *eval.Runner
+	evalJudge       *eval.Judge
 	oauthDeps       *api.OAuthDeps
 	abc             agentBuildCtx
 	path            string
@@ -1719,7 +1747,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Logger:          a.logger,
 	})
 
-	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, api.Deps{
+	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, a.evalJudge, api.Deps{
 		Dispatcher:        a.dispatcher,
 		Scheduler:         a.sched,
 		CostTracker:       a.cost,
@@ -1736,12 +1764,13 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Auditor:           a.auditor,
 		EvalStore:         a.evalStore,
 		EvalRunner:        a.evalRunner,
+		EvalJudge:         a.evalJudge,
 		ConfigPath:        a.path,
 		ModelLister:       a.dispatcher.ListModels,
 		ModelDetailLister: a.dispatcher.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
-		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.approvalManager, a.logger),
+		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.approvalManager, a.evalJudge, a.logger),
 		RestartFunc:       selfRestartFunc,
 		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 			return buildAgentEngine(ctx, ac, a.abc)
@@ -1803,7 +1832,7 @@ func startAPIServer(ctx context.Context, cfg *config.Config, deps api.Deps, hasA
 
 // startAPIAndWireBroadcast starts the API server and wires the adapter→WebSocket
 // broadcast so the web UI is notified when messages arrive via external adapters.
-func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, evalRunner *eval.Runner, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
+func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatcher *agent.Dispatcher, evalRunner *eval.Runner, evalJudge *eval.Judge, deps api.Deps, hasActiveKey bool, logger *slog.Logger) error {
 	apiServer, err := startAPIServer(ctx, cfg, deps, hasActiveKey, logger)
 	if err != nil {
 		return err
@@ -1849,6 +1878,11 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 		// OnResume: a panic is not a pause, and a stopped run stays stopped.
 		if evalRunner != nil {
 			evalRunner.StopAll()
+		}
+		// Judging spends real money on its own budget, and a pass is no more
+		// in inFlight than a run is, so the panic switch has to reach it too.
+		if evalJudge != nil {
+			evalJudge.StopAll()
 		}
 		if hub != nil {
 			hub.Broadcast(api.PanicStatusFrame{
@@ -2061,6 +2095,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// the live engines it owns. Construction starts no goroutine.
 	evalRunner := buildEvalRunner(cfg, st.evalStore, dispatcher, auditor, logger)
 	defer evalRunner.Shutdown()
+	evalJudge := buildEvalJudge(cfg, st.evalStore, dispatcher, auditor, logger)
+	defer evalJudge.Shutdown()
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
 		return err
@@ -2084,6 +2120,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			auditor:         auditor,
 			evalStore:       st.evalStore,
 			evalRunner:      evalRunner,
+			evalJudge:       evalJudge,
 			oauthDeps:       oauthDeps,
 			abc:             abc,
 			path:            path,
@@ -2149,7 +2186,7 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 // and overwrites cfg in place, allowing hot-reloading of most settings.
 // Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
 // re-applied to live engines so they don't go stale after a reload.
-func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, approvals *approval.Manager, logger *slog.Logger) func() error {
+func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, logger *slog.Logger) func() error {
 	return func() error {
 		newCfg, err := config.Load(path)
 		if err != nil {
@@ -2160,6 +2197,11 @@ func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatch
 		// Re-apply the TOML auto-approve policy wholesale: a reload that
 		// narrows a list must narrow the effective rules too.
 		approvals.SetConfigRules(context.Background(), configAutoApproveRules(cfg))
+
+		// The internal judge holds its own snapshot of the [eval] judge block,
+		// so it has to be told: without this, turning judge_model on and
+		// reloading still 503s until a restart.
+		evalJudge.SetConfig(judgeConfigFrom(cfg))
 
 		for _, ac := range cfg.Agents {
 			e := dispatcher.Agent(ac.Name)

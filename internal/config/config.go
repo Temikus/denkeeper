@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -216,6 +217,21 @@ type EvalConfig struct {
 	// GateCostPct is the largest tolerated relative rise in mean cost per task,
 	// in percent. Default: 25.
 	GateCostPct float64 `toml:"gate_cost_pct"`
+	// JudgeModel names the model the internal judge grades blinded pairs with.
+	// Empty (the default) means there is no internal judge and the only judge
+	// path is Claude Code over MCP — the subsystem keeps its zero footprint
+	// until an operator opts in, and opting in is what costs money.
+	JudgeModel string `toml:"judge_model"`
+	// JudgeProvider selects which registered provider instance serves the
+	// judge, by [[llm.providers]] name, following the per-agent llm_provider
+	// precedent. Empty uses the base agent's own provider, so a judge on the
+	// same provider as the agent needs one key rather than two.
+	JudgeProvider string `toml:"judge_provider"`
+	// JudgeMaxCostPerRun is the USD ceiling for one judging pass over a run,
+	// the judge's counterpart to MaxCostPerRun. It is a separate budget
+	// because a judging pass is a separate decision to spend, taken after the
+	// run's own cap has already been consumed. Defaults to MaxCostPerRun.
+	JudgeMaxCostPerRun float64 `toml:"judge_max_cost_per_run"`
 	// Capture turns on L1 trace capture for *live* turns: the built system
 	// prompt, the history window as sent, every tool call with its arguments
 	// and result, and the final response are recorded to turn_traces and shown
@@ -1569,6 +1585,12 @@ func applyEvalDefaults(cfg *Config) {
 	if cfg.Eval.GateCostPct == 0 {
 		cfg.Eval.GateCostPct = 25
 	}
+	// The judge cap defaults to the run cap rather than to a literal, so an
+	// operator who sets judge_model and nothing else still judges under a
+	// bound they already chose.
+	if cfg.Eval.JudgeMaxCostPerRun == 0 {
+		cfg.Eval.JudgeMaxCostPerRun = cfg.Eval.MaxCostPerRun
+	}
 }
 
 // applyReplyGuardDefaults fills the reply sanity guard settings.
@@ -2291,9 +2313,33 @@ func validateEval(e *EvalConfig) error {
 			return fmt.Errorf("%s must not be negative, got %v", g.key, g.val)
 		}
 	}
-	// Capture needs no validation — a bool has no wrong value, and its default
-	// is the safe one. The two trace bounds do: a negative cap or retention is
-	// meaningless, and a written 0 takes the default like every other key here.
+	if err := validateEvalJudge(e); err != nil {
+		return err
+	}
+	return validateEvalTraces(e)
+}
+
+// validateEvalJudge validates the internal judge keys of [eval].
+func validateEvalJudge(e *EvalConfig) error {
+	// 0 is the omitted key, which defaults to max_cost_per_run; only a written
+	// negative is wrong.
+	if e.JudgeMaxCostPerRun < 0 {
+		return fmt.Errorf("judge_max_cost_per_run must not be negative, got %v", e.JudgeMaxCostPerRun)
+	}
+	// A provider without a model selects nothing: the internal judge is off
+	// unless judge_model is set, so the pairing is worth catching at load
+	// rather than leaving an operator to wonder why their judge never ran.
+	if e.JudgeProvider != "" && e.JudgeModel == "" {
+		return errors.New("judge_provider is set but judge_model is not: the internal judge is off without a model")
+	}
+	return nil
+}
+
+// validateEvalTraces validates the turn-trace keys of [eval]. Capture needs no
+// validation — a bool has no wrong value, and its default is the safe one. The
+// two bounds do: a negative cap or retention is meaningless, and a written 0
+// takes the default like every other key here.
+func validateEvalTraces(e *EvalConfig) error {
 	if e.MaxTraceBytes < 0 {
 		return fmt.Errorf("max_trace_bytes must not be negative, got %d", e.MaxTraceBytes)
 	}

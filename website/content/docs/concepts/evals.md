@@ -122,6 +122,8 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp \
   --header "Authorization: Bearer $DENKEEPER_JUDGE_KEY"
 ```
 
+Setting `[eval] judge_model` adds a second consumer for the same queue: an **internal judge** that grades the outstanding pairs server-side, for runs nobody is watching. `POST /eval/runs/{id}/judge` starts a pass, and the judgment-pending block offers it as a button beside the Claude Code instruction. It is one completion per item with no tools in the request and no reader beyond the blinded payload, so it can no more unblind its own queue than the MCP judge can; it grades against the same rubric, records the same `rubric_version`, and its verdicts feed the same win-rate under `judge_ident` `judge_model`. Judging spend is capped by `judge_max_cost_per_run` and recorded on the run as `judge_cost`, apart from the samples' own budget. Left unset there is no internal judge and Claude Code is the only judge path.
+
 The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
