@@ -477,6 +477,17 @@ export const api = {
     const qs = params.toString()
     return apiFetch(`/api/v1/eval/suggest${qs ? `?${qs}` : ''}`)
   },
+  // Top-down counterpart to evalSuggest: test cases generated from the agent's
+  // own configuration rather than mined from its history. `set` suppresses
+  // probes that set already carries.
+  evalProbes: (opts = {}) => {
+    const params = new URLSearchParams()
+    if (opts.agent) params.set('agent', opts.agent)
+    if (opts.set) params.set('set', opts.set)
+    if (opts.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return apiFetch(`/api/v1/eval/probes${qs ? `?${qs}` : ''}`)
+  },
 
   // Turn traces — what a live turn actually saw. Recorded only when
   // [eval] capture is on, which is why the list response repeats the switch.
