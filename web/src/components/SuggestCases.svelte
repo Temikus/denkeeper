@@ -407,7 +407,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
 
@@ -611,9 +611,5 @@
 
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation-duration: 2s; }
-  }
-
-  @media (max-width: 520px) {
-    .suggest { padding: 14px; }
   }
 </style>

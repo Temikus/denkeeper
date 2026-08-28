@@ -761,14 +761,18 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 24px;
-    max-width: 620px;
+    /* Shares --card-inset with .launcher and SuggestCases' .suggest so the
+       card lines up with whichever panel opens under it at every width. */
+    padding: var(--card-inset);
+    margin-bottom: 24px;
   }
   .empty-lead {
     font-size: 14px;
     color: var(--text);
     margin-bottom: 16px;
     line-height: 1.6;
+    /* Card is full width; the prose is not. */
+    max-width: 620px;
   }
   .empty-actions {
     display: flex;
@@ -783,7 +787,7 @@
     outline: none;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
   .launch-grid {
