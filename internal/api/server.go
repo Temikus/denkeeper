@@ -51,7 +51,7 @@ type Deps struct {
 	Scheduler         *scheduler.Scheduler
 	CostTracker       *llm.CostTracker
 	Memory            agent.MemoryStore
-	Config            *config.Config
+	Config            *config.Holder                                                           // nil = no config; hands out immutable snapshots
 	Approvals         *approval.Manager                                                        // nil = approval endpoints return 503
 	LifecycleMgr      *tool.LifecycleManager                                                   // nil = tool CRUD endpoints return 503
 	BrowserProfiles   *browser.ProfileService                                                  // nil = browser endpoints return 503
@@ -112,6 +112,12 @@ type Server struct {
 	// Defaults to 13; tests override to bcrypt.MinCost for speed.
 	bcryptCost int
 }
+
+// appConfig returns a consistent snapshot of the application config. A hot
+// reload swaps the holder's pointer, so a handler must call this once and read
+// every field off the returned value rather than dereferencing the holder
+// repeatedly. Returns nil when no config was wired.
+func (s *Server) appConfig() *config.Config { return s.deps.Config.Get() }
 
 // @title Denkeeper API
 // @version 1.0
@@ -387,7 +393,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 // without rebuilding the mux.
 func (s *Server) mcpGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.deps.Config.API.IsMCPServerEnabled() {
+		if !s.appConfig().API.IsMCPServerEnabled() {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "MCP server is disabled"})
 			return
 		}
@@ -468,7 +474,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
 	}
-	if s.deps.Config.API.IsMCPServerEnabled() {
+	if s.appConfig().API.IsMCPServerEnabled() {
 		resp["mcp_server_enabled"] = true
 		resp["mcp_server_endpoint"] = s.mcpServerEndpoint()
 	}
@@ -513,7 +519,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	// Look up configured adapter bindings and supervisor for each agent.
 	bindingMap := make(map[string][]string)
 	supervisorMap := make(map[string]string)
-	for _, ac := range s.deps.Config.Agents {
+	for _, ac := range s.appConfig().Agents {
 		bindingMap[ac.Name] = ac.Adapters
 		supervisorMap[ac.Name] = ac.Supervisor
 	}
@@ -582,7 +588,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var supervisorContextMessages int
 	var supervisorBodyExcerptLen int
 	var supervisorToolDescLen int
-	for _, ac := range s.deps.Config.Agents {
+	for _, ac := range s.appConfig().Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
 			fallbacks = ac.Fallbacks
@@ -664,7 +670,7 @@ func (s *Server) buildPerProviderCosts(ctx context.Context) []providerCostEntry 
 			Cost:     bp.Cost,
 			Messages: bp.Messages,
 		}
-		for _, pc := range s.deps.Config.LLM.Providers {
+		for _, pc := range s.appConfig().LLM.Providers {
 			if pc.Name == bp.Provider {
 				entry.Soft = pc.CostLimitSoft
 				entry.Hard = pc.CostLimitHard
@@ -735,9 +741,9 @@ func (s *Server) handleCosts(w http.ResponseWriter, r *http.Request) {
 		"fallback_rate_per_1k_tokens": 0.0,
 		"custom_model_count":          0,
 	}
-	if s.deps.Config != nil {
-		pricingConfig["fallback_rate_per_1k_tokens"] = s.deps.Config.Costs.DefaultRatePerKTokens
-		pricingConfig["custom_model_count"] = len(s.deps.Config.Costs.ModelPrices)
+	if cfg := s.appConfig(); cfg != nil {
+		pricingConfig["fallback_rate_per_1k_tokens"] = cfg.Costs.DefaultRatePerKTokens
+		pricingConfig["custom_model_count"] = len(cfg.Costs.ModelPrices)
 	}
 
 	limits := s.deps.CostTracker.DefaultLimits()
@@ -2715,7 +2721,7 @@ func (s *Server) handleBrowserConfig(w http.ResponseWriter, _ *http.Request) {
 	if !s.browserRequired(w) {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.deps.Config.Browser)
+	writeJSON(w, http.StatusOK, s.appConfig().Browser)
 }
 
 // keyStoreRequired writes 503 when the KeyStore is not configured.

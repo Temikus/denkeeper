@@ -32,7 +32,7 @@ type onboardingResponse struct {
 // @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
 // @Router       /onboarding [get]
 func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
-	cfg := s.deps.Config
+	cfg := s.appConfig()
 	dismissed := cfg.API.OnboardingDismissed
 
 	steps := s.buildOnboardingSteps(r)
@@ -54,7 +54,7 @@ func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildOnboardingSteps(r *http.Request) []onboardingStep {
-	cfg := s.deps.Config
+	cfg := s.appConfig()
 
 	// auth: password OR OIDC configured OR API key exists
 	authDone := s.passwordHash != "" || s.oidcProvider != nil
@@ -136,7 +136,7 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist"})
 		return
 	}
-	s.deps.Config.API.OnboardingDismissed = true
+	s.deps.Config.Update(func(c *config.Config) { c.API.OnboardingDismissed = true })
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -159,6 +159,6 @@ func (s *Server) handleWizardComplete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist"})
 		return
 	}
-	s.deps.Config.API.WizardCompleted = true
+	s.deps.Config.Update(func(c *config.Config) { c.API.WizardCompleted = true })
 	w.WriteHeader(http.StatusNoContent)
 }

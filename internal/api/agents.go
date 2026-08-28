@@ -234,7 +234,7 @@ func applyReviewerRuntime(e *agent.Engine, input *agentConfigUpdateInput) {
 func (s *Server) syncAgentCostLimits(name string, input *agentConfigUpdateInput) {
 	defaults := s.deps.CostTracker.DefaultLimits()
 	limits := defaults
-	for _, ac := range s.deps.Config.Agents {
+	for _, ac := range s.appConfig().Agents {
 		if ac.Name == name {
 			if ac.CostLimitSoft != nil {
 				limits.Soft = *ac.CostLimitSoft
@@ -386,29 +386,27 @@ func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateIn
 
 // updateInMemoryAgentConfig applies input fields to the in-memory config.
 func (s *Server) updateInMemoryAgentConfig(name string, input *agentConfigUpdateInput) {
-	if s.deps.Config == nil {
-		return
-	}
-	for i := range s.deps.Config.Agents {
-		if s.deps.Config.Agents[i].Name != name {
-			continue
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name != name {
+				continue
+			}
+			applyAgentFields(&c.Agents[i], input)
+			return
 		}
-		applyAgentFields(&s.deps.Config.Agents[i], input)
-		return
-	}
+	})
 }
 
 // renameInMemoryAgent updates the agent name in the in-memory config slice.
 func (s *Server) renameInMemoryAgent(oldName, newName string) {
-	if s.deps.Config == nil {
-		return
-	}
-	for i := range s.deps.Config.Agents {
-		if s.deps.Config.Agents[i].Name == oldName {
-			s.deps.Config.Agents[i].Name = newName
-			return
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name == oldName {
+				c.Agents[i].Name = newName
+				return
+			}
 		}
-	}
+	})
 }
 
 // applySupervisorChanges validates and applies all supervisor-related changes
@@ -610,7 +608,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	personaDir := filepath.Join(s.deps.Config.DataDir, "agents", input.Name)
+	personaDir := filepath.Join(s.appConfig().DataDir, "agents", input.Name)
 	if err := os.MkdirAll(personaDir, 0o750); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "creating persona directory: " + err.Error(),
@@ -654,9 +652,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.deps.Config != nil {
-		s.deps.Config.Agents = append(s.deps.Config.Agents, ac)
-	}
+	s.deps.Config.Update(func(c *config.Config) { c.Agents = append(c.Agents, ac) })
 
 	resp := map[string]string{"name": input.Name, "status": "created"}
 	if input.CreateSupervisor != nil && input.SessionTier == "supervised" {
@@ -678,17 +674,18 @@ func (s *Server) rollbackAgent(name string) {
 	if rmErr := config.RemoveAgentFromConfig(s.deps.ConfigPath, name); rmErr != nil {
 		s.logger.Warn("rollback: failed to remove agent from config", "agent", name, "error", rmErr)
 	}
-	if s.deps.Config != nil {
-		for i, a := range s.deps.Config.Agents {
+	var personaDir string
+	s.deps.Config.Update(func(c *config.Config) {
+		for i, a := range c.Agents {
 			if a.Name == name {
-				personaDir := a.PersonaDir
-				s.deps.Config.Agents = append(s.deps.Config.Agents[:i], s.deps.Config.Agents[i+1:]...)
-				if personaDir != "" {
-					_ = os.Remove(personaDir)
-				}
+				personaDir = a.PersonaDir
+				c.Agents = append(c.Agents[:i], c.Agents[i+1:]...)
 				break
 			}
 		}
+	})
+	if personaDir != "" {
+		_ = os.Remove(personaDir)
 	}
 }
 
@@ -720,7 +717,7 @@ func (s *Server) createCompanionSupervisor(agentName string, mainEngine *agent.E
 		return "", code, errMsg
 	}
 
-	supPersonaDir := filepath.Join(s.deps.Config.DataDir, "agents", supName)
+	supPersonaDir := filepath.Join(s.appConfig().DataDir, "agents", supName)
 	if err := os.MkdirAll(supPersonaDir, 0o750); err != nil {
 		return "", http.StatusInternalServerError, "creating supervisor persona directory: " + err.Error()
 	}
@@ -747,9 +744,7 @@ func (s *Server) createCompanionSupervisor(agentName string, mainEngine *agent.E
 		return "", http.StatusInternalServerError, "registering supervisor agent: " + err.Error()
 	}
 
-	if s.deps.Config != nil {
-		s.deps.Config.Agents = append(s.deps.Config.Agents, supAC)
-	}
+	s.deps.Config.Update(func(c *config.Config) { c.Agents = append(c.Agents, supAC) })
 
 	s.wireCompanionSupervisor(agentName, mainEngine, supEngine, sup)
 	return supName, 0, ""
@@ -780,20 +775,20 @@ func (s *Server) wireCompanionSupervisor(agentName string, mainEngine, supEngine
 		s.logger.Warn("failed to persist supervisor reference", "agent", agentName, "error", err)
 	}
 
-	if s.deps.Config != nil {
-		for i := range s.deps.Config.Agents {
-			if s.deps.Config.Agents[i].Name == agentName {
-				s.deps.Config.Agents[i].Supervisor = supName
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name == agentName {
+				c.Agents[i].Supervisor = supName
 				if sup.Timeout != "" {
-					s.deps.Config.Agents[i].SupervisorTimeout = sup.Timeout
+					c.Agents[i].SupervisorTimeout = sup.Timeout
 				}
 				if sup.ContextMessages > 0 {
-					s.deps.Config.Agents[i].SupervisorContextMessages = sup.ContextMessages
+					c.Agents[i].SupervisorContextMessages = sup.ContextMessages
 				}
 				break
 			}
 		}
-	}
+	})
 }
 
 // agentDependencyError checks whether the named agent is referenced by any
@@ -809,9 +804,9 @@ func (s *Server) agentDependencyError(name string) string {
 		return "agent is referenced by channels: " + strings.Join(blockingChannels, ", ")
 	}
 
-	if s.deps.Config != nil {
+	if cfg := s.appConfig(); cfg != nil {
 		var blockingSchedules []string
-		for _, sched := range s.deps.Config.Schedules {
+		for _, sched := range cfg.Schedules {
 			if sched.Agent == name {
 				blockingSchedules = append(blockingSchedules, sched.Name)
 			}
@@ -821,7 +816,7 @@ func (s *Server) agentDependencyError(name string) string {
 		}
 
 		var blockingSupervisors []string
-		for _, ag := range s.deps.Config.Agents {
+		for _, ag := range cfg.Agents {
 			if ag.Supervisor == name {
 				blockingSupervisors = append(blockingSupervisors, ag.Name)
 			}
@@ -887,15 +882,14 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove from in-memory config.
-	if s.deps.Config != nil {
-		agents := s.deps.Config.Agents
-		for i := range agents {
-			if agents[i].Name == name {
-				s.deps.Config.Agents = append(agents[:i], agents[i+1:]...)
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name == name {
+				c.Agents = append(c.Agents[:i], c.Agents[i+1:]...)
 				break
 			}
 		}
-	}
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -39,7 +39,7 @@ type Deps struct {
 	Scheduler       ScheduleManager
 	CostTracker     *llm.CostTracker
 	Memory          agent.MemoryStore
-	Config          *config.Config
+	Config          *config.Holder // nil = no config; hands out immutable snapshots
 	Approvals       *approval.Manager
 	LifecycleMgr    *tool.LifecycleManager
 	KeyStore        *api.KeyStore

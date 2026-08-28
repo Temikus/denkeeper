@@ -319,7 +319,7 @@ func TestSkillCreate_SizeCapRejects(t *testing.T) {
 	s := &Server{deps: Deps{
 		Dispatcher: dispatcher,
 		Logger:     testLogger(),
-		Config:     &config.Config{Skills: config.SkillsConfig{MaxBytes: 512}},
+		Config:     config.NewHolder(&config.Config{Skills: config.SkillsConfig{MaxBytes: 512}}),
 	}}
 
 	res, _, err := s.handleSkillCreate(writeScope(t), nil, skillCreateInput{

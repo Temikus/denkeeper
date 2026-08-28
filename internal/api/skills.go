@@ -18,10 +18,11 @@ import (
 // skillMaxBytes returns the configured per-skill size cap, or 0 (no limit) when
 // no config is wired (e.g. in tests).
 func (s *Server) skillMaxBytes() int {
-	if s.deps.Config == nil {
+	cfg := s.appConfig()
+	if cfg == nil {
 		return 0
 	}
-	return s.deps.Config.Skills.MaxBytes
+	return cfg.Skills.MaxBytes
 }
 
 // skillWriter returns a writer that journals each mutation before performing

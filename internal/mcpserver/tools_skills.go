@@ -68,10 +68,11 @@ func validSkillName(name string) error {
 // skillMaxBytes returns the configured per-skill size cap, or 0 (no limit) when
 // no config is wired.
 func (s *Server) skillMaxBytes() int {
-	if s.deps.Config == nil {
+	cfg := s.deps.Config.Get()
+	if cfg == nil {
 		return 0
 	}
-	return s.deps.Config.Skills.MaxBytes
+	return cfg.Skills.MaxBytes
 }
 
 // skillWriter returns a writer that journals each mutation before performing

@@ -376,7 +376,7 @@ func testServerWithConfig(t *testing.T, passwordHash string) (*Server, string) {
 	cfg.API.Auth.PreferredLoginMethod = "auto"
 	return &Server{
 		cfg:          testConfig(),
-		deps:         Deps{ConfigPath: cfgPath, Config: cfg},
+		deps:         Deps{ConfigPath: cfgPath, Config: config.NewHolder(cfg)},
 		logger:       testLogger(),
 		limiters:     make(map[string]*rateLimiter),
 		sessions:     sm,
@@ -488,8 +488,8 @@ func TestHandleAuthPreferences_Valid(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if s.deps.Config.API.Auth.PreferredLoginMethod != "password" {
-		t.Errorf("expected in-memory update to 'password', got %q", s.deps.Config.API.Auth.PreferredLoginMethod)
+	if s.deps.Config.Get().API.Auth.PreferredLoginMethod != "password" {
+		t.Errorf("expected in-memory update to 'password', got %q", s.deps.Config.Get().API.Auth.PreferredLoginMethod)
 	}
 }
 
@@ -548,7 +548,7 @@ func TestHandleOIDCTest_Reachable(t *testing.T) {
 	defer s.loginLimiter.stop()
 	// Set up a non-nil oidcProvider so the guard passes.
 	s.oidcProvider = &OIDCProvider{}
-	s.deps.Config.API.Auth.OIDC.Issuer = mock.URL
+	s.deps.Config.Get().API.Auth.OIDC.Issuer = mock.URL
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/test", nil)
 	rec := httptest.NewRecorder()
@@ -826,9 +826,9 @@ func TestHandleRevokeAllSessions_Success(t *testing.T) {
 func TestHandleAuthStatus_Enriched(t *testing.T) {
 	s, _ := testServerWithConfig(t, testPasswordHash("pw"))
 	defer s.loginLimiter.stop()
-	s.deps.Config.API.Auth.OIDC.Issuer = "https://accounts.example.com"
-	s.deps.Config.API.Auth.OIDC.AllowedEmails = []string{"user@example.com"}
-	s.deps.Config.API.Auth.PreferredLoginMethod = "password"
+	s.deps.Config.Get().API.Auth.OIDC.Issuer = "https://accounts.example.com"
+	s.deps.Config.Get().API.Auth.OIDC.AllowedEmails = []string{"user@example.com"}
+	s.deps.Config.Get().API.Auth.PreferredLoginMethod = "password"
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
 	rec := httptest.NewRecorder()

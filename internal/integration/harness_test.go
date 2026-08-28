@@ -140,14 +140,20 @@ type Harness struct {
 	KeyStore    *api.KeyStore       // nil unless WithKeyStore is set
 	APIKey      string
 	configPath  string
-	config      *config.Config
+	config      *config.Holder
 }
 
 // ConfigPath returns the TOML config path used by this harness (empty if none).
 func (h *Harness) ConfigPath() string { return h.configPath }
 
-// Config returns the in-memory Config struct used by this harness.
-func (h *Harness) Config() *config.Config { return h.config }
+// Config returns the in-memory Config snapshot used by this harness. Tests
+// mutate it directly during setup, which is safe because nothing is serving
+// yet and the harness never swaps the pointer.
+func (h *Harness) Config() *config.Config { return h.config.Get() }
+
+// ConfigHolder returns the holder the API server reads through, for tests that
+// need to publish a new snapshot mid-flight (hot reload).
+func (h *Harness) ConfigHolder() *config.Holder { return h.config }
 
 // HarnessOpts allows customizing the harness setup.
 type HarnessOpts struct {
@@ -533,7 +539,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		RestartFunc:       opts.RestartFunc,
 		EvalStore:         evalStore,
 		EvalRunner:        evalRunner,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: agentConfigs,
 			Eval: config.EvalConfig{
 				Audit:             "full",
@@ -542,11 +548,11 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 				DefaultK:          3,
 				CompletenessFloor: 0.8,
 			},
-		},
+		}),
 	}
 	if opts.WithEval {
 		if c := opts.EvalConfig; c.CompletenessFloor > 0 {
-			deps.Config.Eval.CompletenessFloor = c.CompletenessFloor
+			deps.Config.Get().Eval.CompletenessFloor = c.CompletenessFloor
 		}
 	}
 

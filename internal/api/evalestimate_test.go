@@ -256,7 +256,7 @@ func TestEvalEstimate_SampleTasksNarrowsTheReportedTaskCount(t *testing.T) {
 
 func TestEvalConfig_ReflectsTOMLValues(t *testing.T) {
 	srv, _ := evalTestServer(t)
-	srv.deps.Config.Eval = config.EvalConfig{
+	srv.deps.Config.Get().Eval = config.EvalConfig{
 		Audit:              "summary",
 		MaxConcurrent:      4,
 		MaxCostPerRun:      7.5,
@@ -289,7 +289,7 @@ func TestEvalConfig_ReflectsTOMLValues(t *testing.T) {
 
 func TestEvalConfig_AuditDefaultsToFull(t *testing.T) {
 	srv, _ := evalTestServer(t)
-	srv.deps.Config.Eval = config.EvalConfig{DefaultK: 3}
+	srv.deps.Config.Get().Eval = config.EvalConfig{DefaultK: 3}
 
 	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/config", "", "dk-test-key")
 	var got evalConfigResponse

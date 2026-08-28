@@ -792,7 +792,11 @@ func createSandboxRuntime(cfg *config.Config, logger *slog.Logger) (sandbox.Runt
 
 // agentBuildCtx holds all the shared state needed to build per-agent engines.
 type agentBuildCtx struct {
+	// cfg is the snapshot this build runs against. Engines built at startup
+	// use the boot config; engines built later (the create-agent endpoint) get
+	// a fresh snapshot from cfgHolder.
 	cfg             *config.Config
+	cfgHolder       *config.Holder
 	configPath      string
 	llm             llmClients
 	memory          agent.MemoryStore
@@ -1681,6 +1685,7 @@ type startAPIWithMCPArgs struct {
 	evalRunner      *eval.Runner
 	oauthDeps       *api.OAuthDeps
 	abc             agentBuildCtx
+	cfgHolder       *config.Holder
 	path            string
 	logger          *slog.Logger
 }
@@ -1696,7 +1701,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Scheduler:       a.sched,
 		CostTracker:     a.cost,
 		Memory:          a.memory,
-		Config:          cfg,
+		Config:          a.cfgHolder,
 		Approvals:       a.approvalManager,
 		LifecycleMgr:    a.lifecycleMgr,
 		KeyStore:        keyStore,
@@ -1716,7 +1721,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Scheduler:         a.sched,
 		CostTracker:       a.cost,
 		Memory:            a.memory,
-		Config:            cfg,
+		Config:            a.cfgHolder,
 		Approvals:         a.approvalManager,
 		LifecycleMgr:      a.lifecycleMgr,
 		BrowserProfiles:   a.browserProfiles,
@@ -1733,10 +1738,14 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		ModelDetailLister: a.dispatcher.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
-		ReloadFunc:        buildReloadFunc(a.path, cfg, a.dispatcher, a.approvalManager, a.logger),
+		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.logger),
 		RestartFunc:       selfRestartFunc,
 		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
-			return buildAgentEngine(ctx, ac, a.abc)
+			// Build against the current snapshot, not the boot one, so an
+			// agent created after a reload picks up the reloaded settings.
+			abc := a.abc
+			abc.cfg = a.cfgHolder.Get()
+			return buildAgentEngine(ctx, ac, abc)
 		},
 		Version:   version,
 		Commit:    commit,
@@ -1926,6 +1935,11 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Everything below wires against cfg directly — startup is single-threaded.
+	// cfgHolder is what the serving paths get: a hot reload swaps its pointer,
+	// so a request reads one whole config or the other, never a mix.
+	cfgHolder := config.NewHolder(cfg)
+
 	logger := initLogger(cfg)
 
 	otelShutdown, err := dkotel.Setup(dkotel.Config{
@@ -1958,7 +1972,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	st.approvalManager.StartExpiryWorker(ctx, time.Hour)
 
 	startKVCleanupWorker(ctx, st.kvStore, kvCleanupDuration(cfg.KV.CleanupInterval), logger)
-	startMemoryCleanupWorker(ctx, st.memory, &cfg.Memory, logger)
+	startMemoryCleanupWorker(ctx, st.memory, cfgHolder, logger)
 
 	// Audit emitter — wired into engines, dispatcher, scheduler, and tool manager.
 	auditor, auditCloser := initAuditor(ctx, st.auditStore, cfg, logger)
@@ -2008,6 +2022,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	abc := agentBuildCtx{
 		cfg:             cfg,
+		cfgHolder:       cfgHolder,
 		configPath:      path,
 		llm:             clients,
 		memory:          st.memory,
@@ -2076,6 +2091,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			evalRunner:      evalRunner,
 			oauthDeps:       oauthDeps,
 			abc:             abc,
+			cfgHolder:       cfgHolder,
 			path:            path,
 			logger:          logger,
 		}); err != nil {
@@ -2136,16 +2152,18 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 }
 
 // buildReloadFunc returns a function that re-reads the config file from disk
-// and overwrites cfg in place, allowing hot-reloading of most settings.
+// and publishes it as the new snapshot, allowing hot-reloading of most
+// settings. The pointer is swapped rather than the struct overwritten, so a
+// request in flight during a reload sees one config or the other, never a mix.
 // Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
 // re-applied to live engines so they don't go stale after a reload.
-func buildReloadFunc(path string, cfg *config.Config, dispatcher *agent.Dispatcher, approvals *approval.Manager, logger *slog.Logger) func() error {
+func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, logger *slog.Logger) func() error {
 	return func() error {
-		newCfg, err := config.Load(path)
+		cfg, err := config.Load(path)
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
-		*cfg = *newCfg
+		cfgHolder.Store(cfg)
 
 		// Re-apply the TOML auto-approve policy wholesale: a reload that
 		// narrows a list must narrow the effective rules too.
@@ -2348,12 +2366,12 @@ func startKVCleanupWorker(ctx context.Context, store *kv.SQLiteStore, interval t
 // startMemoryCleanupWorker runs a background goroutine that enforces
 // retention policies (time-based and count-based) on stored conversations.
 // No-op if the memory store does not support telemetry (PruneByCount).
-func startMemoryCleanupWorker(ctx context.Context, mem agent.MemoryStore, cfg *config.MemoryConfig, logger *slog.Logger) {
+func startMemoryCleanupWorker(ctx context.Context, mem agent.MemoryStore, cfgHolder *config.Holder, logger *slog.Logger) {
 	store, ok := mem.(*agent.SQLiteMemoryStore)
 	if !ok {
 		return
 	}
-	interval, err := time.ParseDuration(cfg.CleanupInterval)
+	interval, err := time.ParseDuration(cfgHolder.Get().Memory.CleanupInterval)
 	if err != nil {
 		interval = time.Hour
 	}
@@ -2365,7 +2383,11 @@ func startMemoryCleanupWorker(ctx context.Context, mem agent.MemoryStore, cfg *c
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runMemoryCleanup(ctx, store, cfg, logger)
+				// Re-read per tick so a reloaded retention policy takes
+				// effect without a restart. The ticker interval itself is
+				// fixed at boot.
+				mc := cfgHolder.Get().Memory
+				runMemoryCleanup(ctx, store, &mc, logger)
 			}
 		}
 	}()

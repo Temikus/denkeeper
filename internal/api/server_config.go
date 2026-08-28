@@ -70,7 +70,8 @@ const (
 // @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
 // @Router       /server/config [get]
 func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.deps.Config.API
+	snap := s.appConfig()
+	cfg := snap.API
 	resp := serverConfigResponse{
 		ExternalURL:              cfg.ExternalURL,
 		Timezone:                 cfg.Timezone,
@@ -87,9 +88,9 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		MCPServerChatTimeout:     cfg.MCPServer.ChatTimeout,
 		MCPServerStateless:       cfg.MCPServer.Stateless,
 		MCPServerEndpoint:        s.mcpServerEndpoint(),
-		WebToolsEnabled:          s.deps.Config.Web.WebEnabled(),
-		WebFetchMaxResponseChars: s.deps.Config.Web.Fetch.MaxResponseChars,
-		ScriptEnabled:            s.deps.Config.Script.ScriptEnabled(),
+		WebToolsEnabled:          snap.Web.WebEnabled(),
+		WebFetchMaxResponseChars: snap.Web.Fetch.MaxResponseChars,
+		ScriptEnabled:            snap.Script.ScriptEnabled(),
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -126,8 +127,11 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	applyServerConfigInput(&s.deps.Config.API, &input)
-	restartRequired := applyInProcessToolInput(s.deps.Config, &input)
+	var restartRequired bool
+	s.deps.Config.Update(func(c *config.Config) {
+		applyServerConfigInput(&c.API, &input)
+		restartRequired = applyInProcessToolInput(c, &input)
+	})
 	s.persistServerConfig(&input)
 
 	resp := map[string]any{"status": "updated"}
@@ -359,9 +363,10 @@ func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
 }
 
 func (s *Server) mcpServerEndpoint() string {
-	base := s.deps.Config.API.ExternalURL
+	cfg := s.appConfig()
+	base := cfg.API.ExternalURL
 	if base == "" {
-		base = "http://" + s.deps.Config.API.Listen
+		base = "http://" + cfg.API.Listen
 	}
 	return base + "/api/v1/mcp"
 }
