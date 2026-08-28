@@ -906,6 +906,11 @@ describe('evalSampleTranscript', () => {
     expect(evalSampleTranscript({}).upstream).toBe('')
   })
 
+  test('carries the stop reason through, empty when the model finished', () => {
+    expect(evalSampleTranscript({ stop_reason: 'max_rounds' }).stop_reason).toBe('max_rounds')
+    expect(evalSampleTranscript({}).stop_reason).toBe('')
+  })
+
   test('an unreadable trace is no trace, not a broken view', () => {
     expect(evalSampleTranscript({ trace: 'not json' }).tool_calls).toEqual([])
     expect(evalSampleTranscript({ trace: '{"not":"an array"}' }).tool_calls).toEqual([])
