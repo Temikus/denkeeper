@@ -8330,14 +8330,27 @@
         "github_com_Temikus_denkeeper_internal_eval.Candidate": {
             "type": "object",
             "properties": {
+                "agent": {
+                    "description": "Agent handled the turn; empty when its stats row was pruned.",
+                    "type": "string"
+                },
                 "category": {
                     "type": "string"
                 },
                 "conversation_id": {
                     "type": "string"
                 },
+                "cost_usd": {
+                    "type": "number"
+                },
                 "created_at": {
                     "type": "string"
+                },
+                "faults": {
+                    "type": "integer"
+                },
+                "max_round": {
+                    "type": "integer"
                 },
                 "message_id": {
                     "type": "integer"
@@ -8351,11 +8364,23 @@
                 "prompt": {
                     "type": "string"
                 },
+                "reply_preview": {
+                    "description": "ReplyPreview is the head of the answering reply.",
+                    "type": "string"
+                },
                 "signals": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "tool_calls": {
+                    "description": "ToolCalls, MaxRound, Faults and CostUSD describe the answering reply:\nthe same telemetry the signals are drawn from, in numbers.",
+                    "type": "integer"
+                },
+                "trigger": {
+                    "description": "Trigger is the skill or schedule name that fired a scheduled turn, whose\nprompt is a generated label rather than anything a person wrote. Empty\nfor every other category.",
+                    "type": "string"
                 }
             }
         },

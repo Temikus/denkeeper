@@ -3,7 +3,7 @@ title: "Evals"
 description: "Comparing a candidate model against the one you run today, on your own conversations."
 slug: "evals"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-28T00:00:00+00:00
+lastmod: 2026-08-30T00:00:00+00:00
 draft: false
 weight: 57
 toc: true
@@ -165,6 +165,8 @@ With no test set saved yet, the page opens on an empty state that explains the l
 ### Filling a set from history
 
 **Suggest from history** opens a panel of past turns worth keeping, each card carrying the prompt, its category, and the reason it was offered — a tool call was rejected or failed, the turn took three or more rounds, it cost in the top ten per cent, or a skill command triggered it. Select the ones you want, choose an existing set or name a new one, and add them in a batch.
+
+Under the prompt each card says which agent ran the turn, how long ago, how many tool rounds and faults it took, and what it cost. A scheduled turn is headed by the name of the skill or schedule that fired it rather than by its prompt, which the scheduler generated as a timestamped label. **Show session context** expands in place to the turns pinned as history and the reply that came back, and **Open session** goes to the conversation it was mined from.
 
 Accepting a candidate writes the same shape the Chat page's "Save as test case" does, pinned history included, captured at that moment rather than re-read at run time. Rejecting a candidate writes nothing at all: it is hidden for the session, so reloading the page offers it again.
 

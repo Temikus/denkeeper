@@ -269,3 +269,64 @@ func TestSuggest_CarriesPrecedingContext(t *testing.T) {
 		t.Errorf("Preceding = %+v, want %+v", got[0].Preceding, want)
 	}
 }
+
+func TestSuggest_CarriesTurnContext(t *testing.T) {
+	turns := []agent.InterestingTurn{
+		turn(1, "dig through the logs", func(x *agent.InterestingTurn) {
+			x.Agent = "pamela"
+			x.ToolCalls = 5
+			x.MaxRound = 4
+			x.Faults = 1
+			x.ReplyCost = 0.42
+			x.ReplyContent = "found three timeouts in the last hour"
+		}),
+	}
+
+	got := Suggest(turns, SuggestOpts{Limit: 20})
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(got))
+	}
+	c := got[0]
+	if c.Agent != "pamela" {
+		t.Errorf("Agent = %q, want %q", c.Agent, "pamela")
+	}
+	if c.ReplyPreview != "found three timeouts in the last hour" {
+		t.Errorf("ReplyPreview = %q, want the reply", c.ReplyPreview)
+	}
+	if c.ToolCalls != 5 || c.MaxRound != 4 || c.Faults != 1 {
+		t.Errorf("tool telemetry = %d calls / %d rounds / %d faults, want 5 / 4 / 1",
+			c.ToolCalls, c.MaxRound, c.Faults)
+	}
+	if c.CostUSD != 0.42 {
+		t.Errorf("CostUSD = %v, want 0.42", c.CostUSD)
+	}
+}
+
+func TestSuggest_NamesTheScheduledTrigger(t *testing.T) {
+	turns := []agent.InterestingTurn{
+		turn(1, "[Scheduled: skill-forge | 2026-08-25T10:15:09+10:00 Australia/Sydney | 2026-W35]",
+			func(x *agent.InterestingTurn) { x.Faults = 1 }),
+		turn(2, "[Scheduled trigger: nightly-digest | 2026-08-25T10:15:09Z UTC | 2026-W35]",
+			func(x *agent.InterestingTurn) { x.Faults = 1 }),
+		turn(3, "write me a poem", func(x *agent.InterestingTurn) { x.Faults = 1 }),
+	}
+
+	got := Suggest(turns, SuggestOpts{Limit: 20})
+	want := map[int64]string{1: "skill-forge", 2: "nightly-digest", 3: ""}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for _, c := range got {
+		if c.Trigger != want[c.MessageID] {
+			t.Errorf("message %d trigger = %q, want %q", c.MessageID, c.Trigger, want[c.MessageID])
+		}
+	}
+}
+
+func TestTriggerOf_UnterminatedLabel(t *testing.T) {
+	// A label with no " | " separator still yields a name rather than the
+	// whole string with its bracket.
+	if got := triggerOf("[Scheduled: heartbeat]"); got != "heartbeat" {
+		t.Errorf("triggerOf = %q, want %q", got, "heartbeat")
+	}
+}

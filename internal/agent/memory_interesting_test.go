@@ -280,3 +280,54 @@ func TestListInterestingTurns_HonoursSince(t *testing.T) {
 		t.Errorf("Content = %q, want %q", turns[0].Content, "recent")
 	}
 }
+
+func TestListInterestingTurns_CarriesAgentAndReply(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "1")
+	seedTurn(t, store, convID, "pamela", "check the calendar", 0.01, nil, nil)
+
+	turns, err := store.ListInterestingTurns(ctx, "", time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListInterestingTurns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(turns))
+	}
+	if turns[0].Agent != "pamela" {
+		t.Errorf("Agent = %q, want %q", turns[0].Agent, "pamela")
+	}
+	if turns[0].ReplyContent != "reply to check the calendar" {
+		t.Errorf("ReplyContent = %q, want the answering assistant message", turns[0].ReplyContent)
+	}
+}
+
+func TestListInterestingTurns_CapsReplyContent(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "1")
+	huge := ""
+	for range replyPreviewMax + 500 {
+		huge += "x"
+	}
+	// seedTurn's reply is "reply to " + prompt, so a huge prompt is a huge reply.
+	seedTurn(t, store, convID, "pamela", huge, 0.01, nil, nil)
+
+	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListInterestingTurns: %v", err)
+	}
+	if got := []rune(turns[0].ReplyContent); len(got) != replyPreviewMax+1 {
+		t.Errorf("ReplyContent = %d runes, want %d plus the ellipsis", len(got), replyPreviewMax)
+	}
+}

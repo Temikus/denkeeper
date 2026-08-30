@@ -54,7 +54,20 @@ describe('SuggestCases — listing', () => {
     expect(
       screen.getByText(/Why: a tool call was rejected or failed · took three or more tool rounds/)
     ).toBeInTheDocument()
-    expect(screen.getByText(/Pins 2 preceding turns as history/)).toBeInTheDocument()
+    expect(screen.getByTestId('context-toggle-chan:ops:101'))
+      .toHaveTextContent('Show session context (2 turns pinned)')
+  })
+
+  test('the meta line says who ran the turn, how old it is, and what it cost', async () => {
+    await renderPanel()
+
+    const meta = screen.getByTestId('meta-chan:dev:103').textContent
+    expect(meta).toContain('default')
+    expect(meta).toContain('4 tool rounds')
+    expect(meta).toContain('1 fault')
+    expect(meta).toContain('$0.2100')
+    // A clean turn does not claim faults it did not have.
+    expect(screen.getByTestId('meta-chan:ops:102').textContent).not.toMatch(/\d+ faults?/)
   })
 
   test('asks the endpoint for the given agent', async () => {
@@ -290,5 +303,85 @@ describe('SuggestCases — batch accept and reject', () => {
     }
     await waitFor(() => expect(screen.getByTestId('suggest-empty')).toBeInTheDocument())
     expect(screen.getByText(/All suggestions handled/)).toBeInTheDocument()
+  })
+})
+
+// A scheduled turn's prompt is a generated label, so its card has to be built
+// out of the trigger name and the turn's own context instead.
+const SCHEDULED = {
+  candidates: [{
+    prompt: '[Scheduled: skill-forge | 2026-08-25T10:15:09+10:00 Australia/Sydney | 2026-W35]',
+    category: 'scheduled',
+    conversation_id: 'chan:cron',
+    message_id: 104,
+    created_at: '2026-08-25T00:15:09Z',
+    signals: ['tool_fault'],
+    preceding: [{ role: 'assistant', content: 'last run drafted two skills' }],
+    agent: 'pamela',
+    trigger: 'skill-forge',
+    reply_preview: 'Drafted one skill, one tool call was rejected.',
+    tool_calls: 5,
+    max_round: 3,
+    faults: 1,
+    cost_usd: 0.4,
+  }],
+}
+
+describe('SuggestCases — session context', () => {
+  beforeEach(() => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json(SCHEDULED)))
+    window.location.hash = ''
+  })
+
+  test('a scheduled card is headed by its trigger, not the generated label', async () => {
+    await renderPanel()
+
+    expect(screen.getByText('skill-forge · scheduled run')).toBeInTheDocument()
+    // The generated label lives in the collapsed context, never in the headline.
+    expect(document.querySelector('.prompt').textContent).toBe('skill-forge · scheduled run')
+    expect(screen.getByTestId('meta-chan:cron:104').textContent).toContain('pamela')
+  })
+
+  test('expanding shows the pinned turns, the raw prompt, and the reply', async () => {
+    await renderPanel()
+
+    // The panel collapses rather than unmounting (shared .inline-panel), so it
+    // is the .open class that says whether it is revealed.
+    const context = screen.getByTestId('context-chan:cron:104')
+    expect(context).not.toHaveClass('open')
+    await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
+
+    expect(context).toHaveClass('open')
+    expect(context).toHaveTextContent('last run drafted two skills')
+    // The generated label is still reachable — it is what the case will send.
+    expect(context).toHaveTextContent('[Scheduled: skill-forge')
+    expect(context).toHaveTextContent('Drafted one skill, one tool call was rejected.')
+
+    await fireEvent.click(screen.getByTestId('context-toggle-chan:cron:104'))
+    expect(context).not.toHaveClass('open')
+  })
+
+  test('a turn with nothing behind it has no disclosure', async () => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{
+        ...SCHEDULED.candidates[0],
+        trigger: '',
+        category: 'chat',
+        prompt: 'plain question',
+        preceding: [],
+        reply_preview: '',
+      }],
+    })))
+    await renderPanel()
+
+    expect(screen.queryByTestId('context-toggle-chan:cron:104')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('context-chan:cron:104')).not.toBeInTheDocument()
+  })
+
+  test('open session navigates to the source conversation', async () => {
+    await renderPanel()
+
+    await fireEvent.click(screen.getByTestId('open-session-chan:cron:104'))
+    expect(window.location.hash).toBe('#/sessions/chan:cron')
   })
 })
