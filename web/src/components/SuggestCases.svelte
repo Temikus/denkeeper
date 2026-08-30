@@ -23,6 +23,7 @@
     skill_command: 'Skill command',
     scheduled: 'Scheduled',
     tool_heavy: 'Tool-heavy',
+    probe: 'Behaviour probe',
   }
 
   // Why this turn is worth keeping, in the operator's words. The API's signal
@@ -264,10 +265,10 @@
         // partial add the operator cannot see is worse than a short one.
         await addOne(setName, c)
         done.add(keyOf(c))
+        hiddenKeys = new Set(done)
         added++
         batchDone = added
       }
-      hiddenKeys = done
       savedMsg = `Added ${added} test case${added === 1 ? '' : 's'} to “${setName}”`
       onaccepted?.(setName)
     } catch (e) {
@@ -407,7 +408,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px;
+    padding: var(--card-inset);
     margin-bottom: 24px;
   }
 
@@ -443,7 +444,7 @@
     letter-spacing: 0.3px;
   }
 
-  .inline-error { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
+  .inline-error { margin: 0 0 10px; }
 
   .controls {
     display: flex;
@@ -611,9 +612,5 @@
 
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation-duration: 2s; }
-  }
-
-  @media (max-width: 520px) {
-    .suggest { padding: 14px; }
   }
 </style>

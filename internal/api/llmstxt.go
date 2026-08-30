@@ -42,12 +42,14 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - POST /api/v1/skills/{name}/dry-run   (scope: skills:write)    Preview a skill as a message, command or scheduled fire
 - GET  /api/v1/eval/task-sets          (scope: eval:read)       Saved eval test sets
 - GET  /api/v1/eval/suggest            (scope: eval:read)       Suggest test cases from past turns, stratified by category
+- GET  /api/v1/eval/probes             (scope: eval:read+agents:read) Generate behaviour probes from an agent's own configuration
 - POST /api/v1/eval/task-sets/{name}/tasks (scope: eval:write)  Save a test case
 - POST /api/v1/eval/runs               (scope: eval:write)      Compare agent config variants on a test set
 - GET  /api/v1/eval/runs               (scope: eval:read)       List runs with status, progress and spend
 - POST /api/v1/eval/runs/{id}/stop     (scope: eval:write)      Stop a run; finished samples are kept
 - GET  /api/v1/eval/runs/{id}/summary  (scope: eval:read)       Scorecard, gate table and verdict for a run
 - GET  /api/v1/eval/runs/{id}/pairs    (scope: eval:read)       Judged pairs, unblinded: verdicts, dimensions and outcomes
+- POST /api/v1/eval/runs/{id}/judge    (scope: eval:write)      Judge a run's pending pairs with the internal judge_model
 - POST /api/v1/eval/estimate           (scope: eval:read)       Cost range for a run before starting it
 - GET  /api/v1/eval/config             (scope: eval:read)       Eval defaults and verdict thresholds
 - POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests

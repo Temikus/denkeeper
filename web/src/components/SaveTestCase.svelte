@@ -27,6 +27,7 @@
     { value: 'skill_command', label: 'Skill command' },
     { value: 'scheduled', label: 'Scheduled' },
     { value: 'tool_heavy', label: 'Tool-heavy' },
+    { value: 'probe', label: 'Behaviour probe' },
   ]
 
   let sets = $state([])
@@ -341,11 +342,6 @@
 
   .success {
     color: var(--accent);
-  }
-
-  .inline-error {
-    color: var(--danger);
-    font-size: 0.8rem;
   }
 
   .spinner {

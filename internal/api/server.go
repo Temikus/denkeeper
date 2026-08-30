@@ -70,6 +70,7 @@ type Deps struct {
 	Auditor           audit.Emitter                                                            // nil = no audit events from schedule delivery
 	EvalStore         *eval.Store                                                              // nil = eval endpoints return 503
 	EvalRunner        *eval.Runner                                                             // nil = eval endpoints return 503
+	EvalJudge         *eval.Judge                                                              // nil or unconfigured = internal judging returns 503
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
@@ -297,11 +298,23 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// Unblinded, and deliberately REST-only: the judge's MCP surface must not
 	// be able to look up which variant produced which response.
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/pairs", s.RequireScope("eval:read", s.handleEvalRunPairs))
+	// Judging spends real money, so it sits behind eval:write beside the run
+	// endpoints — not on the read side with the pair views.
+	mux.HandleFunc("POST /api/v1/eval/runs/{id}/judge", s.RequireScope("eval:write", s.handleJudgeEvalRun))
 	// Estimating, suggesting and reading the policy spend nothing, so all
 	// three are read-scoped.
 	mux.HandleFunc("POST /api/v1/eval/estimate", s.RequireScope("eval:read", s.handleEvalEstimate))
 	mux.HandleFunc("GET /api/v1/eval/config", s.RequireScope("eval:read", s.handleEvalConfig))
 	mux.HandleFunc("GET /api/v1/eval/suggest", s.RequireScope("eval:read", s.handleEvalSuggest))
+	// Generating probes reads config and writes nothing; accepting one is an
+	// ordinary task create.
+	mux.HandleFunc("GET /api/v1/eval/probes", s.RequireScope("eval:read", s.handleEvalProbes))
+
+	// Turn traces sit under sessions:read, not eval:read — a trace is turn
+	// content, and the eval scopes exist for a judge that must never read live
+	// prompts.
+	mux.HandleFunc("GET /api/v1/traces", s.RequireScope("sessions:read", s.handleListTraces))
+	mux.HandleFunc("GET /api/v1/traces/{id}", s.RequireScope("sessions:read", s.handleGetTrace))
 
 	// Browser profile and session endpoints.
 	mux.HandleFunc("GET /api/v1/browser/profiles", s.RequireScope("browser:read", s.handleListBrowserProfiles))

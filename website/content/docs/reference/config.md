@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -366,10 +366,22 @@ Events are queryable via `GET /api/v1/audit` and the dashboard's Audit Log page.
 | `gate_rejected_rate_pp` | float | `2.0` | Largest tolerated rise in the rejected tool-call rate, in percentage points |
 | `gate_rounds_pct` | float | `20` | Largest tolerated rise in mean tool-call rounds per task, in percent |
 | `gate_cost_pct` | float | `25` | Largest tolerated rise in mean cost per task, in percent |
+| `judge_model` | string | — | Model the internal judge grades blinded pairs with. Empty means there is no internal judge and the MCP path is the only one |
+| `judge_provider` | string | — | `[[llm.providers]]` instance serving the judge. Empty uses the base agent's own provider |
+| `judge_max_cost_per_run` | float | `max_cost_per_run` | USD ceiling for one judging pass, a separate budget from the run's sample cap |
+| `capture` | bool | `false` | Record live turns as turn traces. Off by default — a trace holds everything the model saw |
+| `max_trace_bytes` | int | `262144` | Per-trace payload cap (256 KiB). Over it, the oldest tool-call rounds are dropped first, then the oldest history messages |
+| `retention_days` | int | `30` | How long captured traces are kept, matching the audit log |
 
-The last four are the decision rule, and it is deliberately asymmetric: the three gates can declare a *downgrade* on their own (a failed gate needs no judge to reject a candidate) or report that nothing regressed, but calling a candidate an *upgrade* also requires the judge win-rate to reach `win_threshold`. A judge's preference can never override an objective regression. `GET /api/v1/eval/runs/{id}/summary` returns the gate table with each value, delta, threshold and pass/fail alongside a one-line reason, plus a per-category breakdown so a candidate that wins on chat while regressing on tool-heavy tasks is visible rather than averaged away.
+`win_threshold` and the three `gate_*` keys are the decision rule, and it is deliberately asymmetric: the three gates can declare a *downgrade* on their own (a failed gate needs no judge to reject a candidate) or report that nothing regressed, but calling a candidate an *upgrade* also requires the judge win-rate to reach `win_threshold`. A judge's preference can never override an objective regression. `GET /api/v1/eval/runs/{id}/summary` returns the gate table with each value, delta, threshold and pass/fail alongside a one-line reason, plus a per-category breakdown so a candidate that wins on chat while regressing on tool-heavy tasks is visible rather than averaged away.
 
 An eval run is bounded twice, by spend (`max_cost_per_run`) and by rate (`max_concurrent`); both are always in force. Writing `0` for any of these keys is indistinguishable from omitting it and yields the default — set a real value to change one. A run that hits its cost cap stops dispatching new samples, lets the in-flight ones finish, and keeps its partial results rather than discarding them.
+
+Setting `judge_model` turns on the **internal judge**: `POST /api/v1/eval/runs/{id}/judge` works the same pending queue server-side, so a run can be judged unattended instead of only from Claude Code over MCP. It is capability-reduced by construction — one completion per item with no tool definitions in the request, reading only the same blinded payload `eval_get_pair` returns — so it can no more unblind its own queue than the MCP judge can. Its verdicts are ordinary verdicts under `judge_ident` `judge_model`, stamped with the rubric version, and they feed the same win rate. Judging spend is capped by `judge_max_cost_per_run` and recorded on the run as `judge_cost`, kept apart from the sample spend in `cost_spent` because the two are separate budgets. `judge_model`, `judge_provider` and `judge_max_cost_per_run` are re-read on config reload, so turning the judge on or moving its cap takes effect on the next pass; `max_concurrent` bounds judging process-wide and is fixed at start-up. Judging spend is attributed to the pseudo-agent `{agent}#eval:judge`, so it never lands in a real agent's totals.
+
+`capture`, `max_trace_bytes` and `retention_days` are the turn-trace knobs. A trace records what a turn actually saw: the system prompt as it was assembled after skill injection, the history window as it went on the wire, every tool call with its arguments and the result the model read, the final response, timings and usage. The dashboard's **Turn inspector** renders them, which is what answers "why did it do that" — the audit log carries rounds and outcomes but never the payloads.
+
+Live capture is off by default and should stay off unless you want that record: a trace is the most sensitive data Denkeeper stores. Eval samples are traced regardless of the switch, because the judge reads the trace and a verdict has to stay re-checkable; those turns never touch a live conversation. Traces get their own `retention_days` rather than riding on `[memory]`'s for the same reason.
 
 Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only idempotent tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
 
@@ -466,6 +478,22 @@ Subprocess plugins run as child processes with direct MCP stdio. Docker plugins 
 | `allow_unsigned` | bool | `true` | Allow unsigned subprocess plugin binaries |
 
 When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
+
+## `[safety.reply_guard]`
+
+Runtime guardrail that holds back an obviously broken final reply on schedule-driven turns — a live user reacts to a bad reply, a schedule fires unattended. Distinct from `[security]`, which covers plugin signing. The turn is still stored in full and an audit event lands under category `safety`, action `reply_guard`; what changes is the delivered text, replaced by a one-line notice. Dry runs and evals evaluate the guard and report the verdict on the transcript, but never substitute the text.
+
+Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Master switch |
+| `on_role_markup` | string | `"withhold"` | Reply carries role/tool-call scaffolding as plain text (`<rs_tool_calls>`, `<\|im_start\|>`, `"\n\nHuman:"`, ...) instead of calling a tool |
+| `on_oversized` | string | `"withhold"` | Reply exceeds `max_reply_bytes` or `max_completion_tokens` |
+| `on_no_tool_calls` | string | `"warn"` | A schedule named a skill and the turn made no tool calls at all; only flags, since some skills legitimately finish without tools |
+| `max_reply_bytes` | int | `16000` | Caps the final reply in bytes (~4 Telegram chunks, under half that adapter's own render limit). Negative disables |
+| `max_completion_tokens` | int | `0` | Caps provider-reported completion tokens. `0` disables — it measures the same thing as `max_reply_bytes` |
+| `excerpt_bytes` | int | `200` | How much of the held reply reaches the audit detail. Negative disables |
 
 ## `[kv]`
 

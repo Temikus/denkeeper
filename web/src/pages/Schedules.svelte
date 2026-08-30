@@ -399,7 +399,8 @@
             {/each}
           </ul>
         {:else}
-        <div class="table-wrap">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Schedules">
           <table class="table">
             <thead>
               <tr>
@@ -517,7 +518,6 @@
   .agent-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .agent-name { font-size: 14px; font-weight: 600; margin: 0; }
   .count { color: var(--text-muted); font-size: 12px; margin-left: auto; }
-  .table-wrap { overflow-x: auto; }
   .table-wrap .table { margin-bottom: 0; }
 
   /* Tier badge (matches Agents page) */

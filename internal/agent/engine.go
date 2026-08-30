@@ -201,6 +201,15 @@ type Engine struct {
 	replyGuardMu sync.RWMutex
 	replyGuard   ReplyGuard
 
+	// Turn-trace capture (L1). traceCapture is the [eval] capture switch and is
+	// false unless an operator turns it on: a trace holds everything the model
+	// saw. Same locking rationale as the reply guard — read every turn,
+	// replaced wholesale on hot-reload.
+	traceMu       sync.RWMutex
+	traceSink     TraceSink
+	traceCapture  bool
+	traceMaxBytes int
+
 	// maxContextMessages limits conversation history sent to the LLM.
 	maxContextMessages int
 
@@ -388,6 +397,40 @@ func (e *Engine) ReplyGuardConfig() ReplyGuard {
 	e.replyGuardMu.RLock()
 	defer e.replyGuardMu.RUnlock()
 	return e.replyGuard
+}
+
+// SetTraceSink wires where captured live traces are written. A nil sink
+// disables live capture whatever [eval] capture says — the switch and the
+// storage are separate concerns and both have to be present.
+func (e *Engine) SetTraceSink(s TraceSink) {
+	e.traceMu.Lock()
+	defer e.traceMu.Unlock()
+	e.traceSink = s
+}
+
+// SetTraceCapture applies the [eval] capture switch and the per-trace byte cap.
+// Called at wiring time and again on every config reload, so turning capture
+// off in TOML stops recording without a restart.
+func (e *Engine) SetTraceCapture(enabled bool, maxBytes int) {
+	e.traceMu.Lock()
+	defer e.traceMu.Unlock()
+	e.traceCapture = enabled
+	e.traceMaxBytes = maxBytes
+}
+
+// traceSettings reads the capture configuration in one lock, so a reload
+// landing mid-turn cannot have a turn capture against one setting and truncate
+// against another.
+func (e *Engine) traceSettings() (TraceSink, bool, int) {
+	e.traceMu.RLock()
+	defer e.traceMu.RUnlock()
+	return e.traceSink, e.traceCapture, e.traceMaxBytes
+}
+
+// TraceCaptureEnabled reports whether live turns on this engine are recorded.
+func (e *Engine) TraceCaptureEnabled() bool {
+	sink, capture, _ := e.traceSettings()
+	return capture && sink != nil
 }
 
 // RequestStop asks every turn currently running on this engine to end at its
@@ -1400,6 +1443,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 		DurationMs:     time.Since(start).Milliseconds(),
 		Provider:       e.router.DefaultProvider(),
 		RequestedModel: policy.Model,
+		Trace:          out.trace,
 	}
 	if out.resp != nil {
 		result.Tokens = out.resp.TokensUsed
@@ -1429,6 +1473,10 @@ type turnOutcome struct {
 	// On a live turn a withholding verdict has already replaced response with
 	// the operator notice; on a policy turn it is reported and nothing else.
 	replyGuard replyGuardResult
+	// trace is the captured turn trace, nil when this turn was not recorded.
+	// A live turn has already had it written to the sink by the time it lands
+	// here; a policy turn hands it to the caller instead.
+	trace *TurnTrace
 }
 
 // turnPrep holds everything prepareTurn resolves before the LLM is called.
@@ -1558,6 +1606,18 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 		if guard.withholds() && !policy.active() {
 			out.response = replyWithheldNotice(guard)
 		}
+	}
+
+	// Trace capture sits before persistence so a store error still leaves the
+	// record of what the model saw behind — that is the one thing an operator
+	// asking "why did it do that" cannot reconstruct from anywhere else.
+	if tt := e.buildTurnTrace(traceParams{
+		msg: msg, policy: policy, prep: prep, resp: resp,
+		responseText: responseText, records: toolRecords,
+		stopReason: stopReason, startedAt: chatStart,
+	}); tt != nil {
+		out.trace = tt
+		e.saveTurnTrace(ctx, tt, policy)
 	}
 
 	if err := e.persistTurn(ctx, msg, policy, prep, resp, responseText, toolRecords); err != nil {

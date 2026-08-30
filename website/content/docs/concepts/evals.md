@@ -3,7 +3,7 @@ title: "Evals"
 description: "Comparing a candidate model against the one you run today, on your own conversations."
 slug: "evals"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 57
 toc: true
@@ -26,19 +26,43 @@ A test set is a named collection of test cases. A case is a prompt, a category, 
 | Field | Meaning |
 |---|---|
 | `prompt` | The user turn to replay |
-| `category` | One of `chat`, `skill_command`, `scheduled`, `tool_heavy` (default `chat`) |
+| `category` | One of `chat`, `skill_command`, `scheduled`, `tool_heavy`, `probe` (default `chat`) |
 | `pinned_history` | `{role, content}` turns replayed verbatim as the context preceding the prompt |
 | `notes` | Judge context. Never parsed as assertions — there is no assertion DSL |
 
 Pinned history is captured at save time rather than re-read from the source conversation at run time, because the source drifts: clearing a session empties it, retention prunes it, and its latest window is not the window that preceded the saved message. A test case that silently re-scopes itself between runs is not a test case.
 
-There are three fill paths:
+There are four fill paths:
 
 - **Save as test case** in the Chat page's message menu, optionally pinning the preceding turns.
-- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four history categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Generate probes** on the Evals page (`GET /api/v1/eval/probes`) works the other way round: top-down from the agent's own written intent rather than bottom-up from its history. See [Behaviour probes](#behaviour-probes) below.
 - **Import JSONL** — `POST /api/v1/eval/task-sets/{name}/import`, one case per line, all-or-none so a typo halfway down leaves the set untouched. `GET .../export` is the other half, so a curated set can be hand-edited or committed to git.
 
 A test set is an appreciating asset: the next candidate model starts here rather than at a blank page.
+
+## Behaviour probes
+
+The first four categories are the *history* axis: what the agent has actually been asked to do. That gives ecological validity and one structural blind spot — a set mined from history can only contain behaviours that have already happened, and the behaviours that separate a worse candidate from the incumbent are mostly ones a well-behaved incumbent never produced. It never retried a denied tool call, so no turn in your history shows a denial being respected.
+
+`probe` is the *spec* axis. `GET /api/v1/eval/probes` reads denkeeper's own written intent — the agent's permission tier, its auto-approve policy, its persona sections, and its skill frontmatter — and generates test cases from it. Six families:
+
+| Family | The question it asks |
+|---|---|
+| `denial_compliance` | The operator refused something. Does the candidate accept the refusal, or reach the same effect another way? |
+| `tier_boundary` | Does it act within the tier it is actually on, and describe that tier honestly when asked? |
+| `budget_hint` | "One sentence, no tools." Does it honour the bound? |
+| `approval_policy` | Does it treat a chat request as standing consent for a tool you never blessed? (supervised agents only — the other tiers have no approval gate) |
+| `skill_instruction` | Does it follow the skill you wrote, and describe it accurately when asked about it rather than invoked? |
+| `persona_fidelity` | Does it hold the persona sections you wrote? |
+
+The first three are canned and ship with denkeeper; they need no configuration, so a fresh install gets them. The other three are derived from your agent's config and are absent when there is nothing to derive them from.
+
+Because a probe quotes your configuration back at you, generation stays inside the caller's read scopes: the endpoint needs `agents:read` alongside `eval:read`, `skill_instruction` needs `skills:read`, and `approval_policy` needs `tools:read`.
+
+Probes carry the same free-text `notes` every other test case does — "what good looks like", handed to the judge as context. There is still no assertion DSL, and nothing parses them.
+
+Probes get their own category rather than being filed under `chat` or `tool_heavy` deliberately: the per-category breakdown in a run's verdict is what tells you *where* a candidate regressed, and folding the two axes together would let a regression on specified behaviour hide inside a chat win rate. It also means the stratified Quick check draw always reaches for a probe when your set carries one.
 
 ## Runs
 
@@ -98,6 +122,8 @@ claude mcp add --transport http denkeeper https://your-denkeeper/api/v1/mcp \
   --header "Authorization: Bearer $DENKEEPER_JUDGE_KEY"
 ```
 
+Setting `[eval] judge_model` adds a second consumer for the same queue: an **internal judge** that grades the outstanding pairs server-side, for runs nobody is watching. `POST /eval/runs/{id}/judge` starts a pass, and the judgment-pending block offers it as a button beside the Claude Code instruction. It is one completion per item with no tools in the request and no reader beyond the blinded payload, so it can no more unblind its own queue than the MCP judge can; it grades against the same rubric, records the same `rubric_version`, and its verdicts feed the same win-rate under `judge_ident` `judge_model`. Judging spend is capped by `judge_max_cost_per_run` and recorded on the run as `judge_cost`, apart from the samples' own budget. Left unset there is no internal judge and Claude Code is the only judge path.
+
 The rubric lives in the repo at `.claude/skills/judge-eval/SKILL.md`, where it can be read and edited: four dimensions in priority order — `task_success`, `tool_path`, `persona_fit`, `length` — with instructions to cite the specific persona or skill clause behind any deduction. Unknown dimension names are rejected rather than stored, because a typo that silently vanishes from the results is worse than a failed call. A verdict records the rubric version the judge worked to, and the summary reports the distinct set it saw, so a queue worked across a rubric edit says so instead of averaging two rubrics into one number.
 
 {{< callout context="note" >}}
@@ -134,13 +160,17 @@ upgrade: judge win-rate 62% over 45 judged pair(s) meets the 55% threshold, and 
 
 The **Evals** page drives the loop, and everything it does is REST underneath — see the [REST API reference](/docs/reference/rest-api/) for the request and response shapes.
 
-With no test set saved yet, the page opens on an empty state that explains the loop and offers the two ways in: **Suggest from history**, or an inline JSONL import.
+With no test set saved yet, the page opens on an empty state that explains the loop and offers the ways in: **Suggest from history**, **Generate probes**, or an inline JSONL import.
 
 ### Filling a set from history
 
 **Suggest from history** opens a panel of past turns worth keeping, each card carrying the prompt, its category, and the reason it was offered — a tool call was rejected or failed, the turn took three or more rounds, it cost in the top ten per cent, or a skill command triggered it. Select the ones you want, choose an existing set or name a new one, and add them in a batch.
 
 Accepting a candidate writes the same shape the Chat page's "Save as test case" does, pinned history included, captured at that moment rather than re-read at run time. Rejecting a candidate writes nothing at all: it is hidden for the session, so reloading the page offers it again.
+
+### Filling a set from the spec
+
+**Generate probes** opens the same shape of panel, filled from the agent's configuration instead. Each card names the behaviour family, the piece of config it came from, and — collapsed — the notes the judge will read. The panel sends the target set with each pass, so probes that set already carries are not offered again; changing the set re-runs the pass. Accept and reject work exactly as they do for suggestions.
 
 ### Launching a run
 
@@ -172,6 +202,14 @@ An `upgrade` offers **Apply to agent**, which switches the base agent's model th
 **The scorecard.** Each variant is a column, the objective metrics are rows, and a completeness line underneath reports turns finished, comparisons judged, and whether that clears the floor.
 
 **Test case by test case.** Every test case is a row with each variant's cost, rounds, and latency; expanding one puts the responses side by side with their tool traces and the judge's verdict for that pair, its per-dimension winners, notes, and rubric version.
+
+## Turn traces and the inspector
+
+A turn trace is the whole turn as the model saw it: the system prompt as it was assembled after skill injection, the history window as it went on the wire, every tool call with its arguments and the result that came back, the final response, timings and usage. The **Turn inspector** page renders them — rows expanding inline into the same transcript the dry-run previews use.
+
+This is the answer to "why did it do that". The audit log records that a turn took four rounds and that one tool call failed; the trace records the prompt that produced them and the payload the model read.
+
+Eval samples are always traced — the judge reads the trace, and a verdict nobody can re-check is not evidence. **Live turns are recorded only when `[eval] capture = true`, which is off by default**: a trace holds everything the model saw, which is the most sensitive data Denkeeper stores, so recording live conversations stays an explicit operator decision rather than something an upgrade switches on. Traces are capped at `[eval] max_trace_bytes` (256 KiB, oldest rounds dropped first, with the trace saying what went) and kept for `[eval] retention_days` (30, matching the audit log).
 
 ## Configuration
 

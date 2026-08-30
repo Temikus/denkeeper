@@ -76,6 +76,9 @@ type evalRunDetail struct {
 	SamplesTotal int            `json:"samples_total"`
 	ETASeconds   int            `json:"eta_seconds,omitempty"`
 	Active       bool           `json:"active"`
+	// Judging is true while an internal-judge pass is working this run's
+	// queue, so a page can say why pairs_judged is climbing on its own.
+	Judging bool `json:"judging"`
 }
 
 // evalRunCreated is the create response.
@@ -90,7 +93,7 @@ type evalImportResult struct {
 }
 
 // evalSuggestResult is the cold-start fill path's response: past turns worth
-// saving as test cases, stratified across the four categories.
+// saving as test cases, stratified across the history categories.
 type evalSuggestResult struct {
 	Candidates []eval.Candidate `json:"candidates"`
 }
@@ -785,6 +788,7 @@ func (s *Server) handleGetEvalRun(w http.ResponseWriter, r *http.Request) {
 		SamplesDone:  len(samples),
 		SamplesTotal: len(tasks) * len(variants) * run.K,
 		Active:       s.deps.EvalRunner.IsActive(id),
+		Judging:      s.deps.EvalJudge.IsActive(id),
 	}
 	detail.ETASeconds = evalETA(samples, detail.SamplesTotal, s.deps.EvalRunner.Config().MaxConcurrent)
 	writeJSON(w, http.StatusOK, detail)
@@ -876,7 +880,7 @@ func (s *Server) handleEvalRunSummary(w http.ResponseWriter, r *http.Request) {
 
 // handleEvalRunPairs godoc
 // @Summary Get an eval run's judged pairs, unblinded
-// @Description Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.
+// @Description Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners both as the raw presented letters and resolved to variant names ('dimensions_variant', ties preserved as 'tie'), notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -895,15 +899,9 @@ func (s *Server) handleEvalRunPairs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var taskID int64
-	if raw := r.URL.Query().Get("task_id"); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || parsed <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "task_id must be a positive integer"})
-			return
-		}
-		taskID = parsed
+	taskID, ok := evalTaskFilter(w, r)
+	if !ok {
+		return
 	}
 	view, err := s.deps.EvalStore.PairDetails(r.Context(), id, taskID)
 	if err != nil {
@@ -915,13 +913,14 @@ func (s *Server) handleEvalRunPairs(w http.ResponseWriter, r *http.Request) {
 
 // handleEvalRunSamples godoc
 // @Summary Get an eval run's per-sample transcripts
-// @Description Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.
+// @Description Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead. Pass 'task_id' to fetch one test case's samples rather than the whole run — a full run is task_count x variants x k samples, each carrying a trace.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
 // @Param id path int true "Run id"
+// @Param task_id query int false "Only return samples for this task"
 // @Success 200 {array} eval.Sample "Samples"
-// @Failure 400 {object} map[string]string "Bad run id"
+// @Failure 400 {object} map[string]string "Bad run id or task_id"
 // @Failure 404 {object} map[string]string "Run not found"
 // @Failure 503 {object} map[string]string "Eval subsystem not configured"
 // @Router /eval/runs/{id}/samples [get]
@@ -933,11 +932,15 @@ func (s *Server) handleEvalRunSamples(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	taskID, ok := evalTaskFilter(w, r)
+	if !ok {
+		return
+	}
 	if _, err := s.deps.EvalStore.GetRun(r.Context(), id); err != nil {
 		writeEvalError(w, err)
 		return
 	}
-	samples, err := s.deps.EvalStore.ListSamples(r.Context(), id)
+	samples, err := s.deps.EvalStore.ListTaskSamples(r.Context(), id, taskID)
 	if err != nil {
 		writeEvalError(w, err)
 		return
@@ -945,11 +948,28 @@ func (s *Server) handleEvalRunSamples(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, samples)
 }
 
+// evalTaskFilter reads the optional task_id narrowing shared by the pairs and
+// samples endpoints. 0 means every task; a false second return means the reply
+// has already been written.
+func evalTaskFilter(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.URL.Query().Get("task_id")
+	if raw == "" {
+		return 0, true
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "task_id must be a positive integer"})
+		return 0, false
+	}
+	return parsed, true
+}
+
 // --- Suggestions ---
 
 const (
 	// suggestDefaultLimit is how many candidates a suggestion pass returns —
-	// enough to fill the four category columns without a wall of cards.
+	// enough to fill the category columns without a wall of cards.
 	suggestDefaultLimit = 20
 	suggestMaxLimit     = 100
 	// suggestDefaultWindow is how far back the telemetry query looks.
@@ -988,7 +1008,7 @@ func suggestParams(w http.ResponseWriter, r *http.Request) (agentName string, si
 
 // handleEvalSuggest godoc
 // @Summary Suggest eval test cases from history
-// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
+// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -1031,4 +1051,69 @@ func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, evalSuggestResult{
 		Candidates: eval.Suggest(turns, eval.SuggestOpts{Limit: limit, Exclude: saved}),
 	})
+}
+
+// evalJudgeInput scopes one internal-judge pass.
+type evalJudgeInput struct {
+	// SampleN draws that many pending items at random instead of taking the
+	// head of the queue — the calibration subset, the same knob eval_pending
+	// gives the MCP judge.
+	SampleN int `json:"sample_n"`
+	// Limit caps how many items the pass takes. 0 is the whole queue.
+	Limit int `json:"limit"`
+}
+
+// handleJudgeEvalRun godoc
+// @Summary Judge a run's pending pairs with the internal judge
+// @Description Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model; without it the endpoint reports 503 and the MCP judge path is unaffected. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.
+// @Tags eval
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "Run id"
+// @Param body body evalJudgeInput false "Optional sample_n calibration subset and item limit"
+// @Success 202 {object} eval.JudgePass "Pass started; items is how many it took"
+// @Failure 400 {object} map[string]string "Bad run id or body"
+// @Failure 404 {object} map[string]string "Run not found"
+// @Failure 409 {object} map[string]string "Run is not terminal, or is already being judged"
+// @Failure 503 {object} map[string]string "Eval subsystem or internal judge not configured"
+// @Router /eval/runs/{id}/judge [post]
+func (s *Server) handleJudgeEvalRun(w http.ResponseWriter, r *http.Request) {
+	if !s.evalRequired(w) {
+		return
+	}
+	if !s.deps.EvalJudge.Available() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "internal judge not configured: set [eval] judge_model"})
+		return
+	}
+	id, ok := evalRunID(w, r)
+	if !ok {
+		return
+	}
+	// An empty body is the ordinary case — judge everything outstanding — and
+	// decodeEvalBody already accepts one. A ContentLength guard here would miss
+	// a chunked request, silently dropping its sample_n.
+	var in evalJudgeInput
+	if !decodeEvalBody(w, r, &in) {
+		return
+	}
+	if in.SampleN < 0 || in.Limit < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "sample_n and limit must not be negative"})
+		return
+	}
+
+	pass, err := s.deps.EvalJudge.Start(r.Context(), id, eval.JudgeOpts{
+		SampleN: in.SampleN,
+		Limit:   in.Limit,
+	})
+	switch {
+	case errors.Is(err, eval.ErrRunNotTerminal), errors.Is(err, eval.ErrJudgeActive):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case err != nil:
+		writeEvalError(w, err)
+	default:
+		writeJSON(w, http.StatusAccepted, pass)
+	}
 }

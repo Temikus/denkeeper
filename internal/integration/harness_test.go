@@ -48,9 +48,22 @@ type mockProvider struct {
 	calls     int
 	requests  []llm.ChatRequest
 
+	// responder, when set, answers from the request itself instead of from the
+	// fixed sequence. Needed wherever the reply has to depend on what was
+	// asked — an LLM judge reading a blinded pair, for one.
+	responder func(req llm.ChatRequest) (*llm.ChatResponse, error)
+
 	// delay pauses every completion, so a test can catch a run mid-flight.
 	// Honours the context, which is what makes cancellation observable.
 	delay time.Duration
+}
+
+// SetResponder swaps in a request-driven responder mid-test, so one harness
+// can answer as the agent during a run and as the judge afterwards.
+func (m *mockProvider) SetResponder(fn func(req llm.ChatRequest) (*llm.ChatResponse, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.responder = fn
 }
 
 // SetDelay makes every subsequent completion take d, so a background run stays
@@ -68,7 +81,7 @@ func (m *mockProvider) ChatCompletion(ctx context.Context, req llm.ChatRequest) 
 	m.requests = append(m.requests, req)
 	idx := m.calls
 	m.calls++
-	errs, responses, delay := m.errors, m.responses, m.delay
+	errs, responses, delay, responder := m.errors, m.responses, m.delay, m.responder
 	m.mu.Unlock()
 
 	if delay > 0 {
@@ -82,6 +95,10 @@ func (m *mockProvider) ChatCompletion(ctx context.Context, req llm.ChatRequest) 
 	// Return errors if configured.
 	if idx < len(errs) && errs[idx] != nil {
 		return nil, errs[idx]
+	}
+
+	if responder != nil {
+		return responder(req)
 	}
 
 	// Return responses in order; last one repeats.
@@ -105,6 +122,17 @@ func (m *mockProvider) CallCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.calls
+}
+
+// requestsFrom returns the requests recorded from index n onward, so a test
+// can look at just the calls a later phase made.
+func (m *mockProvider) requestsFrom(n int) []llm.ChatRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n >= len(m.requests) {
+		return nil
+	}
+	return append([]llm.ChatRequest(nil), m.requests[n:]...)
 }
 
 func (m *mockProvider) LastRequest() llm.ChatRequest {
@@ -136,6 +164,7 @@ type Harness struct {
 	CostTracker *llm.CostTracker
 	EvalStore   *eval.Store         // nil unless WithEval is set
 	EvalRunner  *eval.Runner        // nil unless WithEval is set
+	EvalJudge   *eval.Judge         // nil unless WithEval is set
 	Sessions    *api.SessionManager // always wired by the harness
 	KeyStore    *api.KeyStore       // nil unless WithKeyStore is set
 	APIKey      string
@@ -162,6 +191,10 @@ type HarnessOpts struct {
 
 	// Responses configures the mock LLM response sequence.
 	Responses []*llm.ChatResponse
+
+	// Responder answers from the request instead of the fixed sequence, for
+	// flows where the reply has to depend on what was asked.
+	Responder func(req llm.ChatRequest) (*llm.ChatResponse, error)
 
 	// Scopes configures the API key scopes. If nil, all scopes are granted.
 	Scopes []string
@@ -231,6 +264,11 @@ type HarnessOpts struct {
 	// same defaults config.Load would apply.
 	EvalConfig eval.Config
 
+	// EvalJudgeModel turns on the internal judge. Empty leaves it wired but
+	// unavailable, which is the state a server with no [eval] judge_model is
+	// in — the MCP judge path is unaffected either way.
+	EvalJudgeModel string
+
 	// AutoApproveTools seeds config-scoped ("config") auto-approve rules,
 	// agent name → tool names, standing in for the [[agents]]
 	// auto_approve_tools TOML field that cmd/denkeeper wires at startup.
@@ -276,7 +314,7 @@ func allScopes() []string {
 // a runner over the live dispatcher (with the typed-nil guard), and the
 // OnPanic hook that reaches active runs — eval turns are never in the
 // dispatcher's inFlight map, so without this the panic switch would miss them.
-func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) (*eval.Store, *eval.Runner) {
+func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) (*eval.Store, *eval.Runner, *eval.Judge) {
 	t.Helper()
 	store, err := eval.NewInMemoryStore()
 	if err != nil {
@@ -298,14 +336,22 @@ func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher
 		cfg.CompletenessFloor = 0.8
 	}
 
-	runner := eval.NewRunner(store, func(name string) (eval.Engine, bool) {
+	source := func(name string) (eval.Engine, bool) {
 		e := dispatcher.Agent(name)
 		if e == nil {
 			return nil, false
 		}
 		return e, true
-	}, auditor, cfg, logger)
+	}
+	runner := eval.NewRunner(store, source, auditor, cfg, logger)
 	t.Cleanup(runner.Shutdown)
+
+	judge := eval.NewJudge(store, source, auditor, eval.JudgeConfig{
+		Model:         opts.EvalJudgeModel,
+		MaxCost:       cfg.MaxCostPerRun,
+		MaxConcurrent: cfg.MaxConcurrent,
+	}, logger)
+	t.Cleanup(judge.Shutdown)
 
 	prevPanic := dispatcher.OnPanic
 	dispatcher.OnPanic = func() {
@@ -313,8 +359,9 @@ func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher
 			prevPanic()
 		}
 		runner.StopAll()
+		judge.StopAll()
 	}
-	return store, runner
+	return store, runner, judge
 }
 
 // NewHarness creates and returns a fully wired test harness.
@@ -366,6 +413,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 
 	// Mock LLM.
 	mock := &mockProvider{}
+	mock.responder = opts.Responder
 	if len(opts.Responses) > 0 {
 		mock.responses = opts.Responses
 	} else {
@@ -515,8 +563,9 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 
 	var evalStore *eval.Store
 	var evalRunner *eval.Runner
+	var evalJudge *eval.Judge
 	if opts.WithEval {
-		evalStore, evalRunner = buildEvalDeps(t, opts, dispatcher, auditor, logger)
+		evalStore, evalRunner, evalJudge = buildEvalDeps(t, opts, dispatcher, auditor, logger)
 	}
 
 	deps := api.Deps{
@@ -539,6 +588,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		RestartFunc:       opts.RestartFunc,
 		EvalStore:         evalStore,
 		EvalRunner:        evalRunner,
+		EvalJudge:         evalJudge,
 		Config: config.NewHolder(&config.Config{
 			Agents: agentConfigs,
 			Eval: config.EvalConfig{
@@ -602,6 +652,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		CostTracker: costTracker,
 		EvalStore:   evalStore,
 		EvalRunner:  evalRunner,
+		EvalJudge:   evalJudge,
 		Sessions:    sessionMgr,
 		KeyStore:    keyStore,
 		APIKey:      apiKey,

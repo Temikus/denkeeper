@@ -139,7 +139,8 @@
 
   {#if data.per_provider && data.per_provider.length > 0}
     <h2 class="section-title">Per-Provider Breakdown</h2>
-    <div class="table-wrapper">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+    <div class="table-wrapper table-wrap" tabindex="0" role="region" aria-label="Per-provider breakdown">
       <table class="data-table">
         <thead>
           <tr>
@@ -178,7 +179,8 @@
   {#if sortedAgents.length === 0}
     <p class="empty">No cost data recorded yet.</p>
   {:else}
-    <div class="table-wrapper">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+    <div class="table-wrapper table-wrap" tabindex="0" role="region" aria-label="Per-agent breakdown">
       <table class="data-table">
         <thead>
           <tr>
@@ -280,7 +282,6 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow-x: auto;
   }
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th {

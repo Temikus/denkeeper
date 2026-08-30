@@ -2471,6 +2471,97 @@
                 }
             }
         },
+        "/eval/probes": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates eval test cases top-down from the agent's own written intent — its permission tier, auto-approve policy, persona sections and skill frontmatter — rather than from usage history. Covers what a history-sampled set structurally cannot: denial compliance, permission-tier boundaries, and budget hints are behaviours a well-behaved incumbent never produced, so no past turn demonstrates them. Every probe carries free-text notes describing what a good answer looks like, surfaced to the judge as context and never parsed as assertions. Generation is deterministic for a given agent, so passing set= suppresses probes that set already carries. Nothing is written — accepting a probe is a separate call to the task create endpoint. Requires agents:read alongside eval:read, since probes quote the agent's configuration back; the skill and approval-policy families are omitted for callers without skills:read and tools:read respectively.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Generate spec-derived behavioural probes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent whose configuration is read as the spec",
+                        "name": "agent",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Task set to exclude probes already saved in",
+                        "name": "set",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Probes returned across all families (max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Generated probes",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalProbesResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Missing agent or bad limit",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Missing agents:read",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent or task set not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Store error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs": {
             "get": {
                 "security": [
@@ -2665,6 +2756,87 @@
                 }
             }
         },
+        "/eval/runs/{id}/judge": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model; without it the endpoint reports 503 and the MCP judge path is unaffected. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "eval"
+                ],
+                "summary": "Judge a run's pending pairs with the internal judge",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional sample_n calibration subset and item limit",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.evalJudgeInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Pass started; items is how many it took",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.JudgePass"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad run id or body",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Run not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Run is not terminal, or is already being judged",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Eval subsystem or internal judge not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/eval/runs/{id}/pairs": {
             "get": {
                 "security": [
@@ -2672,7 +2844,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners, notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
+                "description": "Returns the run's blinded-comparison pairs with the blinding lifted: which variant produced each side, every recorded verdict with the presented letter resolved back to a variant name, its per-dimension winners both as the raw presented letters and resolved to variant names ('dimensions_variant', ties preserved as 'tie'), notes and rubric version, and the pair's resolved outcome from the candidate's point of view. Outcomes follow the aggregation rules exactly — a pair is 'win' or 'loss' only when both presentation orders carry a judge verdict naming the same variant, orders that disagree are a 'tie' (the judge tracked position, not quality), and anything half-judged is 'pending'. The operator's calibration marks (judge_ident 'operator') are listed but never drive the outcome. This is the operator's results view and is deliberately not reachable from the judge's MCP tools.",
                 "produces": [
                     "application/json"
                 ],
@@ -2739,7 +2911,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead.",
+                "description": "Returns every sample the run produced, including its response and the full tool trace with arguments and results (trimmed to 8 KiB per field). Failed samples carry their error instead. Pass 'task_id' to fetch one test case's samples rather than the whole run — a full run is task_count x variants x k samples, each carrying a trace.",
                 "produces": [
                     "application/json"
                 ],
@@ -2754,6 +2926,12 @@
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only return samples for this task",
+                        "name": "task_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2767,7 +2945,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad run id",
+                        "description": "Bad run id or task_id",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2937,7 +3115,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the four categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
+                "description": "Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.",
                 "produces": [
                     "application/json"
                 ],
@@ -7556,6 +7734,172 @@
                     }
                 }
             }
+        },
+        "/traces": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns turn trace headers, newest first, without their payloads. A trace records what a turn actually saw — the built system prompt, the history window as sent, the per-round tool calls with arguments and results, and the final response. Live turns are captured only when [eval] capture is on (off by default, since a trace holds everything the model saw); eval samples are always captured. The response repeats the capture switch and the retention window so a caller can tell \"nothing recorded yet\" from \"recording is off\".",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces"
+                ],
+                "summary": "List captured turn traces",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by agent name",
+                        "name": "agent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by conversation id",
+                        "name": "conversation_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by source (live, eval)",
+                        "name": "source",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start of time range (RFC3339 format)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End of time range (RFC3339 format)",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of traces to return (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of traces to skip for pagination",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Trace headers plus the capture settings",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.traceListResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid query parameter (since, until, limit, or offset)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Turn traces not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/traces/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the full trace: the built system prompt as it was assembled post-skill-injection, the history window as it went on the wire, every tool call with its arguments and the result the model read, and the final response. When the trace exceeded [eval] max_trace_bytes it also reports what was dropped — oldest rounds first — so a trimmed trace is not mistaken for a short turn.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "traces"
+                ],
+                "summary": "Get one turn trace with its payload",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Trace id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Turn trace",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.traceDetail"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad trace id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Trace not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Turn traces not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -7651,6 +7995,34 @@
                     "type": "boolean"
                 },
                 "tool_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_agent.TraceMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_agent.TraceTruncation": {
+            "type": "object",
+            "properties": {
+                "clamped_text": {
+                    "type": "boolean"
+                },
+                "dropped_history": {
+                    "type": "integer"
+                },
+                "dropped_rounds": {
+                    "type": "integer"
+                },
+                "note": {
                     "type": "string"
                 }
             }
@@ -8113,6 +8485,32 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.JudgePass": {
+            "type": "object",
+            "properties": {
+                "cost_cap": {
+                    "type": "number"
+                },
+                "items": {
+                    "type": "integer"
+                },
+                "judge_ident": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "rubric_version": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Judgment": {
             "type": "object",
             "properties": {
@@ -8244,7 +8642,14 @@
                     "type": "string"
                 },
                 "dimensions": {
-                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode.",
+                    "description": "Dimensions is the stored per-dimension map, omitted when the judge\nrecorded none or the stored value will not decode. Values are the\npresented letters — what the judge actually saw — and are kept so an\naudit can check the call against the queue it was answering.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "dimensions_variant": {
+                    "description": "DimensionsVariant is Dimensions with every letter resolved through the\nitem's presentation order and the pair's assignment, ties preserved as\n\"tie\". Same key set as Dimensions; a value that is neither a letter nor\na tie is carried through unchanged rather than dropped.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -8299,6 +8704,41 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_eval.Probe": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind is the behaviour family, one of ProbeKinds().",
+                    "type": "string"
+                },
+                "notes": {
+                    "description": "Notes is free-text \"what good looks like\", stored on the task and\nsurfaced to the judge as context. Never parsed (§2, no-DSL).",
+                    "type": "string"
+                },
+                "preceding": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.PrecedingMessage"
+                    }
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source names the written intent this probe was derived from —\n\"tier:supervised\", \"skill:briefing\", \"persona:soul\" — so an operator\nreading a card can go and check the spec it came from.",
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_eval.Run": {
             "type": "object",
             "properties": {
@@ -8325,6 +8765,10 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
                 },
                 "k": {
                     "type": "integer"
@@ -8583,6 +9027,71 @@
                 },
                 "variant_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_eval.TraceRow": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "cost_usd": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "stop_reason": {
+                    "type": "string"
+                },
+                "tokens_cached": {
+                    "type": "integer"
+                },
+                "tokens_completion": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "tokens_total": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "upstream": {
+                    "type": "string"
                 }
             }
         },
@@ -9262,11 +9771,23 @@
                 "gate_rounds_pct": {
                     "type": "number"
                 },
+                "judge_max_cost_per_run": {
+                    "description": "JudgeMaxCostPerRun is the ceiling for one judging pass, so a page can\nsay what it is about to authorise. Omitted with the model.",
+                    "type": "number"
+                },
+                "judge_model": {
+                    "description": "JudgeModel is the internal judge's model, omitted when [eval] judge_model\nis unset. Its presence is the signal a results view uses to decide\nwhether server-side judging is on offer at all — without it the only\njudge path is Claude Code over MCP.",
+                    "type": "string"
+                },
                 "max_concurrent": {
                     "type": "integer"
                 },
                 "max_cost_per_run": {
                     "type": "number"
+                },
+                "rubric_version": {
+                    "description": "RubricVersion names the rubric revision the internal judge grades under.",
+                    "type": "string"
                 },
                 "win_threshold": {
                     "type": "number"
@@ -9306,6 +9827,37 @@
                 }
             }
         },
+        "internal_api.evalJudgeInput": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "description": "Limit caps how many items the pass takes. 0 is the whole queue.",
+                    "type": "integer"
+                },
+                "sample_n": {
+                    "description": "SampleN draws that many pending items at random instead of taking the\nhead of the queue — the calibration subset, the same knob eval_pending\ngives the MCP judge.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.evalProbesResult": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "permission_tier": {
+                    "description": "PermissionTier is echoed because half the probes are written against it,\nand an operator reading the cards should see which tier they assume.",
+                    "type": "string"
+                },
+                "probes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.Probe"
+                    }
+                }
+            }
+        },
         "internal_api.evalRunCreated": {
             "type": "object",
             "properties": {
@@ -9332,6 +9884,10 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
                 },
                 "k": {
                     "type": "integer"
@@ -9393,6 +9949,14 @@
                 },
                 "id": {
                     "type": "integer"
+                },
+                "judge_cost": {
+                    "description": "JudgeCost is what the internal judge has spent grading this run, kept\napart from CostSpent: it is a separate budget spent by a separate\ndecision, and adding it to the sample spend would read as a blown cap.",
+                    "type": "number"
+                },
+                "judging": {
+                    "description": "Judging is true while an internal-judge pass is working this run's\nqueue, so a page can say why pairs_judged is climbing on its own.",
+                    "type": "boolean"
                 },
                 "k": {
                     "type": "integer"
@@ -9980,6 +10544,136 @@
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.traceDetail": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "cost_usd": {
+                    "type": "number"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "description": "DurationMs mirrors latency_ms under the name the transcript renderer\nreads, so the mapping lives here rather than in three UI call sites.",
+                    "type": "integer"
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.TraceMessage"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "requested_model": {
+                    "type": "string"
+                },
+                "response": {
+                    "type": "string"
+                },
+                "rounds": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "stop_reason": {
+                    "type": "string"
+                },
+                "suppressed_count": {
+                    "type": "integer"
+                },
+                "system_prompt": {
+                    "type": "string"
+                },
+                "tokens_cached": {
+                    "type": "integer"
+                },
+                "tokens_completion": {
+                    "type": "integer"
+                },
+                "tokens_prompt": {
+                    "type": "integer"
+                },
+                "tokens_total": {
+                    "type": "integer"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.dryRunToolCall"
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "truncation": {
+                    "description": "Truncation says what the byte cap removed, so a trimmed trace is never\nmistaken for a short turn.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.TraceTruncation"
+                        }
+                    ]
+                },
+                "upstream": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.traceListResult": {
+            "type": "object",
+            "properties": {
+                "capture": {
+                    "type": "boolean"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "max_trace_bytes": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "retention_days": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "traces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TraceRow"
+                    }
                 }
             }
         }

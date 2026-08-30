@@ -25,6 +25,7 @@
   import Providers from './pages/Providers.svelte'
   import Settings from './pages/Settings.svelte'
   import AuditLog from './pages/AuditLog.svelte'
+  import Traces from './pages/Traces.svelte'
   import Channels from './pages/Channels.svelte'
   import Evals from './pages/Evals.svelte'
   import MoreMenu from './pages/MoreMenu.svelte'
@@ -111,6 +112,8 @@
         <Channels />
       {:else if route === 'audit'}
         <AuditLog />
+      {:else if route === 'traces'}
+        <Traces />
       {:else if route === 'evals'}
         <Evals />
       {:else if route === 'settings'}
@@ -148,6 +151,10 @@
     --success:     #3d8f62;
     --warn:        #c87e30;
     --radius:      6px;
+    /* One inset for the Evals page's stacked cards (empty state, launcher,
+       suggest panel) so they stay aligned at every width; the 520px override
+       below is the single place the mobile inset is defined. */
+    --card-inset:  18px;
     --hover-overlay: rgba(0, 0, 0, 0.04);
     --overlay-bg:    rgba(0, 0, 0, 0.4);
     --bottom-nav-height: 60px;
@@ -186,6 +193,12 @@
     --sidebar-active-bg:    rgba(var(--accent-rgb), 0.15);
     --sidebar-hover-bg:     rgba(255, 255, 255, 0.06);
     --sidebar-divider:      rgba(255, 255, 255, 0.08);
+  }
+
+  @media (max-width: 520px) {
+    :global(:root) {
+      --card-inset: 14px;
+    }
   }
 
   :global(body) {

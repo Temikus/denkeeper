@@ -2,6 +2,8 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -305,6 +307,159 @@ func TestPairDetails_TieVerdictNamesNoVariant(t *testing.T) {
 	for _, it := range pair.Items {
 		if it.Verdicts[0].Winner != WinnerTie || it.Verdicts[0].WinnerVariant != "" {
 			t.Errorf("tie verdict = %+v, want winner tie and no variant", it.Verdicts[0])
+		}
+	}
+}
+
+// The point of dimensions_variant: a per-dimension letter is only meaningful
+// once it has been through the item's presentation order and the pair's
+// assignment, and the two orders of one pair present the same variant under
+// different letters.
+func TestPairDetails_DimensionLettersResolveToVariants(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	base, cand := f.variants[0], f.variants[1]
+
+	pairs, err := f.store.ListPairs(ctx, f.run.ID)
+	if err != nil {
+		t.Fatalf("ListPairs: %v", err)
+	}
+	assign, err := DecodeAssignment(pairs[0].Assignment)
+	if err != nil {
+		t.Fatalf("DecodeAssignment: %v", err)
+	}
+
+	// Every item says the candidate won task_success and the baseline won
+	// length, written in whatever letters that item presented them under.
+	for _, it := range f.items(t) {
+		dims := map[string]string{
+			"task_success": letterFor(assign, it.PresentationOrder, cand.ID),
+			"length":       letterFor(assign, it.PresentationOrder, base.ID),
+			"tool_path":    WinnerTie,
+		}
+		raw, err := json.Marshal(dims)
+		if err != nil {
+			t.Fatalf("marshalling dimensions: %v", err)
+		}
+		if _, err := f.store.RecordVerdict(ctx, Verdict{
+			ItemID: it.ID, Winner: WinnerTie, JudgeIdent: "claude-code",
+			Dimensions: string(raw),
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	pair := onlyPair(t, f.pairDetails(t, 0))
+	for _, it := range pair.Items {
+		got := it.Verdicts[0].DimensionsVariant
+		if got["task_success"] != cand.Name {
+			t.Errorf("order %s: task_success = %q, want %q",
+				it.PresentationOrder, got["task_success"], cand.Name)
+		}
+		if got["length"] != base.Name {
+			t.Errorf("order %s: length = %q, want %q",
+				it.PresentationOrder, got["length"], base.Name)
+		}
+		if got["tool_path"] != WinnerTie {
+			t.Errorf("order %s: tool_path = %q, want a preserved tie",
+				it.PresentationOrder, got["tool_path"])
+		}
+	}
+	// The raw letters stay put: an audit has to be able to check the call
+	// against the queue the judge was answering.
+	ab, ba := pair.Items[0], pair.Items[1]
+	if ab.Verdicts[0].Dimensions["task_success"] == ba.Verdicts[0].Dimensions["task_success"] {
+		t.Error("both orders recorded the same letter for task_success — the fixture did not swap")
+	}
+}
+
+// An all-tie item is exactly the case the client-side resolver could not do:
+// no verdict on it names a variant, so nothing but the assignment can say who
+// a dimension letter was.
+func TestPairDetails_DimensionsResolveOnAnAllTieItem(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	cand := f.variants[1]
+
+	pairs, err := f.store.ListPairs(ctx, f.run.ID)
+	if err != nil {
+		t.Fatalf("ListPairs: %v", err)
+	}
+	assign, err := DecodeAssignment(pairs[0].Assignment)
+	if err != nil {
+		t.Fatalf("DecodeAssignment: %v", err)
+	}
+
+	for _, it := range f.items(t) {
+		raw := fmt.Sprintf(`{"persona_fit":%q}`, letterFor(assign, it.PresentationOrder, cand.ID))
+		if _, err := f.store.RecordVerdict(ctx, Verdict{
+			ItemID: it.ID, Winner: WinnerTie, JudgeIdent: "claude-code", Dimensions: raw,
+		}); err != nil {
+			t.Fatalf("RecordVerdict: %v", err)
+		}
+	}
+
+	pair := onlyPair(t, f.pairDetails(t, 0))
+	if pair.Outcome != PairOutcomeTie {
+		t.Fatalf("outcome = %q, want %q", pair.Outcome, PairOutcomeTie)
+	}
+	for _, it := range pair.Items {
+		v := it.Verdicts[0]
+		if v.WinnerVariant != "" {
+			t.Fatalf("winner_variant = %q on a tie, want empty", v.WinnerVariant)
+		}
+		if got := v.DimensionsVariant["persona_fit"]; got != cand.Name {
+			t.Errorf("order %s: persona_fit = %q, want %q", it.PresentationOrder, got, cand.Name)
+		}
+	}
+}
+
+// A judge is free-text on dimension values in a way the server does not police,
+// so a value that is neither a letter nor a tie has to survive the resolver
+// rather than vanish from the operator's view.
+func TestPairDetails_UnreadableDimensionValueIsCarriedThrough(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	ctx := context.Background()
+	f.cleanRun(t)
+	f.createPairs(t)
+	items := f.items(t)
+
+	if _, err := f.store.RecordVerdict(ctx, Verdict{
+		ItemID: items[0].ID, Winner: WinnerA, JudgeIdent: "claude-code",
+		Dimensions: `{"task_success":"both","length":"A"}`,
+	}); err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+
+	pair := onlyPair(t, f.pairDetails(t, 0))
+	v := pair.Items[0].Verdicts[0]
+	if got := v.DimensionsVariant["task_success"]; got != "both" {
+		t.Errorf("task_success = %q, want the judge's own text carried through", got)
+	}
+	// Case and surrounding space are the judge's, not the protocol's: an "A"
+	// is still the A it was shown.
+	if got := v.DimensionsVariant["length"]; got == "A" || got == "" {
+		t.Errorf("length = %q, want an uppercase letter resolved to a variant", got)
+	}
+}
+
+// Nothing to resolve means nothing emitted: dimensions_variant is omitempty,
+// and a map of nils would render as empty rows in the results view.
+func TestPairDetails_NoDimensionsLeavesResolvedMapEmpty(t *testing.T) {
+	f := newPairFixture(t, 1, []string{CategoryChat})
+	f.cleanRun(t)
+	f.createPairs(t)
+	f.judgeRun(t, func(Pair) int64 { return f.variants[1].ID })
+
+	pair := onlyPair(t, f.pairDetails(t, 0))
+	for _, it := range pair.Items {
+		if len(it.Verdicts[0].DimensionsVariant) != 0 {
+			t.Errorf("dimensions_variant = %v on a verdict with no dimensions, want empty",
+				it.Verdicts[0].DimensionsVariant)
 		}
 	}
 }

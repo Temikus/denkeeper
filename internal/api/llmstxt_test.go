@@ -69,6 +69,7 @@ func TestLLMsTxt_ListsEvalEndpoints(t *testing.T) {
 		"POST /api/v1/eval/estimate",
 		"GET  /api/v1/eval/config",
 		"GET  /api/v1/eval/suggest",
+		"GET  /api/v1/eval/probes",
 		"GET  /api/v1/eval/runs/{id}/pairs",
 		"POST /api/v1/eval/runs/{id}/stop",
 	} {

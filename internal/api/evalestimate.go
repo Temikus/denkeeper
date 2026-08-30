@@ -38,6 +38,16 @@ type evalConfigResponse struct {
 	GateRoundsPct      float64 `json:"gate_rounds_pct"`
 	GateCostPct        float64 `json:"gate_cost_pct"`
 	Audit              string  `json:"audit"`
+	// JudgeModel is the internal judge's model, omitted when [eval] judge_model
+	// is unset. Its presence is the signal a results view uses to decide
+	// whether server-side judging is on offer at all — without it the only
+	// judge path is Claude Code over MCP.
+	JudgeModel string `json:"judge_model,omitempty"`
+	// JudgeMaxCostPerRun is the ceiling for one judging pass, so a page can
+	// say what it is about to authorise. Omitted with the model.
+	JudgeMaxCostPerRun float64 `json:"judge_max_cost_per_run,omitempty"`
+	// RubricVersion names the rubric revision the internal judge grades under.
+	RubricVersion string `json:"rubric_version,omitempty"`
 }
 
 // handleEvalEstimate godoc
@@ -198,7 +208,7 @@ func (s *Server) handleEvalConfig(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	c := cfg.Eval
-	writeJSON(w, http.StatusOK, evalConfigResponse{
+	out := evalConfigResponse{
 		DefaultK:           c.DefaultK,
 		MaxCostPerRun:      c.MaxCostPerRun,
 		MaxConcurrent:      c.MaxConcurrent,
@@ -208,5 +218,14 @@ func (s *Server) handleEvalConfig(w http.ResponseWriter, _ *http.Request) {
 		GateRoundsPct:      c.GateRoundsPct,
 		GateCostPct:        c.GateCostPct,
 		Audit:              c.AuditMode(),
-	})
+	}
+	// Reported from the judge's own resolved config rather than from the TOML
+	// struct: a judge the server never wired must not be advertised.
+	if s.deps.EvalJudge.Available() {
+		jc := s.deps.EvalJudge.Config()
+		out.JudgeModel = jc.Model
+		out.JudgeMaxCostPerRun = jc.MaxCost
+		out.RubricVersion = eval.RubricVersion
+	}
+	writeJSON(w, http.StatusOK, out)
 }

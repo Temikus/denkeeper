@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -556,4 +557,280 @@ func TestEvalTaskSet_JSONLRoundTripThroughAPI(t *testing.T) {
 	if strings.Join(prompts, ",") != "alpha,beta" {
 		t.Errorf("imported prompts = %v, want [alpha beta] in order", prompts)
 	}
+}
+
+// --- Internal judge ---
+
+// The unattended half of the golden path: a finished run judged server-side by
+// [eval] judge_model instead of from Claude Code over MCP. Same tables, same
+// blinding, same aggregation — only the consumer differs.
+func TestEvalRun_InternalJudgeProducesAnUpgradeVerdict(t *testing.T) {
+	// The two variants answer differently so the judge has something to prefer;
+	// without that a blinded pair is genuinely a tie and no run could ever be
+	// an upgrade.
+	h := evalHarness(t, &HarnessOpts{
+		EvalJudgeModel: "judge-model",
+		Responder: func(req llm.ChatRequest) (*llm.ChatResponse, error) {
+			content := "the answer"
+			if req.Model == "candidate-model" {
+				content = "the thorough answer"
+			}
+			return &llm.ChatResponse{
+				Content:      content,
+				TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+				Model:        req.Model,
+				FinishReason: "stop",
+			}, nil
+		},
+	})
+	seedEvalSet(t, h, "regression", "first question", "second question")
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "regression",
+		"base_agent": "default",
+		"k":          1,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate", "llm_model": "candidate-model"},
+		},
+	})
+	if run := evalRunStatus(t, h, runID); run.Status != eval.StatusDone {
+		t.Fatalf("status = %q, want %q", run.Status, eval.StatusDone)
+	}
+
+	// From here the mock answers as the judge, reading the blinded payload and
+	// naming whichever side is the thorough one — which is the candidate in
+	// both presentation orders, so the pair counts as a win.
+	h.judgePrefers(t, "thorough")
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", runID), nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("judge: status %d: %s", rec.Code, rec.Body.String())
+	}
+	var pass eval.JudgePass
+	if err := json.Unmarshal(rec.Body.Bytes(), &pass); err != nil {
+		t.Fatalf("decoding pass: %v", err)
+	}
+	if pass.Items != 4 {
+		t.Fatalf("pass took %d items, want 4 (2 pairs × both presentation orders)", pass.Items)
+	}
+	awaitJudging(t, h, runID)
+
+	summary := evalSummary(t, h, runID)
+	vv := summary.Verdicts[0]
+	if vv.Judgment.JudgedPairs != 2 {
+		t.Fatalf("judged pairs = %d, want 2 (judgment %+v)", vv.Judgment.JudgedPairs, vv.Judgment)
+	}
+	if vv.Verdict != eval.VerdictUpgrade {
+		t.Fatalf("verdict = %q (%s), want %q", vv.Verdict, vv.Reason, eval.VerdictUpgrade)
+	}
+	// The internal judge's verdicts are ordinary verdicts: they carry the
+	// rubric version and feed the same tally the MCP judge's do.
+	if len(vv.Judgment.RubricVersions) != 1 || vv.Judgment.RubricVersions[0] != eval.RubricVersion {
+		t.Errorf("rubric_versions = %v, want [%s]", vv.Judgment.RubricVersions, eval.RubricVersion)
+	}
+	verdicts, err := h.EvalStore.ListVerdicts(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("ListVerdicts: %v", err)
+	}
+	for _, v := range verdicts {
+		if v.JudgeIdent != eval.JudgeInternal {
+			t.Errorf("verdict %d judge_ident = %q, want %q", v.ID, v.JudgeIdent, eval.JudgeInternal)
+		}
+	}
+	// Judging spend lands on judge_cost, not on the run's sample budget.
+	run, err := h.EvalStore.GetRun(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if run.JudgeCost <= 0 {
+		t.Errorf("judge_cost = %v, want the pass's spend recorded", run.JudgeCost)
+	}
+}
+
+// The Stage D constraint restated for the internal judge: it must be unable to
+// unblind its own queue. The MCP judge is held to it by its tool set being
+// pinned at five names; the internal judge is held to it by having no tools at
+// all, and by never seeing an identity field in the first place.
+func TestEvalRun_InternalJudgeIsOneShotAndBlind(t *testing.T) {
+	h := evalHarness(t, &HarnessOpts{
+		EvalJudgeModel: "judge-model",
+		Responses: []*llm.ChatResponse{{
+			Content:      "the answer",
+			TokensUsed:   llm.TokenUsage{Prompt: 20, Completion: 10, Total: 30},
+			Model:        "test-model",
+			FinishReason: "stop",
+		}},
+	})
+	seedEvalSet(t, h, "regression", "first question")
+
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "regression",
+		"base_agent": "default",
+		"k":          1,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "kimi-k3-candidate", "llm_model": "kimi-k3"},
+		},
+	})
+	if run := evalRunStatus(t, h, runID); run.Status != eval.StatusDone {
+		t.Fatalf("status = %q, want %q", run.Status, eval.StatusDone)
+	}
+	before := h.MockLLM.CallCount()
+	h.judgeAlwaysPicks(t, "tie")
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", runID), nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("judge: status %d: %s", rec.Code, rec.Body.String())
+	}
+	awaitJudging(t, h, runID)
+
+	reqs := h.MockLLM.requestsFrom(before)
+	if len(reqs) == 0 {
+		t.Fatal("the judge sent nothing")
+	}
+	for i, req := range reqs {
+		if len(req.Tools) != 0 {
+			t.Errorf("judge request %d carried %d tool definitions; it must be one-shot",
+				i, len(req.Tools))
+		}
+		if req.Model != "judge-model" {
+			t.Errorf("judge request %d ran on %q, want judge-model", i, req.Model)
+		}
+		var sb strings.Builder
+		for _, m := range req.Messages {
+			sb.WriteString(m.Content)
+			sb.WriteString("\n")
+		}
+		for _, forbidden := range []string{"kimi-k3-candidate", "kimi-k3", "llm_model", "eval:"} {
+			if strings.Contains(sb.String(), forbidden) {
+				t.Errorf("judge request %d leaks %q", i, forbidden)
+			}
+		}
+	}
+}
+
+func TestEvalRun_InternalJudgeIsOffWithoutAModel(t *testing.T) {
+	h := evalHarness(t, nil)
+	seedEvalSet(t, h, "regression", "first question")
+	runID := startEvalRun(t, h, map[string]any{
+		"task_set":   "regression",
+		"base_agent": "default",
+		"k":          1,
+		"cost_cap":   10.0,
+		"variants": []map[string]any{
+			{"name": "incumbent"},
+			{"name": "candidate", "llm_model": "test-model"},
+		},
+	})
+	evalRunStatus(t, h, runID)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", runID), nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 without [eval] judge_model", rec.Code)
+	}
+	// The MCP judge path is untouched: the queue is still waiting.
+	pending, err := h.EvalStore.ListPending(context.Background(), runID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("got %d pending items, want the pair's two orders still queued", len(pending))
+	}
+}
+
+// judgeAlwaysPicks switches the mock LLM over to answering as the judge with a
+// fixed letter. Naming the same presented letter in both orders resolves to
+// two different variants, so this is the position-bias control's input, not a
+// way to make a candidate win.
+func (h *Harness) judgeAlwaysPicks(t *testing.T, winner string) {
+	t.Helper()
+	h.MockLLM.SetResponder(func(llm.ChatRequest) (*llm.ChatResponse, error) {
+		return judgeReply(winner), nil
+	})
+}
+
+// judgePrefers answers as a judge that actually reads the blinded payload: it
+// names whichever presented response carries marker. That is what makes both
+// presentation orders agree on one variant, which is the only way a pair
+// counts as a win.
+func (h *Harness) judgePrefers(t *testing.T, marker string) {
+	t.Helper()
+	h.MockLLM.SetResponder(func(req llm.ChatRequest) (*llm.ChatResponse, error) {
+		item, err := blindedItemOf(req)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case strings.Contains(item.ResponseA.Response, marker):
+			return judgeReply("a"), nil
+		case strings.Contains(item.ResponseB.Response, marker):
+			return judgeReply("b"), nil
+		default:
+			return judgeReply("tie"), nil
+		}
+	})
+}
+
+func judgeReply(winner string) *llm.ChatResponse {
+	return &llm.ChatResponse{
+		Content: fmt.Sprintf(
+			`{"winner":%q,"dimensions":{"task_success":%q,"tool_path":"tie"},"notes":"judged"}`,
+			winner, winner),
+		TokensUsed:   llm.TokenUsage{Prompt: 400, Completion: 40, Total: 440},
+		Model:        "judge-model",
+		CostUSD:      0.001,
+		FinishReason: "stop",
+	}
+}
+
+// blindedItemOf recovers the payload the judge was handed, which is the whole
+// blinded item serialised into the user message.
+func blindedItemOf(req llm.ChatRequest) (*eval.BlindedItem, error) {
+	for _, m := range req.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		start := strings.Index(m.Content, "{")
+		end := strings.LastIndex(m.Content, "}")
+		if start < 0 || end <= start {
+			continue
+		}
+		var item eval.BlindedItem
+		if err := json.Unmarshal([]byte(m.Content[start:end+1]), &item); err != nil {
+			return nil, err
+		}
+		return &item, nil
+	}
+	return nil, fmt.Errorf("no judgment item in the request")
+}
+
+// awaitJudging waits for the background pass to finish, reading the same
+// `judging` flag GET /eval/runs/{id} reports to the page.
+func awaitJudging(t *testing.T, h *Harness, runID int64) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		rec := h.Do(h.AuthedRequest(http.MethodGet,
+			fmt.Sprintf("/api/v1/eval/runs/%d", runID), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("run detail: status %d: %s", rec.Code, rec.Body.String())
+		}
+		var detail struct {
+			Judging bool `json:"judging"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("decoding run detail: %v", err)
+		}
+		if !detail.Judging {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("judging pass did not finish within 20s")
 }

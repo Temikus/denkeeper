@@ -38,11 +38,19 @@ var ErrNameTaken = errors.New("eval: task set name already exists")
 // Task categories. The curation axis from design/eval-subsystem.md §4.3 —
 // validated in Go rather than by a SQL CHECK constraint, matching the house
 // style (there are no CHECK constraints anywhere in the schema).
+//
+// The first four are the bottom-up axis: what the agent has actually been
+// asked to do. CategoryProbe is the top-down one (Stage E item 2) and is
+// deliberately its own value rather than folded into chat or tool_heavy: a
+// probe is generated from written intent, not sampled from history, so mixing
+// the two would let a regression on specified behaviour hide inside a chat win
+// rate — and the per-category breakdown exists to keep those questions apart.
 const (
 	CategoryChat         = "chat"
 	CategorySkillCommand = "skill_command"
 	CategoryScheduled    = "scheduled"
 	CategoryToolHeavy    = "tool_heavy"
+	CategoryProbe        = "probe"
 )
 
 // Run statuses.
@@ -112,18 +120,28 @@ func Dimensions() []string {
 	return []string{DimTaskSuccess, DimToolPath, DimPersonaFit, DimLength}
 }
 
-// ValidCategory reports whether c is one of the four curation categories.
+// ValidCategory reports whether c is one of the five curation categories.
 func ValidCategory(c string) bool {
 	switch c {
-	case CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy:
+	case CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy, CategoryProbe:
 		return true
 	}
 	return false
 }
 
-// Categories returns the four valid task categories, in the order the docs
-// list them.
+// Categories returns the five valid task categories, in the order the docs
+// list them. Every stratified draw and per-category breakdown cycles this
+// slice, so adding a value here is what widens the axis everywhere.
 func Categories() []string {
+	return []string{CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy, CategoryProbe}
+}
+
+// HistoryCategories returns the categories a turn sampled from history can
+// land in — Categories() minus CategoryProbe, which is generated from written
+// intent and never inferred from a turn. Suggest stratifies across these
+// rather than all of Categories(): a share reserved for a family the pass can
+// never fill would just shrink the pass.
+func HistoryCategories() []string {
 	return []string{CategoryChat, CategorySkillCommand, CategoryScheduled, CategoryToolHeavy}
 }
 
@@ -138,10 +156,11 @@ func IsTerminal(status string) bool {
 }
 
 // schema holds the five Stage B tables plus the three Stage C judging tables.
+// turn_traces (Stage E, L1) lives beside them in traceSchema.
 //
-// Deliberately absent: turn_traces, which lands with L1 live capture. Eval
-// samples self-capture their trace inline in eval_samples.trace, which is why
-// neither stage needs it.
+// eval_samples.trace and turn_traces answer different questions and both stay:
+// the sample's inline trace is the tool path the judge reads, the turn trace is
+// the whole turn including the system prompt and the history window.
 const schema = `
 CREATE TABLE IF NOT EXISTS eval_task_sets (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +290,13 @@ var evalMigrations = []string{
 	// rubric_version: which revision of the judging rubric produced the verdict.
 	// Empty on every pre-migration row, and on any judge that does not say.
 	`ALTER TABLE eval_verdicts ADD COLUMN rubric_version TEXT NOT NULL DEFAULT ''`,
+	// judge_cost: what the internal judge spent grading this run's pairs. Its
+	// own column rather than cost_spent, because the two answer different
+	// questions and share no cap: cost_spent is the sample budget the run was
+	// created with, judging is a later decision to spend under
+	// [eval] judge_max_cost_per_run. Folding them would make a judged run look
+	// like it had blown its cap.
+	`ALTER TABLE eval_runs ADD COLUMN judge_cost REAL NOT NULL DEFAULT 0`,
 }
 
 // TaskSet is a named collection of eval tasks.
@@ -346,13 +372,17 @@ func (l TaskIDList) Value() (driver.Value, error) {
 
 // Run is one comparison run.
 type Run struct {
-	ID        int64     `db:"id"          json:"id"`
-	TaskSetID int64     `db:"task_set_id" json:"task_set_id"`
-	BaseAgent string    `db:"base_agent"  json:"base_agent"`
-	Status    string    `db:"status"      json:"status"`
-	K         int       `db:"k"           json:"k"`
-	CostCap   float64   `db:"cost_cap"    json:"cost_cap"`
-	CostSpent float64   `db:"cost_spent"  json:"cost_spent"`
+	ID        int64   `db:"id"          json:"id"`
+	TaskSetID int64   `db:"task_set_id" json:"task_set_id"`
+	BaseAgent string  `db:"base_agent"  json:"base_agent"`
+	Status    string  `db:"status"      json:"status"`
+	K         int     `db:"k"           json:"k"`
+	CostCap   float64 `db:"cost_cap"    json:"cost_cap"`
+	CostSpent float64 `db:"cost_spent"  json:"cost_spent"`
+	// JudgeCost is what the internal judge has spent grading this run, kept
+	// apart from CostSpent: it is a separate budget spent by a separate
+	// decision, and adding it to the sample spend would read as a blown cap.
+	JudgeCost float64   `db:"judge_cost"  json:"judge_cost"`
 	AsOf      time.Time `db:"as_of"       json:"as_of"`
 	// TaskIDs pins the run's task list at creation; nil means the whole set.
 	// Pinning is what makes a sampled subset possible, and it also stops a task
@@ -522,6 +552,9 @@ func NewInMemoryStore() (*Store, error) {
 func initEvalDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("initializing eval schema: %w", err)
+	}
+	if _, err := db.Exec(traceSchema); err != nil {
+		return fmt.Errorf("initializing turn trace schema: %w", err)
 	}
 	for _, m := range evalMigrations {
 		if _, err := db.Exec(m); err != nil && !isDuplicateColumn(err) {
@@ -820,7 +853,7 @@ func (s *Store) DeleteTask(ctx context.Context, setID, taskID int64) error {
 // runColumns is the shared select list for run reads. task_count comes back as
 // the *set's* current size; resolveTaskCount narrows it to the pin, which is
 // cheaper and clearer than counting a JSON array in SQL.
-const runColumns = `id, task_set_id, base_agent, status, k, cost_cap, cost_spent, as_of,
+const runColumns = `id, task_set_id, base_agent, status, k, cost_cap, cost_spent, judge_cost, as_of,
 	        error, task_ids, created_at, finished_at,
 	        (SELECT COUNT(*) FROM eval_tasks t WHERE t.set_id = eval_runs.task_set_id) AS task_count`
 
@@ -998,6 +1031,18 @@ func (s *Store) AddRunCost(ctx context.Context, runID int64, cost float64) error
 	return nil
 }
 
+// AddJudgeCost accumulates internal-judge spend on a run. Written per item for
+// the same reason sample cost is: a process that dies mid-pass still leaves an
+// honest figure behind.
+func (s *Store) AddJudgeCost(ctx context.Context, runID int64, cost float64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE eval_runs SET judge_cost = judge_cost + ? WHERE id = ?`, cost, runID)
+	if err != nil {
+		return fmt.Errorf("adding judge cost to run %d: %w", runID, err)
+	}
+	return nil
+}
+
 // --- Samples ---
 
 // AddSample inserts one executed sample.
@@ -1030,13 +1075,33 @@ func (s *Store) AddSample(ctx context.Context, smp Sample) (*Sample, error) {
 
 // ListSamples returns a run's samples in insertion order.
 func (s *Store) ListSamples(ctx context.Context, runID int64) ([]Sample, error) {
+	return s.listSamples(ctx, runID, 0)
+}
+
+// ListTaskSamples returns one task's samples within a run. The results view
+// expands one test case at a time, and a full run's samples carry a trace each
+// — fetching all of them to render one row is the whole reason this exists.
+func (s *Store) ListTaskSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
+	return s.listSamples(ctx, runID, taskID)
+}
+
+// listSamples reads a run's samples, narrowed to one task when taskID > 0. The
+// column list lives here once: a sample gained a column twice already, and two
+// copies of it is how one reader silently stops carrying it.
+func (s *Store) listSamples(ctx context.Context, runID, taskID int64) ([]Sample, error) {
 	out := []Sample{}
-	if err := s.db.SelectContext(ctx, &out,
-		`SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
-		        rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
-		        outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
-		        tokens_completion, cost, latency_ms, created_at
-		 FROM eval_samples WHERE run_id = ? ORDER BY id`, runID); err != nil {
+	query := `SELECT id, run_id, variant_id, task_id, k_index, status, error, response, trace,
+	                 rounds, stop_reason, upstream, outcome_ok, outcome_rejected, outcome_failed,
+	                 outcome_denied, outcome_cached, outcome_suppressed, tokens_prompt,
+	                 tokens_completion, cost, latency_ms, created_at
+	          FROM eval_samples WHERE run_id = ?`
+	args := []any{runID}
+	if taskID > 0 {
+		query += ` AND task_id = ?`
+		args = append(args, taskID)
+	}
+	query += ` ORDER BY id`
+	if err := s.db.SelectContext(ctx, &out, query, args...); err != nil {
 		return nil, fmt.Errorf("listing samples of run %d: %w", runID, err)
 	}
 	return out, nil

@@ -233,3 +233,67 @@ describe('DryRunPanel', () => {
     })
   })
 })
+
+// A turn that exhausted its round budget answers with a wrap-up, and without
+// this it reads exactly like one the model chose to finish.
+describe('DryRunPanel — cut-short turns', () => {
+  async function pickCompare(model = 'moonshotai/kimi-k3') {
+    await fireEvent.click(screen.getByText(/Compare with/))
+    const option = await screen.findByRole('option', { name: new RegExp(model) })
+    await fireEvent.click(option)
+  }
+
+  test('names why the tool loop stopped, in plain language', async () => {
+    const run = vi.fn().mockResolvedValue(makeTranscript({ stop_reason: 'max_rounds' }))
+    render(DryRunPanel, { props: { run } })
+    await clickRun()
+
+    await waitFor(() => expect(screen.getByTestId('stop-reason')).toBeInTheDocument())
+    expect(screen.getByTestId('stop-reason')).toHaveTextContent('hit the round limit')
+    expect(screen.getByTestId('stop-reason')).not.toHaveTextContent('max_rounds')
+  })
+
+  test('a turn the model finished on its own carries no badge', async () => {
+    render(DryRunPanel, { props: { run: okRun } })
+    await clickRun()
+    await screen.findByText(/Morning\. Nothing needs you/)
+
+    expect(screen.queryByTestId('stop-reason')).not.toBeInTheDocument()
+  })
+
+  // Only one side of a comparison flailing is exactly the signal being looked
+  // for, so the badge has to belong to its own column.
+  test('badges only the side that was cut short', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce(makeTranscript())
+      .mockResolvedValueOnce(makeTranscript({ stop_reason: 'repeated_calls' }))
+    render(DryRunPanel, { props: { run } })
+    await pickCompare()
+    await clickRun()
+
+    await waitFor(() => expect(screen.getAllByTestId('stop-reason')).toHaveLength(1))
+    expect(screen.getByTestId('stop-reason')).toHaveTextContent('repeated the same call')
+  })
+
+  // The slugs are the engine's, and it may grow one this list has not learnt.
+  test('an unrecognised reason is shown rather than swallowed', async () => {
+    const run = vi.fn().mockResolvedValue(makeTranscript({ stop_reason: 'budget_exhausted' }))
+    render(DryRunPanel, { props: { run } })
+    await clickRun()
+
+    await waitFor(() => expect(screen.getByTestId('stop-reason'))
+      .toHaveTextContent('budget_exhausted'))
+  })
+})
+
+// The serving upstream is an eval-only field: a schedule or skill preview's
+// payload has no such thing, and the head must not sprout an empty chip.
+describe('DryRunPanel — serving upstream', () => {
+  test('a preview transcript shows no upstream', async () => {
+    render(DryRunPanel, { props: { run: okRun } })
+    await clickRun()
+    await screen.findByText(/Morning\. Nothing needs you/)
+
+    expect(screen.queryByTestId('upstream')).not.toBeInTheDocument()
+  })
+})

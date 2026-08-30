@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -386,6 +386,24 @@ List audit events. Filters: `?category=`, `?agent=`, `?status=`, `?source=`, `?s
 
 Aggregate audit statistics. Accepts `?since=` and the same `?exclude_source=` filter as the list endpoint.
 
+## Turn traces
+
+### `GET /api/v1/traces`
+
+**Scope:** `sessions:read`
+
+Turn trace headers, newest first, without their payloads. `total` counts the filtered set, and `limit` echoes the effective page size after clamping. Filters: `?agent=`, `?conversation_id=`, `?source=` (`live`/`eval` — a dry run's trace rides out on its response and is never stored), `?since=`/`?until=` (RFC3339), `?limit=` (default 50, max 200), `?offset=`.
+
+The response repeats `capture`, `retention_days` and `max_trace_bytes` alongside the rows, so a caller can tell "nothing recorded yet" from "recording is off" without a second request.
+
+### `GET /api/v1/traces/{id}`
+
+**Scope:** `sessions:read`
+
+One trace in full: `system_prompt` as it was assembled post-skill-injection, `history` as it went on the wire, `prompt`, `response`, and `tool_calls` with each call's round, arguments, result and outcome. When the trace exceeded `[eval] max_trace_bytes`, `truncation` reports what was dropped — oldest rounds first — so a trimmed trace is never read as a short turn.
+
+Traces sit behind `sessions:read`, not `eval:read`: a trace is turn content, and the eval scopes exist for a judge that must never resolve a live prompt. Live turns are recorded only when `[eval] capture` is on; eval samples always are.
+
 ## Evals
 
 An eval run compares two or more config variants of one agent over a saved set of test cases and reports an objective scorecard. The loop these endpoints serve is described in [Evals](/docs/concepts/evals/). Samples execute on the agent's live engine under the same execution policy dry runs use: reads run for real, writes are suppressed, and nothing is persisted to conversations, telemetry, or memory. Runs spend real tokens, bounded by a per-run cost cap and by `[eval] max_concurrent`.
@@ -404,7 +422,21 @@ Past turns worth saving as test cases: any rejected or failed tool call, three o
 
 Each candidate carries `prompt`, `category`, `conversation_id`, `message_id`, `created_at`, the `signals` that earned it a place, and `preceding` — the turns before it, ready to pin as the test case's history.
 
-Candidates are **stratified across the four categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
+Candidates are **stratified across the four history categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
+
+### `GET /api/v1/eval/probes`
+
+**Scope:** `eval:read` **and** `agents:read`
+
+Test cases generated **top-down** from an agent's own written intent — its permission tier, auto-approve policy, persona sections, and skill frontmatter — rather than mined from history. Parameters: `?agent=` (required), `?set=` (exclude probes that set already carries), `?limit=` (max 100).
+
+The response carries `agent`, `permission_tier`, and `probes[]`. Each probe has `prompt`, `category` (always `probe`), `kind` (the behaviour family), `source` (the piece of configuration it came from, e.g. `tier:supervised`, `skill:briefing`), `notes`, `tags`, and optional `preceding` turns to pin as history.
+
+The six families are `denial_compliance`, `tier_boundary`, `budget_hint`, `approval_policy`, `skill_instruction`, and `persona_fidelity`. The first three need no configuration and ship as the canned starter set; the rest are derived from the agent's own config and are absent when it has nothing to derive them from. A cap is served family at a time, so a small `limit` never truncates a family away entirely.
+
+Probes quote configuration back — a skill's own description, the auto-approve list — so generation stays inside the caller's read scopes: `agents:read` is required on top of `eval:read` (`403` without it), `skill_instruction` is omitted without `skills:read`, and `approval_policy` without `tools:read`. `approval_policy` is only ever generated for the `supervised` tier, the only one with an approval gate to respect.
+
+This covers what a history-sampled set structurally cannot. A well-behaved current model never retried a denied call, so no past turn shows one being respected — but a worse candidate might, and only a probe would catch it. Notes are free-text "what good looks like" for the judge, never parsed as assertions. Generation is deterministic for a given agent, which is what makes `set=` enough to keep a second pass quiet. Nothing is written: accepting a probe is a separate call to the task create endpoint.
 
 ### `POST /api/v1/eval/estimate`
 
@@ -461,7 +493,7 @@ Add a test case. This is what the Chat UI's "Save as test case" calls.
 }
 ```
 
-`category` is one of `chat`, `skill_command`, `scheduled`, `tool_heavy` (default `chat`). `pinned_history` is captured now and replayed verbatim at run time rather than re-read from the source conversation, which drifts. `notes` are judge context, never parsed as assertions.
+`category` is one of `chat`, `skill_command`, `scheduled`, `tool_heavy`, `probe` (default `chat`). The first four are the history axis; `probe` is the spec-derived one written by `GET /eval/probes`. `pinned_history` is captured now and replayed verbatim at run time rather than re-read from the source conversation, which drifts. `notes` are judge context, never parsed as assertions.
 
 ### `PATCH` / `DELETE /api/v1/eval/task-sets/{name}/tasks/{id}`
 
@@ -546,6 +578,12 @@ This is the operator's results view and is deliberately **not** reachable from t
 **Scope:** `eval:read`
 
 Per-sample transcripts, including the full tool trace with arguments and results.
+
+### `POST /api/v1/eval/runs/{id}/judge`
+
+**Scope:** `eval:write`
+
+Starts a server-side judging pass over the run's outstanding blinded pairs with the internal judge, so a run can be judged unattended instead of only from Claude Code over MCP. Requires `[eval] judge_model`; without it the endpoint returns `503` and the MCP judge path is unaffected. Only a terminal run can be judged. The pass runs in the background — progress shows up as `completeness.pairs_judged` on the summary — is bounded by `[eval] judge_max_cost_per_run`, and its spend is recorded separately on the run's `judge_cost`. `202 Accepted` with the pass's item count; `409 Conflict` if the run isn't terminal or is already being judged; optional body `{"sample_n": N, "limit": N}` to judge a calibration subset or cap the pass.
 
 ## Safety
 
