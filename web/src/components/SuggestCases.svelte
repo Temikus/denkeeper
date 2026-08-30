@@ -1,6 +1,8 @@
 <script>
   import { tick } from 'svelte'
   import { api } from '../api.js'
+  import { navigate } from '../router.js'
+  import { relativeTime } from '../relativeTime.js'
 
   // Offers past turns worth keeping as test cases, mined by GET /eval/suggest.
   // Cold-start fill: an operator with no test set has nothing to compare on,
@@ -43,6 +45,9 @@
   let hiddenKeys = $state(new Set())
   let selectedKeys = $state(new Set())
   let busyKeys = $state(new Set())
+  // Cards whose session context is open. Any number at once: the cards sit in
+  // a grid and comparing two offers is the point of the panel.
+  let expandedKeys = $state(new Set())
   let batching = $state(false)
   // Batch progress, so a long serial add says where it is rather than sitting
   // on one "Adding…" for the whole run.
@@ -77,6 +82,41 @@
     return CATEGORY_LABEL[c] || c
   }
 
+  /**
+   * A scheduled turn's prompt is a label the scheduler generated — a skill
+   * name buried in a timestamp — so every scheduled card reads the same. Where
+   * the server named the trigger, that name is the headline instead and the
+   * generated prompt moves into the expanded context below.
+   */
+  function headline(c) {
+    return c.trigger ? `${c.trigger} · scheduled run` : preview(c.prompt)
+  }
+
+  /** How the turn went, in numbers: what the signals above are drawn from. */
+  function metaLine(c, now = Date.now()) {
+    const rounds = c.max_round || 0
+    return [
+      c.agent,
+      relativeTime(c.created_at, now),
+      rounds ? `${rounds} tool round${rounds === 1 ? '' : 's'}` : null,
+      c.faults ? `${c.faults} fault${c.faults === 1 ? '' : 's'}` : null,
+      c.cost_usd ? `$${c.cost_usd.toFixed(4)}` : null,
+    ].filter(Boolean).join(' · ')
+  }
+
+  // The store's role names read as data next to the two written labels the
+  // context panel adds around them.
+  const ROLE_LABEL = { user: 'you asked', assistant: 'agent replied' }
+
+  function roleLabel(role) {
+    return ROLE_LABEL[role] || role
+  }
+
+  /** Whether the disclosure has anything behind it. */
+  function hasContext(c) {
+    return !!(c.preceding?.length || c.trigger || c.reply_preview)
+  }
+
   /** The "why" line: the signals that made this turn interesting. */
   function whyLine(c) {
     const parts = (c.signals || []).map(s => SIGNAL_LABEL[s] || s)
@@ -86,7 +126,8 @@
 
   /** Names a card's controls, so 60 buttons are not all called "Accept". */
   function shortLabel(c) {
-    const t = (c.prompt || '').trim().replace(/\s+/g, ' ')
+    const source = c.trigger ? `${c.trigger} scheduled run` : (c.prompt || '')
+    const t = source.trim().replace(/\s+/g, ' ')
     return t.length > 60 ? `${t.slice(0, 60)}…` : t
   }
 
@@ -170,6 +211,19 @@
     if (next.has(k)) next.delete(k)
     else next.add(k)
     selectedKeys = next
+  }
+
+  function toggleExpanded(c) {
+    const k = keyOf(c)
+    const next = new Set(expandedKeys)
+    if (next.has(k)) next.delete(k)
+    else next.add(k)
+    expandedKeys = next
+  }
+
+  /** Opens the conversation this turn came from, where the full history is. */
+  function openSession(c) {
+    navigate('sessions/' + c.conversation_id)
   }
 
   function selectAll() {
@@ -382,11 +436,45 @@
             </label>
             <span class="cat-chip">{categoryLabel(c.category)}</span>
           </div>
-          <p class="prompt">{preview(c.prompt)}</p>
-          {#if whyLine(c)}<p class="why">{whyLine(c)}</p>{/if}
-          {#if c.preceding?.length}
-            <p class="hint">Pins {c.preceding.length} preceding turn{c.preceding.length === 1 ? '' : 's'} as history.</p>
+          <p class="prompt">{headline(c)}</p>
+          {#if metaLine(c)}<p class="card-sub meta" data-testid={`meta-${k}`}>{metaLine(c)}</p>{/if}
+          {#if whyLine(c)}<p class="card-sub">{whyLine(c)}</p>{/if}
+
+          {#if hasContext(c)}
+          <button class="btn-link context-toggle" onclick={() => toggleExpanded(c)}
+            aria-expanded={expandedKeys.has(k)} aria-controls={`context-${k}`}
+            data-testid={`context-toggle-${k}`}>
+            <span class="arrow" class:open={expandedKeys.has(k)} aria-hidden="true">&#x25B6;</span>
+            {expandedKeys.has(k) ? 'Hide' : 'Show'} session context{c.preceding?.length
+              ? ` (${c.preceding.length} turn${c.preceding.length === 1 ? '' : 's'} pinned)` : ''}
+          </button>
+          <div class="inline-panel" class:open={expandedKeys.has(k)}
+            id={`context-${k}`} data-testid={`context-${k}`} inert={!expandedKeys.has(k)}>
+            <div class="inline-panel-inner">
+              <dl class="context">
+                {#each c.preceding || [] as m}
+                  <dt class="role">{roleLabel(m.role)}</dt>
+                  <dd class="turn card-sub">{m.content}</dd>
+                {/each}
+                {#if c.trigger}
+                  <!-- Only where the headline replaced it: elsewhere the prompt
+                       is already the headline, and repeating it reads as a
+                       second turn. -->
+                  <dt class="role">this turn</dt>
+                  <dd class="turn card-sub">{c.prompt}</dd>
+                {/if}
+                {#if c.reply_preview}
+                  <dt class="role">agent replied</dt>
+                  <dd class="turn card-sub">{c.reply_preview}</dd>
+                {/if}
+              </dl>
+              {#if c.preceding?.length}
+                <p class="hint">The pinned turns replay as history when this case runs.</p>
+              {/if}
+            </div>
+          </div>
           {/if}
+
           <div class="card-actions">
             <button class="btn-primary" onclick={() => accept(c)}
               disabled={busy || !setChosen} aria-label={`Accept: ${shortLabel(c)}`}
@@ -396,6 +484,10 @@
             <button class="btn-ghost btn-sm" onclick={() => reject(c)} disabled={busy}
               aria-label={`Reject: ${shortLabel(c)}`}
               data-testid={`reject-${k}`}>Reject</button>
+            <a class="btn-link open-session" href={`#/sessions/${c.conversation_id}`}
+              onclick={e => { e.preventDefault(); openSession(c) }}
+              aria-label={`Open session: ${shortLabel(c)}`}
+              data-testid={`open-session-${k}`}>Open session &rarr;</a>
           </div>
         </li>
       {/each}
@@ -551,15 +643,75 @@
     white-space: pre-wrap;
   }
 
-  .why {
+  /* One secondary body token for everything under the headline: the why line,
+     the meta line, and the context turns. */
+  .card-sub {
     font-size: 12px;
     color: var(--text-muted);
     margin: 0;
     line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .context-toggle {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-align: left;
+  }
+
+  .arrow {
+    font-size: 9px;
+    transition: transform 0.15s;
+  }
+
+  .arrow.open { transform: rotate(90deg); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .arrow { transition: none; }
+  }
+
+  .context {
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+    margin: 0 0 8px;
+  }
+
+  .context dd { margin: 2px 0 8px; }
+  .context dd:last-child { margin-bottom: 0; }
+
+  .turn { white-space: pre-wrap; }
+
+  /* Same treatment as .cat-chip and the shared .hint: 11px is this project's
+     smallest type. */
+  .role {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-muted);
+  }
+
+  /* An anchor so it can be middle-clicked or copied, wearing .btn-link's
+     shape; pushed to the far end of the row because it leaves the panel and
+     does not belong beside the two buttons that act on the offer. */
+  .open-session {
+    margin-left: auto;
+    text-decoration: none;
+    line-height: 1.6;
+  }
+
+  .open-session:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: var(--radius);
   }
 
   .card-actions {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
     margin-top: auto;
   }

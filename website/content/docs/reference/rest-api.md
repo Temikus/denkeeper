@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-28T00:00:00+00:00
+lastmod: 2026-08-30T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -421,6 +421,8 @@ Returns the `[eval]` defaults and gate thresholds used to size and judge a run �
 Past turns worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Filters: `?agent=`, `?limit=` (default 20, max 100), `?since=` (RFC3339, default 90 days ago).
 
 Each candidate carries `prompt`, `category`, `conversation_id`, `message_id`, `created_at`, the `signals` that earned it a place, and `preceding` — the turns before it, ready to pin as the test case's history.
+
+It also carries enough of the source turn to judge the offer without opening the conversation it came from: `agent`, the `reply_preview` that answered it, and the telemetry the signals are drawn from as numbers — `tool_calls`, `max_round`, `faults`, `cost_usd`. Scheduled turns add `trigger`, the skill or schedule name parsed out of the prompt the scheduler generated; a scheduled prompt is a label rather than anything a person wrote, so the name is the only part of it that identifies the run. Every other category returns `trigger` empty.
 
 Candidates are **stratified across the four history categories** rather than ranked overall — a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written: accepting a candidate is a separate call to the task create endpoint. `501` when the store carries no telemetry.
 

@@ -37,6 +37,10 @@ const toolCallsThreshold = 3
 // fired this turn.
 const scheduledPrefix = "[Scheduled"
 
+// scheduledLabels are the two openings FormatScheduledText emits: a skill name
+// and a bare schedule name respectively.
+var scheduledLabels = []string{"[Scheduled: ", "[Scheduled trigger: "}
+
 // PrecedingMessage is one {role, content} pair of context preceding a
 // suggested turn, ready to be pinned as a task's history.
 type PrecedingMessage struct {
@@ -44,7 +48,10 @@ type PrecedingMessage struct {
 	Content string `json:"content"`
 }
 
-// Candidate is one past turn offered as a test case.
+// Candidate is one past turn offered as a test case. Beyond what an accepted
+// task needs, it carries enough of the source turn — who ran it, what set it
+// off, what it cost, what came back — for the offer to be judged without
+// opening the conversation it came from.
 type Candidate struct {
 	Prompt         string             `json:"prompt"`
 	Category       string             `json:"category"`
@@ -53,6 +60,20 @@ type Candidate struct {
 	CreatedAt      time.Time          `json:"created_at"`
 	Signals        []string           `json:"signals"`
 	Preceding      []PrecedingMessage `json:"preceding"`
+	// Agent handled the turn; empty when its stats row was pruned.
+	Agent string `json:"agent"`
+	// Trigger is the skill or schedule name that fired a scheduled turn, whose
+	// prompt is a generated label rather than anything a person wrote. Empty
+	// for every other category.
+	Trigger string `json:"trigger"`
+	// ReplyPreview is the head of the answering reply.
+	ReplyPreview string `json:"reply_preview"`
+	// ToolCalls, MaxRound, Faults and CostUSD describe the answering reply:
+	// the same telemetry the signals are drawn from, in numbers.
+	ToolCalls int     `json:"tool_calls"`
+	MaxRound  int     `json:"max_round"`
+	Faults    int     `json:"faults"`
+	CostUSD   float64 `json:"cost_usd"`
 }
 
 // SuggestOpts bounds a suggestion pass.
@@ -106,6 +127,13 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 				CreatedAt:      t.CreatedAt,
 				Signals:        signals,
 				Preceding:      precedingOf(t),
+				Agent:          t.Agent,
+				Trigger:        triggerOf(t.Content),
+				ReplyPreview:   t.ReplyContent,
+				ToolCalls:      t.ToolCalls,
+				MaxRound:       t.MaxRound,
+				Faults:         t.Faults,
+				CostUSD:        t.ReplyCost,
 			},
 			score: len(signals),
 		})
@@ -195,6 +223,25 @@ func categoryFor(t agent.InterestingTurn) string {
 	default:
 		return CategoryChat
 	}
+}
+
+// triggerOf pulls the skill or schedule name out of a scheduled turn's
+// generated prompt, the one part of that label a person recognises. Empty for
+// anything a person actually typed.
+func triggerOf(content string) string {
+	for _, label := range scheduledLabels {
+		rest, ok := strings.CutPrefix(content, label)
+		if !ok {
+			continue
+		}
+		// FormatScheduledText separates the label from the fire time with
+		// " | "; a name containing one would only cut short, never mislead.
+		if i := strings.Index(rest, " | "); i >= 0 {
+			rest = rest[:i]
+		}
+		return strings.TrimSuffix(strings.TrimSpace(rest), "]")
+	}
+	return ""
 }
 
 // topDecileCost returns the cost a reply must reach to count as expensive

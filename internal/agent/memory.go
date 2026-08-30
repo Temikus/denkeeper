@@ -1534,12 +1534,17 @@ type InterestingTurn struct {
 	ConversationID string    `db:"conversation_id"`
 	Content        string    `db:"content"`
 	CreatedAt      time.Time `db:"created_at"`
-	// ToolCalls, MaxRound, Faults and ReplyCost describe the assistant reply to
-	// this turn: the next assistant message in the conversation.
-	ToolCalls int     `db:"tool_calls"`
-	MaxRound  int     `db:"max_round"`
-	Faults    int     `db:"faults"`
-	ReplyCost float64 `db:"reply_cost"`
+	// Agent is the agent that handled the conversation, empty when its stats
+	// row was pruned.
+	Agent string `db:"agent"`
+	// ToolCalls, MaxRound, Faults, ReplyCost and ReplyContent describe the
+	// assistant reply to this turn: the next assistant message in the
+	// conversation. ReplyContent is capped at replyPreviewMax runes.
+	ToolCalls    int     `db:"tool_calls"`
+	MaxRound     int     `db:"max_round"`
+	Faults       int     `db:"faults"`
+	ReplyCost    float64 `db:"reply_cost"`
+	ReplyContent string  `db:"reply_content"`
 	// CommandMatches counts skills that matched this turn via a command
 	// trigger (match_type 'command'), as opposed to ambient or scheduled.
 	CommandMatches int `db:"command_matches"`
@@ -1564,6 +1569,9 @@ const (
 	// precedingContentMax caps each preceding message so one runaway tool dump
 	// cannot dominate the response.
 	precedingContentMax = 2000
+	// replyPreviewMax caps the answering reply carried with a candidate: enough
+	// to recognise what the agent did, not the whole answer.
+	replyPreviewMax = 1000
 	// interestingTurnsMaxLimit bounds the candidate pool. Preceding context is
 	// fetched per turn, so the pool size is also the query count.
 	interestingTurnsMaxLimit = 500
@@ -1583,13 +1591,16 @@ SELECT
     c.conversation_id,
     c.content,
     c.created_at,
+    c.agent,
     COALESCE(tc.tool_calls, 0)     AS tool_calls,
     COALESCE(tc.max_round, 0)      AS max_round,
     COALESCE(tc.faults, 0)         AS faults,
     COALESCE(r.cost, 0)            AS reply_cost,
+    substr(r.content, 1, ?)        AS reply_content,
     COALESCE(ms.command_matches, 0) AS command_matches
 FROM (
     SELECT m.id AS message_id, m.conversation_id, m.content, m.created_at,
+           COALESCE(cs.agent, '') AS agent,
            (SELECT a.id FROM messages a
              WHERE a.conversation_id = m.conversation_id
                AND a.role = 'assistant'
@@ -1630,10 +1641,14 @@ func (s *SQLiteMemoryStore) ListInterestingTurns(ctx context.Context, agent stri
 	// is stored by CURRENT_TIMESTAMP in that layout, and the comparison is a
 	// string comparison whichever way the driver renders the parameter.
 	sinceText := since.UTC().Format(sqliteDatetimeLayout)
-	if err := s.db.SelectContext(ctx, &turns, interestingTurnsQuery, sinceText, agent, agent, limit); err != nil {
+	// Bind order is statement-text order: the reply cap sits in the outer
+	// select list, ahead of the subquery's own bounds.
+	if err := s.db.SelectContext(ctx, &turns, interestingTurnsQuery,
+		replyPreviewMax+1, sinceText, agent, agent, limit); err != nil {
 		return nil, fmt.Errorf("listing interesting turns: %w", err)
 	}
 	for i := range turns {
+		turns[i].ReplyContent = truncateRunes(turns[i].ReplyContent, replyPreviewMax)
 		preceding, err := s.precedingMessages(ctx, turns[i].ConversationID, turns[i].MessageID)
 		if err != nil {
 			return nil, err
