@@ -153,11 +153,15 @@
   .upstream {
     font-size: 10px; color: var(--text-muted);
     border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* Tinted rather than `--warn` text: `--warn` on `--bg` is 3.2:1 in the light
+     theme, short of AA at this size. */
   .cut-short {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
-    color: var(--warn); border: 1px solid var(--warn);
-    border-radius: 4px; padding: 1px 5px;
+    color: var(--text); background: rgba(200, 126, 48, 0.12);
+    border: 1px solid var(--warn);
+    border-radius: 4px; padding: 1px 5px; white-space: nowrap;
   }
 
   .rows {
