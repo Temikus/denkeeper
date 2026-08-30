@@ -110,8 +110,8 @@ func (rl *loginRateLimiter) stop() {
 // @Router /auth/config [get]
 func (s *Server) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 	pref := "auto"
-	if s.deps.Config != nil && s.deps.Config.API.Auth.PreferredLoginMethod != "" {
-		pref = s.deps.Config.API.Auth.PreferredLoginMethod
+	if cfg := s.appConfig(); cfg != nil && cfg.API.Auth.PreferredLoginMethod != "" {
+		pref = cfg.API.Auth.PreferredLoginMethod
 	}
 	resp := map[string]any{
 		"password_enabled":       s.passwordHash != "",
@@ -396,11 +396,11 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// OIDC details.
-	if s.deps.Config != nil {
-		resp["oidc_issuer"] = s.deps.Config.API.Auth.OIDC.Issuer
-		resp["oidc_allowed_emails"] = s.deps.Config.API.Auth.OIDC.AllowedEmails
+	if cfg := s.appConfig(); cfg != nil {
+		resp["oidc_issuer"] = cfg.API.Auth.OIDC.Issuer
+		resp["oidc_allowed_emails"] = cfg.API.Auth.OIDC.AllowedEmails
 
-		pref := s.deps.Config.API.Auth.PreferredLoginMethod
+		pref := cfg.API.Auth.PreferredLoginMethod
 		if pref == "" {
 			pref = "auto"
 		}
@@ -497,12 +497,13 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 // @Failure 502 {object} map[string]any
 // @Router /auth/oidc/test [get]
 func (s *Server) handleOIDCTest(w http.ResponseWriter, r *http.Request) {
-	if s.oidcProvider == nil || s.deps.Config == nil {
+	cfg := s.appConfig()
+	if s.oidcProvider == nil || cfg == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "OIDC not configured"})
 		return
 	}
 
-	issuer := s.deps.Config.API.Auth.OIDC.Issuer
+	issuer := cfg.API.Auth.OIDC.Issuer
 	if issuer == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "OIDC issuer not configured"})
 		return
@@ -580,9 +581,9 @@ func (s *Server) handleAuthPreferences(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if s.deps.Config != nil {
-		s.deps.Config.API.Auth.PreferredLoginMethod = input.PreferredLoginMethod
-	}
+	s.deps.Config.Update(func(c *config.Config) {
+		c.API.Auth.PreferredLoginMethod = input.PreferredLoginMethod
+	})
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

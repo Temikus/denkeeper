@@ -15,7 +15,7 @@ func testOnboardingServer(t *testing.T, cfg *config.Config) *Server {
 	t.Helper()
 	return &Server{
 		cfg:    cfg.API,
-		deps:   Deps{Config: cfg},
+		deps:   Deps{Config: config.NewHolder(cfg)},
 		logger: testLogger(),
 	}
 }
@@ -160,7 +160,7 @@ func TestHandleWizardComplete(t *testing.T) {
 	cfg := &config.Config{}
 	s := &Server{
 		cfg:    cfg.API,
-		deps:   Deps{Config: cfg, ConfigPath: cfgPath},
+		deps:   Deps{Config: config.NewHolder(cfg), ConfigPath: cfgPath},
 		logger: testLogger(),
 	}
 
@@ -171,7 +171,7 @@ func TestHandleWizardComplete(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rec.Code)
 	}
-	if !cfg.API.WizardCompleted {
+	if !s.appConfig().API.WizardCompleted {
 		t.Error("expected in-memory WizardCompleted=true after POST")
 	}
 

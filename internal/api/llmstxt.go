@@ -59,17 +59,18 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - OpenAPI 2.0 spec: GET /api/v1/openapi.json  (no auth required)
 `)
 
-	if s.deps.Config != nil && s.deps.Config.API.IsMCPServerEnabled() {
-		fmt.Fprintf(&b, "## MCP Server\n\nAn MCP (Model Context Protocol) server is available at:\n\n    %s\n\n", s.mcpServerEndpoint())
+	cfg := s.appConfig()
+	if cfg != nil && cfg.API.IsMCPServerEnabled() {
+		fmt.Fprintf(&b, "## MCP Server\n\nAn MCP (Model Context Protocol) server is available at:\n\n    %s\n\n", mcpServerEndpoint(cfg))
 		b.WriteString("Authenticate with a Bearer token (same API keys). Supports tools for\n")
 		b.WriteString("agent chat, skill/schedule/KV CRUD, session management, and telemetry.\n\n")
 	}
 
-	if s.deps.Dispatcher != nil && s.deps.Config != nil {
+	if s.deps.Dispatcher != nil && cfg != nil {
 		names := s.deps.Dispatcher.Agents()
 		if len(names) > 0 {
-			descMap := make(map[string]string, len(s.deps.Config.Agents))
-			for _, ac := range s.deps.Config.Agents {
+			descMap := make(map[string]string, len(cfg.Agents))
+			for _, ac := range cfg.Agents {
 				descMap[ac.Name] = ac.Description
 			}
 			b.WriteString("## Agents\n\n")

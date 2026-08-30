@@ -177,7 +177,7 @@ type llmProvidersResponse struct {
 // @Success 200 {object} llmProvidersResponse
 // @Router /llm/providers [get]
 func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.deps.Config.LLM
+	cfg := s.appConfig().LLM
 
 	providers := make([]providerInfo, 0, len(cfg.Providers))
 	for _, pc := range cfg.Providers {
@@ -329,21 +329,42 @@ func validateOpenRouterUpdate(input *providerUpdateInput, providerType string) s
 	return ""
 }
 
-// findProviderInstance returns a pointer to the named provider in config, or nil.
+// findProviderInstance returns the named provider from the current config
+// snapshot, or nil. The returned pointer aims into an immutable snapshot and
+// must only be read; mutations go through Holder.Update.
 func (s *Server) findProviderInstance(name string) *config.ProviderInstanceConfig {
-	for i := range s.deps.Config.LLM.Providers {
-		if s.deps.Config.LLM.Providers[i].Name == name {
-			return &s.deps.Config.LLM.Providers[i]
+	return findProviderIn(s.appConfig(), name)
+}
+
+// findProviderIn returns the named provider within cfg, or nil.
+func findProviderIn(cfg *config.Config, name string) *config.ProviderInstanceConfig {
+	if cfg == nil {
+		return nil
+	}
+	for i := range cfg.LLM.Providers {
+		if cfg.LLM.Providers[i].Name == name {
+			return &cfg.LLM.Providers[i]
 		}
 	}
 	return nil
 }
 
 func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput, nulls nullCostFields) {
-	pc := s.findProviderInstance(name)
-	if pc == nil {
-		return
-	}
+	var soft, hard *float64
+	s.deps.Config.Update(func(c *config.Config) {
+		pc := findProviderIn(c, name)
+		if pc == nil {
+			return
+		}
+		applyProviderFields(c, pc, input, nulls)
+		soft, hard = pc.CostLimitSoft, pc.CostLimitHard
+	})
+	s.syncProviderCostTracker(name, soft, hard)
+}
+
+// applyProviderFields writes a provider update into cfg, including the legacy
+// single-slot mirrors that older read paths still consult.
+func applyProviderFields(c *config.Config, pc *config.ProviderInstanceConfig, input *providerUpdateInput, nulls nullCostFields) {
 	if input.APIKey != nil {
 		pc.APIKey = *input.APIKey
 	}
@@ -355,7 +376,7 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 	}
 
 	if pc.Type == "openrouter" {
-		s.applyOpenRouterUpdate(input)
+		applyOpenRouterUpdate(c, input)
 	}
 
 	if nulls.Soft {
@@ -377,21 +398,19 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 		pc.ModelPrices = input.ModelPrices
 	}
 
-	s.syncProviderCostTracker(name, pc.CostLimitSoft, pc.CostLimitHard)
-
 	// Keep legacy structs in sync for backward compat.
-	s.syncLegacyProviderConfig(name, pc)
+	syncLegacyProviderConfig(c, pc)
 }
 
 // applyOpenRouterUpdate applies reasoning and routing config (both under
 // [llm.openrouter]) from a provider update. Caller ensures the provider is
 // OpenRouter-typed.
-func (s *Server) applyOpenRouterUpdate(input *providerUpdateInput) {
+func applyOpenRouterUpdate(c *config.Config, input *providerUpdateInput) {
 	if input.Reasoning != nil {
-		s.deps.Config.LLM.OpenRouter.Reasoning = *input.Reasoning
+		c.LLM.OpenRouter.Reasoning = *input.Reasoning
 	}
 	if input.Routing != nil {
-		or := &s.deps.Config.LLM.OpenRouter
+		or := &c.LLM.OpenRouter
 		or.ProviderOrder = input.Routing.Order
 		or.ProviderAllowFallbacks = input.Routing.AllowFallbacks
 		or.ProviderSticky = input.Routing.Sticky
@@ -402,19 +421,19 @@ func (s *Server) applyOpenRouterUpdate(input *providerUpdateInput) {
 // syncLegacyProviderConfig mirrors changes from a ProviderInstanceConfig back
 // to the old-style config struct fields so existing code paths that read the
 // legacy fields stay correct.
-func (s *Server) syncLegacyProviderConfig(name string, pc *config.ProviderInstanceConfig) {
-	switch name {
+func syncLegacyProviderConfig(c *config.Config, pc *config.ProviderInstanceConfig) {
+	switch pc.Name {
 	case "anthropic":
-		s.deps.Config.LLM.Anthropic.APIKey = pc.APIKey
-		s.deps.Config.LLM.Anthropic.BaseURL = pc.BaseURL
+		c.LLM.Anthropic.APIKey = pc.APIKey
+		c.LLM.Anthropic.BaseURL = pc.BaseURL
 	case "openrouter":
-		s.deps.Config.LLM.OpenRouter.APIKey = pc.APIKey
+		c.LLM.OpenRouter.APIKey = pc.APIKey
 	case "openai":
-		s.deps.Config.LLM.OpenAI.APIKey = pc.APIKey
-		s.deps.Config.LLM.OpenAI.BaseURL = pc.BaseURL
-		s.deps.Config.LLM.OpenAI.Organization = pc.Organization
+		c.LLM.OpenAI.APIKey = pc.APIKey
+		c.LLM.OpenAI.BaseURL = pc.BaseURL
+		c.LLM.OpenAI.Organization = pc.Organization
 	case "ollama":
-		s.deps.Config.LLM.Ollama.BaseURL = pc.BaseURL
+		c.LLM.Ollama.BaseURL = pc.BaseURL
 	}
 }
 
@@ -532,7 +551,7 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if input.DefaultProvider != nil && *input.DefaultProvider != "" {
-		if !s.deps.Config.LLM.HasProvider(*input.DefaultProvider) {
+		if !s.appConfig().LLM.HasProvider(*input.DefaultProvider) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": "invalid default_provider: " + *input.DefaultProvider + " is not a configured provider",
 			})
@@ -550,26 +569,15 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply to in-memory config.
-	if input.DefaultProvider != nil {
-		s.deps.Config.LLM.DefaultProvider = *input.DefaultProvider
-	}
-	if input.DefaultModel != nil {
-		s.deps.Config.LLM.DefaultModel = *input.DefaultModel
-	}
-	if input.CostLimitSoft != nil {
-		s.deps.Config.LLM.CostLimitSoft = *input.CostLimitSoft
-	}
-	if input.CostLimitHard != nil {
-		s.deps.Config.LLM.CostLimitHard = *input.CostLimitHard
-	}
+	updated := s.applyLLMConfigUpdate(&input)
 
 	// Sync the live CostTracker so new sessions use updated limits.
-	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
+	if updated != nil && (input.CostLimitSoft != nil || input.CostLimitHard != nil) {
 		w.Header().Set("Deprecation", "true")
 		w.Header().Set("Sunset", "2026-08-01")
 		s.deps.CostTracker.SetDefaultLimits(llm.SessionLimits{
-			Soft: s.deps.Config.LLM.CostLimitSoft,
-			Hard: s.deps.Config.LLM.CostLimitHard,
+			Soft: updated.LLM.CostLimitSoft,
+			Hard: updated.LLM.CostLimitHard,
 		})
 	}
 
@@ -577,6 +585,25 @@ func (s *Server) handlePatchLLMConfig(w http.ResponseWriter, r *http.Request) {
 	s.persistLLMConfig(&input)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// applyLLMConfigUpdate writes the global [llm] defaults into a fresh snapshot
+// and returns it, or nil when no config is wired.
+func (s *Server) applyLLMConfigUpdate(input *llmConfigUpdateInput) *config.Config {
+	return s.deps.Config.Update(func(c *config.Config) {
+		if input.DefaultProvider != nil {
+			c.LLM.DefaultProvider = *input.DefaultProvider
+		}
+		if input.DefaultModel != nil {
+			c.LLM.DefaultModel = *input.DefaultModel
+		}
+		if input.CostLimitSoft != nil {
+			c.LLM.CostLimitSoft = *input.CostLimitSoft
+		}
+		if input.CostLimitHard != nil {
+			c.LLM.CostLimitHard = *input.CostLimitHard
+		}
+	})
 }
 
 func (s *Server) persistLLMConfig(input *llmConfigUpdateInput) {
@@ -663,7 +690,7 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if s.deps.Config.LLM.HasProvider(input.Name) {
+	if s.appConfig().LLM.HasProvider(input.Name) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "provider already exists: " + input.Name,
 		})
@@ -701,16 +728,18 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 	costPersistErr := s.persistCreateProviderCosts(input.Name, input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens, input.ModelPrices)
 
 	// Update in-memory config.
-	s.deps.Config.LLM.Providers = append(s.deps.Config.LLM.Providers, config.ProviderInstanceConfig{
-		Name:                  input.Name,
-		Type:                  input.Type,
-		APIKey:                input.APIKey,
-		BaseURL:               input.BaseURL,
-		Organization:          input.Organization,
-		CostLimitSoft:         input.CostLimitSoft,
-		CostLimitHard:         input.CostLimitHard,
-		DefaultRatePerKTokens: input.DefaultRatePerKTokens,
-		ModelPrices:           input.ModelPrices,
+	s.deps.Config.Update(func(c *config.Config) {
+		c.LLM.Providers = append(c.LLM.Providers, config.ProviderInstanceConfig{
+			Name:                  input.Name,
+			Type:                  input.Type,
+			APIKey:                input.APIKey,
+			BaseURL:               input.BaseURL,
+			Organization:          input.Organization,
+			CostLimitSoft:         input.CostLimitSoft,
+			CostLimitHard:         input.CostLimitHard,
+			DefaultRatePerKTokens: input.DefaultRatePerKTokens,
+			ModelPrices:           input.ModelPrices,
+		})
 	})
 
 	if s.deps.Auditor != nil {
@@ -757,7 +786,11 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !s.deps.Config.LLM.HasProvider(name) {
+	// One snapshot for both preconditions: a reload between them would let the
+	// provider pass the existence check and be judged against another config's
+	// references.
+	snap := s.appConfig()
+	if !snap.LLM.HasProvider(name) {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "provider not found: " + name,
 		})
@@ -765,7 +798,7 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check dependencies (default_provider, agent llm_provider, fallbacks).
-	if config.IsProviderReferenced(s.deps.Config, name) {
+	if config.IsProviderReferenced(snap, name) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "provider is in use: referenced as default_provider, by an agent, or by a fallback rule",
 		})
@@ -781,13 +814,14 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Remove from in-memory config.
-	providers := s.deps.Config.LLM.Providers
-	for i := range providers {
-		if providers[i].Name == name {
-			s.deps.Config.LLM.Providers = append(providers[:i], providers[i+1:]...)
-			break
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.LLM.Providers {
+			if c.LLM.Providers[i].Name == name {
+				c.LLM.Providers = append(c.LLM.Providers[:i], c.LLM.Providers[i+1:]...)
+				break
+			}
 		}
-	}
+	})
 
 	if s.deps.Auditor != nil {
 		s.deps.Auditor.Emit(r.Context(), audit.Event{

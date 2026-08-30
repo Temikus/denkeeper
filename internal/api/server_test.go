@@ -116,11 +116,11 @@ func testDepsWithProvider(provider llm.Provider) Deps {
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
 			},
-		},
+		}),
 	}
 }
 
@@ -1932,9 +1932,9 @@ func TestSkills_NoSkillsReturnsArray(t *testing.T) {
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{{Name: "default", Adapters: []string{"telegram"}}},
-		},
+		}),
 	}
 
 	cfg := testConfig(allScopesKey())
@@ -2541,7 +2541,7 @@ func TestBrowserConfig(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
 	deps.BrowserProfiles = browser.NewProfileService(dir, testLogger())
-	deps.Config.Browser = config.BrowserConfig{
+	deps.Config.Get().Browser = config.BrowserConfig{
 		Enabled:     true,
 		Image:       "ghcr.io/temikus/denkeeper-browser:latest",
 		MemoryLimit: "512m",
@@ -2680,11 +2680,11 @@ func TestChat_SSEToolEvents(t *testing.T) {
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
 			},
-		},
+		}),
 	}
 	srv := New(cfg, deps, logger)
 

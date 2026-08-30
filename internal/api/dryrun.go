@@ -243,10 +243,11 @@ func buildTranscript(agentName string, result *agent.TurnResult) dryRunTranscrip
 
 // evalAuditMode returns the configured dry-run/eval audit mode.
 func (s *Server) evalAuditMode() string {
-	if s.deps.Config == nil {
+	cfg := s.appConfig()
+	if cfg == nil {
 		return agent.AuditFull
 	}
-	return s.deps.Config.Eval.AuditMode()
+	return cfg.Eval.AuditMode()
 }
 
 // emitDryRunAudit records that a preview happened. This is the coarse anchor

@@ -108,11 +108,9 @@ func TestTraces_ListReportsCaptureOnWhenConfigured(t *testing.T) {
 }
 
 // tracesTestServer is evalTestServer without the runner, with the [eval]
-// section supplied before New runs: the settings the listing echoes are
-// snapshotted at construction and after each reload, not read per request.
-// A non-nil reload becomes the server's ReloadFunc, handed the same config
-// struct hot reload overwrites in place.
-func tracesTestServer(t *testing.T, evalCfg config.EvalConfig, reload func(cfg *config.Config) error) (*Server, *eval.Store) {
+// section supplied before New runs. A non-nil reload becomes the server's
+// ReloadFunc, handed the same holder hot reload swaps the pointer in.
+func tracesTestServer(t *testing.T, evalCfg config.EvalConfig, reload func(h *config.Holder) error) (*Server, *eval.Store) {
 	t.Helper()
 	deps := testDeps()
 	store, err := eval.NewInMemoryStore()
@@ -121,26 +119,24 @@ func tracesTestServer(t *testing.T, evalCfg config.EvalConfig, reload func(cfg *
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	deps.EvalStore = store
-	deps.Config.Eval = evalCfg
+	deps.Config.Update(func(c *config.Config) { c.Eval = evalCfg })
 	if reload != nil {
-		cfg := deps.Config
-		deps.ReloadFunc = func() error { return reload(cfg) }
+		holder := deps.Config
+		deps.ReloadFunc = func() error { return reload(holder) }
 	}
 	return New(testConfig(allScopesKey()), deps, testLogger()), store
 }
 
-// Hot reload replaces the config struct's contents in place. The listing must
-// serve the new [eval] settings afterwards, and it must get them from its
-// snapshot — refreshed as part of the reload request — rather than by reading
-// the struct a concurrent reload could be overwriting.
+// Hot reload swaps the config pointer. The listing must serve the new [eval]
+// settings afterwards, from the snapshot it takes per request.
 func TestTraces_ListServesReloadedCaptureSettings(t *testing.T) {
-	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(cfg *config.Config) error {
-		// What buildReloadFunc does: overwrite the whole struct.
-		next := *cfg
+	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(h *config.Holder) error {
+		// What buildReloadFunc does: publish a new snapshot.
+		next := h.Get().Clone()
 		next.Eval.Capture = true
 		next.Eval.RetentionDays = 7
 		next.Eval.MaxTraceBytes = 65536
-		*cfg = next
+		h.Store(next)
 		return nil
 	})
 
@@ -168,15 +164,14 @@ func TestTraces_ListServesReloadedCaptureSettings(t *testing.T) {
 	}
 }
 
-// A listing that overlaps a config reload must not touch the config struct the
-// reload is overwriting. The race detector is the assertion here: before the
-// snapshot, this test failed under -race.
+// A listing that overlaps a config reload must not race it. The race detector
+// is the assertion here: before the holder, this test failed under -race.
 func TestTraces_ListDoesNotRaceConfigReload(t *testing.T) {
-	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(cfg *config.Config) error {
-		next := *cfg
-		next.Eval.Capture = !cfg.Eval.Capture
-		next.Eval.RetentionDays++
-		*cfg = next
+	srv, _ := tracesTestServer(t, config.EvalConfig{}, func(h *config.Holder) error {
+		h.Update(func(c *config.Config) {
+			c.Eval.Capture = !c.Eval.Capture
+			c.Eval.RetentionDays++
+		})
 		return nil
 	})
 
@@ -375,7 +370,7 @@ func TestTraces_EvalReadScopeIsNotEnough(t *testing.T) {
 
 func TestTraces_UnconfiguredStoreIs503(t *testing.T) {
 	deps := testDeps()
-	deps.Config.Eval = config.EvalConfig{}
+	deps.Config.Update(func(c *config.Config) { c.Eval = config.EvalConfig{} })
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
 	for _, path := range []string{"/api/v1/traces", "/api/v1/traces/1"} {

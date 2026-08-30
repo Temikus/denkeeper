@@ -73,11 +73,11 @@ func testDepsWithPersona(t *testing.T) Deps {
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
 			},
-		},
+		}),
 	}
 }
 

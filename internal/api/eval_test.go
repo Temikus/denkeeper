@@ -51,7 +51,7 @@ func evalTestServer(t *testing.T, keys ...config.APIKeyConfig) (*Server, *eval.S
 
 	deps.EvalStore = store
 	deps.EvalRunner = runner
-	deps.Config.Eval = config.EvalConfig{
+	deps.Config.Get().Eval = config.EvalConfig{
 		Audit: "full", MaxConcurrent: 1, MaxCostPerRun: 2.0, DefaultK: 3, CompletenessFloor: 0.8,
 	}
 	return New(testConfig(keys...), deps, testLogger()), store

@@ -93,7 +93,7 @@ func TestAgentConfigUpdate_LLMProvider(t *testing.T) {
 		Dispatcher:  dispatcher,
 		CostTracker: costTracker,
 		Memory:      mem,
-		Config:      &config.Config{Agents: []config.AgentInstanceConfig{{Name: "default"}}},
+		Config:      config.NewHolder(&config.Config{Agents: []config.AgentInstanceConfig{{Name: "default"}}}),
 	}
 
 	srv := New(cfg, deps, testLogger())
@@ -206,7 +206,7 @@ func TestAgentConfigUpdate_BrowserURLAllowlist(t *testing.T) {
 	}
 
 	// Verify in-memory config updated.
-	got := deps.Config.Agents[0].BrowserURLAllowlist
+	got := deps.Config.Get().Agents[0].BrowserURLAllowlist
 	if len(got) != 2 || got[0] != "example.com" || got[1] != "*.trusted.io" {
 		t.Errorf("browser_url_allowlist = %v, want [example.com *.trusted.io]", got)
 	}
@@ -230,8 +230,8 @@ func TestAgentConfigUpdate_Description(t *testing.T) {
 	}
 
 	// Verify in-memory config updated.
-	if deps.Config.Agents[0].Description != "Updated description" {
-		t.Errorf("description = %q, want 'Updated description'", deps.Config.Agents[0].Description)
+	if deps.Config.Get().Agents[0].Description != "Updated description" {
+		t.Errorf("description = %q, want 'Updated description'", deps.Config.Get().Agents[0].Description)
 	}
 }
 
@@ -281,12 +281,12 @@ func testDepsWithAgent(name string) Deps {
 		Scheduler:   scheduler.New(logger, nil),
 		CostTracker: costTracker,
 		Memory:      mem,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
 				{Name: name},
 			},
-		},
+		}),
 	}
 }
 
@@ -321,7 +321,7 @@ func TestAgentConfigUpdate_Rename(t *testing.T) {
 
 	// In-memory config updated.
 	found := false
-	for _, ac := range deps.Config.Agents {
+	for _, ac := range deps.Config.Get().Agents {
 		if ac.Name == "bob" {
 			found = true
 		}
@@ -410,7 +410,7 @@ func TestAgentConfigUpdate_Fallbacks_Valid(t *testing.T) {
 	}
 
 	// Verify in-memory config updated.
-	got := deps.Config.Agents[0].Fallbacks
+	got := deps.Config.Get().Agents[0].Fallbacks
 	if len(got) != 2 {
 		t.Fatalf("fallbacks len = %d, want 2", len(got))
 	}
@@ -465,7 +465,7 @@ func TestAgentConfigUpdate_Fallbacks_MissingProvider(t *testing.T) {
 func TestAgentConfigUpdate_Fallbacks_EmptyClears(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	deps.Config.Agents[0].Fallbacks = []config.FallbackConfig{
+	deps.Config.Get().Agents[0].Fallbacks = []config.FallbackConfig{
 		{Trigger: "error", Action: "wait_and_retry", MaxRetries: 1},
 	}
 	srv := New(cfg, deps, testLogger())
@@ -482,15 +482,15 @@ func TestAgentConfigUpdate_Fallbacks_EmptyClears(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	if len(deps.Config.Agents[0].Fallbacks) != 0 {
-		t.Errorf("fallbacks should be empty, got %d", len(deps.Config.Agents[0].Fallbacks))
+	if len(deps.Config.Get().Agents[0].Fallbacks) != 0 {
+		t.Errorf("fallbacks should be empty, got %d", len(deps.Config.Get().Agents[0].Fallbacks))
 	}
 }
 
 func TestAgentDetail_IncludesFallbacks(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	deps.Config.Agents[0].Fallbacks = []config.FallbackConfig{
+	deps.Config.Get().Agents[0].Fallbacks = []config.FallbackConfig{
 		{Trigger: "rate_limit", Action: "wait_and_retry", MaxRetries: 3, Backoff: "exponential"},
 	}
 	srv := New(cfg, deps, testLogger())
@@ -541,7 +541,7 @@ func TestAgentConfigUpdate_MaxToolRounds(t *testing.T) {
 
 	// Verify in-memory config updated.
 	var found bool
-	for _, ac := range deps.Config.Agents {
+	for _, ac := range deps.Config.Get().Agents {
 		if ac.Name == "default" {
 			found = true
 			if ac.MaxToolRounds != 25 {
@@ -645,9 +645,9 @@ func TestAgentDetail_FallbacksEmptyNotNull(t *testing.T) {
 func TestAgentDetail_IncludesSupervisorConfig(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()
-	deps.Config.Agents[0].Supervisor = "guard"
-	deps.Config.Agents[0].SupervisorTimeout = "10s"
-	deps.Config.Agents[0].SupervisorContextMessages = 3
+	deps.Config.Get().Agents[0].Supervisor = "guard"
+	deps.Config.Get().Agents[0].SupervisorTimeout = "10s"
+	deps.Config.Get().Agents[0].SupervisorContextMessages = 3
 	srv := New(cfg, deps, testLogger())
 
 	req := authedRequest(http.MethodGet, "/api/v1/agents/default")

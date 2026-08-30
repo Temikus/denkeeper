@@ -146,10 +146,11 @@ func evalRunID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // config leaves every field zero, and eval.SummaryOpts fills in the shipped
 // defaults — a zero threshold would otherwise fail every gate.
 func (s *Server) evalSummaryOpts() eval.SummaryOpts {
-	if s.deps.Config == nil {
+	cfg := s.appConfig()
+	if cfg == nil {
 		return eval.SummaryOpts{}
 	}
-	c := s.deps.Config.Eval
+	c := cfg.Eval
 	return eval.SummaryOpts{
 		CompletenessFloor: c.CompletenessFloor,
 		WinThreshold:      c.WinThreshold,

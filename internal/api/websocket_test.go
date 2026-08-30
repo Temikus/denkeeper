@@ -371,11 +371,11 @@ func wsTestServerWithProvider(t *testing.T, prov llm.Provider) (*httptest.Server
 		CostTracker: costTracker,
 		Memory:      mem,
 		Approvals:   approvalMgr,
-		Config: &config.Config{
+		Config: config.NewHolder(&config.Config{
 			Agents: []config.AgentInstanceConfig{
 				{Name: "default", Adapters: []string{"telegram"}},
 			},
-		},
+		}),
 	}
 
 	cfg := testConfig(allScopesKey())

@@ -70,7 +70,8 @@ const (
 // @Failure      403  {object}  map[string]string  "Forbidden — requires admin scope"
 // @Router       /server/config [get]
 func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.deps.Config.API
+	snap := s.appConfig()
+	cfg := snap.API
 	resp := serverConfigResponse{
 		ExternalURL:              cfg.ExternalURL,
 		Timezone:                 cfg.Timezone,
@@ -86,10 +87,10 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		MCPServerSessionTimeout:  cfg.MCPServer.SessionTimeout,
 		MCPServerChatTimeout:     cfg.MCPServer.ChatTimeout,
 		MCPServerStateless:       cfg.MCPServer.Stateless,
-		MCPServerEndpoint:        s.mcpServerEndpoint(),
-		WebToolsEnabled:          s.deps.Config.Web.WebEnabled(),
-		WebFetchMaxResponseChars: s.deps.Config.Web.Fetch.MaxResponseChars,
-		ScriptEnabled:            s.deps.Config.Script.ScriptEnabled(),
+		MCPServerEndpoint:        mcpServerEndpoint(snap),
+		WebToolsEnabled:          snap.Web.WebEnabled(),
+		WebFetchMaxResponseChars: snap.Web.Fetch.MaxResponseChars,
+		ScriptEnabled:            snap.Script.ScriptEnabled(),
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -126,8 +127,11 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	applyServerConfigInput(&s.deps.Config.API, &input)
-	restartRequired := applyInProcessToolInput(s.deps.Config, &input)
+	var restartRequired bool
+	s.deps.Config.Update(func(c *config.Config) {
+		applyServerConfigInput(&c.API, &input)
+		restartRequired = applyInProcessToolInput(c, &input)
+	})
 	s.persistServerConfig(&input)
 
 	resp := map[string]any{"status": "updated"}
@@ -260,10 +264,6 @@ func (s *Server) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "reload failed: " + err.Error()})
 		return
 	}
-	// The reload overwrote the config struct's contents in place; refresh the
-	// snapshot the trace handlers read so they serve the new [eval] settings
-	// without ever touching the struct concurrently.
-	s.refreshTraceSettings()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
@@ -362,10 +362,13 @@ func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
 	}
 }
 
-func (s *Server) mcpServerEndpoint() string {
-	base := s.deps.Config.API.ExternalURL
+// mcpServerEndpoint takes the caller's snapshot rather than re-reading the
+// holder: a response that pairs this endpoint with external_url or listen must
+// derive both from one config, not from either side of a reload.
+func mcpServerEndpoint(cfg *config.Config) string {
+	base := cfg.API.ExternalURL
 	if base == "" {
-		base = "http://" + s.deps.Config.API.Listen
+		base = "http://" + cfg.API.Listen
 	}
 	return base + "/api/v1/mcp"
 }

@@ -202,11 +202,12 @@ func (s *Server) handleEvalConfig(w http.ResponseWriter, _ *http.Request) {
 	if !s.evalRequired(w) {
 		return
 	}
-	if s.deps.Config == nil {
+	cfg := s.appConfig()
+	if cfg == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "server config not available"})
 		return
 	}
-	c := s.deps.Config.Eval
+	c := cfg.Eval
 	out := evalConfigResponse{
 		DefaultK:           c.DefaultK,
 		MaxCostPerRun:      c.MaxCostPerRun,

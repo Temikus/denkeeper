@@ -15,7 +15,7 @@ import (
 
 func testDepsWithServerConfig() Deps {
 	deps := testDeps()
-	deps.Config.API = config.APIConfig{
+	deps.Config.Get().API = config.APIConfig{
 		Listen:                   ":8443",
 		TLS:                      true,
 		CORSOrigins:              []string{"https://example.com"},
@@ -122,8 +122,8 @@ func TestPatchServerConfig_ExternalURL(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	if deps.Config.API.ExternalURL != "https://new.example.com" {
-		t.Errorf("in-memory external_url = %q, want https://new.example.com", deps.Config.API.ExternalURL)
+	if deps.Config.Get().API.ExternalURL != "https://new.example.com" {
+		t.Errorf("in-memory external_url = %q, want https://new.example.com", deps.Config.Get().API.ExternalURL)
 	}
 }
 
@@ -143,8 +143,8 @@ func TestPatchServerConfig_ClearExternalURL(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	if deps.Config.API.ExternalURL != "" {
-		t.Errorf("in-memory external_url = %q, want empty", deps.Config.API.ExternalURL)
+	if deps.Config.Get().API.ExternalURL != "" {
+		t.Errorf("in-memory external_url = %q, want empty", deps.Config.Get().API.ExternalURL)
 	}
 }
 
@@ -238,8 +238,8 @@ func TestGetServerConfig_InProcessToolsDefaultEnabled(t *testing.T) {
 
 func TestGetServerConfig_InProcessToolsExplicitDisabled(t *testing.T) {
 	deps := testDepsWithServerConfig()
-	deps.Config.Web.Enabled = boolPtr(false)
-	deps.Config.Script.Enabled = boolPtr(false)
+	deps.Config.Get().Web.Enabled = boolPtr(false)
+	deps.Config.Get().Script.Enabled = boolPtr(false)
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
 	req := authedRequest(http.MethodGet, "/api/v1/server/config")
@@ -289,7 +289,7 @@ func TestPatchServerConfig_DisableScript_PersistsAndRequestsRestart(t *testing.T
 		t.Errorf("restart_required = %v, want true", resp["restart_required"])
 	}
 
-	if deps.Config.Script.ScriptEnabled() {
+	if deps.Config.Get().Script.ScriptEnabled() {
 		t.Error("in-memory Script still enabled, want disabled")
 	}
 
@@ -327,7 +327,7 @@ func TestPatchServerConfig_DisableWebTools_Persists(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if deps.Config.Web.WebEnabled() {
+	if deps.Config.Get().Web.WebEnabled() {
 		t.Error("in-memory Web still enabled, want disabled")
 	}
 
@@ -345,7 +345,7 @@ func TestPatchServerConfig_DisableWebTools_Persists(t *testing.T) {
 
 func TestGetServerConfig_WebFetchMaxResponseChars(t *testing.T) {
 	deps := testDepsWithServerConfig()
-	deps.Config.Web.Fetch.MaxResponseChars = 24000
+	deps.Config.Get().Web.Fetch.MaxResponseChars = 24000
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
 	req := authedRequest(http.MethodGet, "/api/v1/server/config")
@@ -372,7 +372,7 @@ func TestPatchServerConfig_WebFetchMaxResponseChars_PersistsAndRequestsRestart(t
 	}
 
 	deps := testDepsWithServerConfig()
-	deps.Config.Web.Fetch.MaxResponseChars = 8000
+	deps.Config.Get().Web.Fetch.MaxResponseChars = 8000
 	deps.ConfigPath = cfgPath
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
@@ -387,8 +387,8 @@ func TestPatchServerConfig_WebFetchMaxResponseChars_PersistsAndRequestsRestart(t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if deps.Config.Web.Fetch.MaxResponseChars != 24000 {
-		t.Errorf("in-memory MaxResponseChars = %d, want 24000", deps.Config.Web.Fetch.MaxResponseChars)
+	if deps.Config.Get().Web.Fetch.MaxResponseChars != 24000 {
+		t.Errorf("in-memory MaxResponseChars = %d, want 24000", deps.Config.Get().Web.Fetch.MaxResponseChars)
 	}
 
 	var resp map[string]any
@@ -450,7 +450,7 @@ func TestPatchServerConfig_WebFetchMaxResponseChars_AboveRange(t *testing.T) {
 
 func TestPatchServerConfig_WebFetchMaxResponseChars_UnchangedOmitsRestart(t *testing.T) {
 	deps := testDepsWithServerConfig()
-	deps.Config.Web.Fetch.MaxResponseChars = 24000
+	deps.Config.Get().Web.Fetch.MaxResponseChars = 24000
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
 	body, _ := json.Marshal(map[string]any{"web_fetch_max_response_chars": 24000})
@@ -597,5 +597,56 @@ func TestRestartProcess_Unavailable(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// The listing pairs external_url with mcp_server_endpoint, which is derived
+// from it. Both must come from one snapshot, so a reload that lands mid-handler
+// cannot produce a response advertising one config's URL and another's endpoint.
+func TestGetServerConfig_EndpointMatchesExternalURLUnderReload(t *testing.T) {
+	const (
+		urlA = "https://a.example.com"
+		urlB = "https://b.example.com"
+	)
+	deps := testDepsWithServerConfig()
+	deps.Config.Update(func(c *config.Config) { c.API.ExternalURL = urlA })
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			next := urlA
+			if i%2 == 1 {
+				next = urlB
+			}
+			// What buildReloadFunc does: publish a whole new snapshot.
+			cfg := deps.Config.Get().Clone()
+			cfg.API.ExternalURL = next
+			deps.Config.Store(cfg)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+
+	for i := 0; i < 2000; i++ {
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/server/config"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var resp serverConfigResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := resp.ExternalURL + "/api/v1/mcp"; resp.MCPServerEndpoint != want {
+			t.Fatalf("mixed snapshots: external_url = %q, mcp_server_endpoint = %q, want %q",
+				resp.ExternalURL, resp.MCPServerEndpoint, want)
+		}
 	}
 }
