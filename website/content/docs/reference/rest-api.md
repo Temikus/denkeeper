@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -578,6 +578,12 @@ This is the operator's results view and is deliberately **not** reachable from t
 **Scope:** `eval:read`
 
 Per-sample transcripts, including the full tool trace with arguments and results.
+
+### `POST /api/v1/eval/runs/{id}/judge`
+
+**Scope:** `eval:write`
+
+Starts a server-side judging pass over the run's outstanding blinded pairs with the internal judge, so a run can be judged unattended instead of only from Claude Code over MCP. Requires `[eval] judge_model`; without it the endpoint returns `503` and the MCP judge path is unaffected. Only a terminal run can be judged. The pass runs in the background — progress shows up as `completeness.pairs_judged` on the summary — is bounded by `[eval] judge_max_cost_per_run`, and its spend is recorded separately on the run's `judge_cost`. `202 Accepted` with the pass's item count; `409 Conflict` if the run isn't terminal or is already being judged; optional body `{"sample_n": N, "limit": N}` to judge a calibration subset or cap the pass.
 
 ## Safety
 

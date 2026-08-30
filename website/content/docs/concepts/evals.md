@@ -3,7 +3,7 @@ title: "Evals"
 description: "Comparing a candidate model against the one you run today, on your own conversations."
 slug: "evals"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 57
 toc: true

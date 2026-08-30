@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-08-28T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -478,6 +478,22 @@ Subprocess plugins run as child processes with direct MCP stdio. Docker plugins 
 | `allow_unsigned` | bool | `true` | Allow unsigned subprocess plugin binaries |
 
 When `allow_unsigned = false`, all subprocess plugin binaries must have a valid Ed25519 signature from one of the trusted keys.
+
+## `[safety.reply_guard]`
+
+Runtime guardrail that holds back an obviously broken final reply on schedule-driven turns — a live user reacts to a bad reply, a schedule fires unattended. Distinct from `[security]`, which covers plugin signing. The turn is still stored in full and an audit event lands under category `safety`, action `reply_guard`; what changes is the delivered text, replaced by a one-line notice. Dry runs and evals evaluate the guard and report the verdict on the transcript, but never substitute the text.
+
+Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `true` | Master switch |
+| `on_role_markup` | string | `"withhold"` | Reply carries role/tool-call scaffolding as plain text (`<rs_tool_calls>`, `<\|im_start\|>`, `"\n\nHuman:"`, ...) instead of calling a tool |
+| `on_oversized` | string | `"withhold"` | Reply exceeds `max_reply_bytes` or `max_completion_tokens` |
+| `on_no_tool_calls` | string | `"warn"` | A schedule named a skill and the turn made no tool calls at all; only flags, since some skills legitimately finish without tools |
+| `max_reply_bytes` | int | `16000` | Caps the final reply in bytes (~4 Telegram chunks, under half that adapter's own render limit). Negative disables |
+| `max_completion_tokens` | int | `0` | Caps provider-reported completion tokens. `0` disables — it measures the same thing as `max_reply_bytes` |
+| `excerpt_bytes` | int | `200` | How much of the held reply reaches the audit detail. Negative disables |
 
 ## `[kv]`
 
