@@ -599,3 +599,54 @@ func TestRestartProcess_Unavailable(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }
+
+// The listing pairs external_url with mcp_server_endpoint, which is derived
+// from it. Both must come from one snapshot, so a reload that lands mid-handler
+// cannot produce a response advertising one config's URL and another's endpoint.
+func TestGetServerConfig_EndpointMatchesExternalURLUnderReload(t *testing.T) {
+	const (
+		urlA = "https://a.example.com"
+		urlB = "https://b.example.com"
+	)
+	deps := testDepsWithServerConfig()
+	deps.Config.Update(func(c *config.Config) { c.API.ExternalURL = urlA })
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			next := urlA
+			if i%2 == 1 {
+				next = urlB
+			}
+			// What buildReloadFunc does: publish a whole new snapshot.
+			cfg := deps.Config.Get().Clone()
+			cfg.API.ExternalURL = next
+			deps.Config.Store(cfg)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+
+	for i := 0; i < 2000; i++ {
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/server/config"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var resp serverConfigResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := resp.ExternalURL + "/api/v1/mcp"; resp.MCPServerEndpoint != want {
+			t.Fatalf("mixed snapshots: external_url = %q, mcp_server_endpoint = %q, want %q",
+				resp.ExternalURL, resp.MCPServerEndpoint, want)
+		}
+	}
+}

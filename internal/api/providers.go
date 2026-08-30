@@ -786,7 +786,11 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !s.appConfig().LLM.HasProvider(name) {
+	// One snapshot for both preconditions: a reload between them would let the
+	// provider pass the existence check and be judged against another config's
+	// references.
+	snap := s.appConfig()
+	if !snap.LLM.HasProvider(name) {
 		writeJSON(w, http.StatusNotFound, map[string]string{
 			"error": "provider not found: " + name,
 		})
@@ -794,7 +798,7 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Check dependencies (default_provider, agent llm_provider, fallbacks).
-	if config.IsProviderReferenced(s.appConfig(), name) {
+	if config.IsProviderReferenced(snap, name) {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "provider is in use: referenced as default_provider, by an agent, or by a fallback rule",
 		})

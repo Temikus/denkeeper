@@ -87,7 +87,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		MCPServerSessionTimeout:  cfg.MCPServer.SessionTimeout,
 		MCPServerChatTimeout:     cfg.MCPServer.ChatTimeout,
 		MCPServerStateless:       cfg.MCPServer.Stateless,
-		MCPServerEndpoint:        s.mcpServerEndpoint(),
+		MCPServerEndpoint:        mcpServerEndpoint(snap),
 		WebToolsEnabled:          snap.Web.WebEnabled(),
 		WebFetchMaxResponseChars: snap.Web.Fetch.MaxResponseChars,
 		ScriptEnabled:            snap.Script.ScriptEnabled(),
@@ -362,8 +362,10 @@ func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
 	}
 }
 
-func (s *Server) mcpServerEndpoint() string {
-	cfg := s.appConfig()
+// mcpServerEndpoint takes the caller's snapshot rather than re-reading the
+// holder: a response that pairs this endpoint with external_url or listen must
+// derive both from one config, not from either side of a reload.
+func mcpServerEndpoint(cfg *config.Config) string {
 	base := cfg.API.ExternalURL
 	if base == "" {
 		base = "http://" + cfg.API.Listen

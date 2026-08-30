@@ -487,9 +487,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
 	}
-	if s.appConfig().API.IsMCPServerEnabled() {
+	if cfg := s.appConfig(); cfg.API.IsMCPServerEnabled() {
 		resp["mcp_server_enabled"] = true
-		resp["mcp_server_endpoint"] = s.mcpServerEndpoint()
+		resp["mcp_server_endpoint"] = mcpServerEndpoint(cfg)
 	}
 
 	if r.URL.Query().Get("ready") == "true" {
