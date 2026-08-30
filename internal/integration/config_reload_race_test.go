@@ -41,8 +41,26 @@ name = "default"
 session_tier = "supervised"
 description = %q
 `, externalURL, "agent at "+externalURL)
-		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
-			t.Fatalf("writing config: %v", err)
+		// The PATCH /llm/config goroutine persists through
+		// config.UpdateLLMConfig, a read-modify-write of this same file under
+		// ConfigMu. Take that lock and swap the file in by rename, as the
+		// writer does: a plain os.WriteFile here is neither atomic nor ordered
+		// against it, so the writer could read a half-written file and persist
+		// the result back without [[llm.providers]].
+		config.ConfigMu.Lock()
+		defer config.ConfigMu.Unlock()
+		tmp, err := os.CreateTemp(dir, "cfg-*.toml")
+		if err != nil {
+			t.Fatalf("creating temp config: %v", err)
+		}
+		if _, err := tmp.WriteString(body); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		if err := tmp.Close(); err != nil {
+			t.Fatalf("closing temp config: %v", err)
+		}
+		if err := os.Rename(tmp.Name(), cfgPath); err != nil {
+			t.Fatalf("swapping config in: %v", err)
 		}
 	}
 	writeCfg("https://one.example.com")
