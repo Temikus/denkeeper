@@ -32,7 +32,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Stage 3: Runtime
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates tzdata
+# `apk upgrade` before `apk add`: the published alpine:3.24 tag lags the v3.24
+# branch repository, so a plain `apk add` leaves already-fixed CVEs in the
+# image and the release pipeline's Grype gate rejects it (v0.45.0 through
+# v0.47.1 failed this way on openssl 3.5.7-r0, fixed in 3.5.8-r0).
+#
+# VERSION is written to /etc/denkeeper-version so the upgrade layer's cache key
+# changes on every tagged release. Without it, buildx would replay the cached
+# layer from the registry buildcache whenever the alpine:3.24 tag itself has not
+# been republished, silently shipping the stale packages again.
+ARG VERSION=dev
+RUN echo "${VERSION}" > /etc/denkeeper-version && \
+    apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata
 COPY --from=builder /denkeeper /usr/local/bin/denkeeper
 VOLUME ["/data"]
 ENV DENKEEPER_CONFIG=/data/denkeeper.toml
