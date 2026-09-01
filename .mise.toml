@@ -6,6 +6,6 @@ swag = "1.16.6"
 task = "3.52.0"
 "go:github.com/air-verse/air" = "1.67.4"
 "aqua:casey/just" = "1.58.0"
-"aqua:anchore/grype" = "0.117.0"
+"aqua:anchore/grype" = "0.118.0"
 # Keep in sync with the betterleaks job in .github/workflows/security.yml.
 "aqua:betterleaks/betterleaks" = "1.8.1"
