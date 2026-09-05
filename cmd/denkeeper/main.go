@@ -2251,6 +2251,7 @@ func replyGuardFrom(cfg *config.Config) agent.ReplyGuard {
 		OnRoleMarkup:        rg.OnRoleMarkup,
 		OnOversized:         rg.OnOversized,
 		OnNoToolCalls:       rg.OnNoToolCalls,
+		OnLeakedToolCall:    rg.OnLeakedToolCall,
 		MaxReplyBytes:       rg.MaxReplyBytes,
 		MaxCompletionTokens: rg.MaxCompletionTokens,
 		ExcerptBytes:        rg.ExcerptBytes,

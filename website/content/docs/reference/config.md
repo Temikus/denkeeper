@@ -491,6 +491,7 @@ Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
 | `on_role_markup` | string | `"withhold"` | Reply carries role/tool-call scaffolding as plain text (`<rs_tool_calls>`, `<\|im_start\|>`, `"\n\nHuman:"`, ...) instead of calling a tool |
 | `on_oversized` | string | `"withhold"` | Reply exceeds `max_reply_bytes` or `max_completion_tokens` |
 | `on_no_tool_calls` | string | `"warn"` | A schedule named a skill and the turn made no tool calls at all; only flags, since some skills legitimately finish without tools |
+| `on_leaked_tool_call` | string | `"withhold"` | The final reply carries a tool call rendered as plain text (`functions.kv_get:0{...}`) — an upstream that failed to parse the model's native call format. The router retries such a response once before the guard sees it |
 | `max_reply_bytes` | int | `16000` | Caps the final reply in bytes (~4 Telegram chunks, under half that adapter's own render limit). Negative disables |
 | `max_completion_tokens` | int | `0` | Caps provider-reported completion tokens. `0` disables — it measures the same thing as `max_reply_bytes` |
 | `excerpt_bytes` | int | `200` | How much of the held reply reaches the audit detail. Negative disables |

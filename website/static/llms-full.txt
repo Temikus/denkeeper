@@ -443,6 +443,10 @@ Each signal takes "withhold", "warn" (audit but deliver anyway) or "off".
     on_no_tool_calls = "warn"        # a schedule named a skill and no tool ran;
                                      # only flags, since some skills legitimately
                                      # finish without tools
+    on_leaked_tool_call = "withhold" # reply carries a tool call as plain text
+                                     # (functions.kv_get:0{...}) — the upstream
+                                     # failed to parse the model's call format;
+                                     # the router retries once before this
     max_reply_bytes = 16000          # ~4 Telegram chunks, well under that
                                      # adapter's own 35000-byte render limit;
                                      # negative disables (a written 0 defaults)

@@ -205,6 +205,11 @@ func (c *Client) resetSticky() {
 	c.stickyMu.Unlock()
 }
 
+// ResetUpstreamPreference implements llm.UpstreamFaultReporter: the router
+// calls it when a 200 response turned out to be broken (a tool call leaked as
+// text), which the error-based reset above cannot see.
+func (c *Client) ResetUpstreamPreference() { c.resetSticky() }
+
 func (c *Client) Name() string { return c.name }
 
 // SupportsStreaming implements llm.StreamingProvider.
@@ -311,8 +316,11 @@ func (c *Client) chatCompletionInner(ctx context.Context, req llm.ChatRequest) (
 		return nil, fmt.Errorf("no choices in response")
 	}
 
-	c.recordProvider(apiResp.Provider)
-	return buildChatResponse(&apiResp), nil
+	built := buildChatResponse(&apiResp)
+	if !llm.LooksLikeLeakedToolCall(built) {
+		c.recordProvider(apiResp.Provider)
+	}
+	return built, nil
 }
 
 // chatCompletionStream handles the streaming path using the shared OAI helper.
@@ -412,7 +420,9 @@ func (c *Client) chatCompletionStream(ctx context.Context, req llm.ChatRequest) 
 		}
 		chatResp.CostUSD = result.Usage.Cost
 	}
-	c.recordProvider(result.Provider)
+	if !llm.LooksLikeLeakedToolCall(chatResp) {
+		c.recordProvider(result.Provider)
+	}
 	return chatResp, nil
 }
 

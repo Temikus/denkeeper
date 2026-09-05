@@ -96,6 +96,12 @@ type ReplyGuardConfig struct {
 	// common, so this is a hint rather than proof. Set it to "withhold" when
 	// every scheduled skill on this instance is known to use tools.
 	OnNoToolCalls string `toml:"on_no_tool_calls"`
+	// OnLeakedToolCall fires when the final reply carries a tool call rendered
+	// as plain text (`functions.kv_get:0{...}`) — an upstream that failed to
+	// parse the model's native call format. The router already retries such
+	// a response once; this catches the retry also failing. Default:
+	// "withhold": the text is never a usable answer.
+	OnLeakedToolCall string `toml:"on_leaked_tool_call"`
 	// MaxReplyBytes caps the final reply in bytes. Default: 16000, roughly four
 	// Telegram chunks and under half that adapter's own render limit, so a trip
 	// is a strong signal rather than a long-but-legitimate reply. Negative
@@ -1634,6 +1640,9 @@ func applyReplyGuardDefaults(cfg *Config) {
 	if rg.OnNoToolCalls == "" {
 		rg.OnNoToolCalls = ReplyGuardWarn
 	}
+	if rg.OnLeakedToolCall == "" {
+		rg.OnLeakedToolCall = ReplyGuardWithhold
+	}
 	if rg.MaxReplyBytes == 0 {
 		rg.MaxReplyBytes = 16000
 	}
@@ -2287,11 +2296,12 @@ func validateKV(k *KVConfig) error {
 // strings can be wrong — and a typo there must not silently read as "off".
 func validateReplyGuard(rg *ReplyGuardConfig) error {
 	actions := map[string]string{
-		"on_role_markup":   rg.OnRoleMarkup,
-		"on_oversized":     rg.OnOversized,
-		"on_no_tool_calls": rg.OnNoToolCalls,
+		"on_role_markup":      rg.OnRoleMarkup,
+		"on_oversized":        rg.OnOversized,
+		"on_no_tool_calls":    rg.OnNoToolCalls,
+		"on_leaked_tool_call": rg.OnLeakedToolCall,
 	}
-	for _, key := range []string{"on_role_markup", "on_oversized", "on_no_tool_calls"} {
+	for _, key := range []string{"on_role_markup", "on_oversized", "on_no_tool_calls", "on_leaked_tool_call"} {
 		switch actions[key] {
 		case "", ReplyGuardOff, ReplyGuardWarn, ReplyGuardWithhold:
 		default:

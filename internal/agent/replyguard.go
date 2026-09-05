@@ -16,6 +16,7 @@ const (
 	signalOversized      = "oversized_reply"
 	signalNoToolCalls    = "no_tool_calls"
 	signalOversizeTokens = "oversized_completion"
+	signalLeakedToolCall = "leaked_tool_call"
 )
 
 // Reply-guard actions. Each signal carries one.
@@ -71,6 +72,11 @@ type ReplyGuard struct {
 	OnRoleMarkup  string
 	OnOversized   string
 	OnNoToolCalls string
+	// OnLeakedToolCall fires when the final text carries a tool call the
+	// upstream failed to parse (llm.LeakedToolCallText). Unlike
+	// OnNoToolCalls it fires even after successful tool rounds, since the
+	// leak can happen on any round.
+	OnLeakedToolCall string
 	// MaxReplyBytes is the largest final reply, in bytes. Non-positive
 	// disables the byte measure.
 	MaxReplyBytes int
@@ -153,20 +159,29 @@ func evaluateReplyGuard(g ReplyGuard, msg adapter.IncomingMessage, content strin
 	if g.OnRoleMarkup != GuardOff && containsReplyMarkup(content) {
 		out.add(signalRoleMarkup, g.OnRoleMarkup)
 	}
-	if g.OnOversized != GuardOff {
-		if g.MaxReplyBytes > 0 && out.replyBytes > g.MaxReplyBytes {
-			out.add(signalOversized, g.OnOversized)
-		}
-		if g.MaxCompletionTokens > 0 && out.completionTokens > g.MaxCompletionTokens {
-			out.add(signalOversizeTokens, g.OnOversized)
-		}
+	if g.OnLeakedToolCall != GuardOff && llm.LeakedToolCallText(content) {
+		out.add(signalLeakedToolCall, g.OnLeakedToolCall)
 	}
+	out.addOversized(g)
 	// A schedule that named a skill expected that skill to do something. A
 	// triggerless or ad-hoc scheduled message has no such expectation.
 	if g.OnNoToolCalls != GuardOff && msg.SkillName != "" && out.toolCalls == 0 {
 		out.add(signalNoToolCalls, g.OnNoToolCalls)
 	}
 	return out
+}
+
+// addOversized evaluates both size measures under the single OnOversized action.
+func (r *replyGuardResult) addOversized(g ReplyGuard) {
+	if g.OnOversized == GuardOff {
+		return
+	}
+	if g.MaxReplyBytes > 0 && r.replyBytes > g.MaxReplyBytes {
+		r.add(signalOversized, g.OnOversized)
+	}
+	if g.MaxCompletionTokens > 0 && r.completionTokens > g.MaxCompletionTokens {
+		r.add(signalOversizeTokens, g.OnOversized)
+	}
 }
 
 // add records one tripped signal and promotes the result's action. withhold
