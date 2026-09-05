@@ -504,6 +504,7 @@ Each signal takes `"withhold"`, `"warn"` (audit but deliver anyway), or `"off"`.
 | `list_max_bytes` | int | `16384` | Total value bytes a single `kv_list` response may carry |
 | `list_value_head_bytes` | int | `1024` | Per-value cap inside a `kv_list` response |
 | `cleanup_interval` | string | `"1h"` | Background cleanup interval for expired keys |
+| `default_ttl` | table | none | Expiry applied by `kv_set` when the call passes no `ttl`, keyed by namespace prefix (must end in `:`). Longest matching prefix wins; an explicit `ttl` always wins. Example: `default_ttl = { "log:" = "720h", "cache:" = "168h" }` |
 
 Per-agent key-value storage with optional TTL. Exposed as Config MCP tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`). Useful for locks, counters, caches, and cross-session coordination.
 

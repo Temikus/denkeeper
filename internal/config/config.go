@@ -1179,6 +1179,26 @@ type KVConfig struct {
 	ListValueHeadBytes int `toml:"list_value_head_bytes"`
 	// CleanupInterval is how often expired keys are purged (Go duration string).
 	CleanupInterval string `toml:"cleanup_interval"`
+	// DefaultTTL maps a key prefix (must end in ":") to the expiry applied by
+	// kv_set when the call passes no ttl. Longest matching prefix wins; an
+	// explicit ttl always wins. Prose rules asking skills to remember a ttl
+	// decay; this does not.
+	DefaultTTL map[string]string `toml:"default_ttl"`
+}
+
+// DefaultTTLs returns the parsed prefix → duration map. Validation has already
+// rejected unparsable entries, so parse errors are not reachable here.
+func (k *KVConfig) DefaultTTLs() map[string]time.Duration {
+	if len(k.DefaultTTL) == 0 {
+		return nil
+	}
+	out := make(map[string]time.Duration, len(k.DefaultTTL))
+	for prefix, raw := range k.DefaultTTL {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			out[prefix] = d
+		}
+	}
+	return out
 }
 
 type LogConfig struct {
@@ -2246,6 +2266,18 @@ func validateKV(k *KVConfig) error {
 	}
 	if k.ListValueHeadBytes > k.ListMaxBytes {
 		return fmt.Errorf("config: kv.list_value_head_bytes (%d) must not exceed kv.list_max_bytes (%d)", k.ListValueHeadBytes, k.ListMaxBytes)
+	}
+	for prefix, raw := range k.DefaultTTL {
+		if prefix == "" || !strings.HasSuffix(prefix, ":") {
+			return fmt.Errorf("config: kv.default_ttl key %q must be a namespace prefix ending in \":\"", prefix)
+		}
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("config: kv.default_ttl[%q]: invalid duration %q: %w", prefix, raw, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("config: kv.default_ttl[%q] must be positive, got %s", prefix, raw)
+		}
 	}
 	return nil
 }

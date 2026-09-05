@@ -42,7 +42,7 @@ func (s *Server) registerKVTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_set",
-		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry. Use a `prefix:subkey` shape so kv_list stays useful; see system prompt for namespace conventions.",
+		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry; when omitted, a namespace default may apply (operator-configured per prefix, e.g. log:*). Use a `prefix:subkey` shape so kv_list stays useful; see system prompt for namespace conventions.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -143,12 +143,27 @@ func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	if err != nil {
 		return toolError(err.Error()), nil
 	}
+	if strings.TrimSpace(input.TTL) == "" {
+		ttl = defaultTTLFor(s.deps.KVDefaultTTL, input.Key)
+	}
 
 	if err := s.deps.KVStore.Set(ctx, s.deps.AgentName, input.Key, input.Value, ttl); err != nil {
 		return toolError(fmt.Sprintf("kv_set failed: %v", err)), nil
 	}
 
 	return toolText(`{"ok": true}`), nil
+}
+
+// defaultTTLFor picks the longest configured prefix that key starts with.
+func defaultTTLFor(defaults map[string]time.Duration, key string) time.Duration {
+	var best string
+	var ttl time.Duration
+	for prefix, d := range defaults {
+		if strings.HasPrefix(key, prefix) && len(prefix) > len(best) {
+			best, ttl = prefix, d
+		}
+	}
+	return ttl
 }
 
 func (s *Server) handleKVDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
