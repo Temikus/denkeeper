@@ -1227,3 +1227,103 @@ func TestHasProvider_RegisteredAndUnknown(t *testing.T) {
 		t.Error("HasProvider(nope) = true, want false")
 	}
 }
+
+// leakingMockProvider returns leaked-text responses for the first leakCount
+// calls, then a clean one, and records fault reports.
+type leakingMockProvider struct {
+	name      string
+	leakCount int
+	calls     int
+	resets    int
+}
+
+func (p *leakingMockProvider) Name() string                        { return p.name }
+func (p *leakingMockProvider) HealthCheck(_ context.Context) error { return nil }
+func (p *leakingMockProvider) ResetUpstreamPreference()            { p.resets++ }
+func (p *leakingMockProvider) ChatCompletion(_ context.Context, _ ChatRequest) (*ChatResponse, error) {
+	p.calls++
+	usage := TokenUsage{Prompt: 10, Completion: 5, Total: 15}
+	if p.calls <= p.leakCount {
+		return &ChatResponse{
+			Content:      "Let me check.functions.kv_get:0{\"key\": \"log:heartbeat\"}",
+			FinishReason: "stop",
+			Model:        "test-model",
+			TokensUsed:   usage,
+			Upstream:     "Decart",
+		}, nil
+	}
+	return &ChatResponse{Content: "clean answer", FinishReason: "stop", Model: "test-model", TokensUsed: usage}, nil
+}
+
+func TestRouter_LeakedToolCallRetriedOnce(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	p := &leakingMockProvider{name: "mock", leakCount: 1}
+	r.RegisterProvider(p)
+
+	resets := 0
+	onStream := func(c StreamChunk) {
+		if c.Reset {
+			resets++
+		}
+	}
+	resp, err := r.CompleteStream(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}, onStream)
+	if err != nil {
+		t.Fatalf("CompleteStream: %v", err)
+	}
+	if p.calls != 2 {
+		t.Errorf("provider calls = %d, want 2 (leak + one retry)", p.calls)
+	}
+	if resp.Content != "clean answer" {
+		t.Errorf("content = %q, want the retry's answer", resp.Content)
+	}
+	if !resp.LeakRetry {
+		t.Error("LeakRetry should be set on the recovered response")
+	}
+	if p.resets != 1 {
+		t.Errorf("ResetUpstreamPreference called %d times, want 1", p.resets)
+	}
+	if resets != 1 {
+		t.Errorf("stream Reset chunks = %d, want 1 so the consumer drops the leaked deltas", resets)
+	}
+	// Both attempts were billed.
+	if got := ct.SessionCost("s1"); got <= 0 {
+		t.Errorf("session cost = %v, want both attempts recorded", got)
+	}
+}
+
+func TestRouter_LeakedToolCallSecondLeakReturned(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	p := &leakingMockProvider{name: "mock", leakCount: 5}
+	r.RegisterProvider(p)
+
+	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if p.calls != 2 {
+		t.Errorf("provider calls = %d, want exactly 2 — never more than one retry", p.calls)
+	}
+	if !LeakedToolCallText(resp.Content) {
+		t.Errorf("second leak must be returned as-is for the reply guard, got %q", resp.Content)
+	}
+	if !resp.LeakRetry {
+		t.Error("LeakRetry should be set even when the retry also leaked")
+	}
+}
+
+func TestRouter_CleanResponseNotRetried(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	p := &leakingMockProvider{name: "mock", leakCount: 0}
+	r.RegisterProvider(p)
+
+	resp, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if p.calls != 1 || resp.LeakRetry || p.resets != 0 {
+		t.Errorf("clean response: calls=%d LeakRetry=%v resets=%d, want 1/false/0", p.calls, resp.LeakRetry, p.resets)
+	}
+}

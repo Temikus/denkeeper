@@ -17,12 +17,13 @@ import (
 // tests exercise the shipped policy rather than an invented one.
 func defaultTestReplyGuard() ReplyGuard {
 	return ReplyGuard{
-		Enabled:       true,
-		OnRoleMarkup:  GuardWithhold,
-		OnOversized:   GuardWithhold,
-		OnNoToolCalls: GuardWarn,
-		MaxReplyBytes: defaultMaxReplyBytes,
-		ExcerptBytes:  defaultExcerptBytes,
+		Enabled:          true,
+		OnRoleMarkup:     GuardWithhold,
+		OnOversized:      GuardWithhold,
+		OnNoToolCalls:    GuardWarn,
+		OnLeakedToolCall: GuardWithhold,
+		MaxReplyBytes:    defaultMaxReplyBytes,
+		ExcerptBytes:     defaultExcerptBytes,
 	}
 }
 
@@ -420,5 +421,65 @@ func TestReplyGuard_OffActionSkipsSignal(t *testing.T) {
 	}
 	if events := guardEvents(auditor.events); len(events) != 0 {
 		t.Errorf("emitted %d reply_guard events, want 0", len(events))
+	}
+}
+
+func TestReplyGuard_LeakedToolCallWithheld(t *testing.T) {
+	raw := "Let me start with the idempotency guard.functions.kv_get:0{\"key\": \"log:heartbeat:2026-09-05\"}functions.kv_get:1{\"key\": \"log:heartbeat:2026-09-04\"}"
+	e, store, sent, auditor := newGuardTestEngine(t, raw, 120, defaultTestReplyGuard())
+
+	if err := e.HandleMessage(context.Background(), scheduledMsg("heartbeat")); err != nil {
+		t.Fatalf("HandleMessage: %v", err)
+	}
+
+	if len(sent.msgs) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(sent.msgs))
+	}
+	if !strings.HasPrefix(sent.msgs[0].Text, "[engine: reply withheld — "+signalLeakedToolCall) {
+		t.Errorf("wire text = %q, want the withheld notice naming %s", sent.msgs[0].Text, signalLeakedToolCall)
+	}
+	if strings.Contains(sent.msgs[0].Text, "functions.kv_get") {
+		t.Error("wire text leaked the raw call")
+	}
+	if got := storedAssistantContent(t, store, guardTestConvID); got != raw {
+		t.Errorf("stored content = %q, want the raw reply", got)
+	}
+
+	events := guardEvents(auditor.events)
+	if len(events) != 1 {
+		t.Fatalf("emitted %d reply_guard events, want 1", len(events))
+	}
+	detail := guardDetail(t, events[0])
+	signals, _ := detail["signals"].([]any)
+	if len(signals) != 2 || signals[0] != signalLeakedToolCall || signals[1] != signalNoToolCalls {
+		t.Errorf("detail signals = %v, want [%s %s]", signals, signalLeakedToolCall, signalNoToolCalls)
+	}
+	if detail["action"] != GuardWithhold {
+		t.Errorf("detail action = %v, want %q", detail["action"], GuardWithhold)
+	}
+}
+
+// The leak can happen on any round, so unlike no_tool_calls the signal must
+// fire even when tools ran earlier in the turn.
+func TestReplyGuard_LeakedToolCallTripsAfterToolRounds(t *testing.T) {
+	g := defaultTestReplyGuard()
+	content := "Wait, I called it twice.   functions.find-tasks-by-date:8{\"startDate\": \"today\"}"
+	records := []ToolCallRecord{{ToolName: "find-tasks", Outcome: "ok"}, {ToolName: "kv_get", Outcome: "ok"}}
+	res := evaluateReplyGuard(g, scheduledMsg("heartbeat"), content, &llm.ChatResponse{FinishReason: "stop"}, records)
+	if !res.tripped() || res.Action != GuardWithhold {
+		t.Fatalf("expected a withholding trip, got signals=%v action=%q", res.Signals, res.Action)
+	}
+	if len(res.Signals) != 1 || res.Signals[0] != signalLeakedToolCall {
+		t.Errorf("signals = %v, want only %s (tools did run)", res.Signals, signalLeakedToolCall)
+	}
+}
+
+func TestReplyGuard_LeakedToolCallOffSkipsSignal(t *testing.T) {
+	g := defaultTestReplyGuard()
+	g.OnLeakedToolCall = GuardOff
+	content := "functions.kv_get:0{\"key\": \"a\"}"
+	res := evaluateReplyGuard(g, scheduledMsg("heartbeat"), content, &llm.ChatResponse{FinishReason: "stop"}, []ToolCallRecord{{ToolName: "kv_get"}})
+	if res.tripped() {
+		t.Errorf("signal off must not trip, got %v", res.Signals)
 	}
 }

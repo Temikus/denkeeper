@@ -375,7 +375,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 			req.OnStream = onStream
 		}
 	}
-	resp, err := activeProvider.ChatCompletion(ctx, req)
+	resp, err := r.primaryCompletion(ctx, sessionID, activeProvider, req, onStream, attrs)
 	if err == nil {
 		slog.Debug("llm completion",
 			"provider", r.defaultProvider,
@@ -420,6 +420,47 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	if source == "unknown" {
 		slog.Warn("no pricing data for model", "model", resp.Model)
 	}
+	return resp, nil
+}
+
+// primaryCompletion makes the primary call and re-issues it once when the
+// answer is a tool call leaked as text.
+func (r *Router) primaryCompletion(ctx context.Context, sessionID string, provider Provider, req ChatRequest, onStream StreamCallback, attrs metric.MeasurementOption) (*ChatResponse, error) {
+	resp, err := provider.ChatCompletion(ctx, req)
+	if err == nil && LooksLikeLeakedToolCall(resp) {
+		return r.retryLeakedToolCall(ctx, sessionID, provider, req, resp, onStream, attrs)
+	}
+	return resp, err
+}
+
+// retryLeakedToolCall re-issues a completion whose "final" answer was a tool
+// call rendered as plain text — an upstream that did not translate the model's
+// native call format into tool_calls. The leaked attempt was billed, so its
+// cost is recorded before the retry. A provider holding sticky-upstream state
+// is told to drop it first: the fault is invisible to its own error
+// classification (it was a 200). Exactly one retry; a second leak is returned
+// as-is for the engine's reply guard to hold.
+func (r *Router) retryLeakedToolCall(ctx context.Context, sessionID string, provider Provider, req ChatRequest, leaked *ChatResponse, onStream StreamCallback, attrs metric.MeasurementOption) (*ChatResponse, error) {
+	cost, source := TokenCost(leaked, r.pricing, provider.Name())
+	r.costTracker.RecordWithProvider(sessionID, provider.Name(), cost, leaked.TokensUsed, source)
+	r.mErrors.Add(ctx, 1, attrs)
+	slog.Warn("llm: tool call leaked into text, retrying once",
+		"provider", provider.Name(),
+		"upstream", leaked.Upstream,
+		"session", sessionID,
+		"content_len", len(leaked.Content),
+	)
+	if fr, ok := provider.(UpstreamFaultReporter); ok {
+		fr.ResetUpstreamPreference()
+	}
+	if onStream != nil {
+		onStream(StreamChunk{Reset: true})
+	}
+	resp, err := provider.ChatCompletion(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	resp.LeakRetry = true
 	return resp, nil
 }
 

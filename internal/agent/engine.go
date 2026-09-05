@@ -611,6 +611,9 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 	if resp.Upstream != "" {
 		d["upstream"] = resp.Upstream
 	}
+	if resp.LeakRetry {
+		d["leaked_tool_call_retry"] = true
+	}
 	if resp.Content != "" {
 		text := resp.Content
 		if len(text) > maxLen {
