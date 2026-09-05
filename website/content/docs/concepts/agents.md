@@ -2,7 +2,7 @@
 title: "Agents"
 description: "Multi-agent routing, personas, and adapter bindings."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-03-28T00:00:00+00:00
+lastmod: 2026-09-04T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -57,6 +57,5 @@ session_tier = "restricted"
 
 Agents can modify their own persona files within their permission tier:
 
-- **MEMORY.md** — freely writable (working memory)
-- **USER.md** — writable in `supervised` and `autonomous` tiers
-- **SOUL.md** — writable in `supervised` (requires approval) and `autonomous` tiers
+- **MEMORY.md** — freely writable in every tier (working memory)
+- **USER.md** and **SOUL.md** — writable in `autonomous` (applies directly) and `supervised` (goes through the same per-tool-call human approval as any other MCP call); not writable in `restricted`
