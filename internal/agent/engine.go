@@ -2443,14 +2443,21 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 // content after tool rounds. It first checks for accumulated intermediate
 // content, then falls back to nudging the model for a response.
 func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string, run turnRun) (*llm.ChatResponse, []llm.Message, error) {
-	if strings.TrimSpace(accumulated) != "" {
+	haveAccumulated := strings.TrimSpace(accumulated) != ""
+	// Reasoning with no content means the model wrote its answer into the
+	// wrong field (kimi-k2.6 does this after long tool chains); replaying its
+	// intermediate narration would deliver the wrong message, so ask again
+	// first. No reasoning means a transport fault, where the narration is the
+	// best available answer and a retry is unlikely to do better.
+	if haveAccumulated && strings.TrimSpace(resp.ThinkingContent) == "" {
 		e.logger.Info("using accumulated content from intermediate tool rounds",
 			"accumulated_len", len(accumulated))
 		resp.Content = accumulated
 		return resp, llmMessages, nil
 	}
 	e.logger.Warn("empty response after tool rounds, retrying with nudge",
-		"finish_reason", resp.FinishReason)
+		"finish_reason", resp.FinishReason,
+		"thinking_len", len(resp.ThinkingContent))
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "user",
 		Content: "Please provide your response based on the tool results above.",
@@ -2461,6 +2468,11 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
 	}
 	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{nudgeRetry: true})
+	if strings.TrimSpace(nudgeResp.Content) == "" && haveAccumulated {
+		e.logger.Info("nudge returned empty content, falling back to accumulated content",
+			"accumulated_len", len(accumulated))
+		nudgeResp.Content = accumulated
+	}
 	return nudgeResp, llmMessages, nil
 }
 

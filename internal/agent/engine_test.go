@@ -5018,6 +5018,80 @@ func TestRecoverEmptyToolResponse_WhitespaceAccumulatedFallsThroughToNudge(t *te
 	}
 }
 
+func newRecoveryEngine(t *testing.T, provider *sequentialProvider) *Engine {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	router := llm.NewRouter("mock", "test-model", llm.NewCostTracker(llm.SessionLimits{}, nil))
+	router.RegisterProvider(provider)
+	permissions, err := security.NewPermissionEngine("autonomous")
+	if err != nil {
+		t.Fatalf("creating permissions: %v", err)
+	}
+	return NewEngine("default", router, store, nil, permissions, nil, "Test.", nil, nil, nil, testLogger())
+}
+
+// An empty final that carries reasoning is the model answering in the wrong
+// field; the nudge must run before the intermediate narration is reused.
+func TestRecoverEmptyToolResponse_ReasoningPresentNudgesBeforeAccumulated(t *testing.T) {
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "Email review complete: 32 → 0 unread.", FinishReason: "stop"},
+		},
+	}
+	engine := newRecoveryEngine(t, provider)
+
+	resp := &llm.ChatResponse{Content: "", ThinkingContent: "My job is done. Email review complete...", FinishReason: "stop"}
+	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp,
+		[]llm.Message{{Role: "user", Content: "hi"}}, "Already ran earlier today, continuing with cleanup...", turnRun{router: engine.router})
+	if err != nil {
+		t.Fatalf("recoverEmptyToolResponse: %v", err)
+	}
+	if got.Content != "Email review complete: 32 → 0 unread." {
+		t.Errorf("content = %q, want the nudge answer, not the intermediate narration", got.Content)
+	}
+	if provider.callIndex != 1 {
+		t.Errorf("provider calls = %d, want 1 nudge", provider.callIndex)
+	}
+}
+
+// No reasoning means a transport fault: the narration is the best available
+// answer and no round is spent on a nudge.
+func TestRecoverEmptyToolResponse_NoReasoningUsesAccumulatedWithoutNudge(t *testing.T) {
+	provider := &sequentialProvider{}
+	engine := newRecoveryEngine(t, provider)
+
+	resp := &llm.ChatResponse{Content: "", FinishReason: "stop"}
+	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp,
+		[]llm.Message{{Role: "user", Content: "hi"}}, "Partial progress so far.", turnRun{router: engine.router})
+	if err != nil {
+		t.Fatalf("recoverEmptyToolResponse: %v", err)
+	}
+	if got.Content != "Partial progress so far." || provider.callIndex != 0 {
+		t.Errorf("content = %q, calls = %d; want accumulated content and no nudge", got.Content, provider.callIndex)
+	}
+}
+
+func TestRecoverEmptyToolResponse_EmptyNudgeFallsBackToAccumulated(t *testing.T) {
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{{Content: "  ", ThinkingContent: "still thinking", FinishReason: "stop"}},
+	}
+	engine := newRecoveryEngine(t, provider)
+
+	resp := &llm.ChatResponse{Content: "", ThinkingContent: "reasoning", FinishReason: "stop"}
+	got, _, err := engine.recoverEmptyToolResponse(context.Background(), "conv-1", resp,
+		[]llm.Message{{Role: "user", Content: "hi"}}, "Narration.", turnRun{router: engine.router})
+	if err != nil {
+		t.Fatalf("recoverEmptyToolResponse: %v", err)
+	}
+	if got.Content != "Narration." || provider.callIndex != 1 {
+		t.Errorf("content = %q, calls = %d; want the accumulated fallback after one empty nudge", got.Content, provider.callIndex)
+	}
+}
+
 // TestStreamCallbackFor_ResetEmitsRollback verifies a Reset stream chunk is
 // translated into a stream_rollback ChatEvent (and nothing else).
 func TestStreamCallbackFor_ResetEmitsRollback(t *testing.T) {
