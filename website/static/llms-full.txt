@@ -350,6 +350,9 @@ Global MCP settings.
     list_max_bytes = 16384           # total value bytes per kv_list response
     list_value_head_bytes = 1024     # per-value cap inside a kv_list response
     cleanup_interval = "1h"          # expiry cleanup interval
+    # default_ttl = { "log:" = "720h", "cache:" = "168h" }
+    #                                # expiry kv_set applies when no ttl is
+    #                                # passed, by namespace prefix (longest wins)
 
 ### [audit]
 

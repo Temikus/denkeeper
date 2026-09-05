@@ -5190,3 +5190,34 @@ func TestEvalConfig_TraceBytesCapFallsBackToDefault(t *testing.T) {
 		t.Errorf("TraceBytesCap() = %d on a zero value, want %d", got, DefaultMaxTraceBytes)
 	}
 }
+
+func TestParse_KVDefaultTTL_Parsed(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[kv]
+default_ttl = { "log:" = "720h", "log:heartbeat:" = "168h", "cache:" = "1h30m" }
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := cfg.KV.DefaultTTLs()
+	if got["log:"] != 720*time.Hour || got["log:heartbeat:"] != 168*time.Hour || got["cache:"] != 90*time.Minute {
+		t.Errorf("DefaultTTLs = %v", got)
+	}
+	if empty := (&KVConfig{}).DefaultTTLs(); empty != nil {
+		t.Errorf("no config should yield nil, got %v", empty)
+	}
+}
+
+func TestParse_KVDefaultTTL_RejectsBadEntries(t *testing.T) {
+	cases := map[string]string{
+		"bad duration":  `default_ttl = { "log:" = "30 days" }`,
+		"zero duration": `default_ttl = { "log:" = "0s" }`,
+		"missing colon": `default_ttl = { "log" = "720h" }`,
+	}
+	for name, line := range cases {
+		_, err := Parse([]byte(baseConfig + "\n[kv]\n" + line + "\n"))
+		if err == nil || !strings.Contains(err.Error(), "kv.default_ttl") {
+			t.Errorf("%s: expected a kv.default_ttl validation error, got %v", name, err)
+		}
+	}
+}

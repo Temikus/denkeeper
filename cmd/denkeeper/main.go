@@ -850,6 +850,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 
 		KVListMaxBytes:       abc.cfg.KV.ListMaxBytes,
 		KVListValueHeadBytes: abc.cfg.KV.ListValueHeadBytes,
+		KVDefaultTTL:         abc.cfg.KV.DefaultTTLs(),
 		CostSummary: func() configmcp.CostSummaryData {
 			return configmcp.CostSummaryData{
 				GlobalCost:    costTracker.GlobalCost(),

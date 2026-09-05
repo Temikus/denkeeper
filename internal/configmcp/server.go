@@ -105,6 +105,11 @@ type Deps struct {
 	// [kv] list_value_head_bytes.
 	KVListValueHeadBytes int
 
+	// KVDefaultTTL maps a key prefix to the expiry kv_set applies when the
+	// call passes no ttl. Longest matching prefix wins. Sourced from
+	// [kv] default_ttl.
+	KVDefaultTTL map[string]time.Duration
+
 	// CostSummary returns a snapshot of cost tracking data. If nil,
 	// get_cost_summary is disabled.
 	CostSummary func() CostSummaryData
