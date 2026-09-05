@@ -99,6 +99,7 @@ type Entry struct {
 	Tags        []string
 	Enabled     bool
 	LastRun     time.Time // zero if never fired
+	PrevRun     time.Time // the fire before LastRun; zero until the second fire
 	NextRun     time.Time // zero if disabled or indeterminate
 }
 
@@ -494,6 +495,7 @@ func (s *Scheduler) runInterval(e *internalEntry) {
 		case t := <-ticker.C:
 			now := t.In(s.loc)
 			s.mu.Lock()
+			e.PrevRun = e.LastRun
 			e.LastRun = now
 			e.NextRun = now.Add(e.expr.interval)
 			snapshot := e.Entry
@@ -532,6 +534,7 @@ func (s *Scheduler) runCron(e *internalEntry) {
 			lastFiredMinute = minuteStart
 
 			s.mu.Lock()
+			e.PrevRun = e.LastRun
 			e.LastRun = minuteStart
 			e.NextRun = e.expr.cron.next(minuteStart, s.loc)
 			snapshot := e.Entry

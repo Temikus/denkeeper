@@ -2073,13 +2073,16 @@ func (s *Server) locationFor(agentName string) *time.Location {
 // It is shared by the live job closure and the schedule dry-run endpoint, so a
 // preview is by construction the same message the schedule would actually
 // send, not a re-creation that can drift from it.
-func BuildScheduledMessage(cfg scheduler.Config, target agent.AdapterBinding, conversationID string, fireTime time.Time, loc *time.Location) adapter.IncomingMessage {
+//
+// prevRun is the schedule's previous fire (zero for a first fire or a
+// preview), rendered into the header so the skill never computes it.
+func BuildScheduledMessage(cfg scheduler.Config, target agent.AdapterBinding, conversationID string, fireTime, prevRun time.Time, loc *time.Location) adapter.IncomingMessage {
 	return adapter.IncomingMessage{
 		Adapter:        target.Adapter,
 		ExternalID:     target.ExternalID,
 		ConversationID: conversationID,
 		UserName:       "scheduler",
-		Text:           scheduler.FormatScheduledText(cfg.Name, cfg.Skill, fireTime, loc),
+		Text:           scheduler.FormatScheduledTextWithPrev(cfg.Name, cfg.Skill, fireTime, prevRun, loc),
 		SkillName:      cfg.Skill,
 		ScheduleName:   cfg.Name,
 		ScheduleCron:   cfg.Schedule,
@@ -2118,7 +2121,7 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 		var lastErr string
 		now := time.Now()
 		for _, target := range targets {
-			msg := BuildScheduledMessage(cfg, target, conversationID, now, opts.Location)
+			msg := BuildScheduledMessage(cfg, target, conversationID, now, entry.PrevRun, opts.Location)
 			if entry.SessionMode == "isolated" {
 				msg.ConversationID = fmt.Sprintf("sched:%s:%d", entry.Name, entry.LastRun.UnixNano())
 			}

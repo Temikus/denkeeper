@@ -1683,7 +1683,7 @@ func buildScheduledMessage(sc config.ScheduleConfig, entry scheduler.Entry, targ
 		ExternalID:     target.ExternalID,
 		ConversationID: conversationID,
 		UserName:       "scheduler",
-		Text:           scheduler.FormatScheduledText(entry.Name, entry.Skill, now, loc),
+		Text:           scheduler.FormatScheduledTextWithPrev(entry.Name, entry.Skill, now, entry.PrevRun, loc),
 		SkillName:      sc.Skill,
 		ScheduleName:   sc.Name,
 		ScheduleCron:   sc.Schedule,
