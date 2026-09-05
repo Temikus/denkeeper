@@ -495,6 +495,13 @@ func TestBuildScheduledMessage_TextIncludesDateHeader(t *testing.T) {
 	if msg.Text != wantText {
 		t.Errorf("Text = %q, want %q", msg.Text, wantText)
 	}
+
+	entry.PrevRun = now.Add(-3 * time.Hour)
+	withPrev := buildScheduledMessage(sc, entry, target, "chan:main", sydney, now)
+	wantPrev := "[Scheduled: heartbeat | 2026-07-07T10:45:00+10:00 Australia/Sydney | 2026-W28 | last run 2026-07-07T07:45:00+10:00 (3h ago)]"
+	if withPrev.Text != wantPrev {
+		t.Errorf("Text with PrevRun = %q, want %q", withPrev.Text, wantPrev)
+	}
 	if !msg.Timestamp.Equal(now) {
 		t.Errorf("Timestamp = %v, want %v (must match the rendered header)", msg.Timestamp, now)
 	}

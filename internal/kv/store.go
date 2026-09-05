@@ -43,6 +43,8 @@ type Entry struct {
 // Store provides per-agent key-value storage with optional TTL.
 type Store interface {
 	Get(ctx context.Context, agent, key string) (value string, ok bool, err error)
+	// GetEntry is Get with the row metadata (timestamps, expiry).
+	GetEntry(ctx context.Context, agent, key string) (Entry, bool, error)
 	Set(ctx context.Context, agent, key, value string, ttl time.Duration) error
 	Delete(ctx context.Context, agent, key string) error
 	List(ctx context.Context, agent, prefix string) ([]Entry, error)
@@ -136,6 +138,23 @@ func (s *SQLiteStore) Get(ctx context.Context, agent, key string) (string, bool,
 		return "", false, fmt.Errorf("kv get %q: %w", key, err)
 	}
 	return value, true, nil
+}
+
+// GetEntry returns the full row for a non-expired key.
+func (s *SQLiteStore) GetEntry(ctx context.Context, agent, key string) (Entry, bool, error) {
+	var e Entry
+	err := s.db.GetContext(ctx, &e,
+		`SELECT key, value, created_at, updated_at, expires_at FROM kv
+		 WHERE agent_name = ? AND key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+		agent, key,
+	)
+	if err != nil {
+		if isNoRows(err) {
+			return Entry{}, false, nil
+		}
+		return Entry{}, false, fmt.Errorf("kv get %q: %w", key, err)
+	}
+	return e, true, nil
 }
 
 // Set stores a key-value pair. If ttl is zero, the key does not expire.

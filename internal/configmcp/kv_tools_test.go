@@ -353,3 +353,37 @@ func TestHandleKVSet_DefaultTTLByPrefix(t *testing.T) {
 		t.Errorf("unmatched prefix should not expire, got %v", exp)
 	}
 }
+
+func TestHandleKVGet_ReturnsUpdatedAt(t *testing.T) {
+	session, store := newKVServer(t, nil)
+	if err := store.Set(context.Background(), "test-agent", "log:heartbeat:2026-09-04", "ran", 0); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	text, isErr := callTool(t, session, "kv_get", map[string]any{"key": "log:heartbeat:2026-09-04"})
+	if isErr {
+		t.Fatalf("kv_get failed: %s", text)
+	}
+	var resp struct {
+		Value     *string `json:"value"`
+		UpdatedAt string  `json:"updated_at"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshaling kv_get response: %v (body: %s)", err, text)
+	}
+	if resp.Value == nil || *resp.Value != "ran" {
+		t.Errorf("value = %v, want \"ran\"", resp.Value)
+	}
+	ts, err := time.Parse(time.RFC3339, resp.UpdatedAt)
+	if err != nil {
+		t.Fatalf("updated_at %q is not RFC 3339: %v", resp.UpdatedAt, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Errorf("updated_at = %v, want a recent timestamp", ts)
+	}
+
+	text, isErr = callTool(t, session, "kv_get", map[string]any{"key": "missing"})
+	if isErr || text != `{"value": null}` {
+		t.Errorf("missing key: isErr=%v text=%q, want the null form unchanged", isErr, text)
+	}
+}
