@@ -32,7 +32,7 @@ require (
 
 require (
 	github.com/dop251/goja v0.0.0-20260826204918-8f1c0696a37b
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jamestelfer/telegold v1.0.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0
