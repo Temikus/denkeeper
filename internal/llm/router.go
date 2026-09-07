@@ -380,6 +380,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 		slog.Debug("llm completion",
 			"provider", r.defaultProvider,
 			"model", activeModel,
+			"upstream", resp.Upstream,
 			"finish_reason", resp.FinishReason,
 			"content_len", len(resp.Content),
 			"tool_calls", len(resp.ToolCalls),
@@ -424,21 +425,45 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 }
 
 // recordOTelSuccess records duration, token, and cost metrics for a successful LLM call.
+// resp.Upstream (OpenRouter's routed provider slug) is added as an "upstream"
+// attribute when present; empty upstream omits the label rather than dropping
+// the measurement.
 func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, cost float64, pricingSource string, attrs metric.MeasurementOption) {
 	ctx := context.Background()
-	r.mDuration.Record(ctx, time.Since(start).Seconds(), attrs)
-	r.mTokens.Add(ctx, int64(resp.TokensUsed.Prompt), attrs,
-		metric.WithAttributes(attribute.String("direction", "prompt")))
-	r.mTokens.Add(ctx, int64(resp.TokensUsed.Completion), attrs,
-		metric.WithAttributes(attribute.String("direction", "completion")))
+	upstream := resp.Upstream
+	r.mDuration.Record(ctx, time.Since(start).Seconds(), recordOptsWithUpstream(attrs, upstream)...)
+	r.mTokens.Add(ctx, int64(resp.TokensUsed.Prompt),
+		addOptsWithUpstream(attrs, upstream, attribute.String("direction", "prompt"))...)
+	r.mTokens.Add(ctx, int64(resp.TokensUsed.Completion),
+		addOptsWithUpstream(attrs, upstream, attribute.String("direction", "completion"))...)
 	if resp.TokensUsed.CachedPrompt > 0 {
-		r.mTokens.Add(ctx, int64(resp.TokensUsed.CachedPrompt), attrs,
-			metric.WithAttributes(attribute.String("direction", "cached_prompt")))
+		r.mTokens.Add(ctx, int64(resp.TokensUsed.CachedPrompt),
+			addOptsWithUpstream(attrs, upstream, attribute.String("direction", "cached_prompt"))...)
 	}
 	if cost > 0 {
-		r.mCost.Add(ctx, cost, attrs,
-			metric.WithAttributes(attribute.String("pricing_source", pricingSource)))
+		r.mCost.Add(ctx, cost,
+			addOptsWithUpstream(attrs, upstream, attribute.String("pricing_source", pricingSource))...)
 	}
+}
+
+// recordOptsWithUpstream builds RecordOptions from a base attribute set,
+// adding an "upstream" attribute only when non-empty.
+func recordOptsWithUpstream(attrs metric.MeasurementOption, upstream string) []metric.RecordOption {
+	opts := []metric.RecordOption{attrs}
+	if upstream != "" {
+		opts = append(opts, metric.WithAttributes(attribute.String("upstream", upstream)))
+	}
+	return opts
+}
+
+// addOptsWithUpstream builds AddOptions from a base attribute set plus an
+// extra attribute, adding "upstream" only when non-empty.
+func addOptsWithUpstream(attrs metric.MeasurementOption, upstream string, extra attribute.KeyValue) []metric.AddOption {
+	opts := []metric.AddOption{attrs, metric.WithAttributes(extra)}
+	if upstream != "" {
+		opts = append(opts, metric.WithAttributes(attribute.String("upstream", upstream)))
+	}
+	return opts
 }
 
 // setSpanResponseAttrs adds GenAI semantic convention attributes to the span
