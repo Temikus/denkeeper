@@ -2,7 +2,7 @@
 title: "Web Dashboard"
 description: "The built-in browser UI for chat, approvals, configuration, and audit."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-25T00:00:00+00:00
+lastmod: 2026-09-11T00:00:00+00:00
 draft: false
 weight: 5
 toc: true
@@ -41,6 +41,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Approvals** | Pending approvals and auto-approve rules |
 | **Evals** | Compare a candidate model against your current one on saved test cases ([Evals](/docs/concepts/evals/)) |
 | **Audit Log** | Filterable event history |
+| **Turn inspector** | Per-turn traces: system prompt, tool calls, timings, usage ([Turn traces](/docs/concepts/evals/#turn-traces-and-the-inspector)) |
 | **Costs** | Spend by agent, model, and time range |
 | **KV** | Inspect and edit the agent key-value store |
 | **Providers** | LLM provider instances and global defaults |
