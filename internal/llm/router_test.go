@@ -8,6 +8,10 @@ import (
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // ---------------------------------------------------------------------------
@@ -1225,6 +1229,118 @@ func TestHasProvider_RegisteredAndUnknown(t *testing.T) {
 	}
 	if r.HasProvider("nope") {
 		t.Error("HasProvider(nope) = true, want false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Upstream metric attribute (#379)
+// ---------------------------------------------------------------------------
+
+// upstreamAttrOnMetric collects a metric by name and returns the "upstream"
+// attribute value from its first data point, plus whether the key was
+// present at all.
+func upstreamAttrOnMetric(t *testing.T, rm *metricdata.ResourceMetrics, name string) (string, bool) {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			var attrs attribute.Set
+			switch d := m.Data.(type) {
+			case metricdata.Histogram[float64]:
+				if len(d.DataPoints) == 0 {
+					t.Fatalf("metric %q has no data points", name)
+				}
+				attrs = d.DataPoints[0].Attributes
+			case metricdata.Sum[int64]:
+				if len(d.DataPoints) == 0 {
+					t.Fatalf("metric %q has no data points", name)
+				}
+				attrs = d.DataPoints[0].Attributes
+			case metricdata.Sum[float64]:
+				if len(d.DataPoints) == 0 {
+					t.Fatalf("metric %q has no data points", name)
+				}
+				attrs = d.DataPoints[0].Attributes
+			default:
+				t.Fatalf("metric %q has unsupported data type %T", name, m.Data)
+			}
+			v, ok := attrs.Value(attribute.Key("upstream"))
+			return v.AsString(), ok
+		}
+	}
+	t.Fatalf("metric %q not found", name)
+	return "", false
+}
+
+func TestRouter_RecordsUpstreamMetricAttribute(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	prev := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	defer otel.SetMeterProvider(prev)
+
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	r.RegisterProvider(&mockProvider{
+		name: "mock",
+		response: &ChatResponse{
+			Content:    "hi",
+			TokensUsed: TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Upstream:   "Fireworks",
+		},
+	})
+
+	if _, err := r.Complete(context.Background(), "session1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	got, ok := upstreamAttrOnMetric(t, &rm, "denkeeper.llm.duration")
+	if !ok || got != "Fireworks" {
+		t.Errorf("duration metric upstream attribute = %q (present=%v), want \"Fireworks\"", got, ok)
+	}
+
+	got, ok = upstreamAttrOnMetric(t, &rm, "denkeeper.llm.tokens")
+	if !ok || got != "Fireworks" {
+		t.Errorf("tokens metric upstream attribute = %q (present=%v), want \"Fireworks\"", got, ok)
+	}
+}
+
+func TestRouter_OmitsUpstreamMetricAttributeWhenEmpty(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	prev := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	defer otel.SetMeterProvider(prev)
+
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	r.RegisterProvider(&mockProvider{
+		name: "mock",
+		response: &ChatResponse{
+			Content:    "hi",
+			TokensUsed: TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+		},
+	})
+
+	if _, err := r.Complete(context.Background(), "session1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	if _, ok := upstreamAttrOnMetric(t, &rm, "denkeeper.llm.duration"); ok {
+		t.Error("duration metric carries an upstream attribute for an empty resp.Upstream, want omitted")
+	}
+	if _, ok := upstreamAttrOnMetric(t, &rm, "denkeeper.llm.tokens"); ok {
+		t.Error("tokens metric carries an upstream attribute for an empty resp.Upstream, want omitted")
 	}
 }
 
