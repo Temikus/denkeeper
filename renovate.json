@@ -17,5 +17,18 @@
     "labels": [
       "security"
     ]
-  }
+  },
+  "packageRules": [
+    {
+      "description": "Track indirect Go modules (off by default) so vulnerability alerts cover them; routine bumps wait for dashboard approval",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "enabled": true,
+      "dependencyDashboardApproval": true
+    }
+  ]
 }
