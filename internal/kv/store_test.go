@@ -309,3 +309,28 @@ func TestSetNX_KeyCountLimit(t *testing.T) {
 		t.Fatal("expected error or rejection for exceeding key limit")
 	}
 }
+
+func TestGetEntry_ReturnsMetadata(t *testing.T) {
+	s := mustStore(t)
+	ctx := context.Background()
+
+	if _, ok, err := s.GetEntry(ctx, "agent1", "missing"); err != nil || ok {
+		t.Fatalf("GetEntry missing: ok=%v err=%v, want ok=false", ok, err)
+	}
+	if err := s.Set(ctx, "agent1", "greeting", "hello", time.Hour); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	e, ok, err := s.GetEntry(ctx, "agent1", "greeting")
+	if err != nil || !ok {
+		t.Fatalf("GetEntry: ok=%v err=%v", ok, err)
+	}
+	if e.Key != "greeting" || e.Value != "hello" {
+		t.Errorf("entry = %+v, want key/value greeting/hello", e)
+	}
+	if e.UpdatedAt.IsZero() || time.Since(e.UpdatedAt) > time.Minute {
+		t.Errorf("UpdatedAt = %v, want a recent timestamp", e.UpdatedAt)
+	}
+	if e.ExpiresAt == nil {
+		t.Error("ExpiresAt = nil, want the TTL expiry")
+	}
+}

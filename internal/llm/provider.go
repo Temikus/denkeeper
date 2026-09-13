@@ -151,6 +151,19 @@ type ChatResponse struct {
 	// Upstream is the provider-reported serving upstream (OpenRouter's routed
 	// provider). Empty when the provider has no such concept.
 	Upstream string
+	// LeakRetry is set by the router when this completion was re-issued
+	// because the first attempt returned a tool call as plain text (see
+	// LooksLikeLeakedToolCall). It is set whether or not the retry recovered,
+	// so the audit trail records that the upstream misbehaved.
+	LeakRetry bool
+}
+
+// UpstreamFaultReporter is implemented by providers that keep per-upstream
+// state (sticky routing) which should be discarded when a response was
+// syntactically successful but semantically broken — a 200 the provider's own
+// error classification cannot see.
+type UpstreamFaultReporter interface {
+	ResetUpstreamPreference()
 }
 
 // ToolCall represents a tool invocation requested by the LLM (OpenAI format).

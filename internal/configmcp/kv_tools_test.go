@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -299,4 +300,90 @@ func TestHandleKVList_DescriptionStatesLiveCaps(t *testing.T) {
 		return
 	}
 	t.Fatal("kv_list not advertised")
+}
+
+func TestHandleKVSet_DefaultTTLByPrefix(t *testing.T) {
+	session, store := newKVServer(t, func(d *configmcp.Deps) {
+		d.KVDefaultTTL = map[string]time.Duration{
+			"log:":           720 * time.Hour,
+			"log:heartbeat:": 168 * time.Hour,
+		}
+	})
+	ctx := context.Background()
+	set := func(key, ttl string) {
+		t.Helper()
+		args := map[string]any{"key": key, "value": "v"}
+		if ttl != "" {
+			args["ttl"] = ttl
+		}
+		if text, isErr := callTool(t, session, "kv_set", args); isErr {
+			t.Fatalf("kv_set %s: %s", key, text)
+		}
+	}
+	expiry := func(key string) *time.Time {
+		t.Helper()
+		entries, err := store.List(ctx, "test-agent", key)
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("List %s: n=%d err=%v", key, len(entries), err)
+		}
+		return entries[0].ExpiresAt
+	}
+	within := func(got *time.Time, want time.Duration) bool {
+		if got == nil {
+			return false
+		}
+		d := time.Until(*got)
+		return d > want-time.Minute && d <= want+time.Minute
+	}
+
+	set("log:email-cleanup:2026-09-05", "")
+	if exp := expiry("log:email-cleanup:2026-09-05"); !within(exp, 720*time.Hour) {
+		t.Errorf("log: prefix default not applied, expiry = %v", exp)
+	}
+	set("log:heartbeat:2026-09-05", "")
+	if exp := expiry("log:heartbeat:2026-09-05"); !within(exp, 168*time.Hour) {
+		t.Errorf("longest prefix should win, expiry = %v", exp)
+	}
+	set("log:heartbeat:2026-09-06", "24h")
+	if exp := expiry("log:heartbeat:2026-09-06"); !within(exp, 24*time.Hour) {
+		t.Errorf("explicit ttl should win, expiry = %v", exp)
+	}
+	set("pref:email_noise_senders", "")
+	if exp := expiry("pref:email_noise_senders"); exp != nil {
+		t.Errorf("unmatched prefix should not expire, got %v", exp)
+	}
+}
+
+func TestHandleKVGet_ReturnsUpdatedAt(t *testing.T) {
+	session, store := newKVServer(t, nil)
+	if err := store.Set(context.Background(), "test-agent", "log:heartbeat:2026-09-04", "ran", 0); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	text, isErr := callTool(t, session, "kv_get", map[string]any{"key": "log:heartbeat:2026-09-04"})
+	if isErr {
+		t.Fatalf("kv_get failed: %s", text)
+	}
+	var resp struct {
+		Value     *string `json:"value"`
+		UpdatedAt string  `json:"updated_at"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshaling kv_get response: %v (body: %s)", err, text)
+	}
+	if resp.Value == nil || *resp.Value != "ran" {
+		t.Errorf("value = %v, want \"ran\"", resp.Value)
+	}
+	ts, err := time.Parse(time.RFC3339, resp.UpdatedAt)
+	if err != nil {
+		t.Fatalf("updated_at %q is not RFC 3339: %v", resp.UpdatedAt, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Errorf("updated_at = %v, want a recent timestamp", ts)
+	}
+
+	text, isErr = callTool(t, session, "kv_get", map[string]any{"key": "missing"})
+	if isErr || text != `{"value": null}` {
+		t.Errorf("missing key: isErr=%v text=%q, want the null form unchanged", isErr, text)
+	}
 }

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -131,5 +132,48 @@ func TestScheduler_LocationGetter(t *testing.T) {
 	sydney := mustLoadSydney(t)
 	if got := New(logger, sydney).Location(); got != sydney {
 		t.Errorf("explicit loc: got %v, want %v", got, sydney)
+	}
+}
+
+func TestFormatScheduledTextWithPrev_AppendsLastRun(t *testing.T) {
+	sydney := mustLoadSydney(t)
+	fire := time.Date(2026, 9, 4, 14, 30, 0, 0, sydney)
+	prev := time.Date(2026, 9, 4, 8, 30, 0, 0, sydney)
+
+	got := FormatScheduledTextWithPrev("heartbeat", "heartbeat", fire, prev, sydney)
+	want := "[Scheduled: heartbeat | 2026-09-04T14:30:00+10:00 Australia/Sydney | 2026-W36 | last run 2026-09-04T08:30:00+10:00 (6h ago)]"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatScheduledTextWithPrev_ZeroOmitsSegment(t *testing.T) {
+	sydney := mustLoadSydney(t)
+	fire := time.Date(2026, 7, 7, 10, 45, 0, 0, sydney)
+
+	got := FormatScheduledTextWithPrev("heartbeat", "heartbeat", fire, time.Time{}, sydney)
+	if got != FormatScheduledText("heartbeat", "heartbeat", fire, sydney) {
+		t.Errorf("zero prevRun must render identically to the plain header, got %q", got)
+	}
+	if strings.Contains(got, "last run") {
+		t.Errorf("zero prevRun must not mention a last run: %q", got)
+	}
+}
+
+func TestHumanAgo_Units(t *testing.T) {
+	cases := map[time.Duration]string{
+		0:                   "0m",
+		45 * time.Minute:    "45m",
+		90 * time.Minute:    "2h",
+		6 * time.Hour:       "6h",
+		47 * time.Hour:      "47h",
+		49 * time.Hour:      "2d",
+		10 * 24 * time.Hour: "10d",
+		-5 * time.Minute:    "0m",
+	}
+	for d, want := range cases {
+		if got := humanAgo(d); got != want {
+			t.Errorf("humanAgo(%v) = %q, want %q", d, got, want)
+		}
 	}
 }

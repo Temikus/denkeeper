@@ -356,6 +356,39 @@ func TestScheduler_MultipleFiresUpdateLastRun(t *testing.T) {
 	}
 }
 
+func TestScheduler_PrevRunReachesJobOnSecondFire(t *testing.T) {
+	s := New(discardLogger(), nil)
+
+	seen := make(chan Entry, 5)
+	if err := s.Register(Config{
+		Name:     "fast",
+		Type:     "agent",
+		Schedule: "@every 15ms",
+		Enabled:  true,
+	}, func(e Entry) { seen <- e }); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	s.Start()
+	defer s.Stop()
+
+	var fires []Entry
+	for i := 0; i < 2; i++ {
+		select {
+		case e := <-seen:
+			fires = append(fires, e)
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("fire %d did not arrive within timeout", i+1)
+		}
+	}
+	if !fires[0].PrevRun.IsZero() {
+		t.Errorf("first fire PrevRun = %v, want zero", fires[0].PrevRun)
+	}
+	if fires[1].PrevRun.IsZero() || !fires[1].PrevRun.Equal(fires[0].LastRun) {
+		t.Errorf("second fire PrevRun = %v, want the first fire's LastRun %v", fires[1].PrevRun, fires[0].LastRun)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // RegisterAndStart tests
 // ---------------------------------------------------------------------------

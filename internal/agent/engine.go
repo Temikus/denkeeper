@@ -611,6 +611,9 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 	if resp.Upstream != "" {
 		d["upstream"] = resp.Upstream
 	}
+	if resp.LeakRetry {
+		d["leaked_tool_call_retry"] = true
+	}
 	if resp.Content != "" {
 		text := resp.Content
 		if len(text) > maxLen {
@@ -971,6 +974,11 @@ func (e *Engine) RemoveMemoryEntry(heading string) error {
 type buildSystemPromptResult struct {
 	prompt        string
 	matchedSkills []skill.Skill
+	// droppedScheduledMissing lists the tools the schedule-driven skill
+	// required but the registry lacks; empty when it was injected. Only the
+	// scheduled skill is tracked — an ambient skill going inactive is not a
+	// reason to skip the turn.
+	droppedScheduledMissing []string
 }
 
 // buildSystemPrompt assembles the current system prompt from the persona (if set)
@@ -1048,7 +1056,7 @@ Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never i
 		MessageText: msg.Text,
 		SkillName:   msg.SkillName,
 	})
-	active := e.filterUnsatisfiedSkills(matched, msg)
+	active, droppedMissing := e.filterUnsatisfiedSkills(matched, msg)
 	// The not-found warning is deliberately evaluated against the pre-filter
 	// set: a skill dropped for unsatisfied requirements was found, and
 	// filterUnsatisfiedSkills has already warned about it by name. Everything
@@ -1061,9 +1069,9 @@ Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never i
 		)
 	}
 	if suffix := skill.BuildPromptSection(active); suffix != "" {
-		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: active}
+		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: active, droppedScheduledMissing: droppedMissing}
 	}
-	return buildSystemPromptResult{prompt: base, matchedSkills: active}
+	return buildSystemPromptResult{prompt: base, matchedSkills: active, droppedScheduledMissing: droppedMissing}
 }
 
 func skillNameMatched(matched []skill.Skill, name string) bool {
@@ -1087,11 +1095,11 @@ func skillNameMatched(matched []skill.Skill, name string) bool {
 //
 // Inspired by the reactive dependency-driven activation model in
 // https://github.com/cordiverse/paper/blob/main/paper.pdf.
-func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.IncomingMessage) []skill.Skill {
+func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.IncomingMessage) ([]skill.Skill, []string) {
 	// No tool manager means no capability information at all; guessing which
 	// way is worse than not filtering, so declared requirements are ignored.
 	if e.tools == nil || !anySkillRequiresTools(matched) {
-		return matched
+		return matched, nil
 	}
 
 	names := e.tools.ToolNames()
@@ -1101,6 +1109,7 @@ func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.Inco
 	}
 
 	active := make([]skill.Skill, 0, len(matched))
+	var droppedMissing []string
 	for _, s := range matched {
 		missing := missingRequiredTools(s, available)
 		changed := e.recordSkillSatisfaction(s.Name, missing)
@@ -1111,6 +1120,7 @@ func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.Inco
 			}
 			active = append(active, s)
 		case msg.SkillName == s.Name:
+			droppedMissing = missing
 			// Per occurrence, not per state change: a scheduled run that
 			// silently does nothing is an operational failure.
 			e.logger.Warn("scheduled skill deactivated — required tools unavailable, body will not be injected",
@@ -1128,7 +1138,34 @@ func (e *Engine) filterUnsatisfiedSkills(matched []skill.Skill, msg adapter.Inco
 			)
 		}
 	}
-	return active
+	return active, droppedMissing
+}
+
+// scheduledSkillSkipNotice is the reply for a schedule-driven turn whose skill
+// was dropped for missing tools. The LLM is not called: a scheduled message
+// names one skill, and without it there is nothing to do but say so where
+// the schedule's channel can see it — the Warn log is not read at 08:30.
+// Empty when the turn should proceed.
+func (e *Engine) scheduledSkillSkipNotice(ctx context.Context, msg adapter.IncomingMessage, convID string, prep turnPrep) string {
+	missing := prep.sysResult.droppedScheduledMissing
+	if !msg.IsScheduled || msg.SkillName == "" || len(missing) == 0 {
+		return ""
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"skill":    msg.SkillName,
+		"schedule": msg.ScheduleName,
+		"missing":  missing,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySkill,
+		Action:         "deactivated",
+		Summary:        fmt.Sprintf("Skill %s skipped — required tools unavailable: %s", msg.SkillName, strings.Join(missing, ", ")),
+		Detail:         string(detail),
+		Status:         audit.StatusError,
+		Source:         "engine",
+		ConversationID: convID,
+	})
+	return fmt.Sprintf("[engine: %s skipped — required tools unavailable: %s]", msg.SkillName, strings.Join(missing, ", "))
 }
 
 // anySkillRequiresTools reports whether any matched skill declares a tool
@@ -1537,6 +1574,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	}
 	convID := prep.convID
 	span.SetAttributes(attribute.String("conversation.id", convID))
+
+	if notice := e.scheduledSkillSkipNotice(ctx, msg, convID, prep); notice != "" {
+		resp := &llm.ChatResponse{Content: notice, FinishReason: "stop"}
+		if err := e.persistTurn(ctx, msg, policy, prep, resp, notice, nil); err != nil {
+			return turnOutcome{convID: convID}, err
+		}
+		return turnOutcome{response: notice, convID: convID, resp: resp}, nil
+	}
 
 	ctx = e.turnContext(ctx, msg, convID, prep.sysResult.matchedSkills, policy)
 
@@ -2443,14 +2488,21 @@ func (e *Engine) wrapUpToolLoop(ctx context.Context, convID string, reason loopS
 // content after tool rounds. It first checks for accumulated intermediate
 // content, then falls back to nudging the model for a response.
 func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, resp *llm.ChatResponse, llmMessages []llm.Message, accumulated string, run turnRun) (*llm.ChatResponse, []llm.Message, error) {
-	if strings.TrimSpace(accumulated) != "" {
+	haveAccumulated := strings.TrimSpace(accumulated) != ""
+	// Reasoning with no content means the model wrote its answer into the
+	// wrong field (kimi-k2.6 does this after long tool chains); replaying its
+	// intermediate narration would deliver the wrong message, so ask again
+	// first. No reasoning means a transport fault, where the narration is the
+	// best available answer and a retry is unlikely to do better.
+	if haveAccumulated && strings.TrimSpace(resp.ThinkingContent) == "" {
 		e.logger.Info("using accumulated content from intermediate tool rounds",
 			"accumulated_len", len(accumulated))
 		resp.Content = accumulated
 		return resp, llmMessages, nil
 	}
 	e.logger.Warn("empty response after tool rounds, retrying with nudge",
-		"finish_reason", resp.FinishReason)
+		"finish_reason", resp.FinishReason,
+		"thinking_len", len(resp.ThinkingContent))
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "user",
 		Content: "Please provide your response based on the tool results above.",
@@ -2461,6 +2513,11 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
 	}
 	e.emitLLMAudit(ctx, convID, nudgeResp, "", llmAuditOpts{nudgeRetry: true})
+	if strings.TrimSpace(nudgeResp.Content) == "" && haveAccumulated {
+		e.logger.Info("nudge returned empty content, falling back to accumulated content",
+			"accumulated_len", len(accumulated))
+		nudgeResp.Content = accumulated
+	}
 	return nudgeResp, llmMessages, nil
 }
 

@@ -5034,6 +5034,9 @@ func TestParse_ReplyGuardDefaults(t *testing.T) {
 	if rg.OnNoToolCalls != ReplyGuardWarn {
 		t.Errorf("on_no_tool_calls = %q, want %q", rg.OnNoToolCalls, ReplyGuardWarn)
 	}
+	if rg.OnLeakedToolCall != ReplyGuardWithhold {
+		t.Errorf("on_leaked_tool_call = %q, want %q", rg.OnLeakedToolCall, ReplyGuardWithhold)
+	}
 	if rg.MaxReplyBytes != 16000 {
 		t.Errorf("max_reply_bytes = %d, want 16000", rg.MaxReplyBytes)
 	}
@@ -5052,6 +5055,7 @@ enabled = false
 on_role_markup = "warn"
 on_oversized = "off"
 on_no_tool_calls = "withhold"
+on_leaked_tool_call = "warn"
 max_reply_bytes = -1
 max_completion_tokens = 8000
 excerpt_bytes = 500
@@ -5063,8 +5067,8 @@ excerpt_bytes = 500
 	if rg.IsEnabled() {
 		t.Error("explicit enabled = false was overwritten")
 	}
-	if rg.OnRoleMarkup != ReplyGuardWarn || rg.OnOversized != ReplyGuardOff || rg.OnNoToolCalls != ReplyGuardWithhold {
-		t.Errorf("actions = %q/%q/%q, want warn/off/withhold", rg.OnRoleMarkup, rg.OnOversized, rg.OnNoToolCalls)
+	if rg.OnRoleMarkup != ReplyGuardWarn || rg.OnOversized != ReplyGuardOff || rg.OnNoToolCalls != ReplyGuardWithhold || rg.OnLeakedToolCall != ReplyGuardWarn {
+		t.Errorf("actions = %q/%q/%q/%q, want warn/off/withhold/warn", rg.OnRoleMarkup, rg.OnOversized, rg.OnNoToolCalls, rg.OnLeakedToolCall)
 	}
 	// Negative is the "off" sentinel for the byte cap, since a written 0 is
 	// indistinguishable from an omitted key and takes the default.
@@ -5188,5 +5192,46 @@ func TestEvalConfig_TraceBytesCapFallsBackToDefault(t *testing.T) {
 	var c EvalConfig
 	if got := c.TraceBytesCap(); got != DefaultMaxTraceBytes {
 		t.Errorf("TraceBytesCap() = %d on a zero value, want %d", got, DefaultMaxTraceBytes)
+	}
+}
+
+func TestParse_KVDefaultTTL_Parsed(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[kv]
+default_ttl = { "log:" = "720h", "log:heartbeat:" = "168h", "cache:" = "1h30m" }
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := cfg.KV.DefaultTTLs()
+	if got["log:"] != 720*time.Hour || got["log:heartbeat:"] != 168*time.Hour || got["cache:"] != 90*time.Minute {
+		t.Errorf("DefaultTTLs = %v", got)
+	}
+	if empty := (&KVConfig{}).DefaultTTLs(); empty != nil {
+		t.Errorf("no config should yield nil, got %v", empty)
+	}
+}
+
+func TestParse_KVDefaultTTL_RejectsBadEntries(t *testing.T) {
+	cases := map[string]string{
+		"bad duration":  `default_ttl = { "log:" = "30 days" }`,
+		"zero duration": `default_ttl = { "log:" = "0s" }`,
+		"missing colon": `default_ttl = { "log" = "720h" }`,
+	}
+	for name, line := range cases {
+		_, err := Parse([]byte(baseConfig + "\n[kv]\n" + line + "\n"))
+		if err == nil || !strings.Contains(err.Error(), "kv.default_ttl") {
+			t.Errorf("%s: expected a kv.default_ttl validation error, got %v", name, err)
+		}
+	}
+}
+
+func TestParse_ReplyGuardRejectsUnknownLeakAction(t *testing.T) {
+	_, err := Parse([]byte(baseConfig + `
+[safety.reply_guard]
+on_leaked_tool_call = "hold"
+`))
+	if err == nil || !strings.Contains(err.Error(), "on_leaked_tool_call") {
+		t.Fatalf("expected validation error naming on_leaked_tool_call, got %v", err)
 	}
 }

@@ -30,7 +30,7 @@ const (
 func (s *Server) registerKVTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_get",
-		Description: "Get a value from your key-value store. Returns null if the key doesn't exist or has expired. Keys are conventionally namespaced (`cache:*`, `log:*`, `pref:*`, `state:*`, or anything that fits the use case).",
+		Description: "Get a value from your key-value store. Returns {value, updated_at} (RFC 3339), or value null if the key doesn't exist or has expired. Keys are conventionally namespaced (`cache:*`, `log:*`, `pref:*`, `state:*`, or anything that fits the use case).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -42,7 +42,7 @@ func (s *Server) registerKVTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "kv_set",
-		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry. Use a `prefix:subkey` shape so kv_list stays useful; see system prompt for namespace conventions.",
+		Description: "Store a key-value pair. Overwrites any existing value. Use ttl to set an expiry; when omitted, a namespace default may apply (operator-configured per prefix, e.g. log:*). Use a `prefix:subkey` shape so kv_list stays useful; see system prompt for namespace conventions.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -109,7 +109,7 @@ func (s *Server) handleKVGet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return toolError("key is required"), nil
 	}
 
-	val, ok, err := s.deps.KVStore.Get(ctx, s.deps.AgentName, input.Key)
+	entry, ok, err := s.deps.KVStore.GetEntry(ctx, s.deps.AgentName, input.Key)
 	if err != nil {
 		return toolError(fmt.Sprintf("kv_get failed: %v", err)), nil
 	}
@@ -117,7 +117,10 @@ func (s *Server) handleKVGet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return toolText(`{"value": null}`), nil
 	}
 
-	resp, _ := json.Marshal(map[string]string{"value": val})
+	resp, _ := json.Marshal(map[string]string{
+		"value":      entry.Value,
+		"updated_at": entry.UpdatedAt.UTC().Format(time.RFC3339),
+	})
 	return toolText(string(resp)), nil
 }
 
@@ -143,12 +146,27 @@ func (s *Server) handleKVSet(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	if err != nil {
 		return toolError(err.Error()), nil
 	}
+	if strings.TrimSpace(input.TTL) == "" {
+		ttl = defaultTTLFor(s.deps.KVDefaultTTL, input.Key)
+	}
 
 	if err := s.deps.KVStore.Set(ctx, s.deps.AgentName, input.Key, input.Value, ttl); err != nil {
 		return toolError(fmt.Sprintf("kv_set failed: %v", err)), nil
 	}
 
 	return toolText(`{"ok": true}`), nil
+}
+
+// defaultTTLFor picks the longest configured prefix that key starts with.
+func defaultTTLFor(defaults map[string]time.Duration, key string) time.Duration {
+	var best string
+	var ttl time.Duration
+	for prefix, d := range defaults {
+		if strings.HasPrefix(key, prefix) && len(prefix) > len(best) {
+			best, ttl = prefix, d
+		}
+	}
+	return ttl
 }
 
 func (s *Server) handleKVDelete(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

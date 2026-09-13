@@ -850,6 +850,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 
 		KVListMaxBytes:       abc.cfg.KV.ListMaxBytes,
 		KVListValueHeadBytes: abc.cfg.KV.ListValueHeadBytes,
+		KVDefaultTTL:         abc.cfg.KV.DefaultTTLs(),
 		CostSummary: func() configmcp.CostSummaryData {
 			return configmcp.CostSummaryData{
 				GlobalCost:    costTracker.GlobalCost(),
@@ -1682,7 +1683,7 @@ func buildScheduledMessage(sc config.ScheduleConfig, entry scheduler.Entry, targ
 		ExternalID:     target.ExternalID,
 		ConversationID: conversationID,
 		UserName:       "scheduler",
-		Text:           scheduler.FormatScheduledText(entry.Name, entry.Skill, now, loc),
+		Text:           scheduler.FormatScheduledTextWithPrev(entry.Name, entry.Skill, now, entry.PrevRun, loc),
 		SkillName:      sc.Skill,
 		ScheduleName:   sc.Name,
 		ScheduleCron:   sc.Schedule,
@@ -2250,6 +2251,7 @@ func replyGuardFrom(cfg *config.Config) agent.ReplyGuard {
 		OnRoleMarkup:        rg.OnRoleMarkup,
 		OnOversized:         rg.OnOversized,
 		OnNoToolCalls:       rg.OnNoToolCalls,
+		OnLeakedToolCall:    rg.OnLeakedToolCall,
 		MaxReplyBytes:       rg.MaxReplyBytes,
 		MaxCompletionTokens: rg.MaxCompletionTokens,
 		ExcerptBytes:        rg.ExcerptBytes,

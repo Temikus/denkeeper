@@ -2,7 +2,7 @@
 title: "Writing Skills"
 description: "How to create custom skills for your Denkeeper agent."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-11T00:00:00+00:00
+lastmod: 2026-09-04T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -59,7 +59,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 
 ## Trigger types
 
-- **`command:name`** — activates on the `/name` Telegram command
+- **`command:name`** — activates when the user's message starts with `/name` or `!name` (case-insensitive), on any adapter or channel — Telegram, Discord, the web dashboard, or the REST chat API
 - **`schedule:...`** — marks the skill as scheduler-driven. The text after the colon is ignored; timing comes from a `[[schedules]]` entry whose `skill` field names this skill. Without one, the skill never fires
 - **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
 

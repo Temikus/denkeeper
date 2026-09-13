@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
@@ -118,7 +120,7 @@ func TestFilterUnsatisfiedSkills_MissingToolExcludes(t *testing.T) {
 	e := newSatisfactionEngine(t, newSatisfactionToolManager(t, "kv_get"), []skill.Skill{s}, nil)
 
 	msg := satisfactionMessage("sat-missing", "anything")
-	if got := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg); len(got) != 0 {
+	if got, _ := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg); len(got) != 0 {
 		t.Fatalf("filtered set = %d skills, want 0 (gmail_list is not registered)", len(got))
 	}
 
@@ -137,7 +139,7 @@ func TestFilterUnsatisfiedSkills_AllPresentIncludes(t *testing.T) {
 	e := newSatisfactionEngine(t, newSatisfactionToolManager(t, "kv_get", "kv_set", "kv_list"), []skill.Skill{s}, nil)
 
 	msg := satisfactionMessage("sat-present", "anything")
-	got := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg)
+	got, _ := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg)
 	if len(got) != 1 || got[0].Name != "inbox-triage" {
 		t.Fatalf("filtered set = %+v, want the skill kept (every declared tool is registered)", got)
 	}
@@ -154,7 +156,7 @@ func TestFilterUnsatisfiedSkills_NilManagerNoFilter(t *testing.T) {
 	e := newSatisfactionEngine(t, nil, []skill.Skill{s}, nil)
 
 	msg := satisfactionMessage("sat-nil-mgr", "anything")
-	got := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg)
+	got, _ := e.filterUnsatisfiedSkills([]skill.Skill{s}, msg)
 	if len(got) != 1 {
 		t.Fatalf("filtered set = %d skills, want 1 — a nil manager carries no capability information", len(got))
 	}
@@ -230,8 +232,11 @@ func TestFilterUnsatisfiedSkills_ScheduledSkillExcludedWarns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	if !strings.Contains(result, "Nothing to do.") {
-		t.Errorf("result = %q, want the turn to complete normally", result)
+	if result != "[engine: nightly skipped — required tools unavailable: gmail_list]" {
+		t.Errorf("result = %q, want the skip notice", result)
+	}
+	if provider.callIndex != 0 {
+		t.Errorf("provider called %d times, want 0 — a dropped scheduled skill must not spend an LLM round", provider.callIndex)
 	}
 
 	out := logs.String()
@@ -334,5 +339,84 @@ func TestFilterUnsatisfiedSkills_ExcludedSkillDoesNotDriveTurn(t *testing.T) {
 	}
 	if len(usages) != 1 || usages[0].SkillName != "triage" {
 		t.Errorf("recorded %+v, want one usage of triage after its tool returned", usages)
+	}
+}
+
+// A dropped scheduled skill answers with a notice on the schedule's channel,
+// audits it, and persists the turn like any other.
+func TestScheduledSkillDropped_NoticeAuditedAndPersisted(t *testing.T) {
+	provider := &sequentialProvider{}
+	s := skilltest.NewWithRequiresTools("heartbeat", "Heartbeat", []string{"schedule:heartbeat"},
+		"SKILL-BODY-MARKER", []string{"find-tasks", "find-projects"})
+	e := newSatisfactionEngine(t, newSatisfactionToolManager(t, "kv_get"), []skill.Skill{s}, provider)
+	auditor := &collectingAuditor{}
+	e.SetAuditor(auditor)
+
+	msg := satisfactionMessage("sat-dropped", "[Scheduled: heartbeat | 2026-09-05T08:30:51+10:00 Australia/Sydney | 2026-W36]")
+	msg.SkillName = "heartbeat"
+	msg.ScheduleName = "heartbeat"
+	msg.IsScheduled = true
+
+	result, err := e.ChatWithEvents(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if !strings.HasPrefix(result, "[engine: heartbeat skipped — required tools unavailable: ") {
+		t.Fatalf("result = %q, want the skip notice", result)
+	}
+	if !strings.Contains(result, "find-tasks") || !strings.Contains(result, "find-projects") {
+		t.Errorf("result = %q, want both missing tools named", result)
+	}
+
+	var found *audit.Event
+	for i := range auditor.events {
+		ev := auditor.events[i]
+		if ev.Category == audit.CategorySkill && ev.Action == "deactivated" {
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no skill/deactivated audit event among %d events", len(auditor.events))
+	}
+	if found.Status != audit.StatusError {
+		t.Errorf("audit status = %q, want %q", found.Status, audit.StatusError)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(found.Detail), &detail); err != nil {
+		t.Fatalf("audit detail is not JSON: %v (%q)", err, found.Detail)
+	}
+	if detail["skill"] != "heartbeat" || detail["schedule"] != "heartbeat" {
+		t.Errorf("audit detail = %v, want skill and schedule named", detail)
+	}
+
+	msgs, err := e.memory.GetMessages(context.Background(), "default:test:sat-dropped", 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 2 || msgs[1].Role != "assistant" || msgs[1].Content != result {
+		t.Errorf("stored messages = %+v, want user + assistant notice", msgs)
+	}
+}
+
+// A live command turn keeps the old behaviour: the skill body is withheld but
+// the model still answers.
+func TestScheduledSkillDropped_LiveTurnStillRuns(t *testing.T) {
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "Answered anyway.", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+	s := skilltest.NewWithRequiresTools("nightly", "Nightly run", []string{"command:nightly"},
+		"SKILL-BODY-MARKER", []string{"gmail_list"})
+	e := newSatisfactionEngine(t, newSatisfactionToolManager(t, "kv_get"), []skill.Skill{s}, provider)
+
+	msg := satisfactionMessage("sat-live", "/nightly")
+	result, err := e.ChatWithEvents(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if result != "Answered anyway." {
+		t.Errorf("result = %q, want the model's answer", result)
 	}
 }

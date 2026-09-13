@@ -373,7 +373,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 		Channel:     entry.Channel,
 	}
 	convID := newDryRunConvID()
-	msg := configmcp.BuildScheduledMessage(cfg, agent.AdapterBinding{}, convID, asOf, e.Location())
+	msg := configmcp.BuildScheduledMessage(cfg, agent.AdapterBinding{}, convID, asOf, time.Time{}, e.Location())
 
 	s.runDryRun(w, r, e, msg, agent.ExecPolicy{
 		Kind:      agent.ExecDryRun,
@@ -557,7 +557,7 @@ func buildSkillDryRunMessage(mode, skillName string, sk skill.Skill, input dryRu
 				SessionTier: entry.SessionTier,
 				SessionMode: entry.SessionMode,
 				Channel:     entry.Channel,
-			}, agent.AdapterBinding{}, convID, asOf, loc), ""
+			}, agent.AdapterBinding{}, convID, asOf, time.Time{}, loc), ""
 		}
 		// Nothing schedules this skill; the caller asked for a scheduled run
 		// anyway ("what would happen if I scheduled it"), so synthesise the

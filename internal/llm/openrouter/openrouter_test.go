@@ -1086,3 +1086,47 @@ func TestStickyRouting_StreamMidStreamErrorResets(t *testing.T) {
 		t.Fatalf("mid-stream error must reset sticky preference, got %+v", p)
 	}
 }
+
+func TestStickyRouting_NotRecordedOnLeakedToolCall(t *testing.T) {
+	var bodies []apiRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req apiRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		bodies = append(bodies, req)
+		resp := okResponseWithProvider("Decart")
+		resp.Choices[0].Message.Content = "Checking.functions.kv_get:0{\"key\": \"a\"}"
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	base := time.Unix(1_000_000, 0)
+	c.now = func() time.Time { return base }
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 captured requests, got %d", len(bodies))
+	}
+	if bodies[1].Provider != nil {
+		t.Errorf("a leaked 200 must not pin the upstream, got %+v", bodies[1].Provider)
+	}
+}
+
+func TestResetUpstreamPreference_ClearsSticky(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting(nil, nil, time.Hour)
+	c.recordProvider("Decart")
+	if p := c.buildProviderParam(); p == nil || len(p.Order) != 1 {
+		t.Fatalf("precondition: sticky should be set, got %+v", p)
+	}
+	c.ResetUpstreamPreference()
+	if p := c.buildProviderParam(); p != nil {
+		t.Errorf("sticky should be cleared, got %+v", p)
+	}
+}
