@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.6"
+go = "1.27.1"
 hugo-extended = "0.166.0"
 "golangci-lint" = "2.13.2"
 swag = "1.16.6"
