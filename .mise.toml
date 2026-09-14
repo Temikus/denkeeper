@@ -1,7 +1,7 @@
 [tools]
 go = "1.26.6"
 hugo-extended = "0.164.0"
-"golangci-lint" = "2.12.2"
+"golangci-lint" = "2.13.2"
 swag = "1.16.6"
 task = "3.52.0"
 "go:github.com/air-verse/air" = "1.67.4"
