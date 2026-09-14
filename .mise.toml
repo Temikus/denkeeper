@@ -2,7 +2,9 @@
 go = "1.27.1"
 hugo-extended = "0.166.0"
 "golangci-lint" = "2.13.2"
-swag = "1.16.6"
+# go backend so swag is compiled with the pinned Go: its go/parser must
+# understand the stdlib syntax it parses via --parseDependency.
+"go:github.com/swaggo/swag/cmd/swag" = "1.16.6"
 task = "3.53.1"
 "go:github.com/air-verse/air" = "1.67.4"
 "aqua:casey/just" = "1.58.0"
