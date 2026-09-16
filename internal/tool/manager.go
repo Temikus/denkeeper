@@ -271,11 +271,15 @@ type Manager struct {
 	localOf        map[string]string        // advertised name → server-local name (qualified entries only)
 	discoveryOrder []string                 // server names in discovery order; fixes the order of toolDefs
 	toolDefs       []llm.ToolDef            // cached OpenAI-format tool definitions, advertised names
-	disabledCount  int                      // total disabled tools across all servers; 0 = fast-path in ToolDefs
-	mcpCfg         config.MCPConfig         // global MCP settings
-	logger         *slog.Logger
-	oauth          *OAuthSupport // nil if OAuth not configured
-	Auditor        audit.Emitter // nil = no audit events
+	// alwaysAdvertised holds server names whose tools survive every per-request
+	// tool filter (see MarkAlwaysAdvertised). Keyed by server name rather than
+	// held on serverConn so the mark survives unregister/re-register.
+	alwaysAdvertised map[string]bool
+	disabledCount    int              // total disabled tools across all servers; 0 = fast-path in ToolDefs
+	mcpCfg           config.MCPConfig // global MCP settings
+	logger           *slog.Logger
+	oauth            *OAuthSupport // nil if OAuth not configured
+	Auditor          audit.Emitter // nil = no audit events
 }
 
 // SetOAuthSupport injects OAuth infrastructure into the Manager.
@@ -890,6 +894,40 @@ func (m *Manager) ServerToolDefs(serverName string) ([]llm.ToolDef, bool) {
 		}
 	}
 	return defs, true
+}
+
+// MarkAlwaysAdvertised marks every tool served by serverName as exempt from
+// per-request tool filtering. Marking is by server identity, not by tool name:
+// the config-MCP tool set is dependency-gated and grows over time, so a code
+// constant listing its names would drift and silently lock an agent out of a
+// control it owns.
+func (m *Manager) MarkAlwaysAdvertised(serverName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.alwaysAdvertised == nil {
+		m.alwaysAdvertised = make(map[string]bool, 1)
+	}
+	m.alwaysAdvertised[serverName] = true
+}
+
+// IsAlwaysAdvertised reports whether toolName is served by a marked server and
+// must therefore reach the model whatever a turn's filter says. Lookup goes
+// through resolveTool, so a server-qualified name works and an ambiguous bare
+// name is not exempt — it is not advertised in the first place.
+func (m *Manager) IsAlwaysAdvertised(toolName string) bool {
+	m.mu.RLock()
+	sc, _, err := m.resolveTool(toolName)
+	marked := err == nil && m.alwaysAdvertised[sc.name]
+	parent := m.parent
+	m.mu.RUnlock()
+
+	if marked {
+		return true
+	}
+	if err != nil && parent != nil && errors.Is(err, ErrToolNotFound) {
+		return parent.IsAlwaysAdvertised(toolName)
+	}
+	return false
 }
 
 // ToolServer returns the MCP server name that hosts the given tool.

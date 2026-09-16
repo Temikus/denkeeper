@@ -177,10 +177,14 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 // Engine.RequestStop). Zero on a bare turnRun, which matches a fresh engine and
 // so reads as "no stop requested" for the tool-execution helpers.
 type turnRun struct {
-	budget  turnToolBudget
-	policy  *ExecPolicy
-	router  *llm.Router
-	stopGen uint64
+	budget turnToolBudget
+	policy *ExecPolicy
+	router *llm.Router
+	// toolFilter narrows the tool definitions every completion in this turn
+	// advertises. Nil (the zero value, and the common case) advertises whatever
+	// the router's tool source returns — see Engine.resolveToolExposure.
+	toolFilter llm.ToolFilter
+	stopGen    uint64
 }
 
 // TurnResult is everything a caller needs from one turn executed outside the
