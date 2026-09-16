@@ -226,7 +226,7 @@ func (m *Manager) Abort(ctx context.Context, id, reason string) error {
 			Category: audit.CategoryApproval,
 			Action:   "abort",
 			Summary:  fmt.Sprintf("Approval %s aborted (%s)", id, reason),
-			Status:   audit.StatusDenied,
+			Status:   string(StatusAborted),
 			Source:   "engine",
 		})
 	}
