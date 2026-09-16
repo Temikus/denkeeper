@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Temikus/denkeeper/internal/kv"
 )
 
 type kvGetInput struct {
@@ -80,9 +82,9 @@ func (s *Server) handleKVSet(ctx context.Context, _ *mcp.CallToolRequest, input 
 	var ttl time.Duration
 	if input.TTL != "" {
 		var err error
-		ttl, err = time.ParseDuration(input.TTL)
+		ttl, err = kv.ParseTTL(input.TTL)
 		if err != nil {
-			return toolError("invalid ttl: " + err.Error()), nil, nil
+			return toolError(err.Error()), nil, nil
 		}
 	}
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scope"
 )
 
@@ -1200,7 +1201,7 @@ func (k *KVConfig) DefaultTTLs() map[string]time.Duration {
 	}
 	out := make(map[string]time.Duration, len(k.DefaultTTL))
 	for prefix, raw := range k.DefaultTTL {
-		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		if d, err := kv.ParseTTL(raw); err == nil && d > 0 {
 			out[prefix] = d
 		}
 	}
@@ -2280,9 +2281,9 @@ func validateKV(k *KVConfig) error {
 		if prefix == "" || !strings.HasSuffix(prefix, ":") {
 			return fmt.Errorf("config: kv.default_ttl key %q must be a namespace prefix ending in \":\"", prefix)
 		}
-		d, err := time.ParseDuration(raw)
+		d, err := kv.ParseTTL(raw)
 		if err != nil {
-			return fmt.Errorf("config: kv.default_ttl[%q]: invalid duration %q: %w", prefix, raw, err)
+			return fmt.Errorf("config: kv.default_ttl[%q]: %w", prefix, err)
 		}
 		if d <= 0 {
 			return fmt.Errorf("config: kv.default_ttl[%q] must be positive, got %s", prefix, raw)
