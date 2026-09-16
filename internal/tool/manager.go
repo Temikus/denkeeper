@@ -1379,6 +1379,25 @@ func (m *Manager) ServerGuidance() []ServerGuidance {
 	return out
 }
 
+// GuidanceForTool returns the owning server's [tools.*] guidance for the
+// named tool, or "" when the tool is unknown or its server declares none.
+// Lookup is by *advertised* name, like ToolDescription: a bare name two
+// servers claim resolves to neither, so it returns "" rather than guessing.
+func (m *Manager) GuidanceForTool(toolName string) string {
+	m.mu.RLock()
+	sc, ok := m.toolMap[toolName]
+	parent := m.parent
+	var g string
+	if ok {
+		g = strings.TrimSpace(sc.cfg.Guidance)
+	}
+	m.mu.RUnlock()
+	if !ok && parent != nil {
+		return parent.GuidanceForTool(toolName)
+	}
+	return g
+}
+
 // ServerNames returns the names of all registered MCP servers,
 // including those from the parent manager (if any).
 func (m *Manager) ServerNames() []string {

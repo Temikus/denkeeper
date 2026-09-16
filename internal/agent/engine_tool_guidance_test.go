@@ -6,10 +6,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -118,6 +123,125 @@ func TestBuildSystemPrompt_NoGuidanceIsByteIdentical(t *testing.T) {
 	}
 	if strings.Contains(withTools, "Tool Server Notes") {
 		t.Error("empty guidance rendered a section header")
+	}
+}
+
+// newSupervisedGuidanceEngine wires a supervised engine whose primary model
+// calls toolName once, with a capturing supervisor that approves it.
+func newSupervisedGuidanceEngine(t *testing.T, mgr *tool.Manager, toolName string) (*Engine, *capturingProvider) {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	primary := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: toolName, Arguments: `{}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+			{Content: "Done.", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+	supervisorProv := &capturingProvider{
+		responses: []*llm.ChatResponse{
+			{Content: "APPROVE: conforms", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(primary)
+	supRouter := llm.NewRouter("mock", "sup-model", costTracker)
+	supRouter.RegisterProvider(supervisorProv)
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	t.Cleanup(func() { _ = approvalStore.Close() })
+	apprMgr := approval.NewManager(approvalStore, testLogger())
+
+	permissions, _ := security.NewPermissionEngine("supervised")
+	engine := NewEngine("default", router, store, (&sentMessages{}).send, permissions, nil, "You are a test assistant.", nil, mgr, apprMgr, testLogger())
+
+	supPerms, _ := security.NewPermissionEngine("autonomous")
+	supEngine := NewEngine("supervisor", supRouter, store, nil, supPerms, nil, "", nil, nil, nil, testLogger())
+	engine.SetSupervisor(supEngine)
+	return engine, supervisorProv
+}
+
+func supervisorReviewPrompt(t *testing.T, prov *capturingProvider) string {
+	t.Helper()
+	if len(prov.requests) != 1 {
+		t.Fatalf("supervisor received %d requests, want 1", len(prov.requests))
+	}
+	for _, m := range prov.requests[0].Messages {
+		if m.Role == "user" {
+			return m.Content
+		}
+	}
+	t.Fatal("no user message found in supervisor request")
+	return ""
+}
+
+func TestSupervisorReview_IncludesServerGuidance(t *testing.T) {
+	ts := startGuidanceMCPServer(t, "todoist", "find-tasks")
+	mgr := newGuidanceToolManager(t)
+	registerGuidanceServer(t, mgr, "todoist", ts.URL, "Never send workspaceId — this API has no workspace concept.")
+
+	engine, supervisorProv := newSupervisedGuidanceEngine(t, mgr, "find-tasks")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-guidance",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "find my tasks",
+		Timestamp:  time.Now(),
+	}, nil); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	review := supervisorReviewPrompt(t, supervisorProv)
+	if !strings.Contains(review, "**Operator guidance for this tool's server**") {
+		t.Errorf("review prompt missing guidance header:\n%s", review)
+	}
+	if !strings.Contains(review, "Never send workspaceId — this API has no workspace concept.") {
+		t.Errorf("review prompt missing guidance text:\n%s", review)
+	}
+}
+
+func TestSupervisorReview_NoGuidanceOmitsSection(t *testing.T) {
+	ts := startGuidanceMCPServer(t, "plain", "search")
+	mgr := newGuidanceToolManager(t)
+	registerGuidanceServer(t, mgr, "plain", ts.URL, "")
+
+	engine, supervisorProv := newSupervisedGuidanceEngine(t, mgr, "search")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := engine.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: "chat-sup-noguidance",
+		UserID:     "user-1",
+		UserName:   "testuser",
+		Text:       "search",
+		Timestamp:  time.Now(),
+	}, nil); err != nil {
+		t.Fatalf("ChatWithEvents: %v", err)
+	}
+
+	review := supervisorReviewPrompt(t, supervisorProv)
+	if strings.Contains(review, "Operator guidance for this tool's server") {
+		t.Errorf("review prompt rendered a guidance section for an unguided server:\n%s", review)
 	}
 }
 

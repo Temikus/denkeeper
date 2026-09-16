@@ -112,6 +112,51 @@ func TestServerGuidance_SortedAndParentMerged(t *testing.T) {
 	}
 }
 
+func TestGuidanceForTool_ReturnsOwningServerGuidance(t *testing.T) {
+	ts := startCollisionServer(t, "todoist", "find-tasks")
+	m := NewManager(testLogger())
+	t.Cleanup(func() { _ = m.Close() })
+	registerGuidedServer(t, m, "todoist", ts.URL, "  no workspaces  ")
+
+	if got := m.GuidanceForTool("find-tasks"); got != "no workspaces" {
+		t.Errorf("GuidanceForTool(find-tasks) = %q, want trimmed guidance", got)
+	}
+	if got := m.GuidanceForTool("no-such-tool"); got != "" {
+		t.Errorf("GuidanceForTool(no-such-tool) = %q, want empty", got)
+	}
+}
+
+func TestGuidanceForTool_ParentDelegation(t *testing.T) {
+	ts := startCollisionServer(t, "upstream", "u-tool")
+	parent := NewManager(testLogger())
+	t.Cleanup(func() { _ = parent.Close() })
+	registerGuidedServer(t, parent, "upstream", ts.URL, "parent rules")
+
+	child := NewManager(testLogger())
+	t.Cleanup(func() { _ = child.Close() })
+	child.AdoptFrom(parent)
+
+	if got := child.GuidanceForTool("u-tool"); got != "parent rules" {
+		t.Errorf("GuidanceForTool(u-tool) via parent = %q, want %q", got, "parent rules")
+	}
+}
+
+func TestGuidanceForTool_CollidingBareNameResolvesToNeither(t *testing.T) {
+	a := startCollisionServer(t, "alpha", "dup")
+	b := startCollisionServer(t, "beta", "dup")
+	m := NewManager(testLogger())
+	t.Cleanup(func() { _ = m.Close() })
+	registerGuidedServer(t, m, "alpha", a.URL, "alpha rules")
+	registerGuidedServer(t, m, "beta", b.URL, "beta rules")
+
+	if got := m.GuidanceForTool("dup"); got != "" {
+		t.Errorf("GuidanceForTool(dup) = %q, want empty — a colliding bare name must never guess an owner", got)
+	}
+	if got := m.GuidanceForTool("alpha__dup"); got != "alpha rules" {
+		t.Errorf("GuidanceForTool(alpha__dup) = %q, want %q", got, "alpha rules")
+	}
+}
+
 func TestToolConfigToMap_IncludesGuidance(t *testing.T) {
 	m := toolConfigToMap(config.ToolConfig{Command: "/usr/bin/tool", Guidance: "IDs come from the value, not the key."})
 	if m["guidance"] != "IDs come from the value, not the key." {

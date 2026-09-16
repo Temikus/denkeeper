@@ -3402,6 +3402,23 @@ const (
 	supervisorEscalate supervisorDecision = "ESCALATE"
 )
 
+// writeSupervisorToolContext appends the tool's description and its server's
+// operator guidance to the review prompt.
+func (e *Engine) writeSupervisorToolContext(review *strings.Builder, toolName string) {
+	if e.tools == nil {
+		return
+	}
+	if desc := e.tools.ToolDescription(toolName); desc != "" {
+		fmt.Fprintf(review, "**Tool description**: %s\n", truncateForSupervisor(desc, e.supervisorToolDescLen))
+	}
+	// Verbatim, not truncated: guidance is the operator's argument rules —
+	// the reviewer approving a fabricated ID is the failure this exists to
+	// catch — and load already caps it at config.MaxToolGuidanceBytes.
+	if g := e.tools.GuidanceForTool(toolName); g != "" {
+		fmt.Fprintf(review, "**Operator guidance for this tool's server** (arguments must conform):\n%s\n", g)
+	}
+}
+
 // supervisorReview asks the supervisor agent to evaluate a tool call and return
 // an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
 // one-shot LLM call through the supervisor's Router — no conversation storage,
@@ -3444,15 +3461,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 	review.WriteString("## Tool Call Review Request\n\n")
 	fmt.Fprintf(&review, "**Agent**: %s\n", e.name)
 	fmt.Fprintf(&review, "**Tool**: %s\n", tc.Function.Name)
-	if e.tools != nil {
-		// [tools.*] guidance deliberately does NOT reach the supervisor: it
-		// would let the reviewer catch fabricated arguments before the call,
-		// but it is a change to the supervisor contract and costs tokens on
-		// every review. Decided out of scope for now; revisit as a follow-up.
-		if desc := e.tools.ToolDescription(tc.Function.Name); desc != "" {
-			fmt.Fprintf(&review, "**Tool description**: %s\n", truncateForSupervisor(desc, e.supervisorToolDescLen))
-		}
-	}
+	e.writeSupervisorToolContext(&review, tc.Function.Name)
 	fmt.Fprintf(&review, "**Arguments**:\n```json\n%s\n```\n\n", tc.Function.Arguments)
 
 	skillCtx := agentctx.SkillContext(ctx)
