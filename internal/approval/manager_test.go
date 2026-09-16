@@ -116,6 +116,104 @@ func TestManager_Resolve_Denied_SkipsAction(t *testing.T) {
 	}
 }
 
+func TestManager_Abort_ResolvesWithoutRunningTheAction(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	called := false
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error {
+			called = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Abort(ctx, req.ID, "turn stopped"); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+
+	got, err := m.Get(ctx, req.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusAborted {
+		t.Errorf("status = %q, want %q", got.Status, StatusAborted)
+	}
+	if got.ResolvedBy != "stopped" {
+		t.Errorf("resolved_by = %q, want %q", got.ResolvedBy, "stopped")
+	}
+	if called {
+		t.Error("the action ran — an aborted approval executes nothing")
+	}
+	if _, ok := m.registry.Pop(req.ID); ok {
+		t.Error("the closure is still registered after an abort")
+	}
+}
+
+// A waiter blocked on the request must be released by an abort, or the turn
+// that asked for it stays parked on a request that is already terminal.
+func TestManager_Abort_ReleasesWaiter(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"summary", "payload", "123", "telegram", "conv1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statuses := make(chan Status, 1)
+	go func() {
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		statuses <- m.WaitForResolution(waitCtx, req.ID)
+	}()
+
+	// Give the waiter time to register before aborting.
+	time.Sleep(20 * time.Millisecond)
+	if err := m.Abort(ctx, req.ID, "turn stopped"); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+
+	select {
+	case status := <-statuses:
+		if status != StatusAborted {
+			t.Errorf("waiter saw %q, want %q", status, StatusAborted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter was not released by the abort")
+	}
+}
+
+func TestManager_Abort_AlreadyResolved(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	req, err := m.Submit(ctx, "default", ActionKindToolCall,
+		"summary", "payload", "123", "telegram", "conv1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Resolve(ctx, req.ID, false, "test"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if err := m.Abort(ctx, req.ID, "turn stopped"); !errors.Is(err, ErrAlreadyResolved) {
+		t.Errorf("Abort on a resolved request = %v, want ErrAlreadyResolved", err)
+	}
+	got, err := m.Get(ctx, req.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusDenied {
+		t.Errorf("status = %q, want the original denial to stand", got.Status)
+	}
+}
+
 func TestManager_Resolve_NotFound(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()

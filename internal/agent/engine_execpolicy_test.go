@@ -761,6 +761,7 @@ func TestLoopStopReason_SlugIsMachineReadableAndStringIsProse(t *testing.T) {
 		{stopRepeatedCalls, "repeated_calls", "repeated identical tool calls"},
 		{stopMaxRounds, "max_rounds", "tool-call round budget exhausted"},
 		{stopRequested, "stop_requested", "stop requested"},
+		{stopCancelled, "cancelled", "cancelled at your request"},
 	}
 	for _, tc := range cases {
 		if got := tc.reason.slug(); got != tc.wantSlug {

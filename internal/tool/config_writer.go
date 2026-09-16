@@ -66,6 +66,9 @@ func toolConfigToMap(cfg config.ToolConfig) map[string]any {
 	if len(cfg.Env) > 0 {
 		entry["env"] = cfg.Env
 	}
+	if len(cfg.EnvPassthrough) > 0 {
+		entry["env_passthrough"] = cfg.EnvPassthrough
+	}
 	if len(cfg.Headers) > 0 {
 		entry["headers"] = cfg.Headers
 	}

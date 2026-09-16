@@ -145,8 +145,28 @@ func (lm *LifecycleManager) RemoveTool(ctx context.Context, name string) error {
 	return nil
 }
 
+// preserveUnsetFields carries over the fields a REST/UI tool edit does not
+// send. Zeroing them would unscope the stdio subprocess env, re-advertise
+// withheld tools, and re-enable a server the operator switched off.
+func preserveUnsetFields(cfg, oldCfg config.ToolConfig) config.ToolConfig {
+	if cfg.EnvPassthrough == nil {
+		cfg.EnvPassthrough = oldCfg.EnvPassthrough
+	}
+	if cfg.DisabledTools == nil {
+		cfg.DisabledTools = oldCfg.DisabledTools
+	}
+	if cfg.Enabled == nil {
+		cfg.Enabled = oldCfg.Enabled
+	}
+	return cfg
+}
+
 // UpdateTool replaces the configuration of an existing MCP tool server.
 // It removes the old server and re-adds it with the new config atomically.
+//
+// Fields the caller left unset are preserved from the old config rather than
+// zeroed: a nil EnvPassthrough/DisabledTools/Enabled means "not specified", an
+// empty non-nil slice means "clear". Every other field replaces wholesale.
 func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg config.ToolConfig) error {
 	transport := cfg.Transport
 	if transport == "" {
@@ -177,6 +197,8 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 		return fmt.Errorf("tool %q not found", name)
 	}
 
+	cfg = preserveUnsetFields(cfg, oldCfg)
+
 	// A stored token belongs to the OAuth identity it was issued for. If the
 	// update changes that identity, discard the token so the tool re-auths —
 	// before UnregisterServer, so a live handler's in-memory state clears too.
@@ -190,8 +212,11 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 		return fmt.Errorf("unregistering tool %q: %w", name, err)
 	}
 
-	// Register with new config.
-	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
+	// Register with new config. A disabled server must not be started by an
+	// edit — it goes back to the disabled entry it came from.
+	if !cfg.IsEnabled() {
+		lm.toolMgr.RegisterDisabled(name, cfg, "disabled by user", false)
+	} else if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
 		return fmt.Errorf("re-registering tool %q: %w", name, err)
 	}
 
@@ -265,6 +290,10 @@ func (lm *LifecycleManager) DisableTool(ctx context.Context, name string) error 
 		lm.logger.Warn("error stopping tool during disable", "name", name, "error", err)
 	}
 
+	// Mirror the TOML write into the retained config, so a later edit that
+	// preserves Enabled sees "off" rather than "unspecified".
+	disabled := false
+	cfg.Enabled = &disabled
 	lm.toolMgr.RegisterDisabled(name, cfg, "disabled by user", false)
 
 	if err := updateEnabledInConfig(lm.configPath, name, false); err != nil {
@@ -297,6 +326,7 @@ func (lm *LifecycleManager) EnableTool(ctx context.Context, name string) error {
 	}
 
 	_ = lm.toolMgr.UnregisterServer(name)
+	cfg.Enabled = nil // nil = enabled; keeps the retained config in step with TOML
 
 	if err := lm.toolMgr.RegisterServer(ctx, name, cfg); err != nil {
 		lm.toolMgr.RegisterDisabled(name, cfg, err.Error(), false)

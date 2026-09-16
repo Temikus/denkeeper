@@ -90,8 +90,11 @@
     return new Date(s).toLocaleString()
   }
 
-  const filters = ['pending', 'approved', 'denied', 'expired', '']
-  const filterLabels = { '': 'all', pending: 'pending', approved: 'approved', denied: 'denied', expired: 'expired' }
+  const filters = ['pending', 'approved', 'denied', 'expired', 'aborted', '']
+  const filterLabels = {
+    '': 'all', pending: 'pending', approved: 'approved', denied: 'denied',
+    expired: 'expired', aborted: 'aborted',
+  }
 </script>
 
 <h1 class="page-title">Approvals</h1>
