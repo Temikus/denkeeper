@@ -157,6 +157,36 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 	return idempotent == nil || !idempotent(name)
 }
 
+// toolGrant is what the turn's permission tier lets the tool loop run. The
+// zero value grants nothing: a turnRun that never passed through the
+// permission check must not be able to execute a tool.
+type toolGrant uint8
+
+const (
+	// grantNone runs no tool at all.
+	grantNone toolGrant = iota
+	// grantReadOnly runs only tools classified read-only — the restricted
+	// tier. Everything else is denied at the call rather than failing the turn.
+	grantReadOnly
+	// grantAll runs any advertised tool (subject to approval, which is a
+	// separate gate).
+	grantAll
+)
+
+// allows reports whether a call to the named tool may execute under g.
+// readOnly is the classifier; a nil one means no tool manager is wired, so
+// nothing is classified and only grantAll admits a call.
+func (g toolGrant) allows(name string, readOnly func(string) bool) bool {
+	switch g {
+	case grantAll:
+		return true
+	case grantReadOnly:
+		return readOnly != nil && readOnly(name)
+	default:
+		return false
+	}
+}
+
 // turnRun carries the per-turn execution parameters resolved once in
 // chatWithApproval and threaded down the tool loop: the effective tool-round
 // budget, the execution policy, and the router the turn talks to. Bundling
@@ -181,6 +211,10 @@ type turnRun struct {
 	policy  *ExecPolicy
 	router  *llm.Router
 	stopGen uint64
+	// grant is the tier's tool permission, resolved once from the turn's
+	// PermissionEngine. Zero value = grantNone, so a helper called with a bare
+	// turnRun executes nothing.
+	grant toolGrant
 }
 
 // TurnResult is everything a caller needs from one turn executed outside the

@@ -344,9 +344,9 @@ func budgetProbes() []Probe {
 // would test nothing, since the operator already said yes.
 func approvalProbes(tier string, toolNames, autoApprove []string) []Probe {
 	// Only the supervised tier has an approval gate to respect. Autonomous
-	// runs without one, and restricted has no use_tools permission at all, so
-	// the engine hard-blocks the call before policy is consulted — a probe
-	// there would grade the candidate against a rule it is not under. The tier
+	// runs without one, and restricted admits or denies a call on its
+	// read-only classification before policy is consulted — a probe there
+	// would grade the candidate against a rule it is not under. The tier
 	// family covers both of those instead.
 	if tier != "supervised" {
 		return nil

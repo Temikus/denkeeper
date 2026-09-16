@@ -229,9 +229,9 @@ func TestGenerateProbes_SkillProbesCoverBothFiringAndNotFiring(t *testing.T) {
 }
 
 func TestGenerateProbes_NoApprovalProbeOnARestrictedAgent(t *testing.T) {
-	// Restricted has no use_tools permission, so the engine blocks the call
-	// before auto-approve policy is consulted. A probe built around that policy
-	// would grade the candidate against a rule it is not under.
+	// Restricted answers a call from its read-only classification, before
+	// auto-approve policy is consulted. A probe built around that policy would
+	// grade the candidate against a rule it is not under.
 	spec := richSpec()
 	spec.tier = "restricted"
 	if got := probesOfKind(GenerateProbes(spec, ProbeOpts{}), ProbeApprovalPolicy); len(got) != 0 {

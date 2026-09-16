@@ -915,29 +915,79 @@ var builtinIdempotentTools = map[string]bool{
 	"web_search": true,
 }
 
+// builtinReadOnlyTools names in-process tools that only read. Broader than
+// builtinIdempotentTools on purpose: a config read (skill_get, tool_list) is
+// read-only but must not be memoized, because the same turn can write config
+// between two calls. Keyed by MCP tool name; consulted only for
+// session-registered (in-process) servers.
+var builtinReadOnlyTools = map[string]bool{
+	"browser_profile_info": true,
+	"browser_profile_list": true,
+	"channel_info":         true,
+	"channel_list":         true,
+	"get_cost_summary":     true,
+	"kv_get":               true,
+	"kv_list":              true,
+	"persona_get":          true,
+	"plugin_list":          true,
+	"schedule_list":        true,
+	"session_search":       true,
+	"skill_get":            true,
+	"skill_list":           true,
+	"skill_read_file":      true,
+	"tool_list":            true,
+	"web_fetch":            true,
+	"web_search":           true,
+}
+
+// toolClass is everything a classification decision reads about one tool,
+// snapshotted under the manager lock.
+type toolClass struct {
+	local     string // server-local name, which the allowlists are keyed by
+	inProcess bool   // registered as an in-process session, not an external server
+	optedIn   bool   // [tools.*] idempotent / idempotent_tools names it
+	trusted   bool   // [tools.*] trust_annotations
+	hinted    bool   // the server marked it readOnlyHint at discovery
+}
+
+// classify resolves toolName and snapshots its classification inputs.
+// discoverTools and SetDisabledTools mutate these fields under m.mu during
+// restart, re-register and config edits, so they are all read under the lock.
+func (m *Manager) classify(toolName string) (toolClass, *Manager, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	parent := m.parent
+	sc, local, err := m.resolveTool(toolName)
+	if err != nil {
+		return toolClass{}, parent, err
+	}
+	return toolClass{
+		local: local,
+		// In-process sessions (RegisterSession) have no transport and no
+		// command; external servers always set one of them.
+		inProcess: sc.transport == "" && sc.command == "",
+		optedIn:   sc.cfg.IsIdempotentTool(local),
+		trusted:   sc.cfg.TrustAnnotations,
+		hinted:    sc.readOnlyHinted[local],
+	}, parent, nil
+}
+
+// declaredReadOnly reports whether an external server's operator or the server
+// itself classified the tool as read-only. Shared by both classifications: the
+// [tools.*] idempotent flags are documented as "only for servers whose tools
+// are ALL read-only", and a readOnlyHint counts only under the per-server
+// trust_annotations opt-in.
+func (c toolClass) declaredReadOnly() bool {
+	return c.optedIn || (c.trusted && c.hinted)
+}
+
 // IsIdempotent reports whether toolName's results may be memoized within a
 // single turn. In-process tools use the built-in allowlist; external MCP
 // tools default to false unless their [tools.*] config opts in via
 // idempotent / idempotent_tools, or via trust_annotations for tools the
 // server marked readOnlyHint at discovery.
 func (m *Manager) IsIdempotent(toolName string) bool {
-	m.mu.RLock()
-	sc, local, err := m.resolveTool(toolName)
-	parent := m.parent
-	// Everything the decision needs is read under the lock: discoverTools and
-	// SetDisabledTools mutate these fields under m.mu during restart,
-	// re-register and config edits.
-	var inProcess, optedIn, trusted, hinted bool
-	if err == nil {
-		// In-process sessions (RegisterSession) have no transport and no
-		// command; external servers always set one of them.
-		inProcess = sc.transport == "" && sc.command == ""
-		optedIn = sc.cfg.IsIdempotentTool(local)
-		trusted = sc.cfg.TrustAnnotations
-		hinted = sc.readOnlyHinted[local]
-	}
-	m.mu.RUnlock()
-
+	class, parent, err := m.classify(toolName)
 	if err != nil {
 		// An ambiguous name is not memoizable — and must not be answered by
 		// the parent either, since the collision is here.
@@ -946,13 +996,33 @@ func (m *Manager) IsIdempotent(toolName string) bool {
 		}
 		return false
 	}
-	if inProcess {
-		return builtinIdempotentTools[local]
+	if class.inProcess {
+		return builtinIdempotentTools[class.local]
 	}
-	if optedIn {
-		return true
+	return class.declaredReadOnly()
+}
+
+// IsReadOnly reports whether toolName only reads — the classification the
+// restricted tier's read-only tool grant is checked against. Conservative by
+// construction: a tool nobody classified is not read-only, and neither is an
+// ambiguous name.
+//
+// In-process tools use the built-in allowlist. External MCP tools qualify via
+// the server's readOnlyHint annotation under trust_annotations, or via the
+// [tools.*] idempotent / idempotent_tools opt-in, which is documented as a
+// declaration that the tools are read-only.
+func (m *Manager) IsReadOnly(toolName string) bool {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.IsReadOnly(toolName)
+		}
+		return false
 	}
-	return trusted && hinted
+	if class.inProcess {
+		return builtinReadOnlyTools[class.local]
+	}
+	return class.declaredReadOnly()
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""

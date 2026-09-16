@@ -1556,8 +1556,8 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 	// tool gate while the approval manager is nil (engine.go: supervised
 	// requires both), but withholds create_skill/modify_schedule/
 	// execute_shell/access_filesystem from the allowlist. "restricted" is not
-	// an option: it omits use_tools, which would block the append-only memory
-	// tool the reviewer is meant to keep.
+	// an option: it grants read-only tools only, and the append-only memory
+	// tool the reviewer is meant to keep is a write.
 	//
 	// If a real approval manager is ever wired here, the supervised path will
 	// block in WaitForResolution on an undeliverable approval — map supervisor

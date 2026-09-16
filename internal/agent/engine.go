@@ -1591,7 +1591,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), stopGen: stopGen}
+	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), stopGen: stopGen, grant: grantFor(perms)}
 	resp, _, toolRecords, stopReason, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
@@ -2044,12 +2044,14 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		e.emitLLMAudit(ctx, convID, resp, "", llmAuditOpts{round: 0})
 	}
 
-	// Validate tool execution preconditions before entering the loop.
+	// Validate tool execution preconditions before entering the loop. A tier
+	// that grants read-only tools does enter the loop: write calls are denied
+	// one at a time there, so the model can answer without them.
 	if resp.FinishReason == "tool_calls" && len(resp.ToolCalls) > 0 {
 		if e.tools == nil {
 			return nil, llmMessages, nil, stopNone, fmt.Errorf("LLM requested tool calls but no tool manager configured")
 		}
-		if !perms.CanExecute("use_tools") {
+		if run.grant == grantNone {
 			return nil, llmMessages, nil, stopNone, fmt.Errorf("tool execution not permitted under %q tier", perms.Tier())
 		}
 	}
@@ -2530,6 +2532,12 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 // nothing). New denials and new cacheable results are recorded in state for
 // subsequent rounds of this turn.
 func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord) {
+	// The tier grant answers first: a tool the tier does not allow must not
+	// reach the cache, the approval chain or the tool manager.
+	if !run.grant.allows(tc.Function.Name, e.readOnlyCheck()) {
+		return e.denyToolCallByGrant(ctx, tc, round, convID, onEvent)
+	}
+
 	key := toolDedupeKey(tc)
 	if denyText, deniedBefore := state.denied[key]; deniedBefore {
 		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
@@ -2571,6 +2579,54 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 	if record.Outcome == "ok" && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
 		state.cache[key] = cachedToolResult{result: result, round: round}
 	}
+	return result, record
+}
+
+// denyToolCallByGrant refuses a call the permission tier does not cover —
+// under the restricted tier, any tool not classified read-only. The turn is
+// not failed: the model reads the refusal as a tool result and can answer
+// without that tool, the same shape as an operator denial.
+func (e *Engine) denyToolCallByGrant(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, ToolCallRecord) {
+	e.logger.Warn("tool call denied by permission tier",
+		"tool", tc.Function.Name, "round", round, "conversation", convID)
+	record := ToolCallRecord{
+		ToolName:  tc.Function.Name,
+		Round:     round,
+		Success:   false,
+		Outcome:   "denied",
+		ErrorMsg:  "denied (read-only tier)",
+		Arguments: tc.Function.Arguments,
+	}
+	if e.tools != nil {
+		record.ServerName = e.tools.ToolServer(tc.Function.Name)
+	}
+	result := fmt.Sprintf(
+		"[engine: call not executed — this session may use read-only tools only, and %q is not classified read-only. Do not retry it; answer without it.]",
+		tc.Function.Name)
+	record.Result = result
+
+	if onEvent != nil {
+		onEvent(ChatEvent{Type: "tool_start", Tool: tc.Function.Name, ToolID: tc.ID, Round: round})
+		onEvent(ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round,
+			Duration: 0, Text: "denied — read-only tier"})
+	}
+
+	detail, _ := json.Marshal(map[string]any{
+		"tool":      tc.Function.Name,
+		"server":    record.ServerName,
+		"round":     round,
+		"arguments": tc.Function.Arguments,
+		"reason":    "tier grants read-only tools only",
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryToolCall,
+		Action:         "denied",
+		Summary:        tc.Function.Name,
+		Detail:         string(detail),
+		Status:         audit.StatusDenied,
+		Source:         "engine",
+		ConversationID: convID,
+	})
 	return result, record
 }
 
@@ -2667,6 +2723,9 @@ func (e *Engine) cachedToolCallResult(ctx context.Context, tc llm.ToolCall, roun
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),
 // then executing it and emitting tool_start/tool_end ChatEvents.
 // Returns the tool result string and a ToolCallRecord for persistence.
+//
+// The permission tier's grant is checked by executeToolCallDeduped, its only
+// caller; a call arriving here is one the tier allows.
 func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc) (string, ToolCallRecord) {
 	// An execution policy splits tools by the existing idempotency signal:
 	// read-only calls run for real so the model sees a truthful world, and
@@ -2802,6 +2861,30 @@ func (e *Engine) idempotencyCheck() func(string) bool {
 		return nil
 	}
 	return e.tools.IsIdempotent
+}
+
+// readOnlyCheck returns the read-only classifier the tool grant consults, or
+// nil when no tool manager is wired — nothing is classified, so a read-only
+// grant admits nothing.
+func (e *Engine) readOnlyCheck() func(string) bool {
+	if e.tools == nil {
+		return nil
+	}
+	return e.tools.IsReadOnly
+}
+
+// grantFor maps a permission tier onto the tool grant the turn runs under.
+// "use_tools" is every advertised tool; "use_read_only_tools" alone is the
+// restricted tier's read-only grant.
+func grantFor(perms *security.PermissionEngine) toolGrant {
+	switch {
+	case perms.CanExecute("use_tools"):
+		return grantAll
+	case perms.CanExecute("use_read_only_tools"):
+		return grantReadOnly
+	default:
+		return grantNone
+	}
 }
 
 // approvalOutcome represents the result of the supervised approval chain.

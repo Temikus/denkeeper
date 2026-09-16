@@ -67,7 +67,7 @@ REST API (/api/v1/chat) ────┘                    ↕                  
 
 ## Permission Tiers
 
-`autonomous` (all actions), `supervised` (chat + tools with approval), `restricted` (chat + read-only tools). Approval workflow, auto-approve scopes, and supervisor agents: `.claude/rules/approval.md`.
+`autonomous` (all actions), `supervised` (chat + tools with approval), `restricted` (chat + tools classified read-only; anything else is denied per call). Read-only classification, approval workflow, auto-approve scopes, and supervisor agents: `.claude/rules/approval.md`.
 
 ## UI/UX Standards
 
