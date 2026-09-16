@@ -6071,7 +6071,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Cancels an in-flight LLM request for the given session.",
+                "description": "Stops the in-flight turn for the given session. The turn ends at its next step boundary — the tool call in flight finishes, the rest are skipped, and the agent replies with a summary of what it did — so a 204 means \"stopping\", not \"stopped\". A turn that has not ended within the grace period is cancelled outright.",
                 "tags": [
                     "sessions"
                 ],
@@ -6087,7 +6087,7 @@
                 ],
                 "responses": {
                     "204": {
-                        "description": "Request cancelled"
+                        "description": "Stop requested"
                     },
                     "404": {
                         "description": "No in-flight request",
@@ -8116,13 +8116,15 @@
                 "pending",
                 "approved",
                 "denied",
-                "expired"
+                "expired",
+                "aborted"
             ],
             "x-enum-varnames": [
                 "StatusPending",
                 "StatusApproved",
                 "StatusDenied",
-                "StatusExpired"
+                "StatusExpired",
+                "StatusAborted"
             ]
         },
         "github_com_Temikus_denkeeper_internal_audit.Event": {

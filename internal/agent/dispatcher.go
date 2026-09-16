@@ -37,6 +37,17 @@ type inFlightRequest struct {
 	start  time.Time
 }
 
+// chatCancel is a transport-owned context cancel for one chat, registered as
+// the hard-kill fallback behind a cooperative stop.
+type chatCancel struct {
+	cancel context.CancelFunc
+}
+
+// defaultStopGrace is how long a turn has to reach a step boundary after a stop
+// before the context is cancelled instead. Long enough for an in-flight tool
+// call (toolExecTimeout) plus the wrap-up completion the cancel exit issues.
+const defaultStopGrace = 45 * time.Second
+
 // Dispatcher routes incoming messages to the correct agent Engine based on
 // channel bindings (or legacy adapter bindings). It owns the adapter lifecycle
 // and the shared incoming channel.
@@ -60,6 +71,18 @@ type Dispatcher struct {
 	// In-flight request tracking for /stop cancellation.
 	inFlightMu sync.Mutex
 	inFlight   map[string]*inFlightRequest // "adapter:externalID" → request
+
+	// chatCancels holds the hard-kill fallbacks registered by transports that
+	// own a turn's context without going through handleMessage — WebSocket, SSE
+	// and REST chat, none of which appear in inFlight. StopChat arms them
+	// behind the cooperative stop; nothing else touches them, so a panic keeps
+	// its stage-1 behavior of cancelling only the adapter loop.
+	cancelsMu   sync.Mutex
+	chatCancels map[string]map[*chatCancel]struct{}
+
+	// stopGrace is how long a cooperative stop has to land before the fallback
+	// cancels the context. Zero means defaultStopGrace.
+	stopGrace time.Duration
 
 	// Panic state — blocks all new messages until /resume.
 	panicMu   sync.RWMutex
@@ -739,11 +762,12 @@ func (d *Dispatcher) emitRouteAudit(ctx context.Context, msg adapter.IncomingMes
 func (d *Dispatcher) handleMessage(ctx context.Context, wg *sync.WaitGroup, e *Engine, msg adapter.IncomingMessage) {
 	defer wg.Done()
 
-	// Derive a cancellable context so /stop can abort this request.
+	// Derive a cancellable context so a stop that outlives its grace period, or
+	// a panic, can abort this request.
 	msgCtx, msgCancel := context.WithCancel(ctx)
 	defer msgCancel()
 
-	key := msg.Adapter + ":" + msg.ExternalID
+	key := ChatKey(msg.Adapter, msg.ExternalID)
 	d.inFlightMu.Lock()
 	d.inFlight[key] = &inFlightRequest{cancel: msgCancel, agent: e.Name(), start: time.Now()}
 	d.inFlightMu.Unlock()
@@ -824,21 +848,13 @@ func (d *Dispatcher) handleControlCommand(ctx context.Context, cmd string, msg a
 	}
 }
 
-// handleStopCommand cancels the in-flight request for the sender's chat.
+// handleStopCommand stops the in-flight request for the sender's chat. The turn
+// finishes the step it is on and answers with what it has, so the reply the
+// user gets is the wrap-up, not this acknowledgement.
 func (d *Dispatcher) handleStopCommand(ctx context.Context, msg adapter.IncomingMessage) {
-	key := msg.Adapter + ":" + msg.ExternalID
-	d.inFlightMu.Lock()
-	req, ok := d.inFlight[key]
-	if ok {
-		req.cancel()
-		delete(d.inFlight, key)
-	}
-	d.inFlightMu.Unlock()
-
 	text := "No request in progress."
-	if ok {
-		text = "Request cancelled."
-		d.logger.Info("stop command: cancelled in-flight request", "adapter", msg.Adapter, "external_id", msg.ExternalID, "agent", req.agent)
+	if err := d.StopChat(msg.Adapter, msg.ExternalID); err == nil {
+		text = "Stopping — I'll finish the step I'm on and reply with what I have."
 	}
 
 	d.emitSafetyAudit(ctx, "stop", msg, text)
@@ -908,23 +924,139 @@ func (d *Dispatcher) executeResume() {
 	}
 }
 
-// StopChat cancels the in-flight request for the given adapter and external ID.
-// Returns an error if no request is in progress. Used by REST API and WebSocket.
+// StopChat asks the turn running for the given adapter and external ID to stop.
+// Returns an error if nothing is in progress. Used by /stop, the REST session
+// stop endpoint and the WebSocket cancel frame — every user-facing cancel path.
+//
+// The stop is cooperative first: the turn ends at its next step boundary, keeps
+// the effects it has already applied, answers with a wrap-up and persists like
+// any other turn. Context cancellation is only the escape hatch, armed here and
+// fired after stopGrace if the turn has not ended by then — a turn wedged
+// inside a tool call that ignores its context never reaches a boundary, and a
+// stop button that sometimes does nothing is worse than an abrupt one.
 func (d *Dispatcher) StopChat(adapterName, externalID string) error {
-	key := adapterName + ":" + externalID
-	d.inFlightMu.Lock()
-	req, ok := d.inFlight[key]
-	if ok {
-		req.cancel()
-		delete(d.inFlight, key)
-	}
-	d.inFlightMu.Unlock()
+	key := ChatKey(adapterName, externalID)
 
-	if !ok {
+	observed := d.requestChatStop(adapterName, externalID)
+	armed := d.armHardKill(key)
+	if !observed && armed == 0 {
 		return fmt.Errorf("no in-flight request for %s", key)
 	}
-	d.logger.Info("stop: cancelled in-flight request via API", "key", key, "agent", req.agent)
+
+	d.logger.Info("stop requested for chat",
+		"key", key, "cooperative", observed, "fallbacks_armed", armed, "grace", d.stopGracePeriod())
 	return nil
+}
+
+// requestChatStop raises the cooperative stop on every engine, since the chat
+// key alone does not say which agent is serving it (channel overrides move a
+// chat between agents at runtime). Reports whether any turn observed it.
+func (d *Dispatcher) requestChatStop(adapterName, externalID string) bool {
+	d.mu.RLock()
+	engines := make([]*Engine, 0, len(d.agents))
+	for _, e := range d.agents {
+		engines = append(engines, e)
+	}
+	d.mu.RUnlock()
+
+	observed := false
+	for _, e := range engines {
+		if e.RequestStopChat(adapterName, externalID) {
+			observed = true
+		}
+	}
+	return observed
+}
+
+// armHardKill schedules the fallback cancellation for every context registered
+// against this chat, and reports how many it armed. Each timer re-checks that
+// the very same registration is still live, so a turn that ended in time — or a
+// later turn that reused the key — is never cancelled.
+func (d *Dispatcher) armHardKill(key string) int {
+	var armed int
+
+	d.inFlightMu.Lock()
+	req, inFlight := d.inFlight[key]
+	d.inFlightMu.Unlock()
+	if inFlight {
+		armed++
+		d.hardKillAfterGrace(key, req.cancel, func() bool {
+			d.inFlightMu.Lock()
+			defer d.inFlightMu.Unlock()
+			return d.inFlight[key] == req
+		})
+	}
+
+	d.cancelsMu.Lock()
+	registered := make([]*chatCancel, 0, len(d.chatCancels[key]))
+	for cc := range d.chatCancels[key] {
+		registered = append(registered, cc)
+	}
+	d.cancelsMu.Unlock()
+	for _, cc := range registered {
+		armed++
+		d.hardKillAfterGrace(key, cc.cancel, func() bool {
+			d.cancelsMu.Lock()
+			defer d.cancelsMu.Unlock()
+			_, still := d.chatCancels[key][cc]
+			return still
+		})
+	}
+
+	return armed
+}
+
+func (d *Dispatcher) hardKillAfterGrace(key string, cancel context.CancelFunc, stillRunning func() bool) {
+	time.AfterFunc(d.stopGracePeriod(), func() {
+		if !stillRunning() {
+			return
+		}
+		d.logger.Warn("cooperative stop did not complete in time, cancelling context",
+			"key", key, "grace", d.stopGracePeriod())
+		cancel()
+	})
+}
+
+func (d *Dispatcher) stopGracePeriod() time.Duration {
+	if d.stopGrace > 0 {
+		return d.stopGrace
+	}
+	return defaultStopGrace
+}
+
+// SetStopGracePeriod overrides how long a cooperative stop is given before the
+// context is cancelled instead. Call before the dispatcher serves traffic.
+func (d *Dispatcher) SetStopGracePeriod(grace time.Duration) {
+	d.stopGrace = grace
+}
+
+// RegisterChatCancel registers cancel as the hard-kill fallback for the turn a
+// transport is about to run on this chat, and returns the function that
+// unregisters it. Transports that run turns outside the adapter message loop
+// (WebSocket, SSE, REST chat) call this so StopChat can reach them; the cancel
+// is never invoked unless the cooperative stop fails to land.
+func (d *Dispatcher) RegisterChatCancel(adapterName, externalID string, cancel context.CancelFunc) (release func()) {
+	key := ChatKey(adapterName, externalID)
+	cc := &chatCancel{cancel: cancel}
+
+	d.cancelsMu.Lock()
+	if d.chatCancels == nil {
+		d.chatCancels = make(map[string]map[*chatCancel]struct{})
+	}
+	if d.chatCancels[key] == nil {
+		d.chatCancels[key] = make(map[*chatCancel]struct{})
+	}
+	d.chatCancels[key][cc] = struct{}{}
+	d.cancelsMu.Unlock()
+
+	return func() {
+		d.cancelsMu.Lock()
+		defer d.cancelsMu.Unlock()
+		delete(d.chatCancels[key], cc)
+		if len(d.chatCancels[key]) == 0 {
+			delete(d.chatCancels, key)
+		}
+	}
 }
 
 // Panic triggers an emergency stop via the API. Cancels all in-flight
@@ -1353,6 +1485,12 @@ var supervisorStatusRenders = map[string]supervisorStatusRender{
 			return fmt.Sprintf("Tool **%s** auto-denied: identical call was denied earlier this turn", evt.Tool)
 		},
 		alogLine: func(_ ChatEvent) string { return "❌ auto-denied (repeat of denied call)" },
+	},
+	"aborted": {
+		debugText: func(evt ChatEvent) string {
+			return fmt.Sprintf("Approval for **%s** aborted — the turn was stopped before you answered", evt.Tool)
+		},
+		alogLine: func(_ ChatEvent) string { return "⏹ aborted — turn stopped" },
 	},
 }
 
