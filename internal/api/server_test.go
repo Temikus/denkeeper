@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/approval"
@@ -2036,11 +2039,19 @@ func TestWebHandler_APIRoutesNotIntercepted(t *testing.T) {
 
 func testLifecycleMgr(t *testing.T) *tool.LifecycleManager {
 	t.Helper()
+	lm, _ := testLifecycleMgrWithPath(t)
+	return lm
+}
+
+// testLifecycleMgrWithPath also returns the TOML path, for tests that assert
+// against what was persisted rather than what the handler echoed back.
+func testLifecycleMgrWithPath(t *testing.T) (*tool.LifecycleManager, string) {
+	t.Helper()
 	dir := t.TempDir()
 	cfgPath := dir + "/denkeeper.toml"
 	_ = os.WriteFile(cfgPath, []byte("[telegram]\ntoken = \"test\"\n"), 0644)
-	mgr := tool.NewManager(testLogger())
-	return tool.NewLifecycleManager(mgr, cfgPath, 50, testLogger())
+	mgr := tool.NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	return tool.NewLifecycleManager(mgr, cfgPath, 50, testLogger()), cfgPath
 }
 
 func TestListTools_NilLifecycleMgr_Returns503(t *testing.T) {
@@ -2410,6 +2421,125 @@ func TestUpdateTool_MissingCommand(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// startTestMCPServer runs a real (tool-less) MCP server over Streamable HTTP so
+// tool-edit tests exercise the register/unregister path instead of stubbing it.
+func startTestMCPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "api-test", Version: "v1"}, nil)
+	ts := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// seedEditableTool registers a live SSE tool carrying the three fields the edit
+// form does not send, and returns the server + the TOML path to assert against.
+func seedEditableTool(t *testing.T, name string) (*Server, *tool.LifecycleManager, string, string) {
+	t.Helper()
+	ts := startTestMCPServer(t)
+	lm, cfgPath := testLifecycleMgrWithPath(t)
+	err := lm.AddTool(t.Context(), name, config.ToolConfig{
+		Transport:      "sse",
+		URL:            ts.URL,
+		AllowLoopback:  true,
+		EnvPassthrough: []string{"NPM_TOKEN"},
+		DisabledTools:  []string{"dangerous_tool"},
+	})
+	if err != nil {
+		t.Fatalf("AddTool: %v", err)
+	}
+	t.Cleanup(func() { _ = lm.ToolManager().Close() })
+
+	deps := testDeps()
+	deps.LifecycleMgr = lm
+	return New(testConfig(allScopesKey()), deps, testLogger()), lm, cfgPath, ts.URL
+}
+
+// persistedToolEntry reads [tools.<name>] back out of the TOML file.
+func persistedToolEntry(t *testing.T, cfgPath, name string) map[string]any {
+	t.Helper()
+	raw, err := config.ReadRawConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	tools, ok := raw["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("no [tools] section in %s", cfgPath)
+	}
+	entry, ok := tools[name].(map[string]any)
+	if !ok {
+		t.Fatalf("no [tools.%s] section in %s", name, cfgPath)
+	}
+	return entry
+}
+
+// putTool issues an authenticated PUT and asserts a 200.
+func putTool(t *testing.T, srv *Server, name, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/"+name, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestUpdateTool_OmittedFieldsPreserved(t *testing.T) {
+	srv, _, cfgPath, url := seedEditableTool(t, "editme")
+
+	// A dashboard edit that only touches the timeout.
+	putTool(t, srv, "editme", fmt.Sprintf(
+		`{"transport":"sse","url":%q,"allow_loopback":true,"request_timeout_secs":42}`, url))
+
+	entry := persistedToolEntry(t, cfgPath, "editme")
+	if got := entry["env_passthrough"]; !reflect.DeepEqual(got, []any{"NPM_TOKEN"}) {
+		t.Errorf("env_passthrough = %#v, want [NPM_TOKEN]", got)
+	}
+	if got := entry["disabled_tools"]; !reflect.DeepEqual(got, []any{"dangerous_tool"}) {
+		t.Errorf("disabled_tools = %#v, want [dangerous_tool]", got)
+	}
+	if got := entry["request_timeout_secs"]; got != int64(42) {
+		t.Errorf("request_timeout_secs = %#v, want 42", got)
+	}
+}
+
+func TestUpdateTool_ExplicitEmptyArrayClears(t *testing.T) {
+	srv, _, cfgPath, url := seedEditableTool(t, "editme")
+
+	putTool(t, srv, "editme", fmt.Sprintf(
+		`{"transport":"sse","url":%q,"allow_loopback":true,"env_passthrough":[],"disabled_tools":[]}`, url))
+
+	entry := persistedToolEntry(t, cfgPath, "editme")
+	if _, ok := entry["env_passthrough"]; ok {
+		t.Errorf("env_passthrough = %#v, want cleared", entry["env_passthrough"])
+	}
+	if _, ok := entry["disabled_tools"]; ok {
+		t.Errorf("disabled_tools = %#v, want cleared", entry["disabled_tools"])
+	}
+}
+
+func TestUpdateTool_DisabledServerStaysDisabled(t *testing.T) {
+	srv, lm, cfgPath, url := seedEditableTool(t, "editme")
+	if err := lm.DisableTool(t.Context(), "editme"); err != nil {
+		t.Fatalf("DisableTool: %v", err)
+	}
+
+	putTool(t, srv, "editme", fmt.Sprintf(
+		`{"transport":"sse","url":%q,"allow_loopback":true}`, url))
+
+	if entry := persistedToolEntry(t, cfgPath, "editme"); entry["enabled"] != false {
+		t.Errorf("enabled = %#v, want false", entry["enabled"])
+	}
+	info, ok := lm.ToolManager().ServerInfo("editme")
+	if !ok {
+		t.Fatal("server missing after update")
+	}
+	if info.Enabled {
+		t.Error("server re-enabled by an unrelated edit")
 	}
 }
 

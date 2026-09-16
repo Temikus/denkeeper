@@ -2022,6 +2022,8 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 	if cfg, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
 		resp["args"] = cfg.Args
 		resp["env"] = cfg.Env
+		resp["env_passthrough"] = cfg.EnvPassthrough
+		resp["disabled_tools"] = cfg.DisabledTools
 		resp["headers"] = cfg.Headers
 		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
 		resp["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
@@ -2131,6 +2133,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
+		EnvPassthrough     []string          `json:"env_passthrough"`
+		DisabledTools      []string          `json:"disabled_tools"`
+		Enabled            *bool             `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2158,6 +2163,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
 		TrustAnnotations:   body.TrustAnnotations,
+		EnvPassthrough:     body.EnvPassthrough,
+		DisabledTools:      body.DisabledTools,
+		Enabled:            body.Enabled,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -2170,9 +2178,19 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// derefSlice maps an omitted JSON array (nil pointer, which JSON null also
+// yields) to a nil slice and an explicit one — including [] — to a non-nil
+// slice, so callers can tell "unspecified" from "clear".
+func derefSlice[T any](p *[]T) []T {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 // handleUpdateTool godoc
 // @Summary Update a tool server
-// @Description Updates the configuration of an existing MCP tool server and reconnects it.
+// @Description Updates the configuration of an existing MCP tool server and reconnects it. Most fields replace wholesale, but env_passthrough, disabled_tools and enabled are preserve-on-omit: leaving one out (or sending null) keeps the stored value, sending an empty array or an explicit boolean replaces it. A body that omits all three therefore cannot silently unscope the subprocess environment, re-advertise withheld tools, or re-enable a disabled server.
 // @Tags tools
 // @Accept json
 // @Produce json
@@ -2205,6 +2223,13 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
+
+		// Preserve-on-omit. Pointers so an absent array is distinguishable
+		// from an explicit [], which clears. LifecycleManager.UpdateTool
+		// merges a nil from the stored config.
+		EnvPassthrough *[]string `json:"env_passthrough"`
+		DisabledTools  *[]string `json:"disabled_tools"`
+		Enabled        *bool     `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2228,6 +2253,9 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
 		TrustAnnotations:   body.TrustAnnotations,
+		EnvPassthrough:     derefSlice(body.EnvPassthrough),
+		DisabledTools:      derefSlice(body.DisabledTools),
+		Enabled:            body.Enabled,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {
