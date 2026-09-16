@@ -108,7 +108,7 @@ func TestToolGrant_ReadOnlyWithoutClassifierAdmitsNothing(t *testing.T) {
 
 func TestExecuteToolCallDeduped_RestrictedTier_RunsReadOnlyTool(t *testing.T) {
 	e := newRestrictedTestEngine(t, "restricted")
-	result, record := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
+	result, record, _ := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
 		ID: "c1", Function: llm.FunctionCall{Name: "read_thing", Arguments: `{"value":"x"}`},
 	}, 1, "conv:1", false, turnRun{grant: grantReadOnly}, nil, newTurnToolState())
 
@@ -122,7 +122,7 @@ func TestExecuteToolCallDeduped_RestrictedTier_RunsReadOnlyTool(t *testing.T) {
 
 func TestExecuteToolCallDeduped_RestrictedTier_DeniesUnclassifiedTool(t *testing.T) {
 	e := newRestrictedTestEngine(t, "restricted")
-	result, record := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
+	result, record, _ := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
 		ID: "c1", Function: llm.FunctionCall{Name: "write_thing", Arguments: `{"value":"x"}`},
 	}, 1, "conv:1", false, turnRun{grant: grantReadOnly}, nil, newTurnToolState())
 
@@ -141,7 +141,7 @@ func TestExecuteToolCallDeduped_SupervisedTier_RunsUnclassifiedTool(t *testing.T
 	// The read-only classification gates only the restricted tier; a tier
 	// holding use_tools is unaffected by it.
 	e := newRestrictedTestEngine(t, "supervised")
-	_, record := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
+	_, record, _ := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
 		ID: "c1", Function: llm.FunctionCall{Name: "write_thing", Arguments: `{"value":"x"}`},
 	}, 1, "conv:1", false, turnRun{grant: grantAll}, nil, newTurnToolState())
 
@@ -158,7 +158,7 @@ func TestExecuteToolCallDeduped_DeniedByGrant_NeverReachesApproval(t *testing.T)
 	e.SetAuditor(auditor)
 
 	var events []ChatEvent
-	_, record := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
+	_, record, _ := e.executeToolCallDeduped(context.Background(), llm.ToolCall{
 		ID: "c1", Function: llm.FunctionCall{Name: "write_thing", Arguments: `{"value":"x"}`},
 	}, 2, "conv:1", true, turnRun{grant: grantReadOnly}, func(ev ChatEvent) { events = append(events, ev) }, newTurnToolState())
 

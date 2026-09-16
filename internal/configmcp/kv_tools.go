@@ -364,9 +364,9 @@ func parseTTL(s string) (time.Duration, error) {
 	if s == "" {
 		return 0, nil
 	}
-	d, err := time.ParseDuration(s)
+	d, err := kv.ParseTTL(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid ttl %q: %w", s, err)
+		return 0, err
 	}
 	if d < 0 {
 		return 0, fmt.Errorf("ttl must be non-negative, got %s", s)

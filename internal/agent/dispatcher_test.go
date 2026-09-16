@@ -1885,8 +1885,11 @@ func TestControlCommand(t *testing.T) {
 	}
 }
 
-func TestDispatcher_StopChat_CancelsInFlight(t *testing.T) {
+// A cooperative stop that never lands must still end the request: once the
+// grace period elapses with the turn still registered, the context is cancelled.
+func TestDispatcher_StopChat_HardKillsAfterGrace(t *testing.T) {
 	d := NewDispatcher(nil, nil, nil, testLogger())
+	d.SetStopGracePeriod(20 * time.Millisecond)
 
 	cancelled := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1909,21 +1912,47 @@ func TestDispatcher_StopChat_CancelsInFlight(t *testing.T) {
 		t.Fatalf("StopChat returned error: %v", err)
 	}
 
+	// The cooperative stop owns the first window: nothing is cancelled yet, and
+	// the entry stays so the turn can finish its step and persist.
 	select {
 	case <-cancelled:
-		// success
-	case <-time.After(time.Second):
-		t.Fatal("cancel was not called")
+		t.Fatal("context was cancelled immediately — the cooperative stop must get its grace period first")
+	case <-time.After(5 * time.Millisecond):
 	}
-
-	_ = ctx // consume ctx to avoid vet warning
-
-	// Verify entry was removed.
 	d.inFlightMu.Lock()
 	_, exists := d.inFlight["telegram:12345"]
 	d.inFlightMu.Unlock()
-	if exists {
-		t.Error("in-flight entry should have been removed")
+	if !exists {
+		t.Error("in-flight entry should survive the stop request; the turn ending removes it")
+	}
+
+	select {
+	case <-cancelled:
+		// success — the fallback fired.
+	case <-time.After(time.Second):
+		t.Fatal("cancel was not called after the grace period")
+	}
+
+	_ = ctx // consume ctx to avoid vet warning
+}
+
+// A turn that ends within the grace period must not be cancelled afterwards —
+// the fallback checks that the very registration it was armed for is still live.
+func TestDispatcher_StopChat_NoHardKillAfterTurnEnds(t *testing.T) {
+	d := NewDispatcher(nil, nil, nil, testLogger())
+	d.SetStopGracePeriod(20 * time.Millisecond)
+
+	var cancelled atomic.Bool
+	release := d.RegisterChatCancel("ws", "s1", func() { cancelled.Store(true) })
+
+	if err := d.StopChat("ws", "s1"); err != nil {
+		t.Fatalf("StopChat returned error: %v", err)
+	}
+	release() // the turn finished cooperatively
+
+	time.Sleep(60 * time.Millisecond)
+	if cancelled.Load() {
+		t.Error("context was cancelled after the turn had already ended")
 	}
 }
 

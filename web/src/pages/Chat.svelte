@@ -275,6 +275,7 @@
       case 'auto_denied': return '\u2717'
       case 'supervisor_escalated': return '\u2191'
       case 'supervisor_error': return '\u26a0'
+      case 'aborted': return '\u23f9'
       default: return '\u25cb'
     }
   }
@@ -289,6 +290,7 @@
       case 'auto_denied': return 'auto-denied'
       case 'supervisor_escalated': return 'escalated to you'
       case 'supervisor_error': return 'supervisor unavailable'
+      case 'aborted': return 'aborted (turn stopped)'
       default: return 'pending'
     }
   }

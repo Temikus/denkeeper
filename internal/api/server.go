@@ -1179,12 +1179,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		ConversationID: conversationID,
 	}
 
+	// A REST turn is not in the dispatcher's in-flight map either, so register
+	// its context as the hard-kill fallback for POST /sessions/{id}/stop. The
+	// cooperative stop is what normally ends the turn; this only fires if that
+	// fails to land within the grace period.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	releaseCancel := s.deps.Dispatcher.RegisterChatCancel("api", sessionID, cancel)
+	defer releaseCancel()
+
 	if r.Header.Get("Accept") == "text/event-stream" {
-		s.handleChatSSE(w, r, eng, msg, sessionID)
+		s.handleChatSSE(ctx, w, r, eng, msg, sessionID)
 		return
 	}
 
-	responseText, err := eng.Chat(r.Context(), msg)
+	responseText, err := eng.Chat(ctx, msg)
 	if err != nil {
 		s.logger.Error("chat error", "error", err, "agent", agentName, "session", sessionID)
 		writeJSON(w, llm.HTTPStatusForError(err), map[string]string{"error": llm.UserFacingError(err)})
@@ -1197,8 +1206,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChatSSE streams the response as Server-Sent Events.
-func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
+// handleChatSSE streams the response as Server-Sent Events. ctx is the turn's
+// context (the request's, made cancellable by the stop path), not r.Context().
+func (s *Server) handleChatSSE(ctx context.Context, w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1208,7 +1218,7 @@ func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agen
 	defer sseActiveGauge.Add(r.Context(), -1)
 
 	stream := NewSSEStreamSession(w)
-	s.runChatStream(r.Context(), stream, eng, msg, sessionID)
+	s.runChatStream(ctx, stream, eng, msg, sessionID)
 }
 
 // handleDeleteSession godoc
@@ -1336,11 +1346,11 @@ func (s *Server) resolveEngineForSession(sessionID, agentHint string) *agent.Eng
 
 // handleStopSession godoc
 // @Summary Stop in-flight request
-// @Description Cancels an in-flight LLM request for the given session.
+// @Description Stops the in-flight turn for the given session. The turn ends at its next step boundary — the tool call in flight finishes, the rest are skipped, and the agent replies with a summary of what it did — so a 204 means "stopping", not "stopped". A turn that has not ended within the grace period is cancelled outright.
 // @Tags sessions
 // @Security BearerAuth
 // @Param id path string true "Session ID"
-// @Success 204 "Request cancelled"
+// @Success 204 "Stop requested"
 // @Failure 404 {object} map[string]string "No in-flight request"
 // @Router /sessions/{id}/stop [post]
 func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
@@ -2022,6 +2032,8 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 	if cfg, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
 		resp["args"] = cfg.Args
 		resp["env"] = cfg.Env
+		resp["env_passthrough"] = cfg.EnvPassthrough
+		resp["disabled_tools"] = cfg.DisabledTools
 		resp["headers"] = cfg.Headers
 		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
 		resp["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
@@ -2131,6 +2143,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
+		EnvPassthrough     []string          `json:"env_passthrough"`
+		DisabledTools      []string          `json:"disabled_tools"`
+		Enabled            *bool             `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2158,6 +2173,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
 		TrustAnnotations:   body.TrustAnnotations,
+		EnvPassthrough:     body.EnvPassthrough,
+		DisabledTools:      body.DisabledTools,
+		Enabled:            body.Enabled,
 	}
 
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -2170,9 +2188,19 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// derefSlice maps an omitted JSON array (nil pointer, which JSON null also
+// yields) to a nil slice and an explicit one — including [] — to a non-nil
+// slice, so callers can tell "unspecified" from "clear".
+func derefSlice[T any](p *[]T) []T {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 // handleUpdateTool godoc
 // @Summary Update a tool server
-// @Description Updates the configuration of an existing MCP tool server and reconnects it.
+// @Description Updates the configuration of an existing MCP tool server and reconnects it. Most fields replace wholesale, but env_passthrough, disabled_tools and enabled are preserve-on-omit: leaving one out (or sending null) keeps the stored value, sending an empty array or an explicit boolean replaces it. A body that omits all three therefore cannot silently unscope the subprocess environment, re-advertise withheld tools, or re-enable a disabled server.
 // @Tags tools
 // @Accept json
 // @Produce json
@@ -2205,6 +2233,13 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
+
+		// Preserve-on-omit. Pointers so an absent array is distinguishable
+		// from an explicit [], which clears. LifecycleManager.UpdateTool
+		// merges a nil from the stored config.
+		EnvPassthrough *[]string `json:"env_passthrough"`
+		DisabledTools  *[]string `json:"disabled_tools"`
+		Enabled        *bool     `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2228,6 +2263,9 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent:         body.Idempotent,
 		IdempotentTools:    body.IdempotentTools,
 		TrustAnnotations:   body.TrustAnnotations,
+		EnvPassthrough:     derefSlice(body.EnvPassthrough),
+		DisabledTools:      derefSlice(body.DisabledTools),
+		Enabled:            body.Enabled,
 	}
 
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {

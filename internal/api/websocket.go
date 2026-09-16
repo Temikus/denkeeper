@@ -505,10 +505,17 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 	ctx, cancel := context.WithCancel(c.connCtx)
 	c.sessions.Store(sessionID, cancel)
 
+	// A WS turn is never in the dispatcher's in-flight map, so register the
+	// cancel there explicitly: it is the hard-kill fallback StopChat arms
+	// behind the cooperative stop, for cancel frames and the REST session stop
+	// endpoint alike.
+	releaseCancel := c.server.deps.Dispatcher.RegisterChatCancel("ws", sessionID, cancel)
+
 	// Run the chat pipeline in a goroutine so the read pump stays free.
 	go func() {
 		defer func() {
 			<-c.chatSem
+			releaseCancel()
 			c.sessions.Delete(sessionID)
 			cancel()
 		}()
@@ -618,16 +625,16 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 	}()
 }
 
+// handleCancel stops the turn running for a session. It does not cancel the
+// context here: StopChat raises the cooperative stop so the turn ends at its
+// next step boundary with a reply the client actually receives, and arms the
+// context kill only as the fallback (the cancel for a WS turn is registered
+// with the dispatcher in handleChat). The in-flight map covers a session that
+// was started from an adapter instead.
 func (c *WSConn) handleCancel(f CancelFrame) {
-	// Cancel the WS-originated session goroutine.
-	if val, ok := c.sessions.Load(f.SessionID); ok {
-		if cancel, ok := val.(context.CancelFunc); ok {
-			cancel()
-		}
+	if err := c.server.deps.Dispatcher.StopChat("ws", f.SessionID); err != nil {
+		c.hub.logger.Debug("ws: cancel for a session with nothing in flight", "session", f.SessionID)
 	}
-	// Also try to cancel via the Dispatcher's in-flight map, which covers
-	// sessions that were started from adapters (Telegram, Discord, etc.).
-	_ = c.server.deps.Dispatcher.StopChat("ws", f.SessionID)
 }
 
 // handlePanic triggers an emergency stop via the Dispatcher.
