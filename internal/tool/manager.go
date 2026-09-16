@@ -247,6 +247,7 @@ type ServerStatus struct {
 	TotalToolCount int              `json:"total_tool_count"`
 	Enabled        bool             `json:"enabled"`
 	ConfigError    string           `json:"config_error,omitempty"`
+	Guidance       string           `json:"guidance,omitempty"`
 }
 
 // OAuthStatusInfo is a non-sensitive view of OAuth state for API responses.
@@ -1322,6 +1323,62 @@ func (m *Manager) RestartServer(ctx context.Context, name string) error {
 	return nil
 }
 
+// ServerGuidance is one server's operator-authored argument rules together
+// with the tools it currently advertises, for injection into the system prompt.
+type ServerGuidance struct {
+	Server   string
+	Guidance string
+	Tools    []string // advertised tool names, sorted
+}
+
+// ServerGuidance returns guidance for every server that declares a non-blank
+// [tools.*] guidance AND currently advertises at least one enabled tool — the
+// model can only be told about a server it can actually call. That inclusion
+// rule is what excludes disabled, config_error, crashed and fully
+// tool-disabled servers without any of them being special-cased, and it
+// excludes in-process RegisterSession servers too (their config is the zero
+// ToolConfig).
+//
+// Rendering feeds the prompt cache prefix, so the result is deterministic:
+// servers and tool names are sorted lexicographically. Local entries win over
+// the parent's on a name collision, mirroring ServerNames.
+func (m *Manager) ServerGuidance() []ServerGuidance {
+	m.mu.RLock()
+	parent := m.parent
+	byServer := make(map[string][]string)
+	for _, td := range m.enabledToolDefs() {
+		sc, ok := m.toolMap[td.Function.Name]
+		if !ok || strings.TrimSpace(sc.cfg.Guidance) == "" {
+			continue
+		}
+		byServer[sc.name] = append(byServer[sc.name], td.Function.Name)
+	}
+	out := make([]ServerGuidance, 0, len(byServer))
+	for name, tools := range byServer {
+		slices.Sort(tools)
+		out = append(out, ServerGuidance{
+			Server:   name,
+			Guidance: strings.TrimSpace(m.servers[name].cfg.Guidance),
+			Tools:    tools,
+		})
+	}
+	m.mu.RUnlock()
+
+	if parent != nil {
+		seen := make(map[string]bool, len(out))
+		for _, g := range out {
+			seen[g.Server] = true
+		}
+		for _, g := range parent.ServerGuidance() {
+			if !seen[g.Server] {
+				out = append(out, g)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b ServerGuidance) int { return strings.Compare(a.Server, b.Server) })
+	return out
+}
+
 // ServerNames returns the names of all registered MCP servers,
 // including those from the parent manager (if any).
 func (m *Manager) ServerNames() []string {
@@ -1463,6 +1520,7 @@ func buildServerStatus(sc *serverConn, toolNames []string) ServerStatus {
 		TotalToolCount: totalCount,
 		Enabled:        !sc.userDisabled && !sc.disabled && sc.configError == "",
 		ConfigError:    sc.configError,
+		Guidance:       sc.cfg.Guidance,
 	}
 }
 

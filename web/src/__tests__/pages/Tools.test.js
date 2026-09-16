@@ -468,4 +468,24 @@ describe('Tools idempotent field', () => {
     expect(putBody.idempotent_tools).toEqual(['search_web'])
     expect(putBody.idempotent).toBeUndefined()
   })
+
+  test('shows server guidance read-only, and only for servers that declare it', async () => {
+    server.use(
+      http.get('/api/v1/tools', () =>
+        HttpResponse.json({
+          tools: [
+            { name: 'todoist', type: 'stdio', command: 'todoist-mcp', status: 'connected', tool_names: ['find_tasks'], guidance: 'Never send workspaceId.' },
+            { name: 'web_search', type: 'stdio', command: 'search-cli', status: 'connected', tool_names: ['search_web'] },
+          ],
+        })
+      )
+    )
+
+    render(Tools)
+    await waitFor(() => screen.getByText('todoist'))
+
+    expect(screen.getByText('Never send workspaceId.')).toBeInTheDocument()
+    // One card declares guidance, so exactly one label renders.
+    expect(screen.getAllByText('Server guidance')).toHaveLength(1)
+  })
 })

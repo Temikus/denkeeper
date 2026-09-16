@@ -91,6 +91,9 @@ func (lm *LifecycleManager) AddTool(ctx context.Context, name string, cfg config
 	default:
 		return fmt.Errorf("unsupported transport %q", transport)
 	}
+	if err := config.ValidateToolGuidance(cfg.Guidance); err != nil {
+		return err
+	}
 
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -160,6 +163,9 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 		}
 	default:
 		return fmt.Errorf("unsupported transport %q", transport)
+	}
+	if err := config.ValidateToolGuidance(cfg.Guidance); err != nil {
+		return err
 	}
 
 	lm.mu.Lock()

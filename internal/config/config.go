@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -935,6 +936,17 @@ type ToolConfig struct {
 	// names (DENKEEPER_* and the forbidden-pattern denylist) are always filtered
 	// out even if listed here.
 	EnvPassthrough []string `toml:"env_passthrough"`
+
+	// Guidance is operator-authored prose about this server's argument
+	// conventions, injected into the system prompt of every agent that can call
+	// its tools. Server-level facts only (ID provenance, forbidden grammar,
+	// fields the API accepts but that must be omitted) — workflow belongs in
+	// skills. Capped at MaxToolGuidanceBytes: rejected past the cap on the CRUD
+	// path, truncated at load. Operator-authored only; agents must never gain a
+	// writer for it (it lands in every agent's prompt, including supervised
+	// ones, so an agent-writable field would be a self-directed injection
+	// channel).
+	Guidance string `toml:"guidance"`
 
 	// Unsafe options.
 	AllowLoopback bool `toml:"allow_loopback"` // bypass SSRF loopback block (localhost/127.x/::1)
@@ -2060,12 +2072,59 @@ func applyScheduleDefaults(cfg *Config) {
 
 func applyToolDefaults(cfg *Config) {
 	for name, tc := range cfg.Tools {
+		changed := false
 		if tc.Enabled == nil {
 			v := true
 			tc.Enabled = &v
+			changed = true
+		}
+		// Truncate, never reject: a startup or POST /server/reload must not take
+		// a working MCP server offline over a cosmetic field. Deliberately NOT
+		// routed through cfg.ToolWarnings — that path auto-disables the server.
+		if len(tc.Guidance) > MaxToolGuidanceBytes {
+			tc.Guidance = truncateRunes(tc.Guidance, MaxToolGuidanceBytes)
+			changed = true
+			slog.Warn("tools guidance truncated to the size cap",
+				"tool", name,
+				"max_bytes", MaxToolGuidanceBytes,
+			)
+		}
+		if changed {
 			cfg.Tools[name] = tc
 		}
 	}
+}
+
+// MaxToolGuidanceBytes caps a single [tools.*] guidance string (~500 tokens):
+// dense enough for an argument-rules digest, small enough that several guided
+// servers stay well inside the prompt budget.
+const MaxToolGuidanceBytes = 2000
+
+// ValidateToolGuidance checks operator-supplied guidance for interactive
+// writes (REST POST/PUT, lifecycle add/update), where oversize input is
+// rejected rather than silently truncated.
+func ValidateToolGuidance(guidance string) error {
+	if len(guidance) > MaxToolGuidanceBytes {
+		return fmt.Errorf("config: guidance is %d bytes, over the %d-byte limit", len(guidance), MaxToolGuidanceBytes)
+	}
+	for _, r := range guidance {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r' {
+			return fmt.Errorf("config: guidance contains a control character (%U)", r)
+		}
+	}
+	return nil
+}
+
+// truncateRunes cuts s to at most maxBytes on a rune boundary.
+func truncateRunes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // validTiers is the set of recognised permission tier names.

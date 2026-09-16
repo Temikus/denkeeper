@@ -823,6 +823,16 @@
       {/if}
     {/snippet}
 
+    {#snippet toolGuidance(t)}
+      {#if t.guidance}
+        <div class="tool-guidance">
+          <div class="tool-guidance-label">Server guidance</div>
+          <p class="tool-guidance-text">{t.guidance}</p>
+          <p class="hint">Injected into every agent's system prompt alongside this server's tools. Edit it in denkeeper.toml under [tools.{t.name}].</p>
+        </div>
+      {/if}
+    {/snippet}
+
     <!-- Add tool panel (top-level, only for adding new tools) -->
     <div class="inline-panel" id="tool-form-panel" class:open={showToolForm && !editingToolName} use:inert={!(showToolForm && !editingToolName)}>
       <div class="inline-panel-inner">
@@ -885,6 +895,8 @@
                     {@render toolFormFields()}
                   </div>
                 </div>
+              {:else}
+                {@render toolGuidance(t)}
               {/if}
             </div>
           {/each}
@@ -924,6 +936,8 @@
                     {@render toolFormFields()}
                   </div>
                 </div>
+              {:else}
+                {@render toolGuidance(t)}
               {/if}
             </div>
           {/each}
@@ -990,6 +1004,9 @@
                     <code class="tool-error-msg">{t.last_error}</code>
                   </div>
                 </div>
+              {/if}
+              {#if editingToolName !== t.name}
+                {@render toolGuidance(t)}
               {/if}
             </div>
           {/each}
@@ -1569,6 +1586,30 @@
     font-size: 12px;
     color: var(--text-muted);
     margin: 4px 0 0;
+  }
+
+  /* Read-only per-server guidance (TOML-authored) */
+  .tool-guidance {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+  .tool-guidance-label {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .tool-guidance-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.6;
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .tool-guidance .hint {
+    display: block;
+    margin: 6px 0 0;
   }
 
   /* Clickable tool count link */
