@@ -1598,6 +1598,88 @@ func (e *Engine) resolveToolBudget(ctx context.Context, matched []skill.Skill, m
 	return turnToolBudget{maxRounds: driver.MaxToolRounds, skillName: driver.Name}
 }
 
+// turnToolExposure is the per-turn gate on which tool *definitions* are
+// advertised to the model, the request-time counterpart of the match-time
+// inclusion gate in filterUnsatisfiedSkills. Resolved once in prepareTurn and
+// carried on turnRun, so a skill edited mid-turn cannot change what a running
+// turn sees.
+type turnToolExposure struct {
+	// allowed is the union of the active skills' declared tools. Empty means
+	// the turn advertises everything.
+	allowed map[string]struct{}
+	// skills names the declaring skills, for the resolution log and span.
+	skills []string
+}
+
+// resolveToolExposure computes the advertised-tool gate for one turn from the
+// active skill set.
+//
+// The semantics are deliberately the inverse of the inclusion half's: exposure
+// fails *open*. An unsatisfied skill is dropped because its prose would point
+// at tools that are gone, but a skill that declares nothing has said nothing
+// about what the turn needs — narrowing on that silence would strip the agent's
+// whole surface off every ordinary chat turn. So gating starts only once some
+// active skill has stated a requirement.
+//
+// filterUnsatisfiedSkills has already dropped any skill whose declared tools
+// are absent from the registry, so this reads its verdict rather than checking
+// availability a second time: the union is over declared-and-registered names
+// by construction, and a skill naming a tool that does not exist contributes
+// nothing here instead of emptying the payload.
+func (e *Engine) resolveToolExposure(ctx context.Context, active []skill.Skill, msg adapter.IncomingMessage) turnToolExposure {
+	if e.tools == nil || !anySkillRequiresTools(active) {
+		return turnToolExposure{}
+	}
+
+	allowed := make(map[string]struct{})
+	var skills []string
+	for _, s := range active {
+		if len(s.Requires.Tools) == 0 {
+			continue
+		}
+		skills = append(skills, s.Name)
+		for _, name := range s.Requires.Tools {
+			allowed[name] = struct{}{}
+		}
+	}
+
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Int("agent.skill_tool_allow", len(allowed)))
+	e.logger.Info("skill tool exposure gate applied",
+		"skills", strings.Join(skills, ","),
+		"allowed", len(allowed),
+		"registered", len(e.tools.ToolNames()),
+		"adapter", msg.Adapter,
+		"external_id", msg.ExternalID,
+	)
+	return turnToolExposure{allowed: allowed, skills: skills}
+}
+
+// filter renders the gate as an llm.ToolFilter, or nil when the turn advertises
+// everything — a nil filter takes the router's pre-existing branch, so an
+// ungated turn puts a byte-identical request on the wire. The filter runs per
+// request rather than over a turn-start snapshot, so a server that connects
+// mid-turn is judged by the same rule as one that was already there.
+func (x turnToolExposure) filter(tools *tool.Manager) llm.ToolFilter {
+	if len(x.allowed) == 0 || tools == nil {
+		return nil
+	}
+	return func(defs []llm.ToolDef) []llm.ToolDef {
+		out := make([]llm.ToolDef, 0, len(defs))
+		for _, td := range defs {
+			_, declared := x.allowed[td.Function.Name]
+			if declared || tools.IsAlwaysAdvertised(td.Function.Name) {
+				out = append(out, td)
+			}
+		}
+		if len(out) == 0 {
+			// Every declared tool vanished mid-turn and nothing is exempt.
+			// Advertising nothing is strictly worse than advertising everything.
+			return defs
+		}
+		return out
+	}
+}
+
 // drivingSkill returns the single skill that explicitly drives this turn, if
 // any: a scheduled run naming it (msg.SkillName), or — absent that — exactly
 // one command-triggered match. Zero or several such skills means no skill owns
@@ -1777,6 +1859,9 @@ type turnPrep struct {
 	llmMessages []llm.Message
 	sysResult   buildSystemPromptResult
 	budget      turnToolBudget
+	// toolFilter narrows the advertised tool set for this turn; nil advertises
+	// everything (see resolveToolExposure).
+	toolFilter llm.ToolFilter
 }
 
 // chatWithApproval is the internal full-pipeline implementation. It returns
@@ -1850,7 +1935,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), stopGen: stopGen, stop: stopHandle}
+	run := turnRun{
+		budget:     prep.budget,
+		policy:     policy,
+		router:     e.routerFor(policy),
+		toolFilter: prep.toolFilter,
+		stopGen:    stopGen,
+		stop:       stopHandle,
+	}
 	resp, _, toolRecords, stopReason, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
@@ -1976,6 +2068,10 @@ func (e *Engine) prepareTurn(ctx context.Context, msg adapter.IncomingMessage, p
 	// per turn means skill edits (CRUD copies whole skill.Skill values) take
 	// effect on the next turn with no hot-reload plumbing.
 	prep.budget = e.resolveToolBudget(ctx, prep.sysResult.matchedSkills, msg)
+
+	// Same timing, same input set: which tools this turn advertises is gated by
+	// what the active skills declared they need.
+	prep.toolFilter = e.resolveToolExposure(ctx, prep.sysResult.matchedSkills, msg).filter(e.tools)
 
 	// A live turn's message reaches the model as the last history entry: it was
 	// stored above, so loading history reads it straight back. A policy turn
@@ -2291,7 +2387,7 @@ func (e *Engine) runLLMWithTools(ctx context.Context, convID string, perms *secu
 		onEvent(ChatEvent{Type: "thinking"})
 	}
 
-	resp, err := run.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+	resp, err := run.router.CompleteStreamFiltered(ctx, convID, llmMessages, streamCallbackFor(onEvent), run.toolFilter)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: 0})
 		return nil, llmMessages, nil, stopNone, fmt.Errorf("LLM completion: %w", err)
@@ -2498,7 +2594,7 @@ func (e *Engine) stopAtRoundBoundary(convID string, nextRound int, run turnRun, 
 // event: the Layer-3 guard in executeToolRounds emits the single error-status
 // event for that round-trip instead of an "ok then error" pair.
 func (e *Engine) completeToolRound(ctx context.Context, convID string, round int, llmMessages []llm.Message, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, error) {
-	resp, err := run.router.CompleteStream(ctx, convID, llmMessages, streamCallbackFor(onEvent))
+	resp, err := run.router.CompleteStreamFiltered(ctx, convID, llmMessages, streamCallbackFor(onEvent), run.toolFilter)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{round: round})
 		return nil, fmt.Errorf("LLM completion (tool round %d): %w", round, err)
@@ -2809,7 +2905,9 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 		Role:    "user",
 		Content: "Please provide your response based on the tool results above.",
 	})
-	nudgeResp, err := run.router.Complete(ctx, convID, llmMessages)
+	// Filtered like every other round: the recovery prompt asks for a summary of
+	// work already done, not for an escape hatch into hidden tools.
+	nudgeResp, err := run.router.CompleteFiltered(ctx, convID, llmMessages, run.toolFilter)
 	if err != nil {
 		e.emitLLMAudit(ctx, convID, nil, err.Error(), llmAuditOpts{nudgeRetry: true})
 		return nil, llmMessages, fmt.Errorf("LLM completion (nudge retry): %w", err)
