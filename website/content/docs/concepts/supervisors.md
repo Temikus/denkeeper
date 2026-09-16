@@ -111,7 +111,7 @@ Leaving `reviewer_model` empty disables it. It runs fire-and-forget through a no
 {{< callout context="note" >}}
 The reviewer is **capability-reduced, not supervised** — a deliberate design choice. Approval gating exists only at the engine tier, and the reviewer sends through a no-op, so it could never be meaningfully supervised. Instead it is handed a deliberately small tool set: `skill_list`, `skill_get`, `skill_read_file`, `persona_get`, and append-only `persona_memory_manage`. It can read skills and report improvements as text, but it cannot rewrite them.
 
-It runs at the `supervised` tier rather than `restricted`, because `restricted` omits tool use altogether and would block every call it needs to make.
+It runs at the `supervised` tier rather than `restricted`, because `restricted` grants read-only tools only and `persona_memory_manage` is a write — the one call the reviewer exists to make.
 {{< /callout >}}
 
 See the [configuration reference](/docs/reference/config/) for every supervisor and reviewer knob.
