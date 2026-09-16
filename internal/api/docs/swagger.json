@@ -6071,7 +6071,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Cancels an in-flight LLM request for the given session.",
+                "description": "Stops the in-flight turn for the given session. The turn ends at its next step boundary — the tool call in flight finishes, the rest are skipped, and the agent replies with a summary of what it did — so a 204 means \"stopping\", not \"stopped\". A turn that has not ended within the grace period is cancelled outright.",
                 "tags": [
                     "sessions"
                 ],
@@ -6087,7 +6087,7 @@
                 ],
                 "responses": {
                     "204": {
-                        "description": "Request cancelled"
+                        "description": "Stop requested"
                     },
                     "404": {
                         "description": "No in-flight request",
@@ -7085,7 +7085,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Updates the configuration of an existing MCP tool server and reconnects it.",
+                "description": "Updates the configuration of an existing MCP tool server and reconnects it. Most fields replace wholesale, but env_passthrough, disabled_tools and enabled are preserve-on-omit: leaving one out (or sending null) keeps the stored value, sending an empty array or an explicit boolean replaces it. A body that omits all three therefore cannot silently unscope the subprocess environment, re-advertise withheld tools, or re-enable a disabled server.",
                 "consumes": [
                     "application/json"
                 ],
@@ -8116,13 +8116,15 @@
                 "pending",
                 "approved",
                 "denied",
-                "expired"
+                "expired",
+                "aborted"
             ],
             "x-enum-varnames": [
                 "StatusPending",
                 "StatusApproved",
                 "StatusDenied",
-                "StatusExpired"
+                "StatusExpired",
+                "StatusAborted"
             ]
         },
         "github_com_Temikus_denkeeper_internal_audit.Event": {

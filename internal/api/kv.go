@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/kv"
 )
 
 // kvRequired writes 503 when the KV store is not configured.
@@ -152,9 +154,9 @@ func (s *Server) handleSetKV(w http.ResponseWriter, r *http.Request) {
 	var ttl time.Duration
 	if body.TTL != "" {
 		var err error
-		ttl, err = time.ParseDuration(body.TTL)
+		ttl, err = kv.ParseTTL(body.TTL)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid ttl %q: %v", body.TTL, err)})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		if ttl < 0 {

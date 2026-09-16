@@ -27,7 +27,7 @@ paths:
 | `GET/PATCH server/config`, `POST server/reload\|restart` | `admin` | config = version, build info, CORS, WebSocket settings, in-process tool toggles + `web_fetch_max_response_chars`; reload re-reads TOML from disk |
 | `GET sessions/{id}/stats\|tool-calls\|skills` | `sessions:read` | per-session telemetry, tool-call records, skill usage |
 | `POST sessions/{id}/clear\|compact` | `sessions:write` | both accept `?agent=` hint; compact returns `{"summary": "..."}`; see `ClearMessages` invariant |
-| `POST sessions/{id}/stop` | `chat` | cancel in-flight request for a session |
+| `POST sessions/{id}/stop` | `chat` | stops the in-flight turn **cooperatively**: `204` means "stopping", not "stopped" — the turn ends at its next step boundary, replies with a wrap-up and persists, and only a turn still running after the grace period is context-killed. Tries the `ws` key then the `api` one; `404` when neither has a turn |
 | `GET telemetry/summary` | `costs:read` | `?since=&until=` filtering |
 | `GET audit`, `GET audit/stats` | `audit:read` | list filters `?category=&agent=&status=&source=&search=&since=&until=&limit=&offset=`; stats accepts `?since=` |
 | `GET channels(/{name})` | `channels:read` | list: agent, adapter bindings, implicit flag, active adapter keys; detail adds `conversation_id` |
@@ -40,7 +40,7 @@ paths:
 | `GET traces`, `GET traces/{id}` | `sessions:read` | L1 turn traces: list filters `?agent=&conversation_id=&source=&since=&until=&limit=&offset=`, headers only (no payload); detail carries the built system prompt, the history window as sent, the flattened tool calls with arguments/results, and what truncation dropped. **`sessions:read` deliberately, not `eval:read`** — a trace is turn content and the eval scopes are the judge's. The list repeats `capture`/`retention_days`/`max_trace_bytes` so the UI distinguishes "not recording" from "nothing yet" — echoed from a server-side snapshot (`refreshTraceSettings`, re-taken after each successful reload), never read from `deps.Config` at request time: hot reload overwrites that struct in place (`*cfg = *newCfg`) and a request-time read races it |
 | `POST panic`, `POST resume`, `GET panic` | `admin` | emergency stop: cancel all in-flight requests + pause scheduler; resume clears; GET returns `{panicked, panic_time}` |
 
-Chat streaming events (SSE and WS): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`. `tool_approval` carries `approval_status` plus, on `auto_approved`, a machine-readable `approval_scope` (`config`/`session`/`permanent`) alongside the human-readable text.
+Chat streaming events (SSE and WS): `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `content`, `done`. `tool_approval` carries `approval_status` plus, on `auto_approved`, a machine-readable `approval_scope` (`config`/`session`/`permanent`) alongside the human-readable text. A cancelled turn is **not** an error frame: `aborted` transitions the pending approval line, and the turn still ends with `content` (the wrap-up plus the `[engine: turn ended early — cancelled at your request]` marker) and `done`.
 
 
 ## Invariants

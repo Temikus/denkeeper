@@ -34,6 +34,10 @@ const defaultMaxToolRounds = 50
 const defaultRepeatDetectionThreshold = 3 // consecutive identical tool calls before abort
 const toolExecTimeout = 30 * time.Second
 const defaultApprovalTimeout = 5 * time.Minute
+
+// approvalAbortTimeout bounds the detached write that resolves a pending
+// approval when its turn is stopped.
+const approvalAbortTimeout = 5 * time.Second
 const defaultSupervisorContextMessages = 5
 const defaultSupervisorTimeout = 30 * time.Second
 const defaultSupervisorBodyExcerptLen = 500
@@ -115,10 +119,12 @@ func (d *repeatDetector) observe(name, args string) bool {
 //
 // The two model-behavior reasons are eligible for a wrap-up round: one final
 // tools-stripped completion that summarizes the work done so far. stopRequested
-// is not — an operator stop must not spend tokens (see finishStoppedTurn).
+// is not — an emergency stop must not spend tokens (see finishStoppedTurn).
+// stopCancelled is: the user asked this one turn to stop and is still waiting
+// for an answer (see finishCancelledTurn).
 //
 // Wrap-up design: design/archive/loop-guard-wrapup-round.md. Step-boundary stop
-// (stopRequested): design/plans/6-step-boundary-stop.md.
+// (stopRequested, stopCancelled): design/plans/6-step-boundary-stop.md.
 type loopStopReason int
 
 const (
@@ -126,6 +132,7 @@ const (
 	stopRepeatedCalls
 	stopMaxRounds
 	stopRequested
+	stopCancelled
 )
 
 func (r loopStopReason) String() string {
@@ -136,6 +143,8 @@ func (r loopStopReason) String() string {
 		return "tool-call round budget exhausted"
 	case stopRequested:
 		return "stop requested"
+	case stopCancelled:
+		return "cancelled at your request"
 	default:
 		return "none"
 	}
@@ -157,6 +166,8 @@ func (r loopStopReason) slug() string {
 		return "max_rounds"
 	case stopRequested:
 		return "stop_requested"
+	case stopCancelled:
+		return "cancelled"
 	default:
 		return ""
 	}
@@ -168,6 +179,106 @@ func (r loopStopReason) slug() string {
 // as a fault (the same treatment the repeated-call guard gives its suppressed
 // calls).
 const syntheticStoppedResult = "[engine: call not executed — the turn was stopped before this call started]"
+
+// turnStop is one turn's cooperative stop handle: a channel closed once when a
+// stop is raised for that turn, plus the reason it was stopped for. The channel
+// is what a turn blocked *outside* the tool loop — parked in an approval wait —
+// can select on; inside the loop the step-boundary checks poll it.
+//
+// A turn holds its handle for its whole life and drops it at the end, which is
+// what makes a stop self-scoping: it reaches the turns running at the moment it
+// is raised and nothing else, so nothing has to be reset.
+type turnStop struct {
+	ch      chan struct{}
+	mu      sync.Mutex
+	stopped bool
+	reason  loopStopReason
+}
+
+func newTurnStop() *turnStop {
+	return &turnStop{ch: make(chan struct{})}
+}
+
+// fire records the reason and wakes everyone watching. Only the first call
+// wins: a turn stops once, for the reason that stopped it.
+func (t *turnStop) fire(reason loopStopReason) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped {
+		return
+	}
+	t.stopped = true
+	t.reason = reason
+	close(t.ch)
+}
+
+// fired reports whether this turn has been asked to stop. Nil-safe: a turnRun
+// assembled without a handle (unit tests, and the engine-wide generation path)
+// simply never fires.
+func (t *turnStop) fired() bool {
+	if t == nil {
+		return false
+	}
+	select {
+	case <-t.ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// done returns the channel closed on stop. A nil handle yields a nil channel,
+// which blocks forever in a select — the correct "never stops" behavior.
+func (t *turnStop) done() <-chan struct{} {
+	if t == nil {
+		return nil
+	}
+	return t.ch
+}
+
+// stopReason is the reason the turn was stopped for, defaulting to
+// stopRequested — the reason of the engine-wide signal, which is the only way a
+// turn can observe a stop without its handle being fired.
+func (t *turnStop) stopReason() loopStopReason {
+	if t == nil {
+		return stopRequested
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.stopped {
+		return stopRequested
+	}
+	return t.reason
+}
+
+// watchStop calls onStop once the turn's stop handle fires, and returns a
+// detach function that tears the watcher down (blocking until it is gone, so a
+// caller that has moved on cannot be interrupted by a late fire). It is
+// context.AfterFunc for a stop handle, which is not a context.
+func watchStop(ts *turnStop, onStop func()) (detach func()) {
+	detached := make(chan struct{})
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		select {
+		case <-ts.done():
+			onStop()
+		case <-detached:
+		}
+	}()
+	return func() {
+		close(detached)
+		<-gone
+	}
+}
+
+// ChatKey is the routing identity a stop request addresses: one adapter's view
+// of one chat. The dispatcher's in-flight map, the /stop command, the session
+// stop endpoint and the WebSocket cancel frame all key on it, so a turn that
+// registers under it is reachable from every user-facing cancel path.
+func ChatKey(adapterName, externalID string) string {
+	return adapterName + ":" + externalID
+}
 
 // SendFunc is a callback for sending a response back to the originating adapter.
 // The Dispatcher sets this when constructing each Engine.
@@ -222,6 +333,14 @@ type Engine struct {
 	// running now") and needs no reset — a turn that starts later captures the
 	// new value and runs normally.
 	stopGen atomic.Uint64
+
+	// activeStops holds the stop handle of every turn currently running on this
+	// engine, keyed by ChatKey. It is what narrows a stop below engine scope:
+	// RequestStopChat fires only the handles of one chat, while RequestStop
+	// (panic) fires all of them. Registration happens before a turn does any
+	// work and is undone when it ends.
+	stopsMu     sync.Mutex
+	activeStops map[string]map[*turnStop]struct{}
 
 	// Approval configuration (set via SetApprovalConfig after construction).
 	approvalTimeout time.Duration // default 5m
@@ -434,11 +553,11 @@ func (e *Engine) TraceCaptureEnabled() bool {
 }
 
 // RequestStop asks every turn currently running on this engine to end at its
-// next step boundary — the top of a tool round, or the gap before the next tool
-// call in a round. The call in flight is never killed: it completes (bounded by
-// toolExecTimeout) and is recorded with its real outcome, the remaining calls
-// are not started, and the turn leaves through the normal wrap-up and
-// persistence path instead of the error path.
+// next step boundary — the top of a tool round, the gap before the next tool
+// call in a round, or a pending approval wait. The call in flight is never
+// killed: it completes (bounded by toolExecTimeout) and is recorded with its
+// real outcome, the remaining calls are not started, and the turn leaves
+// through the normal wrap-up and persistence path instead of the error path.
 //
 // It is a signal, not a barrier: RequestStop returns immediately and a turn
 // with no tool rounds left to run (or none at all) is unaffected. Turns that
@@ -457,14 +576,78 @@ func (e *Engine) TraceCaptureEnabled() bool {
 // revertible-effect machinery in internal/skilleffect needs to mean anything at
 // turn granularity (see stage 7 of the plan below).
 //
-// Stage 1 of design/plans/6-step-boundary-stop.md, and deliberately only that:
-// the signal is engine-wide and wired from Dispatcher.executePanic alone, so
-// /stop, POST /sessions/{id}/stop and the WS cancel frame still work by context
-// cancellation until stop scoping (stage 3) lands. Approval abort (stage 4) and
-// the scheduler fixes (stage 5) are likewise not here.
+// Stages 1 and 3-4 of design/plans/6-step-boundary-stop.md. This entry point is
+// the engine-wide one, wired from Dispatcher.executePanic: it stops every turn
+// on this engine with the stopRequested reason (no wrap-up, no spend). A single
+// chat is stopped through RequestStopChat instead. Scheduler pause (stage 5)
+// still cancels its entry contexts.
 func (e *Engine) RequestStop() {
 	gen := e.stopGen.Add(1)
-	e.logger.Warn("stop requested for in-flight turns", "stop_generation", gen)
+	e.stopsMu.Lock()
+	turns := 0
+	for _, handles := range e.activeStops {
+		for ts := range handles {
+			ts.fire(stopRequested)
+			turns++
+		}
+	}
+	e.stopsMu.Unlock()
+	e.logger.Warn("stop requested for in-flight turns", "stop_generation", gen, "turns", turns)
+}
+
+// RequestStopChat asks the turns running for one chat to end at their next step
+// boundary, with the stopCancelled reason: a user cancelled this turn and is
+// still waiting, so unlike the emergency stop it answers with a wrap-up. It
+// reports whether any turn observed the request, which is how the caller
+// distinguishes "stopping" from "nothing in progress".
+//
+// The caller is expected to keep a hard-kill fallback armed (see
+// Dispatcher.StopChat): this is a request, not a guarantee, and a turn wedged
+// inside a tool call that ignores its context never reaches a boundary.
+func (e *Engine) RequestStopChat(adapterName, externalID string) bool {
+	key := ChatKey(adapterName, externalID)
+	e.stopsMu.Lock()
+	handles := e.activeStops[key]
+	stopped := make([]*turnStop, 0, len(handles))
+	for ts := range handles {
+		stopped = append(stopped, ts)
+	}
+	e.stopsMu.Unlock()
+
+	for _, ts := range stopped {
+		ts.fire(stopCancelled)
+	}
+	if len(stopped) == 0 {
+		return false
+	}
+	e.logger.Info("stop requested for chat", "agent", e.name, "chat", key, "turns", len(stopped))
+	return true
+}
+
+// registerTurnStop hands the starting turn its stop handle and makes it
+// addressable by every cancel path until unregisterTurnStop drops it.
+func (e *Engine) registerTurnStop(key string) *turnStop {
+	ts := newTurnStop()
+	e.stopsMu.Lock()
+	defer e.stopsMu.Unlock()
+	if e.activeStops == nil {
+		e.activeStops = make(map[string]map[*turnStop]struct{})
+	}
+	if e.activeStops[key] == nil {
+		e.activeStops[key] = make(map[*turnStop]struct{})
+	}
+	e.activeStops[key][ts] = struct{}{}
+	return ts
+}
+
+func (e *Engine) unregisterTurnStop(key string, ts *turnStop) {
+	e.stopsMu.Lock()
+	defer e.stopsMu.Unlock()
+	handles := e.activeStops[key]
+	delete(handles, ts)
+	if len(handles) == 0 {
+		delete(e.activeStops, key)
+	}
 }
 
 // StopGeneration returns the engine's current stop generation. A turn that
@@ -474,9 +657,17 @@ func (e *Engine) StopGeneration() uint64 {
 	return e.stopGen.Load()
 }
 
-// turnStopRequested reports whether a stop was requested after this turn began.
+// turnStopRequested reports whether a stop was requested after this turn began,
+// through either scope: this turn's own handle, or the engine-wide generation.
 func (e *Engine) turnStopRequested(run turnRun) bool {
-	return e.stopGen.Load() != run.stopGen
+	return run.stop.fired() || e.stopGen.Load() != run.stopGen
+}
+
+// turnStopReason is the stop reason to end this turn with. It decides between
+// the emergency exit (stopRequested — no wrap-up, no spend) and the user cancel
+// (stopCancelled — one wrap-up completion so the user gets an answer).
+func (e *Engine) turnStopReason(run turnRun) loopStopReason {
+	return run.stop.stopReason()
 }
 
 // SetApprovalConfig configures the approval timeout and retry count.
@@ -1649,9 +1840,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 
 	e.logger.Info("received message", "adapter", msg.Adapter, "user", msg.UserName, "text_len", len(msg.Text))
 
-	// Capture the stop generation before any turn work begins: from here on, a
-	// stop belongs to this turn and must end it at the next step boundary.
+	// Register for stops before any turn work begins: from here on, a stop
+	// belongs to this turn and must end it at the next step boundary. The
+	// generation is captured in the same breath — it is the engine-wide half of
+	// the same signal.
 	stopGen := e.stopGen.Load()
+	stopKey := ChatKey(msg.Adapter, msg.ExternalID)
+	stopHandle := e.registerTurnStop(stopKey)
+	defer e.unregisterTurnStop(stopKey, stopHandle)
 
 	prep, err := e.prepareTurn(ctx, msg, policy, perms)
 	if err != nil {
@@ -1676,7 +1872,14 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 	var streamedContent strings.Builder
 	wrappedEvent := wrapEventForPartialCapture(onEvent, &streamedContent)
 
-	run := turnRun{budget: prep.budget, policy: policy, router: e.routerFor(policy), toolFilter: prep.toolFilter, stopGen: stopGen}
+	run := turnRun{
+		budget:     prep.budget,
+		policy:     policy,
+		router:     e.routerFor(policy),
+		toolFilter: prep.toolFilter,
+		stopGen:    stopGen,
+		stop:       stopHandle,
+	}
 	resp, _, toolRecords, stopReason, err := e.runLLMWithTools(ctx, convID, perms, msg, prep.llmMessages, run, wrappedEvent)
 	if err != nil {
 		// A policy turn has nothing to persist and no history to keep honest;
@@ -2260,7 +2463,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 			// Same message-list state as the round-budget stop above: the
 			// pending assistant tool_calls message is NOT appended, so the list
 			// ends on the previous round's tool results.
-			out.stopReason = stopRequested
+			out.stopReason = e.turnStopReason(run)
 			break
 		}
 		out.toolRounds++
@@ -2390,7 +2593,7 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			e.logger.Warn("stop requested, skipping remaining tool calls in round",
 				"round", round+1, "skipped", len(toolCalls)-i, "conversation", convID)
 			return appendSyntheticResults(llmMessages, toolCalls[i:], syntheticStoppedResult),
-				toolRecords, stopRequested, nil
+				toolRecords, e.turnStopReason(run), nil
 		}
 		if detector.observe(tc.Function.Name, tc.Function.Arguments) {
 			e.logger.Warn("repetitive tool call detected, stopping tool loop for wrap-up",
@@ -2408,7 +2611,15 @@ func (e *Engine) runRoundToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		e.mToolCalls.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("agent", e.name),
 			attribute.String("tool_name", tc.Function.Name)))
-		result, record := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, run, onEvent, state)
+		result, record, aborted := e.executeToolCallDeduped(ctx, tc, round+1, convID, supervised, run, onEvent, state)
+		if aborted {
+			// The approval wait was cut short by a stop, so this call never ran
+			// either: it joins the ones below it as un-started and unrecorded.
+			e.logger.Warn("stop requested while an approval was pending, ending round",
+				"round", round+1, "skipped", len(toolCalls)-i, "conversation", convID)
+			return appendSyntheticResults(llmMessages, toolCalls[i:], syntheticStoppedResult),
+				toolRecords, e.turnStopReason(run), nil
+		}
 		toolRecords = append(toolRecords, record)
 		content := result
 		if i == len(toolCalls)-1 {
@@ -2467,9 +2678,10 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 	))
 }
 
-// finishStoppedToolLoop finalizes a turn after an early loop stop. An operator
-// stop short-circuits to finishStoppedTurn (no completion at all); the two
-// model-behavior stops run the wrap-up round described below.
+// finishStoppedToolLoop finalizes a turn after an early loop stop. An emergency
+// stop short-circuits to finishStoppedTurn (no completion at all), a user
+// cancel to finishCancelledTurn (one wrap-up, because the user is waiting for a
+// reply); the two model-behavior stops run the wrap-up round described below.
 //
 // Fallback ordering: wrap-up text → accumulated intermediate content → error
 // (which routes to persistInterruptedProgress upstream, i.e. exactly the
@@ -2479,10 +2691,14 @@ func recordToolRoundEvent(span trace.Span, round int, toolCalls []llm.ToolCall) 
 func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message, error) {
 	stopReason := out.stopReason
 	if stopReason == stopRequested {
-		// An operator stop takes the graceful exit without the wrap-up
+		// An emergency stop takes the graceful exit without the wrap-up
 		// completion, and unlike the model-behavior stops it is meaningful with
 		// zero executed calls — so this branch sits above the no-records guard.
 		resp, llmMessages := e.finishStoppedTurn(convID, out, totalUsage, totalCost)
+		return resp, llmMessages, nil
+	}
+	if stopReason == stopCancelled {
+		resp, llmMessages := e.finishCancelledTurn(ctx, convID, out, totalUsage, totalCost, run, onEvent)
 		return resp, llmMessages, nil
 	}
 	if len(out.toolRecords) == 0 {
@@ -2543,6 +2759,36 @@ func (e *Engine) finishStoppedTurn(convID string, out toolLoopOutcome, totalUsag
 	e.logger.Warn("turn stopped at step boundary",
 		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
 	return resp, out.llmMessages
+}
+
+// finishCancelledTurn finalizes a turn a user cancelled. It stops at the same
+// boundary as the emergency exit but does answer: whoever pressed stop is still
+// waiting, so one tools-stripped wrap-up summarizes what already ran. Where
+// there is nothing to summarize — no executed calls — or the wrap-up itself
+// fails or comes back empty, it falls back to the emergency exit's marker-only
+// response: a reply the user can read beats an error, and a cancel must never
+// be the thing that fails a turn.
+func (e *Engine) finishCancelledTurn(ctx context.Context, convID string, out toolLoopOutcome, totalUsage *llm.TokenUsage, totalCost *float64, run turnRun, onEvent ChatEventFunc) (*llm.ChatResponse, []llm.Message) {
+	if len(out.toolRecords) == 0 {
+		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
+	}
+	resp, llmMessages, err := e.wrapUpToolLoop(ctx, convID, stopCancelled, out.llmMessages, out.toolRounds, run, onEvent)
+	if err != nil {
+		e.logger.Warn("wrap-up after cancel failed, answering with what the turn already produced",
+			"conversation", convID, "error", err)
+		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
+	}
+	totalUsage.Add(resp.TokensUsed)
+	*totalCost += resp.CostUSD
+	if strings.TrimSpace(resp.Content) == "" {
+		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
+	}
+	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", stopCancelled)
+	resp.TokensUsed = *totalUsage
+	resp.CostUSD = *totalCost
+	e.logger.Warn("turn cancelled at step boundary",
+		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
+	return resp, llmMessages
 }
 
 // wrapUpToolLoop issues one final tools-stripped completion after a
@@ -2620,7 +2866,11 @@ func (e *Engine) recoverEmptyToolResponse(ctx context.Context, convID string, re
 // chain — the original call already passed it, and a cache hit executes
 // nothing). New denials and new cacheable results are recorded in state for
 // subsequent rounds of this turn.
-func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord) {
+//
+// The third return reports that the call was abandoned before it ran because
+// the turn was stopped while its approval was pending — the caller must then
+// treat it as never attempted (no record), not as a denial.
+func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc, state *turnToolState) (string, ToolCallRecord, bool) {
 	key := toolDedupeKey(tc)
 	if denyText, deniedBefore := state.denied[key]; deniedBefore {
 		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
@@ -2645,14 +2895,18 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 		if e.tools != nil {
 			record.ServerName = e.tools.ToolServer(tc.Function.Name)
 		}
-		return result, record
+		return result, record, false
 	}
 
 	if hit, ok := state.cache[key]; ok && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
-		return e.cachedToolCallResult(ctx, tc, round, convID, onEvent, hit)
+		result, record := e.cachedToolCallResult(ctx, tc, round, convID, onEvent, hit)
+		return result, record, false
 	}
 
-	result, record := e.executeToolCall(ctx, tc, round, convID, supervised, run, onEvent)
+	result, record, aborted := e.executeToolCall(ctx, tc, round, convID, supervised, run, onEvent)
+	if aborted {
+		return "", ToolCallRecord{}, true
+	}
 	if !record.Success && record.ErrorMsg == "denied" {
 		state.denied[key] = result
 	}
@@ -2662,7 +2916,7 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 	if record.Outcome == "ok" && e.tools != nil && e.tools.IsIdempotent(tc.Function.Name) {
 		state.cache[key] = cachedToolResult{result: result, round: round}
 	}
-	return result, record
+	return result, record, false
 }
 
 // suppressToolCall returns the synthetic result for a write the execution
@@ -2757,14 +3011,16 @@ func (e *Engine) cachedToolCallResult(ctx context.Context, tc llm.ToolCall, roun
 
 // executeToolCall handles one tool call: optionally awaiting approval (supervised),
 // then executing it and emitting tool_start/tool_end ChatEvents.
-// Returns the tool result string and a ToolCallRecord for persistence.
-func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc) (string, ToolCallRecord) {
+// Returns the tool result string, a ToolCallRecord for persistence, and whether
+// the call was abandoned unexecuted because a stop landed during its approval.
+func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int, convID string, supervised bool, run turnRun, onEvent ChatEventFunc) (string, ToolCallRecord, bool) {
 	// An execution policy splits tools by the existing idempotency signal:
 	// read-only calls run for real so the model sees a truthful world, and
 	// everything else — including every unknown tool — is suppressed before it
 	// can reach the approval chain or the tool manager.
 	if run.policy.suppresses(tc.Function.Name, e.idempotencyCheck()) {
-		return e.suppressToolCall(ctx, tc, round, convID, onEvent)
+		result, record := e.suppressToolCall(ctx, tc, round, convID, onEvent)
+		return result, record, false
 	}
 
 	record := ToolCallRecord{
@@ -2781,11 +3037,15 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	// Supervised tier: check auto-approve rules first, then supervisor review,
 	// then fall through to human approval.
 	if supervised {
-		if outcome := e.resolveSupervisedApproval(ctx, tc, round, convID, onEvent); outcome.denied {
+		outcome := e.resolveSupervisedApproval(ctx, tc, round, convID, run, onEvent)
+		if outcome.aborted {
+			return "", ToolCallRecord{}, true
+		}
+		if outcome.denied {
 			record.Success = false
 			record.Outcome = "denied"
 			record.ErrorMsg = "denied"
-			return outcome.denyText, record
+			return outcome.denyText, record, false
 		}
 	}
 
@@ -2825,38 +3085,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 			"duration_ms", toolDur.Milliseconds(), "result_len", len(result))
 	}
 
-	// Audit: tool execution.
-	toolStatus := audit.StatusOK
-	toolDetail := map[string]any{
-		"tool":      tc.Function.Name,
-		"server":    record.ServerName,
-		"round":     round,
-		"arguments": tc.Function.Arguments,
-	}
-	if execErr != nil {
-		toolStatus = audit.StatusError
-		toolDetail["error"] = execErr.Error()
-	} else {
-		// Cap stored result at 64 KB to keep audit DB manageable.
-		const maxResultLen = 64 * 1024
-		if len(result) <= maxResultLen {
-			toolDetail["result"] = result
-		} else {
-			toolDetail["result"] = result[:maxResultLen]
-			toolDetail["result_truncated"] = true
-		}
-	}
-	toolDetailJSON, _ := json.Marshal(toolDetail)
-	e.emitAudit(ctx, audit.Event{
-		Category:       audit.CategoryToolCall,
-		Action:         "execute",
-		Summary:        tc.Function.Name,
-		Detail:         string(toolDetailJSON),
-		Status:         toolStatus,
-		DurationMs:     toolDur.Milliseconds(),
-		Source:         "engine",
-		ConversationID: convID,
-	})
+	e.auditToolExecution(ctx, tc, round, convID, record.ServerName, result, execErr, toolDur)
 
 	if onEvent != nil {
 		evt := ChatEvent{Type: "tool_end", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Duration: toolDur.Milliseconds()}
@@ -2866,7 +3095,43 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		onEvent(evt)
 	}
 	record.Result = result
-	return result, record
+	return result, record, false
+}
+
+// auditToolExecution records one executed tool call. The result body is capped
+// at 64 KB so a chatty tool cannot bloat the audit DB; a failed call stores the
+// error instead of a result.
+func (e *Engine) auditToolExecution(ctx context.Context, tc llm.ToolCall, round int, convID, serverName, result string, execErr error, dur time.Duration) {
+	status := audit.StatusOK
+	detail := map[string]any{
+		"tool":      tc.Function.Name,
+		"server":    serverName,
+		"round":     round,
+		"arguments": tc.Function.Arguments,
+	}
+	if execErr != nil {
+		status = audit.StatusError
+		detail["error"] = execErr.Error()
+	} else {
+		const maxResultLen = 64 * 1024
+		if len(result) <= maxResultLen {
+			detail["result"] = result
+		} else {
+			detail["result"] = result[:maxResultLen]
+			detail["result_truncated"] = true
+		}
+	}
+	detailJSON, _ := json.Marshal(detail)
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategoryToolCall,
+		Action:         "execute",
+		Summary:        tc.Function.Name,
+		Detail:         string(detailJSON),
+		Status:         status,
+		DurationMs:     dur.Milliseconds(),
+		Source:         "engine",
+		ConversationID: convID,
+	})
 }
 
 // routerFor returns the router this turn talks to: the engine's own, or a
@@ -2899,9 +3164,16 @@ func (e *Engine) idempotencyCheck() func(string) bool {
 type approvalOutcome struct {
 	denied   bool   // true if the tool call was denied
 	denyText string // denial reason fed to the LLM (only set when denied)
+	// aborted marks the one outcome that is not a decision: the turn was
+	// stopped while the approval was pending, so nobody denied anything and
+	// nothing ran. The caller drops the call entirely rather than recording it.
+	aborted bool
 }
 
-var approvalApproved = approvalOutcome{}
+var (
+	approvalApproved = approvalOutcome{}
+	approvalAborted  = approvalOutcome{aborted: true}
+)
 
 func approvalDenied(text string) approvalOutcome {
 	return approvalOutcome{denied: true, denyText: text}
@@ -2909,7 +3181,7 @@ func approvalDenied(text string) approvalOutcome {
 
 // resolveSupervisedApproval runs the three-stage approval chain for supervised
 // tool calls: auto-approve rules → supervisor review → human approval.
-func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) approvalOutcome {
+func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	// Stage 1: Auto-approve rules.
 	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
 		e.logger.Info("tool auto-approved", "tool", tc.Function.Name, "scope", scope)
@@ -2929,15 +3201,11 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 
 	// Stage 2: Supervisor agent review.
 	if e.supervisor != nil {
-		return e.resolveSupervisorReview(ctx, tc, round, convID, onEvent)
+		return e.resolveSupervisorReview(ctx, tc, round, convID, run, onEvent)
 	}
 
 	// Stage 3: Human approval (no supervisor configured).
-	result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
-	if !approved {
-		return approvalDenied(result)
-	}
-	return approvalApproved
+	return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
 }
 
 // auditAutoApprove records a Stage-1 auto-approval in the audit log. Emitted
@@ -2964,7 +3232,7 @@ func (e *Engine) auditAutoApprove(ctx context.Context, toolName, scope string, r
 
 // resolveSupervisorReview handles supervisor agent review of a tool call.
 // On ESCALATE or error, falls through to human approval.
-func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) approvalOutcome {
+func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	decision, reason, supErr := e.supervisorReview(ctx, tc, convID)
 	if supErr != nil {
 		e.logger.Warn("supervisor review failed, falling through to human approval",
@@ -2978,11 +3246,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 				ApprovalStatus: "supervisor_error",
 			})
 		}
-		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
-		if !approved {
-			return approvalDenied(result)
-		}
-		return approvalApproved
+		return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
 	}
 
 	switch decision {
@@ -3020,28 +3284,29 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 				ApprovalStatus: "supervisor_escalated",
 			})
 		}
-		result, approved := e.awaitToolApproval(ctx, tc, round, convID, onEvent)
-		if !approved {
-			return approvalDenied(result)
-		}
-		return approvalApproved
+		return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
 	}
 }
 
 // awaitToolApproval submits a tool call for approval and blocks until the
 // operator approves or denies it. Emits a "tool_approval" ChatEvent so the
 // adapter can render inline buttons. On timeout, retries up to
-// e.approvalRetries times before giving up. Returns the result string and
-// whether the tool was approved.
-func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) (string, bool) {
+// e.approvalRetries times before giving up.
+//
+// A turn parked here is not in the tool loop and so observes no step boundary;
+// the wait therefore watches the turn's stop handle as well, and a stop both
+// ends the wait and resolves the request as aborted (stage 4 of
+// design/plans/6-step-boundary-stop.md) — a pending row whose turn is gone is
+// the orphan the whole plan exists to prevent.
+func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	// If no event handler is wired, there is no way to surface the approval
 	// dialog to a human operator. Deny immediately rather than waiting for
 	// a timeout that can never be resolved.
 	if onEvent == nil {
 		e.logger.Warn("tool approval denied: no event handler wired — approval cannot be surfaced to an operator",
 			"tool", tc.Function.Name, "round", round, "conversation", convID)
-		return "Tool call denied — no adapter is connected to surface the approval dialog. " +
-			"Ensure the session is routed through an adapter (Telegram, Discord, web) or use autonomous permission tier for unattended sessions.", false
+		return approvalDenied("Tool call denied — no adapter is connected to surface the approval dialog. " +
+			"Ensure the session is routed through an adapter (Telegram, Discord, web) or use autonomous permission tier for unattended sessions.")
 	}
 
 	adapterName := agentctx.Adapter(ctx)
@@ -3073,7 +3338,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		)
 		if err != nil {
 			e.logger.Warn("tool approval submit failed", "tool", tc.Function.Name, "error", err)
-			return fmt.Sprintf("Tool call approval failed: %v", err), false
+			return approvalDenied(fmt.Sprintf("Tool call approval failed: %v", err))
 		}
 
 		onEvent(ChatEvent{
@@ -3086,9 +3351,18 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		})
 
 		approvalCtx, approvalCancel := context.WithTimeout(ctx, e.approvalTimeout)
+		detachStop := watchStop(run.stop, approvalCancel)
 		status := e.approvals.WaitForResolution(approvalCtx, req.ID)
+		detachStop()
 		timedOut := approvalCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 		approvalCancel()
+
+		// Checked before the timeout: a stop cancels the wait rather than
+		// letting it expire, so this is the only branch that can see it.
+		if status != approval.StatusApproved && e.turnStopRequested(run) {
+			e.abortPendingApproval(ctx, req.ID, tc, round, convID, onEvent)
+			return approvalAborted
+		}
 
 		if timedOut {
 			prevReqID = req.ID
@@ -3101,12 +3375,12 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 			e.logger.Warn("tool approval timed out",
 				"tool", tc.Function.Name, "id", req.ID,
 				"timeout", e.approvalTimeout)
-			return "Tool approval timed out — no response from operator.", false
+			return approvalDenied(approvalTimedOutResult)
 		}
 
 		if status == approval.StatusApproved {
 			e.logger.Info("tool call approved", "tool", tc.Function.Name, "id", req.ID)
-			return "", true
+			return approvalApproved
 		}
 
 		e.logger.Info("tool call denied", "tool", tc.Function.Name, "id", req.ID)
@@ -3119,9 +3393,39 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 			Round:          round,
 			ApprovalStatus: "denied",
 		})
-		return "Tool call was denied by the operator.", false
+		return approvalDenied("Tool call was denied by the operator.")
 	}
-	return "Tool approval timed out — no response from operator.", false
+	return approvalDenied(approvalTimedOutResult)
+}
+
+// approvalTimedOutResult is fed to the LLM when no operator answered.
+const approvalTimedOutResult = "Tool approval timed out — no response from operator."
+
+// abortPendingApproval resolves an approval nobody will ever answer, because
+// the turn that submitted it is stopping. Aborted rather than denied: the
+// operator refused nothing, and a row left pending would outlive the only turn
+// that could have executed it.
+func (e *Engine) abortPendingApproval(ctx context.Context, id string, tc llm.ToolCall, round int, convID string, onEvent ChatEventFunc) {
+	e.logger.Warn("tool approval aborted: the turn was stopped while it was pending",
+		"tool", tc.Function.Name, "id", id, "round", round, "conversation", convID)
+
+	// The stop may have arrived with (or just ahead of) a context kill, and the
+	// row must be resolved either way — so the write runs on a detached context.
+	abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), approvalAbortTimeout)
+	defer cancel()
+	if err := e.approvals.Abort(abortCtx, id, "turn stopped"); err != nil {
+		e.logger.Error("aborting pending approval", "id", id, "error", err)
+	}
+
+	if onEvent != nil {
+		onEvent(ChatEvent{
+			Type:           "tool_approval",
+			Tool:           tc.Function.Name,
+			Round:          round,
+			ApprovalID:     id,
+			ApprovalStatus: "aborted",
+		})
+	}
 }
 
 // supervisorDecision represents the outcome of a supervisor agent's review.

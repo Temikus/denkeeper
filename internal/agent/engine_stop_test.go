@@ -1,8 +1,9 @@
-// Step-boundary stop for panic/cancel — stage 1 of
+// Step-boundary stop for panic/cancel — stages 1, 3 and 4 of
 // design/plans/6-step-boundary-stop.md. These tests pin the two boundaries (top
-// of a tool round, and the gap before each call within a round) and the
-// graceful exit; the hard-kill fallback they deliberately do not touch is
-// covered by engine_interrupted_test.go.
+// of a tool round, and the gap before each call within a round), the third one
+// added by stage 4 (an approval wait), the graceful exits, and the scoping that
+// separates a per-chat cancel from an engine-wide panic. The hard-kill fallback
+// lives on the dispatcher (dispatcher_test.go) and in engine_interrupted_test.go.
 package agent
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/security"
@@ -310,6 +312,173 @@ func TestRequestStop_DoesNotAffectLaterTurns(t *testing.T) {
 	}
 	if got := execCount.Load(); got != 1 {
 		t.Errorf("executed %d tool calls, want 1", got)
+	}
+}
+
+// A user cancel (stage 3) stops at the same boundary as a panic but answers:
+// one tools-stripped wrap-up summarises the work that did run, and the turn
+// persists with the cancel marker rather than the panic one.
+func TestRequestStopChat_EndsTurnWithWrapUp(t *testing.T) {
+	var engine *Engine
+	provider := &hookedSequentialProvider{
+		responses: []*llm.ChatResponse{
+			toolRoundResponse("", stopToolCall("c1", "step_a")),
+			toolRoundResponse("", stopToolCall("c2", "step_b")),
+			{Content: "I looked up step A before you stopped me.", TokensUsed: llm.TokenUsage{Total: 7}, FinishReason: "stop"},
+		},
+	}
+	provider.beforeCall = func(call int) {
+		if call == 2 {
+			if !engine.RequestStopChat("telegram", "stop-chat-wrapup") {
+				t.Error("RequestStopChat did not reach the in-flight turn")
+			}
+		}
+	}
+	engine, store, execCount := newStopTestEngine(t, provider, nil)
+
+	sessionID := "stop-chat-wrapup"
+	result, err := engine.ChatWithEvents(context.Background(), stopTestMessage(sessionID), nil)
+	if err != nil {
+		t.Fatalf("cancelled turn should end gracefully, got error: %v", err)
+	}
+	if !strings.Contains(result, "[engine: turn ended early — cancelled at your request]") {
+		t.Errorf("result = %q, want the cancel marker", result)
+	}
+	if !strings.Contains(result, "I looked up step A before you stopped me.") {
+		t.Errorf("result = %q, want the wrap-up text", result)
+	}
+	// Initial completion + round-1 follow-up + the wrap-up.
+	if len(provider.requests) != 3 {
+		t.Fatalf("got %d provider requests, want 3 (initial + follow-up + wrap-up)", len(provider.requests))
+	}
+	if got := execCount.Load(); got != 1 {
+		t.Errorf("executed %d tool calls, want 1 (round 2 must not start)", got)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	assistants := assistantMessages(t, store, sessionID)
+	if len(assistants) != 1 {
+		t.Fatalf("got %d assistant messages, want 1", len(assistants))
+	}
+	if !strings.Contains(assistants[0].Content, "turn ended early — cancelled at your request") {
+		t.Errorf("stored content = %q, want the cancel marker", assistants[0].Content)
+	}
+}
+
+// A cancel is scoped to one chat: a turn running for a different external ID on
+// the same engine is untouched, and the request reports that it reached nothing.
+func TestRequestStopChat_LeavesOtherChatsAlone(t *testing.T) {
+	provider := &hookedSequentialProvider{
+		responses: []*llm.ChatResponse{
+			toolRoundResponse("", stopToolCall("c1", "step_a")),
+			{Content: "Finished.", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+		},
+	}
+	var engine *Engine
+	provider.beforeCall = func(call int) {
+		if call == 2 {
+			if engine.RequestStopChat("telegram", "some-other-chat") {
+				t.Error("RequestStopChat reported reaching a turn on a chat that has none")
+			}
+		}
+	}
+	engine, _, execCount := newStopTestEngine(t, provider, nil)
+
+	result, err := engine.ChatWithEvents(context.Background(), stopTestMessage("stop-scoping"), nil)
+	if err != nil {
+		t.Fatalf("unrelated turn should run normally, got error: %v", err)
+	}
+	if result != "Finished." {
+		t.Errorf("result = %q, want the normal completion", result)
+	}
+	if got := execCount.Load(); got != 1 {
+		t.Errorf("executed %d tool calls, want 1", got)
+	}
+}
+
+// Stage 4: a turn parked in an approval wait observes no step boundary, so the
+// stop has to wake it. The pending request is resolved as aborted — not denied,
+// and never left pending — and the call it guarded is treated as never
+// attempted: no execution, no ToolCallRecord.
+func TestRequestStopChat_AbortsPendingApproval(t *testing.T) {
+	e, execCount := newCacheTestEngine(t, config.ToolConfig{}, "supervised")
+
+	approvalStore, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating approval store: %v", err)
+	}
+	t.Cleanup(func() { _ = approvalStore.Close() })
+	mgr := approval.NewManager(approvalStore, testLogger())
+	e.approvals = mgr
+
+	provider := &sequentialProvider{
+		responses: []*llm.ChatResponse{
+			{
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"x"}`}},
+				},
+				TokensUsed:   llm.TokenUsage{Total: 10},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+	router := llm.NewRouter("mock", "test-model", llm.NewCostTracker(llm.SessionLimits{}, nil))
+	router.RegisterProvider(provider)
+	e.router = router
+
+	sessionID := "stop-pending-approval"
+	var approvalID string
+	onEvent := func(ev ChatEvent) {
+		if ev.Type == "tool_approval" && ev.ApprovalID != "" {
+			approvalID = ev.ApprovalID
+			// The operator hits stop instead of answering the prompt.
+			e.RequestStopChat("test", sessionID)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := e.ChatWithEvents(ctx, adapter.IncomingMessage{
+		Adapter:    "test",
+		ExternalID: sessionID,
+		UserID:     "user-1",
+		Text:       "look it up",
+		Timestamp:  time.Now(),
+	}, onEvent)
+	if err != nil {
+		t.Fatalf("cancelled turn should end gracefully, got error: %v", err)
+	}
+	if approvalID == "" {
+		t.Fatal("no approval was submitted — the test never reached the wait it is about")
+	}
+	if !strings.Contains(result, "[engine: turn ended early — cancelled at your request]") {
+		t.Errorf("result = %q, want the cancel marker", result)
+	}
+	if got := execCount.Load(); got != 0 {
+		t.Errorf("executed %d tool calls, want 0 (the call was never approved)", got)
+	}
+
+	req, err := mgr.Get(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("fetching the approval: %v", err)
+	}
+	if req.Status != approval.StatusAborted {
+		t.Errorf("approval status = %q, want %q (a stopped turn must not leave it pending or read as a denial)",
+			req.Status, approval.StatusAborted)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	store, ok := e.memory.(*SQLiteMemoryStore)
+	if !ok {
+		t.Fatalf("memory store is %T, want the in-memory SQLite store", e.memory)
+	}
+	records, err := store.GetToolCalls(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("getting tool calls: %v", err)
+	}
+	if len(records) != 0 {
+		t.Errorf("records = %+v, want none — a call abandoned in approval was never attempted", records)
 	}
 }
 
