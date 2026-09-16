@@ -14,13 +14,19 @@ const (
 	StatusApproved Status = "approved"
 	StatusDenied   Status = "denied"
 	StatusExpired  Status = "expired"
+
+	// StatusAborted is the terminal state of a request nobody will ever answer:
+	// the turn that submitted it stopped at a step boundary, so the tool call it
+	// guards can no longer run. Distinct from denied (the operator refused
+	// nothing) and from expired (nothing timed out) — see Manager.Abort.
+	StatusAborted Status = "aborted"
 )
 
-// ValidStatus reports whether s is one of the four known status values.
+// ValidStatus reports whether s is one of the five known status values.
 // An empty string is also accepted (means "all" in list queries).
 func ValidStatus(s Status) bool {
 	switch s {
-	case "", StatusPending, StatusApproved, StatusDenied, StatusExpired:
+	case "", StatusPending, StatusApproved, StatusDenied, StatusExpired, StatusAborted:
 		return true
 	}
 	return false

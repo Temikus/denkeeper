@@ -75,7 +75,7 @@ func newOutcomeTestEngine(t *testing.T) *Engine {
 
 func TestExecuteToolCall_OutcomeOk(t *testing.T) {
 	e := newOutcomeTestEngine(t)
-	_, record := e.executeToolCall(context.Background(), llm.ToolCall{
+	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`},
 	}, 1, "conv:1", false, turnRun{}, nil)
 
@@ -89,7 +89,7 @@ func TestExecuteToolCall_OutcomeOk(t *testing.T) {
 
 func TestExecuteToolCall_OutcomeRejected(t *testing.T) {
 	e := newOutcomeTestEngine(t)
-	_, record := e.executeToolCall(context.Background(), llm.ToolCall{
+	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "reject_tool", Arguments: `{"value":"x"}`},
 	}, 1, "conv:1", false, turnRun{}, nil)
 
@@ -104,7 +104,7 @@ func TestExecuteToolCall_OutcomeRejected(t *testing.T) {
 func TestExecuteToolCall_OutcomeFailed(t *testing.T) {
 	e := newOutcomeTestEngine(t)
 	// Unknown tool => manager returns a plain error (not a RejectionError).
-	_, record := e.executeToolCall(context.Background(), llm.ToolCall{
+	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "no_such_tool", Arguments: `{}`},
 	}, 1, "conv:1", false, turnRun{}, nil)
 
@@ -122,7 +122,7 @@ func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 	state := newTurnToolState()
 	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
 
-	_, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
 	if record.Success {
 		t.Errorf("Success = true, want false")
 	}

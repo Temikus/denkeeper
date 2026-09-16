@@ -205,6 +205,36 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 	return req, err
 }
 
+// Abort resolves a pending approval that nobody will ever answer: the turn that
+// submitted it is ending at a step boundary, so the action it guards can no
+// longer run. It is deliberately not a denial — the operator refused nothing,
+// and a denial would teach the agent (and the audit log) something untrue — and
+// deliberately not "leave it pending", which is the orphaned row the
+// step-boundary stop exists to prevent.
+//
+// The registered closure is dropped without running, and any other waiter is
+// notified so nothing stays blocked on a request that is now terminal.
+func (m *Manager) Abort(ctx context.Context, id, reason string) error {
+	if err := m.store.Resolve(ctx, id, StatusAborted, "stopped"); err != nil {
+		return fmt.Errorf("aborting approval %s: %w", id, err)
+	}
+	m.registry.Delete(id)
+	m.logger.Info("approval aborted", "id", id, "reason", reason)
+
+	if m.Auditor != nil {
+		m.Auditor.Emit(ctx, audit.Event{
+			Category: audit.CategoryApproval,
+			Action:   "abort",
+			Summary:  fmt.Sprintf("Approval %s aborted (%s)", id, reason),
+			Status:   audit.StatusDenied,
+			Source:   "engine",
+		})
+	}
+
+	m.notifyWaiterWithErr(id, StatusAborted, nil)
+	return nil
+}
+
 // ErrStaleCallback is returned by ResolveByCallback when the callback refers to
 // an approval that exists but is no longer pending (already resolved, expired,
 // or approved). The caller should surface its Status to the user.

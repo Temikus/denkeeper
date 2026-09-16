@@ -176,11 +176,16 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 // loop compares it against the live value at every step boundary (see
 // Engine.RequestStop). Zero on a bare turnRun, which matches a fresh engine and
 // so reads as "no stop requested" for the tool-execution helpers.
+//
+// stop is this turn's own stop handle, which narrows a stop below engine scope
+// (Engine.RequestStopChat) and carries the reason to end with. Nil on a bare
+// turnRun, where every method reads as "never stopped".
 type turnRun struct {
 	budget  turnToolBudget
 	policy  *ExecPolicy
 	router  *llm.Router
 	stopGen uint64
+	stop    *turnStop
 }
 
 // TurnResult is everything a caller needs from one turn executed outside the

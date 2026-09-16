@@ -1179,12 +1179,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		ConversationID: conversationID,
 	}
 
+	// A REST turn is not in the dispatcher's in-flight map either, so register
+	// its context as the hard-kill fallback for POST /sessions/{id}/stop. The
+	// cooperative stop is what normally ends the turn; this only fires if that
+	// fails to land within the grace period.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	releaseCancel := s.deps.Dispatcher.RegisterChatCancel("api", sessionID, cancel)
+	defer releaseCancel()
+
 	if r.Header.Get("Accept") == "text/event-stream" {
-		s.handleChatSSE(w, r, eng, msg, sessionID)
+		s.handleChatSSE(ctx, w, r, eng, msg, sessionID)
 		return
 	}
 
-	responseText, err := eng.Chat(r.Context(), msg)
+	responseText, err := eng.Chat(ctx, msg)
 	if err != nil {
 		s.logger.Error("chat error", "error", err, "agent", agentName, "session", sessionID)
 		writeJSON(w, llm.HTTPStatusForError(err), map[string]string{"error": llm.UserFacingError(err)})
@@ -1197,8 +1206,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleChatSSE streams the response as Server-Sent Events.
-func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
+// handleChatSSE streams the response as Server-Sent Events. ctx is the turn's
+// context (the request's, made cancellable by the stop path), not r.Context().
+func (s *Server) handleChatSSE(ctx context.Context, w http.ResponseWriter, r *http.Request, eng *agent.Engine, msg adapter.IncomingMessage, sessionID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1208,7 +1218,7 @@ func (s *Server) handleChatSSE(w http.ResponseWriter, r *http.Request, eng *agen
 	defer sseActiveGauge.Add(r.Context(), -1)
 
 	stream := NewSSEStreamSession(w)
-	s.runChatStream(r.Context(), stream, eng, msg, sessionID)
+	s.runChatStream(ctx, stream, eng, msg, sessionID)
 }
 
 // handleDeleteSession godoc
@@ -1336,11 +1346,11 @@ func (s *Server) resolveEngineForSession(sessionID, agentHint string) *agent.Eng
 
 // handleStopSession godoc
 // @Summary Stop in-flight request
-// @Description Cancels an in-flight LLM request for the given session.
+// @Description Stops the in-flight turn for the given session. The turn ends at its next step boundary — the tool call in flight finishes, the rest are skipped, and the agent replies with a summary of what it did — so a 204 means "stopping", not "stopped". A turn that has not ended within the grace period is cancelled outright.
 // @Tags sessions
 // @Security BearerAuth
 // @Param id path string true "Session ID"
-// @Success 204 "Request cancelled"
+// @Success 204 "Stop requested"
 // @Failure 404 {object} map[string]string "No in-flight request"
 // @Router /sessions/{id}/stop [post]
 func (s *Server) handleStopSession(w http.ResponseWriter, r *http.Request) {
