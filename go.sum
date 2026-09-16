@@ -25,8 +25,6 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dlclark/regexp2/v2 v2.5.2 h1:HAsucWRhsqcDzl6Ua9aR8JwYOTzrZyPrF0/FNxJVAI0=
 github.com/dlclark/regexp2/v2 v2.5.2/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
-github.com/dop251/goja v0.0.0-20260906210903-70ad66ec7ce4 h1:GsWm9G80nlJAmJE/r9qdyqQWieJVdJObCMxmu4cZ5dQ=
-github.com/dop251/goja v0.0.0-20260906210903-70ad66ec7ce4/go.mod h1:u8yZRUavu+N4EnFFy6J5fVtjE7lEcZ2YyV2GcBXY9c8=
 github.com/dop251/goja v0.0.0-20260911104922-fabc3b8078ad h1:5gT9hQ9h8CplLZfAGgFMcoLqQS6I9T2sZwQOCXy8/3s=
 github.com/dop251/goja v0.0.0-20260911104922-fabc3b8078ad/go.mod h1:u8yZRUavu+N4EnFFy6J5fVtjE7lEcZ2YyV2GcBXY9c8=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
