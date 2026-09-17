@@ -99,6 +99,9 @@ func toolConfigFilteringToMap(cfg config.ToolConfig, entry map[string]any) {
 	if cfg.TrustAnnotations {
 		entry["trust_annotations"] = true
 	}
+	if cfg.Guidance != "" {
+		entry["guidance"] = cfg.Guidance
+	}
 }
 
 func toolConfigOAuthToMap(cfg config.ToolConfig, entry map[string]any) {

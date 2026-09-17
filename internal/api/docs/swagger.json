@@ -9321,6 +9321,9 @@
                 "enabled_count": {
                     "type": "integer"
                 },
+                "guidance": {
+                    "type": "string"
+                },
                 "last_error": {
                     "type": "string"
                 },

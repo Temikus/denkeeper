@@ -1215,6 +1215,11 @@ Feel free to add new namespaces (` + "`note:*`" + `, ` + "`task:*`" + `, ` + "`c
 
 Prefer KV over persona memory for anything structured or dated. Persona memory is for stable prose facts (identity, durable user context). When in doubt: structured/dated → KV; narrative → persona.`
 
+	// Placed right after the KV block and before the sections below it: guidance
+	// is the most stable appended block (it changes only when an operator edits
+	// it), so it belongs as early as possible in the prompt-cache prefix.
+	base += e.buildToolGuidanceSection()
+
 	// Inject session context so the agent knows its current delivery channel.
 	if msg.Adapter != "" && msg.ExternalID != "" {
 		base += fmt.Sprintf(`
@@ -1263,6 +1268,64 @@ Today is %s %s (ISO week %04d-W%02d, %s). This date is authoritative — never i
 		return buildSystemPromptResult{prompt: base + "\n\n" + suffix, matchedSkills: active, droppedScheduledMissing: droppedMissing}
 	}
 	return buildSystemPromptResult{prompt: base, matchedSkills: active, droppedScheduledMissing: droppedMissing}
+}
+
+const (
+	// maxGuidanceSectionBytes bounds the whole "## Tool Server Notes" section.
+	// Per-server text is already capped at config.MaxToolGuidanceBytes; this is
+	// the aggregate guard so a fleet of guided servers cannot crowd out skills.
+	maxGuidanceSectionBytes = 8000
+	// maxGuidanceToolNames caps the per-server tool-name list so one large
+	// server (40+ tools) cannot dominate the section.
+	maxGuidanceToolNames = 40
+)
+
+// buildToolGuidanceSection renders operator-authored per-server argument rules
+// for every server the agent can currently call, or "" when none declare any.
+// The empty case must stay byte-identical to a prompt built without this
+// feature — it is part of the prompt-cache prefix.
+func (e *Engine) buildToolGuidanceSection() string {
+	if e.tools == nil {
+		return ""
+	}
+	guided := e.tools.ServerGuidance()
+	if len(guided) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(`
+
+## Tool Server Notes
+
+Operator-authored rules for specific MCP servers. They describe how these servers actually behave and override any assumption you have about their arguments. Follow them exactly.`)
+
+	var dropped []string
+	for _, g := range guided {
+		var sub strings.Builder
+		fmt.Fprintf(&sub, "\n\n### %s\n\nTools: %s\n\n%s", g.Server, formatGuidanceTools(g.Tools), g.Guidance)
+		if b.Len()+sub.Len() > maxGuidanceSectionBytes {
+			dropped = append(dropped, g.Server)
+			continue
+		}
+		b.WriteString(sub.String())
+	}
+	if len(dropped) > 0 {
+		e.logger.Warn("tool guidance dropped — section size cap reached",
+			"servers", strings.Join(dropped, ", "),
+			"max_bytes", maxGuidanceSectionBytes,
+		)
+	}
+	return b.String()
+}
+
+// formatGuidanceTools renders a server's advertised tool names, eliding the
+// tail past maxGuidanceToolNames.
+func formatGuidanceTools(names []string) string {
+	if len(names) <= maxGuidanceToolNames {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s (+%d more)", strings.Join(names[:maxGuidanceToolNames], ", "), len(names)-maxGuidanceToolNames)
 }
 
 func skillNameMatched(matched []skill.Skill, name string) bool {
@@ -3339,6 +3402,23 @@ const (
 	supervisorEscalate supervisorDecision = "ESCALATE"
 )
 
+// writeSupervisorToolContext appends the tool's description and its server's
+// operator guidance to the review prompt.
+func (e *Engine) writeSupervisorToolContext(review *strings.Builder, toolName string) {
+	if e.tools == nil {
+		return
+	}
+	if desc := e.tools.ToolDescription(toolName); desc != "" {
+		fmt.Fprintf(review, "**Tool description**: %s\n", truncateForSupervisor(desc, e.supervisorToolDescLen))
+	}
+	// Verbatim, not truncated: guidance is the operator's argument rules —
+	// the reviewer approving a fabricated ID is the failure this exists to
+	// catch — and load already caps it at config.MaxToolGuidanceBytes.
+	if g := e.tools.GuidanceForTool(toolName); g != "" {
+		fmt.Fprintf(review, "**Operator guidance for this tool's server** (arguments must conform):\n%s\n", g)
+	}
+}
+
 // supervisorReview asks the supervisor agent to evaluate a tool call and return
 // an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
 // one-shot LLM call through the supervisor's Router — no conversation storage,
@@ -3381,11 +3461,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 	review.WriteString("## Tool Call Review Request\n\n")
 	fmt.Fprintf(&review, "**Agent**: %s\n", e.name)
 	fmt.Fprintf(&review, "**Tool**: %s\n", tc.Function.Name)
-	if e.tools != nil {
-		if desc := e.tools.ToolDescription(tc.Function.Name); desc != "" {
-			fmt.Fprintf(&review, "**Tool description**: %s\n", truncateForSupervisor(desc, e.supervisorToolDescLen))
-		}
-	}
+	e.writeSupervisorToolContext(&review, tc.Function.Name)
 	fmt.Fprintf(&review, "**Arguments**:\n```json\n%s\n```\n\n", tc.Function.Arguments)
 
 	skillCtx := agentctx.SkillContext(ctx)

@@ -2030,36 +2030,45 @@ func (s *Server) handleGetTool(w http.ResponseWriter, r *http.Request) {
 		resp["oauth_status"] = info.OAuthStatus
 	}
 	if cfg, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
-		resp["args"] = cfg.Args
-		resp["env"] = cfg.Env
-		resp["env_passthrough"] = cfg.EnvPassthrough
-		resp["disabled_tools"] = cfg.DisabledTools
-		resp["headers"] = cfg.Headers
-		resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
-		resp["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
-		if cfg.Auth != "" {
-			resp["auth"] = cfg.Auth
-		}
-		if cfg.ClientID != "" {
-			resp["client_id"] = cfg.ClientID
-		}
-		if len(cfg.Scopes) > 0 {
-			resp["scopes"] = cfg.Scopes
-		}
-		if cfg.AllowLoopback {
-			resp["allow_loopback"] = true
-		}
-		if cfg.Idempotent != nil && *cfg.Idempotent {
-			resp["idempotent"] = true
-		}
-		if len(cfg.IdempotentTools) > 0 {
-			resp["idempotent_tools"] = cfg.IdempotentTools
-		}
-		if cfg.TrustAnnotations {
-			resp["trust_annotations"] = true
-		}
+		addToolConfigFields(resp, cfg)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// addToolConfigFields copies the stored [tools.*] config onto a get-tool
+// response, so the edit form pre-populates from what is actually persisted.
+func addToolConfigFields(resp map[string]any, cfg config.ToolConfig) {
+	resp["args"] = cfg.Args
+	resp["env"] = cfg.Env
+	resp["env_passthrough"] = cfg.EnvPassthrough
+	resp["disabled_tools"] = cfg.DisabledTools
+	resp["headers"] = cfg.Headers
+	resp["request_timeout_secs"] = cfg.RequestTimeoutSecs
+	resp["sse_keep_alive_secs"] = cfg.SSEKeepAliveSecs
+	if cfg.Auth != "" {
+		resp["auth"] = cfg.Auth
+	}
+	if cfg.ClientID != "" {
+		resp["client_id"] = cfg.ClientID
+	}
+	if len(cfg.Scopes) > 0 {
+		resp["scopes"] = cfg.Scopes
+	}
+	if cfg.AllowLoopback {
+		resp["allow_loopback"] = true
+	}
+	if cfg.Idempotent != nil && *cfg.Idempotent {
+		resp["idempotent"] = true
+	}
+	if len(cfg.IdempotentTools) > 0 {
+		resp["idempotent_tools"] = cfg.IdempotentTools
+	}
+	if cfg.TrustAnnotations {
+		resp["trust_annotations"] = true
+	}
+	if cfg.Guidance != "" {
+		resp["guidance"] = cfg.Guidance
+	}
 }
 
 // handleToolDefs godoc
@@ -2130,6 +2139,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Command            string            `json:"command"`
 		Args               []string          `json:"args"`
 		Env                map[string]string `json:"env"`
+		EnvPassthrough     []string          `json:"env_passthrough"`
+		DisabledTools      []string          `json:"disabled_tools"`
+		Enabled            *bool             `json:"enabled"`
 		Transport          string            `json:"transport"`
 		URL                string            `json:"url"`
 		Headers            map[string]string `json:"headers"`
@@ -2143,9 +2155,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
-		EnvPassthrough     []string          `json:"env_passthrough"`
-		DisabledTools      []string          `json:"disabled_tools"`
-		Enabled            *bool             `json:"enabled"`
+		// Pointer so an omitted key is distinguishable from an explicit "":
+		// the update handler preserves on omit and clears on empty string.
+		Guidance *string `json:"guidance"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -2155,8 +2167,17 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	var guidance string
+	if body.Guidance != nil {
+		guidance = *body.Guidance
+	}
+	if err := config.ValidateToolGuidance(guidance); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	cfg := config.ToolConfig{
+		Guidance:           guidance,
 		Command:            body.Command,
 		Args:               body.Args,
 		Env:                body.Env,
@@ -2233,20 +2254,34 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Idempotent         *bool             `json:"idempotent"`
 		IdempotentTools    []string          `json:"idempotent_tools"`
 		TrustAnnotations   bool              `json:"trust_annotations"`
-
 		// Preserve-on-omit. Pointers so an absent array is distinguishable
 		// from an explicit [], which clears. LifecycleManager.UpdateTool
 		// merges a nil from the stored config.
 		EnvPassthrough *[]string `json:"env_passthrough"`
 		DisabledTools  *[]string `json:"disabled_tools"`
 		Enabled        *bool     `json:"enabled"`
+		// Pointer so an omitted key preserves the stored guidance. Without
+		// that, one UI edit — which never sends the field — silently erases
+		// prose the operator wrote into the TOML.
+		Guidance *string `json:"guidance"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
+	guidance := ""
+	if body.Guidance != nil {
+		guidance = *body.Guidance
+	} else if stored, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
+		guidance = stored.Guidance
+	}
+	if err := config.ValidateToolGuidance(guidance); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	cfg := config.ToolConfig{
+		Guidance:           guidance,
 		Command:            body.Command,
 		Args:               body.Args,
 		Env:                body.Env,
