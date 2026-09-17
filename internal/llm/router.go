@@ -314,15 +314,43 @@ func (r *Router) currentTools() []ToolDef {
 	return r.toolSource()
 }
 
+// ToolFilter narrows the tool definitions advertised on one request. It is
+// applied to the live tool source, so a runtime registration change is still
+// picked up; returning the input unchanged advertises everything.
+type ToolFilter func([]ToolDef) []ToolDef
+
+// completeOpts carries the per-request knobs of completeInternal. A zero value
+// is the ordinary tools-advertised, non-streaming request.
+type completeOpts struct {
+	onStream StreamCallback
+	// omitTools strips the tool payload entirely (wrap-up rounds).
+	omitTools bool
+	// toolFilter narrows the payload; nil advertises the source verbatim, so an
+	// unfiltered request is byte-identical to one made before filtering existed.
+	toolFilter ToolFilter
+}
+
 func (r *Router) Complete(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
-	return r.completeInternal(ctx, sessionID, messages, nil, false)
+	return r.completeInternal(ctx, sessionID, messages, completeOpts{})
+}
+
+// CompleteFiltered is Complete with the advertised tool set narrowed by filter.
+// A nil filter is exactly Complete.
+func (r *Router) CompleteFiltered(ctx context.Context, sessionID string, messages []Message, filter ToolFilter) (*ChatResponse, error) {
+	return r.completeInternal(ctx, sessionID, messages, completeOpts{toolFilter: filter})
 }
 
 // CompleteStream is like Complete but enables real-time streaming of content
 // chunks via the onStream callback. If the active provider does not support
 // streaming, it falls back to the non-streaming path transparently.
 func (r *Router) CompleteStream(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback) (*ChatResponse, error) {
-	return r.completeInternal(ctx, sessionID, messages, onStream, false)
+	return r.completeInternal(ctx, sessionID, messages, completeOpts{onStream: onStream})
+}
+
+// CompleteStreamFiltered is CompleteStream with the advertised tool set
+// narrowed by filter. A nil filter is exactly CompleteStream.
+func (r *Router) CompleteStreamFiltered(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback, filter ToolFilter) (*ChatResponse, error) {
+	return r.completeInternal(ctx, sessionID, messages, completeOpts{onStream: onStream, toolFilter: filter})
 }
 
 // CompleteFinal is like Complete but omits all tool definitions from the
@@ -330,10 +358,10 @@ func (r *Router) CompleteStream(ctx context.Context, sessionID string, messages 
 // wrap-up completions that must terminate a turn (the "no more tools"
 // contract is enforced by request shape, not prompt instructions).
 func (r *Router) CompleteFinal(ctx context.Context, sessionID string, messages []Message) (*ChatResponse, error) {
-	return r.completeInternal(ctx, sessionID, messages, nil, true)
+	return r.completeInternal(ctx, sessionID, messages, completeOpts{omitTools: true})
 }
 
-func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, onStream StreamCallback, omitTools bool) (*ChatResponse, error) {
+func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, opts completeOpts) (*ChatResponse, error) {
 	provider, ok := r.providers[r.defaultProvider]
 	if !ok {
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
@@ -365,17 +393,23 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	}
 
 	// 3. Make the primary call — enable streaming if the provider supports it.
+	// Filtering here rather than at the call site means the fallback retry below
+	// carries the same narrowed payload, and CompleteFinal stays tools-free by
+	// construction.
 	var currentTools []ToolDef
-	if !omitTools {
+	if !opts.omitTools {
 		currentTools = r.currentTools()
-	}
-	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
-	if onStream != nil {
-		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
-			req.OnStream = onStream
+		if opts.toolFilter != nil {
+			currentTools = opts.toolFilter(currentTools)
 		}
 	}
-	resp, err := r.primaryCompletion(ctx, sessionID, activeProvider, req, onStream, attrs)
+	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
+	if opts.onStream != nil {
+		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
+			req.OnStream = opts.onStream
+		}
+	}
+	resp, err := r.primaryCompletion(ctx, sessionID, activeProvider, req, opts.onStream, attrs)
 	if err == nil {
 		slog.Debug("llm completion",
 			"provider", r.defaultProvider,
@@ -407,7 +441,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 
 	// 5. Apply error/rate_limit fallbacks in declaration order.
 	var resolvedProvider string
-	resp, resolvedProvider, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, onStream, err)
+	resp, resolvedProvider, err = r.applyErrorFallbacks(ctx, sessionID, activeProvider, activeModel, messages, currentTools, opts.onStream, err)
 	if err != nil {
 		r.mErrors.Add(ctx, 1, attrs)
 		span.RecordError(err)

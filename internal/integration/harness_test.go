@@ -462,6 +462,11 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 
 		router := llm.NewRouter("mock", model, costTracker)
 		router.RegisterProvider(mock)
+		if opts.ToolManager != nil {
+			// Same wiring as main.go: without a tool source the requests the mock
+			// records carry no tool definitions at all.
+			router.SetTools(opts.ToolManager.ToolDefs)
+		}
 
 		e := agent.NewEngine(
 			a.Name, router, mem, nil, perms, nil,

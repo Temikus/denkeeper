@@ -54,7 +54,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 | `description` | Yes | What the skill does (shown in Telegram command menu for command triggers) |
 | `version` | No | Semantic version |
 | `triggers` | No | When to activate (see below) |
-| `requires.tools` | No | MCP tools this skill needs. The skill is skipped while any of them is unavailable (see below) |
+| `requires.tools` | No | MCP tools this skill needs. The skill is skipped while any of them is unavailable, and an active declaration narrows the tools the model is shown (see below) |
 | `max_tool_rounds` | No | Cap on tool-call rounds for turns this skill drives (command or schedule trigger). Only lowers the agent's limit, never raises it; must be ≥ 0 |
 
 ## Trigger types
@@ -81,6 +81,15 @@ Notes:
 - This applies to scheduled skills too: a run whose tools are missing does nothing and logs a warning, rather than half-executing.
 - Deactivation and reactivation are logged once per change, not once per message.
 - A skill with no `requires.tools` is always active — the field is opt-in.
+
+### What the model is shown
+
+The declaration also narrows the tool list sent to the model. On a turn where at least one active skill declares `requires.tools`, only the union of those declarations is advertised — everything else is hidden for that turn, so a focused skill is not distracted by the agent's entire tool surface.
+
+- Declare **everything** the skill calls. A tool you forget is invisible for that turn, not merely undocumented.
+- A turn where no active skill declares anything advertises every tool, as before. The narrowing is opt-in per turn, the same way the field is.
+- An ambient skill (no triggers) matches every message, so a declaration on one narrows ordinary conversation too. Put `requires.tools` on command- or schedule-driven skills unless that is what you want.
+- The agent's own management tools (skills, persona, schedules, KV) are never hidden — otherwise a mistyped declaration would be unfixable from the inside.
 
 ## Agent-specific skills
 

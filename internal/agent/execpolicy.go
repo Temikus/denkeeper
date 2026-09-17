@@ -181,10 +181,14 @@ func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool 
 // (Engine.RequestStopChat) and carries the reason to end with. Nil on a bare
 // turnRun, where every method reads as "never stopped".
 type turnRun struct {
-	budget  turnToolBudget
-	policy  *ExecPolicy
-	router  *llm.Router
-	stopGen uint64
+	budget turnToolBudget
+	policy *ExecPolicy
+	router *llm.Router
+	// toolFilter narrows the tool definitions every completion in this turn
+	// advertises. Nil (the zero value, and the common case) advertises whatever
+	// the router's tool source returns — see Engine.resolveToolExposure.
+	toolFilter llm.ToolFilter
+	stopGen    uint64
 	stop    *turnStop
 }
 

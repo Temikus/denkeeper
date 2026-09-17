@@ -55,7 +55,7 @@ A skill with a `schedule:` trigger and no matching `[[schedules]]` entry will ne
 
 ## Other frontmatter fields
 
-- **`requires.tools`** — names the MCP tools the skill depends on (`[requires] tools = [...]` in the example above). A skill naming a tool that isn't currently advertised is dropped from matching for that turn rather than included and left to fail; it reactivates automatically once the tool comes back.
+- **`requires.tools`** — names the MCP tools the skill depends on (`[requires] tools = [...]` in the example above). A skill naming a tool that isn't currently advertised is dropped from matching for that turn rather than included and left to fail; it reactivates automatically once the tool comes back. The declaration also gates what the model sees: once some active skill declares tools, only the union of those declarations is advertised for that turn (plus the agent's own management tools, which are never hidden). A turn where nothing declares anything advertises everything.
 - **`max_tool_rounds`** — caps how many tool-call rounds this skill's turn may use, on top of the agent's own round limit. It can only lower the effective budget, never raise it, and only applies when this skill is the one driving the turn (a schedule naming it, or the sole matching `command:` trigger) — an ambient skill matching every message does not cap unrelated turns.
 
 ## Directory structure
