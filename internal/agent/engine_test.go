@@ -613,6 +613,9 @@ func TestEngine_HandleMessage_ToolCallNoManager(t *testing.T) {
 	}
 }
 
+// TestEngine_HandleMessage_ToolCallDenied covers the deny half of the
+// restricted tier's read-only grant: an unclassified tool is refused at the
+// call, and the turn still answers instead of failing.
 func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
@@ -629,6 +632,11 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 				TokensUsed:   llm.TokenUsage{Total: 10},
 				FinishReason: "tool_calls",
 			},
+			{
+				Content:      "I cannot run commands in this session.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
 		},
 	}
 
@@ -638,14 +646,14 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 
 	sent := &sentMessages{}
 
-	// restricted tier does NOT have use_tools permission.
+	// restricted grants read-only tools only; "shell" is not classified.
 	permissions, err := security.NewPermissionEngine("restricted")
 	if err != nil {
 		t.Fatalf("creating permissions: %v", err)
 	}
 
 	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
-	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
+	engine.tools = &tool.Manager{} // non-nil so we reach the tool loop
 
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:    "test",
@@ -654,11 +662,21 @@ func TestEngine_HandleMessage_ToolCallDenied(t *testing.T) {
 		Text:       "run a command",
 		Timestamp:  time.Now(),
 	})
-	if err == nil {
-		t.Fatal("expected error for denied tool execution")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not permitted") {
-		t.Errorf("unexpected error: %v", err)
+	if len(sent.msgs) != 1 || sent.msgs[0].Text != "I cannot run commands in this session." {
+		t.Errorf("sent = %+v, want the model's answer after the denial", sent.msgs)
+	}
+
+	summary, err := store.GetTelemetrySummary(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	shell := toolUsage(t, summary, "shell")
+	if shell.DenialCount != 1 || shell.FailureCount != 0 {
+		t.Errorf("shell = {denials:%d failures:%d}, want {1 0}: a tier denial is not a tool fault",
+			shell.DenialCount, shell.FailureCount)
 	}
 }
 
@@ -1441,6 +1459,11 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 				TokensUsed:   llm.TokenUsage{Total: 10},
 				FinishReason: "tool_calls",
 			},
+			{
+				Content:      "Briefing without the shell.",
+				TokensUsed:   llm.TokenUsage{Total: 15},
+				FinishReason: "stop",
+			},
 		},
 	}
 
@@ -1457,9 +1480,10 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 	}
 
 	engine := NewEngine("default", router, store, sent.send, permissions, nil, "You are a test assistant.", nil, nil, nil, testLogger())
-	engine.tools = &tool.Manager{} // non-nil so we reach the permission check
+	engine.tools = &tool.Manager{} // non-nil so we reach the tool loop
 
-	// Override to "restricted" via SessionTier — should deny tool use.
+	// Override to "restricted" via SessionTier — the unclassified "shell" call
+	// must be denied even though the agent's own tier would have run it.
 	err = engine.HandleMessage(context.Background(), adapter.IncomingMessage{
 		Adapter:     "test",
 		ExternalID:  "chat-tier-override",
@@ -1469,11 +1493,16 @@ func TestEngine_HandleMessage_SessionTierOverride(t *testing.T) {
 		Timestamp:   time.Now(),
 		SessionTier: "restricted",
 	})
-	if err == nil {
-		t.Fatal("expected error for restricted tier denying tool use")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not permitted") {
-		t.Errorf("unexpected error: %v", err)
+
+	summary, err := store.GetTelemetrySummary(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("GetTelemetrySummary: %v", err)
+	}
+	if got := toolUsage(t, summary, "shell").DenialCount; got != 1 {
+		t.Errorf("denials = %d, want 1: the session tier override must gate the call", got)
 	}
 }
 

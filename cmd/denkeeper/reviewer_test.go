@@ -174,9 +174,9 @@ func TestReviewerToolSet_Pinned(t *testing.T) {
 }
 
 // TestReviewerTier documents, in executable form, why the reviewer is not
-// built at the restricted tier: restricted omits use_tools, which the engine
-// checks before any tool round, so the reviewer could not reach even its
-// append-only memory tool.
+// built at the restricted tier: restricted holds no use_tools, so the engine
+// runs only tools it classifies read-only — and the reviewer's append-only
+// memory tool is a write.
 func TestReviewerTier(t *testing.T) {
 	perms, err := security.NewPermissionEngine(reviewerTier)
 	if err != nil {
