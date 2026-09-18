@@ -214,9 +214,10 @@ Named routing endpoints decoupling sessions from adapters.
     key = "sk-..."                   # secret key value
     scopes = ["chat", "admin"]       # permission scopes
 
-Available scopes: chat, admin, sessions:read, sessions:write, agents:read,
-approvals:read, approvals:write, schedules:read, schedules:write,
-skills:read, skills:write, tools:read, tools:write, costs:read,
+Available scopes: chat, admin, health, sessions:read, sessions:write,
+agents:read, agents:write, approvals:read, approvals:write, schedules:read,
+schedules:write, skills:read, skills:write, tools:read, tools:write,
+browser:read, browser:write, kv:read, kv:write, costs:read,
 channels:read, channels:write, audit:read, eval:read, eval:write
 
 ### [api.auth]
