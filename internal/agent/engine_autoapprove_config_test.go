@@ -144,7 +144,7 @@ func TestEngine_AutoApprove_AuditsEveryScope(t *testing.T) {
 
 	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"x"}`}}
 	var events []ChatEvent
-	outcome := e.resolveSupervisedApproval(context.Background(), tc, 1, "conv:1",
+	outcome := e.resolveSupervisedApproval(context.Background(), tc, 1, "conv:1", turnRun{},
 		func(ev ChatEvent) { events = append(events, ev) })
 	if outcome.denied {
 		t.Fatal("permanent rule should auto-approve")

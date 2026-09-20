@@ -87,11 +87,11 @@ func TestExecuteToolCallDeduped_CachedHit_SkipsExecution(t *testing.T) {
 	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"x"}`}}
 	state := newTurnToolState()
 
-	first, firstRecord := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
+	first, firstRecord, _ := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
 	if firstRecord.Outcome != "ok" {
 		t.Fatalf("first Outcome = %q, want ok", firstRecord.Outcome)
 	}
-	second, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	second, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
 
 	if got := execCount.Load(); got != 1 {
 		t.Errorf("handler executed %d times, want 1", got)
@@ -116,8 +116,8 @@ func TestExecuteToolCallDeduped_NonIdempotent_ReExecutes(t *testing.T) {
 	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"x"}`}}
 	state := newTurnToolState()
 
-	_, r1 := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
-	_, r2 := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	_, r1, _ := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
+	_, r2, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
 
 	if got := execCount.Load(); got != 2 {
 		t.Errorf("handler executed %d times, want 2 (no caching without the idempotent flag)", got)
@@ -132,8 +132,8 @@ func TestExecuteToolCallDeduped_FailedResult_NotCached(t *testing.T) {
 	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "bad_lookup", Arguments: `{"query":"x"}`}}
 	state := newTurnToolState()
 
-	_, r1 := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
-	_, r2 := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	_, r1, _ := e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, nil, state)
+	_, r2, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
 
 	if r1.Outcome != "rejected" || r2.Outcome != "rejected" {
 		t.Errorf("outcomes = %q, %q, want rejected, rejected", r1.Outcome, r2.Outcome)
@@ -149,8 +149,8 @@ func TestExecuteToolCallDeduped_CacheKey_ArgSensitive(t *testing.T) {
 
 	tcA := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"a"}`}}
 	tcB := llm.ToolCall{ID: "c2", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"b"}`}}
-	_, _ = e.executeToolCallDeduped(context.Background(), tcA, 1, "conv:1", false, turnRun{}, nil, state)
-	_, record := e.executeToolCallDeduped(context.Background(), tcB, 2, "conv:1", false, turnRun{}, nil, state)
+	_, _, _ = e.executeToolCallDeduped(context.Background(), tcA, 1, "conv:1", false, turnRun{}, nil, state)
+	_, record, _ := e.executeToolCallDeduped(context.Background(), tcB, 2, "conv:1", false, turnRun{}, nil, state)
 
 	if got := execCount.Load(); got != 2 {
 		t.Errorf("handler executed %d times, want 2 (different args must not hit the cache)", got)
@@ -180,7 +180,7 @@ func TestExecuteToolCallDeduped_CachedHit_SkipsApproval(t *testing.T) {
 	state.cache[toolDedupeKey(tc)] = cachedToolResult{result: "result for x", round: 1}
 
 	var events []ChatEvent
-	result, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", true,
+	result, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", true,
 		turnRun{}, func(ev ChatEvent) { events = append(events, ev) }, state)
 
 	if record.Outcome != "cached" {
@@ -212,7 +212,7 @@ func TestExecuteToolCallDeduped_DeniedThenNeverCached(t *testing.T) {
 	state := newTurnToolState()
 	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
 
-	_, record := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
 	if record.Outcome != "denied" {
 		t.Errorf("Outcome = %q, want denied (denial dedup wins; the cache never sees denied calls)", record.Outcome)
 	}
@@ -234,9 +234,9 @@ func TestCachedToolCallResult_EventsAndAudit(t *testing.T) {
 	var events []ChatEvent
 	capture := func(ev ChatEvent) { events = append(events, ev) }
 
-	_, _ = e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, capture, state)
+	_, _, _ = e.executeToolCallDeduped(context.Background(), tc, 1, "conv:1", false, turnRun{}, capture, state)
 	events = nil
-	_, _ = e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, capture, state)
+	_, _, _ = e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, capture, state)
 
 	if len(events) != 2 || events[0].Type != "tool_start" || events[1].Type != "tool_end" {
 		t.Fatalf("events = %+v, want [tool_start tool_end]", events)
