@@ -3195,6 +3195,16 @@ func (e *Engine) auditAutoApprove(ctx context.Context, toolName, scope string, r
 	})
 }
 
+// supervisorErrorText renders the fall-through notice. "Unavailable" is wrong
+// for a budget refusal: nothing is down, the reviewer is out of money for this
+// conversation, and that needs a different fix from the operator.
+func supervisorErrorText(err error) string {
+	if errors.Is(err, llm.ErrHardLimitExceeded) {
+		return fmt.Sprintf("Supervisor hit its cost limit for this conversation (%v) — awaiting your review", err)
+	}
+	return fmt.Sprintf("Supervisor unavailable (%v) — awaiting your review", err)
+}
+
 // resolveSupervisorReview handles supervisor agent review of a tool call.
 // On ESCALATE or error, falls through to human approval.
 func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
@@ -3207,7 +3217,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
 				Round:          round,
-				Text:           fmt.Sprintf("Supervisor unavailable (%v) — awaiting your review", supErr),
+				Text:           supervisorErrorText(supErr),
 				ApprovalStatus: "supervisor_error",
 			})
 		}
@@ -3402,6 +3412,34 @@ const (
 	supervisorEscalate supervisorDecision = "ESCALATE"
 )
 
+// supervisorSessionKey returns the cost-tracker session ID billed for reviews
+// of convID.
+//
+// Scoping by conversation is load-bearing: the tracker never resets a session's
+// spend, so a key that is constant for the process turns the per-session cost
+// limit into a lifetime budget. Once spent, every later review fails closed to
+// human approval until restart.
+func supervisorSessionKey(agent, convID string) string {
+	if convID == "" {
+		return "supervisor:" + agent
+	}
+	return "supervisor:" + agent + ":" + convID
+}
+
+// supervisorErrorCause classifies a failed review for the audit trail. A
+// supervisor refused for budget and one that is down both fall through to a
+// human, so the distinction has to survive somewhere filterable.
+func supervisorErrorCause(err error) string {
+	switch {
+	case errors.Is(err, llm.ErrHardLimitExceeded):
+		return "cost_limit"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "provider_error"
+	}
+}
+
 // writeSupervisorToolContext appends the tool's description and its server's
 // operator guidance to the review prompt.
 func (e *Engine) writeSupervisorToolContext(review *strings.Builder, toolName string) {
@@ -3497,7 +3535,15 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 	reviewCtx, cancel := context.WithTimeout(ctx, e.supervisorTimeout)
 	defer cancel()
 
-	resp, err := e.supervisor.router.Complete(reviewCtx, "supervisor:"+e.name, messages)
+	sessionID := supervisorSessionKey(e.name, convID)
+	// Bill reviews to the supervisor's own agent. The key's first segment would
+	// otherwise parse as an agent literally named "supervisor", which both hides
+	// the spend and skips the supervisor's configured limits.
+	if ct := e.supervisor.router.CostTracker(); ct != nil {
+		ct.RegisterSessionAgent(sessionID, e.supervisor.name)
+	}
+
+	resp, err := e.supervisor.router.Complete(reviewCtx, sessionID, messages)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -3507,6 +3553,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 			"tool":       tc.Function.Name,
 			"arguments":  tc.Function.Arguments,
 			"decision":   "error",
+			"cause":      supervisorErrorCause(err),
 			"reason":     err.Error(),
 			"supervisor": e.supervisor.name,
 		})
