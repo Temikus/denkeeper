@@ -3,7 +3,7 @@ title: "Configuration Reference"
 description: "Complete reference for denkeeper.toml options."
 slug: "config"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-28T00:00:00+00:00
+lastmod: 2026-09-18T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -53,6 +53,10 @@ Named provider instances. Multiple entries of the same `type` are allowed, enabl
 | `api_key` | string | API key (required for all types except `ollama`) |
 | `base_url` | string | API endpoint override (useful for Azure, vLLM, LM Studio, etc.) |
 | `organization` | string | OpenAI organization ID (openai type only) |
+| `cost_limit_soft` | float | Soft per-session cost limit in USD for this provider instance (warns but continues) |
+| `cost_limit_hard` | float | Hard per-session cost limit in USD for this provider instance (stops generation) |
+| `default_rate_per_1k_tokens` | float | Fallback per-1k-token rate used when a model has no pricing entry |
+| `model_prices` | table | Per-model pricing overrides, keyed by model ID: `input`, `output`, `cached_input` (all USD per million tokens) — see below |
 
 ```toml
 [[llm.providers]]
@@ -65,6 +69,17 @@ name = "lmstudio"
 type = "openai"
 base_url = "http://localhost:1234/v1"
 api_key = "lm-studio"
+
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "sk-ant-..."
+cost_limit_hard = 5.0
+
+[llm.providers.model_prices."claude-opus-4-1"]
+input = 15.0
+output = 75.0
+cached_input = 1.5
 ```
 
 **Legacy single-slot syntax** (`[llm.openai]`, `[llm.anthropic]`, etc.) is still supported and auto-converted at startup. The two styles can coexist; an explicit `[[llm.providers]]` entry with the same name takes precedence.
