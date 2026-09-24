@@ -77,7 +77,7 @@ func TestExecuteToolCall_OutcomeOk(t *testing.T) {
 	e := newOutcomeTestEngine(t)
 	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`},
-	}, 1, "conv:1", false, turnRun{}, nil)
+	}, 1, "conv:1", false, turnRun{grant: grantAll}, nil)
 
 	if !record.Success {
 		t.Errorf("Success = false, want true")
@@ -91,7 +91,7 @@ func TestExecuteToolCall_OutcomeRejected(t *testing.T) {
 	e := newOutcomeTestEngine(t)
 	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "reject_tool", Arguments: `{"value":"x"}`},
-	}, 1, "conv:1", false, turnRun{}, nil)
+	}, 1, "conv:1", false, turnRun{grant: grantAll}, nil)
 
 	if record.Success {
 		t.Errorf("Success = true, want false")
@@ -106,7 +106,7 @@ func TestExecuteToolCall_OutcomeFailed(t *testing.T) {
 	// Unknown tool => manager returns a plain error (not a RejectionError).
 	_, record, _ := e.executeToolCall(context.Background(), llm.ToolCall{
 		Function: llm.FunctionCall{Name: "no_such_tool", Arguments: `{}`},
-	}, 1, "conv:1", false, turnRun{}, nil)
+	}, 1, "conv:1", false, turnRun{grant: grantAll}, nil)
 
 	if record.Success {
 		t.Errorf("Success = true, want false")
@@ -122,7 +122,7 @@ func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 	state := newTurnToolState()
 	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
 
-	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{}, nil, state)
+	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{grant: grantAll}, nil, state)
 	if record.Success {
 		t.Errorf("Success = true, want false")
 	}
@@ -162,7 +162,7 @@ func TestExecuteToolRounds_AppendsBudgetHint(t *testing.T) {
 		},
 	}
 	budget := turnToolBudget{maxRounds: e.maxToolRounds}
-	_, msgs, _, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, turnRun{budget: budget, router: e.router}, nil)
+	_, msgs, _, _, err := e.executeToolRounds(context.Background(), "conv:hint", perms, resp, nil, turnRun{budget: budget, router: e.router, grant: grantAll}, nil)
 	if err != nil {
 		t.Fatalf("executeToolRounds: %v", err)
 	}

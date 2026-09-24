@@ -53,7 +53,9 @@ Tool execution respects the agent's permission tier:
 
 - **Autonomous** — tools execute without approval
 - **Supervised** — each tool call requires human approval via Approve/Deny buttons (Telegram/Discord inline keyboards, web dashboard, or REST API). Auto-approve rules can be created per-tool with session or permanent scope to skip future approvals for trusted tools.
-- **Restricted** — only read-only tools are available
+- **Restricted** — only tools classified read-only run; anything else is refused at the call, and the model is told so and answers without it
+
+A tool counts as read-only if it is a built-in read (`web_fetch`, `web_search`, `kv_get`, `kv_list`, and the config-MCP readers such as `skill_get`, `skill_list`, `tool_list`, `schedule_list`, `persona_get`), or if its `[tools.*]` entry declares it — `idempotent`/`idempotent_tools`, or `readOnlyHint` under `trust_annotations`. The classification is deliberately conservative: a tool nobody classified is not read-only.
 
 ## Runtime tool management
 

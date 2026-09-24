@@ -10,6 +10,11 @@ type PermissionEngine struct {
 }
 
 // tierAllowlists defines the permitted actions for each tier.
+//
+// The two tool actions are a pair: "use_tools" is every advertised tool,
+// "use_read_only_tools" only those the tool manager classifies read-only. A
+// tier holding the second alone — restricted — runs reads and has each other
+// call denied at the call (agent.grantFor).
 var tierAllowlists = map[string][]string{
 	"autonomous": {
 		"chat", "read_memory", "write_memory",
