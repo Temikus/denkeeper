@@ -907,6 +907,10 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 	if err := toolMgr.RegisterSession(ctx, "config-"+agentName, session); err != nil {
 		return fmt.Errorf("registering config MCP for agent %q: %w", agentName, err)
 	}
+	// Self-management must never be filtered away by a skill's requires.tools:
+	// the agent reads and patches its own skills through these tools, so hiding
+	// them is how a bad declaration becomes unfixable from the inside.
+	toolMgr.MarkAlwaysAdvertised("config-" + agentName)
 	abc.logger.Info("config MCP registered", "agent", agentName, "tools", len(toolMgr.ToolDefs()))
 	return nil
 }
@@ -1596,6 +1600,9 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 	if err := revToolMgr.RegisterSession(ctx, "config-"+ac.Name+"-reviewer", session); err != nil {
 		return nil, fmt.Errorf("registering reviewer config MCP: %w", err)
 	}
+	// The reviewer's pinned 5-tool set is its whole capability; a filter must
+	// never narrow it (see TestReviewerToolSet_Pinned).
+	revToolMgr.MarkAlwaysAdvertised("config-" + ac.Name + "-reviewer")
 
 	revRouter.SetTools(revToolMgr.ToolDefs)
 	return revEngine, nil
