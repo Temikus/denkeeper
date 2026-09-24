@@ -217,7 +217,7 @@ jobs:
     name: E2E Tests
     needs: [build]
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright:v1.62.1-noble
+    container: mcr.microsoft.com/playwright:v1.63.0-noble
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
