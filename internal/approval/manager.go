@@ -162,10 +162,14 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 			action = "approve"
 			auditStatus = audit.StatusOK
 		}
+		verb := "denied"
+		if approved {
+			verb = "approved"
+		}
 		m.Auditor.Emit(ctx, audit.Event{
 			Category: audit.CategoryApproval,
 			Action:   action,
-			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, action+"d", resolvedBy),
+			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, verb, resolvedBy),
 			Status:   auditStatus,
 			Source:   resolvedBy,
 		})
