@@ -17,6 +17,10 @@
   let offset = $state(0)
   const limit = 50
   let loadingMore = $state(false)
+  let includeScheduled = $state(false)
+  // Bumped per list reload; a response from an older generation is dropped so a
+  // late page can't land on a list reloaded under a different filter.
+  let listGen = 0
 
   // Telemetry state
   let stats = $state(null)
@@ -29,28 +33,49 @@
   let compactingSession = $state(null)
 
   onMount(async () => {
-    try {
-      const res = await api.sessions({ limit })
-      sessions = res.sessions || []
-      total = res.total || 0
-      // Auto-select session from URL (e.g. #/sessions/abc123)
-      const parts = $currentRoute.split('/')
-      if (parts.length > 1 && parts[1]) {
-        const target = sessions.find(s => s.id === parts[1])
-        if (target) selectSession(target)
-      }
-    } catch(e) { error = e.message }
+    // Auto-select session from URL (e.g. #/sessions/abc123)
+    const parts = $currentRoute.split('/')
+    const targetId = parts.length > 1 ? parts[1] : ''
+    // A deep link to a scheduled run must not land on a list that hides it.
+    if (targetId.startsWith('sched:')) includeScheduled = true
+    await loadSessions()
+    if (targetId) {
+      const target = sessions.find(s => s.id === targetId)
+      if (target) selectSession(target)
+    }
   })
 
+  async function loadSessions() {
+    const gen = ++listGen
+    offset = 0
+    loadingMore = false
+    try {
+      const res = await api.sessions({ limit, includeScheduled })
+      if (gen !== listGen) return
+      sessions = res.sessions || []
+      total = res.total || 0
+      if (selected && !sessions.some(s => s.id === selected.id)) {
+        selected = null; messages = []; stats = null; toolCalls = []; skillUsages = []
+      }
+    } catch(e) { if (gen === listGen) error = e.message }
+  }
+
   async function loadMore() {
+    const gen = listGen
     loadingMore = true
     offset += limit
     try {
-      const res = await api.sessions({ limit, offset })
+      const res = await api.sessions({ limit, offset, includeScheduled })
+      if (gen !== listGen) return
       sessions = [...sessions, ...(res.sessions || [])]
       total = res.total || 0
-    } catch(e) { error = e.message }
-    finally { loadingMore = false }
+    } catch(e) { if (gen === listGen) error = e.message }
+    finally { if (gen === listGen) loadingMore = false }
+  }
+
+  // sched:{name}:{unix_nano} all truncate to the same prefix; show the name.
+  function scheduleName(id) {
+    return id.startsWith('sched:') ? id.split(':')[1] : ''
   }
 
   async function selectSession(s) {
@@ -141,6 +166,13 @@
 
 <div class="layout">
   <aside class="list">
+    <label class="scheduled-toggle">
+      <span class="switch switch-sm">
+        <input type="checkbox" bind:checked={includeScheduled} onchange={loadSessions} />
+        <span class="switch-slider"></span>
+      </span>
+      <span>Show scheduled runs</span>
+    </label>
     {#each sessions as s}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
@@ -150,7 +182,11 @@
         role="button"
         tabindex="0"
       >
-        <div class="sid">{s.id.slice(0, 14)}</div>
+        {#if scheduleName(s.id)}
+          <div class="sid"><span class="pill">scheduled</span> {scheduleName(s.id)}</div>
+        {:else}
+          <div class="sid">{s.id.slice(0, 14)}</div>
+        {/if}
         <div class="smeta">{fmtDate(s.updated_at || s.created_at)}</div>
         {#if s.channel}
           <div class="schannel">{s.channel}</div>
@@ -165,7 +201,7 @@
       </div>
     {/each}
     {#if sessions.length === 0 && !error}
-      <p class="empty">No sessions.</p>
+      <p class="empty">No sessions.{includeScheduled ? '' : ' Scheduled runs are hidden.'}</p>
     {/if}
     {#if sessions.length > 0 && sessions.length < total}
       <button class="btn-ghost btn-sm load-more" onclick={loadMore} disabled={loadingMore}>
@@ -354,6 +390,12 @@
   }
   .del:hover { color: var(--danger); background: rgba(224,92,110,0.1); }
   .load-more { width: 100%; margin-top: 4px; }
+  /* shared .toggle-row is scoped to .inline-form; this sits atop the list */
+  .scheduled-toggle {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text-muted);
+    padding: 2px 0 8px; cursor: pointer;
+  }
 
   .session-actions {
     display: flex;

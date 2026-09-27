@@ -23,13 +23,15 @@ func newSessionsCmd() *cobra.Command {
 	}
 	sessionsCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.denkeeper/denkeeper.toml)")
 
+	var listIncludeScheduled bool
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all sessions",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runSessionsList(os.Stdout)
+			return runSessionsList(os.Stdout, listIncludeScheduled)
 		},
 	}
+	listCmd.Flags().BoolVar(&listIncludeScheduled, "include-scheduled", false, "include isolated scheduled-run sessions (sched:*)")
 
 	showCmd := &cobra.Command{
 		Use:   "show <session-id>",
@@ -88,7 +90,7 @@ func openMemoryStore() (*agent.SQLiteMemoryStore, error) {
 	return store, nil
 }
 
-func runSessionsList(w *os.File) error {
+func runSessionsList(w *os.File, includeScheduled bool) error {
 	store, err := openMemoryStore()
 	if err != nil {
 		return err
@@ -96,7 +98,7 @@ func runSessionsList(w *os.File) error {
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{})
+	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{ExcludeScheduled: !includeScheduled})
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}

@@ -262,8 +262,8 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 }
 
 // A DB created before #439 carries a unique (adapter, external_id) index that
-// silently dropped sched:* rows targeting an existing chat; reopening must
-// remove it.
+// silently dropped sched:* rows targeting an existing chat, leaving their
+// messages orphaned; reopening must remove the index and recover the rows.
 func TestMemoryStore_GetOrCreateConversationByID_SharedTargetAfterUpgrade(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "upgrade.db")
 	store, err := NewSQLiteMemoryStore(dbPath)
@@ -273,6 +273,18 @@ func TestMemoryStore_GetOrCreateConversationByID_SharedTargetAfterUpgrade(t *tes
 	if _, err := store.db.Exec(`CREATE UNIQUE INDEX idx_conversations_adapter_ext ON conversations(adapter, external_id)`); err != nil {
 		t.Fatalf("recreating legacy index: %v", err)
 	}
+	ctx := context.Background()
+	for _, id := range []string{"chan:main", "sched:daily:0"} {
+		if err := store.GetOrCreateConversationByID(ctx, id, "telegram", "123"); err != nil {
+			t.Fatalf("GetOrCreateConversationByID(%s): %v", id, err)
+		}
+		if _, err := store.AddMessage(ctx, id, StoredMessage{Role: "user", Content: "hi"}); err != nil {
+			t.Fatalf("AddMessage(%s): %v", id, err)
+		}
+	}
+	if pre, _, _ := store.ListConversations(ctx, SessionListOpts{}); len(pre) != 1 {
+		t.Fatalf("legacy index should have dropped sched:daily:0, listed %+v", pre)
+	}
 	_ = store.Close()
 
 	store, err = NewSQLiteMemoryStore(dbPath)
@@ -280,9 +292,8 @@ func TestMemoryStore_GetOrCreateConversationByID_SharedTargetAfterUpgrade(t *tes
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	ctx := context.Background()
 
-	for _, id := range []string{"chan:main", "sched:daily:1", "sched:daily:2"} {
+	for _, id := range []string{"sched:daily:1", "sched:daily:2"} {
 		if err := store.GetOrCreateConversationByID(ctx, id, "telegram", "123"); err != nil {
 			t.Fatalf("GetOrCreateConversationByID(%s): %v", id, err)
 		}
@@ -292,8 +303,13 @@ func TestMemoryStore_GetOrCreateConversationByID_SharedTargetAfterUpgrade(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 3 || len(convos) != 3 {
-		t.Errorf("listed %d (total %d), want 3: %+v", len(convos), total, convos)
+	if total != 4 || len(convos) != 4 {
+		t.Errorf("listed %d (total %d), want 4: %+v", len(convos), total, convos)
+	}
+	for _, c := range convos {
+		if c.ID == "sched:daily:0" && (c.Adapter != "sched" || c.MessageCount != 1) {
+			t.Errorf("recovered row = %+v, want adapter sched with 1 message", c)
+		}
 	}
 
 	interactive, total, err := store.ListConversations(ctx, SessionListOpts{ExcludeScheduled: true})

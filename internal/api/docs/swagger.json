@@ -5722,6 +5722,12 @@
                         "description": "Filter by agent name",
                         "name": "agent",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include isolated scheduled-run sessions (sched:*), hidden by default",
+                        "name": "include_scheduled",
+                        "in": "query"
                     }
                 ],
                 "responses": {

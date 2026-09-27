@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 -- (adapter, external_id) is metadata, not identity: sched:* and ephemeral
 -- chan:* rows share it with the target chat's conversation, and a unique
--- index made GetOrCreateConversationByID silently drop them.
+-- index made GetOrCreateConversationByID silently drop them (#439).
 DROP INDEX IF EXISTS idx_conversations_adapter_ext;
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -436,10 +436,27 @@ func applyMigrations(db *sqlx.DB, migrations []string) error {
 	return nil
 }
 
+// backfillOrphanConversations recreates conversation rows the pre-#439 unique
+// index dropped. Their messages survived, but listing and retention pruning
+// both start from conversations, so they were invisible and never pruned. The
+// original target chat is unknown; adapter records the ID prefix (sched/chan).
+const backfillOrphanConversations = `
+INSERT OR IGNORE INTO conversations (id, adapter, external_id, created_at)
+SELECT m.conversation_id,
+       substr(m.conversation_id, 1, instr(m.conversation_id, ':') - 1),
+       m.conversation_id,
+       MIN(m.created_at)
+FROM messages m
+WHERE NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = m.conversation_id)
+GROUP BY m.conversation_id`
+
 // initDB runs the base schema then applies telemetry migrations.
 func initDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
+	}
+	if _, err := db.Exec(backfillOrphanConversations); err != nil {
+		return fmt.Errorf("backfilling orphaned conversations: %w", err)
 	}
 	if err := applyMigrations(db, telemetryMigrations); err != nil {
 		return err
