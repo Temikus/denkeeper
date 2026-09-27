@@ -131,6 +131,33 @@ func TestInitLLMClients_WithOpenRouterKey(t *testing.T) {
 	}
 }
 
+func TestInitLLMClients_BuildsDeciders(t *testing.T) {
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			Providers: []config.ProviderInstanceConfig{
+				{Name: "or", Type: "openrouter", APIKey: "test-key"},
+				{Name: "anthropic", Type: "anthropic", APIKey: "test-key"},
+			},
+			Deciders: []config.DeciderConfig{
+				{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", Timeout: "5s", MaxInputTokens: 30000},
+				// Unreachable after config validation; must be skipped, not wired.
+				{Name: "bad", Provider: "anthropic", Model: "m", Timeout: "5s"},
+			},
+		},
+	}
+	clients := initLLMClients(cfg)
+	d := clients.deciders["jev"]
+	if d == nil {
+		t.Fatal("expected decider jev to be built")
+	}
+	if d.Name() != "jev" || d.Model() != "typesafe/jev-1.13" {
+		t.Errorf("decider = %s/%s", d.Name(), d.Model())
+	}
+	if _, ok := clients.deciders["bad"]; ok {
+		t.Error("decider on a non-decision provider must be skipped")
+	}
+}
+
 func TestInitLLMClients_WithAnthropicKey(t *testing.T) {
 	cfg := &config.Config{
 		LLM: config.LLMConfig{

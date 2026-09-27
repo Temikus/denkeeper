@@ -142,6 +142,20 @@ Compatible with any endpoint that speaks the OpenAI Chat Completions API format.
 
 `cost_limit` rules consume the agent's `cost_limit_soft` / `cost_limit_hard` (resolved via `[[agents]]` overrides or the global `[llm]` defaults). Legacy `low_funds` rules with a `threshold` field auto-migrate to `cost_limit` + `scope = "soft"` on load.
 
+## `[[llm.deciders]]`
+
+Named decision models: non-generative classifiers such as [`typesafe/jev-1.13`](https://openrouter.ai/typesafe/jev-1.13) that answer typed questions with probabilities instead of text. A decider cannot chat, so it is never selectable as an agent model.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | *required* | Unique decider name (lowercase alphanumeric with hyphens) |
+| `provider` | string | *required* | `[[llm.providers]]` instance serving the model. Must be of type `openrouter` |
+| `model` | string | *required* | Decision model ID |
+| `timeout` | duration | `"5s"` | Per-call timeout |
+| `max_input_tokens` | int | `30000` | Calls whose estimated input exceeds this are refused, never truncated |
+
+Spend is taken from the provider-reported cost and counts against the calling session's cost limits. Everything sent to a decider (tool arguments, conversation excerpts) goes to that provider's upstream, an additional data processor.
+
 ## `[session]`
 
 | Key | Type | Default | Description |

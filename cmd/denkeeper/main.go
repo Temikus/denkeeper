@@ -186,6 +186,7 @@ func buildChannelResolver(d *agent.Dispatcher) configmcp.ChannelResolver {
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
 	providers         map[string]llm.Provider // keyed by instance name
+	deciders          map[string]*llm.Decider // keyed by [[llm.deciders]] name
 	cost              *llm.CostTracker
 	fallbacks         []llm.FallbackRule
 	pricing           *pricing.Registry
@@ -341,13 +342,38 @@ func initLLMClients(cfg *config.Config) llmClients {
 		}
 	}
 
+	cost := buildCostTracker(cfg)
 	return llmClients{
 		providers:         providers,
-		cost:              buildCostTracker(cfg),
+		deciders:          buildDeciders(cfg, providers, cost),
+		cost:              cost,
 		fallbacks:         fallbackRules,
 		pricing:           reg,
 		streamIdleTimeout: time.Duration(cfg.LLM.StreamIdleTimeoutSecs) * time.Second,
 	}
+}
+
+// buildDeciders binds each [[llm.deciders]] entry to its provider instance.
+// Config validation guarantees a decision-capable provider type, so a failed
+// assertion only means the provider itself failed to build.
+func buildDeciders(cfg *config.Config, providers map[string]llm.Provider, cost *llm.CostTracker) map[string]*llm.Decider {
+	deciders := make(map[string]*llm.Decider, len(cfg.LLM.Deciders))
+	for _, dc := range cfg.LLM.Deciders {
+		dp, ok := providers[dc.Provider].(llm.DecisionProvider)
+		if !ok {
+			slog.Warn("decider skipped: provider does not serve decisions", "decider", dc.Name, "provider", dc.Provider)
+			continue
+		}
+		timeout, _ := time.ParseDuration(dc.Timeout) // validated by config.Load
+		deciders[dc.Name] = llm.NewDecider(llm.DeciderConfig{
+			Name:           dc.Name,
+			Provider:       dc.Provider,
+			Model:          dc.Model,
+			Timeout:        timeout,
+			MaxInputTokens: dc.MaxInputTokens,
+		}, dp, cost)
+	}
+	return deciders
 }
 
 // createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
