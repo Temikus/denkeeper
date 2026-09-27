@@ -271,7 +271,7 @@ Skills are markdown files that teach the agent how to handle specific tasks. The
 name = "daily-briefing"
 description = "Compile and deliver a daily briefing"
 version = "1.0.0"
-triggers = ["schedule:daily:08:00", "command:briefing"]
+triggers = ["schedule:daily-briefing", "command:briefing"]
 +++
 
 # Daily Briefing
@@ -282,7 +282,7 @@ When triggered, compile a briefing with:
 3. Any pending reminders
 ```
 
-Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included.
+Place skill files in `~/.denkeeper/skills/` (configurable via `[agent] skills_dir`). Subdirectories with a `SKILL.md` file are also supported. Skills with `triggers` are only injected when matched; skills without triggers are always included. A `schedule:<name>` trigger added at runtime must name an existing `[[schedules]]` entry; triggers a skill already carries are exempt.
 
 Agent-specific skills in `<persona_dir>/skills/` override global skills of the same name.
 

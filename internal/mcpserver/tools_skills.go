@@ -28,7 +28,7 @@ type skillCreateInput struct {
 	Name          string   `json:"name" jsonschema:"Skill name"`
 	Description   string   `json:"description,omitempty" jsonschema:"Skill description"`
 	Version       string   `json:"version,omitempty" jsonschema:"Skill version (e.g. 1.0.0)"`
-	Triggers      []string `json:"triggers,omitempty" jsonschema:"Trigger keywords"`
+	Triggers      []string `json:"triggers,omitempty" jsonschema:"Trigger strings, e.g. command:name or schedule:schedule-name; a schedule: trigger must name an existing schedule"`
 	Body          string   `json:"body" jsonschema:"Skill content/instructions"`
 	MaxToolRounds int      `json:"max_tool_rounds,omitempty" jsonschema:"Optional cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 = no cap. Only lowers the agent's budget, never raises it."`
 	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"Optional tool names this skill depends on (frontmatter [requires] tools)."`
@@ -40,7 +40,7 @@ type skillUpdateInput struct {
 	NewName       *string  `json:"new_name,omitempty" jsonschema:"New skill name (rename)"`
 	Description   *string  `json:"description,omitempty" jsonschema:"New description"`
 	Version       *string  `json:"version,omitempty" jsonschema:"New version (e.g. 1.0.0)"`
-	Triggers      []string `json:"triggers,omitempty" jsonschema:"New triggers"`
+	Triggers      []string `json:"triggers,omitempty" jsonschema:"New triggers; a newly added schedule: trigger must name an existing schedule"`
 	Body          *string  `json:"body,omitempty" jsonschema:"New content"`
 	MaxToolRounds *int     `json:"max_tool_rounds,omitempty" jsonschema:"New cap on tool-call ROUNDS (not calls); 0 removes the cap. Omit to keep current."`
 	RequiresTools []string `json:"requires_tools,omitempty" jsonschema:"New required tool names; omit to keep current, pass [] to clear."`
@@ -201,11 +201,15 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	payload := configmcp.BuildSkillPayload(input.Name, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, nil, payload)
+	if err != nil {
+		return toolError(err.Error()), nil, nil
+	}
 	if err := s.skillWriter(input.Agent, e).Create(ctx, payload); err != nil {
 		return toolError("creating skill: " + err.Error()), nil, nil
 	}
 
-	return toolText("skill created: " + input.Name), nil, nil
+	return toolText("skill created: " + input.Name + configmcp.FormatSkillWarnings(warnings)), nil, nil
 }
 
 func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, input skillUpdateInput) (*mcp.CallToolResult, any, error) {
@@ -247,20 +251,24 @@ func (s *Server) handleSkillUpdate(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	warnings, err := configmcp.LintSkillWrite(s.deps.Scheduler, &existing, payload)
+	if err != nil {
+		return toolError(err.Error()), nil, nil
+	}
 
 	writer := s.skillWriter(input.Agent, e)
 	if isRename {
 		if err := writer.Rename(ctx, input.Name, payload); err != nil {
 			return toolError("renaming skill: " + err.Error()), nil, nil
 		}
-		return toolText("skill renamed: " + input.Name + " → " + newName), nil, nil
+		return toolText("skill renamed: " + input.Name + " → " + newName + configmcp.FormatSkillWarnings(warnings)), nil, nil
 	}
 
 	if err := writer.Update(ctx, input.Name, payload); err != nil {
 		return toolError("updating skill: " + err.Error()), nil, nil
 	}
 
-	return toolText("skill updated: " + input.Name), nil, nil
+	return toolText("skill updated: " + input.Name + configmcp.FormatSkillWarnings(warnings)), nil, nil
 }
 
 func (s *Server) handleSkillDelete(ctx context.Context, _ *mcp.CallToolRequest, input skillDeleteInput) (*mcp.CallToolResult, any, error) {

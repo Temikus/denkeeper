@@ -20,6 +20,9 @@ type Trigger struct {
 	Type    TriggerType
 	Raw     string // original string, e.g. "command:briefing"
 	Command string // lowercase command name, for TriggerCommand only
+	// Schedule is the text after "schedule:", trimmed. The scheduler ignores
+	// it; skill writes require it to name an existing schedule when non-empty.
+	Schedule string
 }
 
 // ParseTrigger parses a raw trigger string like "command:briefing" into a Trigger.
@@ -50,8 +53,9 @@ func ParseTrigger(raw string) (Trigger, error) {
 		}, nil
 	case "schedule":
 		return Trigger{
-			Type: TriggerSchedule,
-			Raw:  raw,
+			Type:     TriggerSchedule,
+			Raw:      raw,
+			Schedule: strings.TrimSpace(value),
 		}, nil
 	default:
 		return Trigger{}, fmt.Errorf("trigger %q: unknown type %q (expected command or schedule)", raw, prefix)
