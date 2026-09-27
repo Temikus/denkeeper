@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,6 +269,42 @@ func TestAudit_Search(t *testing.T) {
 	DecodeJSON(t, rec, &resp)
 	if resp.Total != 1 {
 		t.Errorf("expected total=1, got %d", resp.Total)
+	}
+}
+
+func TestAudit_DetailMaxChars(t *testing.T) {
+	h := NewHarness(t, nil)
+	ctx := context.Background()
+
+	long := strings.Repeat("a", 500)
+	_ = h.AuditStore.Insert(ctx, audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategorySupervisor, Action: "review", Summary: "s", Detail: long, Status: audit.StatusOK})
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?detail_max_chars=20", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp audit.ListResult
+	DecodeJSON(t, rec, &resp)
+	if want := strings.Repeat("a", 20) + "…[truncated, 500 chars total]"; resp.Events[0].Detail != want {
+		t.Errorf("detail = %q, want %q", resp.Events[0].Detail, want)
+	}
+
+	rec = h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit", nil))
+	var full audit.ListResult
+	DecodeJSON(t, rec, &full)
+	if full.Events[0].Detail != long {
+		t.Errorf("detail truncated without detail_max_chars: len=%d", len(full.Events[0].Detail))
+	}
+}
+
+func TestAudit_InvalidDetailMaxChars(t *testing.T) {
+	h := NewHarness(t, nil)
+
+	for _, v := range []string{"0", "-1", "abc"} {
+		rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/audit?detail_max_chars="+v, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("detail_max_chars=%s: status = %d, want 400", v, rec.Code)
+		}
 	}
 }
 

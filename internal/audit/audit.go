@@ -3,8 +3,10 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ParseFilterList normalizes multi-valued filter input into the union form
@@ -95,6 +97,27 @@ type ListOpts struct {
 	Until          *time.Time
 	Limit          int
 	Offset         int
+	// DetailMaxChars cuts each Detail to its first N runes plus a marker
+	// carrying the original length (see truncateDetail). 0 = no truncation.
+	DetailMaxChars int
+}
+
+// truncateDetail cuts s to maxChars runes and appends a marker with the
+// original rune count. The marker does not count towards maxChars.
+func truncateDetail(s string, maxChars int) string {
+	n := utf8.RuneCountInString(s)
+	if maxChars <= 0 || n <= maxChars {
+		return s
+	}
+	cut, runes := 0, 0
+	for i := range s {
+		if runes == maxChars {
+			cut = i
+			break
+		}
+		runes++
+	}
+	return fmt.Sprintf("%s…[truncated, %d chars total]", s[:cut], n)
 }
 
 // StatsOpts controls filtering for aggregate audit queries. Stats needs the

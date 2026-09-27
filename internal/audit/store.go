@@ -239,6 +239,7 @@ func (s *SQLiteStore) List(ctx context.Context, opts ListOpts) ([]Event, int, er
 			return nil, 0, fmt.Errorf("scanning audit event: %w", err)
 		}
 		e.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		e.Detail = truncateDetail(e.Detail, opts.DetailMaxChars)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
