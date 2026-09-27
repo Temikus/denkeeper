@@ -797,10 +797,10 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check dependencies (default_provider, agent llm_provider, fallbacks).
+	// Check dependencies (default_provider, agent llm_provider, fallbacks, deciders).
 	if config.IsProviderReferenced(snap, name) {
 		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "provider is in use: referenced as default_provider, by an agent, or by a fallback rule",
+			"error": "provider is in use: referenced as default_provider, by an agent, by a fallback rule, or by a decider",
 		})
 		return
 	}

@@ -117,6 +117,17 @@ Automatic failover strategies.
     threshold = 0.0                  # cost threshold (for cost_limit trigger)
     backoff = "exponential"          # "exponential" or "constant"
 
+### [[llm.deciders]]
+
+Named decision models (array): non-generative classifiers such as `typesafe/jev-1.13` that return typed probabilities instead of text. Never selectable as an agent model. Inputs sent to a decider go to that provider's upstream.
+
+    [[llm.deciders]]
+    name = "jev"                     # unique decider name
+    provider = "openrouter"          # [[llm.providers]] instance; type must be openrouter
+    model = "typesafe/jev-1.13"      # decision model ID
+    timeout = "5s"                   # per-call timeout
+    max_input_tokens = 30000         # oversize inputs are refused, never truncated
+
 ### [session]
 
     tier = "supervised"              # default permission tier

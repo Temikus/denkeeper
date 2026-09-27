@@ -1039,7 +1039,31 @@ type LLMConfig struct {
 	CostLimitHard         float64                  `toml:"cost_limit_hard"`
 	StreamIdleTimeoutSecs int                      `toml:"stream_idle_timeout_secs"`
 	Fallbacks             []FallbackConfig         `toml:"fallback"`
+	Deciders              []DeciderConfig          `toml:"deciders"`
 }
+
+// DeciderConfig names a non-generative decision model (e.g. typesafe/jev-1.13)
+// served by a decision-capable provider instance. Deciders cannot chat, so
+// they are never selectable as an agent model. Inputs sent to a decider (tool
+// arguments, conversation excerpts) go to that provider's upstream.
+type DeciderConfig struct {
+	Name           string `toml:"name"`
+	Provider       string `toml:"provider"`
+	Model          string `toml:"model"`
+	Timeout        string `toml:"timeout"`          // default "5s"
+	MaxInputTokens int    `toml:"max_input_tokens"` // default 30000; oversize inputs are refused, never truncated
+}
+
+// Default decider knobs. Jev's context is 32k tokens; 30k leaves headroom for
+// the token estimate being approximate.
+const (
+	DefaultDeciderTimeout        = "5s"
+	DefaultDeciderMaxInputTokens = 30000
+)
+
+// decisionProviderTypes are the provider types whose client implements
+// llm.DecisionProvider.
+var decisionProviderTypes = map[string]bool{"openrouter": true}
 
 // ProviderInstanceConfig defines a named LLM provider instance.
 // Multiple instances of the same type are allowed (e.g. two OpenAI-compatible endpoints).
@@ -1447,7 +1471,8 @@ func synthesizeLegacyProviders(cfg *Config) {
 }
 
 // IsProviderReferenced returns true if the named provider is referenced as the
-// default provider, by any agent's llm_provider, or by any fallback rule.
+// default provider, by any agent's llm_provider, by any fallback rule, or by
+// any decider.
 func IsProviderReferenced(cfg *Config, name string) bool {
 	if cfg.LLM.DefaultProvider == name {
 		return true
@@ -1462,7 +1487,57 @@ func IsProviderReferenced(cfg *Config, name string) bool {
 			return true
 		}
 	}
+	for _, d := range cfg.LLM.Deciders {
+		if d.Provider == name {
+			return true
+		}
+	}
 	return false
+}
+
+// validateDeciders checks [[llm.deciders]]: unique valid names, a provider
+// instance whose type serves decisions, a model, a positive timeout and a
+// positive max_input_tokens (defaults have already filled the omitted keys).
+func validateDeciders(cfg *Config) error {
+	seen := make(map[string]bool, len(cfg.LLM.Deciders))
+	for i, d := range cfg.LLM.Deciders {
+		if !ValidResourceName(d.Name) {
+			return fmt.Errorf("config: llm.deciders[%d]: invalid name %q (lowercase alphanumeric with hyphens, 1-64 chars)", i, d.Name)
+		}
+		if seen[d.Name] {
+			return fmt.Errorf("config: llm.deciders[%d]: duplicate decider name %q", i, d.Name)
+		}
+		seen[d.Name] = true
+		if err := validateDecider(cfg, d); err != nil {
+			return fmt.Errorf("config: llm.deciders %q: %w", d.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateDecider(cfg *Config, d DeciderConfig) error {
+	var typ string
+	for _, p := range cfg.LLM.Providers {
+		if p.Name == d.Provider {
+			typ = p.Type
+		}
+	}
+	if typ == "" {
+		return fmt.Errorf("provider %q does not match any configured provider instance", d.Provider)
+	}
+	if !decisionProviderTypes[typ] {
+		return fmt.Errorf("provider %q has type %q, which does not serve decision models (supported: openrouter)", d.Provider, typ)
+	}
+	if strings.TrimSpace(d.Model) == "" {
+		return errors.New("model is required")
+	}
+	if dur, err := time.ParseDuration(d.Timeout); err != nil || dur <= 0 {
+		return fmt.Errorf("timeout %q must be a positive duration", d.Timeout)
+	}
+	if d.MaxInputTokens < 0 {
+		return fmt.Errorf("max_input_tokens must be positive, got %d", d.MaxInputTokens)
+	}
+	return nil
 }
 
 // resolveDataDir sets cfg.DataDir from DENKEEPER_DATA_DIR env var, the TOML
@@ -1695,6 +1770,16 @@ func applyLLMDefaults(cfg *Config) {
 	for i := range cfg.LLM.Fallbacks {
 		if cfg.LLM.Fallbacks[i].Backoff == "" {
 			cfg.LLM.Fallbacks[i].Backoff = "exponential"
+		}
+	}
+
+	for i := range cfg.LLM.Deciders {
+		d := &cfg.LLM.Deciders[i]
+		if d.Timeout == "" {
+			d.Timeout = DefaultDeciderTimeout
+		}
+		if d.MaxInputTokens == 0 {
+			d.MaxInputTokens = DefaultDeciderMaxInputTokens
 		}
 	}
 }
@@ -2236,6 +2321,9 @@ func validateProviderAPIKeys(cfg *Config) error {
 			referenced[a.LLMProvider] = true
 		}
 	}
+	for _, d := range cfg.LLM.Deciders {
+		referenced[d.Provider] = true
+	}
 
 	for _, p := range cfg.LLM.Providers {
 		if referenced[p.Name] && providerNeedsAPIKey(p.Type) && p.APIKey == "" {
@@ -2257,6 +2345,9 @@ func validateAdaptersAndProviders(cfg *Config) error {
 		return fmt.Errorf("config: discord.allowed_users must not be empty when discord.token is set (security requirement)")
 	}
 	if err := validateProviderInstances(cfg); err != nil {
+		return err
+	}
+	if err := validateDeciders(cfg); err != nil {
 		return err
 	}
 	if err := validateProviderAPIKeys(cfg); err != nil {
