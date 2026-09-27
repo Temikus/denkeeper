@@ -14,10 +14,11 @@ body.home {
   --dk-text-2: #5e4c40;
   --dk-muted: #8a7a6a;
   --dk-accent: #{$primary};
+  --dk-on-accent: #fff; // text on --dk-accent / --dk-ok; flips dark below for AA
   --dk-accent-soft: rgba(184, 90, 40, 0.08);
   --dk-accent-line: rgba(184, 90, 40, 0.35);
   --dk-door-bg: #fbefe4;
-  --dk-ok: #3d8f62;
+  --dk-ok: #2f7a52;
   --dk-danger: #c43a3a;
   --dk-warn: #c87e30;
   --dk-code-bg: #2a1d15;
@@ -39,6 +40,7 @@ body.home {
     --dk-text-2: #c4b5a8;
     --dk-muted: #9a8a7a;
     --dk-accent: #e07a5a;
+    --dk-on-accent: #1a1411;
     --dk-accent-soft: rgba(224, 122, 90, 0.12);
     --dk-accent-line: rgba(224, 122, 90, 0.45);
     --dk-door-bg: #2e1d14;
@@ -148,7 +150,7 @@ body.home {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
   background: var(--dk-accent);
-  color: #fff;
+  color: var(--dk-on-accent);
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -492,7 +494,7 @@ body.home {
 .dk-fake-btn-primary {
   border-color: var(--dk-accent);
   background: var(--dk-accent);
-  color: #fff;
+  color: var(--dk-on-accent);
 }
 
 .dk-fake-btn-danger {
@@ -792,7 +794,7 @@ code.dk-step-body {
 .dk-chip-ok {
   border-color: var(--dk-ok);
   background: var(--dk-ok);
-  color: #fff;
+  color: var(--dk-on-accent);
 }
 
 .dk-chip-danger {
