@@ -117,6 +117,7 @@ export const api = {
     if (opts.limit) params.set('limit', String(opts.limit))
     if (opts.offset) params.set('offset', String(opts.offset))
     if (opts.agent) params.set('agent', opts.agent)
+    if (opts.includeScheduled) params.set('include_scheduled', 'true')
     const qs = params.toString()
     return apiFetch(`/api/v1/sessions${qs ? '?' + qs : ''}`)
   },

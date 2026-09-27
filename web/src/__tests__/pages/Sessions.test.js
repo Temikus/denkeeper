@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/sve
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
+import { currentRoute } from '../../router.js'
 import Sessions from '../../pages/Sessions.svelte'
 
 beforeEach(() => {
@@ -32,7 +33,7 @@ describe('Sessions page', () => {
 
     render(Sessions)
     await waitFor(() => {
-      expect(screen.getByText('No sessions.')).toBeInTheDocument()
+      expect(screen.getByText('No sessions. Scheduled runs are hidden.')).toBeInTheDocument()
     })
   })
 
@@ -420,5 +421,75 @@ describe('Sessions page', () => {
     })
     // Stats grid should not be present
     expect(document.querySelector('.stats-grid')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sessions page: scheduled runs toggle', () => {
+  function serveByFlag() {
+    const seen = []
+    server.use(
+      http.get('/api/v1/sessions', ({ request }) => {
+        const include = new URL(request.url).searchParams.get('include_scheduled') === 'true'
+        seen.push(include)
+        const sessions = [{ id: 'chan:main', created_at: '2026-01-01T00:00:00Z', message_count: 2 }]
+        if (include) sessions.push({ id: 'sched:daily:1', created_at: '2026-01-02T00:00:00Z', message_count: 2 })
+        return HttpResponse.json({ sessions, total: sessions.length, limit: 50, offset: 0 })
+      })
+    )
+    return seen
+  }
+
+  test('hides scheduled runs by default and shows them when toggled on', async () => {
+    const seen = serveByFlag()
+    render(Sessions)
+    await waitFor(() => expect(screen.getByText('chan:main')).toBeInTheDocument())
+    expect(screen.queryByText('scheduled')).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByLabelText('Show scheduled runs'))
+    // Rendered as a "scheduled" pill plus the schedule name, not the raw ID.
+    await waitFor(() => expect(screen.getByText('scheduled')).toBeInTheDocument())
+    expect(screen.getByText('scheduled').closest('.sid')).toHaveTextContent('scheduled daily')
+    expect(seen).toEqual([false, true])
+  })
+
+  test('deep link opens a scheduled run that is not on the first page', async () => {
+    serveByFlag()
+    currentRoute.set('sessions/sched:old:1')
+    try {
+      render(Sessions)
+      await waitFor(() => {
+        expect(screen.getByText('Hello')).toBeInTheDocument()
+        expect(screen.getByText('Hi there')).toBeInTheDocument()
+      })
+      expect(screen.getByLabelText('Show scheduled runs')).toBeChecked()
+    } finally {
+      currentRoute.set('sessions')
+    }
+  })
+
+  test('drops a Load more page that resolves after the filter changed', async () => {
+    let releaseStale
+    server.use(
+      http.get('/api/v1/sessions', async ({ request }) => {
+        const params = new URL(request.url).searchParams
+        const include = params.get('include_scheduled') === 'true'
+        if (params.get('offset') === '50') {
+          await new Promise(r => { releaseStale = r })
+          return HttpResponse.json({ sessions: [{ id: 'stale-page', created_at: '2026-01-01T00:00:00Z' }], total: 100 })
+        }
+        const sessions = [{ id: include ? 'with-sched' : 'first-page', created_at: '2026-01-01T00:00:00Z' }]
+        return HttpResponse.json({ sessions, total: include ? 1 : 100 })
+      })
+    )
+    render(Sessions)
+    await waitFor(() => expect(screen.getByText('Load more')).toBeInTheDocument())
+    await fireEvent.click(screen.getByText('Load more'))
+    await waitFor(() => expect(releaseStale).toBeTypeOf('function'))
+
+    await fireEvent.click(screen.getByLabelText('Show scheduled runs'))
+    await waitFor(() => expect(screen.getByText('with-sched')).toBeInTheDocument())
+    releaseStale()
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.queryByText('stale-page')).not.toBeInTheDocument()
   })
 })

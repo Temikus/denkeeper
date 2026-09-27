@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -23,13 +24,15 @@ func newSessionsCmd() *cobra.Command {
 	}
 	sessionsCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path (default: ~/.denkeeper/denkeeper.toml)")
 
+	var listIncludeScheduled bool
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all sessions",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runSessionsList(os.Stdout)
+			return runSessionsList(os.Stdout, listIncludeScheduled)
 		},
 	}
+	listCmd.Flags().BoolVar(&listIncludeScheduled, "include-scheduled", false, "include isolated scheduled-run sessions (sched:*)")
 
 	showCmd := &cobra.Command{
 		Use:   "show <session-id>",
@@ -88,15 +91,17 @@ func openMemoryStore() (*agent.SQLiteMemoryStore, error) {
 	return store, nil
 }
 
-func runSessionsList(w *os.File) error {
+func runSessionsList(w *os.File, includeScheduled bool) error {
 	store, err := openMemoryStore()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = store.Close() }()
+	return listSessions(context.Background(), w, store, includeScheduled)
+}
 
-	ctx := context.Background()
-	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{})
+func listSessions(ctx context.Context, w io.Writer, store *agent.SQLiteMemoryStore, includeScheduled bool) error {
+	convos, _, err := store.ListConversations(ctx, agent.SessionListOpts{ExcludeScheduled: !includeScheduled})
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
@@ -110,10 +115,8 @@ func runSessionsList(w *os.File) error {
 	_, _ = fmt.Fprintln(tw, "ID\tADAPTER\tEXT-ID\tMESSAGES\tCOST\tCREATED")
 	for _, c := range convos {
 		cost, _ := store.ConversationCost(ctx, c.ID)
+		// ID is printed in full: it's the argument show/export/delete take.
 		id := c.ID
-		if len(id) > 24 {
-			id = id[:24] + "..."
-		}
 		extID := c.ExternalID
 		if len(extID) > 16 {
 			extID = extID[:16] + "..."

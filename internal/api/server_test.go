@@ -885,6 +885,44 @@ func TestSessions_ListsConversations(t *testing.T) {
 	}
 }
 
+func TestSessions_IncludeScheduled(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	ctx := context.Background()
+	_ = deps.Memory.GetOrCreateConversationByID(ctx, "chan:main", "telegram", "12345")
+	_ = deps.Memory.GetOrCreateConversationByID(ctx, "sched:daily:1", "telegram", "12345")
+	srv := New(cfg, deps, testLogger())
+
+	listIDs := func(path string) []string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, path))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+		var result struct {
+			Sessions []struct {
+				ID string `json:"id"`
+			} `json:"sessions"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		ids := make([]string, len(result.Sessions))
+		for i, s := range result.Sessions {
+			ids[i] = s.ID
+		}
+		return ids
+	}
+
+	if got := listIDs("/api/v1/sessions"); len(got) != 1 || got[0] != "chan:main" {
+		t.Errorf("default listing = %v, want [chan:main]", got)
+	}
+	if got := listIDs("/api/v1/sessions?include_scheduled=true"); len(got) != 2 {
+		t.Errorf("include_scheduled listing = %v, want chan:main and sched:daily:1", got)
+	}
+}
+
 func TestSessionMessages_ReturnsMessages(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	deps := testDeps()

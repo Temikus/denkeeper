@@ -113,7 +113,31 @@ type ConversationInfoWithStats struct {
 type SessionListOpts struct {
 	Limit  int // 0 = no limit (return all)
 	Offset int
-	Agent  string // filter by agent prefix in conversation ID
+	Agent  string // filter by agent prefix in conversation ID or recorded stats agent
+	// ExcludeScheduled hides isolated scheduled-run conversations (sched:*).
+	ExcludeScheduled bool
+}
+
+// ScheduledConversationPrefix prefixes isolated scheduled-run conversation IDs.
+const ScheduledConversationPrefix = "sched:"
+
+// sessionListWhere builds the WHERE clause for ListConversations*. The query
+// must alias conversations as c and LEFT JOIN conversation_stats as cs.
+func sessionListWhere(opts SessionListOpts) (string, []any) {
+	var conds []string
+	var args []any
+	if opts.Agent != "" {
+		conds = append(conds, `(c.id LIKE ? ESCAPE '\' OR cs.agent = ?)`)
+		args = append(args, escapeLike(opts.Agent)+":%", opts.Agent)
+	}
+	if opts.ExcludeScheduled {
+		conds = append(conds, `c.id NOT LIKE ? ESCAPE '\'`)
+		args = append(args, escapeLike(ScheduledConversationPrefix)+"%")
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
 // escapeLike escapes SQL LIKE wildcards (% and _) so the value is treated
@@ -212,7 +236,10 @@ CREATE TABLE IF NOT EXISTS conversations (
     external_id TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_adapter_ext ON conversations(adapter, external_id);
+-- (adapter, external_id) is metadata, not identity: sched:* and ephemeral
+-- chan:* rows share it with the target chat's conversation, and a unique
+-- index made GetOrCreateConversationByID silently drop them (#439).
+DROP INDEX IF EXISTS idx_conversations_adapter_ext;
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,10 +436,27 @@ func applyMigrations(db *sqlx.DB, migrations []string) error {
 	return nil
 }
 
+// backfillOrphanConversations recreates conversation rows the pre-#439 unique
+// index dropped. Their messages survived, but listing and retention pruning
+// both start from conversations, so they were invisible and never pruned. The
+// original target chat is unknown; adapter records the ID prefix (sched/chan).
+const backfillOrphanConversations = `
+INSERT OR IGNORE INTO conversations (id, adapter, external_id, created_at)
+SELECT m.conversation_id,
+       substr(m.conversation_id, 1, instr(m.conversation_id, ':') - 1),
+       m.conversation_id,
+       MIN(m.created_at)
+FROM messages m
+WHERE NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = m.conversation_id)
+GROUP BY m.conversation_id`
+
 // initDB runs the base schema then applies telemetry migrations.
 func initDB(db *sqlx.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("initializing schema: %w", err)
+	}
+	if _, err := db.Exec(backfillOrphanConversations); err != nil {
+		return fmt.Errorf("backfilling orphaned conversations: %w", err)
 	}
 	if err := applyMigrations(db, telemetryMigrations); err != nil {
 		return err
@@ -537,16 +581,12 @@ func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limi
 }
 
 func (s *SQLiteMemoryStore) ListConversations(ctx context.Context, opts SessionListOpts) ([]ConversationInfo, int, error) {
-	var args []any
-	where := ""
-	if opts.Agent != "" {
-		where = ` WHERE c.id LIKE ? ESCAPE '\'`
-		args = append(args, escapeLike(opts.Agent)+":%")
-	}
+	where, args := sessionListWhere(opts)
 
 	// Count total matching rows.
 	var total int
-	countQ := `SELECT COUNT(*) FROM conversations c` + where
+	countQ := `SELECT COUNT(*) FROM conversations c
+	           LEFT JOIN conversation_stats cs ON cs.conversation_id = c.id` + where
 	if err := s.db.GetContext(ctx, &total, countQ, args...); err != nil {
 		return nil, 0, fmt.Errorf("counting conversations: %w", err)
 	}
@@ -815,16 +855,12 @@ func (s *SQLiteMemoryStore) GetConversationStats(ctx context.Context, convID str
 
 // ListConversationsWithStats returns conversations joined with their telemetry stats.
 func (s *SQLiteMemoryStore) ListConversationsWithStats(ctx context.Context, opts SessionListOpts) ([]ConversationInfoWithStats, int, error) {
-	var args []any
-	where := ""
-	if opts.Agent != "" {
-		where = ` WHERE c.id LIKE ? ESCAPE '\'`
-		args = append(args, escapeLike(opts.Agent)+":%")
-	}
+	where, args := sessionListWhere(opts)
 
 	// Count total matching rows.
 	var total int
-	countQ := `SELECT COUNT(*) FROM conversations c` + where
+	countQ := `SELECT COUNT(*) FROM conversations c
+	           LEFT JOIN conversation_stats cs ON cs.conversation_id = c.id` + where
 	if err := s.db.GetContext(ctx, &total, countQ, args...); err != nil {
 		return nil, 0, fmt.Errorf("counting conversations: %w", err)
 	}

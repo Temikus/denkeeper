@@ -989,6 +989,7 @@ func channelForConversation(id string) string {
 // @Param limit query int false "Maximum number of sessions to return (max 500)"
 // @Param offset query int false "Number of sessions to skip"
 // @Param agent query string false "Filter by agent name"
+// @Param include_scheduled query bool false "Include isolated scheduled-run sessions (sched:*), hidden by default"
 // @Success 200 {object} object "Paginated session list with total count"
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
@@ -996,7 +997,8 @@ func channelForConversation(id string) string {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	opts := agent.SessionListOpts{
-		Agent: q.Get("agent"),
+		Agent:            q.Get("agent"),
+		ExcludeScheduled: q.Get("include_scheduled") != "true",
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)

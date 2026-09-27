@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -34,6 +35,32 @@ func TestSessionsList_Empty(t *testing.T) {
 	}
 	if len(convos) != 0 {
 		t.Errorf("expected 0 conversations, got %d", len(convos))
+	}
+}
+
+func TestSessionsList_ScheduledFullID(t *testing.T) {
+	store, cleanup := helperStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	const schedID = "sched:daily-briefing:1790000000000000000"
+	if err := store.GetOrCreateConversationByID(ctx, schedID, "telegram", "user1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var hidden bytes.Buffer
+	if err := listSessions(ctx, &hidden, store, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(hidden.String(), "sched:") {
+		t.Errorf("scheduled run listed without --include-scheduled:\n%s", hidden.String())
+	}
+
+	var shown bytes.Buffer
+	if err := listSessions(ctx, &shown, store, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shown.String(), schedID) {
+		t.Errorf("full scheduled ID missing, can't be passed to show/export:\n%s", shown.String())
 	}
 }
 

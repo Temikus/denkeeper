@@ -12,6 +12,8 @@ type sessionListInput struct {
 	Agent  string `json:"agent,omitempty" jsonschema:"Filter by agent name"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"Max results (default 50)"`
 	Offset int    `json:"offset,omitempty" jsonschema:"Pagination offset"`
+
+	IncludeScheduled bool `json:"include_scheduled,omitempty" jsonschema:"Include isolated scheduled-run conversations (sched:*), hidden by default"`
 }
 
 type sessionMessagesInput struct {
@@ -39,6 +41,7 @@ func (s *Server) registerSessionTools() {
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "session_list",
 		Description: "List conversations with optional agent filter and pagination. " +
+			"Scheduled runs (sched:*) are hidden unless include_scheduled is set. " +
 			"Returns conversation IDs, adapter, message count, and creation time. " +
 			"Requires 'sessions:read' scope.",
 	}, s.handleSessionList)
@@ -79,9 +82,10 @@ func (s *Server) handleSessionList(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 
 	convs, total, err := s.deps.Memory.ListConversations(ctx, agent.SessionListOpts{
-		Limit:  limit,
-		Offset: input.Offset,
-		Agent:  input.Agent,
+		Limit:            limit,
+		Offset:           input.Offset,
+		Agent:            input.Agent,
+		ExcludeScheduled: !input.IncludeScheduled,
 	})
 	if err != nil {
 		return toolError("listing sessions: " + err.Error()), nil, nil
