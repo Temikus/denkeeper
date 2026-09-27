@@ -105,8 +105,11 @@ type ListOpts struct {
 // truncateDetail cuts s to maxChars runes and appends a marker with the
 // original rune count. The marker does not count towards maxChars.
 func truncateDetail(s string, maxChars int) string {
+	if maxChars <= 0 {
+		return s
+	}
 	n := utf8.RuneCountInString(s)
-	if maxChars <= 0 || n <= maxChars {
+	if n <= maxChars {
 		return s
 	}
 	cut, runes := 0, 0
