@@ -184,3 +184,114 @@ model = "m"
 		t.Error("provider used only by a decider must count as referenced")
 	}
 }
+
+// deciderAgent is a supervised agent using decider "jev"; fields is appended
+// inside the [[agents]] table.
+func deciderAgent(fields string) string {
+	return `
+[[llm.deciders]]
+name = "jev"
+provider = "or"
+model = "typesafe/jev-1.13"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+` + fields
+}
+
+func TestSupervisorDecider_Defaults(t *testing.T) {
+	cfg, err := Parse(deciderConfig(deciderAgent(`supervisor_decider = "jev"
+`)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	a := cfg.Agents[0]
+	if a.SupervisorDeciderMode != "shadow" || a.SupervisorDeciderApproveAt != 0.95 || a.SupervisorDeciderDenyAt != 0.05 {
+		t.Errorf("defaults = %q/%v/%v, want shadow/0.95/0.05", a.SupervisorDeciderMode, a.SupervisorDeciderApproveAt, a.SupervisorDeciderDenyAt)
+	}
+}
+
+func TestSupervisorDecider_ExplicitThresholdsKept(t *testing.T) {
+	cfg, err := Parse(deciderConfig(deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_approve_at = 0.9
+supervisor_decider_deny_at = 0.2
+`)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a := cfg.Agents[0]; a.SupervisorDeciderApproveAt != 0.9 || a.SupervisorDeciderDenyAt != 0.2 {
+		t.Errorf("thresholds = %v/%v, want 0.9/0.2", a.SupervisorDeciderApproveAt, a.SupervisorDeciderDenyAt)
+	}
+}
+
+func TestSupervisorDecider_UnknownDecider(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "nope"
+`), `supervisor_decider "nope" does not match`)
+}
+
+func TestSupervisorDecider_RequiresSupervisedTier(t *testing.T) {
+	parseDeciderErr(t, `
+[[llm.deciders]]
+name = "jev"
+provider = "or"
+model = "m"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "autonomous"
+supervisor_decider = "jev"
+`, "only meaningful when the session tier")
+}
+
+func TestSupervisorDecider_EmptyTierResolvesToSessionTier(t *testing.T) {
+	// No session_tier on the agent: [session] tier decides, as in the engine.
+	base := `
+[session]
+tier = "TIER"
+
+[[llm.deciders]]
+name = "jev"
+provider = "or"
+model = "m"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+supervisor_decider = "jev"
+`
+	if _, err := Parse(deciderConfig(strings.Replace(base, "TIER", "supervised", 1))); err != nil {
+		t.Errorf("session.tier = supervised: unexpected error %v", err)
+	}
+	parseDeciderErr(t, strings.Replace(base, "TIER", "autonomous", 1), "only meaningful when the session tier")
+}
+
+func TestSupervisorDecider_EnforceNotYetSupported(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_mode = "enforce"
+`), "not supported")
+}
+
+func TestSupervisorDecider_ThresholdsOutOfOrder(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_approve_at = 0.3
+supervisor_decider_deny_at = 0.5
+`), "0 < deny_at < approve_at < 1")
+}
+
+func TestSupervisorDecider_ApproveAtOne(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_approve_at = 1.0
+`), "0 < deny_at < approve_at < 1")
+}
+
+func TestSupervisorDecider_NegativeDenyAt(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_deny_at = -0.1
+`), "0 < deny_at < approve_at < 1")
+}

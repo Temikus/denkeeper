@@ -774,6 +774,21 @@ type AgentInstanceConfig struct {
 	// 0 = use default).
 	SupervisorToolDescLen int `toml:"supervisor_tool_desc_len"`
 
+	// SupervisorDecider names an [[llm.deciders]] entry that scores each
+	// supervised tool call before the LLM supervisor. Only meaningful when the
+	// effective session tier is "supervised".
+	SupervisorDecider string `toml:"supervisor_decider"`
+
+	// SupervisorDeciderMode is "shadow" (default): the decider runs and is
+	// audited but never changes the outcome.
+	SupervisorDeciderMode string `toml:"supervisor_decider_mode"`
+
+	// SupervisorDeciderApproveAt / DenyAt are the probability thresholds the
+	// decider's verdict is computed against (defaults 0.95 / 0.05). Every
+	// answer >= approve_at approves; any answer <= deny_at denies.
+	SupervisorDeciderApproveAt float64 `toml:"supervisor_decider_approve_at"`
+	SupervisorDeciderDenyAt    float64 `toml:"supervisor_decider_deny_at"`
+
 	// ReviewerModel is the LLM model used for post-turn reviews. If empty,
 	// post-turn review is disabled for this agent.
 	ReviewerModel string `toml:"reviewer_model"`
@@ -1512,6 +1527,38 @@ func validateDeciders(cfg *Config) error {
 			return fmt.Errorf("config: llm.deciders %q: %w", d.Name, err)
 		}
 	}
+	for _, a := range cfg.Agents {
+		if err := validateSupervisorDecider(cfg, a, seen); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateSupervisorDecider checks an agent's supervisor_decider fields. The
+// tier check resolves an empty session_tier to [session] tier, which is what
+// the engine runs under.
+func validateSupervisorDecider(cfg *Config, a AgentInstanceConfig, deciders map[string]bool) error {
+	if a.SupervisorDecider == "" {
+		return nil
+	}
+	if !deciders[a.SupervisorDecider] {
+		return fmt.Errorf("supervisor_decider %q does not match any [[llm.deciders]] entry", a.SupervisorDecider)
+	}
+	tier := a.SessionTier
+	if tier == "" {
+		tier = cfg.Session.Tier
+	}
+	if tier != "supervised" {
+		return fmt.Errorf("supervisor_decider is only meaningful when the session tier is \"supervised\" (got %q)", tier)
+	}
+	if a.SupervisorDeciderMode != DeciderModeShadow {
+		return fmt.Errorf("supervisor_decider_mode %q is not supported (only \"shadow\" for now)", a.SupervisorDeciderMode)
+	}
+	lo, hi := a.SupervisorDeciderDenyAt, a.SupervisorDeciderApproveAt
+	if lo <= 0 || hi >= 1 || lo >= hi {
+		return fmt.Errorf("supervisor_decider thresholds need 0 < deny_at < approve_at < 1, got deny_at=%v approve_at=%v", lo, hi)
+	}
 	return nil
 }
 
@@ -2097,6 +2144,29 @@ func applyAgentDefaults(cfg *Config) {
 				a.Fallbacks[j].Backoff = "exponential"
 			}
 		}
+		applySupervisorDeciderDefaults(a)
+	}
+}
+
+// Supervisor decider defaults.
+const (
+	DeciderModeShadow       = "shadow"
+	DefaultDeciderApproveAt = 0.95
+	DefaultDeciderDenyAt    = 0.05
+)
+
+func applySupervisorDeciderDefaults(a *AgentInstanceConfig) {
+	if a.SupervisorDecider == "" {
+		return
+	}
+	if a.SupervisorDeciderMode == "" {
+		a.SupervisorDeciderMode = DeciderModeShadow
+	}
+	if a.SupervisorDeciderApproveAt == 0 {
+		a.SupervisorDeciderApproveAt = DefaultDeciderApproveAt
+	}
+	if a.SupervisorDeciderDenyAt == 0 {
+		a.SupervisorDeciderDenyAt = DefaultDeciderDenyAt
 	}
 }
 
