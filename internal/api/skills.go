@@ -100,6 +100,15 @@ type skillCreateInput struct {
 	RequiresTools []string `json:"requires_tools"`
 }
 
+// skillWriteResponse is the create/update result. Warnings are non-fatal
+// findings from configmcp.LintSkillWrite.
+type skillWriteResponse struct {
+	Name     string   `json:"name"`
+	Agent    string   `json:"agent"`
+	Status   string   `json:"status"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
 // handleCreateSkill godoc
 // @Summary Create a new skill
 // @Description Creates a skill for the specified agent. Writes the skill file to the agent's persona directory and registers it in memory.
@@ -109,7 +118,7 @@ type skillCreateInput struct {
 // @Security BearerAuth
 // @Param agent path string true "Agent name"
 // @Param body body skillCreateInput true "Skill definition"
-// @Success 201 {object} map[string]string "Skill created"
+// @Success 201 {object} skillWriteResponse "Skill created"
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent not found"
 // @Failure 500 {object} map[string]string "Creation failed"
@@ -152,6 +161,11 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := configmcp.BuildSkillPayload(input.Name, input.Description, version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), nil, payload)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	if err := s.skillWriter(agentName, e).Create(r.Context(), payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
@@ -159,11 +173,7 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("skill created via API", "agent", agentName, "name", input.Name)
-	writeJSON(w, http.StatusCreated, map[string]string{
-		"name":   input.Name,
-		"agent":  agentName,
-		"status": "created",
-	})
+	writeJSON(w, http.StatusCreated, skillWriteResponse{Name: input.Name, Agent: agentName, Status: "created", Warnings: warnings})
 }
 
 type skillUpdateInput struct {
@@ -190,7 +200,7 @@ type skillUpdateInput struct {
 // @Param agent path string true "Agent name"
 // @Param name path string true "Current skill name"
 // @Param body body skillUpdateInput true "Fields to update (all optional; omit to keep current value)"
-// @Success 200 {object} map[string]string "Skill updated"
+// @Success 200 {object} skillWriteResponse "Skill updated"
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 409 {object} map[string]string "New name conflicts with existing skill"
@@ -241,6 +251,11 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := configmcp.MergeSkillFields(newName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
+	warnings, err := configmcp.LintSkillWrite(s.scheduleLookup(), &existing, payload)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	writer := s.skillWriter(agentName, e)
 	if isRename {
@@ -257,11 +272,15 @@ func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("skill updated via API", "agent", agentName, "name", skillName)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"name":   newName,
-		"agent":  agentName,
-		"status": "updated",
-	})
+	writeJSON(w, http.StatusOK, skillWriteResponse{Name: newName, Agent: agentName, Status: "updated", Warnings: warnings})
+}
+
+// scheduleLookup keeps a nil *Scheduler from becoming a non-nil interface.
+func (s *Server) scheduleLookup() configmcp.ScheduleLookup {
+	if s.deps.Scheduler == nil {
+		return nil
+	}
+	return s.deps.Scheduler
 }
 
 // handleDeleteSkill godoc

@@ -6456,10 +6456,7 @@
                     "201": {
                         "description": "Skill created",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/internal_api.skillWriteResponse"
                         }
                     },
                     "400": {
@@ -6597,10 +6594,7 @@
                     "200": {
                         "description": "Skill updated",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/internal_api.skillWriteResponse"
                         }
                     },
                     "400": {
@@ -10574,6 +10568,26 @@
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_api.skillWriteResponse": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

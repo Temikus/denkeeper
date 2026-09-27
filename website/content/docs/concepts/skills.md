@@ -17,7 +17,7 @@ Skills are the simplest extension point. They are markdown files with TOML front
 name = "daily-briefing"
 description = "Compile and deliver a daily briefing"
 version = "1.0.0"
-triggers = ["command:briefing", "schedule:daily"]
+triggers = ["command:briefing", "schedule:morning-briefing"]
 
 [requires]
 tools = ["web-search", "calendar"]
@@ -36,11 +36,11 @@ tools = ["web-search", "calendar"]
 Skills are activated by triggers:
 
 - **`command:name`** — activated when the user's message starts with `/name` or `!name` (case-insensitive), on any adapter or channel — Telegram, Discord, the web dashboard, or the REST chat API
-- **`schedule:...`** — marks the skill as scheduler-driven
+- **`schedule:<name>`** — marks the skill as scheduler-driven
 - **Ambient** — skills without triggers are always included in the system prompt
 
 {{< callout context="danger" >}}
-A `schedule:` trigger does **not** set a time. Everything after the colon is ignored by the parser — the trigger only marks the skill as one the scheduler invokes. The actual timing lives in a `[[schedules]]` entry that names the skill:
+A `schedule:` trigger does **not** set a time. It only marks the skill as one the scheduler invokes, and the name after the colon must be an existing schedule: skill writes reject any other value (a bare `schedule:` is accepted). The actual timing lives in a `[[schedules]]` entry that names the skill:
 
 ```toml
 [[schedules]]

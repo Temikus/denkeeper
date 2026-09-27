@@ -91,7 +91,7 @@ func (s *Server) registerSkillTools() {
 					"name":        {"type": "string",  "description": "Unique skill slug (e.g. send-daily-report)"},
 					"description":{"type": "string",  "description": "One-line description of what this skill does"},
 					"version":     {"type": "string",  "description": "Semver string, e.g. 1.0.0"},
-					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\"]"},
+					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "Trigger strings, e.g. [\"command:skill-name\", \"schedule:schedule-name\"]. A schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "Markdown body — the skill instructions"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "Optional cap on tool-call ROUNDS (not calls) for turns this skill drives. Omit or 0 for no cap; it can only lower the agent's budget, never raise it. Prefer this over telling the model in the body to count its own tool calls."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tool names this skill depends on (frontmatter [requires] tools). Declaring it documents the skill's tool surface; omit when the skill needs no particular tools."}
@@ -134,7 +134,7 @@ func (s *Server) registerSkillTools() {
 					"new_name":    {"type": "string",  "description": "Rename the skill to this name (omit to keep current name)"},
 					"description":{"type": "string",  "description": "New description (omit to keep current)"},
 					"version":     {"type": "string",  "description": "New version (omit to keep current)"},
-					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current)"},
+					"triggers":    {"type": "array", "items": {"type": "string"}, "description": "New triggers (omit to keep current). A newly added schedule: trigger must name an existing schedule."},
 					"body":        {"type": "string",  "description": "New markdown body (omit to keep current)"},
 					"max_tool_rounds": {"type": "integer", "minimum": 0, "description": "New cap on tool-call ROUNDS (not calls) for turns this skill drives; 0 removes the cap (omit to keep current). It can only lower the agent's budget, never raise it."},
 					"requires_tools": {"type": "array", "items": {"type": "string"}, "description": "New list of required tool names (omit to keep current; pass [] to clear)."}
@@ -447,8 +447,8 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 		return nil
 	})
 
-	return applyOrSubmit(ctx, s.deps, approval.ActionKindCreateSkill,
-		"Create new skill: "+input.Name, payload, applyFn, false)
+	return s.applyLintedSkill(ctx, nil, approval.ActionKindCreateSkill,
+		"Create new skill: "+input.Name, payload, applyFn)
 }
 
 func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -603,8 +603,8 @@ func (s *Server) handleSkillUpdate(ctx context.Context, req *mcp.CallToolRequest
 	payload := MergeSkillFields(effectiveName, existing, input.Description, input.Version, input.Triggers, input.Body, input.MaxToolRounds, input.RequiresTools)
 	applyFn, summary := s.buildSkillUpdateAction(input.Name, effectiveName, isRename, payload)
 
-	return applyOrSubmit(ctx, s.deps, approval.ActionKindUpdateSkill,
-		summary, payload, applyFn, false)
+	return s.applyLintedSkill(ctx, &existing, approval.ActionKindUpdateSkill,
+		summary, payload, applyFn)
 }
 
 func resolveSkillRename(name string, newName *string) (effectiveName string, isRename bool) {
@@ -708,8 +708,8 @@ func (s *Server) handleSkillPatch(ctx context.Context, req *mcp.CallToolRequest)
 		return nil
 	})
 
-	return applyOrSubmit(ctx, s.deps, approval.ActionKindUpdateSkill,
-		"Patch skill: "+input.Name, payload, applyFn, false)
+	return s.applyLintedSkill(ctx, &sk, approval.ActionKindUpdateSkill,
+		"Patch skill: "+input.Name, payload, applyFn)
 }
 
 func (s *Server) handleSkillReadFile(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1684,6 +1684,27 @@ func applyOrSubmit(
 		return toolError(fmt.Sprintf("action failed: %v", err)), nil
 	}
 	return toolText("Done: " + summary), nil
+}
+
+// applyLintedSkill runs LintSkillWrite before applyOrSubmit and appends any
+// warnings to the success text.
+func (s *Server) applyLintedSkill(ctx context.Context, prior *skill.Skill, kind approval.ActionKind, summary, payload string, fn approval.ActionFunc) (*mcp.CallToolResult, error) {
+	var sched ScheduleLookup
+	if s.deps.Sched != nil {
+		sched = s.deps.Sched
+	}
+	warnings, err := LintSkillWrite(sched, prior, payload)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+	res, err := applyOrSubmit(ctx, s.deps, kind, summary, payload, fn, false)
+	if err != nil || res.IsError {
+		return res, err
+	}
+	if tc, ok := res.Content[0].(*mcp.TextContent); ok {
+		tc.Text += FormatSkillWarnings(warnings)
+	}
+	return res, nil
 }
 
 // skillLogger is the minimal logging surface the skill-file helpers need.
