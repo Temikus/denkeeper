@@ -271,7 +271,7 @@ Skills are markdown files that teach the agent how to handle specific tasks. The
 name = "daily-briefing"
 description = "Compile and deliver a daily briefing"
 version = "1.0.0"
-triggers = ["schedule:morning-briefing", "command:briefing"]
+triggers = ["schedule:daily-briefing", "command:briefing"]
 +++
 
 # Daily Briefing
