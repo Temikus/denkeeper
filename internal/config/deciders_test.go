@@ -290,6 +290,15 @@ supervisor_decider_approve_at = 1.0
 `), "0 < deny_at < approve_at < 1")
 }
 
+// TOML accepts nan, and NaN fails every comparison, so without an explicit
+// check it would pass the range test and make every verdict escalate.
+func TestSupervisorDecider_NaNThresholdsRejected(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_approve_at = nan
+supervisor_decider_deny_at = nan
+`), "0 < deny_at < approve_at < 1")
+}
+
 func TestSupervisorDecider_NegativeDenyAt(t *testing.T) {
 	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
 supervisor_decider_deny_at = -0.1

@@ -1556,7 +1556,7 @@ func validateSupervisorDecider(cfg *Config, a AgentInstanceConfig, deciders map[
 		return fmt.Errorf("supervisor_decider_mode %q is not supported (only \"shadow\" for now)", a.SupervisorDeciderMode)
 	}
 	lo, hi := a.SupervisorDeciderDenyAt, a.SupervisorDeciderApproveAt
-	if lo <= 0 || hi >= 1 || lo >= hi {
+	if math.IsNaN(lo) || math.IsNaN(hi) || lo <= 0 || hi >= 1 || lo >= hi {
 		return fmt.Errorf("supervisor_decider thresholds need 0 < deny_at < approve_at < 1, got deny_at=%v approve_at=%v", lo, hi)
 	}
 	return nil
