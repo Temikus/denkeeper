@@ -1,15 +1,74 @@
 {{ define "main" }}
-<section class="section section-hero container-fluid mt-n3 pb-3">
-  <div class="row justify-content-center">
-    <div class="col-lg-12 text-center">
-      <img src="/logo.png" alt="Denkeeper logo" class="hero-logo mb-3" width="120" height="120">
-      <h1>{{ .Title }}</h1>
+<section class="dk-hero">
+  <div class="dk-hero-copy">
+    {{ with .Params.announcement -}}
+    <a class="dk-pill" href="{{ .url | relURL }}">
+      <span class="dk-pill-label">{{ .label }}</span>
+      <span>{{ .text }}{{ with .detail }}<span class="dk-pill-detail"> {{ . }}</span>{{ end }} &rarr;</span>
+    </a>
+    {{- end }}
+    <h1 class="dk-headline">{{ .Params.headline | safeHTML }}</h1>
+    <p class="dk-lead">{{ .Params.lead }}</p>
+    <div class="dk-install">
+      {{- highlight "curl -fsSL https://get.denkeeper.io | sh" "bash" "" -}}
     </div>
-    <div class="col-lg-9 col-xl-8 text-center">
-      <p class="lead">{{ .Params.lead | safeHTML }}</p>
-      <div class="mt-4">
-        <a class="btn btn-primary btn-cta rounded-pill btn-lg" href="/docs/getting-started/installation/" role="button">Get Started</a>
-        <a class="btn btn-outline-primary rounded-pill btn-lg ms-2" href="https://github.com/Temikus/denkeeper" role="button"><svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="20" height="20" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.15em; margin-right: 0.3em;"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5"/></svg>GitHub</a>
+    <div class="dk-cta">
+      <a class="btn btn-primary rounded-pill dk-btn" href="/docs/getting-started/installation/">Read the docs</a>
+      <a class="dk-link-strong" href="/docs/getting-started/installation/#homebrew-macos">Homebrew, .deb, .rpm, Docker, Helm &rarr;</a>
+    </div>
+  </div>
+
+  {{/* Illustration of the dashboard's Approvals page; demo data only. */}}
+  <div class="dk-dash" role="img" aria-label="The Denkeeper dashboard: the den agent is waiting for approval to create a schedule, with today's spend at $0.42 of a $2.00 budget.">
+    <div class="dk-dash-chrome">
+      <span class="dk-dot"></span><span class="dk-dot"></span><span class="dk-dot"></span>
+      <span class="dk-dash-url">pi.local:8080/#/approvals</span>
+    </div>
+    <div class="dk-dash-app">
+      <div class="dk-dash-nav">
+        <span>Overview</span>
+        <span>Chat</span>
+        <span class="dk-dash-nav-label">Agents</span>
+        <span>Sessions</span>
+        <span>Schedules</span>
+        <span class="is-active">Approvals</span>
+        <span>Audit Log</span>
+        <span class="dk-dash-nav-label">Admin</span>
+        <span>Providers</span>
+        <span>Costs</span>
+        <span>Evals</span>
+      </div>
+      <div class="dk-dash-main">
+        <div class="dk-dash-title">Approvals <span>1 pending &middot; 14 today</span></div>
+        <div class="dk-approval">
+          <div class="dk-approval-head">
+            <span class="dk-status dk-status-warn"></span>
+            <strong>den wants to run</strong>
+            <code class="dk-tool">schedule_create</code>
+            <span class="dk-approval-meta">via Telegram &middot; 12s ago</span>
+          </div>
+          <pre class="dk-approval-args">{ "name": "morning-brief",
+  "cron": "0 7 * * 1-5",
+  "prompt": "Summarise my calendar and inbox" }</pre>
+          <div class="dk-approval-actions">
+            <span class="dk-fake-btn dk-fake-btn-primary">Approve</span>
+            <span class="dk-fake-btn">Always allow</span>
+            <span class="dk-fake-btn dk-fake-btn-danger">Deny</span>
+          </div>
+        </div>
+        <ul class="dk-dash-rows">
+          <li><span class="dk-status dk-status-ok"></span><code>web_fetch</code><span>Auto-approved by supervisor agent</span><time>2m</time></li>
+          <li><span class="dk-status dk-status-ok"></span><code>kv_set</code><span>Approved by you on Telegram</span><time>9m</time></li>
+          <li><span class="dk-status dk-status-danger"></span><code>run_javascript</code><span>Denied: restricted tier</span><time>31m</time></li>
+        </ul>
+        <div class="dk-budget">
+          <div class="dk-budget-head">
+            <span>Today's spend &middot; den</span>
+            <strong>$0.42</strong>
+            <span class="dk-budget-of">of $2.00 budget</span>
+          </div>
+          <div class="dk-meter"><div style="--dk-fill: 21%"></div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -17,78 +76,86 @@
 {{ end }}
 
 {{ define "sidebar-prefooter" }}
-{{ if site.Params.doks.backgroundDots -}}
-<div class="d-flex justify-content-start">
-  <div class="bg-dots"></div>
-</div>
-{{ end -}}
-<section class="section section-md section-features">
-  <div class="container">
-    <div class="row justify-content-center g-4">
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f512;</span>
-          <h2 class="h4">Security first</h2>
-          <p>Tiered permissions (autonomous, supervised, restricted). Every capability is opt-in. Approval workflows for sensitive actions.</p>
-        </div>
-      </div>
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f4b0;</span>
-          <h2 class="h4">Cost aware</h2>
-          <p>Per-session and global budget tracking. Automatic fallback to cheaper models when funds are low.</p>
-        </div>
-      </div>
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f4e6;</span>
-          <h2 class="h4">Single binary</h2>
-          <p>One file, one TOML config, SQLite storage. No Docker required to run (but supported). Runs on a Raspberry Pi 5.</p>
-        </div>
-      </div>
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f916;</span>
-          <h2 class="h4">Multi-agent</h2>
-          <p>Run multiple agents with distinct personas, skills, and adapter bindings in a single instance.</p>
-        </div>
-      </div>
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f527;</span>
-          <h2 class="h4">Extensible</h2>
-          <p>Three extension tiers: skills (markdown), tools (MCP servers), and plugins (subprocess/Docker).</p>
-        </div>
-      </div>
-      <div class="col-md-8 col-lg-5">
-        <div class="feature-card">
-          <span class="feature-icon">&#x1f4ac;</span>
-          <h2 class="h4">Multi-platform</h2>
-          <p>Connects to Telegram and Discord. Routes messages through Anthropic, OpenAI, OpenRouter, or Ollama.</p>
-        </div>
-      </div>
-    </div>
+<section class="container dk-platforms" aria-label="Supported platforms">
+  <div class="dk-platform">
+    <span class="dk-kicker-muted">Talks to you on</span>
+    <span>Telegram &middot; Discord &middot; Web &middot; REST &middot; MCP</span>
+  </div>
+  <div class="dk-platform">
+    <span class="dk-kicker-muted">Thinks with</span>
+    <span>Anthropic &middot; OpenAI &middot; OpenRouter &middot; Ollama</span>
+  </div>
+  <div class="dk-platform">
+    <span class="dk-kicker-muted">Runs on</span>
+    <span>Linux &middot; macOS &middot; Raspberry Pi &middot; Docker &middot; Helm</span>
   </div>
 </section>
 
-<section class="section section-md section-getstarted">
-  <div class="container">
-    <div class="row justify-content-center text-center">
-      <div class="col-lg-8">
-        <h2 class="mb-3">Get Started</h2>
-        <p class="mb-4">Install with a single command:</p>
-        <div class="install-command text-start">
-          {{- highlight "curl -fsSL https://get.denkeeper.io | sh" "bash" "" -}}
-        </div>
-        <p class="mt-4 mb-3">Or via Homebrew:</p>
-        <div class="install-command text-start">
-          {{- highlight "brew install Temikus/denkeeper/denkeeper" "bash" "" -}}
-        </div>
-        <p class="mt-4">Or grab a <code>.deb</code>/<code>.rpm</code> package from the <a href="https://github.com/Temikus/denkeeper/releases">releases page</a>.</p>
-        <a class="btn btn-primary rounded-pill btn-lg mt-3" href="/docs/getting-started/installation/" role="button">Read the guide</a>
-      </div>
+<section class="container dk-door">
+  <div class="dk-section-head">
+    <div>
+      <span class="dk-kicker">Security first</span>
+      <h2>Every tool call goes through the door.</h2>
     </div>
+    <a class="dk-link-strong" href="/docs/concepts/sessions/">How approvals work &rarr;</a>
   </div>
+  <ol class="dk-flow">
+    <li class="dk-step">
+      <span class="dk-step-n">01 &middot; message</span>
+      <span class="dk-step-body">&ldquo;Brief me every weekday at 7&rdquo;</span>
+    </li>
+    <li class="dk-step">
+      <span class="dk-step-n">02 &middot; agent plans</span>
+      <code class="dk-step-body">schedule_create</code>
+    </li>
+    <li class="dk-step">
+      <span class="dk-step-n">03 &middot; tier check</span>
+      <span class="dk-step-body">Supervised tier: it writes, so it waits</span>
+    </li>
+    <li class="dk-step dk-step-door">
+      <span class="dk-step-n">04 &middot; the door</span>
+      <span class="dk-step-body">You tap Approve, or your supervisor agent does</span>
+      <span class="dk-chips" aria-hidden="true">
+        <span class="dk-chip dk-chip-ok">approve</span>
+        <span class="dk-chip">always</span>
+        <span class="dk-chip dk-chip-danger">deny</span>
+      </span>
+    </li>
+    <li class="dk-step">
+      <span class="dk-step-n">05 &middot; on record</span>
+      <span class="dk-step-body">Runs, then lands in the audit log with its cost</span>
+    </li>
+  </ol>
+  <dl class="dk-tiers">
+    <div class="dk-tier"><dt>Autonomous</dt><dd>walks straight through the door.</dd></div>
+    <div class="dk-tier dk-tier-default"><dt>Supervised</dt><dd>knocks and waits. The default.</dd></div>
+    <div class="dk-tier"><dt>Restricted</dt><dd>only gets read-only tools.</dd></div>
+  </dl>
+</section>
+
+<section class="container dk-costs">
+  <div class="dk-costs-copy">
+    <span class="dk-kicker">Cost aware</span>
+    <h2>Know what every conversation costs.</h2>
+    <p>Per-session soft and hard limits, live pricing for every provider, and fallback rules that downshift to a cheaper model instead of just stopping.</p>
+    <a class="dk-link-strong" href="/docs/concepts/observability/">Cost tracking &rarr;</a>
+  </div>
+  <figure class="dk-chart">
+    <div class="dk-chart-total"><strong>$3.18</strong> <span>this week across 3 agents</span></div>
+    <div class="dk-bars" role="img" aria-label="Daily spend for a week; Thursday is the highest day.">
+      <span style="--dk-h: 38%"></span>
+      <span style="--dk-h: 52%"></span>
+      <span style="--dk-h: 30%"></span>
+      <span class="is-peak" style="--dk-h: 88%"></span>
+      <span style="--dk-h: 44%"></span>
+      <span style="--dk-h: 26%"></span>
+      <span style="--dk-h: 34%"></span>
+    </div>
+    <figcaption class="dk-chart-note">
+      <span class="dk-status dk-status-warn"></span>
+      Thu: soft limit hit, switched den to a cheaper model for the rest of the session
+    </figcaption>
+  </figure>
 </section>
 {{ end }}
 

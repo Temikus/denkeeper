@@ -5,8 +5,9 @@ $red: hsl(10, 70%, 58%);
 $orange: hsl(20, 75%, 58%);
 $yellow: hsl(35, 82%, 60%);
 
-// Primary accent: warm lighter red (not pink — kept on the orange side of red)
-$primary: hsl(10, 70%, 58%);
+// Primary accent: the dashboard's terracotta (web/src/App.svelte --accent), so
+// site and product share one orange. White text on it clears 4.5:1.
+$primary: #b85a28;
 $info: hsl(10, 55%, 60%);
 
 // Light mode body color: warm dark brown instead of cold blue-gray
