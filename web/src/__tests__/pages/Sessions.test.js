@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/sve
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
+import { currentRoute } from '../../router.js'
 import Sessions from '../../pages/Sessions.svelte'
 
 beforeEach(() => {
@@ -449,6 +450,21 @@ describe('Sessions page: scheduled runs toggle', () => {
     await waitFor(() => expect(screen.getByText('scheduled')).toBeInTheDocument())
     expect(screen.getByText('scheduled').closest('.sid')).toHaveTextContent('scheduled daily')
     expect(seen).toEqual([false, true])
+  })
+
+  test('deep link opens a scheduled run that is not on the first page', async () => {
+    serveByFlag()
+    currentRoute.set('sessions/sched:old:1')
+    try {
+      render(Sessions)
+      await waitFor(() => {
+        expect(screen.getByText('Hello')).toBeInTheDocument()
+        expect(screen.getByText('Hi there')).toBeInTheDocument()
+      })
+      expect(screen.getByLabelText('Show scheduled runs')).toBeChecked()
+    } finally {
+      currentRoute.set('sessions')
+    }
   })
 
   test('drops a Load more page that resolves after the filter changed', async () => {

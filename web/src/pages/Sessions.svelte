@@ -39,10 +39,8 @@
     // A deep link to a scheduled run must not land on a list that hides it.
     if (targetId.startsWith('sched:')) includeScheduled = true
     await loadSessions()
-    if (targetId) {
-      const target = sessions.find(s => s.id === targetId)
-      if (target) selectSession(target)
-    }
+    // Messages load by ID, so a target past the first page still opens.
+    if (targetId) selectSession(sessions.find(s => s.id === targetId) ?? { id: targetId })
   })
 
   async function loadSessions() {
