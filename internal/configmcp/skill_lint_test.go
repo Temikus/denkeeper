@@ -195,6 +195,25 @@ func TestSkillUpdate_BodyAndVersionChanged_NoWarning(t *testing.T) {
 	}
 }
 
+// With no scheduler no schedule can exist, so a new named trigger is dangling.
+func TestLintSkillWrite_NilScheduler_RejectsNamedTrigger(t *testing.T) {
+	payload := configmcp.BuildSkillPayload("review", "", "1.0.0", []string{"schedule:weekly-review"}, "Review skills.", 10, nil)
+
+	if _, err := configmcp.LintSkillWrite(nil, nil, payload); err == nil {
+		t.Fatal("expected rejection with no scheduler")
+	}
+}
+
+func TestLintSkillWrite_NilScheduler_AllowsBareMarkerAndCarriedOver(t *testing.T) {
+	prior := skilltest.NewVersioned("review", "", "1.0.0", []string{"schedule:daily:08:00"}, "Review skills.")
+	for _, trig := range []string{"schedule:", "schedule:daily:08:00"} {
+		payload := configmcp.BuildSkillPayload("review", "", "1.0.1", []string{trig}, "Review skills.", 10, nil)
+		if _, err := configmcp.LintSkillWrite(nil, &prior, payload); err != nil {
+			t.Errorf("trigger %q: unexpected rejection: %v", trig, err)
+		}
+	}
+}
+
 func TestSkillPatch_VersionKept_Warns(t *testing.T) {
 	existing := skilltest.NewVersioned("greet", "", "1.0.0", nil, "Say hello.")
 	session, _ := newLintServer(t, &existing)

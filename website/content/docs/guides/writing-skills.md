@@ -60,7 +60,7 @@ Always acknowledge with: "Logged: $AMOUNT for CATEGORY"
 ## Trigger types
 
 - **`command:name`** — activates when the user's message starts with `/name` or `!name` (case-insensitive), on any adapter or channel — Telegram, Discord, the web dashboard, or the REST chat API
-- **`schedule:<name>`** — marks the skill as scheduler-driven. Timing comes from a `[[schedules]]` entry whose `skill` field names this skill; without one, the skill never fires. Skill writes (REST, MCP, or the agent itself) reject a `<name>` that isn't an existing schedule; a bare `schedule:` is accepted
+- **`schedule:<name>`** — marks the skill as scheduler-driven. Timing comes from a `[[schedules]]` entry whose `skill` field names this skill; without one, the skill never fires. Skill writes (REST, MCP, or the agent itself) reject a newly added `<name>` that isn't an existing schedule; triggers the skill already carries, and a bare `schedule:`, are accepted
 - **No triggers** — *ambient*: always included in the system prompt, and matched on every turn
 
 The distinction between ambient and scheduled matters for `max_tool_rounds`: the cap applies only when a single skill explicitly drives the turn (a command match, or a schedule naming it). An ambient skill matches every message, so capping on it would throttle unrelated conversation — it is deliberately exempt.

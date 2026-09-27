@@ -40,7 +40,7 @@ Skills are activated by triggers:
 - **Ambient** — skills without triggers are always included in the system prompt
 
 {{< callout context="danger" >}}
-A `schedule:` trigger does **not** set a time. It only marks the skill as one the scheduler invokes, and the name after the colon must be an existing schedule: skill writes reject any other value (a bare `schedule:` is accepted). The actual timing lives in a `[[schedules]]` entry that names the skill:
+A `schedule:` trigger does **not** set a time. It only marks the skill as one the scheduler invokes, and the name after the colon must be an existing schedule: skill writes reject a newly added trigger naming anything else (triggers the skill already carries, and a bare `schedule:`, are accepted). The actual timing lives in a `[[schedules]]` entry that names the skill:
 
 ```toml
 [[schedules]]

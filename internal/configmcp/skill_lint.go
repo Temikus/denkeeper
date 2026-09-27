@@ -17,7 +17,7 @@ type ScheduleLookup interface {
 // the skill being replaced (nil on create). A non-nil error rejects the write;
 // warnings are for the caller's result. A payload that doesn't parse is left
 // for the write path to reject, so its error message is unchanged. A nil sched
-// skips the schedule check; pass an untyped nil, not a nil *Scheduler.
+// means no schedules exist; pass an untyped nil, not a nil *Scheduler.
 func LintSkillWrite(sched ScheduleLookup, prior *skill.Skill, payload string) ([]string, error) {
 	next, err := skill.ParseFile("(payload)", []byte(payload))
 	if err != nil {
@@ -41,9 +41,6 @@ func LintSkillWrite(sched ScheduleLookup, prior *skill.Skill, payload string) ([
 // doesn't exist. Triggers carried over unchanged from prior are exempt: they
 // predate the check, and blocking them would block every edit to the skill.
 func checkScheduleTriggers(sched ScheduleLookup, prior *skill.Skill, next *skill.Skill) error {
-	if sched == nil {
-		return nil
-	}
 	kept := map[string]bool{}
 	if prior != nil {
 		for _, raw := range prior.Triggers {
@@ -55,7 +52,7 @@ func checkScheduleTriggers(sched ScheduleLookup, prior *skill.Skill, next *skill
 		if t.Type != skill.TriggerSchedule || t.Schedule == "" || kept[t.Raw] {
 			continue
 		}
-		if _, ok := sched.GetEntry(t.Schedule); !ok {
+		if !scheduleExists(sched, t.Schedule) {
 			missing = append(missing, fmt.Sprintf("%q", t.Schedule))
 		}
 	}
@@ -63,6 +60,15 @@ func checkScheduleTriggers(sched ScheduleLookup, prior *skill.Skill, next *skill
 		return fmt.Errorf("schedule trigger names a schedule that does not exist: %s (create the schedule first, or use a bare \"schedule:\" marker)", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// scheduleExists treats a nil lookup as an empty schedule table.
+func scheduleExists(sched ScheduleLookup, name string) bool {
+	if sched == nil {
+		return false
+	}
+	_, ok := sched.GetEntry(name)
+	return ok
 }
 
 func hasScheduleTrigger(s *skill.Skill) bool {
