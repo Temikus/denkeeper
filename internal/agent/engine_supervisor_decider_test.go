@@ -233,6 +233,36 @@ func TestSupervisorDecider_StateEmbedsArgumentsAsJSON(t *testing.T) {
 	}
 }
 
+func TestDeciderState_ScheduledSkillAndExcerpts(t *testing.T) {
+	in := &supervisorReviewInput{
+		agent:     "default",
+		tool:      "web_search",
+		arguments: `{"q":"x"}`,
+		skill: &agentctx.SkillSummary{
+			Name: "digest", Description: "daily digest", Body: strings.Repeat("b", 50),
+			IsScheduled: true, ScheduleName: "morning",
+		},
+		bodyExcerptLen: 10,
+		recent:         []StoredMessage{{Role: "user", Content: strings.Repeat("m", 300)}},
+	}
+	s := in.deciderState()
+	if s.Skill == nil || s.Skill.Name != "digest" || !s.Skill.Scheduled || s.Skill.Schedule != "morning" {
+		t.Fatalf("skill = %+v", s.Skill)
+	}
+	// Same truncation as the markdown prompt, so the two views match.
+	if s.Skill.Instructions != strings.Repeat("b", 10)+"..." {
+		t.Errorf("instructions excerpt = %q", s.Skill.Instructions)
+	}
+	if got := s.RecentMessages[0].Content; got != strings.Repeat("m", supervisorRecentMsgLen)+"..." {
+		t.Errorf("recent message not truncated to %d: len %d", supervisorRecentMsgLen, len(got))
+	}
+
+	in.bodyExcerptLen = 0
+	if s := in.deciderState(); s.Skill.Instructions != "" {
+		t.Errorf("excerpt len 0 must omit instructions, got %q", s.Skill.Instructions)
+	}
+}
+
 func TestRawJSONOrString_NonJSONArgumentsBecomeString(t *testing.T) {
 	if got := string(rawJSONOrString(`not json`)); got != `"not json"` {
 		t.Errorf("rawJSONOrString = %s", got)
