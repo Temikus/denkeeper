@@ -4,11 +4,22 @@
   weight = 10
 
 [[main]]
-  name = "GitHub"
-  url = "https://github.com/Temikus/denkeeper"
+  name = "Guides"
+  url = "/docs/guides/"
   weight = 20
 
+[[main]]
+  name = "Security"
+  url = "/docs/concepts/security/"
+  weight = 30
+
+[[main]]
+  name = "Releases"
+  url = "https://github.com/Temikus/denkeeper/releases"
+  weight = 40
+
+# Rendered as the "Star on GitHub" pill in header.html.
 [[social]]
-  name = "GitHub"
+  name = "Star on GitHub"
   url = "https://github.com/Temikus/denkeeper"
   weight = 10

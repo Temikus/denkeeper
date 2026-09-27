@@ -54,113 +54,21 @@ body.home .navbar {
   vertical-align: -0.15em;
 }
 
-// ---- Hero section ----
-.section-hero {
-  padding-top: 5rem;
-  padding-bottom: 4rem;
+// ---- GitHub pill (header) ----
+.btn-github-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  border: 1px solid #e8dcc8;
+  background: #fff;
+  color: $body-color;
+  font-weight: 500;
+  white-space: nowrap;
 
-  .lead {
-    font-size: 1.2rem;
-    color: var(--bs-secondary-color);
-    max-width: 640px;
-    margin-left: auto;
-    margin-right: auto;
-    line-height: 1.7;
-  }
-
-  .hero-logo {
-    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
-  }
-
-  .btn-cta {
-    padding: 0.75rem 2rem;
-    font-weight: 600;
-    font-size: 1.05rem;
-  }
-}
-
-// ---- Feature cards ----
-.section-features {
-  .feature-card {
-    background: var(--bs-body-bg);
-    border: 1px solid #e8dcc8;
-    border-radius: 12px;
-    padding: 1.75rem 1.5rem;
-    height: 100%;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    box-shadow: 0 1px 3px rgba(61, 42, 30, 0.06);
-
-    &:hover {
-      border-color: $primary;
-      box-shadow: 0 4px 12px rgba($primary, 0.1);
-    }
-  }
-
-  .feature-icon {
-    font-size: 1.75rem;
-    margin-bottom: 0.75rem;
-    display: block;
-  }
-
-  h2 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-    margin-top: 0;
-  }
-
-  p {
-    font-size: 0.925rem;
-    color: var(--bs-secondary-color);
-    line-height: 1.55;
-    margin-bottom: 0;
-  }
-}
-
-// ---- Install / get-started section ----
-.section-getstarted {
-  background: #faf5eb;
-  border-top: 1px solid #e8dcc8;
-  border-bottom: 1px solid #e8dcc8;
-}
-
-.install-command {
-  max-width: 560px;
-  margin-left: auto;
-  margin-right: auto;
-
-  .highlight {
-    position: relative;
-  }
-
-  // Hide the copy button on these small one-liner blocks
-  .copy {
-    display: none;
-  }
-
-  pre {
-    border-radius: 8px;
-    border: 1px solid #e8dcc8;
-    background: #fdf8f0;
-    padding: 0.75rem 1rem;
-
-    code {
-      display: block;
-      padding: 0;
-      margin: 0;
-      background: none;
-    }
-  }
-
-  // Remove the line highlight left-border marker
-  .chroma .hl {
-    border-inline-start: none;
-    margin-left: 0;
-    padding-left: 0;
-  }
-
-  .chroma .line {
-    border-inline-start: none;
+  &:hover {
+    border-color: $primary;
+    color: $primary;
   }
 }
 
@@ -201,25 +109,23 @@ body.home .navbar {
     background: hsl(15, 10%, 10%);
   }
 
-  .section-features .feature-card {
+  // Doks sets `color` on dark .btn-primary, but Bootstrap's .btn paints from
+  // --bs-btn-color, so the label rendered white on the light accent.
+  .btn-primary {
+    --bs-btn-color: #{$body-bg-dark};
+    --bs-btn-hover-color: #{$body-bg-dark};
+    --bs-btn-active-color: #{$body-bg-dark};
+  }
+
+  .btn-github-pill {
     background: hsl(15, 12%, 14%);
     border-color: hsl(15, 10%, 20%);
+    color: $body-color-dark;
 
     &:hover {
-      border-color: hsl(15, 80%, 75%);
-      box-shadow: 0 4px 12px rgba(hsl(15, 80%, 75%), 0.08);
+      border-color: $link-color-dark;
+      color: $link-color-dark;
     }
-  }
-
-  .section-getstarted {
-    background: hsl(15, 12%, 12%);
-    border-color: hsl(15, 10%, 20%);
-  }
-
-  .install-command pre {
-    background: hsl(15, 12%, 14%);
-    border-color: hsl(15, 10%, 20%);
-    color: hsl(20, 8%, 75%);
   }
 
   .docs-content pre {
@@ -239,3 +145,6 @@ body.home .navbar {
     border-top: 1px solid hsl(15, 10%, 20%);
   }
 }
+
+// ---- Homepage ----
+@import "layouts/home";

@@ -1,0 +1,965 @@
+// Homepage (layouts/home.html). Tokens mirror the dashboard palette in
+// web/src/App.svelte so the illustration reads as the real product.
+// Jost ships 400/500/700 only (static/fonts/vendor/jost) — no 600s here.
+
+body.home {
+  --dk-card: #fff;
+  --dk-surface: #faf5eb;
+  --dk-band: #f3e6d6;
+  --dk-nav-bg: #fdf8f0;
+  --dk-border: #e8dcc8;
+  --dk-line: #efe5d5;
+  --dk-connector: #d9c9b2;
+  --dk-text: #3d2a1e;
+  --dk-text-2: #5e4c40;
+  --dk-muted: #8a7a6a;
+  --dk-accent: #{$primary};
+  --dk-accent-soft: rgba(184, 90, 40, 0.08);
+  --dk-accent-line: rgba(184, 90, 40, 0.35);
+  --dk-door-bg: #fbefe4;
+  --dk-ok: #3d8f62;
+  --dk-danger: #c43a3a;
+  --dk-warn: #c87e30;
+  --dk-code-bg: #2a1d15;
+  --dk-code-fg: #f4e9dd;
+  --dk-bar: #e7c7b0;
+  --dk-shadow: rgba(61, 42, 30, 0.28);
+}
+
+@include color-mode(dark) {
+  body.home {
+    --dk-card: #1f1915;
+    --dk-surface: #241c18;
+    --dk-band: #2a201b;
+    --dk-nav-bg: #1e1c19;
+    --dk-border: #3a2e26;
+    --dk-line: #33281f;
+    --dk-connector: #4a3c33;
+    --dk-text: #e8ddd4;
+    --dk-text-2: #c4b5a8;
+    --dk-muted: #9a8a7a;
+    --dk-accent: #e07a5a;
+    --dk-accent-soft: rgba(224, 122, 90, 0.12);
+    --dk-accent-line: rgba(224, 122, 90, 0.45);
+    --dk-door-bg: #2e1d14;
+    --dk-ok: #4caf7d;
+    --dk-danger: #e05c6e;
+    --dk-warn: #f0a958;
+    --dk-code-bg: #120d0b;
+    --dk-code-fg: #f4e9dd;
+    --dk-bar: #4a3a30;
+    --dk-shadow: rgba(0, 0, 0, 0.55);
+  }
+}
+
+// ---- Shared bits ----
+.dk-kicker,
+.dk-kicker-muted {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dk-accent);
+}
+
+.dk-kicker-muted {
+  font-size: 0.8125rem;
+  color: var(--dk-muted);
+}
+
+.dk-link-strong {
+  font-weight: 500;
+  color: var(--dk-accent);
+  white-space: nowrap;
+}
+
+.dk-status {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dk-status-ok { background: var(--dk-ok); }
+.dk-status-warn { background: var(--dk-warn); }
+.dk-status-danger { background: var(--dk-danger); }
+
+body.home {
+  h2 {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--dk-text);
+  }
+
+  code {
+    font-size: inherit;
+    color: inherit;
+    background: none;
+    padding: 0;
+  }
+}
+
+// ---- Hero ----
+.dk-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2.5rem;
+  padding: 1.75rem 0 0;
+
+  @include media-breakpoint-up(lg) {
+    gap: 3.5rem;
+    padding: 4rem 0 5.5rem;
+  }
+
+  // Two columns only at xl: in the 960px lg container the window gets ~380px.
+  @include media-breakpoint-up(xl) {
+    grid-template-columns: minmax(0, 32.5rem) minmax(0, 1fr);
+    align-items: center;
+  }
+}
+
+.dk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.75rem;
+  padding: 0.3rem 0.85rem 0.3rem 0.4rem;
+  border: 1px solid var(--dk-border);
+  border-radius: 999px;
+  background: var(--dk-card);
+  color: var(--dk-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+
+  &:hover {
+    border-color: var(--dk-accent);
+    text-decoration: none;
+  }
+
+  @include media-breakpoint-up(md) {
+    font-size: 0.875rem;
+  }
+}
+
+.dk-pill-label {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--dk-accent);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+// Hidden on phones so the pill stays on one line.
+.dk-pill-detail {
+  @include media-breakpoint-down(sm) {
+    display: none;
+  }
+}
+
+.dk-headline {
+  margin: 0;
+  font-size: 2.875rem;
+  font-weight: 700;
+  line-height: 1.04;
+  letter-spacing: -0.025em;
+  color: var(--dk-text);
+
+  @include media-breakpoint-up(md) {
+    font-size: 4rem;
+  }
+}
+
+.dk-lead {
+  margin: 1.25rem 0 1.75rem;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--dk-text-2);
+
+  @include media-breakpoint-up(md) {
+    margin: 1.5rem 0 2.25rem;
+    font-size: 1.1875rem;
+  }
+}
+
+// Doks' clipboard.js injects .copy > .btn-copy into every .highlight; its own
+// styles are scoped to .expressive-code, so the button is dressed here.
+.dk-install {
+  .highlight {
+    position: relative;
+  }
+
+  pre {
+    margin: 0;
+    padding: 0.85rem 3.5rem 0.85rem 1rem;
+    border: 0;
+    border-radius: 10px;
+    background: var(--dk-code-bg);
+    color: var(--dk-code-fg);
+    font-size: 0.71875rem;
+    white-space: pre;
+    overflow-x: auto;
+
+    @include media-breakpoint-up(sm) {
+      padding-left: 1.15rem;
+      font-size: 0.9375rem;
+    }
+  }
+
+  code,
+  .chroma span {
+    color: inherit;
+    background: none;
+    border: 0;
+  }
+
+  .copy {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0.5rem;
+    display: flex;
+    align-items: center;
+    z-index: 1;
+  }
+
+  .btn-copy {
+    position: relative;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0.5rem;
+      background-color: var(--dk-code-fg);
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='8' y='8' width='12' height='12' rx='2'/%3E%3Cpath d='M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2'/%3E%3C/svg%3E") no-repeat center / contain;
+    }
+
+    &:focus::after,
+    &:active::after {
+      mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5l10 -10'/%3E%3C/svg%3E");
+    }
+  }
+}
+
+.dk-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  margin-top: 0.875rem;
+
+  .dk-link-strong {
+    color: var(--dk-text);
+    font-size: 0.9375rem;
+  }
+
+  @include media-breakpoint-up(sm) {
+    flex-direction: row;
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+
+    .dk-link-strong {
+      font-size: 1rem;
+    }
+  }
+}
+
+.dk-btn {
+  width: 100%;
+  padding: 0.8rem 1.6rem;
+  font-weight: 500;
+
+  @include media-breakpoint-up(sm) {
+    width: auto;
+  }
+}
+
+// ---- Dashboard illustration ----
+// Below lg only the approval card and budget remain, on a full-bleed band.
+.dk-dash {
+  margin-inline: calc(var(--bs-gutter-x) * -0.5);
+  padding: 1.5rem calc(var(--bs-gutter-x) * 0.5);
+  background: var(--dk-band);
+  color: var(--dk-text);
+  font-size: 0.875rem;
+
+  @include media-breakpoint-up(lg) {
+    margin-inline: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--dk-border);
+    border-radius: 14px;
+    background: var(--dk-card);
+    box-shadow:
+      0 30px 60px -20px var(--dk-shadow),
+      0 2px 6px rgba(61, 42, 30, 0.06);
+  }
+}
+
+.dk-dash-chrome,
+.dk-dash-nav,
+.dk-dash-title,
+.dk-dash-rows {
+  display: none !important;
+
+  @include media-breakpoint-up(lg) {
+    display: flex !important;
+  }
+}
+
+.dk-dash-chrome {
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--dk-border);
+  background: var(--dk-surface);
+}
+
+.dk-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--dk-connector);
+}
+
+.dk-dash-url {
+  padding-left: 16px;
+  font-family: var(--bs-font-monospace);
+  font-size: 0.75rem;
+  color: var(--dk-muted);
+}
+
+.dk-dash-app {
+  display: flex;
+
+  @include media-breakpoint-up(lg) {
+    min-height: 29rem;
+  }
+}
+
+.dk-dash-nav {
+  flex-direction: column;
+  gap: 2px;
+  width: 168px;
+  flex-shrink: 0;
+  padding: 16px 10px;
+  border-right: 1px solid var(--dk-border);
+  background: var(--dk-nav-bg);
+
+  span {
+    padding: 5px 10px;
+    color: var(--dk-text);
+  }
+
+  .is-active {
+    border-radius: 6px;
+    background: var(--dk-accent-soft);
+    color: var(--dk-accent);
+    font-weight: 500;
+  }
+}
+
+.dk-dash-nav-label {
+  padding-top: 12px !important;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dk-muted) !important;
+}
+
+.dk-dash-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+
+  @include media-breakpoint-up(lg) {
+    gap: 14px;
+    padding: 22px 24px;
+  }
+}
+
+.dk-dash-title {
+  align-items: baseline;
+  gap: 10px;
+  font-size: 1.25rem;
+  font-weight: 500;
+
+  span {
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--dk-muted);
+  }
+}
+
+.dk-approval {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--dk-accent-line);
+  border-radius: 12px;
+  background: var(--dk-card);
+  box-shadow: 0 16px 32px -14px var(--dk-shadow);
+
+  @include media-breakpoint-up(lg) {
+    padding: 16px;
+    border-radius: 8px;
+    box-shadow: none;
+  }
+}
+
+.dk-approval-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+
+  strong {
+    font-weight: 500;
+  }
+}
+
+.dk-tool {
+  padding: 2px 6px !important;
+  border-radius: 4px;
+  background: var(--dk-accent-soft) !important;
+  color: var(--dk-accent) !important;
+  font-size: 0.8125rem !important;
+}
+
+.dk-approval-meta {
+  flex: 1;
+  text-align: right;
+  font-size: 0.8125rem;
+  color: var(--dk-muted);
+}
+
+.dk-approval-args {
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dk-surface);
+  color: var(--dk-text-2);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow: hidden;
+
+  @include media-breakpoint-up(lg) {
+    font-size: 0.75rem;
+  }
+}
+
+.dk-approval-actions {
+  display: flex;
+  gap: 8px;
+
+  @include media-breakpoint-down(lg) {
+    > * {
+      flex: 1;
+      text-align: center;
+    }
+  }
+}
+
+.dk-fake-btn {
+  padding: 7px 16px;
+  border: 1px solid var(--dk-border);
+  border-radius: 6px;
+  color: var(--dk-text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dk-fake-btn-primary {
+  border-color: var(--dk-accent);
+  background: var(--dk-accent);
+  color: #fff;
+}
+
+.dk-fake-btn-danger {
+  color: var(--dk-danger);
+}
+
+.dk-dash-rows {
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--dk-line);
+    font-size: 0.8125rem;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  code {
+    width: 110px;
+    flex-shrink: 0;
+    font-size: 0.75rem !important;
+  }
+
+  span:not(.dk-status) {
+    flex: 1;
+    color: var(--dk-text-2);
+  }
+
+  time {
+    color: var(--dk-muted);
+  }
+}
+
+.dk-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--dk-card);
+
+  @include media-breakpoint-up(lg) {
+    margin-top: auto;
+    border-radius: 8px;
+    background: var(--dk-surface);
+  }
+}
+
+.dk-budget-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+
+  span:first-child {
+    flex: 1;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--dk-text-2);
+  }
+
+  strong {
+    font-size: 0.9375rem;
+    font-weight: 700;
+  }
+}
+
+.dk-budget-of {
+  font-size: 0.8125rem;
+  color: var(--dk-muted);
+}
+
+.dk-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dk-line);
+
+  div {
+    width: var(--dk-fill);
+    height: 100%;
+    border-radius: inherit;
+    background: var(--dk-accent);
+  }
+}
+
+// ---- Platforms strip ----
+.dk-platforms {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding-top: 0.5rem;
+
+  @include media-breakpoint-up(md) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding-top: 0;
+  }
+}
+
+.dk-platform {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--dk-border);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--dk-text);
+
+  @include media-breakpoint-up(md) {
+    padding: 1.5rem 0 1.5rem 2rem;
+    border-top: 1px solid var(--dk-border);
+    border-left: 1px solid var(--dk-border);
+    font-size: 1.125rem;
+
+    &:first-child {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+}
+
+// ---- The door ----
+.dk-door {
+  padding-top: 3.5rem;
+  padding-bottom: 1.5rem;
+
+  @include media-breakpoint-up(lg) {
+    padding-top: 7rem;
+    padding-bottom: 3.5rem;
+  }
+}
+
+.dk-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+
+  h2 {
+    margin: 0.75rem 0 0;
+    font-size: 2.125rem;
+    line-height: 1.12;
+  }
+
+  @include media-breakpoint-up(lg) {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 2.75rem;
+
+    h2 {
+      font-size: 3rem;
+    }
+  }
+}
+
+// Vertical stack below xl; five nodes don't fit a row in the lg container.
+.dk-flow {
+  --dk-gap: 18px;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--dk-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  @include media-breakpoint-up(xl) {
+    --dk-gap: 40px;
+
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
+.dk-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--dk-border);
+  border-radius: 10px;
+  background: var(--dk-card);
+
+  &:not(:first-child)::before {
+    content: "";
+    position: absolute;
+    left: 28px;
+    bottom: 100%;
+    width: 1px;
+    height: var(--dk-gap);
+    background: var(--dk-connector);
+  }
+
+  @include media-breakpoint-up(xl) {
+    flex: 1 1 0;
+    padding: 1.25rem;
+    border-radius: 12px;
+
+    &:not(:first-child)::before {
+      left: auto;
+      right: 100%;
+      bottom: auto;
+      top: 50%;
+      width: var(--dk-gap);
+      height: 1px;
+    }
+  }
+}
+
+.dk-step-n {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.6875rem;
+  color: var(--dk-muted);
+
+  @include media-breakpoint-up(xl) {
+    font-size: 0.75rem;
+  }
+}
+
+.dk-step-body {
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--dk-text);
+
+  @include media-breakpoint-up(xl) {
+    font-size: 1.125rem;
+  }
+}
+
+code.dk-step-body {
+  font-size: 0.875rem !important;
+  font-weight: 400;
+
+  @include media-breakpoint-up(xl) {
+    font-size: 0.9375rem !important;
+  }
+}
+
+.dk-step-door {
+  gap: 0.6rem;
+  border: 1.5px solid var(--dk-accent);
+  background: var(--dk-door-bg);
+  box-shadow: 0 12px 32px -10px var(--dk-shadow);
+
+  &::before {
+    width: 2px !important;
+    background: var(--dk-accent) !important;
+  }
+
+  .dk-step-n {
+    color: var(--dk-accent);
+  }
+
+  .dk-step-body {
+    font-size: 1.125rem;
+    font-weight: 700;
+  }
+
+  @include media-breakpoint-up(xl) {
+    flex-grow: 1.25;
+
+    &::before {
+      width: var(--dk-gap) !important;
+      height: 2px !important;
+    }
+
+    .dk-step-body {
+      font-size: 1.25rem;
+    }
+  }
+}
+
+.dk-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.dk-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--dk-border);
+  border-radius: 4px;
+  background: var(--dk-card);
+  font-family: var(--bs-font-monospace);
+  font-size: 0.75rem;
+  color: var(--dk-text);
+}
+
+.dk-chip-ok {
+  border-color: var(--dk-ok);
+  background: var(--dk-ok);
+  color: #fff;
+}
+
+.dk-chip-danger {
+  color: var(--dk-danger);
+}
+
+.dk-tiers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 1.75rem 0 0;
+
+  @include media-breakpoint-up(md) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2.5rem;
+    margin-top: 2.75rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--dk-border);
+  }
+}
+
+.dk-tier {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--dk-border);
+
+  &:last-child {
+    border-bottom: 1px solid var(--dk-border);
+  }
+
+  dt {
+    width: 6.5rem;
+    flex-shrink: 0;
+    font-weight: 700;
+    color: var(--dk-text);
+  }
+
+  dd {
+    margin: 0;
+    color: var(--dk-text-2);
+  }
+
+  @include media-breakpoint-up(md) {
+    padding: 0;
+    border: 0 !important;
+
+    dt {
+      width: auto;
+    }
+  }
+}
+
+.dk-tier-default dt {
+  color: var(--dk-accent);
+}
+
+// ---- Costs ----
+.dk-costs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  padding-top: 3.5rem;
+  padding-bottom: 4rem;
+
+  @include media-breakpoint-up(lg) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 28.75rem);
+    gap: 5rem;
+    align-items: center;
+    padding-top: 3.5rem;
+    padding-bottom: 7rem;
+
+    .dk-chart {
+      order: -1;
+    }
+  }
+}
+
+.dk-costs-copy {
+  h2 {
+    margin: 0.75rem 0 0.9rem;
+    font-size: 2.125rem;
+    line-height: 1.12;
+
+    @include media-breakpoint-up(lg) {
+      font-size: 2.5rem;
+    }
+  }
+
+  p {
+    margin-bottom: 1.1rem;
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    color: var(--dk-text-2);
+
+    @include media-breakpoint-up(lg) {
+      font-size: 1.125rem;
+    }
+  }
+}
+
+.dk-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin: 0;
+  padding: 1.1rem;
+  border: 1px solid var(--dk-border);
+  border-radius: 12px;
+  background: var(--dk-card);
+
+  @include media-breakpoint-up(lg) {
+    gap: 1.25rem;
+    padding: 1.75rem;
+  }
+}
+
+.dk-chart-total {
+  strong {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--dk-text);
+
+    @include media-breakpoint-up(lg) {
+      font-size: 2.125rem;
+    }
+  }
+
+  span {
+    padding-left: 0.4rem;
+    font-size: 0.875rem;
+    color: var(--dk-muted);
+  }
+}
+
+.dk-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 96px;
+  border-bottom: 1px solid var(--dk-border);
+
+  span {
+    flex: 1;
+    height: var(--dk-h);
+    border-radius: 3px 3px 0 0;
+    background: var(--dk-bar);
+  }
+
+  .is-peak {
+    background: var(--dk-accent);
+  }
+
+  @include media-breakpoint-up(lg) {
+    gap: 14px;
+    height: 140px;
+  }
+}
+
+.dk-chart-note {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  background: var(--dk-surface);
+  font-size: 0.875rem;
+  font-style: normal;
+  color: var(--dk-text);
+}
