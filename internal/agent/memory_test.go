@@ -261,6 +261,50 @@ func TestMemoryStore_GetOrCreateConversationByID(t *testing.T) {
 	}
 }
 
+// A DB created before #439 carries a unique (adapter, external_id) index that
+// silently dropped sched:* rows targeting an existing chat; reopening must
+// remove it.
+func TestMemoryStore_GetOrCreateConversationByID_SharedTargetAfterUpgrade(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "upgrade.db")
+	store, err := NewSQLiteMemoryStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE UNIQUE INDEX idx_conversations_adapter_ext ON conversations(adapter, external_id)`); err != nil {
+		t.Fatalf("recreating legacy index: %v", err)
+	}
+	_ = store.Close()
+
+	store, err = NewSQLiteMemoryStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	for _, id := range []string{"chan:main", "sched:daily:1", "sched:daily:2"} {
+		if err := store.GetOrCreateConversationByID(ctx, id, "telegram", "123"); err != nil {
+			t.Fatalf("GetOrCreateConversationByID(%s): %v", id, err)
+		}
+	}
+
+	convos, total, err := store.ListConversations(ctx, SessionListOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(convos) != 3 {
+		t.Errorf("listed %d (total %d), want 3: %+v", len(convos), total, convos)
+	}
+
+	interactive, total, err := store.ListConversations(ctx, SessionListOpts{ExcludeScheduled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(interactive) != 1 || interactive[0].ID != "chan:main" {
+		t.Errorf("ExcludeScheduled listed %+v (total %d), want only chan:main", interactive, total)
+	}
+}
+
 func TestMemoryStore_DeleteConversation(t *testing.T) {
 	store, err := NewInMemoryStore()
 	if err != nil {
