@@ -73,30 +73,45 @@ func TestValidateQuestions_Valid(t *testing.T) {
 	}
 }
 
-func TestValidateQuestions_Rejects(t *testing.T) {
-	manyChoices := make(map[string]string, 256)
+func assertRejected(t *testing.T, what string, q Question) {
+	t.Helper()
+	if err := ValidateQuestions(map[string]Question{"q": q}); err == nil {
+		t.Errorf("%s: expected error, got nil", what)
+	}
+}
+
+func TestValidateQuestions_RejectsMissingFields(t *testing.T) {
+	if err := ValidateQuestions(map[string]Question{}); err == nil {
+		t.Error("empty question set: expected error")
+	}
+	if err := ValidateQuestions(map[string]Question{"": {Type: QuestionNoul, Instructions: "x"}}); err == nil {
+		t.Error("empty id: expected error")
+	}
+	assertRejected(t, "blank instructions", Question{Type: QuestionNoul, Instructions: "  "})
+	assertRejected(t, "unknown type", Question{Type: "rank", Instructions: "x"})
+}
+
+func TestValidateQuestions_RejectsBadChoice(t *testing.T) {
+	many := make(map[string]string, 256)
 	for i := range 256 {
-		manyChoices[strings.Repeat("x", i+1)] = "d"
+		many[strings.Repeat("x", i+1)] = "d"
 	}
-	cases := map[string]map[string]Question{
-		"empty set":          {},
-		"empty id":           {"": {Type: QuestionNoul, Instructions: "x"}},
-		"no instructions":    {"q": {Type: QuestionNoul, Instructions: "  "}},
-		"unknown type":       {"q": {Type: "rank", Instructions: "x"}},
-		"one choice":         {"q": {Type: QuestionChoice, Instructions: "x", Choices: map[string]string{"a": "A"}}},
-		"256 choices":        {"q": {Type: QuestionChoice, Instructions: "x", Choices: manyChoices}},
-		"choice with levels": {"q": {Type: QuestionChoice, Instructions: "x", Choices: map[string]string{"a": "A", "b": "B"}, Levels: []string{"l", "m"}}},
-		"one level":          {"q": {Type: QuestionScore, Instructions: "x", Levels: []string{"l"}}},
-		"eleven levels":      {"q": {Type: QuestionScore, Instructions: "x", Levels: make([]string, 11)}},
-		"score with choices": {"q": {Type: QuestionScore, Instructions: "x", Levels: []string{"l", "m"}, Choices: map[string]string{"a": "A"}}},
-		"noul bad key":       {"q": {Type: QuestionNoul, Instructions: "x", Choices: map[string]string{"maybe": "?"}}},
-		"noul with levels":   {"q": {Type: QuestionNoul, Instructions: "x", Levels: []string{"l", "m"}}},
-	}
-	for name, qs := range cases {
-		if err := ValidateQuestions(qs); err == nil {
-			t.Errorf("%s: expected error, got nil", name)
-		}
-	}
+	assertRejected(t, "one option", Question{Type: QuestionChoice, Instructions: "x", Choices: map[string]string{"a": "A"}})
+	assertRejected(t, "256 options", Question{Type: QuestionChoice, Instructions: "x", Choices: many})
+	assertRejected(t, "levels on choice", Question{Type: QuestionChoice, Instructions: "x",
+		Choices: map[string]string{"a": "A", "b": "B"}, Levels: []string{"l", "m"}})
+}
+
+func TestValidateQuestions_RejectsBadScore(t *testing.T) {
+	assertRejected(t, "one level", Question{Type: QuestionScore, Instructions: "x", Levels: []string{"l"}})
+	assertRejected(t, "eleven levels", Question{Type: QuestionScore, Instructions: "x", Levels: make([]string, 11)})
+	assertRejected(t, "choices on score", Question{Type: QuestionScore, Instructions: "x",
+		Levels: []string{"l", "m"}, Choices: map[string]string{"a": "A"}})
+}
+
+func TestValidateQuestions_RejectsBadNoul(t *testing.T) {
+	assertRejected(t, "non-boolean criteria key", Question{Type: QuestionNoul, Instructions: "x", Choices: map[string]string{"maybe": "?"}})
+	assertRejected(t, "levels on noul", Question{Type: QuestionNoul, Instructions: "x", Levels: []string{"l", "m"}})
 }
 
 func TestDecider_Decide_RecordsCostAgainstSession(t *testing.T) {
