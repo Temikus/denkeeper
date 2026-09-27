@@ -1535,7 +1535,7 @@ func validateDecider(cfg *Config, d DeciderConfig) error {
 		return fmt.Errorf("timeout %q must be a positive duration", d.Timeout)
 	}
 	if d.MaxInputTokens < 0 {
-		return fmt.Errorf("max_input_tokens must be positive, got %d", d.MaxInputTokens)
+		return fmt.Errorf("max_input_tokens must not be negative, got %d", d.MaxInputTokens)
 	}
 	return nil
 }

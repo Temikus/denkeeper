@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -72,7 +73,7 @@ func (c *Client) decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 		return nil, fmt.Errorf("reading decision response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: string(respBody)}
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: decisionErrorMessage(resp.StatusCode, respBody)}
 	}
 
 	var out decisionResponse
@@ -80,6 +81,31 @@ func (c *Client) decide(ctx context.Context, req llm.DecisionRequest) (*llm.Deci
 		return nil, fmt.Errorf("parsing decision response: %w", err)
 	}
 	return out.toLLM()
+}
+
+// maxDecisionErrorLen caps the provider message kept on a failed decision.
+const maxDecisionErrorLen = 200
+
+// decisionErrorMessage keeps only OpenRouter's short error.message, capped,
+// falling back to the status text. The error reaches spans and audit detail,
+// and the raw body could echo the request state (tool arguments).
+func decisionErrorMessage(status int, body []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	msg := ""
+	if json.Unmarshal(body, &e) == nil {
+		msg = strings.TrimSpace(e.Error.Message)
+	}
+	if msg == "" {
+		return http.StatusText(status)
+	}
+	if len(msg) > maxDecisionErrorLen {
+		msg = msg[:maxDecisionErrorLen] + "..."
+	}
+	return msg
 }
 
 // encodeQuestion maps a Question onto the wire shape, where "criteria" is an

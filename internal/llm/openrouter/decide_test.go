@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -149,12 +150,51 @@ func TestDecide_NoulWithoutProbabilityIsError(t *testing.T) {
 }
 
 func TestDecide_Non200IsLLMError(t *testing.T) {
-	srv := decisionServer(t, http.StatusPaymentRequired, `{"error":"insufficient credits"}`, nil)
+	srv := decisionServer(t, http.StatusPaymentRequired, `{"error":{"code":402,"message":"insufficient credits"}}`, nil)
 	c := NewWithHTTPClient("test-key", srv.URL, srv.Client())
 
 	_, err := c.Decide(context.Background(), llm.DecisionRequest{Model: "m", State: "s"})
 	var llmErr *llm.LLMError
 	if !errors.As(err, &llmErr) || llmErr.StatusCode != http.StatusPaymentRequired {
 		t.Fatalf("err = %v, want LLMError 402", err)
+	}
+	if llmErr.Message != "insufficient credits" {
+		t.Errorf("message = %q, want the provider's error.message", llmErr.Message)
+	}
+}
+
+// The error lands in spans and audit detail, so only the provider's short
+// error.message is kept: never the raw body, which could echo request state.
+func TestDecide_Non200DropsRawBody(t *testing.T) {
+	body := `{"error":{"message":"bad request","metadata":{"state":"secret-tool-args"}}}`
+	srv := decisionServer(t, http.StatusBadRequest, body, nil)
+	c := NewWithHTTPClient("test-key", srv.URL, srv.Client())
+
+	_, err := c.Decide(context.Background(), llm.DecisionRequest{Model: "m", State: "s"})
+	if err == nil || strings.Contains(err.Error(), "secret-tool-args") {
+		t.Fatalf("err = %v, must not carry the raw body", err)
+	}
+}
+
+func TestDecide_Non200LongMessageIsCapped(t *testing.T) {
+	body := `{"error":{"message":"` + strings.Repeat("x", 1000) + `"}}`
+	srv := decisionServer(t, http.StatusBadRequest, body, nil)
+	c := NewWithHTTPClient("test-key", srv.URL, srv.Client())
+
+	_, err := c.Decide(context.Background(), llm.DecisionRequest{Model: "m", State: "s"})
+	var llmErr *llm.LLMError
+	if !errors.As(err, &llmErr) || len(llmErr.Message) > maxDecisionErrorLen+3 {
+		t.Fatalf("err = %v, want message capped at %d", err, maxDecisionErrorLen)
+	}
+}
+
+func TestDecide_Non200NonJSONFallsBackToStatusText(t *testing.T) {
+	srv := decisionServer(t, http.StatusBadGateway, `<html>upstream secret</html>`, nil)
+	c := NewWithHTTPClient("test-key", srv.URL, srv.Client())
+
+	_, err := c.Decide(context.Background(), llm.DecisionRequest{Model: "m", State: "s"})
+	var llmErr *llm.LLMError
+	if !errors.As(err, &llmErr) || llmErr.Message != http.StatusText(http.StatusBadGateway) {
+		t.Fatalf("err = %v, want status text only", err)
 	}
 }
