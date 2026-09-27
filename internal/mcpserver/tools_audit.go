@@ -9,16 +9,17 @@ import (
 )
 
 type auditEventsInput struct {
-	Category      string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor); comma-separated for several"`
-	Agent         string `json:"agent,omitempty" jsonschema:"Filter by agent name"`
-	Status        string `json:"status,omitempty" jsonschema:"Filter by status (ok, error, pending, denied); comma-separated for several"`
-	Source        string `json:"source,omitempty" jsonschema:"Filter by event source"`
-	ExcludeSource string `json:"exclude_source,omitempty" jsonschema:"Drop events with these sources (e.g. eval,dryrun); comma-separated for several"`
-	Search        string `json:"search,omitempty" jsonschema:"Free-text search across event summaries"`
-	Since         string `json:"since,omitempty" jsonschema:"Start of time range (RFC 3339)"`
-	Until         string `json:"until,omitempty" jsonschema:"End of time range (RFC 3339)"`
-	Limit         int    `json:"limit,omitempty" jsonschema:"Max results (default 50, max 200)"`
-	Offset        int    `json:"offset,omitempty" jsonschema:"Pagination offset"`
+	Category       string `json:"category,omitempty" jsonschema:"Filter by category (tool_call, skill, channel, approval, schedule, llm, config, session, mcp, safety, supervisor); comma-separated for several"`
+	Agent          string `json:"agent,omitempty" jsonschema:"Filter by agent name"`
+	Status         string `json:"status,omitempty" jsonschema:"Filter by status (ok, error, pending, denied); comma-separated for several"`
+	Source         string `json:"source,omitempty" jsonschema:"Filter by event source"`
+	ExcludeSource  string `json:"exclude_source,omitempty" jsonschema:"Drop events with these sources (e.g. eval,dryrun); comma-separated for several"`
+	Search         string `json:"search,omitempty" jsonschema:"Free-text search across event summaries"`
+	Since          string `json:"since,omitempty" jsonschema:"Start of time range (RFC 3339)"`
+	Until          string `json:"until,omitempty" jsonschema:"End of time range (RFC 3339)"`
+	Limit          int    `json:"limit,omitempty" jsonschema:"Max results (default 50, max 200)"`
+	Offset         int    `json:"offset,omitempty" jsonschema:"Pagination offset"`
+	DetailMaxChars int    `json:"detail_max_chars,omitempty" jsonschema:"Cut each event's detail to this many characters, marking cut ones with their original length (omit for full detail)"`
 }
 
 type auditSummaryInput struct {
@@ -34,6 +35,7 @@ func (s *Server) registerAuditTools() {
 			"comma-separated list and match any of the given values; 'exclude_source' drops " +
 			"the listed sources (dry-run and eval turns emit under the ordinary llm/tool_call " +
 			"categories, so excluding by source is the only way to hide them). " +
+			"'detail' can hold full tool arguments; pass 'detail_max_chars' to bound it. " +
 			"Supports pagination (default limit 50, max 200). Requires 'audit:read' scope.",
 	}, s.handleAuditEvents)
 
@@ -53,6 +55,9 @@ func (s *Server) handleAuditEvents(ctx context.Context, _ *mcp.CallToolRequest, 
 	if s.deps.AuditStore == nil {
 		return toolError("audit not configured"), nil, nil
 	}
+	if input.DetailMaxChars < 0 {
+		return toolError("invalid detail_max_chars: must be positive"), nil, nil
+	}
 
 	opts := audit.ListOpts{
 		Categories:     audit.ParseFilterList(input.Category),
@@ -63,6 +68,7 @@ func (s *Server) handleAuditEvents(ctx context.Context, _ *mcp.CallToolRequest, 
 		Search:         input.Search,
 		Limit:          input.Limit,
 		Offset:         input.Offset,
+		DetailMaxChars: input.DetailMaxChars,
 	}
 	if input.Since != "" {
 		t, err := time.Parse(time.RFC3339, input.Since)

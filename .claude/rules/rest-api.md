@@ -29,7 +29,7 @@ paths:
 | `POST sessions/{id}/clear\|compact` | `sessions:write` | both accept `?agent=` hint; compact returns `{"summary": "..."}`; see `ClearMessages` invariant |
 | `POST sessions/{id}/stop` | `chat` | stops the in-flight turn **cooperatively**: `204` means "stopping", not "stopped" — the turn ends at its next step boundary, replies with a wrap-up and persists, and only a turn still running after the grace period is context-killed. Tries the `ws` key then the `api` one; `404` when neither has a turn |
 | `GET telemetry/summary` | `costs:read` | `?since=&until=` filtering |
-| `GET audit`, `GET audit/stats` | `audit:read` | list filters `?category=&agent=&status=&source=&search=&since=&until=&limit=&offset=`; stats accepts `?since=` |
+| `GET audit`, `GET audit/stats` | `audit:read` | list filters `?category=&agent=&status=&source=&search=&since=&until=&limit=&offset=&detail_max_chars=`; stats accepts `?since=` |
 | `GET channels(/{name})` | `channels:read` | list: agent, adapter bindings, implicit flag, active adapter keys; detail adds `conversation_id` |
 | `POST/DELETE channels/{name}/activate` | `channels:write` | body `{"adapter_key": "telegram:12345"}`; DELETE clears the override and 409s if the key is not active on this channel |
 | `tools` CRUD (PUT edit), `GET {name}/health`, `POST {name}/restart\|enable\|disable` | `tools:read`/`tools:write` | enable starts the MCP process, disable stops it; both persist to TOML; 404 convention in invariants |

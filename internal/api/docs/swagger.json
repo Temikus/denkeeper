@@ -810,6 +810,12 @@
                         "description": "Number of events to skip for pagination",
                         "name": "offset",
                         "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Cut each event's detail to this many characters; cut details end with a marker carrying the original length. Omit for full detail.",
+                        "name": "detail_max_chars",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -820,7 +826,7 @@
                         }
                     },
                     "400": {
-                        "description": "Invalid query parameter (since, until, limit, or offset)",
+                        "description": "Invalid query parameter (since, until, limit, offset, or detail_max_chars)",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

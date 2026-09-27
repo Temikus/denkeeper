@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestInsertAndList(t *testing.T) {
@@ -482,5 +483,76 @@ func TestStats_ExcludeSources(t *testing.T) {
 	}
 	if unfiltered.Total != 5 {
 		t.Errorf("unfiltered Total = %d, want 5 — the record itself stays complete", unfiltered.Total)
+	}
+}
+
+// seedDetailStore inserts one event per detail in timestamp order. List
+// returns newest first, so callers index in reverse.
+func seedDetailStore(t *testing.T, details ...string) *SQLiteStore {
+	t.Helper()
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	base := time.Now().UTC()
+	for i, d := range details {
+		ev := Event{Timestamp: base.Add(time.Duration(i) * time.Second), Category: CategorySupervisor, Status: StatusOK, Detail: d}
+		if err := store.Insert(context.Background(), ev); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+	}
+	return store
+}
+
+func TestList_DetailMaxCharsTruncates(t *testing.T) {
+	long := strings.Repeat("a", 100)
+	multibyte := strings.Repeat("é", 20) // 20 runes, 40 bytes
+	store := seedDetailStore(t, long, multibyte, "short")
+
+	events, _, err := store.List(context.Background(), ListOpts{DetailMaxChars: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+
+	if got, want := events[0].Detail, "short"; got != want {
+		t.Errorf("under-limit detail = %q, want %q", got, want)
+	}
+	if got, want := events[1].Detail, strings.Repeat("é", 10)+"…[truncated, 20 chars total]"; got != want {
+		t.Errorf("multibyte detail = %q, want %q", got, want)
+	}
+	if !utf8.ValidString(events[1].Detail) {
+		t.Errorf("multibyte detail is not valid UTF-8: %q", events[1].Detail)
+	}
+	if got, want := events[2].Detail, strings.Repeat("a", 10)+"…[truncated, 100 chars total]"; got != want {
+		t.Errorf("long detail = %q, want %q", got, want)
+	}
+}
+
+func TestList_DetailMaxCharsAbsentLeavesDetail(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	store := seedDetailStore(t, long)
+
+	events, _, err := store.List(context.Background(), ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 1 || events[0].Detail != long {
+		t.Fatalf("detail changed without DetailMaxChars")
+	}
+}
+
+func TestList_DetailMaxCharsExactLengthUntouched(t *testing.T) {
+	store := seedDetailStore(t, "0123456789")
+
+	events, _, err := store.List(context.Background(), ListOpts{DetailMaxChars: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if events[0].Detail != "0123456789" {
+		t.Errorf("detail at exactly the limit was changed: %q", events[0].Detail)
 	}
 }

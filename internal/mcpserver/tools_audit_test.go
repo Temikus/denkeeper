@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +118,32 @@ func TestAuditEvents_InvalidUntil(t *testing.T) {
 	res, _, _ := s.handleAuditEvents(auditReadCtx(), nil, auditEventsInput{Until: "not-a-time"})
 	if !res.IsError {
 		t.Error("expected error for invalid until")
+	}
+}
+
+func TestAuditEvents_DetailMaxChars(t *testing.T) {
+	s := auditServer(t,
+		audit.Event{Timestamp: time.Now().UTC(), Category: audit.CategorySupervisor, Status: audit.StatusOK, Detail: strings.Repeat("a", 500)},
+	)
+
+	res, _, _ := s.handleAuditEvents(auditReadCtx(), nil, auditEventsInput{DetailMaxChars: 20})
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", toolResultText(res))
+	}
+	var got audit.ListResult
+	if err := json.Unmarshal([]byte(toolResultText(res)), &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if want := strings.Repeat("a", 20) + "…[truncated, 500 chars total]"; got.Events[0].Detail != want {
+		t.Errorf("detail = %q, want %q", got.Events[0].Detail, want)
+	}
+}
+
+func TestAuditEvents_NegativeDetailMaxChars(t *testing.T) {
+	s := auditServer(t)
+	res, _, _ := s.handleAuditEvents(auditReadCtx(), nil, auditEventsInput{DetailMaxChars: -1})
+	if !res.IsError {
+		t.Error("expected error for negative detail_max_chars")
 	}
 }
 

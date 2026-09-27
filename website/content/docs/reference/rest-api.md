@@ -378,6 +378,8 @@ Clear the active override for an adapter key. Returns `409 Conflict` if that key
 
 List audit events. Filters: `?category=`, `?agent=`, `?status=`, `?source=`, `?search=`, `?since=`, `?until=`, `?limit=`, `?offset=`.
 
+`?detail_max_chars=N` cuts each event's `detail` to its first N characters and appends `…[truncated, M chars total]`. Tool-call and supervisor details carry full tool arguments, so use this when you only need a preview.
+
 `?exclude_source=eval,dryrun` omits preview turns. Dry-run and eval events carry the ordinary `llm` and `tool_call` categories, so `source` is the only axis that separates them from live traffic — which is why the exclusion applies to the statistics endpoint too.
 
 ### `GET /api/v1/audit/stats`
