@@ -31,7 +31,7 @@ require (
 )
 
 require (
-	github.com/dop251/goja v0.0.0-20260917113740-793a2a65c13b
+	github.com/dop251/goja v0.0.0-20260926152631-39ec2650adc9
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jamestelfer/telegold v1.0.0
