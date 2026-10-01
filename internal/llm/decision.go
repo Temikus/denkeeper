@@ -190,6 +190,9 @@ func NewDecider(cfg DeciderConfig, provider DecisionProvider, costs *CostTracker
 // Name returns the decider's configured name.
 func (d *Decider) Name() string { return d.cfg.Name }
 
+// Provider returns the provider instance name the decider calls through.
+func (d *Decider) Provider() string { return d.cfg.Provider }
+
 // Model returns the decision model the decider calls.
 func (d *Decider) Model() string { return d.cfg.Model }
 

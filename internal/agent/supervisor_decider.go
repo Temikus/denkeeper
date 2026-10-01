@@ -37,6 +37,14 @@ func (e *Engine) SetSupervisorDecider(d *llm.Decider, cfg DeciderStageConfig) {
 	e.supervisorDecider.Store(&deciderStage{decider: d, cfg: cfg})
 }
 
+// SupervisorDecider returns the wired decider, or nil.
+func (e *Engine) SupervisorDecider() *llm.Decider {
+	if cur := e.supervisorDecider.Load(); cur != nil {
+		return cur.decider
+	}
+	return nil
+}
+
 // SetSupervisorDeciderConfig re-tunes the wired decider (config reload). No-op
 // when none is wired: binding a decider needs a restart, like supervisor.
 func (e *Engine) SetSupervisorDeciderConfig(cfg DeciderStageConfig) {

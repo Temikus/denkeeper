@@ -2266,6 +2266,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			}
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
+			reconcileSupervisorDecider(e, ac, cfg, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
 			e.SetReplyGuard(replyGuardFrom(cfg))
@@ -2307,6 +2308,30 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	}
 	// Re-tunes an already-wired decider only; binding one needs a restart.
 	e.SetSupervisorDeciderConfig(deciderStageFrom(ac))
+}
+
+// reconcileSupervisorDecider unbinds a wired decider on reload when the agent
+// no longer names it or its provider or model changed: removing a decider must
+// stop review data reaching that destination without a restart. Binding a new
+// one still needs a restart, since decider clients are built at startup.
+func reconcileSupervisorDecider(e *agent.Engine, ac config.AgentInstanceConfig, cfg *config.Config, logger *slog.Logger) {
+	cur := e.SupervisorDecider()
+	if cur == nil {
+		if ac.SupervisorDecider != "" {
+			logger.Warn("supervisor decider not bound; restart to apply", "agent", ac.Name, "decider", ac.SupervisorDecider)
+		}
+		return
+	}
+	if ac.SupervisorDecider == cur.Name() {
+		for _, dc := range cfg.LLM.Deciders {
+			if dc.Name == cur.Name() && dc.Provider == cur.Provider() && dc.Model == cur.Model() {
+				return
+			}
+		}
+	}
+	e.SetSupervisorDecider(nil, agent.DeciderStageConfig{})
+	logger.Warn("supervisor decider unbound on reload; restart to bind a replacement",
+		"agent", ac.Name, "decider", cur.Name(), "configured", ac.SupervisorDecider)
 }
 
 func deciderStageFrom(ac config.AgentInstanceConfig) agent.DeciderStageConfig {

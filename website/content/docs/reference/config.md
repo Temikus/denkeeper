@@ -212,6 +212,8 @@ Defaults for agents that do not set their own directories.
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything.
 
+On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider immediately. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload.
+
 ### Post-turn reviewer
 
 A headless per-agent engine that reviews after a turn and can append persona memory or report skill improvements. Distinct from the supervisor above — it reviews *after* the fact rather than gating tool calls, and is capability-reduced rather than approval-gated.
