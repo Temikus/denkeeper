@@ -212,7 +212,7 @@ Defaults for agents that do not set their own directories.
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything.
 
-On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider immediately. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload.
+On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider for tool calls reviewed after the reload. A review already in progress finishes with it. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload.
 
 ### Post-turn reviewer
 
