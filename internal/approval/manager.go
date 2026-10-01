@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -142,6 +144,11 @@ func (m *Manager) submit(
 	return &req, nil
 }
 
+// ErrActionFailed wraps the error of an approved action. The request is
+// already recorded as approved when it is returned, so callers must not
+// report it as an unresolved request.
+var ErrActionFailed = errors.New("approval action failed")
+
 // Resolve marks an approval as approved or denied and, if approved, invokes
 // the registered action closure. Returns the updated Request.
 func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolvedBy string) (*Request, error) {
@@ -151,55 +158,91 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 		return nil, err
 	}
 
-	// Audit: approval resolved.
-	if m.Auditor != nil {
-		action := "deny"
-		auditStatus := audit.StatusDenied
-		if approved {
-			action = "approve"
-			auditStatus = audit.StatusOK
-		}
-		m.Auditor.Emit(ctx, audit.Event{
-			Category: audit.CategoryApproval,
-			Action:   action,
-			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, status, resolvedBy),
-			Status:   auditStatus,
-			Source:   resolvedBy,
-		})
-	}
-
-	if approved {
-		fn, ok := m.registry.Pop(id)
-		if !ok {
-			// Registry is empty after a restart — the DB row was already expired
-			// at startup, so this path should not be reached in practice.
-			m.logger.Warn("approval action not found in registry (restarted?)", "id", id)
-		} else {
-			req, err := m.store.Get(ctx, id)
-			if err != nil {
-				return nil, fmt.Errorf("fetching approved request: %w", err)
-			}
-			if actionErr := fn(ctx, req.Payload); actionErr != nil {
-				m.logger.Error("approval action failed", "id", id, "error", actionErr)
-				m.notifyWaiterWithErr(id, StatusApproved, actionErr)
-				return req, fmt.Errorf("approval action: %w", actionErr)
-			}
-			m.logger.Info("approval action executed", "id", id, "resolvedBy", resolvedBy)
-			m.notifyWaiterWithErr(id, StatusApproved, nil)
-			return req, nil
-		}
-	} else {
-		// Denied — clean up any registered closure.
-		m.registry.Delete(id)
-		m.logger.Info("approval denied", "id", id, "resolvedBy", resolvedBy)
-	}
-
 	// Fetch the updated record BEFORE notifying the waiter so that any
 	// goroutine unblocked by notifyWaiterWithErr (e.g. SubmitAndWait returning)
 	// cannot race to close the underlying store before we finish the Get.
 	req, err := m.store.Get(ctx, id)
-	m.notifyWaiterWithErr(id, status, nil)
-	return req, err
+	if err != nil {
+		// Without the payload an approved action cannot run.
+		err = fmt.Errorf("fetching resolved request: %w", err)
+		m.registry.Delete(id)
+		var actionErr error
+		if approved {
+			actionErr = err
+		}
+		m.auditResolution(ctx, &Request{ID: id, Status: status}, resolvedBy, actionErr)
+		m.notifyWaiterWithErr(id, status, actionErr)
+		return nil, err
+	}
+
+	actionErr := m.settle(ctx, req, resolvedBy)
+	m.notifyWaiterWithErr(id, status, actionErr)
+	return req, wrapActionErr(actionErr)
+}
+
+// settle runs the action of an approved request (or drops the closure of a
+// denied one), then audits the outcome. The audit follows the action so a
+// failed action is recorded as an error, not a clean approval. Returns the
+// action's error; callers notify waiters.
+func (m *Manager) settle(ctx context.Context, req *Request, resolvedBy string) error {
+	var actionErr error
+	if req.Status == StatusApproved {
+		actionErr = m.runAction(ctx, req)
+	} else {
+		m.registry.Delete(req.ID)
+		m.logger.Info("approval denied", "id", req.ID, "resolvedBy", resolvedBy)
+	}
+	m.auditResolution(ctx, req, resolvedBy, actionErr)
+	return actionErr
+}
+
+func (m *Manager) runAction(ctx context.Context, req *Request) error {
+	fn, ok := m.registry.Pop(req.ID)
+	if !ok {
+		// Registry is empty after a restart — the DB row was already expired
+		// at startup, so this path should not be reached in practice.
+		m.logger.Warn("approval action not found in registry (restarted?)", "id", req.ID)
+		return nil
+	}
+	if err := fn(ctx, req.Payload); err != nil {
+		m.logger.Error("approval action failed", "id", req.ID, "error", err)
+		return err
+	}
+	m.logger.Info("approval action executed", "id", req.ID, "resolvedBy", req.ResolvedBy)
+	return nil
+}
+
+func (m *Manager) auditResolution(ctx context.Context, req *Request, resolvedBy string, actionErr error) {
+	if m.Auditor == nil {
+		return
+	}
+	event := audit.Event{
+		Category:       audit.CategoryApproval,
+		Action:         "deny",
+		Agent:          req.AgentName,
+		Summary:        fmt.Sprintf("Approval %s %s (by %s)", req.ID, req.Status, resolvedBy),
+		Status:         audit.StatusDenied,
+		Source:         resolvedBy,
+		ConversationID: req.ConversationID,
+	}
+	if req.Status == StatusApproved {
+		event.Action = "approve"
+		event.Status = audit.StatusOK
+	}
+	if actionErr != nil {
+		event.Status = audit.StatusError
+		event.Summary += "; action failed"
+		detail, _ := json.Marshal(map[string]string{"error": actionErr.Error()})
+		event.Detail = string(detail)
+	}
+	m.Auditor.Emit(ctx, event)
+}
+
+func wrapActionErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", ErrActionFailed, err)
 }
 
 // Abort resolves a pending approval that nobody will ever answer: the turn that
@@ -286,31 +329,14 @@ func (m *Manager) ResolveByCallback(ctx context.Context, callbackData string, re
 		return nil, err
 	}
 
-	// If approved, invoke the action closure.
-	resolvedStatus := StatusDenied
-	if approved {
-		resolvedStatus = StatusApproved
-		fn, ok := m.registry.Pop(req.ID)
-		if ok {
-			if actionErr := fn(ctx, req.Payload); actionErr != nil {
-				m.logger.Error("approval action failed", "id", req.ID, "error", actionErr)
-				m.notifyWaiterWithErr(req.ID, resolvedStatus, actionErr)
-				return req, fmt.Errorf("approval action: %w", actionErr)
-			}
-			m.logger.Info("approval action executed via callback", "id", req.ID)
-		} else {
-			m.logger.Warn("approval action not found in registry (restarted?)", "id", req.ID)
-		}
-
-		// Create auto-approve rule if requested.
+	actionErr := m.settle(ctx, req, resolvedBy)
+	// Create the rule before waking the waiter, so the resumed turn's next
+	// call to the same tool already matches it.
+	if approved && actionErr == nil {
 		m.createAutoApproveFromCallback(ctx, action, req, resolvedBy)
-	} else {
-		m.registry.Delete(req.ID)
-		m.logger.Info("approval denied via callback", "id", req.ID)
 	}
-
-	m.notifyWaiterWithErr(req.ID, resolvedStatus, nil)
-	return req, nil
+	m.notifyWaiterWithErr(req.ID, req.Status, actionErr)
+	return req, wrapActionErr(actionErr)
 }
 
 // createAutoApproveFromCallback creates an auto-approve rule when the callback
@@ -641,6 +667,7 @@ func (m *Manager) AddSessionRule(ctx context.Context, agentName, toolName, conve
 	m.logger.Info("session auto-approve rule added",
 		"agent", agentName, "tool", toolName, "conversation", conversationID,
 		"by", createdBy, "expires_at", expiresAt.Format(time.RFC3339))
+	m.auditRuleCreated(ctx, agentName, toolName, ScopeSession, conversationID, createdBy)
 	m.autoResolvePending(ctx, agentName, toolName)
 }
 
@@ -661,8 +688,26 @@ func (m *Manager) AddPermanentRule(ctx context.Context, agentName, toolName, cre
 	}
 	m.logger.Info("permanent auto-approve rule added",
 		"id", rule.ID, "agent", agentName, "tool", toolName, "by", createdBy)
+	m.auditRuleCreated(ctx, agentName, toolName, ScopePermanent, "", createdBy)
 	m.autoResolvePending(ctx, agentName, toolName)
 	return &rule, nil
+}
+
+func (m *Manager) auditRuleCreated(ctx context.Context, agentName, toolName string, scope AutoApproveScope, conversationID, createdBy string) {
+	if m.Auditor == nil {
+		return
+	}
+	detail, _ := json.Marshal(map[string]string{"tool": toolName, "scope": string(scope)})
+	m.Auditor.Emit(ctx, audit.Event{
+		Category:       audit.CategoryApproval,
+		Action:         "create_rule",
+		Agent:          agentName,
+		Summary:        toolName,
+		Detail:         string(detail),
+		Status:         audit.StatusOK,
+		Source:         createdBy,
+		ConversationID: conversationID,
+	})
 }
 
 // autoResolvePending approves all pending approvals for the given agent+tool.
