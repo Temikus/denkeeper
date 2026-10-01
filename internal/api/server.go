@@ -601,6 +601,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var supervisorContextMessages int
 	var supervisorBodyExcerptLen int
 	var supervisorToolDescLen int
+	var supervisorMaxArgsBytes int
 	for _, ac := range s.appConfig().Agents {
 		if ac.Name == name {
 			adapters = ac.Adapters
@@ -612,6 +613,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 			supervisorContextMessages = ac.SupervisorContextMessages
 			supervisorBodyExcerptLen = ac.SupervisorBodyExcerptLen
 			supervisorToolDescLen = ac.SupervisorToolDescLen
+			supervisorMaxArgsBytes = ac.SupervisorMaxArgsBytes
 			break
 		}
 	}
@@ -654,6 +656,9 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if supervisorToolDescLen > 0 {
 		resp["supervisor_tool_desc_len"] = supervisorToolDescLen
+	}
+	if supervisorMaxArgsBytes > 0 {
+		resp["supervisor_max_args_bytes"] = supervisorMaxArgsBytes
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

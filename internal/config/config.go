@@ -774,6 +774,11 @@ type AgentInstanceConfig struct {
 	// 0 = use default).
 	SupervisorToolDescLen int `toml:"supervisor_tool_desc_len"`
 
+	// SupervisorMaxArgsBytes caps the tool-call arguments sent for supervisor
+	// review (default 16384; 0 = use default). Larger calls skip the review
+	// and go straight to human approval.
+	SupervisorMaxArgsBytes int `toml:"supervisor_max_args_bytes"`
+
 	// ReviewerModel is the LLM model used for post-turn reviews. If empty,
 	// post-turn review is disabled for this agent.
 	ReviewerModel string `toml:"reviewer_model"`
@@ -2748,12 +2753,8 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 			}
 		}
 
-		if a.MaxContextMessages < 0 {
-			return nil, fmt.Errorf("config: agent %q: max_context_messages must be >= 0 (0 = default)", a.Name)
-		}
-
-		if a.MaxToolRounds < 0 {
-			return nil, fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
+		if err := validateAgentCounts(a); err != nil {
+			return nil, err
 		}
 
 		if err := validateTimezone(a.Timezone, fmt.Sprintf("agent %q: timezone", a.Name)); err != nil {
@@ -2774,6 +2775,20 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 	}
 
 	return names, nil
+}
+
+// validateAgentCounts rejects negative count/size knobs, where 0 = default.
+func validateAgentCounts(a AgentInstanceConfig) error {
+	if a.MaxContextMessages < 0 {
+		return fmt.Errorf("config: agent %q: max_context_messages must be >= 0 (0 = default)", a.Name)
+	}
+	if a.MaxToolRounds < 0 {
+		return fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
+	}
+	if a.SupervisorMaxArgsBytes < 0 {
+		return fmt.Errorf("config: agent %q: supervisor_max_args_bytes must be >= 0 (0 = default)", a.Name)
+	}
+	return nil
 }
 
 // validateAutoApproveTools checks an agent's auto_approve_tools entries.
