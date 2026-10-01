@@ -2301,6 +2301,7 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	if ac.SupervisorBodyExcerptLen > 0 || ac.SupervisorToolDescLen > 0 {
 		e.SetSupervisorExcerptConfig(ac.SupervisorBodyExcerptLen, ac.SupervisorToolDescLen)
 	}
+	e.SetSupervisorMaxArgsBytes(ac.SupervisorMaxArgsBytes)
 }
 
 // agentLocation resolves the effective timezone for an agent's injected date

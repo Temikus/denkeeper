@@ -9506,6 +9506,9 @@
                 "supervisor_context_messages": {
                     "type": "integer"
                 },
+                "supervisor_max_args_bytes": {
+                    "type": "integer"
+                },
                 "supervisor_timeout": {
                     "type": "string"
                 },

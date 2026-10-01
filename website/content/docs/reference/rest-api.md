@@ -294,7 +294,7 @@ Create an agent. Creates the persona directory and persists an `[[agents]]` bloc
 
 **Scope:** `agents:write`
 
-Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
+Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `supervisor_max_args_bytes`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
 
 ### `DELETE /api/v1/agents/{name}`
 

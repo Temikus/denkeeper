@@ -31,6 +31,7 @@ type agentConfigUpdateInput struct {
 	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`
 	SupervisorBodyExcerptLen  *int                     `json:"supervisor_body_excerpt_len,omitempty"`
 	SupervisorToolDescLen     *int                     `json:"supervisor_tool_desc_len,omitempty"`
+	SupervisorMaxArgsBytes    *int                     `json:"supervisor_max_args_bytes,omitempty"`
 	ReviewerModel             *string                  `json:"reviewer_model,omitempty"`
 	ReviewerProvider          *string                  `json:"reviewer_provider,omitempty"`
 	ReviewMaxIterations       *int                     `json:"review_max_iterations,omitempty"`
@@ -154,6 +155,9 @@ func validateSupervisorFields(input *agentConfigUpdateInput) string {
 	}
 	if input.SupervisorToolDescLen != nil && *input.SupervisorToolDescLen < 0 {
 		return "supervisor_tool_desc_len must be >= 0"
+	}
+	if input.SupervisorMaxArgsBytes != nil && *input.SupervisorMaxArgsBytes < 0 {
+		return "supervisor_max_args_bytes must be >= 0"
 	}
 	return ""
 }
@@ -361,6 +365,9 @@ func addSupervisorConfigChanges(changes map[string]any, input *agentConfigUpdate
 	if input.SupervisorToolDescLen != nil {
 		changes["supervisor_tool_desc_len"] = *input.SupervisorToolDescLen
 	}
+	if input.SupervisorMaxArgsBytes != nil {
+		changes["supervisor_max_args_bytes"] = *input.SupervisorMaxArgsBytes
+	}
 }
 
 func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
@@ -437,6 +444,9 @@ func (s *Server) applySupervisorChanges(name string, e *agent.Engine, input *age
 			descLen = *input.SupervisorToolDescLen
 		}
 		e.SetSupervisorExcerptConfig(bodyLen, descLen)
+	}
+	if input.SupervisorMaxArgsBytes != nil {
+		e.SetSupervisorMaxArgsBytes(*input.SupervisorMaxArgsBytes)
 	}
 	return ""
 }
@@ -515,6 +525,9 @@ func applySupervisorFields(ac *config.AgentInstanceConfig, input *agentConfigUpd
 	}
 	if input.SupervisorToolDescLen != nil {
 		ac.SupervisorToolDescLen = *input.SupervisorToolDescLen
+	}
+	if input.SupervisorMaxArgsBytes != nil {
+		ac.SupervisorMaxArgsBytes = *input.SupervisorMaxArgsBytes
 	}
 }
 
