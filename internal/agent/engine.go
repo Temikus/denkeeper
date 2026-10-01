@@ -3714,7 +3714,9 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 		{Role: "user", Content: review.String()},
 	}
 
-	// Call the supervisor's Router with a timeout — no tools, no streaming.
+	// Tools-stripped (CompleteFinal): a review needs none, and the supervisor's
+	// own catalogue would inflate every call and invite a tool call in place
+	// of a decision. Non-streaming.
 	reviewCtx, cancel := context.WithTimeout(ctx, e.supervisorTimeout)
 	defer cancel()
 
@@ -3726,7 +3728,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 		ct.RegisterSessionAgent(sessionID, e.supervisor.name)
 	}
 
-	resp, err := e.supervisor.router.Complete(reviewCtx, sessionID, messages)
+	resp, err := e.supervisor.router.CompleteFinal(reviewCtx, sessionID, messages)
 	duration := time.Since(start)
 
 	if err != nil {
