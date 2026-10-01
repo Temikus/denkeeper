@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/approval"
@@ -75,6 +76,9 @@ func (s *Server) handleApprovalResolve(ctx context.Context, _ *mcp.CallToolReque
 	}
 
 	req, err := s.deps.Approvals.Resolve(ctx, input.ID, action == "approve", "mcp:"+keyNameFromCtx(ctx))
+	if errors.Is(err, approval.ErrActionFailed) {
+		return toolError("approval " + string(req.Status) + " and recorded, but " + err.Error() + " (do not retry)"), nil, nil
+	}
 	if err != nil {
 		return toolError("resolve failed: " + err.Error()), nil, nil
 	}
