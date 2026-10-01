@@ -74,13 +74,10 @@ func (s *Server) handleApprovalResolve(ctx context.Context, _ *mcp.CallToolReque
 		return toolError("action must be 'approve' or 'deny'"), nil, nil
 	}
 
-	_, err := s.deps.Approvals.Resolve(ctx, input.ID, action == "approve", "mcp:"+keyNameFromCtx(ctx))
+	req, err := s.deps.Approvals.Resolve(ctx, input.ID, action == "approve", "mcp:"+keyNameFromCtx(ctx))
 	if err != nil {
 		return toolError("resolve failed: " + err.Error()), nil, nil
 	}
 
-	if action == "approve" {
-		return toolText("approval approved"), nil, nil
-	}
-	return toolText("approval denied"), nil, nil
+	return toolText("approval " + string(req.Status)), nil, nil
 }
