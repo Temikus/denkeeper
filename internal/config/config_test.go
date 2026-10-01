@@ -1182,6 +1182,42 @@ max_tool_rounds = -1
 	}
 }
 
+func TestParse_Agents_NegativeSupervisorMaxArgsBytes(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+supervisor_max_args_bytes = -1
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative supervisor_max_args_bytes")
+	}
+	if !strings.Contains(err.Error(), "supervisor_max_args_bytes must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_Agents_SupervisorMaxArgsBytes(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+supervisor_max_args_bytes = 32768
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := cfg.Agents[0].SupervisorMaxArgsBytes; got != 32768 {
+		t.Errorf("SupervisorMaxArgsBytes = %d, want 32768", got)
+	}
+}
+
 func TestParse_Agents_ConflictingWildcard(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[agents]]

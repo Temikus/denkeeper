@@ -10355,6 +10355,9 @@
                     "description": "\"shadow\" or \"enforce\"",
                     "type": "string"
                 },
+                "supervisor_max_args_bytes": {
+                    "type": "integer"
+                },
                 "supervisor_timeout": {
                     "type": "string"
                 },

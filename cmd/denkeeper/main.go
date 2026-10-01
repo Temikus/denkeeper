@@ -2392,6 +2392,7 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	e.SetSupervisorContextMessages(ac.SupervisorContextMessages)
 	e.SetSupervisorBodyExcerptLen(ac.SupervisorBodyExcerptLen)
 	e.SetSupervisorToolDescLen(ac.SupervisorToolDescLen)
+	e.SetSupervisorMaxArgsBytes(ac.SupervisorMaxArgsBytes)
 	// Re-tunes the bound decider; syncDeciders does the binding.
 	e.SetSupervisorDeciderConfig(deciderStageFrom(ac))
 }

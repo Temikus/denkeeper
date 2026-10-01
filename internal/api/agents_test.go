@@ -133,6 +133,47 @@ func TestAgentConfigUpdate_LLMProvider_Unknown(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUpdate_SupervisorMaxArgsBytes(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	srv := New(cfg, deps, testLogger())
+
+	body, _ := json.Marshal(map[string]any{"supervisor_max_args_bytes": 32768})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := deps.Dispatcher.Agent("default").SupervisorMaxArgsBytes(); got != 32768 {
+		t.Errorf("engine SupervisorMaxArgsBytes = %d, want 32768", got)
+	}
+	if got := deps.Config.Get().Agents[0].SupervisorMaxArgsBytes; got != 32768 {
+		t.Errorf("config SupervisorMaxArgsBytes = %d, want 32768", got)
+	}
+}
+
+func TestAgentConfigUpdate_NegativeSupervisorMaxArgsBytes(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	srv := New(cfg, testDeps(), testLogger())
+
+	body, _ := json.Marshal(map[string]any{"supervisor_max_args_bytes": -1})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/default", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
 func TestAgentConfigUpdate_InvalidTier(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	srv := New(cfg, testDeps(), testLogger())
@@ -648,6 +689,7 @@ func TestAgentDetail_IncludesSupervisorConfig(t *testing.T) {
 	deps.Config.Get().Agents[0].Supervisor = "guard"
 	deps.Config.Get().Agents[0].SupervisorTimeout = "10s"
 	deps.Config.Get().Agents[0].SupervisorContextMessages = 3
+	deps.Config.Get().Agents[0].SupervisorMaxArgsBytes = 32768
 	srv := New(cfg, deps, testLogger())
 
 	req := authedRequest(http.MethodGet, "/api/v1/agents/default")
@@ -674,6 +716,9 @@ func TestAgentDetail_IncludesSupervisorConfig(t *testing.T) {
 	}
 	if int(cm) != 3 {
 		t.Errorf("supervisor_context_messages = %d, want 3", int(cm))
+	}
+	if resp["supervisor_max_args_bytes"] != float64(32768) {
+		t.Errorf("supervisor_max_args_bytes = %v, want 32768", resp["supervisor_max_args_bytes"])
 	}
 }
 
@@ -702,5 +747,8 @@ func TestAgentDetail_OmitsSupervisorFieldsWhenUnset(t *testing.T) {
 	}
 	if _, present := resp["supervisor_context_messages"]; present {
 		t.Errorf("supervisor_context_messages should be absent when unset, got %v", resp["supervisor_context_messages"])
+	}
+	if _, present := resp["supervisor_max_args_bytes"]; present {
+		t.Errorf("supervisor_max_args_bytes should be absent when unset, got %v", resp["supervisor_max_args_bytes"])
 	}
 }

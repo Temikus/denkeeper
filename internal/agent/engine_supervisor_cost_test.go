@@ -18,11 +18,12 @@ import (
 // supervisorCostHarness builds a supervised engine plus an "argus" supervisor
 // sharing one cost tracker, and returns both engines and the tracker.
 type supervisorCostHarness struct {
-	engine   *Engine
-	primary  *sequentialProvider
-	tracker  *llm.CostTracker
-	auditor  *collectingAuditor
-	teardown func()
+	engine      *Engine
+	primary     *sequentialProvider
+	tracker     *llm.CostTracker
+	auditor     *collectingAuditor
+	teardown    func()
+	supProvider *sequentialProvider
 }
 
 // newSupervisorCostHarness wires a real engine, supervisor and cost tracker so
@@ -44,7 +45,8 @@ func newSupervisorCostHarness(t *testing.T, limits llm.SessionLimits, primaryRes
 	router.RegisterProvider(primary)
 
 	supRouter := llm.NewRouter("mock", "sup-model", tracker)
-	supRouter.RegisterProvider(&sequentialProvider{responses: supervisorResponses})
+	supProvider := &sequentialProvider{responses: supervisorResponses}
+	supRouter.RegisterProvider(supProvider)
 
 	approvalStore, err := approval.NewInMemoryStore()
 	if err != nil {
@@ -68,10 +70,11 @@ func newSupervisorCostHarness(t *testing.T, limits llm.SessionLimits, primaryRes
 	engine.SetAuditor(auditor)
 
 	return &supervisorCostHarness{
-		engine:  engine,
-		primary: primary,
-		tracker: tracker,
-		auditor: auditor,
+		engine:      engine,
+		primary:     primary,
+		tracker:     tracker,
+		auditor:     auditor,
+		supProvider: supProvider,
 		teardown: func() {
 			_ = store.Close()
 			_ = approvalStore.Close()

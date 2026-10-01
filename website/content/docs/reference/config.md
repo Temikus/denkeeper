@@ -205,6 +205,7 @@ Defaults for agents that do not set their own directories.
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
+| `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
 | `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call (aligned, safe arguments, scoped) before the supervisor. Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
 | `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every answer is at or above this probability |
@@ -212,7 +213,7 @@ Defaults for agents that do not set their own directories.
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 
-A config reload applies `supervisor` and the four `supervisor_*` knobs above to running agents: adding, changing, or removing a supervisor takes effect for the next tool call, and removing a knob restores its default. Renaming an agent through the API or dashboard also updates other agents' `supervisor` and any `[[channels]]` `agent` that named it.
+A config reload applies `supervisor` and the five `supervisor_*` knobs above to running agents: adding, changing, or removing a supervisor takes effect for the next tool call, and removing a knob restores its default. Renaming an agent through the API or dashboard also updates other agents' `supervisor` and any `[[channels]]` `agent` that named it.
 
 A config reload applies every decider change: adding, removing or switching `supervisor_decider`, changing a decider's `provider` or `model`, and mode and thresholds. A review already in progress finishes with the old decider. `PATCH /api/v1/agents/{name}` and the dashboard apply at once, without a reload.
 

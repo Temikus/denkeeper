@@ -481,6 +481,23 @@ func TestRegisterSchedules_MixedValidAndInvalid(t *testing.T) {
 	}
 }
 
+// A reload that clears supervisor_max_args_bytes must restore the default,
+// not keep the previous override.
+func TestApplySupervisorKnobs_MaxArgsBytesReloadClears(t *testing.T) {
+	e := testDispatcher(t, "default", nil).Agent("default")
+	def := e.SupervisorMaxArgsBytes()
+
+	applySupervisorKnobs(e, config.AgentInstanceConfig{Name: "default", SupervisorMaxArgsBytes: 32768})
+	if got := e.SupervisorMaxArgsBytes(); got != 32768 {
+		t.Fatalf("after override: SupervisorMaxArgsBytes = %d, want 32768", got)
+	}
+
+	applySupervisorKnobs(e, config.AgentInstanceConfig{Name: "default"})
+	if got := e.SupervisorMaxArgsBytes(); got != def {
+		t.Errorf("after clearing: SupervisorMaxArgsBytes = %d, want default %d", got, def)
+	}
+}
+
 func TestAgentLocation_AgentOverride(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.API.Timezone = "UTC"

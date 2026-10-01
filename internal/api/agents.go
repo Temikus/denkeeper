@@ -31,6 +31,7 @@ type agentConfigUpdateInput struct {
 	SupervisorContextMessages  *int                     `json:"supervisor_context_messages,omitempty"`
 	SupervisorBodyExcerptLen   *int                     `json:"supervisor_body_excerpt_len,omitempty"`
 	SupervisorToolDescLen      *int                     `json:"supervisor_tool_desc_len,omitempty"`
+	SupervisorMaxArgsBytes     *int                     `json:"supervisor_max_args_bytes,omitempty"`
 	SupervisorDecider          *string                  `json:"supervisor_decider,omitempty"`            // [[llm.deciders]] name; empty string to clear
 	SupervisorDeciderMode      *string                  `json:"supervisor_decider_mode,omitempty"`       // "shadow" or "enforce"
 	SupervisorDeciderApproveAt *float64                 `json:"supervisor_decider_approve_at,omitempty"` // 0 = default 0.95
@@ -166,6 +167,9 @@ func validateSupervisorFields(input *agentConfigUpdateInput) string {
 	}
 	if input.SupervisorToolDescLen != nil && *input.SupervisorToolDescLen < 0 {
 		return "supervisor_tool_desc_len must be >= 0"
+	}
+	if input.SupervisorMaxArgsBytes != nil && *input.SupervisorMaxArgsBytes < 0 {
+		return "supervisor_max_args_bytes must be >= 0"
 	}
 	return ""
 }
@@ -374,6 +378,9 @@ func addSupervisorConfigChanges(changes map[string]any, input *agentConfigUpdate
 		changes["supervisor_tool_desc_len"] = *input.SupervisorToolDescLen
 	}
 	addDeciderConfigChanges(changes, input)
+	if input.SupervisorMaxArgsBytes != nil {
+		changes["supervisor_max_args_bytes"] = *input.SupervisorMaxArgsBytes
+	}
 }
 
 func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
@@ -458,6 +465,9 @@ func (s *Server) applySupervisorChanges(name string, e *agent.Engine, input *age
 	if input.SupervisorToolDescLen != nil {
 		e.SetSupervisorToolDescLen(*input.SupervisorToolDescLen)
 	}
+	if input.SupervisorMaxArgsBytes != nil {
+		e.SetSupervisorMaxArgsBytes(*input.SupervisorMaxArgsBytes)
+	}
 	return ""
 }
 
@@ -537,6 +547,9 @@ func applySupervisorFields(ac *config.AgentInstanceConfig, input *agentConfigUpd
 		ac.SupervisorToolDescLen = *input.SupervisorToolDescLen
 	}
 	applyDeciderFields(ac, input)
+	if input.SupervisorMaxArgsBytes != nil {
+		ac.SupervisorMaxArgsBytes = *input.SupervisorMaxArgsBytes
+	}
 }
 
 func applyReviewerFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
