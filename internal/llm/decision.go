@@ -193,6 +193,9 @@ func (d *Decider) Name() string { return d.cfg.Name }
 // Model returns the decision model the decider calls.
 func (d *Decider) Model() string { return d.cfg.Model }
 
+// CostTracker returns the tracker calls are billed to (may be nil).
+func (d *Decider) CostTracker() *CostTracker { return d.costs }
+
 // Decide asks the configured model the questions about state, billing the
 // call to sessionID. It returns ErrDecisionTooLarge or ErrHardLimitExceeded
 // without calling the provider, and an error if any asked question is left

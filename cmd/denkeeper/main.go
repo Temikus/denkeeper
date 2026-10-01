@@ -1262,8 +1262,12 @@ func buildDispatcherWithChannels(
 // buildAllAgents creates an Engine for each configured agent and collects their bindings.
 // wireSupervisors links supervisor engines to supervised agents (second pass
 // after all engines are built).
-func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*agent.Engine, logger *slog.Logger) {
+func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*agent.Engine, deciders map[string]*llm.Decider, logger *slog.Logger) {
 	for _, ac := range agents {
+		if d := deciders[ac.SupervisorDecider]; d != nil && engines[ac.Name] != nil {
+			engines[ac.Name].SetSupervisorDecider(d, deciderStageFrom(ac))
+			logger.Info("supervisor decider wired", "agent", ac.Name, "decider", d.Name(), "mode", ac.SupervisorDeciderMode)
+		}
 		if ac.Supervisor == "" {
 			continue
 		}
@@ -2128,7 +2132,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// already ran inside buildAgentEngine).
 	st.approvalManager.SetConfigRules(ctx, configAutoApproveRules(cfg))
 
-	wireSupervisors(cfg.Agents, engines, logger)
+	wireSupervisors(cfg.Agents, engines, clients.deciders, logger)
 
 	// Re-create dispatcher with the fully wired engines, bindings, and channels.
 	dispatcher = buildDispatcherWithChannels(ctx, cfg, engines, bindings, adapters, st.memory, logger)
@@ -2300,6 +2304,16 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	}
 	if ac.SupervisorBodyExcerptLen > 0 || ac.SupervisorToolDescLen > 0 {
 		e.SetSupervisorExcerptConfig(ac.SupervisorBodyExcerptLen, ac.SupervisorToolDescLen)
+	}
+	// Re-tunes an already-wired decider only; binding one needs a restart.
+	e.SetSupervisorDeciderConfig(deciderStageFrom(ac))
+}
+
+func deciderStageFrom(ac config.AgentInstanceConfig) agent.DeciderStageConfig {
+	return agent.DeciderStageConfig{
+		Mode:      ac.SupervisorDeciderMode,
+		ApproveAt: ac.SupervisorDeciderApproveAt,
+		DenyAt:    ac.SupervisorDeciderDenyAt,
 	}
 }
 

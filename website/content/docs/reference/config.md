@@ -205,6 +205,12 @@ Defaults for agents that do not set their own directories.
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
+| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call (aligned, safe arguments, scoped) before the supervisor. Supervised tier only; works with or without `supervisor` |
+| `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. Only `"shadow"` is supported for now |
+| `supervisor_decider_approve_at` | float | `0.95` | The decider would approve when every answer is at or above this probability |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider would deny when any answer is at or below this probability. Must satisfy `0 < deny_at < approve_at < 1` |
+
+Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything.
 
 ### Post-turn reviewer
 
