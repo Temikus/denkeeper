@@ -145,10 +145,7 @@ func (m *Manager) submit(
 // Resolve marks an approval as approved or denied and, if approved, invokes
 // the registered action closure. Returns the updated Request.
 func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolvedBy string) (*Request, error) {
-	status := StatusDenied
-	if approved {
-		status = StatusApproved
-	}
+	status := statusFor(approved)
 
 	if err := m.store.Resolve(ctx, id, status, resolvedBy); err != nil {
 		return nil, err
@@ -162,14 +159,10 @@ func (m *Manager) Resolve(ctx context.Context, id string, approved bool, resolve
 			action = "approve"
 			auditStatus = audit.StatusOK
 		}
-		verb := "denied"
-		if approved {
-			verb = "approved"
-		}
 		m.Auditor.Emit(ctx, audit.Event{
 			Category: audit.CategoryApproval,
 			Action:   action,
-			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, verb, resolvedBy),
+			Summary:  fmt.Sprintf("Approval %s %s (by %s)", id, status, resolvedBy),
 			Status:   auditStatus,
 			Source:   resolvedBy,
 		})
