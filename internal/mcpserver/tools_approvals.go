@@ -79,5 +79,8 @@ func (s *Server) handleApprovalResolve(ctx context.Context, _ *mcp.CallToolReque
 		return toolError("resolve failed: " + err.Error()), nil, nil
 	}
 
-	return toolText("approval " + action + "d"), nil, nil
+	if action == "approve" {
+		return toolText("approval approved"), nil, nil
+	}
+	return toolText("approval denied"), nil, nil
 }

@@ -7,7 +7,17 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/audit"
 )
+
+type recordingAuditEmitter struct {
+	events []audit.Event
+}
+
+func (r *recordingAuditEmitter) Emit(_ context.Context, event audit.Event) {
+	r.events = append(r.events, event)
+}
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
@@ -113,6 +123,58 @@ func TestManager_Resolve_Denied_SkipsAction(t *testing.T) {
 	}
 	if called {
 		t.Error("action should not be called on denial")
+	}
+}
+
+func TestManager_Resolve_Approved_AuditSummary(t *testing.T) {
+	m := newTestManager(t)
+	emitter := &recordingAuditEmitter{}
+	m.Auditor = emitter
+	req, err := m.Submit(context.Background(), "default", ActionKindUserUpdate,
+		"summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error { return nil })
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if _, err := m.Resolve(context.Background(), req.ID, true, "operator"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(emitter.events) != 1 {
+		t.Fatalf("got %d audit events, want 1", len(emitter.events))
+	}
+	event := emitter.events[0]
+	if event.Action != "approve" {
+		t.Errorf("audit action = %q, want %q", event.Action, "approve")
+	}
+	wantSummary := "Approval " + req.ID + " approved (by operator)"
+	if event.Summary != wantSummary {
+		t.Errorf("audit summary = %q, want %q", event.Summary, wantSummary)
+	}
+}
+
+func TestManager_Resolve_Denied_AuditSummary(t *testing.T) {
+	m := newTestManager(t)
+	emitter := &recordingAuditEmitter{}
+	m.Auditor = emitter
+	req, err := m.Submit(context.Background(), "default", ActionKindUserUpdate,
+		"summary", "payload", "123", "telegram", "conv1",
+		func(_ context.Context, _ string) error { return nil })
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if _, err := m.Resolve(context.Background(), req.ID, false, "operator"); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(emitter.events) != 1 {
+		t.Fatalf("got %d audit events, want 1", len(emitter.events))
+	}
+	event := emitter.events[0]
+	if event.Action != "deny" {
+		t.Errorf("audit action = %q, want %q", event.Action, "deny")
+	}
+	wantSummary := "Approval " + req.ID + " denied (by operator)"
+	if event.Summary != wantSummary {
+		t.Errorf("audit summary = %q, want %q", event.Summary, wantSummary)
 	}
 }
 
