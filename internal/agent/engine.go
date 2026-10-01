@@ -392,8 +392,9 @@ type Engine struct {
 	supervisorToolDescLen int
 
 	// supervisorMaxArgsBytes is the largest tool-call arguments payload sent
-	// for supervisor review. Default 16384.
-	supervisorMaxArgsBytes int
+	// for supervisor review; 0 = default. Atomic: PATCH and reload write it
+	// while reviews read it.
+	supervisorMaxArgsBytes atomic.Int64
 
 	// Reviewer runs post-turn background reviews. Set via SetReviewer.
 	reviewer      *Engine
@@ -460,7 +461,6 @@ func NewEngine(
 		supervisorTimeout:         defaultSupervisorTimeout,
 		supervisorBodyExcerptLen:  defaultSupervisorBodyExcerptLen,
 		supervisorToolDescLen:     defaultSupervisorToolDescLen,
-		supervisorMaxArgsBytes:    defaultSupervisorMaxArgsBytes,
 		reviewMaxIter:             defaultReviewMaxIter,
 		reviewTimeout:             defaultReviewTimeout,
 		loc:                       time.UTC,
@@ -727,15 +727,15 @@ func (e *Engine) SetSupervisorExcerptConfig(bodyExcerptLen, toolDescLen int) {
 // SetSupervisorMaxArgsBytes sets the largest arguments payload the supervisor
 // reviews; 0 (or negative) restores the default 16384.
 func (e *Engine) SetSupervisorMaxArgsBytes(n int) {
-	if n <= 0 {
-		n = defaultSupervisorMaxArgsBytes
-	}
-	e.supervisorMaxArgsBytes = n
+	e.supervisorMaxArgsBytes.Store(int64(max(n, 0)))
 }
 
 // SupervisorMaxArgsBytes returns the effective supervisor arguments cap.
 func (e *Engine) SupervisorMaxArgsBytes() int {
-	return e.supervisorMaxArgsBytes
+	if n := e.supervisorMaxArgsBytes.Load(); n > 0 {
+		return int(n)
+	}
+	return defaultSupervisorMaxArgsBytes
 }
 
 // SetSkillDirs configures the directories used for skill creation and hot-reload.
@@ -3663,13 +3663,13 @@ func supervisorArgsTooLargeError(size, limit int) error {
 // checkSupervisorArgsSize audits and returns errSupervisorArgsTooLarge when
 // tc's arguments exceed the cap, so the review never reaches the LLM.
 func (e *Engine) checkSupervisorArgsSize(ctx context.Context, span trace.Span, tc llm.ToolCall, convID string) error {
-	size := len(tc.Function.Arguments)
-	if size <= e.supervisorMaxArgsBytes {
+	size, limit := len(tc.Function.Arguments), e.SupervisorMaxArgsBytes()
+	if size <= limit {
 		return nil
 	}
-	err := supervisorArgsTooLargeError(size, e.supervisorMaxArgsBytes)
+	err := supervisorArgsTooLargeError(size, limit)
 	e.logger.Warn("supervisor review skipped: arguments too large",
-		"tool", tc.Function.Name, "arguments_bytes", size, "max_args_bytes", e.supervisorMaxArgsBytes)
+		"tool", tc.Function.Name, "arguments_bytes", size, "max_args_bytes", limit)
 	span.SetAttributes(attribute.String("supervisor.decision", "error"), attribute.Int("supervisor.args_bytes", size))
 	// Arguments omitted: oversized by definition, and the approval request carries them.
 	detail, _ := json.Marshal(map[string]any{
@@ -3679,7 +3679,7 @@ func (e *Engine) checkSupervisorArgsSize(ctx context.Context, span trace.Span, t
 		"reason":          err.Error(),
 		"supervisor":      e.supervisor.name,
 		"arguments_bytes": size,
-		"max_args_bytes":  e.supervisorMaxArgsBytes,
+		"max_args_bytes":  limit,
 	})
 	e.emitAudit(ctx, audit.Event{
 		Category:       audit.CategorySupervisor,

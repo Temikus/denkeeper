@@ -123,8 +123,8 @@ func TestEngine_SetSupervisorMaxArgsBytes_ZeroRestoresDefault(t *testing.T) {
 	h.engine.SetSupervisorMaxArgsBytes(64)
 	h.engine.SetSupervisorMaxArgsBytes(0)
 
-	if h.engine.supervisorMaxArgsBytes != defaultSupervisorMaxArgsBytes {
-		t.Errorf("supervisorMaxArgsBytes = %d, want default %d", h.engine.supervisorMaxArgsBytes, defaultSupervisorMaxArgsBytes)
+	if got := h.engine.SupervisorMaxArgsBytes(); got != defaultSupervisorMaxArgsBytes {
+		t.Errorf("SupervisorMaxArgsBytes = %d, want default %d", got, defaultSupervisorMaxArgsBytes)
 	}
 }
 
