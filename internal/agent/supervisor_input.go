@@ -52,6 +52,13 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 		e.logger.Warn("supervisor: failed to load conversation context", "error", err)
 		recent = nil
 	}
+	in.setRecent(recent)
+	return in
+}
+
+// setRecent records the conversation context and derives the user's request
+// from its last user message.
+func (in *supervisorReviewInput) setRecent(recent []StoredMessage) {
 	in.recent = recent
 	for i := len(recent) - 1; i >= 0; i-- {
 		if recent[i].Role == "user" {
@@ -60,7 +67,6 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 			break
 		}
 	}
-	return in
 }
 
 // markdown renders the LLM supervisor's review prompt.

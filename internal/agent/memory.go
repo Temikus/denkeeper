@@ -512,6 +512,24 @@ func NewSQLiteMemoryStore(dbPath string) (*SQLiteMemoryStore, error) {
 	return &SQLiteMemoryStore{db: db}, nil
 }
 
+// OpenSQLiteMemoryStoreReadOnly opens an existing database for reading only:
+// no schema setup, no migrations, and a missing file is an error rather than
+// a new database.
+func OpenSQLiteMemoryStoreReadOnly(dbPath string) (*SQLiteMemoryStore, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=query_only(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	return &SQLiteMemoryStore{db: db}, nil
+}
+
 // NewInMemoryStore creates an in-memory SQLite store (for testing).
 func NewInMemoryStore() (*SQLiteMemoryStore, error) {
 	db, err := sqlx.Open("sqlite", ":memory:")
@@ -575,6 +593,27 @@ func (s *SQLiteMemoryStore) GetMessages(ctx context.Context, convID string, limi
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting messages: %w", err)
+	}
+	slices.Reverse(messages)
+	return messages, nil
+}
+
+// messageTimeLayout is how SQLite's CURRENT_TIMESTAMP renders created_at.
+const messageTimeLayout = "2006-01-02 15:04:05"
+
+// GetMessagesBefore returns the last limit messages of convID created at or
+// before the given time (second resolution), oldest first.
+func (s *SQLiteMemoryStore) GetMessagesBefore(ctx context.Context, convID string, before time.Time, limit int) ([]StoredMessage, error) {
+	var messages []StoredMessage
+	err := s.db.SelectContext(ctx, &messages,
+		`SELECT id, conversation_id, role, content, reasoning_content, tokens_used, cost,
+		        model, provider, tokens_prompt, tokens_completion, tokens_cached, created_at
+		 FROM messages WHERE conversation_id = ? AND created_at <= ?
+		 ORDER BY created_at DESC, id DESC LIMIT ?`,
+		convID, before.UTC().Format(messageTimeLayout), limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("getting messages before %s: %w", before.Format(time.RFC3339), err)
 	}
 	slices.Reverse(messages)
 	return messages, nil

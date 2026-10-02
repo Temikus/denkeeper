@@ -89,7 +89,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd())
+	rootCmd.AddCommand(serveCmd, versionCmd, newKeysCmd(), newPluginCmd(), newSessionsCmd(), newPasswdCmd(), newDecideCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -364,16 +364,20 @@ func buildDeciders(cfg *config.Config, providers map[string]llm.Provider, cost *
 			slog.Warn("decider skipped: provider does not serve decisions", "decider", dc.Name, "provider", dc.Provider)
 			continue
 		}
-		timeout, _ := time.ParseDuration(dc.Timeout) // validated by config.Load
-		deciders[dc.Name] = llm.NewDecider(llm.DeciderConfig{
-			Name:           dc.Name,
-			Provider:       dc.Provider,
-			Model:          dc.Model,
-			Timeout:        timeout,
-			MaxInputTokens: dc.MaxInputTokens,
-		}, dp, cost)
+		deciders[dc.Name] = newDecider(dc, dp, cost)
 	}
 	return deciders
+}
+
+func newDecider(dc config.DeciderConfig, dp llm.DecisionProvider, cost *llm.CostTracker) *llm.Decider {
+	timeout, _ := time.ParseDuration(dc.Timeout) // validated by config.Load
+	return llm.NewDecider(llm.DeciderConfig{
+		Name:           dc.Name,
+		Provider:       dc.Provider,
+		Model:          dc.Model,
+		Timeout:        timeout,
+		MaxInputTokens: dc.MaxInputTokens,
+	}, dp, cost)
 }
 
 // createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
