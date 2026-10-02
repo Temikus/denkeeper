@@ -16,32 +16,36 @@ import (
 
 // agentConfigUpdateInput holds the mutable fields for PATCH /api/v1/agents/{name}.
 type agentConfigUpdateInput struct {
-	Name                      *string                  `json:"name,omitempty"`
-	SessionTier               *string                  `json:"session_tier,omitempty"`
-	LLMProvider               *string                  `json:"llm_provider,omitempty"`
-	LLMModel                  *string                  `json:"llm_model,omitempty"`
-	Description               *string                  `json:"description,omitempty"`
-	MaxToolRounds             *int                     `json:"max_tool_rounds,omitempty"`
-	BrowserURLAllowlist       *[]string                `json:"browser_url_allowlist,omitempty"`
-	Fallbacks                 *[]config.FallbackConfig `json:"fallbacks,omitempty"`
-	CostLimitSoft             *float64                 `json:"cost_limit_soft,omitempty"`
-	CostLimitHard             *float64                 `json:"cost_limit_hard,omitempty"`
-	Supervisor                *string                  `json:"supervisor,omitempty"` // empty string to clear
-	SupervisorTimeout         *string                  `json:"supervisor_timeout,omitempty"`
-	SupervisorContextMessages *int                     `json:"supervisor_context_messages,omitempty"`
-	SupervisorBodyExcerptLen  *int                     `json:"supervisor_body_excerpt_len,omitempty"`
-	SupervisorToolDescLen     *int                     `json:"supervisor_tool_desc_len,omitempty"`
-	ReviewerModel             *string                  `json:"reviewer_model,omitempty"`
-	ReviewerProvider          *string                  `json:"reviewer_provider,omitempty"`
-	ReviewMaxIterations       *int                     `json:"review_max_iterations,omitempty"`
-	ReviewTimeout             *string                  `json:"review_timeout,omitempty"`
-	NudgeMemoryInterval       *int                     `json:"nudge_memory_interval,omitempty"`
-	NudgeSkillInterval        *int                     `json:"nudge_skill_interval,omitempty"`
+	Name                       *string                  `json:"name,omitempty"`
+	SessionTier                *string                  `json:"session_tier,omitempty"`
+	LLMProvider                *string                  `json:"llm_provider,omitempty"`
+	LLMModel                   *string                  `json:"llm_model,omitempty"`
+	Description                *string                  `json:"description,omitempty"`
+	MaxToolRounds              *int                     `json:"max_tool_rounds,omitempty"`
+	BrowserURLAllowlist        *[]string                `json:"browser_url_allowlist,omitempty"`
+	Fallbacks                  *[]config.FallbackConfig `json:"fallbacks,omitempty"`
+	CostLimitSoft              *float64                 `json:"cost_limit_soft,omitempty"`
+	CostLimitHard              *float64                 `json:"cost_limit_hard,omitempty"`
+	Supervisor                 *string                  `json:"supervisor,omitempty"` // empty string to clear
+	SupervisorTimeout          *string                  `json:"supervisor_timeout,omitempty"`
+	SupervisorContextMessages  *int                     `json:"supervisor_context_messages,omitempty"`
+	SupervisorBodyExcerptLen   *int                     `json:"supervisor_body_excerpt_len,omitempty"`
+	SupervisorToolDescLen      *int                     `json:"supervisor_tool_desc_len,omitempty"`
+	SupervisorDecider          *string                  `json:"supervisor_decider,omitempty"`            // [[llm.deciders]] name; empty string to clear
+	SupervisorDeciderMode      *string                  `json:"supervisor_decider_mode,omitempty"`       // "shadow" or "enforce"
+	SupervisorDeciderApproveAt *float64                 `json:"supervisor_decider_approve_at,omitempty"` // 0 = default 0.95
+	SupervisorDeciderDenyAt    *float64                 `json:"supervisor_decider_deny_at,omitempty"`    // 0 = default 0.05
+	ReviewerModel              *string                  `json:"reviewer_model,omitempty"`
+	ReviewerProvider           *string                  `json:"reviewer_provider,omitempty"`
+	ReviewMaxIterations        *int                     `json:"review_max_iterations,omitempty"`
+	ReviewTimeout              *string                  `json:"review_timeout,omitempty"`
+	NudgeMemoryInterval        *int                     `json:"nudge_memory_interval,omitempty"`
+	NudgeSkillInterval         *int                     `json:"nudge_skill_interval,omitempty"`
 }
 
 // handleAgentConfigUpdate godoc
 // @Summary Update agent configuration
-// @Description Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, etc.
+// @Description Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, supervisor decider, etc.
 // @Tags agents
 // @Accept json
 // @Produce json
@@ -87,6 +91,12 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		e = s.deps.Dispatcher.Agent(name)
 	}
 
+	decider, err := s.planDeciderUpdate(name, &input)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	// Apply runtime changes to the engine.
 	if httpStatus, errMsg := applyAgentRuntimeChanges(e, &input); httpStatus != 0 {
 		writeJSON(w, httpStatus, map[string]string{"error": errMsg})
@@ -98,6 +108,7 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 		return
 	}
+	decider.apply(e)
 
 	// Sync per-agent cost limits to the live CostTracker.
 	if input.CostLimitSoft != nil || input.CostLimitHard != nil {
@@ -361,6 +372,7 @@ func addSupervisorConfigChanges(changes map[string]any, input *agentConfigUpdate
 	if input.SupervisorToolDescLen != nil {
 		changes["supervisor_tool_desc_len"] = *input.SupervisorToolDescLen
 	}
+	addDeciderConfigChanges(changes, input)
 }
 
 func addReviewerConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
@@ -516,6 +528,7 @@ func applySupervisorFields(ac *config.AgentInstanceConfig, input *agentConfigUpd
 	if input.SupervisorToolDescLen != nil {
 		ac.SupervisorToolDescLen = *input.SupervisorToolDescLen
 	}
+	applyDeciderFields(ac, input)
 }
 
 func applyReviewerFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {

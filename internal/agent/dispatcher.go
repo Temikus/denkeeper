@@ -1458,13 +1458,14 @@ type supervisorStatusRender struct {
 var supervisorStatusRenders = map[string]supervisorStatusRender{
 	"supervisor_approved": {
 		debugText: func(evt ChatEvent) string {
-			return fmt.Sprintf("Tool **%s** approved by supervisor", evt.Tool)
+			// evt.Text names the stage (supervisor or decider) that approved.
+			return fmt.Sprintf("Tool **%s**: %s", evt.Tool, evt.Text)
 		},
 		alogLine: func(_ ChatEvent) string { return "auto-approved" },
 	},
 	"supervisor_denied": {
 		debugText: func(evt ChatEvent) string {
-			return fmt.Sprintf("Tool **%s** denied by supervisor: %s", evt.Tool, evt.Text)
+			return fmt.Sprintf("Tool **%s**: %s", evt.Tool, evt.Text)
 		},
 		alogLine: func(evt ChatEvent) string { return "❌ denied: " + evt.Text },
 	},

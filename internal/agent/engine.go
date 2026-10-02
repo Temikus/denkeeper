@@ -3332,8 +3332,8 @@ func approvalDenied(text string) approvalOutcome {
 }
 
 // resolveSupervisedApproval runs the approval chain for supervised tool calls:
-// auto-approve rules → decider (shadow, audit only) → supervisor review →
-// human approval.
+// auto-approve rules → decider (acts in enforce mode, audit only in shadow) →
+// supervisor review → human approval.
 func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	// Stage 1: Auto-approve rules.
 	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
@@ -3358,9 +3358,13 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	}
 	in := e.gatherSupervisorInput(ctx, tc, convID)
 
-	// Stage 2: Decider. Shadow only: audited, never changes the outcome.
+	// Stage 2: Decider. ok only for a successful enforce-mode verdict.
 	if stage != nil {
-		e.runSupervisorDecider(ctx, stage, in, convID)
+		if decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID); ok {
+			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, tc, round, onEvent); done {
+				return outcome
+			}
+		}
 	}
 
 	// Stage 3: Supervisor agent review.

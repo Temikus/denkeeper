@@ -3,13 +3,17 @@
 package integration
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -538,6 +542,77 @@ session_tier = "supervised"
 	}
 	if !strings.Contains(string(content), "cost_limit_hard") {
 		t.Errorf("cost_limit_hard not found in TOML:\n%s", content)
+	}
+}
+
+type noopDecisionProvider struct{}
+
+func (noopDecisionProvider) Decide(context.Context, llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	return &llm.DecisionResponse{}, nil
+}
+
+// The decider fields written by PATCH must leave a config the next start
+// accepts, with the values that were sent.
+func TestAgentConfig_UpdateSupervisorDecider_PersistsLoadableTOML(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	initialConfig := `
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm]
+default_provider = "or"
+
+[[llm.providers]]
+name = "or"
+type = "openrouter"
+api_key = "sk-or-test"
+
+[[llm.deciders]]
+name = "jev"
+provider = "or"
+model = "typesafe/jev-1.13"
+
+[[agents]]
+name = "default"
+persona_dir = "` + filepath.Join(dir, "persona") + `"
+adapters = ["telegram"]
+session_tier = "supervised"
+`
+	if err := os.WriteFile(cfgPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	h := NewHarness(t, &HarnessOpts{
+		Agents:     []agentSetup{{Name: "default", Tier: "supervised"}},
+		ConfigPath: cfgPath,
+		Deciders: []*llm.Decider{llm.NewDecider(llm.DeciderConfig{
+			Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", Timeout: time.Second,
+		}, noopDecisionProvider{}, nil)},
+	})
+
+	rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default", map[string]any{
+		"supervisor_decider":            "jev",
+		"supervisor_decider_mode":       "enforce",
+		"supervisor_decider_approve_at": 0.9,
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if d := h.Dispatcher.Agent("default").SupervisorDecider(); d == nil || d.Name() != "jev" {
+		t.Fatalf("live decider = %v, want jev", d)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("the persisted config does not load: %v", err)
+	}
+	a := cfg.Agents[0]
+	if a.SupervisorDecider != "jev" || a.SupervisorDeciderMode != "enforce" ||
+		a.SupervisorDeciderApproveAt != 0.9 || a.SupervisorDeciderDenyAt != 0.05 {
+		t.Errorf("loaded decider = %q/%q/%v/%v, want jev/enforce/0.9/0.05",
+			a.SupervisorDecider, a.SupervisorDeciderMode, a.SupervisorDeciderApproveAt, a.SupervisorDeciderDenyAt)
 	}
 }
 

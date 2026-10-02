@@ -21,6 +21,7 @@ import (
 // sharing one cost tracker, and returns both engines and the tracker.
 type supervisorCostHarness struct {
 	engine   *Engine
+	primary  *sequentialProvider
 	tracker  *llm.CostTracker
 	auditor  *collectingAuditor
 	teardown func()
@@ -41,7 +42,8 @@ func newSupervisorCostHarness(t *testing.T, limits llm.SessionLimits, primaryRes
 	tracker := llm.NewCostTracker(limits, nil)
 
 	router := llm.NewRouter("mock", "test-model", tracker)
-	router.RegisterProvider(&sequentialProvider{responses: primaryResponses})
+	primary := &sequentialProvider{responses: primaryResponses}
+	router.RegisterProvider(primary)
 
 	supRouter := llm.NewRouter("mock", "sup-model", tracker)
 	supRouter.RegisterProvider(&sequentialProvider{responses: supervisorResponses})
@@ -69,6 +71,7 @@ func newSupervisorCostHarness(t *testing.T, limits llm.SessionLimits, primaryRes
 
 	return &supervisorCostHarness{
 		engine:  engine,
+		primary: primary,
 		tracker: tracker,
 		auditor: auditor,
 		teardown: func() {

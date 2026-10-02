@@ -275,6 +275,116 @@ describe('Agents permission config', () => {
     })
   })
 
+  // Renders the supervised "default" agent with one configured decision model
+  // and returns a getter for the body of the next PATCH.
+  function setupDeciderAgent(agentFields = {}) {
+    const agent = {
+      name: 'default', model: 'claude-3-opus', permission_tier: 'supervised',
+      skill_count: 0, has_tools: false, max_tool_rounds: 50, fallbacks: [],
+      persona_sections: {}, adapters: [], tool_names: [], ...agentFields,
+    }
+    let patchBody = null
+    server.use(
+      http.get('/api/v1/agents/:name', () => HttpResponse.json(agent)),
+      http.get('/api/v1/agents', () => HttpResponse.json([
+        { name: 'default', permission_tier: 'supervised', skill_count: 0, has_tools: false, fallbacks: [] },
+      ])),
+      http.get('/api/v1/llm/providers', () => HttpResponse.json({
+        default_provider: 'openrouter',
+        providers: [{ name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true }],
+        deciders: [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }],
+      })),
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ ok: true })
+      })
+    )
+    render(Agents)
+    return () => patchBody
+  }
+
+  test('selecting a decision model in enforce mode sends the decider fields', async () => {
+    const patchBody = setupDeciderAgent()
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Decision Model'))
+
+    // Mode and thresholds stay hidden until a decision model is chosen.
+    expect(screen.queryByLabelText('Decision Model Mode')).toBeNull()
+
+    await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: 'jev' } })
+    expect(screen.queryByTestId('decider-enforce-warning')).toBeNull()
+    await fireEvent.change(screen.getByLabelText('Decision Model Mode'), { target: { value: 'enforce' } })
+    expect(screen.getByTestId('decider-enforce-warning').textContent).toContain('with no review')
+    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '0.9' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).not.toBeNull())
+    expect(patchBody()).toEqual({
+      supervisor_decider: 'jev',
+      supervisor_decider_mode: 'enforce',
+      supervisor_decider_approve_at: 0.9,
+    })
+  })
+
+  test('decision model fields load from the agent and clearing sends an empty name', async () => {
+    const patchBody = setupDeciderAgent({
+      supervisor_decider: 'jev', supervisor_decider_mode: 'enforce',
+      supervisor_decider_approve_at: 0.9, supervisor_decider_deny_at: 0.1,
+    })
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Decision Model Mode'))
+
+    expect(screen.getByLabelText('Decision Model').value).toBe('jev')
+    expect(screen.getByLabelText('Decision Model Mode').value).toBe('enforce')
+    expect(screen.getByLabelText('Approve Threshold').value).toBe('0.9')
+    expect(screen.getByLabelText('Deny Threshold').value).toBe('0.1')
+
+    await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).not.toBeNull())
+    expect(patchBody()).toEqual({ supervisor_decider: '' })
+  })
+
+  test('out-of-order decision model thresholds show an error and block saving', async () => {
+    setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow' })
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Approve Threshold'))
+
+    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '0.2' } })
+    await fireEvent.input(screen.getByLabelText('Deny Threshold'), { target: { value: '0.5' } })
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('0 < deny threshold < approve threshold < 1'))
+    expect(screen.getByText('Save').disabled).toBe(true)
+  })
+
+  test('leaving the supervised tier clears a configured decision model', async () => {
+    const patchBody = setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow' })
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Permission Tier'))
+
+    await fireEvent.change(screen.getByLabelText('Permission Tier'), { target: { value: 'autonomous' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).not.toBeNull())
+    expect(patchBody()).toEqual({ session_tier: 'autonomous', supervisor_decider: '' })
+  })
+
+  test('decision model control is hidden when no deciders are configured', async () => {
+    render(Agents)
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Permission Tier'))
+    await fireEvent.change(screen.getByLabelText('Permission Tier'), { target: { value: 'supervised' } })
+    await waitFor(() => screen.getByLabelText('Supervisor Agent'))
+
+    expect(screen.queryByLabelText('Decision Model')).toBeNull()
+  })
+
   test('changing provider and saving sends llm_provider in PATCH', async () => {
     let patchBody = null
     server.use(
