@@ -3,7 +3,7 @@ title: "CLI Reference"
 description: "Denkeeper command-line interface reference."
 slug: "cli"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-10-02T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -17,16 +17,17 @@ toc: true
 | `denkeeper version` | Print version information |
 | `denkeeper keys` | Manage REST API keys |
 | `denkeeper sessions` | Inspect and prune conversation sessions |
+| `denkeeper decide` | Calibrate decision models against recorded supervisor reviews |
 | `denkeeper passwd` | Generate a bcrypt hash for dashboard login |
 | `denkeeper plugin` | Ed25519 plugin signing |
 
 ## Flags
 
-`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, and `sessions`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
+`--config` / `-c` is accepted by the commands that read the config file — `serve`, `keys`, `sessions`, and `decide`. It is not a root-level flag, so `denkeeper --config ... <command>` will not work; put it after the subcommand instead.
 
 | Flag | Available on | Description |
 |---|---|---|
-| `--config PATH`, `-c` | `serve`, `keys`, `sessions` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
+| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `decide` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
 | `--help` | all commands | Print help |
 
 There is no `--version` flag. Use the `denkeeper version` subcommand.
@@ -149,6 +150,45 @@ denkeeper sessions prune --older-than 720h --yes
 |---|---|
 | `--older-than` | Duration threshold (e.g., `720h` for 30 days). Required. |
 | `--yes`, `-y` | Skip confirmation prompt |
+
+## `denkeeper decide`
+
+Work with the decision models configured under `[[llm.deciders]]`.
+
+### `denkeeper decide replay`
+
+Re-score an agent's recorded supervisor reviews with a decider and report how often the two agree. Use it to pick `supervisor_decider_approve_at` and `supervisor_decider_deny_at` from existing audit history. It is read-only: nothing is written to the audit log and no approval outcome changes.
+
+```bash
+denkeeper decide replay --agent default
+denkeeper decide replay --agent default --since 2026-09-01 --decider jev --limit 200
+denkeeper decide replay --agent default --format json > replay.json
+```
+
+| Flag | Description |
+|---|---|
+| `--agent` | Agent whose supervisor reviews to replay. Required. |
+| `--decider` | `[[llm.deciders]]` name (default: the agent's `supervisor_decider`) |
+| `--since` | Replay reviews from this date, `2006-01-02` or RFC3339 (default: 30 days ago) |
+| `--approve-at`, `--deny-at` | Thresholds for the agreement table (default: the agent's configured values) |
+| `--limit` | Maximum reviews to replay, newest first (default: 500) |
+| `--show` | Disagreements to list (default: 20) |
+| `--concurrency` | Parallel decider calls (default: 4) |
+| `--format`, `-f` | Output format: `text` (default) or `json` |
+
+The report has four parts:
+
+- **Agreement table:** the decider's verdict (approve, escalate, deny) against the supervisor's, at the chosen thresholds.
+- **Threshold sweep:** for each `approve_at`, how many calls the decider would approve and how many of those the supervisor did not; for each `deny_at`, how many it would deny and how many of those the supervisor approved.
+- **Disagreements:** decider approvals the supervisor denied or escalated come first, then decider denials the supervisor approved.
+- **Latency and cost:** p50 and p95 per call, and the total provider-reported cost of the replay.
+
+Two things to know before running it:
+
+- **Egress:** each replayed review sends its tool arguments and the recent messages before it to the decider's provider, and each call is billed.
+- **Thinner input than a live review:** the audit log does not record the tool description, server guidance, or skill context, and a conversation that was cleared, compacted, or pruned has no user request to recover. Treat replay as indicative. The `source = "decider:<name>"` audit events written by shadow mode are the authoritative comparison.
+
+Only reviews that ended in a supervisor verdict are replayed. Failed reviews and calls that went straight to a human are not in the set.
 
 ## `denkeeper passwd`
 
