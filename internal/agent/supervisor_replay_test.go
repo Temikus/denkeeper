@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -129,5 +131,45 @@ func TestMemoryStore_GetMessagesBefore(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Content != "second" || got[1].Content != "third" {
 		t.Errorf("messages = %+v, want [second third]", got)
+	}
+}
+
+func TestOpenSQLiteMemoryStoreReadOnly_ReadsButRejectsWrites(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "with space", "memory.db")
+	rw, err := NewSQLiteMemoryStore(path)
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	convID, err := rw.GetOrCreateConversation(ctx, "telegram", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rw.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rw.Close()
+
+	ro, err := OpenSQLiteMemoryStoreReadOnly(path)
+	if err != nil {
+		t.Fatalf("OpenSQLiteMemoryStoreReadOnly: %v", err)
+	}
+	defer func() { _ = ro.Close() }()
+	got, err := ro.GetMessagesBefore(ctx, convID, time.Now().Add(time.Minute), 5)
+	if err != nil || len(got) != 1 || got[0].Content != "hello" {
+		t.Errorf("read = %+v, err %v; want the stored message", got, err)
+	}
+	if _, err := ro.AddMessage(ctx, convID, StoredMessage{Role: "user", Content: "nope"}); err == nil {
+		t.Error("write through a read-only store succeeded")
+	}
+}
+
+func TestOpenSQLiteMemoryStoreReadOnly_MissingFileIsNotCreated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	if _, err := OpenSQLiteMemoryStoreReadOnly(path); err == nil {
+		t.Fatal("opening a missing database succeeded")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("missing database was created (stat err = %v)", err)
 	}
 }

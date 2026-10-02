@@ -106,7 +106,7 @@ func runDecideReplay(w, progress io.Writer, f replayFlags) error {
 		return fmt.Errorf("opening audit log at %s: %w", auditPath, err)
 	}
 	defer func() { _ = auditStore.Close() }()
-	memory, err := agent.NewSQLiteMemoryStore(cfg.Memory.DBPath)
+	memory, err := agent.OpenSQLiteMemoryStoreReadOnly(cfg.Memory.DBPath)
 	if err != nil {
 		return fmt.Errorf("opening memory store at %s: %w", cfg.Memory.DBPath, err)
 	}

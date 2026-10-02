@@ -512,6 +512,24 @@ func NewSQLiteMemoryStore(dbPath string) (*SQLiteMemoryStore, error) {
 	return &SQLiteMemoryStore{db: db}, nil
 }
 
+// OpenSQLiteMemoryStoreReadOnly opens an existing database for reading only:
+// no schema setup, no migrations, and a missing file is an error rather than
+// a new database.
+func OpenSQLiteMemoryStoreReadOnly(dbPath string) (*SQLiteMemoryStore, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	db, err := sqlx.Open("sqlite", dbPath+"?_pragma=query_only(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("opening database read-only: %w", err)
+	}
+	return &SQLiteMemoryStore{db: db}, nil
+}
+
 // NewInMemoryStore creates an in-memory SQLite store (for testing).
 func NewInMemoryStore() (*SQLiteMemoryStore, error) {
 	db, err := sqlx.Open("sqlite", ":memory:")
