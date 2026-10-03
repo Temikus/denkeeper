@@ -948,6 +948,7 @@ func (m *Manager) ToolServer(toolName string) string {
 // safe to memoize within one turn. Keyed by MCP tool name; consulted only for
 // session-registered (in-process) servers.
 var builtinIdempotentTools = map[string]bool{
+	"decide":     true,
 	"kv_get":     true,
 	"kv_list":    true,
 	"web_fetch":  true,
@@ -964,6 +965,7 @@ var builtinReadOnlyTools = map[string]bool{
 	"browser_profile_list": true,
 	"channel_info":         true,
 	"channel_list":         true,
+	"decide":               true,
 	"get_cost_summary":     true,
 	"kv_get":               true,
 	"kv_list":              true,

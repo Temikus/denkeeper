@@ -437,3 +437,54 @@ judge_decider = "jev"
 		t.Errorf("eval = %+v, want both judge keys kept", cfg.Eval)
 	}
 }
+
+func TestDecideTool_OffWithoutDecider(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Decide.DecideEnabled() {
+		t.Error("DecideEnabled() = true without a decider, want false")
+	}
+}
+
+func TestDecideTool_OnWhenDeciderNamed(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider + `
+[decide]
+decider = "jev"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !cfg.Decide.DecideEnabled() {
+		t.Error("DecideEnabled() = false with a decider named, want true")
+	}
+}
+
+func TestDecideTool_ExplicitDisable(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider + `
+[decide]
+enabled = false
+decider = "jev"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Decide.DecideEnabled() {
+		t.Error("DecideEnabled() = true with enabled = false, want false")
+	}
+}
+
+func TestDecideTool_UnknownDecider(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[decide]
+decider = "nope"
+`, `[decide]: decider "nope" does not match`)
+}
+
+func TestDecideTool_EnabledWithoutDeciderRejected(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[decide]
+enabled = true
+`, `[decide]: enabled is true but decider is not set`)
+}

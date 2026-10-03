@@ -125,6 +125,31 @@ The default of 0.9 is a probability, not a confidence. TypeSafe's confidence for
 
 Two limits of the model matter here more than for a tool review. TypeSafe notes that accuracy falls as the state grows with content unrelated to the decision, and a blinded pair carries both full tool traces; a decider alone is therefore best on chat-heavy sets, with `judge_model` behind it for tool-heavy ones. And a decision model is not trained on text, so the `persona_fit` and `length` dimensions lean harder on its criteria than `task_success` does. The pair view shows which judge called each item, and the operator agreement figure is the check.
 
+## As an agent tool
+
+The same decider can be handed to agents as a `decide` tool, so a skill can classify, triage, route or filter with a cheap typed call instead of spending chat-model tokens on it:
+
+```toml
+[decide]
+decider = "jev"
+```
+
+The agent passes a `state` (any JSON value or a string) and a set of questions keyed by an id of its choosing, each with a `type`:
+
+| Type | Asks for | Criteria |
+|---|---|---|
+| `noul` | The probability (0 to 1) that the statement in `instructions` is true | optional `choices` keyed `true`/`false` |
+| `choice` | One of 2 to 255 options, with a probability for each | `choices`: option id to description |
+| `score` | A rating on 2 to 10 ordered levels | `levels`, worst first |
+
+Instructions can reference state fields by path, such as `` `message.subject` ``. The answer is JSON: the answers keyed by question id, the model, and the call's cost.
+
+A malformed question, an input over the decider's `max_input_tokens`, a timeout, the agent's cost limit, or a provider error comes back to the agent as a tool error that says what to change. The input is never truncated.
+
+The tool only reads, so it is available in the `restricted` tier and in dry runs, and a repeated identical call within one turn is answered from cache. Spend is billed to the calling agent, bucketed per day since a tool call carries no conversation, and counts against that agent's cost limits. The same data-egress point applies: whatever state the agent passes goes to the decider's provider.
+
+Like the other decider stages, naming or changing `[decide] decider` in the TOML needs a restart.
+
 ## Things to weigh
 
 - **Data egress:** tool arguments and recent messages are sent to the decider's provider, an additional data processor. As the eval judge it also receives the blinded pairs, including tool results on both sides.

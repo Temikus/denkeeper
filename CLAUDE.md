@@ -105,6 +105,7 @@ Every user-facing feature gets thoughtful UX:
 | Channels | `internal/agent/channel.go`, `dispatcher.go` | `[[channels]]` |
 | MCP Server | `internal/mcpserver/` | `[api.mcp_server]` |
 | Script MCP | `internal/scriptmcp/` | `[script]` |
+| Decide tool | `internal/decidemcp/` | `[decide]` |
 | Dry run / evals | `internal/agent/execpolicy.go`, `internal/api/dryrun.go` | `[eval]` |
 | Eval task sets & runner | `internal/eval/` | `[eval]` |
 | Eval pairing, judging, verdict | `internal/eval/pairing.go`, `judging.go`, `verdict.go`, `internal/mcpserver/tools_eval.go` | `[eval]` |
@@ -122,7 +123,7 @@ Subsystem-specific invariants live in `.claude/rules/*.md`, each scoped with `pa
 |---|---|---|
 | `agent-engine.md` | Engine knobs, tool loop, stop reasons & wrap-up, reply guard, telemetry attribution, channels, memoization, date injection | `internal/agent/**`, `internal/scheduler/**`, `main.go` |
 | `eval-dryrun.md` | ExecPolicy isolation, router overlays, eval runs, pairing, blinding, judging, verdicts | `internal/eval/**`, `execpolicy.go`, `api/dryrun.go` |
-| `mcp-tools.md` | MCP health/drain teardown, tool-name collisions, OAuth, stdio env scoping, `run_javascript`, `web_fetch`, `kv_list` | `internal/tool/**`, `scriptmcp/**`, `webmcp/**`, `kv/**` |
+| `mcp-tools.md` | MCP health/drain teardown, tool-name collisions, OAuth, stdio env scoping, `run_javascript`, `decide`, `web_fetch`, `kv_list` | `internal/tool/**`, `scriptmcp/**`, `decidemcp/**`, `webmcp/**`, `kv/**` |
 | `skills.md` | Skill frontmatter writer, config-MCP dep gating, undo journal, skill-file IO hardening | `internal/configmcp/**`, `skilleffect/**` |
 | `rest-api.md` | Endpoint map, scopes, streaming events, OpenAPI generation gate | `internal/api/**` |
 | `approval.md` | Tiers, approval flow, auto-approve scopes, supervisor agents | `internal/approval/**` |

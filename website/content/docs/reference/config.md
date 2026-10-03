@@ -324,6 +324,17 @@ Bounds for the in-process `run_javascript` tool, which runs short ES5.1 snippets
 There is no per-VM heap cap. `max_concurrent` bounds the memory multiplier but is not a hard ceiling — lower it if you run on constrained hardware.
 {{< /callout >}}
 
+## `[decide]`
+
+Gives every agent an in-process `decide` tool that puts typed questions about a JSON `state` to a [decision model](/docs/concepts/deciders/#as-an-agent-tool) and returns probabilities. Off until a decider is named.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `decider` | string | — | `[[llm.deciders]]` entry the tool calls. Empty means no tool |
+| `enabled` | bool | `true` | Switch the tool off without unnaming the decider. `true` without a `decider` is rejected |
+
+The tool is classified read-only, so it is available in the `restricted` tier and in dry runs, and identical calls within one turn are served from cache. Spend is billed to the calling agent under a per-day session key and counts against its cost limits. The state an agent passes goes to the decider's provider. Restart-only, like `[script]`: the decider is one of the clients built at startup.
+
 ## `[skills]`
 
 | Key | Type | Default | Description |

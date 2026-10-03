@@ -29,6 +29,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/browser"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
+	"github.com/Temikus/denkeeper/internal/decidemcp"
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
@@ -1096,6 +1097,46 @@ func connectScriptMCP(ctx context.Context, agentName string, cfg *config.Config,
 	return nil
 }
 
+// connectInProcessTools registers the per-agent in-process tool servers that
+// need no engine wiring beyond the permission tier: web, script and decide.
+func connectInProcessTools(ctx context.Context, agentName string, permTier func() string, toolMgr *tool.Manager, abc agentBuildCtx) error {
+	if err := connectWebMCP(ctx, agentName, abc.cfg, permTier, toolMgr, abc.logger); err != nil {
+		return err
+	}
+	if err := connectScriptMCP(ctx, agentName, abc.cfg, permTier, abc.scriptSem, toolMgr, abc.logger); err != nil {
+		return err
+	}
+	return connectDecideMCP(ctx, agentName, abc.cfg, abc.llm.deciders, toolMgr, abc.logger)
+}
+
+// connectDecideMCP creates the per-agent Decide MCP server (decide) and
+// registers it with the agent's tool manager. The decider is one of the
+// clients built at startup, so a [decide] change in the TOML needs a restart.
+func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config, deciders map[string]*llm.Decider, toolMgr *tool.Manager, logger *slog.Logger) error {
+	if !cfg.Decide.DecideEnabled() {
+		return nil
+	}
+	d := startedDecider(cfg, deciders, cfg.Decide.Decider)
+	if d == nil {
+		logger.Warn("decide tool not registered: decider not bound; restart to apply", "agent", agentName, "decider", cfg.Decide.Decider)
+		return nil
+	}
+	srv := decidemcp.New(decidemcp.Deps{
+		Decider:   d,
+		AgentName: agentName,
+		Logger:    logger,
+	})
+	session, err := srv.Connect(ctx)
+	if err != nil {
+		return fmt.Errorf("starting decide MCP for agent %q: %w", agentName, err)
+	}
+	if err := toolMgr.RegisterSession(ctx, "decide-"+agentName, session); err != nil {
+		return fmt.Errorf("registering decide MCP for agent %q: %w", agentName, err)
+	}
+	logger.Info("decide MCP registered", "agent", agentName, "decider", d.Name())
+	return nil
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
@@ -1400,11 +1441,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 
 	seedSkillProvenance(ctx, ac.Name, sr.skills, abc.memory, abc.logger)
 
-	if err := connectWebMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, agentToolMgr, abc.logger); err != nil {
-		return nil, nil, err
-	}
-
-	if err := connectScriptMCP(ctx, ac.Name, abc.cfg, e.PermissionTier, abc.scriptSem, agentToolMgr, abc.logger); err != nil {
+	if err := connectInProcessTools(ctx, ac.Name, e.PermissionTier, agentToolMgr, abc); err != nil {
 		return nil, nil, err
 	}
 
