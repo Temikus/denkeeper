@@ -11,6 +11,45 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
+func noFiles(string) bool { return false }
+
+func envOf(m map[string]string) func(string) string {
+	return func(k string) string { return m[k] }
+}
+
+func TestDetectProcessManager_Terminal(t *testing.T) {
+	if detectProcessManager(envOf(nil), noFiles) {
+		t.Error("a plain terminal run was reported as managed")
+	}
+}
+
+func TestDetectProcessManager_Systemd(t *testing.T) {
+	if !detectProcessManager(envOf(map[string]string{"INVOCATION_ID": "abc"}), noFiles) {
+		t.Error("systemd not detected")
+	}
+}
+
+func TestDetectProcessManager_Kubernetes(t *testing.T) {
+	if !detectProcessManager(envOf(map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}), noFiles) {
+		t.Error("kubernetes not detected")
+	}
+}
+
+func TestDetectProcessManager_BrewServicesOnly(t *testing.T) {
+	if !detectProcessManager(envOf(map[string]string{"XPC_SERVICE_NAME": "homebrew.mxcl.denkeeper"}), noFiles) {
+		t.Error("brew services not detected")
+	}
+	if detectProcessManager(envOf(map[string]string{"XPC_SERVICE_NAME": "com.apple.Terminal"}), noFiles) {
+		t.Error("an unrelated launchd job was reported as managed")
+	}
+}
+
+func TestDetectProcessManager_Container(t *testing.T) {
+	if !detectProcessManager(envOf(nil), func(p string) bool { return p == "/.dockerenv" }) {
+		t.Error("docker not detected")
+	}
+}
+
 func TestSyncProviders_AddsReplacesRemoves(t *testing.T) {
 	set := llm.NewProviderSet()
 	live := liveProviders{set: set}

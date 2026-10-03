@@ -2,25 +2,32 @@ package persona
 
 import "testing"
 
-func TestFormatIdentity_RoundTripThroughParseIdentity(t *testing.T) {
-	cases := []Identity{
-		{Name: "Den", Emoji: "🦊", Theme: "helpful general-purpose assistant", Body: "Extra notes."},
-		{Name: `Say "hi"`, Emoji: "🛰️", Theme: "key: value, with # and 'quotes'"},
-		{Name: "", Emoji: "", Theme: ""},
+// assertRoundTrip checks want survives FormatIdentity then ParseIdentity.
+func assertRoundTrip(t *testing.T, want Identity) {
+	t.Helper()
+	out, err := FormatIdentity(want)
+	if err != nil {
+		t.Fatalf("FormatIdentity(%+v): %v", want, err)
 	}
-	for _, want := range cases {
-		out, err := FormatIdentity(want)
-		if err != nil {
-			t.Fatalf("FormatIdentity(%+v): %v", want, err)
-		}
-		got, err := ParseIdentity(out)
-		if err != nil {
-			t.Fatalf("ParseIdentity(%q): %v", out, err)
-		}
-		if got.Name != want.Name || got.Emoji != want.Emoji || got.Theme != want.Theme || got.Body != want.Body {
-			t.Errorf("round trip = %+v, want %+v\n%s", *got, want, out)
-		}
+	got, err := ParseIdentity(out)
+	if err != nil {
+		t.Fatalf("ParseIdentity(%q): %v", out, err)
 	}
+	if got.Name != want.Name || got.Emoji != want.Emoji || got.Theme != want.Theme || got.Body != want.Body {
+		t.Errorf("round trip = %+v, want %+v\n%s", *got, want, out)
+	}
+}
+
+func TestFormatIdentity_RoundTrip_WithBody(t *testing.T) {
+	assertRoundTrip(t, Identity{Name: "Den", Emoji: "🦊", Theme: "helpful general-purpose assistant", Body: "Extra notes."})
+}
+
+func TestFormatIdentity_RoundTrip_QuotesAndColons(t *testing.T) {
+	assertRoundTrip(t, Identity{Name: `Say "hi"`, Emoji: "🛰️", Theme: "key: value, with # and 'quotes'"})
+}
+
+func TestFormatIdentity_RoundTrip_Empty(t *testing.T) {
+	assertRoundTrip(t, Identity{})
 }
 
 func TestFormatIdentity_YAMLInjectionStaysScalar(t *testing.T) {

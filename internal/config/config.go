@@ -513,6 +513,11 @@ type APIConfig struct {
 	// (or skipped). Set via POST /api/v1/onboarding/wizard-complete.
 	WizardCompleted bool `toml:"wizard_completed"`
 
+	// WizardSkipped records that the wizard was left with "Set up later"
+	// rather than finished, so the dashboard keeps offering to resume it.
+	// Set via POST /api/v1/onboarding/wizard-skip; wizard-complete clears it.
+	WizardSkipped bool `toml:"wizard_skipped"`
+
 	// MCPServer configures the MCP server endpoint that allows external MCP
 	// clients (Claude Code, other AI tools) to interact with Denkeeper agents.
 	MCPServer APIMCPServerConfig `toml:"mcp_server"`

@@ -1806,6 +1806,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		MCPHandler:        mcpSrv.Handler(),
 		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, rt, a.logger),
 		RestartFunc:       selfRestartFunc,
+		RestartManaged:    detectProcessManager(os.Getenv, fileExists),
 		AgentFactory:      agentFactory,
 		Providers:         live,
 		Version:           version,
@@ -2390,6 +2391,26 @@ func agentLocation(cfg *config.Config, ac config.AgentInstanceConfig) *time.Loca
 		return time.UTC
 	}
 	return loc
+}
+
+// detectProcessManager reports whether something will start the process again
+// after selfRestartFunc stops it. A heuristic: the UI only uses it to choose
+// between "restarting…" and "run denkeeper serve again" copy.
+func detectProcessManager(getenv func(string) string, exists func(string) bool) bool {
+	switch {
+	case getenv("INVOCATION_ID") != "": // systemd
+		return true
+	case getenv("KUBERNETES_SERVICE_HOST") != "":
+		return true
+	case strings.HasPrefix(getenv("XPC_SERVICE_NAME"), "homebrew.mxcl."): // brew services
+		return true
+	}
+	return exists("/.dockerenv") || exists("/run/.containerenv")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // selfRestartFunc sends SIGTERM to the current process so that a process

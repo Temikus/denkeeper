@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Temikus/denkeeper/internal/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -101,13 +103,34 @@ func TestOnboarding_StepDetection_AdapterMissing(t *testing.T) {
 	}
 }
 
+// addUsableProvider gives the harness config a default provider instance
+// that has a key, which is what the provider step counts as done.
+func addUsableProvider(h *Harness, name string) {
+	h.Config().LLM.DefaultProvider = name
+	h.Config().LLM.Providers = append(h.Config().LLM.Providers,
+		config.ProviderInstanceConfig{Name: name, Type: name, APIKey: "k"})
+}
+
 func TestOnboarding_StepDetection_ProviderSet(t *testing.T) {
 	h := NewHarness(t, nil)
-	h.Config().LLM.DefaultProvider = "anthropic"
+	addUsableProvider(h, "anthropic")
 
 	resp := getOnboarding(t, h)
 	if !stepMap(resp.Steps)["provider"] {
-		t.Error("provider step should be done when default_provider is set")
+		t.Error("provider step should be done when a provider instance has a key")
+	}
+}
+
+func TestOnboarding_StepDetection_DefaultProviderWithoutKey(t *testing.T) {
+	// The implicit openrouter default with no key cannot serve a request, so
+	// it must not tick the step.
+	h := NewHarness(t, nil)
+	h.Config().LLM.DefaultProvider = "openrouter"
+	h.Config().LLM.Providers = []config.ProviderInstanceConfig{{Name: "openrouter", Type: "openrouter"}}
+
+	resp := getOnboarding(t, h)
+	if stepMap(resp.Steps)["provider"] {
+		t.Error("provider step should be incomplete for a provider with no key")
 	}
 }
 
@@ -208,7 +231,7 @@ func TestOnboarding_ShowOnboarding_FalseWhenAllDone(t *testing.T) {
 			{Name: "default", Tier: "autonomous", Adapters: []string{"discord"}},
 		},
 	})
-	h.Config().LLM.DefaultProvider = "openrouter"
+	addUsableProvider(h, "openrouter")
 	h.Config().Agents[0].SkillsDir = skillsDir
 
 	resp := getOnboarding(t, h)
@@ -413,7 +436,7 @@ func TestOnboarding_FullLifecycle(t *testing.T) {
 	}
 
 	// Phase 2: add provider.
-	h.Config().LLM.DefaultProvider = "openrouter"
+	addUsableProvider(h, "openrouter")
 	resp = getOnboarding(t, h)
 	steps = stepMap(resp.Steps)
 	if !steps["provider"] {

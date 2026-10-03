@@ -19,11 +19,12 @@ type onboardingResponse struct {
 	Steps           []onboardingStep `json:"steps"`
 	Dismissed       bool             `json:"dismissed"`
 	WizardCompleted bool             `json:"wizard_completed"`
+	Wizard          wizardStatus     `json:"wizard"`
 }
 
 // handleOnboarding godoc
 // @Summary      Get onboarding status
-// @Description  Returns the onboarding checklist with five setup milestones (auth, agent, adapter, provider, skill) and whether the onboarding card should be displayed.
+// @Description  Returns the onboarding checklist with five setup milestones (auth, agent, adapter, provider, skill), whether the onboarding card should be displayed, and the setup wizard's four-step progress derived from config.
 // @Tags         onboarding
 // @Produce      json
 // @Security     BearerAuth
@@ -35,7 +36,7 @@ func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 	cfg := s.appConfig()
 	dismissed := cfg.API.OnboardingDismissed
 
-	steps := s.buildOnboardingSteps(r)
+	steps := s.buildOnboardingSteps(r, cfg)
 
 	allDone := true
 	for _, step := range steps {
@@ -50,12 +51,11 @@ func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 		Steps:           steps,
 		Dismissed:       dismissed,
 		WizardCompleted: cfg.API.WizardCompleted,
+		Wizard:          s.buildWizardStatus(cfg),
 	})
 }
 
-func (s *Server) buildOnboardingSteps(r *http.Request) []onboardingStep {
-	cfg := s.appConfig()
-
+func (s *Server) buildOnboardingSteps(r *http.Request, cfg *config.Config) []onboardingStep {
 	// auth: password OR OIDC configured OR API key exists
 	authDone := s.passwordHash != "" || s.oidcProvider != nil
 	if !authDone && s.deps.KeyStore != nil {
@@ -77,8 +77,9 @@ func (s *Server) buildOnboardingSteps(r *http.Request) []onboardingStep {
 		}
 	}
 
-	// provider: default LLM provider is set
-	providerDone := cfg.LLM.DefaultProvider != ""
+	// provider: an instance that can serve requests. default_provider alone
+	// proves nothing: older configs default it to openrouter with no key.
+	providerDone := usableProvider(cfg) != nil
 
 	// skill: at least one .md file in any agent's skills directory
 	skillDone := hasSkillFiles(cfg)
@@ -142,7 +143,7 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 
 // handleWizardComplete godoc
 // @Summary      Mark setup wizard complete
-// @Description  Persists wizard_completed=true to the TOML config so the post-auth setup wizard is not shown again.
+// @Description  Persists wizard_completed=true (and clears wizard_skipped) to the TOML config so the post-auth setup wizard is not shown again.
 // @Tags         onboarding
 // @Produce      json
 // @Security     BearerAuth
@@ -154,11 +155,15 @@ func (s *Server) handleOnboardingDismiss(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleWizardComplete(w http.ResponseWriter, r *http.Request) {
 	if err := config.UpdateAPIConfig(s.deps.ConfigPath, map[string]any{
 		"wizard_completed": true,
+		"wizard_skipped":   false,
 	}); err != nil {
 		s.logger.Error("persisting wizard complete", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist"})
 		return
 	}
-	s.deps.Config.Update(func(c *config.Config) { c.API.WizardCompleted = true })
+	s.deps.Config.Update(func(c *config.Config) {
+		c.API.WizardCompleted = true
+		c.API.WizardSkipped = false
+	})
 	w.WriteHeader(http.StatusNoContent)
 }

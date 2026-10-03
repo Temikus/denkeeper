@@ -75,6 +75,7 @@ type Deps struct {
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
+	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
 	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
@@ -369,6 +370,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/onboarding", s.RequireScope("admin", s.handleOnboarding))
 	mux.HandleFunc("POST /api/v1/onboarding/dismiss", s.RequireScope("admin", s.handleOnboardingDismiss))
 	mux.HandleFunc("POST /api/v1/onboarding/wizard-complete", s.RequireScope("admin", s.handleWizardComplete))
+	mux.HandleFunc("POST /api/v1/onboarding/wizard-skip", s.RequireScope("admin", s.handleWizardSkip))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)

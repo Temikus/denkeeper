@@ -11,19 +11,22 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
-func TestNew_EachType_NamedAfterInstance(t *testing.T) {
-	for _, typ := range []string{"anthropic", "openai", "openrouter", "ollama"} {
-		t.Run(typ, func(t *testing.T) {
-			p, err := New(config.ProviderInstanceConfig{Name: "my-" + typ, Type: typ, APIKey: "k"}, config.OpenRouterConfig{}, nil)
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
-			if p.Name() != "my-"+typ {
-				t.Errorf("Name() = %q, want my-%s", p.Name(), typ)
-			}
-		})
+// assertBuilds checks New builds typ under the instance's own name.
+func assertBuilds(t *testing.T, typ string) {
+	t.Helper()
+	p, err := New(config.ProviderInstanceConfig{Name: "my-" + typ, Type: typ, APIKey: "k"}, config.OpenRouterConfig{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if p.Name() != "my-"+typ {
+		t.Errorf("Name() = %q, want my-%s", p.Name(), typ)
 	}
 }
+
+func TestNew_Anthropic(t *testing.T)  { assertBuilds(t, "anthropic") }
+func TestNew_OpenAI(t *testing.T)     { assertBuilds(t, "openai") }
+func TestNew_OpenRouter(t *testing.T) { assertBuilds(t, "openrouter") }
+func TestNew_Ollama(t *testing.T)     { assertBuilds(t, "ollama") }
 
 func TestNew_UnknownType(t *testing.T) {
 	if _, err := New(config.ProviderInstanceConfig{Name: "x", Type: "nope"}, config.OpenRouterConfig{}, nil); err == nil {
