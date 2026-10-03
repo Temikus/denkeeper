@@ -348,6 +348,22 @@ describe('Agents permission config', () => {
     expect(patchBody()).toEqual({ supervisor_decider: '' })
   })
 
+  test('clearing a configured threshold sends 0 to restore the default', async () => {
+    const patchBody = setupDeciderAgent({
+      supervisor_decider: 'jev', supervisor_decider_mode: 'shadow',
+      supervisor_decider_approve_at: 0.9, supervisor_decider_deny_at: 0.05,
+    })
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Approve Threshold'))
+
+    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).not.toBeNull())
+    expect(patchBody()).toEqual({ supervisor_decider_approve_at: 0 })
+  })
+
   test('out-of-order decision model thresholds show an error and block saving', async () => {
     setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow' })
     await waitFor(() => screen.getByText('PERMISSION'))

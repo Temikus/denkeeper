@@ -287,8 +287,9 @@
   const DECIDER_DENY_DEFAULT = 0.05
 
   // An empty threshold input means "use the default"; the API takes 0 for that.
+  // Svelte sets a cleared number input to undefined.
   function thresholdValue(v) {
-    return v === '' || v === null ? 0 : Number(v)
+    return v === '' || v === null || v === undefined ? 0 : Number(v)
   }
 
   let deciderError = $derived.by(() => {

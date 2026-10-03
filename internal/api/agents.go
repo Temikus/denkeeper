@@ -80,6 +80,13 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Planned before the rename: a rejected decider must leave the name alone.
+	decider, err := s.planDeciderUpdate(name, &input)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	// Handle rename before other mutations.
 	if input.Name != nil && *input.Name != name {
 		code, msg := s.handleAgentRename(name, *input.Name)
@@ -89,12 +96,6 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		}
 		name = *input.Name
 		e = s.deps.Dispatcher.Agent(name)
-	}
-
-	decider, err := s.planDeciderUpdate(name, &input)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
 	}
 
 	// Apply runtime changes to the engine.

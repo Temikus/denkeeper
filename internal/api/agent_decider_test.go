@@ -196,6 +196,23 @@ func TestAgentConfigUpdate_TierChangeWithDeciderSetRejected(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUpdate_RejectedDeciderDoesNotRename(t *testing.T) {
+	deps := deciderDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := patchAgent(t, srv, map[string]any{"name": "renamed", "supervisor_decider": "nope"})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if deps.Dispatcher.Agent("default") == nil || deps.Dispatcher.Agent("renamed") != nil {
+		t.Error("the agent was renamed by a request that was rejected")
+	}
+	if got := deps.Config.Get().Agents[0].Name; got != "default" {
+		t.Errorf("stored name = %q, want default", got)
+	}
+}
+
 func TestLLMProviders_ListsDeciders(t *testing.T) {
 	srv := New(testConfig(allScopesKey()), deciderDeps(), testLogger())
 

@@ -1471,6 +1471,9 @@ var supervisorStatusRenders = map[string]supervisorStatusRender{
 	},
 	"supervisor_escalated": {
 		debugText: func(evt ChatEvent) string {
+			if evt.Text != "" {
+				return fmt.Sprintf("Tool **%s**: %s", evt.Tool, evt.Text)
+			}
 			return fmt.Sprintf("Supervisor escalated tool **%s** — awaiting your review", evt.Tool)
 		},
 		alogLine: func(_ ChatEvent) string { return "↑ escalated — awaiting your review" },
