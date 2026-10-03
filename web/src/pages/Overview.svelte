@@ -3,7 +3,7 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { navigate } from '../router.js'
-  import { showSetupReminder, refreshSetup } from '../setupStore.js'
+  import { setup, showSetupReminder, refreshSetup, openWizard } from '../setupStore.js'
   import SetupCard from '../components/SetupCard.svelte'
 
   let data = $state(null)
@@ -69,6 +69,12 @@
 
 {#if $showSetupReminder && !onboarding?.dismissed}
   <SetupCard onhide={dismissOnboarding} />
+{:else if $showSetupReminder}
+  <!-- Phones have no sidebar chip, so a hidden card leaves this line. -->
+  <button class="setup-mini" onclick={openWizard} data-testid="setup-mini">
+    <span>Setup · {$setup.doneCount} of {$setup.total}</span>
+    <span class="setup-mini-action">Resume</span>
+  </button>
 {:else if onboarding?.show_onboarding && !$showSetupReminder}
   <div class="onboarding-card">
     {#if onboarding.steps.every(s => !s.done)}
@@ -201,6 +207,25 @@
   .card.clickable:hover, .card.alert { border-color: var(--warn); }
   .label { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
   .value { font-size: 28px; font-weight: 700; }
+  .setup-mini { display: none; }
+  @media (max-width: 768px) {
+    .setup-mini {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .setup-mini-action { color: var(--accent); }
+  }
   .card.empty-card { border-style: dashed; }
   .card-hint { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 500; }
   .value.ok   { color: var(--success); }

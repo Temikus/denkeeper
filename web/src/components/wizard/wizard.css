@@ -29,7 +29,7 @@
 :root.dark .wizard .wz-input { background: var(--bg); }
 .wizard .wz-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12); }
 .wizard .wz-input.ok { border-color: var(--success); }
-.wizard .wz-input.bad { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(196, 58, 58, 0.1); }
+.wizard .wz-input.bad { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 12%, transparent); }
 .wizard .wz-input:disabled { opacity: 0.6; }
 .wizard .wz-input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wizard textarea.wz-input { resize: vertical; line-height: 1.6; }

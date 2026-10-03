@@ -28,10 +28,15 @@
   let rejected = $derived(draft.probe?.status === 'rejected')
   let unreachable = $derived(draft.probe?.status === 'unreachable')
 
+  // A name another provider already uses: saving would replace its key, so
+  // the user has to say so first.
+  let replaceConfirmed = $state(false)
+  let clash = $derived(!resumed && draft.saved !== draft.name.trim() && existing.includes(draft.name.trim()))
+
   $effect(() => {
     const keyGiven = !needsKey || !!draft.apiKey.trim()
     const probeBlocks = testing || ((rejected || unreachable) && !saveAnyway)
-    ready = keyGiven && !probeBlocks && !saving
+    ready = keyGiven && !probeBlocks && !saving && (!clash || replaceConfirmed)
   })
 
   onMount(async () => {
@@ -99,6 +104,12 @@
       return false
     }
     if (resumed) return true
+    if (clash && !replaceConfirmed) return false
+    // Enter can submit a typed key that was never blurred or pasted.
+    if (probeKey() !== lastTested && (!needsKey || draft.apiKey.trim())) {
+      await checkKey()
+      if ((rejected || unreachable) && !saveAnyway) return false
+    }
     saving = true
     try {
       const fields = {
@@ -246,6 +257,16 @@
       </div>
     {/if}
   </div>
+
+  {#if clash}
+    <div class="wz-panel" role="group" aria-label="Provider name in use" data-testid="wizard-provider-clash">
+      <p class="wz-hint">A provider named <strong>{draft.name.trim()}</strong> already exists. Saving replaces its {meta.needsKey ? 'key' : 'address'}.</p>
+      <p class="probe-actions">
+        <button type="button" class="wz-link" onclick={() => { replaceConfirmed = true }} disabled={replaceConfirmed} data-testid="wizard-provider-replace">{replaceConfirmed ? 'Will replace it' : 'Replace it'}</button>
+        <button type="button" class="wz-link muted" onclick={() => { advancedOpen = true; draft.nameEdited = true }}>Use a different name</button>
+      </p>
+    </div>
+  {/if}
 
   {#if error}<p class="inline-error" role="alert">{error}</p>{/if}
 </div>

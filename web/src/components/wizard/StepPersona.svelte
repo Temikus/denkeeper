@@ -87,7 +87,7 @@
       Describe it in your own words
     </label>
     {#if draft.tone === 'custom'}
-      <textarea class="wz-input" rows="2" maxlength="500" placeholder="e.g. dry-witted research partner who cites sources" bind:value={draft.customTheme} disabled={saving} data-testid="wizard-persona-theme"></textarea>
+      <textarea class="wz-input" rows="2" maxlength="500" aria-label="Describe the tone" placeholder="e.g. dry-witted research partner who cites sources" bind:value={draft.customTheme} disabled={saving} data-testid="wizard-persona-theme"></textarea>
     {/if}
   </fieldset>
 

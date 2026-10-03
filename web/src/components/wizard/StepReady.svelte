@@ -17,6 +17,7 @@
 
   let phase = $state('idle') // idle | restarting | back | timeout | error
   let restartError = $state('')
+  let confirmingStop = $state(false) // unmanaged only: stopping takes this page offline
   let cancelled = false
 
   const appLabel = $derived(chatApp ? chatApp.charAt(0).toUpperCase() + chatApp.slice(1) : '')
@@ -55,31 +56,40 @@
   {#if restartRequired && restart.available}
     <div class="wz-panel restart" data-testid="wizard-restart">
       {#if phase === 'back'}
-        <p class="wz-status ok">Restarted. {appLabel} is connected; say hi to {name} there.</p>
+        <p class="wz-status ok" role="status">Restarted. {appLabel} is connected; say hi to {name} there.</p>
       {:else if restart.managed}
         <p class="wz-panel-title">Restart to connect {appLabel}</p>
         <p class="wz-hint">Chat apps start when the server starts. It comes back on its own in a few seconds.</p>
         {#if phase === 'restarting'}
-          <p class="wz-status muted">Restarting… this page reconnects by itself.</p>
+          <p class="wz-status muted" role="status">Restarting… this page reconnects by itself.</p>
         {:else}
           <button type="button" class="btn-primary" onclick={doRestart} data-testid="wizard-restart-now">Restart now</button>
         {/if}
       {:else}
         <p class="wz-panel-title">Restart Denkeeper to connect {appLabel}</p>
         <p class="wz-hint">Chat apps start when the server starts. Stop Denkeeper and run <code>denkeeper serve</code> again. It doesn't look like a service manager will restart it for you.</p>
-        {#if phase === 'restarting'}
-          <p class="wz-status muted">Stopping the server…</p>
-        {:else}
-          <button type="button" class="wz-link muted" onclick={doRestart}>Stop the server now</button>
+        {#if phase === 'idle'}
+          {#if confirmingStop}
+            <p class="wz-hint">Stop Denkeeper now? This page goes offline until you run <code>denkeeper serve</code> yourself.</p>
+            <div class="stop-actions">
+              <button type="button" class="btn-ghost" onclick={() => { confirmingStop = false }}>Cancel</button>
+              <button type="button" class="btn-danger" onclick={doRestart} data-testid="wizard-stop-confirm">Stop server</button>
+            </div>
+          {:else}
+            <button type="button" class="wz-link muted" onclick={() => { confirmingStop = true }}>Stop the server now</button>
+          {/if}
         {/if}
       {/if}
-      {#if phase === 'timeout'}<p class="wz-status warn">The server hasn't come back yet. Start it again if it isn't managed by a service.</p>{/if}
+      <div aria-live="polite">
+        {#if phase === 'restarting' && !restart.managed}<p class="wz-status muted">Stopping the server…</p>{/if}
+        {#if phase === 'timeout'}<p class="wz-status warn">The server hasn't come back yet. Start it again if it isn't managed by a service.</p>{/if}
+      </div>
       {#if restartError}<p class="inline-error" role="alert">{restartError}</p>{/if}
     </div>
   {/if}
 
   <div class="try">
-    <h3 class="try-title">Try asking</h3>
+    <h2 class="try-title">Try asking</h2>
     {#each EXAMPLE_PROMPTS as p (p)}
       <button type="button" class="prompt" onclick={() => onTry?.(p)}>
         <span>"{p}"</span>
@@ -128,5 +138,6 @@
     color: var(--text-muted);
   }
   .restart { align-items: flex-start; }
+  .stop-actions { display: flex; gap: 10px; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 </style>

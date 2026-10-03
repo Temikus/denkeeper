@@ -309,6 +309,65 @@ describe('SetupWizard', () => {
     expect(screen.getByTestId('wizard-rail-agent')).toHaveTextContent('assistant · Supervised')
   })
 
+  test('Continue tests a typed key that was never pasted or blurred', async () => {
+    const tests = record('post', '/api/v1/llm/providers/test', () => HttpResponse.json({ status: 'rejected', message: 'Anthropic says this key is not valid.' }))
+    const creates = record('post', '/api/v1/llm/providers', () => HttpResponse.json({ name: 'anthropic', status: 'created' }, { status: 201 }))
+    render(SetupWizard)
+    await headingIs("Let's set up")
+    await fireEvent.click(continueBtn())
+    await fireEvent.input(await screen.findByTestId('wizard-provider-apikey'), { target: { value: 'sk-ant-typed' } })
+
+    await fireEvent.click(continueBtn())
+    await waitFor(() => expect(screen.getByTestId('wizard-provider-status')).toHaveTextContent('not valid'))
+    expect(tests.length).toBe(1)
+    expect(creates.length).toBe(0)
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Connect a provider')
+  })
+
+  test('a provider name already in use must be confirmed before its key is replaced', async () => {
+    server.use(http.get('/api/v1/llm/providers', () => HttpResponse.json({ providers: [{ name: 'anthropic', type: 'anthropic' }], default_provider: 'anthropic' })))
+    render(SetupWizard)
+    await headingIs("Let's set up")
+    await fireEvent.click(continueBtn())
+    const key = await screen.findByTestId('wizard-provider-apikey')
+    await fireEvent.input(key, { target: { value: 'sk-ant-good' } })
+    await fireEvent.paste(key)
+    await waitFor(() => expect(screen.getByTestId('wizard-provider-status')).toHaveTextContent('Key works'))
+
+    expect(screen.getByTestId('wizard-provider-clash')).toHaveTextContent('already exists')
+    expect(continueBtn()).toBeDisabled()
+    await fireEvent.click(screen.getByTestId('wizard-provider-replace'))
+    expect(continueBtn()).not.toBeDisabled()
+  })
+
+  test('Enter in the model picker does not submit the step', async () => {
+    serveOnboarding(onboarding({ provider: true }))
+    const creates = record('post', '/api/v1/agents', () => HttpResponse.json({ name: 'assistant', status: 'created' }, { status: 201 }))
+    render(SetupWizard)
+    await headingIs('Create an agent')
+    const model = screen.getByTestId('wizard-agent-model')
+    await fireEvent.input(model, { target: { value: 'claude-x' } })
+
+    await fireEvent.keyDown(model, { key: 'Enter' })
+    expect(creates.length).toBe(0)
+    await fireEvent.keyDown(screen.getByTestId('wizard-agent-name'), { key: 'Enter' })
+    await waitFor(() => expect(creates.length).toBe(1))
+  })
+
+  test('stopping an unmanaged server asks first', async () => {
+    serveOnboarding(onboarding({ provider: true, agent: true, persona: true, chat_app: true }, {
+      restart_required: true, restart: { available: true, managed: false },
+    }))
+    const restarts = record('post', '/api/v1/server/restart', () => new HttpResponse(null, { status: 204 }))
+    render(SetupWizard)
+    await headingIs('Den is ready')
+
+    await fireEvent.click(screen.getByText('Stop the server now'))
+    expect(restarts.length).toBe(0)
+    await fireEvent.click(screen.getByTestId('wizard-stop-confirm'))
+    await waitFor(() => expect(restarts.length).toBe(1))
+  })
+
   test('Back returns to the previous step', async () => {
     serveOnboarding(onboarding({ provider: true }))
     render(SetupWizard)

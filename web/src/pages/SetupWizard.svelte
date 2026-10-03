@@ -25,6 +25,20 @@
   let heading = $state(null)
   let confirmingLeave = $state(false)
   let leaveError = $state('')
+  let laterBtn = $state(null)
+  let keepGoingBtn = $state(null)
+
+  async function askLeave() {
+    confirmingLeave = true
+    await tick()
+    keepGoingBtn?.focus()
+  }
+
+  function cancelLeave() {
+    confirmingLeave = false
+    leaveError = ''
+    laterBtn?.focus()
+  }
 
   // Drafts survive Back/Continue; the server holds what was saved.
   let provider = $state({ type: 'anthropic', name: 'anthropic', nameEdited: false, apiKey: '', baseURL: '', setDefault: true, saved: '', probe: null })
@@ -185,9 +199,11 @@
   }
 
   function onKeydown(e) {
-    // Enter continues, except where Enter has its own meaning.
-    if (e.key !== 'Enter' || e.shiftKey || busy || !stepReady) return
-    if (['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) return
+    // Enter continues, except where Enter has its own meaning: IME
+    // composition, multi-line text, buttons, selects and datalist pickers.
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return
+    if (busy || !stepReady || confirmingLeave) return
+    if (['TEXTAREA', 'BUTTON', 'A', 'SELECT'].includes(e.target.tagName) || e.target.list) return
     if (step === 'welcome' || step === 'ready') return
     e.preventDefault()
     next()
@@ -217,7 +233,7 @@
         <span class="mobile-progress">{['provider', 'agent', 'persona', 'chat'].indexOf(step) + 1} / 4 <span>{railSteps.find(s => s.id === step)?.label}</span></span>
       {/if}
       {#if step !== 'ready'}
-        <button type="button" class="wz-link muted later" onclick={() => { confirmingLeave = true }} disabled={busy} data-testid="wizard-later">Set up later</button>
+        <button type="button" class="wz-link muted later" bind:this={laterBtn} onclick={askLeave} disabled={busy} aria-expanded={confirmingLeave} data-testid="wizard-later">Set up later</button>
       {/if}
     </div>
 
@@ -231,7 +247,7 @@
         </p>
         {#if leaveError}<p class="inline-error" role="alert">{leaveError}</p>{/if}
         <div class="leave-actions">
-          <button type="button" class="btn-ghost" onclick={() => { confirmingLeave = false; leaveError = '' }} disabled={busy}>Keep going</button>
+          <button type="button" class="btn-ghost" bind:this={keepGoingBtn} onclick={cancelLeave} disabled={busy}>Keep going</button>
           <button type="button" class="btn-primary" onclick={leave} disabled={busy} data-testid="wizard-leave">Leave setup</button>
         </div>
       </div>
@@ -240,7 +256,7 @@
     <div class="mobile-preview"><PreviewCard {...preview} compact /></div>
 
     {#if loading}
-      <p class="wz-hint loading">Loading…</p>
+      <p class="wz-hint loading" role="status">Loading…</p>
     {:else}
       <div class="form">
         <header class="head">

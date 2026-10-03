@@ -35,7 +35,7 @@
         {#if subline}<span class="sub">{subline}</span>{/if}
       </div>
       {#if compact && chatApp}
-        <span class="chip ok">{chatApp}</span>
+        <span class="preview-chip ok">{chatApp}</span>
       {/if}
     </div>
     {#if greeting && !compact}
@@ -43,11 +43,11 @@
     {/if}
     {#if !compact}
       <div class="chips">
-        {#if keyWorks && !model}<span class="chip ok">Key works</span>{/if}
-        {#if tierLabel}<span class="chip accent">{tierLabel}</span>{/if}
-        {#if supervised}<span class="chip">+ supervisor</span>{/if}
+        {#if keyWorks && !model}<span class="preview-chip ok">Key works</span>{/if}
+        {#if tierLabel}<span class="preview-chip accent">{tierLabel}</span>{/if}
+        {#if supervised}<span class="preview-chip">+ supervisor</span>{/if}
         {#if model}
-          {#if chatApp}<span class="chip ok">{chatApp}</span>{:else}<span class="chip dashed">No chat app yet</span>{/if}
+          {#if chatApp}<span class="preview-chip ok">{chatApp}</span>{:else}<span class="preview-chip dashed">No chat app yet</span>{/if}
         {/if}
       </div>
     {/if}
@@ -138,7 +138,7 @@
     flex-wrap: wrap;
     gap: 6px;
   }
-  .chip {
+  .preview-chip {
     padding: 4px 10px;
     border-radius: 999px;
     background: var(--surface);
@@ -147,7 +147,7 @@
     color: var(--text-muted);
     white-space: nowrap;
   }
-  .chip.accent { background: rgba(var(--accent-rgb), 0.1); color: var(--accent); font-weight: 600; }
-  .chip.ok { background: rgba(61, 143, 98, 0.12); color: var(--success); font-weight: 600; }
-  .chip.dashed { background: none; border: 1px dashed var(--border); font-weight: 400; }
+  .preview-chip.accent { background: rgba(var(--accent-rgb), 0.1); color: var(--accent); font-weight: 600; }
+  .preview-chip.ok { background: rgba(61, 143, 98, 0.12); color: var(--success); font-weight: 600; }
+  .preview-chip.dashed { background: none; border: 1px dashed var(--border); font-weight: 400; }
 </style>

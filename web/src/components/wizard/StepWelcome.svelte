@@ -4,7 +4,7 @@
 </script>
 
 <div class="welcome">
-  <h3 class="needs-title">What you'll need</h3>
+  <h2 class="needs-title">What you'll need</h2>
   <ul class="needs">
     <li>
       <span class="need-title">An API key</span>

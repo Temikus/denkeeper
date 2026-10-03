@@ -74,7 +74,7 @@ session_tier = "supervised"`
       <p class="config-text">This is the smallest working setup. Add it to denkeeper.toml, then press Reload on the Server page.</p>
       <pre class="snippet">{SNIPPET}</pre>
       <p class="config-links">
-        <button class="link" onclick={copySnippet}>{copied ? 'Copied' : 'Copy'}</button>
+        <button class="link" onclick={copySnippet} aria-live="polite">{copied ? 'Copied' : 'Copy'}</button>
         ·
         <a href="https://denkeeper.io/docs/reference/config/" target="_blank" rel="noopener noreferrer">Full config reference ↗</a>
       </p>
@@ -126,7 +126,7 @@ session_tier = "supervised"`
   .step.next .num { border: 2px solid var(--accent); color: var(--accent); }
   .step.next .label { font-weight: 600; }
   .step.next .note { color: var(--accent); font-weight: 500; }
-  .step.done .num { background: var(--success); border-color: var(--success); color: #fff; }
+  .step.done .num { background: var(--accent); border-color: var(--accent); color: #fff; }
   .step.done .label { color: var(--text-muted); }
 
   .actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
