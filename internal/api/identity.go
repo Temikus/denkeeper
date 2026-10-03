@@ -16,6 +16,7 @@ const (
 	identityNameMax  = 64  // characters
 	identityEmojiMax = 32  // bytes; a flag or ZWJ sequence runs to ~28
 	identityThemeMax = 500 // characters
+	identityBodyMax  = 16 << 10
 )
 
 // identityInput is the body of PUT /api/v1/agents/{name}/identity.
@@ -37,6 +38,7 @@ type identityInput struct {
 // @Success      200  {object}  identityInput
 // @Failure      400  {object}  map[string]string  "Invalid field"
 // @Failure      404  {object}  map[string]string  "Agent not found"
+// @Failure      409  {object}  map[string]string  "IDENTITY.md frontmatter does not parse"
 // @Failure      500  {object}  map[string]string  "Save failed"
 // @Router       /agents/{name}/identity [put]
 func (s *Server) handleUpdateIdentity(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +50,7 @@ func (s *Server) handleUpdateIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input identityInput
+	r.Body = http.MaxBytesReader(w, r.Body, identityBodyMax)
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
@@ -64,7 +67,8 @@ func (s *Server) handleUpdateIdentity(w http.ResponseWriter, r *http.Request) {
 	current, _, _, _ := e.PersonaSection("identity")
 	existing, err := persona.ParseIdentity(current)
 	if err != nil {
-		existing = &persona.Identity{}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "IDENTITY.md has invalid frontmatter; fix it before updating the identity"})
+		return
 	}
 	content, err := persona.FormatIdentity(persona.Identity{
 		Name: input.Name, Emoji: input.Emoji, Theme: input.Theme, Body: existing.Body,

@@ -338,6 +338,15 @@
                             }
                         }
                     },
+                    "409": {
+                        "description": "IDENTITY.md frontmatter does not parse",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Save failed",
                         "schema": {

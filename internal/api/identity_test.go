@@ -80,3 +80,21 @@ func TestUpdateIdentity_MultilineEmojiRejected(t *testing.T) {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestUpdateIdentity_InvalidFrontmatterKeepsFile(t *testing.T) {
+	deps := testDepsWithPersona(t)
+	e := deps.Dispatcher.Agent("default")
+	broken := "---\nname: [unclosed\n---\n\nKeep this note."
+	if err := e.SavePersonaSection("identity", broken); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := putIdentity(t, srv, "default", `{"name":"Den","emoji":"🦊","theme":"helpful"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if content, _, _, _ := e.PersonaSection("identity"); content != broken {
+		t.Errorf("identity = %q, want the file left as it was", content)
+	}
+}

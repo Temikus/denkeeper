@@ -101,10 +101,8 @@ func (s *Server) resolveProbeTarget(input *providerTestInput) (config.ProviderIn
 		if stored == nil {
 			return pc, http.StatusNotFound, "provider not found: " + input.Name
 		}
-		pc.Type, pc.APIKey = stored.Type, stored.APIKey
-		if pc.BaseURL == "" {
-			pc.BaseURL = stored.BaseURL
-		}
+		// A stored key only goes to its stored URL.
+		pc.Type, pc.APIKey, pc.BaseURL = stored.Type, stored.APIKey, stored.BaseURL
 		if pc.Organization == "" {
 			pc.Organization = stored.Organization
 		}
@@ -114,6 +112,9 @@ func (s *Server) resolveProbeTarget(input *providerTestInput) (config.ProviderIn
 	}
 	if msg := validateBaseURL(pc.BaseURL); msg != "" {
 		return pc, http.StatusBadRequest, msg
+	}
+	if pc.BaseURL != "" && pc.Type == "openrouter" {
+		return pc, http.StatusBadRequest, "base_url is not supported for openrouter-type providers"
 	}
 	if pc.Organization != "" && pc.Type != "openai" {
 		return pc, http.StatusBadRequest, "organization is only supported for openai-type providers"

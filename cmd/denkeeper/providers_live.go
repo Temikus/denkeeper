@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/llm/llmfactory"
@@ -42,7 +44,7 @@ func syncProviders(l liveProviders, cfg *config.Config) {
 	for _, pc := range cfg.LLM.Providers {
 		keep[pc.Name] = true
 		if err := l.Apply(pc, cfg); err != nil {
-			continue // unknown types are rejected at config load
+			slog.Warn("reload: provider not rebuilt", "provider", pc.Name, "error", err)
 		}
 	}
 	for _, name := range l.set.Names() {

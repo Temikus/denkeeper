@@ -154,3 +154,34 @@ func TestProbeProvider_DoesNotFollowRedirects(t *testing.T) {
 		t.Errorf("resp = %+v, want a failure for a redirect", resp)
 	}
 }
+
+func TestProbeProvider_StoredKeyIgnoresOverrideURL(t *testing.T) {
+	up := anthropicUpstream(t)
+	var leaked atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "" {
+			leaked.Store(true)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer other.Close()
+	cfg := &config.Config{LLM: config.LLMConfig{Providers: []config.ProviderInstanceConfig{
+		{Name: "anthropic", Type: "anthropic", APIKey: probeKey, BaseURL: up.URL},
+	}}}
+
+	_, resp, _ := probe(t, probeServer(cfg), `{"name":"anthropic","base_url":"`+other.URL+`"}`)
+	if leaked.Load() {
+		t.Fatal("stored key was sent to a caller-supplied base_url")
+	}
+	if resp.Status != "ok" {
+		t.Errorf("resp = %+v, want ok against the stored URL", resp)
+	}
+}
+
+func TestProbeProvider_OpenRouterBaseURL400(t *testing.T) {
+	code, _, _ := probe(t, probeServer(&config.Config{}),
+		`{"type":"openrouter","api_key":"k","base_url":"https://example.com"}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400: openrouter ignores base_url", code)
+	}
+}

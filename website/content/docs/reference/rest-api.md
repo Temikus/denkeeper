@@ -122,7 +122,7 @@ Create a named provider instance. Agents can use it straight away; no restart is
 
 **Scope:** `admin`
 
-Check a key and base URL without saving anything. Send the provider fields, or `{"name": "..."}` to test a saved provider's key. The answer is always `200`; a refused key is a result, not an error:
+Check a key and base URL without saving anything. Send the provider fields, or `{"name": "..."}` to test a saved provider's key against its saved URL. A finished probe answers `200`, and a refused key is a result, not an error. A malformed request gets `400`, and an unknown `name` gets `404`:
 
 ```json
 { "status": "ok", "message": "Key works. 14 models available.", "model_count": 14, "models": ["..."] }
@@ -334,7 +334,7 @@ Replace a persona section's contents.
 
 **Scope:** `agents:write`
 
-Set the display name, emoji and theme in `IDENTITY.md`. The server writes the frontmatter and keeps the markdown body, so send plain values:
+Set the display name, emoji and theme in `IDENTITY.md`. The server writes the frontmatter and keeps the markdown body, so send plain values. If the existing frontmatter does not parse, the server answers `409` and leaves the file alone:
 
 ```json
 { "name": "Den", "emoji": "🦊", "theme": "helpful general-purpose assistant" }

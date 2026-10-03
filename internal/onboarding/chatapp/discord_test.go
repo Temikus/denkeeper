@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -37,6 +38,23 @@ func TestDiscordVerify_OK(t *testing.T) {
 func TestDiscordVerify_BadToken(t *testing.T) {
 	if _, err := (Discord{BaseURL: discordServer(t).URL}).Verify(shortCtx(t), "bad"); !errors.Is(err, ErrRejected) {
 		t.Errorf("err = %v, want ErrRejected", err)
+	}
+}
+
+func TestDiscordVerify_DoesNotFollowRedirects(t *testing.T) {
+	var hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer elsewhere.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/users/@me", http.StatusFound)
+	}))
+	defer up.Close()
+
+	if _, err := (Discord{BaseURL: up.URL}).Verify(shortCtx(t), "good"); err == nil {
+		t.Error("Verify succeeded through a redirect")
+	}
+	if hits.Load() != 0 {
+		t.Error("Verify followed a redirect, which would carry the token header")
 	}
 }
 
