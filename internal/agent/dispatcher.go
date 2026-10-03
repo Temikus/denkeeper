@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -236,10 +237,14 @@ func (d *Dispatcher) resolveChannel(msg adapter.IncomingMessage) (*Channel, *Eng
 	d.activeChannelsMu.RLock()
 	if name, ok := d.activeChannels[key]; ok {
 		d.activeChannelsMu.RUnlock()
-		if ch, ok := d.channels[name]; ok {
-			if e, ok := d.agents[ch.AgentName]; ok {
-				return ch, e
-			}
+		d.mu.RLock()
+		ch, e := d.channels[name], (*Engine)(nil)
+		if ch != nil {
+			e = d.agents[ch.AgentName]
+		}
+		d.mu.RUnlock()
+		if e != nil {
+			return ch, e
 		}
 		// Override references a stale channel — clear it and continue.
 		d.activeChannelsMu.Lock()
@@ -295,9 +300,16 @@ func (d *Dispatcher) LoadActiveChannels(ctx context.Context) error {
 	return nil
 }
 
-// Channels returns the channel registry. Returns nil when channels are not configured.
+// Channels returns a snapshot of the channel registry, or nil when channels
+// are not configured. Channels are copy-on-write: a change swaps in a new
+// *Channel under d.mu, so a caller may read the returned ones unlocked.
 func (d *Dispatcher) Channels() map[string]*Channel {
-	return d.channels
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.channels == nil {
+		return nil
+	}
+	return maps.Clone(d.channels)
 }
 
 // ErrChannelsNotConfigured is returned when channel operations are attempted
@@ -574,9 +586,11 @@ func (d *Dispatcher) RenameAgent(oldName, newName string) error {
 			d.wildcard[k] = newName
 		}
 	}
-	for _, ch := range d.channels {
+	for name, ch := range d.channels {
 		if ch.AgentName == oldName {
-			ch.AgentName = newName
+			renamed := *ch
+			renamed.AgentName = newName
+			d.channels[name] = &renamed
 		}
 	}
 

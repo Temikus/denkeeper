@@ -1418,6 +1418,38 @@ func TestDispatcher_RenameAgent_RewritesChannelAgent(t *testing.T) {
 	}
 }
 
+// Channel readers run unlocked (API handlers, the WS hub), so a rename must
+// swap in a new *Channel rather than write the shared one. Fails under -race
+// otherwise.
+func TestDispatcher_RenameAgent_ConcurrentChannelReads(t *testing.T) {
+	work := newTestEngine(t, "work", &sentMessages{})
+	d := NewDispatcher(
+		map[string]*Engine{"work": work},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels([]*Channel{{Name: "work", AgentName: "work", Adapters: []string{"telegram"}}}, nil),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			for _, ch := range d.Channels() {
+				_ = ch.AgentName
+			}
+		}
+	}()
+	if err := d.RenameAgent("work", "ops"); err != nil {
+		t.Fatalf("RenameAgent: %v", err)
+	}
+	<-done
+
+	if got := d.Channels()["work"].AgentName; got != "ops" {
+		t.Errorf("channel AgentName = %q, want ops", got)
+	}
+}
+
 func TestDispatcher_ResolveChannel_WildcardBinding(t *testing.T) {
 	sentDefault := &sentMessages{}
 	defaultEngine := newTestEngine(t, "default", sentDefault)
