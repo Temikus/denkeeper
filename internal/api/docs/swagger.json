@@ -277,6 +277,79 @@
                 }
             }
         },
+        "/agents/{name}/identity": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sets the display name, emoji and theme in the agent's IDENTITY.md frontmatter, keeping its markdown body. The server encodes the YAML, so callers send plain values rather than building frontmatter.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "persona"
+                ],
+                "summary": "Update agent identity",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Identity fields",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.identityInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.identityInput"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid field",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Save failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/agents/{name}/persona/{section}": {
             "get": {
                 "security": [
@@ -4489,7 +4562,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Creates a new named provider instance and persists to TOML",
+                "description": "Creates a new named provider instance, persists it to TOML and makes it usable by agents without a restart. The first provider on a config with no default_provider becomes the default.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4515,10 +4588,7 @@
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/internal_api.providerCreateResponse"
                         }
                     },
                     "400": {
@@ -4532,6 +4602,63 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/llm/providers/test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Checks a key and base URL against the provider without saving anything, and lists the models it can see. Always answers 200 with a status: an upstream refusal is a result, not an auth failure of this request. The key is never logged or echoed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Test LLM provider credentials",
+                "parameters": [
+                    {
+                        "description": "Provider to test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.providerTestInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.providerTestResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4627,12 +4754,10 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "status, and restart_required when the change is saved but not live",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "400": {
@@ -4741,7 +4866,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns the onboarding checklist with five setup milestones (auth, agent, adapter, provider, skill) and whether the onboarding card should be displayed.",
+                "description": "Returns the onboarding checklist with five setup milestones (auth, agent, adapter, provider, skill), whether the onboarding card should be displayed, and the setup wizard's four-step progress derived from config.",
                 "produces": [
                     "application/json"
                 ],
@@ -4767,6 +4892,204 @@
                     },
                     "403": {
                         "description": "Forbidden — requires admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/chat-app/pair": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Long-polls the bot for up to timeout_seconds (default 25, max 50) for the first private message from a person, so the wizard can fill allowed_users without asking for a numeric ID. Messages sent before the first call are ignored. Answer timeout means poll again with the returned cursor. Discord answers manual: enter the ID by hand.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Wait for the bot owner's first message",
+                "parameters": [
+                    {
+                        "description": "Bot to listen on",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppPairInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppPairResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "The adapter is already running, or another pairing is waiting",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/chat-app/save": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Writes the bot token and allowed_users and binds the adapter to the agent (default: the primary agent) in one validated config write. The adapter starts on the next restart: the response says whether a process manager will bring the server back after POST /server/restart.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Save a chat app connection",
+                "parameters": [
+                    {
+                        "description": "Connection to save",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppSaveInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppSaveResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent not in config",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "An env var overrides the token, or the binding conflicts with another agent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/chat-app/verify": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Checks a Telegram or Discord bot token with the platform and returns the bot's identity. Nothing is saved. Always answers 200 with a status; the token is never logged or echoed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Verify a chat bot token",
+                "parameters": [
+                    {
+                        "description": "Token to verify",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppVerifyInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.chatAppVerifyResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -4833,7 +5156,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Persists wizard_completed=true to the TOML config so the post-auth setup wizard is not shown again.",
+                "description": "Persists wizard_completed=true (and clears wizard_skipped) to the TOML config so the post-auth setup wizard is not shown again.",
                 "produces": [
                     "application/json"
                 ],
@@ -4844,6 +5167,55 @@
                 "responses": {
                     "204": {
                         "description": "Wizard marked complete"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden — requires admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to persist",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/onboarding/wizard-skip": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Persists wizard_completed=true and wizard_skipped=true, so the wizard stops opening on login but the dashboard keeps offering to resume it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "onboarding"
+                ],
+                "summary": "Leave the setup wizard for later",
+                "responses": {
+                    "204": {
+                        "description": "Wizard skipped"
                     },
                     "401": {
                         "description": "Unauthorized",
@@ -9249,6 +9621,45 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_onboarding_chatapp.BotInfo": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invite_url": {
+                    "description": "InviteURL adds the bot to a server. Discord only: a user can message a\nbot only if they share a server with it.",
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_Temikus_denkeeper_internal_onboarding_chatapp.Sender": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string"
+                },
+                "first_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "text": {
+                    "description": "trimmed, so the user can recognise their message",
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_tool.OAuthStatusInfo": {
             "type": "object",
             "properties": {
@@ -9591,6 +10002,107 @@
                     "type": "string"
                 },
                 "session_mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppPairInput": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppPairResponse": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "sender": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_onboarding_chatapp.Sender"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppSaveInput": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "description": "Agent defaults to the primary agent.",
+                    "type": "string"
+                },
+                "allowed_users": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "notify_chat_id": {
+                    "description": "NotifyChatID, when set, gets a best-effort \"connected\" message.",
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppSaveResponse": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "restart": {
+                    "$ref": "#/definitions/internal_api.restartStatus"
+                },
+                "restart_required": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppVerifyInput": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.chatAppVerifyResponse": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_onboarding_chatapp.BotInfo"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 }
             }
@@ -10157,6 +10669,20 @@
                 }
             }
         },
+        "internal_api.identityInput": {
+            "type": "object",
+            "properties": {
+                "emoji": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "theme": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.llmConfigUpdateInput": {
             "type": "object",
             "properties": {
@@ -10212,6 +10738,9 @@
                         "$ref": "#/definitions/internal_api.onboardingStep"
                     }
                 },
+                "wizard": {
+                    "$ref": "#/definitions/internal_api.wizardStatus"
+                },
                 "wizard_completed": {
                     "type": "boolean"
                 }
@@ -10262,6 +10791,28 @@
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.providerCreateResponse": {
+            "type": "object",
+            "properties": {
+                "default": {
+                    "description": "Default is true when this was the first provider and became default_provider.",
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "restart_required": {
+                    "description": "RestartRequired is true when the provider is saved but not yet usable.",
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "warning": {
                     "type": "string"
                 }
             }
@@ -10330,6 +10881,46 @@
                 }
             }
         },
+        "internal_api.providerTestInput": {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "organization": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.providerTestResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                },
+                "model_count": {
+                    "type": "integer"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api.providerUpdateInput": {
             "type": "object",
             "properties": {
@@ -10367,6 +10958,17 @@
                             "$ref": "#/definitions/internal_api.providerRoutingCfg"
                         }
                     ]
+                }
+            }
+        },
+        "internal_api.restartStatus": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "managed": {
+                    "type": "boolean"
                 }
             }
         },
@@ -10730,6 +11332,95 @@
                     "items": {
                         "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_eval.TraceRow"
                     }
+                }
+            }
+        },
+        "internal_api.wizardStatus": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "description": "Agent is the primary agent: the first one no other agent uses as its\nsupervisor. Empty until one exists.",
+                    "type": "string"
+                },
+                "completed": {
+                    "type": "boolean"
+                },
+                "done_count": {
+                    "type": "integer"
+                },
+                "restart": {
+                    "$ref": "#/definitions/internal_api.restartStatus"
+                },
+                "restart_required": {
+                    "description": "RestartRequired is true when a chat app is saved but its adapter is\nnot running yet; adapters only start at boot.",
+                    "type": "boolean"
+                },
+                "skipped": {
+                    "type": "boolean"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.wizardStep"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api.wizardStep": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "$ref": "#/definitions/internal_api.wizardStepDetail"
+                },
+                "done": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "optional": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.wizardStepDetail": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "emoji": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "supervisor": {
+                    "type": "string"
+                },
+                "supervisor_model": {
+                    "type": "string"
+                },
+                "supervisor_timeout": {
+                    "type": "string"
+                },
+                "theme": {
+                    "type": "string"
+                },
+                "tier": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
                 }
             }
         }
