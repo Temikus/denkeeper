@@ -118,6 +118,28 @@ api_key = "sk-or-test-key"
 	}
 }
 
+func TestParse_OnlyNonOpenrouterInstance_DefaultsToIt(t *testing.T) {
+	// The wizard's output when "set as default" was unticked: one anthropic
+	// instance and an agent, no default_provider. It used to default to an
+	// unconfigured openrouter and fail to load.
+	tomlData := []byte(`
+[[llm.providers]]
+name = "anthropic"
+type = "anthropic"
+api_key = "k"
+
+[[agents]]
+name = "assistant"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "anthropic" {
+		t.Errorf("default_provider = %q, want anthropic", cfg.LLM.DefaultProvider)
+	}
+}
+
 func TestParse_MissingToken(t *testing.T) {
 	tomlData := []byte(`
 [api]

@@ -1792,16 +1792,23 @@ func applyReplyGuardDefaults(cfg *Config) {
 	}
 }
 
-// applyDefaultProvider defaults llm.default_provider to "openrouter" unless
-// the config has no LLM or adapter setup at all. A blank config must load with
-// no provider so the web setup wizard can add the first one; an implicit
-// openrouter there would fail validation for want of an api_key.
+// applyDefaultProvider fills an unset llm.default_provider. A blank config
+// stays without one, so it loads and the web setup wizard can add the first
+// provider. Otherwise openrouter keeps its historical place as the default
+// when it is configured (or nothing else is), and failing that the first
+// [[llm.providers]] instance is used, so a config naming only, say, an
+// anthropic instance does not fail for want of an openrouter key.
 // Runs after applyEnvOverrides so env-supplied keys count as setup.
 func applyDefaultProvider(cfg *Config) {
 	if cfg.LLM.DefaultProvider != "" || isBlankSetup(cfg) {
 		return
 	}
-	cfg.LLM.DefaultProvider = "openrouter"
+	l := &cfg.LLM
+	if l.OpenRouter.APIKey != "" || l.HasProvider("openrouter") || len(l.Providers) == 0 {
+		l.DefaultProvider = "openrouter"
+		return
+	}
+	l.DefaultProvider = l.Providers[0].Name
 }
 
 func isBlankSetup(cfg *Config) bool {
