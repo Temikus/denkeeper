@@ -81,7 +81,7 @@ Every user-facing feature gets thoughtful UX:
 
 ## Web Dashboard & WebSocket Transport
 
-`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 19 pages, roughly one per subsystem (routes in `web/src`). App shell: `TopBar.svelte` (with `StopAllButton.svelte`, hold-to-stop; replaced `PanicBar`), `Nav.svelte`/`BottomNav.svelte` driven by `navItems.js`, attention badges from `attention.js`.
+`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 19 pages, roughly one per subsystem (routes in `web/src`). App shell: `TopBar.svelte` (with `StopAllButton.svelte`, hold-to-stop; replaced `PanicBar`), `Nav.svelte` reads entries from `navItems.js`, but `BottomNav.svelte` keeps its own inline `tabs` list, so update both; attention badges come from `attention.js`.
 
 **WebSocket** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to bidirectional WS; dashboard auto-connects and falls back to SSE after 3 failed reconnects. `WSHub` keeps a per-connection replay buffer. Config: `api.websocket_enabled` (true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl` (5m). Frame types in `wsframes.go`.
 
