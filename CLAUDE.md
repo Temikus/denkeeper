@@ -81,7 +81,7 @@ Every user-facing feature gets thoughtful UX:
 
 ## Web Dashboard & WebSocket Transport
 
-`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 19 pages, roughly one per subsystem (routes in `web/src`).
+`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 19 pages, roughly one per subsystem (routes in `web/src`). App shell: `TopBar.svelte` (with `StopAllButton.svelte`, hold-to-stop; replaced `PanicBar`), `Nav.svelte`/`BottomNav.svelte` driven by `navItems.js`, attention badges from `attention.js`.
 
 **WebSocket** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to bidirectional WS; dashboard auto-connects and falls back to SSE after 3 failed reconnects. `WSHub` keeps a per-connection replay buffer. Config: `api.websocket_enabled` (true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl` (5m). Frame types in `wsframes.go`.
 
@@ -111,6 +111,7 @@ Every user-facing feature gets thoughtful UX:
 | Internal judge (`judge_model`) | `internal/eval/judge.go`, `rubric.go` | `[eval]` |
 | Eval acquisition (history + spec probes) | `internal/eval/suggest.go`, `probes.go`, `internal/api/evalprobes.go` | `[eval]` |
 | Turn traces & inspector | `internal/agent/trace.go`, `internal/eval/trace.go`, `internal/api/traces.go` | `[eval]` (`capture`, `max_trace_bytes`, `retention_days`) |
+| Decision models / supervisor decider | `internal/llm/decision.go`, `internal/llm/openrouter/decide.go`, `internal/agent/supervisor_decider.go`, `cmd/denkeeper/decide.go` | `[[llm.deciders]]`, `supervisor_decider*` |
 | Skill undo journal | `internal/skilleffect/` | (none — on whenever a SQLite store is wired) |
 
 ## Detailed Invariants

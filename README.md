@@ -124,13 +124,14 @@ cosign verify \
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
 - **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor prompt includes skill/schedule context for scheduled invocations; configurable timeout (`supervisor_timeout`, default 30s) and context message count (`supervisor_context_messages`, default 5); LLM failures emit a `supervisor_error` event before falling through to human approval
+- **Decision models (deciders)** — `[[llm.deciders]]` declares a non-generative classifier (e.g. `typesafe/jev-1.13` via OpenRouter) that scores each supervised tool call before the supervisor; `supervisor_decider_mode` is `shadow` (audit only, default) or `enforce`, with `supervisor_decider_approve_at` / `supervisor_decider_deny_at` thresholds; a failed decider never approves; `denkeeper decide replay --agent NAME` re-scores past supervisor reviews to calibrate thresholds
 - **Dry runs** — preview what a schedule or skill would actually do without letting it do anything: the real persona, skills, and read-only tools run, while every write is suppressed and nothing is persisted, sent to an adapter, or remembered; returns a full transcript with suppressed calls marked, and accepts an `as_of` clock so a preview of a dated task is reproducible
 - **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 12 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`, `eval`); web UI page with timeline and table views, category/status/agent/time filters, and a source-exclusion filter that hides dry-run noise by default
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
 - **Safety commands** — `/stop` cancels the current in-flight request, `/panic` emergency-stops all in-flight requests and pauses the scheduler, `/resume` clears panic state; available in Telegram, Discord, web UI, and REST API
 - **Session history management** — `/clear` removes all messages from a session, `/compact` summarises via LLM and replaces all messages with a single summary; available in Telegram, Discord, web UI, and REST API
 - **OpenAPI spec** — generated via `swaggo/swag`, served at `GET /api/v1/openapi.json` (no auth required); the committed spec is kept in sync with the handler annotations by a CI freshness gate
-- **Web dashboard** — embedded Svelte UI (served via the API server) with 19 pages: overview, chat, sessions, approvals, schedules, skills, tools, browser, KV store, costs, agents, API keys, providers, server config, settings, audit log, channels, evals, and the turn inspector; includes dark mode toggle and warm light theme
+- **Web dashboard** — embedded Svelte UI (served via the API server) with 19 pages: overview, chat, sessions, approvals, schedules, skills, tools, browser, KV store, costs, agents, API keys, providers, server config, settings, audit log, channels, evals, and the turn inspector; includes a top bar with a hold-to-stop emergency button, dark mode toggle, and warm light theme
 - **Voice** — speech-to-text and text-to-speech via OpenAI (Whisper + TTS)
 - **Permission tiers** — autonomous, supervised (default), and restricted; configurable per-agent or per-schedule
 - **Approval workflows** — supervised-tier actions (profile updates, skill creation, schedule additions, tool installation) require explicit human approval via chat buttons (Telegram/Discord) or REST API; auto-approve rules in three scopes: `config` (declared per agent in TOML via `auto_approve_tools`, immutable at runtime), `session` (in-memory, 15m TTL), and `permanent` (SQLite)
@@ -209,11 +210,12 @@ Key sections:
 | `[llm.anthropic]` | Anthropic API key — legacy single-slot syntax, auto-converted to `[[llm.providers]]` |
 | `[llm.openrouter]` | OpenRouter API key — legacy single-slot syntax |
 | `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
+| `[[llm.deciders]]` | Named decision models (`name`, `provider`, `model`, `timeout`, `max_input_tokens`) used via `supervisor_decider` |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/cost_limit triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
-| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, supervisor_timeout, supervisor_context_messages, cost limits) |
+| `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, supervisor_decider (+ `_mode`, `_approve_at`, `_deny_at`), supervisor_timeout, supervisor_context_messages, cost limits) |
 | `[[channels]]` | Named routing endpoints — bind adapter chats to agents with session identity; `session_mode` (`shared`/`ephemeral`) |
-| `[audit]` | Audit log settings (`enabled`, `retention_days`, `cleanup_interval`, `buffer_size`) |
+| `[audit]` | Audit log settings (`enabled`, `retention_days`, `cleanup_interval`, `buffer_size`, `detail_max_chars`) |
 | `[mcp]` | Global MCP settings — request timeout, auto-restart, max restart attempts, restart cooldown, SSE URL allowlist |
 | `[tools.*]` | MCP tool server definitions — stdio (subprocess) or SSE (remote) transport, URL, headers, per-server timeout override |
 | `[plugins.*]` | Plugin definitions — subprocess or Docker-sandboxed (capability declarations) |
