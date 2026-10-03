@@ -3,6 +3,8 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { navigate } from '../router.js'
+  import { showSetupReminder, refreshSetup } from '../setupStore.js'
+  import SetupCard from '../components/SetupCard.svelte'
 
   let data = $state(null)
   let onboarding = $state(null)
@@ -55,6 +57,7 @@
       ])
       data = { health, agents, costs, pendingCount: approvals.length }
       onboarding = ob
+      refreshSetup()
     } catch (e) {
       error = e.message
     }
@@ -64,7 +67,9 @@
 <h1 class="page-title">Overview</h1>
 <ErrorBanner message={error} />
 
-{#if onboarding?.show_onboarding}
+{#if $showSetupReminder && !onboarding?.dismissed}
+  <SetupCard onhide={dismissOnboarding} />
+{:else if onboarding?.show_onboarding && !$showSetupReminder}
   <div class="onboarding-card">
     {#if onboarding.steps.every(s => !s.done)}
       <p class="welcome-banner">Welcome to Denkeeper! Let's get your agent set up.</p>
@@ -92,9 +97,12 @@
       <div class="label">Status</div>
       <div class="value" class:ok={data.health.status === 'ok'}>{data.health.status}</div>
     </div>
-    <div class="card">
+    <div class="card" class:empty-card={data.agents.length === 0}>
       <div class="label">Agents</div>
       <div class="value">{data.agents.length}</div>
+      {#if data.agents.length === 0}
+        <a class="card-hint" href="#/agents" data-testid="agents-empty-hint">Create your first →</a>
+      {/if}
     </div>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -193,6 +201,8 @@
   .card.clickable:hover, .card.alert { border-color: var(--warn); }
   .label { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
   .value { font-size: 28px; font-weight: 700; }
+  .card.empty-card { border-style: dashed; }
+  .card-hint { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 500; }
   .value.ok   { color: var(--success); }
   .value.warn { color: var(--warn); }
   .cost-table-wrapper {

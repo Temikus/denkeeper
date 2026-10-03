@@ -1,601 +1,430 @@
 <script>
-  import { onMount } from 'svelte'
-  import { api } from '../api.js'
+  import { onMount, tick } from 'svelte'
+  import { navigate } from '../router.js'
+  import { pendingSkillTest } from '../chatStore.js'
+  import { refreshSetup, skipSetup, completeSetup } from '../setupStore.js'
+  import { TIERS, TONES, providerMeta, sampleGreeting, toneForTheme } from '../components/wizard/wizardContent.js'
+  import WizardRail from '../components/wizard/WizardRail.svelte'
+  import PreviewCard from '../components/wizard/PreviewCard.svelte'
+  import StepWelcome from '../components/wizard/StepWelcome.svelte'
+  import StepProvider from '../components/wizard/StepProvider.svelte'
+  import StepAgent from '../components/wizard/StepAgent.svelte'
+  import StepPersona from '../components/wizard/StepPersona.svelte'
+  import StepChatApp from '../components/wizard/StepChatApp.svelte'
+  import StepReady from '../components/wizard/StepReady.svelte'
+  import '../components/wizard/wizard.css'
 
-  let { onComplete } = $props()
+  // Six screens; the rail and "Step N of 4" count the middle four.
+  const STEPS = ['welcome', 'provider', 'agent', 'persona', 'chat', 'ready']
 
-  // step: 'provider' | 'agent' | 'persona'
-  let step = $state('provider')
+  let index = $state(0)
   let loading = $state(true)
+  let busy = $state(false)
+  let stepRef = $state(null)
+  let stepReady = $state(false)
+  let heading = $state(null)
+  let confirmingLeave = $state(false)
+  let leaveError = $state('')
 
-  // Cross-step state
-  let providerName = $state('')
-  let agentName = $state('')
+  // Drafts survive Back/Continue; the server holds what was saved.
+  let provider = $state({ type: 'anthropic', name: 'anthropic', nameEdited: false, apiKey: '', baseURL: '', setDefault: true, saved: '', probe: null })
+  let agent = $state({ name: 'assistant', model: '', tier: 'supervised', supervisorModel: '', supervisorTimeout: '30s', contextMessages: 5, saved: '' })
+  let persona = $state({ displayName: '', emoji: '', tone: 'generalist', customTheme: '', rules: null, saved: false })
+  let chat = $state({ app: 'telegram', token: '', bot: null, verify: null, sender: null, confirmed: false, manualID: '', manual: false, saved: false, restart: null })
+  let restartRequired = $state(false)
+  let restartInfo = $state({ available: false, managed: false })
 
-  // --- Provider step ---
-  let providerType = $state('anthropic')
-  let providerFormName = $state('anthropic')
-  let providerAPIKey = $state('')
-  let providerBaseURL = $state('')
-  let providerSetDefault = $state(true)
-  let providerError = $state('')
-  let providerSaving = $state(false)
+  let step = $derived(STEPS[index])
+  let agentLabel = $derived(persona.displayName || agent.saved || agent.name || 'your agent')
+  let tierLabel = $derived(TIERS.find(t => t.id === agent.tier)?.label || '')
+  let chatLabel = $derived(chat.saved ? providerLabelFor(chat.app) + (chat.bot ? ` · @${chat.bot.username}` : '') : '')
 
-  const providerTypes = [
-    { value: 'anthropic', label: 'Anthropic' },
-    { value: 'openai', label: 'OpenAI' },
-    { value: 'openrouter', label: 'OpenRouter' },
-    { value: 'ollama', label: 'Ollama' },
-  ]
-
-  function onProviderTypeChange() {
-    providerFormName = providerType
+  function providerLabelFor(app) {
+    return app === 'telegram' ? 'Telegram' : app === 'discord' ? 'Discord' : ''
   }
 
-  // --- Agent step ---
-  let agentFormName = $state('')
-  let agentProvider = $state('')
-  let agentModel = $state('')
-  let agentTier = $state('supervised')
-  let agentDescription = $state('')
-  let agentError = $state('')
-  let agentSaving = $state(false)
-  let providers = $state([])
-  let defaultProvider = $state('')
-
-  // Supervisor companion
-  let supervisorName = $state('supervisor')
-  let supervisorModel = $state('')
-  let supervisorTimeout = $state('30s')
-  let supervisorContextMsgs = $state(5)
-
-  // --- Persona step ---
-  let displayName = $state('')
-  let emoji = $state('')
-  let theme = $state('helpful general-purpose assistant')
-  let behaviorGuidelines = $state(
-`Be genuinely helpful, not performatively helpful. Skip filler — just help.
-
-Have opinions. You're allowed to disagree, prefer things, find stuff amusing or boring.
-
-Be resourceful before asking. Try to figure it out first, then ask if stuck.
-
-Earn trust through competence. Be careful with external actions. Be bold with internal ones.
-
-Remember you're a guest. You have access to someone's life — treat it with respect.`)
-  let personaError = $state('')
-  let personaSaving = $state(false)
-
-  const STORAGE_KEY = 'dk_wizard_state'
-
-  function saveState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ step, providerName, agentName }))
-    } catch { /* ignore */ }
+  const HEADERS = {
+    welcome: { kicker: 'Welcome to Denkeeper', title: "Let's set up your first agent", sub: 'An agent is an AI assistant you talk to here, in Telegram or in Discord. Four short steps, and you can change all of it later.' },
+    provider: { kicker: 'Step 1 of 4', title: 'Connect a provider', sub: "Pick where your agent's model runs. You can add more providers later." },
+    agent: { kicker: 'Step 2 of 4', title: 'Create an agent', sub: 'Pick a name and a model. Everything here can be changed later.' },
+    persona: { kicker: 'Step 3 of 4', title: 'Give it a personality', sub: 'How your agent introduces itself and talks to you. Watch the preview change.' },
+    chat: { kicker: 'Step 4 of 4 · optional', title: 'Connect a chat app', sub: 'Talk to your agent from your phone. The web chat always works, so you can skip this.' },
+    ready: { kicker: 'All set', title: '', sub: '' },
   }
+  let header = $derived(step === 'ready'
+    ? { kicker: 'All set', title: `${agentLabel} is ready`, sub: `Say hello here${chat.saved ? ' or in ' + providerLabelFor(chat.app) : ''}. You can change anything later under Agents.` }
+    : HEADERS[step])
+
+  let railSteps = $derived([
+    {
+      id: 'provider', label: 'Connect a provider',
+      summary: provider.saved ? `${provider.saved} · ${provider.probe?.status === 'ok' ? 'key works' : 'saved'}` : 'Where the model runs',
+    },
+    { id: 'agent', label: 'Create an agent', summary: agent.saved ? `${agent.saved} · ${tierLabel}` : 'Model and permissions' },
+    {
+      id: 'persona', label: 'Give it a personality',
+      summary: persona.saved ? `${persona.displayName} · ${TONES.find(t => t.id === persona.tone)?.label || 'Custom tone'}` : 'Name, emoji and tone',
+    },
+    { id: 'chat', label: 'Connect a chat app', optional: true, summary: chatLabel || (step === 'ready' ? 'Web chat only' : 'Telegram or Discord') },
+  ].map(s => ({
+    ...s,
+    state: STEPS[index] === s.id ? 'current' : isDone(s.id) ? 'done' : 'upcoming',
+  })))
+
+  function isDone(id) {
+    if (id === 'provider') return !!provider.saved
+    if (id === 'agent') return !!agent.saved
+    if (id === 'persona') return persona.saved
+    return chat.saved || step === 'ready'
+  }
+
+  let preview = $derived({
+    name: persona.displayName || agent.saved || (index >= 2 ? agent.name : ''),
+    emoji: persona.emoji,
+    model: agent.model && index >= 2 ? agent.model : '',
+    provider: provider.saved || (index >= 1 && provider.probe?.status === 'ok' ? providerMeta(provider.type).label : ''),
+    tier: index >= 2 ? agent.tier : '',
+    supervised: index >= 2 && agent.tier === 'supervised',
+    chatApp: chatLabel,
+    greeting: index >= 3 && persona.displayName ? sampleGreeting(persona.tone, persona.displayName) : '',
+    keyWorks: provider.probe?.status === 'ok',
+  })
 
   onMount(async () => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) {
-        const s = JSON.parse(saved)
-        if (s.step === 'agent' && s.providerName) {
-          providerName = s.providerName
-          step = 'agent'
-        } else if (s.step === 'persona' && s.agentName) {
-          agentName = s.agentName
-          providerName = s.providerName || ''
-          step = 'persona'
-        }
-      }
-    } catch { /* ignore */ }
+    const state = await refreshSetup()
+    if (state) resume(state)
     loading = false
+    await go(index)
   })
 
-  // --- Provider submit ---
-  async function submitProvider() {
-    providerError = ''
-    const name = providerFormName.trim()
-    if (!name) { providerError = 'Name is required.'; return }
-    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
-      providerError = 'Must be lowercase alphanumeric with hyphens only.'
-      return
+  // resume fills the drafts from server progress and opens the first step
+  // that still needs doing.
+  function resume(state) {
+    const byID = Object.fromEntries(state.steps.map(s => [s.id, s]))
+    const p = byID.provider
+    if (p?.done) Object.assign(provider, { saved: p.detail.name, name: p.detail.name, type: p.detail.type || provider.type, nameEdited: true })
+    const a = byID.agent
+    if (a?.done) Object.assign(agent, { saved: a.detail.name, name: a.detail.name, model: a.detail.model || '', tier: a.detail.tier || agent.tier })
+    const pe = byID.persona
+    if (pe?.done) {
+      const tone = toneForTheme(pe.detail.theme)
+      Object.assign(persona, { saved: true, displayName: pe.detail.display_name, emoji: pe.detail.emoji || '', tone, customTheme: tone === 'custom' ? pe.detail.theme : '' })
     }
+    const c = byID.chat_app
+    if (c?.done) Object.assign(chat, { app: c.detail.type, saved: true })
+    restartRequired = state.restartRequired
+    restartInfo = state.restart
 
-    providerSaving = true
+    if (!p?.done && !a?.done) index = 0
+    else if (!p?.done) index = 1
+    else if (!a?.done) index = 2
+    else if (!pe?.done) index = 3
+    else if (!c?.done) index = 4
+    else index = 5
+  }
+
+  async function go(i) {
+    index = i
+    stepReady = false
+    if (STEPS[i] === 'persona' && !persona.displayName) {
+      const n = agent.saved || agent.name
+      persona.displayName = n.charAt(0).toUpperCase() + n.slice(1)
+    }
+    await tick()
+    heading?.focus()
+  }
+
+  async function next() {
+    if (busy) return
+    if (stepRef?.submit) {
+      busy = true
+      const ok = await stepRef.submit()
+      busy = false
+      if (!ok) return
+    }
+    if (step === 'chat') {
+      const state = await refreshSetup()
+      if (state) { restartRequired = state.restartRequired; restartInfo = state.restart }
+    }
+    go(index + 1)
+  }
+
+  function back() {
+    if (index > 0 && !busy) go(index - 1)
+  }
+
+  function skipChat() {
+    chat.app = 'web'
+    go(STEPS.indexOf('ready'))
+  }
+
+  async function leave() {
+    leaveError = ''
+    busy = true
     try {
-      const body = { name, type: providerType }
-      if (providerAPIKey) body.api_key = providerAPIKey
-      if (providerBaseURL) body.base_url = providerBaseURL
-      await api.createLLMProvider(body)
-      if (providerSetDefault) {
-        await api.updateLLMConfig({ default_provider: name })
-      }
-      providerName = name
-      step = 'agent'
-      saveState()
-      await fetchProviders()
+      await skipSetup()
     } catch (e) {
-      providerError = e.message
+      leaveError = e.message
     } finally {
-      providerSaving = false
+      busy = false
     }
   }
 
-  // --- Agent step helpers ---
-  async function fetchProviders() {
+  async function finish(dest, prompt = '') {
+    if (busy) return
+    busy = true
     try {
-      const data = await api.llmProviders()
-      providers = data.providers || []
-      defaultProvider = data.default_provider || ''
-      if (!agentProvider) agentProvider = defaultProvider
-    } catch { /* ignore */ }
-  }
-
-  $effect(() => {
-    if (step === 'agent') fetchProviders()
-  })
-
-  function providerLabel(p) {
-    if (p.name === defaultProvider) return `Default (${p.name})`
-    return p.name
-  }
-
-  async function submitAgent() {
-    agentError = ''
-    const name = agentFormName.trim()
-    if (!name) { agentError = 'Agent name is required.'; return }
-    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
-      agentError = 'Must be lowercase letters, numbers, and hyphens only.'
-      return
-    }
-
-    agentSaving = true
-    try {
-      const body = {
-        name,
-        llm_provider: agentProvider || undefined,
-        llm_model: agentModel || undefined,
-        session_tier: agentTier,
-        description: agentDescription || undefined,
-      }
-      if (agentTier === 'supervised') {
-        const supName = supervisorName.trim()
-        if (supName && supName !== name) {
-          body.create_supervisor = {
-            name: supName,
-            llm_model: supervisorModel || undefined,
-            timeout: supervisorTimeout || '30s',
-            context_messages: supervisorContextMsgs || 5,
-          }
-        }
-      }
-      await api.createAgent(body)
-      agentName = name
-      displayName = name.charAt(0).toUpperCase() + name.slice(1)
-      step = 'persona'
-      saveState()
+      if (dest === 'chat') pendingSkillTest.set({ agent: agent.saved, command: prompt, send: false })
+      await completeSetup()
+      navigate(dest)
     } catch (e) {
-      agentError = e.message
+      leaveError = e.message
     } finally {
-      agentSaving = false
+      busy = false
     }
   }
 
-  // --- Persona submit ---
-  async function submitPersona() {
-    personaError = ''
-    personaSaving = true
-    try {
-      const identityYaml = `---\nname: "${displayName}"\nemoji: "${emoji}"\ntheme: "${theme}"\n---`
-      await api.updatePersona(agentName, 'identity', identityYaml)
-      await api.updatePersona(agentName, 'soul', behaviorGuidelines)
-      await finishWizard()
-    } catch (e) {
-      personaError = e.message
-    } finally {
-      personaSaving = false
-    }
+  function onKeydown(e) {
+    // Enter continues, except where Enter has its own meaning.
+    if (e.key !== 'Enter' || e.shiftKey || busy || !stepReady) return
+    if (['TEXTAREA', 'BUTTON', 'A'].includes(e.target.tagName)) return
+    if (step === 'welcome' || step === 'ready') return
+    e.preventDefault()
+    next()
   }
 
-  async function useDefaults() {
-    personaSaving = true
-    try {
-      await finishWizard()
-    } catch (e) {
-      personaError = e.message
-    } finally {
-      personaSaving = false
-    }
-  }
-
-  async function finishWizard() {
-    await api.wizardComplete()
-    try { await api.reloadConfig() } catch { /* best effort */ }
-    localStorage.removeItem(STORAGE_KEY)
-    onComplete?.()
-  }
-
-  async function skipSetup() {
-    try {
-      await api.wizardComplete()
-      localStorage.removeItem(STORAGE_KEY)
-      onComplete?.()
-    } catch { /* ignore */ }
-  }
+  let canContinue = $derived(step === 'welcome' || stepReady)
+  let continueLabel = $derived(step === 'welcome' ? 'Get started' : step === 'chat' ? (chat.app === 'web' ? 'Finish setup' : 'Save and finish') : 'Continue')
 </script>
 
-<div class="wizard-page">
-  <div class="card" class:wide={step === 'persona'}>
-    {#if loading}
-      <h1>Loading...</h1>
-    {:else if step === 'provider'}
-      <h1>Add a Provider</h1>
-      <p class="subtitle">Connect an LLM provider so your agents can think. You can add more later.</p>
+<svelte:window onkeydown={onKeydown} />
 
-      {#if providerError}
-        <p class="error">{providerError}</p>
+<div class="wizard" data-testid="setup-wizard">
+  <aside class="rail" aria-label="Setup progress">
+    <div class="rail-top">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Denkeeper</div>
+      <WizardRail steps={railSteps} />
+    </div>
+    <div class="rail-preview">
+      <span class="preview-label">{step === 'ready' ? 'Your agent' : 'Preview'}</span>
+      <PreviewCard {...preview} />
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      {#if step !== 'welcome' && step !== 'ready'}
+        <span class="mobile-progress">{['provider', 'agent', 'persona', 'chat'].indexOf(step) + 1} / 4 <span>{railSteps.find(s => s.id === step)?.label}</span></span>
       {/if}
-
-      <span class="field-label">Provider type</span>
-      <select class="input" bind:value={providerType} onchange={onProviderTypeChange} disabled={providerSaving} data-testid="wizard-provider-type">
-        {#each providerTypes as { value, label }}
-          <option {value}>{label}</option>
-        {/each}
-      </select>
-
-      <span class="field-label">Name</span>
-      <input type="text" class="input" bind:value={providerFormName} disabled={providerSaving} placeholder="e.g. anthropic" data-testid="wizard-provider-name" />
-      <span class="hint">Used to reference this provider in agent config</span>
-
-      {#if providerType !== 'ollama'}
-        <span class="field-label">API key</span>
-        <input type="password" class="input" bind:value={providerAPIKey} disabled={providerSaving} placeholder={providerType === 'anthropic' ? 'sk-ant-api03-...' : 'sk-...'} data-testid="wizard-provider-apikey" />
+      {#if step !== 'ready'}
+        <button type="button" class="wz-link muted later" onclick={() => { confirmingLeave = true }} disabled={busy} data-testid="wizard-later">Set up later</button>
       {/if}
+    </div>
 
-      <span class="field-label">Base URL <span class="optional">optional</span></span>
-      <input type="url" class="input" bind:value={providerBaseURL} disabled={providerSaving} placeholder={providerType === 'ollama' ? 'http://localhost:11434' : `https://api.${providerType}.com`} data-testid="wizard-provider-baseurl" />
-
-      <label class="toggle-row">
-        <span class="switch switch-sm">
-          <input type="checkbox" bind:checked={providerSetDefault} />
-          <span class="switch-slider"></span>
-        </span>
-        <span>Set as default provider</span>
-      </label>
-
-      <button onclick={submitProvider} disabled={providerSaving || !providerFormName.trim()} data-testid="wizard-provider-submit">
-        {providerSaving ? 'Adding...' : 'Add provider'}
-      </button>
-
-    {:else if step === 'agent'}
-      <h1>Create an Agent</h1>
-      <p class="subtitle">Agents are independent personalities with their own LLM, permissions, and skills.</p>
-
-      {#if agentError}
-        <p class="error">{agentError}</p>
-      {/if}
-
-      <span class="field-label">Agent name</span>
-      <input type="text" class="input" bind:value={agentFormName} disabled={agentSaving} placeholder="e.g. assistant, researcher" data-testid="wizard-agent-name" />
-      <span class="hint">Lowercase letters, numbers, and hyphens only</span>
-
-      <span class="field-label">LLM provider</span>
-      <select class="input" bind:value={agentProvider} disabled={agentSaving} data-testid="wizard-agent-provider">
-        {#each providers as p}
-          <option value={p.name}>{providerLabel(p)}</option>
-        {/each}
-      </select>
-      <span class="hint">Inherits global default if not set</span>
-
-      <span class="field-label">Model</span>
-      <input type="text" class="input" bind:value={agentModel} disabled={agentSaving} placeholder="e.g. claude-sonnet-4-20250514" data-testid="wizard-agent-model" />
-      <span class="hint">Leave blank to use the global default model</span>
-
-      <span class="field-label">Permission tier</span>
-      <div class="tier-options">
-        <label class="tier-option" class:selected={agentTier === 'autonomous'}>
-          <input type="radio" name="tier" value="autonomous" bind:group={agentTier} disabled={agentSaving} />
-          <div class="tier-content">
-            <span class="tier-name">Autonomous</span>
-            <span class="tier-desc">All actions allowed without approval</span>
-          </div>
-        </label>
-        <label class="tier-option" class:selected={agentTier === 'supervised'}>
-          <input type="radio" name="tier" value="supervised" bind:group={agentTier} disabled={agentSaving} />
-          <div class="tier-content">
-            <span class="tier-name">Supervised <span class="badge">DEFAULT</span></span>
-            <span class="tier-desc">Tool calls require human or supervisor approval</span>
-          </div>
-        </label>
-        <label class="tier-option" class:selected={agentTier === 'restricted'}>
-          <input type="radio" name="tier" value="restricted" bind:group={agentTier} disabled={agentSaving} />
-          <div class="tier-content">
-            <span class="tier-name">Restricted</span>
-            <span class="tier-desc">Chat and read-only tools only</span>
-          </div>
-        </label>
-      </div>
-
-      {#if agentTier === 'supervised'}
-        <div class="supervisor-callout" data-testid="wizard-supervisor-callout">
-          <div class="callout-header">
-            <svg class="callout-icon" viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clip-rule="evenodd" /></svg>
-            COMPANION SUPERVISOR
-          </div>
-          <p class="callout-desc">A lightweight agent will be auto-created to review tool calls before they execute.</p>
-
-          <span class="field-label">Name</span>
-          <input type="text" class="input" bind:value={supervisorName} disabled={agentSaving} data-testid="wizard-supervisor-name" />
-
-          <span class="field-label">Model</span>
-          <input type="text" class="input" bind:value={supervisorModel} disabled={agentSaving} placeholder="e.g. claude-haiku-4.5" data-testid="wizard-supervisor-model" />
-          <span class="hint">Supervisors only make quick yes/no decisions</span>
-
-          <div class="inline-fields">
-            <div class="inline-field">
-              <span class="field-label">Timeout</span>
-              <input type="text" class="input" bind:value={supervisorTimeout} disabled={agentSaving} />
-            </div>
-            <div class="inline-field">
-              <span class="field-label">Context messages</span>
-              <input type="number" class="input" bind:value={supervisorContextMsgs} disabled={agentSaving} min="0" max="50" />
-            </div>
-          </div>
-
-          <p class="callout-note">If the supervisor can't decide, the request escalates to human approval. You can customize this agent later.</p>
+    {#if confirmingLeave}
+      <div class="leave wz-panel" role="group" aria-labelledby="leave-title" data-testid="wizard-leave-confirm">
+        <p id="leave-title" class="wz-panel-title">Leave setup for now?</p>
+        <p class="wz-hint">
+          {provider.saved ? 'What you saved is kept.' : 'Nothing is saved yet.'}
+          {agent.saved ? '' : "There's no agent yet, so chat won't work until you finish."}
+          You can pick this up from the Overview page.
+        </p>
+        {#if leaveError}<p class="inline-error" role="alert">{leaveError}</p>{/if}
+        <div class="leave-actions">
+          <button type="button" class="btn-ghost" onclick={() => { confirmingLeave = false; leaveError = '' }} disabled={busy}>Keep going</button>
+          <button type="button" class="btn-primary" onclick={leave} disabled={busy} data-testid="wizard-leave">Leave setup</button>
         </div>
-      {/if}
-
-      <span class="field-label">Description <span class="optional">optional</span></span>
-      <input type="text" class="input" bind:value={agentDescription} disabled={agentSaving} placeholder="What does this agent do?" data-testid="wizard-agent-description" />
-
-      <button onclick={submitAgent} disabled={agentSaving || !agentFormName.trim()} data-testid="wizard-agent-submit">
-        {#if agentSaving}
-          Creating...
-        {:else if agentTier === 'supervised'}
-          Create agent + supervisor
-        {:else}
-          Create agent
-        {/if}
-      </button>
-
-    {:else if step === 'persona'}
-      <h1>Personalize Your Agent</h1>
-      <p class="subtitle">Your agent comes with sensible defaults. Review and customize its identity and behavior guidelines.</p>
-
-      {#if personaError}
-        <p class="error">{personaError}</p>
-      {/if}
-
-      <span class="section-label">IDENTITY</span>
-      <p class="section-desc">How your agent appears in conversations.</p>
-
-      <div class="inline-fields">
-        <div class="inline-field" style="flex:2">
-          <span class="field-label">Display name</span>
-          <input type="text" class="input" bind:value={displayName} disabled={personaSaving} placeholder="e.g. Fennec" data-testid="wizard-persona-name" />
-        </div>
-        <div class="inline-field" style="flex:0 0 64px">
-          <span class="field-label">Emoji</span>
-          <input type="text" class="input" bind:value={emoji} disabled={personaSaving} maxlength="4" style="text-align:center" data-testid="wizard-persona-emoji" />
-        </div>
-      </div>
-
-      <span class="field-label">Theme</span>
-      <input type="text" class="input" bind:value={theme} disabled={personaSaving} placeholder="e.g. helpful general-purpose assistant" data-testid="wizard-persona-theme" />
-      <span class="hint">A short phrase that sets the agent's tone</span>
-
-      <span class="section-label">BEHAVIOR GUIDELINES</span>
-      <p class="section-desc">Core instructions that shape how your agent thinks and acts. You can refine these anytime.</p>
-
-      <textarea class="input guidelines-textarea" bind:value={behaviorGuidelines} disabled={personaSaving} rows="10" data-testid="wizard-persona-guidelines"></textarea>
-
-      <div class="persona-actions">
-        <button class="btn-secondary" onclick={useDefaults} disabled={personaSaving}>Use defaults</button>
-        <button onclick={submitPersona} disabled={personaSaving} data-testid="wizard-persona-submit">
-          {personaSaving ? 'Saving...' : 'Save & continue'}
-        </button>
       </div>
     {/if}
 
-    <button class="skip-link" onclick={skipSetup} type="button">Skip setup</button>
-  </div>
+    <div class="mobile-preview"><PreviewCard {...preview} compact /></div>
+
+    {#if loading}
+      <p class="wz-hint loading">Loading…</p>
+    {:else}
+      <div class="form">
+        <header class="head">
+          {#if step === 'ready'}
+            <span class="ready-avatar" aria-hidden="true">{persona.emoji || agentLabel.charAt(0).toUpperCase()}</span>
+          {/if}
+          <p class="kicker">{header.kicker}</p>
+          <h1 tabindex="-1" bind:this={heading} class:big={step === 'welcome'}>{header.title}</h1>
+          {#if header.sub}<p class="sub">{header.sub}</p>{/if}
+        </header>
+
+        {#if step === 'welcome'}
+          <StepWelcome onUseConfigFile={leave} {busy} />
+        {:else if step === 'provider'}
+          <StepProvider bind:this={stepRef} bind:draft={provider} bind:ready={stepReady} />
+        {:else if step === 'agent'}
+          <StepAgent bind:this={stepRef} bind:draft={agent} bind:ready={stepReady} providerName={provider.saved} providerType={provider.type} models={provider.probe?.models || []} />
+        {:else if step === 'persona'}
+          <StepPersona bind:this={stepRef} bind:draft={persona} bind:ready={stepReady} agentName={agent.saved} />
+        {:else if step === 'chat'}
+          <StepChatApp bind:this={stepRef} bind:draft={chat} bind:ready={stepReady} agentName={agent.saved} displayName={persona.displayName} />
+        {:else}
+          <StepReady name={agentLabel} supervised={agent.tier === 'supervised'} chatApp={chat.saved ? chat.app : ''} {restartRequired} restart={restartInfo} onTry={p => finish('chat', p)} />
+        {/if}
+        {#if leaveError && !confirmingLeave}<p class="inline-error" role="alert">{leaveError}</p>{/if}
+      </div>
+
+      <footer class="footer">
+        {#if step === 'ready'}
+          <span></span>
+          <div class="footer-right">
+            <button type="button" class="btn-ghost" onclick={() => finish('overview')} disabled={busy} data-testid="wizard-dashboard">Go to dashboard</button>
+            <button type="button" class="btn-primary primary" onclick={() => finish('chat')} disabled={busy} data-testid="wizard-open-chat">Open chat with {agentLabel}</button>
+          </div>
+        {:else}
+          {#if index > 0}
+            <button type="button" class="btn-ghost back" onclick={back} disabled={busy} aria-label="Back">
+              <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M8.5 3L4.5 7l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span class="back-text">Back</span>
+            </button>
+          {:else}
+            <span></span>
+          {/if}
+          <div class="footer-right">
+            {#if step === 'chat' && chat.app !== 'web' && !chat.saved}
+              <button type="button" class="wz-link muted" onclick={skipChat} disabled={busy} data-testid="wizard-skip-chat">Skip for now</button>
+            {:else if step !== 'welcome'}
+              <span class="enter-hint" aria-hidden="true">Enter ↵</span>
+            {/if}
+            <button type="button" class="btn-primary primary" onclick={next} disabled={busy || !canContinue} data-testid="wizard-continue">
+              {busy ? 'Saving…' : continueLabel}
+            </button>
+          </div>
+        {/if}
+      </footer>
+    {/if}
+  </main>
 </div>
 
 <style>
-  .wizard-page {
+  .wizard {
+    display: flex;
+    min-height: 100vh;
+    background: var(--bg);
+  }
+  .rail {
+    width: 440px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 32px;
+    padding: 40px;
+    background: var(--wizard-rail-bg);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .rail-top { display: flex; flex-direction: column; gap: 48px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+  .brand-mark { width: 24px; height: 24px; border-radius: var(--radius); background: var(--accent); }
+  .rail-preview { display: flex; flex-direction: column; gap: 14px; }
+  .preview-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 40px 56px 48px 96px;
+  }
+  .topbar { display: flex; justify-content: flex-end; align-items: center; gap: 12px; min-height: 20px; }
+  .mobile-progress, .mobile-preview { display: none; }
+  .leave { max-width: 544px; margin-top: 16px; }
+  .leave-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+  .form {
+    flex: 1;
+    width: 100%;
+    max-width: 544px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding-top: 48px;
+  }
+  .head { display: flex; flex-direction: column; gap: 8px; }
+  .kicker { font-size: 13px; font-weight: 600; color: var(--accent); }
+  h1 { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.18; outline: none; }
+  h1.big { font-size: 44px; letter-spacing: -0.03em; }
+  .sub { font-size: 15px; color: var(--text-muted); }
+  .ready-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
-    padding: 24px;
-    background: var(--bg);
+    background: rgba(var(--accent-rgb), 0.12);
+    font-size: 34px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 8px;
   }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 40px;
-    width: min(420px, 90vw);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .card.wide {
-    width: min(480px, 90vw);
-  }
-  h1 { font-size: 22px; font-weight: 700; color: var(--accent); }
-  .subtitle { color: var(--text-muted); font-size: 13px; }
-  .error { color: var(--danger); font-size: 13px; }
-  .field-label { font-size: 12px; color: var(--text-muted); margin-bottom: -8px; display: block; }
-  .hint { font-size: 11px; color: var(--text-muted); margin-top: -8px; }
-  .optional { font-weight: 400; font-style: italic; }
+  .loading { padding-top: 48px; }
 
-  .input {
-    padding: 10px 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-size: 14px;
-    font-family: inherit;
-    outline: none;
+  .footer {
     width: 100%;
-    box-sizing: border-box;
-  }
-  .input:focus { border-color: var(--accent); }
-  .input:disabled { opacity: 0.6; }
-  select.input { cursor: pointer; }
-
-  button {
-    padding: 10px;
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  button:hover:not(:disabled) { background: var(--accent-hover); }
-  button:disabled { opacity: 0.6; cursor: default; }
-
-  .btn-secondary {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover:not(:disabled) {
-    background: var(--bg);
-  }
-
-  /* Toggle switch — pill pattern (.switch / .switch-slider) lives in shared.css */
-  .toggle-row {
+    max-width: 544px;
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  /* Permission tier radio buttons */
-  .tier-options {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-  .tier-option {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    cursor: pointer;
-    border-bottom: 1px solid var(--border);
-    transition: background 0.1s;
-  }
-  .tier-option:last-child { border-bottom: none; }
-  .tier-option:hover { background: var(--hover-overlay); }
-  .tier-option.selected {
-    background: rgba(var(--accent-rgb), 0.06);
-    border-left: 3px solid var(--accent);
-    padding-left: 9px;
-  }
-  .tier-option input[type="radio"] {
-    accent-color: var(--accent);
-    margin: 0;
-    flex-shrink: 0;
-  }
-  .tier-content {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .tier-name { font-size: 14px; font-weight: 600; }
-  .tier-desc { font-size: 12px; color: var(--text-muted); }
-  .badge {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 700;
-    background: var(--accent);
-    color: #fff;
-    padding: 1px 5px;
-    border-radius: 3px;
-    vertical-align: middle;
-    margin-left: 4px;
-  }
-
-  /* Supervisor companion callout */
-  .supervisor-callout {
-    border: 1px solid var(--accent);
-    border-radius: var(--radius);
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    background: rgba(var(--accent-rgb), 0.03);
-  }
-  .callout-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    color: var(--accent);
-  }
-  .callout-icon { color: var(--accent); flex-shrink: 0; }
-  .callout-desc { font-size: 13px; color: var(--text-muted); }
-  .callout-note { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
-
-  /* Inline field pairs */
-  .inline-fields {
-    display: flex;
     gap: 12px;
+    padding-top: 40px;
   }
-  .inline-field {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  .footer-right { display: flex; align-items: center; gap: 16px; }
+  .footer .btn-primary, .footer .btn-ghost { font-size: 14px; font-weight: 600; padding: 10px 20px; }
+  .back { display: inline-flex; align-items: center; gap: 6px; }
+  .enter-hint { font-size: 12px; color: var(--text-muted); }
+
+  @media (max-width: 1100px) {
+    .rail { width: 340px; padding: 32px; }
+    .main { padding: 32px 32px 40px 48px; }
   }
 
-  /* Persona section labels */
-  .section-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    color: var(--accent);
-  }
-  .section-desc { font-size: 13px; color: var(--text-muted); margin-top: -8px; }
-
-  .guidelines-textarea {
-    resize: vertical;
-    line-height: 1.6;
-    min-height: 160px;
-  }
-
-  .persona-actions {
-    display: flex;
-    gap: 8px;
-  }
-  .persona-actions button { flex: 1; }
-
-  .skip-link {
-    background: none;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 400;
-    text-align: center;
-    padding: 4px;
-    margin-top: 4px;
-  }
-  .skip-link:hover:not(:disabled) {
-    background: none;
-    color: var(--text);
-    text-decoration: underline;
+  @media (max-width: 768px) {
+    .wizard { flex-direction: column; }
+    .rail { display: none; }
+    .main { padding: 0; }
+    .topbar {
+      justify-content: space-between;
+      padding: 16px 20px 8px;
+      background: var(--wizard-rail-bg);
+    }
+    .mobile-progress { display: inline; font-size: 13px; font-weight: 700; color: var(--accent); }
+    .mobile-progress span { font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+    .mobile-preview {
+      display: block;
+      padding: 4px 20px 16px;
+      background: var(--wizard-rail-bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .leave { margin: 12px 20px 0; }
+    .form { padding: 24px 20px; gap: 22px; max-width: none; }
+    h1 { font-size: 28px; }
+    h1.big { font-size: 30px; }
+    .footer {
+      position: sticky;
+      bottom: 0;
+      max-width: none;
+      padding: 12px 20px calc(12px + var(--safe-area-bottom));
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    .footer-right { flex: 1; justify-content: flex-end; }
+    .footer .primary { flex: 1; min-height: 50px; font-size: 16px; }
+    .enter-hint, .back-text { display: none; }
+    .back { min-height: 50px; min-width: 52px; justify-content: center; }
   }
 </style>

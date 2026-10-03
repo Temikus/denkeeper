@@ -1,0 +1,182 @@
+/* Form pieces shared by the setup wizard's steps. Scoped under .wizard so
+   nothing leaks into the dashboard. */
+
+.wizard .wz-stack { display: flex; flex-direction: column; gap: 28px; }
+.wizard .wz-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wizard .wz-row { display: flex; gap: 16px; align-items: flex-start; }
+.wizard .wz-row > .wz-field { flex: 1; }
+
+.wizard .wz-label {
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.wizard .wz-label a { font-weight: 500; }
+
+.wizard .wz-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+:root.dark .wizard .wz-input { background: var(--bg); }
+.wizard .wz-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12); }
+.wizard .wz-input.ok { border-color: var(--success); }
+.wizard .wz-input.bad { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(196, 58, 58, 0.1); }
+.wizard .wz-input:disabled { opacity: 0.6; }
+.wizard .wz-input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wizard textarea.wz-input { resize: vertical; line-height: 1.6; }
+
+.wizard .wz-input-wrap { position: relative; display: flex; }
+.wizard .wz-input-wrap .wz-input { padding-right: 40px; }
+.wizard .wz-input-action {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+}
+.wizard .wz-input-action:hover { color: var(--text); }
+
+.wizard .wz-hint { font-size: 13px; color: var(--text-muted); }
+
+/* A one-line result under a field; aria-live is set by the caller. */
+.wizard .wz-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  min-height: 18px;
+}
+.wizard .wz-status.ok { color: var(--success); font-weight: 500; }
+.wizard .wz-status.bad { color: var(--danger); }
+.wizard .wz-status.warn { color: var(--warn); }
+.wizard .wz-status.muted { color: var(--text-muted); }
+
+/* Card-like radio choices: provider tiles, tone presets. */
+.wizard .wz-choices {
+  display: grid;
+  grid-template-columns: repeat(var(--wz-cols, 4), minmax(0, 1fr));
+  gap: 10px;
+  border: none;
+}
+.wizard .wz-choice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+:root.dark .wizard .wz-choice { background: var(--bg); }
+.wizard .wz-choice:hover { border-color: var(--text-muted); }
+.wizard .wz-choice input { position: absolute; opacity: 0; pointer-events: none; }
+.wizard .wz-choice:has(input:checked) {
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12);
+}
+.wizard .wz-choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wizard .wz-choice-title { font-size: 14px; font-weight: 600; }
+.wizard .wz-choice-caption { font-size: 12px; color: var(--text-muted); }
+
+/* Segmented radio group. */
+.wizard .wz-segmented {
+  display: flex;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.wizard .wz-segment {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: center;
+}
+.wizard .wz-segment input { position: absolute; opacity: 0; pointer-events: none; }
+.wizard .wz-segment:has(input:checked) {
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+:root.dark .wizard .wz-segment:has(input:checked) { background: var(--bg); }
+.wizard .wz-segment:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.wizard .wz-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.wizard .wz-panel-title { font-size: 13px; font-weight: 600; }
+
+/* Text-style buttons. */
+.wizard .wz-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+}
+.wizard .wz-link:hover { color: var(--accent-hover); text-decoration: underline; }
+.wizard .wz-link.muted { color: var(--text-muted); font-weight: 400; }
+.wizard .wz-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
+
+.wizard .wz-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 0;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.wizard .wz-disclosure-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.wizard .wz-disclosure-summary { font-size: 13px; color: var(--text-muted); text-align: right; }
+
+/* iOS Safari zooms into inputs under 16px. */
+@media (max-width: 768px) {
+  .wizard .wz-input,
+  .wizard select,
+  .wizard textarea { font-size: 16px; }
+  .wizard .wz-choices { --wz-cols: 2; }
+  .wizard .wz-row { flex-direction: column; gap: 20px; }
+  .wizard .wz-row > .wz-field { width: 100%; }
+}

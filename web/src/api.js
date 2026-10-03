@@ -212,6 +212,11 @@ export const api = {
     method: 'PUT',
     body: JSON.stringify({ content }),
   }),
+  // The server encodes the frontmatter; never build identity YAML here.
+  updateIdentity: (agent, { name, emoji, theme }) => apiFetch(`/api/v1/agents/${encodeURIComponent(agent)}/identity`, {
+    method: 'PUT',
+    body: JSON.stringify({ name, emoji, theme }),
+  }),
 
   // KV Store
   kvList: (agent, prefix) => {
@@ -243,6 +248,12 @@ export const api = {
     body: JSON.stringify(data),
   }),
   deleteLLMProvider: (name) => apiFetch(`/api/v1/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  // Always resolves with {status, message, model_count, models}; a rejected key is a result, not an error.
+  testLLMProvider: (data, signal) => apiFetch('/api/v1/llm/providers/test', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    signal,
+  }),
   updateLLMConfig: (data) => apiFetch('/api/v1/llm/config', {
     method: 'PATCH',
     body: JSON.stringify(data),
@@ -347,6 +358,21 @@ export const api = {
   onboarding: () => apiFetch('/api/v1/onboarding'),
   dismissOnboarding: () => apiFetch('/api/v1/onboarding/dismiss', { method: 'POST' }),
   wizardComplete: () => apiFetch('/api/v1/onboarding/wizard-complete', { method: 'POST' }),
+  wizardSkip: () => apiFetch('/api/v1/onboarding/wizard-skip', { method: 'POST' }),
+  chatAppVerify: (type, token) => apiFetch('/api/v1/onboarding/chat-app/verify', {
+    method: 'POST',
+    body: JSON.stringify({ type, token }),
+  }),
+  // Long poll; pass an AbortSignal so leaving the step stops it.
+  chatAppPair: (body, signal) => apiFetch('/api/v1/onboarding/chat-app/pair', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    signal,
+  }),
+  chatAppSave: (body) => apiFetch('/api/v1/onboarding/chat-app/save', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
 
   // Auth endpoints (no auth required).
   authConfig: () => fetch('/auth/config').then(r => r.json()),

@@ -45,6 +45,29 @@ describe('Chat page', () => {
     })
   })
 
+  test('with no agents, chat explains why and disables the composer', async () => {
+    server.use(http.get('/api/v1/agents', () => HttpResponse.json([])))
+    render(Chat)
+
+    const empty = await screen.findByTestId('chat-no-agents')
+    expect(empty).toHaveTextContent('No one to talk to yet')
+    expect(screen.getByTestId('chat-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Finish setup to start chatting')
+    expect(screen.getByTestId('agent-selector')).toHaveTextContent('No agents yet')
+    expect(screen.queryByText('default')).not.toBeInTheDocument()
+  })
+
+  test('a queued prompt with send: false prefills instead of sending', async () => {
+    const { pendingSkillTest } = await import('../../chatStore.js')
+    let sent = 0
+    server.use(http.post('/api/v1/chat', () => { sent++; return HttpResponse.json({}) }))
+    pendingSkillTest.set({ agent: 'default', command: 'What can you do for me?', send: false })
+
+    render(Chat)
+    await waitFor(() => expect(screen.getByTestId('chat-input').value).toBe('What can you do for me?'))
+    expect(sent).toBe(0)
+  })
+
   test('agent selector is populated from API', async () => {
     render(Chat)
     await waitFor(() => {
