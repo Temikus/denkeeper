@@ -24,7 +24,12 @@ func (in *agentConfigUpdateInput) touchesDecider() bool {
 
 func applyDeciderFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateInput) {
 	if input.SupervisorDecider != nil {
+		// A bind or clear starts from defaults: a stale enforce mode left by
+		// an earlier decider must not come back with a new name.
 		ac.SupervisorDecider = *input.SupervisorDecider
+		ac.SupervisorDeciderMode = ""
+		ac.SupervisorDeciderApproveAt = 0
+		ac.SupervisorDeciderDenyAt = 0
 	}
 	if input.SupervisorDeciderMode != nil {
 		ac.SupervisorDeciderMode = *input.SupervisorDeciderMode
@@ -119,7 +124,11 @@ func (up deciderUpdate) apply(e *agent.Engine) {
 
 func addDeciderConfigChanges(changes map[string]any, input *agentConfigUpdateInput) {
 	if input.SupervisorDecider != nil {
+		// Same reset as applyDeciderFields, so the TOML cannot keep stale tuning.
 		changes["supervisor_decider"] = *input.SupervisorDecider
+		changes["supervisor_decider_mode"] = ""
+		changes["supervisor_decider_approve_at"] = 0.0
+		changes["supervisor_decider_deny_at"] = 0.0
 	}
 	if input.SupervisorDeciderMode != nil {
 		changes["supervisor_decider_mode"] = *input.SupervisorDeciderMode

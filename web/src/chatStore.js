@@ -3,6 +3,7 @@ import { api } from './api.js'
 import { wsStatus, getWSClient, onSessionEvent, offSessionEvent } from './wsStore.js'
 
 const STORAGE_KEY = 'dk_chat_session'
+const SETTLED_APPROVAL_STATUSES = new Set(['auto_approved', 'supervisor_approved', 'supervisor_denied', 'auto_denied'])
 
 // Set by Skills page to queue a test run, consumed by Chat on mount.
 export const pendingSkillTest = writable(null) // { agent: string, command: string }
@@ -170,10 +171,12 @@ function handleToolEvent(agentMsg, evt) {
     return
   }
   if (evt.type === 'tool_approval') {
-    if (evt.approval_status === 'auto_approved') {
+    // Verdicts nobody has to act on. Escalations and errors still fall
+    // through to the pending branch, since a human prompt follows them.
+    if (SETTLED_APPROVAL_STATUSES.has(evt.approval_status)) {
       agentMsg.approvals = [...agentMsg.approvals, {
         id: evt.approval_id, tool: evt.tool, text: evt.text,
-        status: 'auto_approved', resolving: false,
+        status: evt.approval_status, resolving: false,
       }]
     } else {
       agentMsg.status = `Waiting for approval: ${evt.tool}`

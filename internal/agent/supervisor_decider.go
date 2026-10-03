@@ -60,11 +60,18 @@ func (e *Engine) SupervisorDeciderConfig() (cfg DeciderStageConfig, ok bool) {
 	return DeciderStageConfig{}, false
 }
 
-// SetSupervisorDeciderConfig re-tunes the wired decider (config reload). No-op
-// when none is wired: binding a decider needs a restart, like supervisor.
+// SetSupervisorDeciderConfig re-tunes the wired decider (config reload or
+// PATCH). No-op when none is wired, and a CAS so a concurrent unbind cannot be
+// overwritten with the old decider.
 func (e *Engine) SetSupervisorDeciderConfig(cfg DeciderStageConfig) {
-	if cur := e.supervisorDecider.Load(); cur != nil {
-		e.supervisorDecider.Store(&deciderStage{decider: cur.decider, cfg: cfg})
+	for {
+		cur := e.supervisorDecider.Load()
+		if cur == nil {
+			return
+		}
+		if e.supervisorDecider.CompareAndSwap(cur, &deciderStage{decider: cur.decider, cfg: cfg}) {
+			return
+		}
 	}
 }
 

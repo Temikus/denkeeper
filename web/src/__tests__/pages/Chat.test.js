@@ -5,7 +5,7 @@ import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
 
 // Mock wsStore before importing Chat (it imports wsStore via chatStore).
-const { writable } = await import('svelte/store')
+const { writable, get } = await import('svelte/store')
 const mockWsStatus = writable('disconnected')
 const mockPanicStatus = writable({ active: false, message: '' })
 
@@ -167,6 +167,36 @@ describe('Chat page', () => {
       expect(screen.getAllByText('15 min').length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText('Always').length).toBeGreaterThanOrEqual(1)
     })
+  })
+
+  test('labels a decider approval as the decider, with its reason', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"tool_approval","tool":"web_search","text":"Approved by decider (jev): all checks passed (p=0.99)","approval_status":"supervisor_approved"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"content","text":"done"}\n\n'))
+            controller.enqueue(encoder.encode('data: {"type":"done"}\n\n'))
+            controller.close()
+          },
+        })
+        return new HttpResponse(stream, { headers: { 'Content-Type': 'text/event-stream' } })
+      })
+    )
+
+    render(Chat)
+    // Let the mount-time session restore finish, then start clean.
+    await waitFor(() => expect(get(chatState).initialized).toBe(true))
+    newSession()
+    await waitFor(() => expect(screen.getByText('Send a message to start a conversation.')).toBeInTheDocument())
+    await fireEvent.input(screen.getByPlaceholderText(/Type a message/), { target: { value: 'search' } })
+    await fireEvent.click(document.querySelector('.btn-send'))
+
+    await waitFor(() => expect(document.querySelector('.approval-badge')?.textContent).toBe('decider approved'), { timeout: 3000 })
+    expect(screen.getByText('Approved by decider (jev): all checks passed (p=0.99)')).toBeInTheDocument()
+    expect(screen.queryByText('supervisor approved')).toBeNull()
+    expect(screen.queryByText('Approve')).toBeNull()
   })
 
   test('Enter sends message, Shift+Enter does not', async () => {

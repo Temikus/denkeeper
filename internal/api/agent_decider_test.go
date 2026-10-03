@@ -151,6 +151,24 @@ func TestAgentConfigUpdate_EmptyDeciderUnbinds(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUpdate_RebindAfterClearStartsFromDefaults(t *testing.T) {
+	deps := deciderDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": "jev", "supervisor_decider_mode": "enforce",
+		"supervisor_decider_approve_at": 0.6, "supervisor_decider_deny_at": 0.4})
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": ""})
+
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": "jev"})
+
+	want := agent.DeciderStageConfig{Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05}
+	if got, _ := deps.Dispatcher.Agent("default").SupervisorDeciderConfig(); got != want {
+		t.Errorf("live stage = %+v, want %+v (a cleared decider's enforce tuning must not come back)", got, want)
+	}
+	if ac := deps.Config.Get().Agents[0]; ac.SupervisorDeciderMode != "shadow" || ac.SupervisorDeciderApproveAt != 0.95 {
+		t.Errorf("stored mode/approve_at = %q/%v, want shadow/0.95", ac.SupervisorDeciderMode, ac.SupervisorDeciderApproveAt)
+	}
+}
+
 func TestAgentConfigUpdate_DeciderThresholdsOutOfOrderRejected(t *testing.T) {
 	assertPatchRejected(t, deciderDeps(), map[string]any{
 		"supervisor_decider": "jev", "supervisor_decider_approve_at": 0.3, "supervisor_decider_deny_at": 0.5,

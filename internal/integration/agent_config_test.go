@@ -614,6 +614,22 @@ session_tier = "supervised"
 		t.Errorf("loaded decider = %q/%q/%v/%v, want jev/enforce/0.9/0.05",
 			a.SupervisorDecider, a.SupervisorDeciderMode, a.SupervisorDeciderApproveAt, a.SupervisorDeciderDenyAt)
 	}
+
+	// Clearing the decider must drop its tuning from the TOML too, so a later
+	// rebind by name loads in shadow with default thresholds.
+	for _, body := range []map[string]any{{"supervisor_decider": ""}, {"supervisor_decider": "jev"}} {
+		if rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/default", body)); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %v: status = %d; body: %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	cfg, err = config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("the persisted config does not load after clear and rebind: %v", err)
+	}
+	a = cfg.Agents[0]
+	if a.SupervisorDecider != "jev" || a.SupervisorDeciderMode != "shadow" || a.SupervisorDeciderApproveAt != 0.95 {
+		t.Errorf("rebound decider = %q/%q/%v, want jev/shadow/0.95", a.SupervisorDecider, a.SupervisorDeciderMode, a.SupervisorDeciderApproveAt)
+	}
 }
 
 // ---------------------------------------------------------------------------

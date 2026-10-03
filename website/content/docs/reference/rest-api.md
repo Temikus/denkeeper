@@ -262,7 +262,7 @@ List all agents with metadata.
 
 **Scope:** `admin`
 
-Get agent details including persona directory, loaded persona sections, and MCP tool names.
+Get agent details including persona directory, loaded persona sections, and MCP tool names. When a [decision model](/docs/concepts/deciders/) is set, the response carries `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, and `supervisor_decider_deny_at`.
 
 ### `POST /api/v1/agents`
 

@@ -263,6 +263,24 @@ func TestSupervisorDecider_EnforceUncertainGoesToSupervisor(t *testing.T) {
 	}
 }
 
+func TestSupervisorDecider_EnforceApproveWithoutSupervisorRunsCall(t *testing.T) {
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), nil)
+	defer h.teardown()
+	h.engine.SetSupervisor(nil)
+	wireDecider(h, &fakeDecisionProvider{p: 0.99}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	if statuses := approvalStatuses(events); len(statuses) != 1 || statuses[0] != "supervisor_approved" {
+		t.Fatalf("statuses = %v, want [supervisor_approved] and no human prompt", statuses)
+	}
+	for _, ev := range events {
+		if ev.Type == "tool_approval" && ev.ApprovalID != "" {
+			t.Fatal("a decider-approved call still asked a human")
+		}
+	}
+}
+
 func TestSupervisorDecider_EnforceUncertainWithoutSupervisorGoesToHuman(t *testing.T) {
 	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), nil)
 	defer h.teardown()
