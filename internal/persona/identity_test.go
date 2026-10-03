@@ -47,6 +47,23 @@ func TestFormatIdentity_YAMLInjectionStaysScalar(t *testing.T) {
 	}
 }
 
+func TestFormatIdentity_ReadableOutput(t *testing.T) {
+	// Plain values stay unquoted and the emoji stays an emoji, so the file
+	// reads like a hand-written one (yaml.v3 would write \U0001F98A).
+	out, err := FormatIdentity(Identity{Name: "Den", Emoji: "🦊", Theme: "helpful general-purpose assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\nname: Den\nemoji: \"🦊\"\ntheme: helpful general-purpose assistant\n---\n"
+	if out != want {
+		t.Errorf("FormatIdentity =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestFormatIdentity_RoundTrip_LeadingIndicators(t *testing.T) {
+	assertRoundTrip(t, Identity{Name: "- dash", Emoji: "", Theme: "#hash then: colon, and a trailing space "})
+}
+
 func TestFormatIdentity_MultilineNameRejected(t *testing.T) {
 	if _, err := FormatIdentity(Identity{Name: "a\nb"}); err == nil {
 		t.Error("expected error for a multi-line name")
