@@ -243,7 +243,7 @@ type providerUpdateInput struct {
 // @Security BearerAuth
 // @Param name path string true "Provider name"
 // @Param body body providerUpdateInput true "Fields to update"
-// @Success 200 {object} map[string]string
+// @Success 200 {object} map[string]any "status, and restart_required when the change is saved but not live"
 // @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Router /llm/providers/{name} [patch]
@@ -299,10 +299,11 @@ func (s *Server) handlePatchLLMProvider(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Apply to in-memory config and persist.
-	s.applyLLMProviderUpdate(name, &input, nullCosts)
+	updated := s.applyLLMProviderUpdate(name, &input, nullCosts)
 	s.persistLLMProvider(name, &input, nullCosts)
+	live := s.applyProviderLive(name, updated)
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "restart_required": !live})
 }
 
 // validateOpenRouterUpdate checks the OpenRouter-only fields (reasoning,
@@ -349,9 +350,11 @@ func findProviderIn(cfg *config.Config, name string) *config.ProviderInstanceCon
 	return nil
 }
 
-func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput, nulls nullCostFields) {
+// applyLLMProviderUpdate writes the update into a fresh snapshot, syncs the
+// cost tracker, and returns the snapshot.
+func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput, nulls nullCostFields) *config.Config {
 	var soft, hard *float64
-	s.deps.Config.Update(func(c *config.Config) {
+	updated := s.deps.Config.Update(func(c *config.Config) {
 		pc := findProviderIn(c, name)
 		if pc == nil {
 			return
@@ -360,6 +363,7 @@ func (s *Server) applyLLMProviderUpdate(name string, input *providerUpdateInput,
 		soft, hard = pc.CostLimitSoft, pc.CostLimitHard
 	})
 	s.syncProviderCostTracker(name, soft, hard)
+	return updated
 }
 
 // applyProviderFields writes a provider update into cfg, including the legacy
@@ -648,15 +652,26 @@ type providerCreateInput struct {
 	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
 }
 
+// providerCreateResponse is the body of a successful POST /api/v1/llm/providers.
+type providerCreateResponse struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	// Default is true when this was the first provider and became default_provider.
+	Default bool `json:"default,omitempty"`
+	// RestartRequired is true when the provider is saved but not yet usable.
+	RestartRequired bool   `json:"restart_required,omitempty"`
+	Warning         string `json:"warning,omitempty"`
+}
+
 // handleCreateLLMProvider godoc
 // @Summary Create LLM provider
-// @Description Creates a new named provider instance and persists to TOML
+// @Description Creates a new named provider instance, persists it to TOML and makes it usable by agents without a restart. The first provider on a config with no default_provider becomes the default.
 // @Tags providers
 // @Accept json
 // @Produce json
 // @Security BearerAuth
 // @Param body body providerCreateInput true "Provider configuration"
-// @Success 201 {object} map[string]string
+// @Success 201 {object} providerCreateResponse
 // @Failure 400 {object} map[string]string
 // @Failure 409 {object} map[string]string
 // @Router /llm/providers [post]
@@ -676,41 +691,9 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if !config.ValidResourceName(input.Name) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid provider name: must be lowercase alphanumeric with hyphens, 1-64 chars",
-		})
-		return
-	}
-
-	if !config.ValidProviderType(input.Type) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid provider type: must be one of: anthropic, openai, openrouter, ollama",
-		})
-		return
-	}
-
-	if s.appConfig().LLM.HasProvider(input.Name) {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "provider already exists: " + input.Name,
-		})
-		return
-	}
-
-	if msg := validateBaseURL(input.BaseURL); msg != "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
-		return
-	}
-
-	if input.Organization != "" && input.Type != "openai" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "organization is only supported for openai-type providers",
-		})
-		return
-	}
-
-	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+	snap := s.appConfig()
+	if status, msg := validateProviderCreate(&input, snap); status != 0 {
+		writeJSON(w, status, map[string]string{"error": msg})
 		return
 	}
 
@@ -725,10 +708,10 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	makeDefault := s.persistFirstProviderDefault(snap, input.Name)
 	costPersistErr := s.persistCreateProviderCosts(input.Name, input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens, input.ModelPrices)
 
-	// Update in-memory config.
-	s.deps.Config.Update(func(c *config.Config) {
+	updated := s.deps.Config.Update(func(c *config.Config) {
 		c.LLM.Providers = append(c.LLM.Providers, config.ProviderInstanceConfig{
 			Name:                  input.Name,
 			Type:                  input.Type,
@@ -740,7 +723,11 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 			DefaultRatePerKTokens: input.DefaultRatePerKTokens,
 			ModelPrices:           input.ModelPrices,
 		})
+		if makeDefault {
+			c.LLM.DefaultProvider = input.Name
+		}
 	})
+	live := s.applyProviderLive(input.Name, updated)
 
 	if s.deps.Auditor != nil {
 		s.deps.Auditor.Emit(r.Context(), audit.Event{
@@ -752,14 +739,49 @@ func (s *Server) handleCreateLLMProvider(w http.ResponseWriter, r *http.Request)
 		})
 	}
 
-	resp := map[string]string{
-		"name":   input.Name,
-		"status": "created",
-	}
+	resp := providerCreateResponse{Name: input.Name, Status: "created", Default: makeDefault, RestartRequired: !live}
 	if costPersistErr != nil {
-		resp["warning"] = "cost fields not persisted to config: " + costPersistErr.Error()
+		resp.Warning = "cost fields not persisted to config: " + costPersistErr.Error()
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// validateProviderCreate checks a create body against snap. It returns a zero
+// status when the input is valid.
+func validateProviderCreate(input *providerCreateInput, snap *config.Config) (int, string) {
+	if !config.ValidResourceName(input.Name) {
+		return http.StatusBadRequest, "invalid provider name: must be lowercase alphanumeric with hyphens, 1-64 chars"
+	}
+	if !config.ValidProviderType(input.Type) {
+		return http.StatusBadRequest, "invalid provider type: must be one of: anthropic, openai, openrouter, ollama"
+	}
+	if snap.LLM.HasProvider(input.Name) {
+		return http.StatusConflict, "provider already exists: " + input.Name
+	}
+	if msg := validateBaseURL(input.BaseURL); msg != "" {
+		return http.StatusBadRequest, msg
+	}
+	if input.Organization != "" && input.Type != "openai" {
+		return http.StatusBadRequest, "organization is only supported for openai-type providers"
+	}
+	if msg := validateCostFields(input.CostLimitSoft, input.CostLimitHard, input.DefaultRatePerKTokens); msg != "" {
+		return http.StatusBadRequest, msg
+	}
+	return 0, ""
+}
+
+// persistFirstProviderDefault makes name the default provider when snap has
+// none, which is the case on a blank first-run config. It reports whether the
+// default was written.
+func (s *Server) persistFirstProviderDefault(snap *config.Config, name string) bool {
+	if snap.LLM.DefaultProvider != "" {
+		return false
+	}
+	if err := config.UpdateLLMConfig(s.deps.ConfigPath, map[string]any{"default_provider": name}); err != nil {
+		s.logger.Warn("failed to persist first provider as default", "provider", name, "error", err)
+		return false
+	}
+	return true
 }
 
 // handleDeleteLLMProvider godoc
@@ -822,6 +844,10 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	})
+	// Safe while live: the reference check above means no agent routes to it.
+	if s.deps.Providers != nil {
+		s.deps.Providers.Remove(name)
+	}
 
 	if s.deps.Auditor != nil {
 		s.deps.Auditor.Emit(r.Context(), audit.Event{

@@ -1770,6 +1770,17 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Logger:          a.logger,
 	})
 
+	agentFactory := func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
+		// Build against the current snapshot, not the boot one, so an
+		// agent created after a reload picks up the reloaded settings.
+		abc := a.abc
+		abc.cfg = a.cfgHolder.Get()
+		return buildAgentEngine(ctx, ac, abc)
+	}
+	live := &liveProviders{set: a.abc.llm.providers}
+	catalog := newCatalogRouter(a.abc.llm)
+	rt := reloadRuntime{providers: live, buildAgent: agentFactory, deciders: a.abc.llm.deciders}
+
 	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, a.evalJudge, api.Deps{
 		Dispatcher:        a.dispatcher,
 		Scheduler:         a.sched,
@@ -1789,22 +1800,17 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		EvalRunner:        a.evalRunner,
 		EvalJudge:         a.evalJudge,
 		ConfigPath:        a.path,
-		ModelLister:       a.dispatcher.ListModels,
-		ModelDetailLister: a.dispatcher.ListModelDetails,
+		ModelLister:       catalog.ListModels,
+		ModelDetailLister: catalog.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
-		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, a.logger),
+		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, rt, a.logger),
 		RestartFunc:       selfRestartFunc,
-		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
-			// Build against the current snapshot, not the boot one, so an
-			// agent created after a reload picks up the reloaded settings.
-			abc := a.abc
-			abc.cfg = a.cfgHolder.Get()
-			return buildAgentEngine(ctx, ac, abc)
-		},
-		Version:   version,
-		Commit:    commit,
-		BuildDate: date,
+		AgentFactory:      agentFactory,
+		Providers:         live,
+		Version:           version,
+		Commit:            commit,
+		BuildDate:         date,
 	}, hasActiveKey, a.logger)
 }
 
@@ -2222,13 +2228,28 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 // request in flight during a reload sees one config or the other, never a mix.
 // Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
 // re-applied to live engines so they don't go stale after a reload.
-func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, logger *slog.Logger) func() error {
+// reloadRuntime is what a reload needs beyond config to pick up providers and
+// agents added to the TOML by hand. A zero value skips both.
+type reloadRuntime struct {
+	providers  *liveProviders
+	buildAgent func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error)
+	deciders   map[string]*llm.Decider
+}
+
+func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, rt reloadRuntime, logger *slog.Logger) func() error {
 	return func() error {
 		cfg, err := config.Load(path)
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
 		cfgHolder.Store(cfg)
+
+		if rt.providers != nil {
+			syncProviders(*rt.providers, cfg)
+		}
+		if rt.buildAgent != nil {
+			reloadNewAgents(cfg, dispatcher, rt, logger)
+		}
 
 		// Re-apply the TOML auto-approve policy wholesale: a reload that
 		// narrows a list must narrow the effective rules too.
@@ -2257,6 +2278,40 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		logger.Info("config reloaded from disk", "path", path)
 		return nil
 	}
+}
+
+// reloadNewAgents builds and registers agents present in cfg but not yet
+// running, then wires their supervisors. This is what makes "edit
+// denkeeper.toml, then Reload" work after setup was skipped. Adapter bindings
+// for these agents still need a restart.
+func reloadNewAgents(cfg *config.Config, dispatcher *agent.Dispatcher, rt reloadRuntime, logger *slog.Logger) {
+	var added []config.AgentInstanceConfig
+	for _, ac := range cfg.Agents {
+		if dispatcher.Agent(ac.Name) != nil {
+			continue
+		}
+		e, _, err := rt.buildAgent(ac)
+		if err != nil {
+			logger.Warn("reload: agent not built", "agent", ac.Name, "error", err)
+			continue
+		}
+		if err := dispatcher.AddAgent(ac.Name, e); err != nil {
+			logger.Warn("reload: agent not registered", "agent", ac.Name, "error", err)
+			continue
+		}
+		added = append(added, ac)
+		logger.Info("reload: agent added", "agent", ac.Name)
+	}
+	if len(added) == 0 {
+		return
+	}
+	engines := make(map[string]*agent.Engine, len(cfg.Agents))
+	for _, ac := range cfg.Agents {
+		if e := dispatcher.Agent(ac.Name); e != nil {
+			engines[ac.Name] = e
+		}
+	}
+	wireSupervisors(added, engines, rt.deciders, logger)
 }
 
 // replyGuardFrom translates the TOML reply-guard policy into the engine-side

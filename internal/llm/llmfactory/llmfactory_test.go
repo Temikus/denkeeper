@@ -51,7 +51,11 @@ func TestNew_HTTPClientOverride_IsUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	models, err := p.(llm.ModelLister).ListModels(context.Background())
+	lister, ok := p.(llm.ModelLister)
+	if !ok {
+		t.Fatal("anthropic client does not list models")
+	}
+	models, err := lister.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}

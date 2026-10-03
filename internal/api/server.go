@@ -76,6 +76,7 @@ type Deps struct {
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
+	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                                   // git commit hash
 	BuildDate         string                                                                   // build timestamp
