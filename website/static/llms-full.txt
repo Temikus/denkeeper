@@ -346,7 +346,7 @@ Global MCP settings.
 
 ### [decide]
 
-    enabled = true                   # switch the decide tool off without unnaming the decider
+    enabled = true                   # enable the decide tool once a decider is named; set false to switch it off without unnaming the decider
     decider = ""                     # [[llm.deciders]] entry the agent-facing decide tool calls; empty = no tool (restart-only)
 
 ### [skills]
