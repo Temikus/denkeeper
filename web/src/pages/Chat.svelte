@@ -83,6 +83,11 @@
       agents = res || []
       agentsLoaded = true
       await initChat(agents)
+      // initChat runs once per page load, so agents created since then
+      // (wizard, Reload config) leave a stale or empty selection.
+      if (agents.length && !agents.some(a => a.name === get(chatState).agent)) {
+        setAgent(agents[0].name)
+      }
       // The Skills page queues a command to send; the setup wizard queues
       // one to prefill (send: false), or none to just pick the agent.
       const pending = get(pendingSkillTest)

@@ -32,7 +32,8 @@
   let shortSup = $derived((draft.supervisorModel || 'the default model').replace(/^[a-z]+\//, ''))
 
   $effect(() => {
-    ready = (nameOK || !!draft.saved) && !!draft.model.trim() && !saving
+    // A saved agent may have no model of its own (it uses the default).
+    ready = !saving && (!!draft.saved || (nameOK && !!draft.model.trim()))
   })
 
   onMount(async () => {

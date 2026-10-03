@@ -375,4 +375,16 @@ describe('SetupWizard', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     await headingIs('Connect a provider')
   })
+
+  test('a saved agent on the default model can still Continue', async () => {
+    const body = onboarding({ provider: true, agent: true })
+    body.wizard.steps[1].detail.model = ''
+    serveOnboarding(body)
+    server.use(http.get('/api/v1/models/details', () => HttpResponse.json({ models: [] })))
+    render(SetupWizard)
+    await headingIs('Give it a personality')
+    await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await headingIs('Create an agent')
+    await waitFor(() => expect(continueBtn()).toBeEnabled())
+  })
 })
