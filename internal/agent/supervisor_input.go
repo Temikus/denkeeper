@@ -37,16 +37,16 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 		tool:           tc.Function.Name,
 		arguments:      tc.Function.Arguments,
 		skill:          agentctx.SkillContext(ctx),
-		bodyExcerptLen: e.supervisorBodyExcerptLen,
+		bodyExcerptLen: e.SupervisorBodyExcerptLen(),
 	}
 	if e.tools != nil {
 		if desc := e.tools.ToolDescription(in.tool); desc != "" {
-			in.toolDescription = truncateForSupervisor(desc, e.supervisorToolDescLen)
+			in.toolDescription = truncateForSupervisor(desc, e.SupervisorToolDescLen())
 		}
 		in.toolGuidance = e.tools.GuidanceForTool(in.tool)
 	}
 
-	recent, err := e.memory.GetMessages(ctx, convID, e.supervisorContextMessages)
+	recent, err := e.memory.GetMessages(ctx, convID, e.SupervisorContextMessages())
 	if err != nil {
 		// Proceed without context rather than blocking.
 		e.logger.Warn("supervisor: failed to load conversation context", "error", err)

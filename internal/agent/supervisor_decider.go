@@ -226,7 +226,7 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 
 // resolveDeciderVerdict acts on an enforce-mode verdict. done is false when
 // the call must go on to the next stage (supervisor, else human).
-func (e *Engine) resolveDeciderVerdict(stage *deciderStage, decision supervisorDecision, reason string, tc llm.ToolCall, round int, onEvent ChatEventFunc) (outcome approvalOutcome, done bool) {
+func (e *Engine) resolveDeciderVerdict(stage *deciderStage, decision supervisorDecision, reason string, hasSupervisor bool, tc llm.ToolCall, round int, onEvent ChatEventFunc) (outcome approvalOutcome, done bool) {
 	name := stage.decider.Name()
 	reason = strings.TrimPrefix(reason, "decider: ")
 	emit := func(status, text string) {
@@ -244,7 +244,7 @@ func (e *Engine) resolveDeciderVerdict(stage *deciderStage, decision supervisorD
 	default:
 		// The supervisor reports its own verdict; only a human hand-off needs
 		// the decider's escalation shown.
-		if e.supervisor == nil {
+		if !hasSupervisor {
 			emit("supervisor_escalated", fmt.Sprintf("Decider (%s) escalated — awaiting your review: %s", name, reason))
 		}
 		return approvalOutcome{}, false

@@ -1385,6 +1385,39 @@ func TestDispatcher_ResolveChannel_SpecificBinding(t *testing.T) {
 	}
 }
 
+// A renamed agent keeps its channels: routing must not look up the old name.
+func TestDispatcher_RenameAgent_RewritesChannelAgent(t *testing.T) {
+	defaultEngine := newTestEngine(t, "default", &sentMessages{})
+	workEngine := newTestEngine(t, "work", &sentMessages{})
+
+	channels := []*Channel{
+		{Name: "personal", AgentName: "default", Adapters: []string{"telegram"}},
+		{Name: "work", AgentName: "work", Adapters: []string{"telegram:99999"}},
+	}
+	d := NewDispatcher(
+		map[string]*Engine{"default": defaultEngine, "work": workEngine},
+		nil,
+		nil,
+		testLogger(),
+		WithChannels(channels, nil),
+	)
+
+	if err := d.RenameAgent("work", "ops"); err != nil {
+		t.Fatalf("RenameAgent: %v", err)
+	}
+
+	ch, e := d.resolveChannel(adapter.IncomingMessage{Adapter: "telegram", ExternalID: "99999", Text: "hi", Timestamp: time.Now()})
+	if ch == nil || ch.Name != "work" {
+		t.Fatalf("resolveChannel channel = %v, want work", ch)
+	}
+	if e != workEngine {
+		t.Errorf("resolveChannel engine = %v, want the renamed work engine", e)
+	}
+	if ch.AgentName != "ops" {
+		t.Errorf("channel AgentName = %q, want ops", ch.AgentName)
+	}
+}
+
 func TestDispatcher_ResolveChannel_WildcardBinding(t *testing.T) {
 	sentDefault := &sentMessages{}
 	defaultEngine := newTestEngine(t, "default", sentDefault)

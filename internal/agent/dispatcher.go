@@ -574,6 +574,11 @@ func (d *Dispatcher) RenameAgent(oldName, newName string) error {
 			d.wildcard[k] = newName
 		}
 	}
+	for _, ch := range d.channels {
+		if ch.AgentName == oldName {
+			ch.AgentName = newName
+		}
+	}
 
 	e.SetName(newName)
 	return nil

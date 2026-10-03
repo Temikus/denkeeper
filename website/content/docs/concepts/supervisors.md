@@ -87,6 +87,8 @@ Validation rejects configurations that would deadlock or recurse:
 - It must not itself be supervised — no chains
 - It must not use the `supervised` tier, which would deadlock
 - `supervisor` is only meaningful on a supervised agent
+
+An agent with no `session_tier` runs under `[session] tier`, which defaults to `supervised`, and validation checks that tier. Set the supervisor's `session_tier` explicitly.
 - An agent that is referenced as a supervisor cannot be deleted
 
 The review is a single call with no storage, no skills, and no tool loop of its own, which is what keeps it cheap enough to sit in front of every tool call. A small fast model is usually the right choice.

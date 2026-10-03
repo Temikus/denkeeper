@@ -410,13 +410,26 @@ func (s *Server) updateInMemoryAgentConfig(name string, input *agentConfigUpdate
 	})
 }
 
-// renameInMemoryAgent updates the agent name in the in-memory config slice.
+// renameInMemoryAgent mirrors config.RenameAgentInConfig on the in-memory
+// snapshot: the agent itself and every supervisor, channel and schedule ref.
 func (s *Server) renameInMemoryAgent(oldName, newName string) {
 	s.deps.Config.Update(func(c *config.Config) {
 		for i := range c.Agents {
 			if c.Agents[i].Name == oldName {
 				c.Agents[i].Name = newName
-				return
+			}
+			if c.Agents[i].Supervisor == oldName {
+				c.Agents[i].Supervisor = newName
+			}
+		}
+		for i := range c.Channels {
+			if c.Channels[i].Agent == oldName {
+				c.Channels[i].Agent = newName
+			}
+		}
+		for i := range c.Schedules {
+			if c.Schedules[i].Agent == oldName {
+				c.Schedules[i].Agent = newName
 			}
 		}
 	})
@@ -430,26 +443,20 @@ func (s *Server) applySupervisorChanges(name string, e *agent.Engine, input *age
 			return errMsg
 		}
 	}
-	if input.SupervisorTimeout != nil || input.SupervisorContextMessages != nil {
-		var timeout time.Duration
-		var ctxMsgs int
-		if input.SupervisorTimeout != nil {
-			timeout, _ = time.ParseDuration(*input.SupervisorTimeout) // validated earlier
-		}
-		if input.SupervisorContextMessages != nil {
-			ctxMsgs = *input.SupervisorContextMessages
-		}
-		e.SetSupervisorConfig(timeout, ctxMsgs)
+	// Only the knobs present in the request change; "" or 0 restores the
+	// default, matching what the TOML write means on the next load.
+	if input.SupervisorTimeout != nil {
+		timeout, _ := time.ParseDuration(*input.SupervisorTimeout) // validated earlier; "" = 0
+		e.SetSupervisorTimeout(timeout)
 	}
-	if input.SupervisorBodyExcerptLen != nil || input.SupervisorToolDescLen != nil {
-		var bodyLen, descLen int
-		if input.SupervisorBodyExcerptLen != nil {
-			bodyLen = *input.SupervisorBodyExcerptLen
-		}
-		if input.SupervisorToolDescLen != nil {
-			descLen = *input.SupervisorToolDescLen
-		}
-		e.SetSupervisorExcerptConfig(bodyLen, descLen)
+	if input.SupervisorContextMessages != nil {
+		e.SetSupervisorContextMessages(*input.SupervisorContextMessages)
+	}
+	if input.SupervisorBodyExcerptLen != nil {
+		e.SetSupervisorBodyExcerptLen(*input.SupervisorBodyExcerptLen)
+	}
+	if input.SupervisorToolDescLen != nil {
+		e.SetSupervisorToolDescLen(*input.SupervisorToolDescLen)
 	}
 	return ""
 }
@@ -768,15 +775,9 @@ func (s *Server) createCompanionSupervisor(agentName string, mainEngine *agent.E
 func (s *Server) wireCompanionSupervisor(agentName string, mainEngine, supEngine *agent.Engine, sup *companionSupervisorInput) {
 	mainEngine.SetSupervisor(supEngine)
 
-	timeout, err := time.ParseDuration(sup.Timeout)
-	if err != nil {
-		timeout = 30 * time.Second
-	}
-	ctxMsgs := sup.ContextMessages
-	if ctxMsgs == 0 {
-		ctxMsgs = 5
-	}
-	mainEngine.SetSupervisorConfig(timeout, ctxMsgs)
+	timeout, _ := time.ParseDuration(sup.Timeout) // unparseable = 0 = default
+	mainEngine.SetSupervisorTimeout(timeout)
+	mainEngine.SetSupervisorContextMessages(sup.ContextMessages)
 
 	supName := resolveCompanionName(sup)
 	supChanges := map[string]any{"supervisor": supName}

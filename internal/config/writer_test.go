@@ -1136,3 +1136,72 @@ func TestWebEnabled_NilDefaultsTrue(t *testing.T) {
 		t.Error("WebEnabled() with nil pointer = false, want true")
 	}
 }
+
+// renameRefsConfig has a supervised worker, a supervisor and a channel all
+// naming "guard", so a rename that misses one fails the next Load.
+const renameRefsConfig = `[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[[agents]]
+name = "worker"
+persona_dir = "/agents/worker"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "autonomous"
+
+[[channels]]
+name = "ops"
+agent = "guard"
+`
+
+func TestRenameAgentInConfig_RewritesSupervisorRefs(t *testing.T) {
+	path := writeTestConfig(t, renameRefsConfig)
+
+	if err := RenameAgentInConfig(path, "guard", "argus"); err != nil {
+		t.Fatalf("RenameAgentInConfig: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	worker, _ := rawAgents(raw)[0].(map[string]any)
+	if worker["supervisor"] != "argus" {
+		t.Errorf("worker supervisor = %v, want argus", worker["supervisor"])
+	}
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load after rename: %v", err)
+	}
+}
+
+func TestRenameAgentInConfig_RewritesChannelAgent(t *testing.T) {
+	path := writeTestConfig(t, renameRefsConfig)
+
+	if err := RenameAgentInConfig(path, "guard", "argus"); err != nil {
+		t.Fatalf("RenameAgentInConfig: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatalf("ReadRawConfig: %v", err)
+	}
+	channels, _ := raw["channels"].([]any)
+	if len(channels) != 1 {
+		t.Fatalf("channels = %v, want one entry", raw["channels"])
+	}
+	if ch, _ := channels[0].(map[string]any); ch["agent"] != "argus" {
+		t.Errorf("channel agent = %v, want argus", ch["agent"])
+	}
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load after rename: %v", err)
+	}
+}

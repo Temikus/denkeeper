@@ -107,6 +107,111 @@ func TestAgentConfig_RenameAgent(t *testing.T) {
 	}
 }
 
+// Renaming a supervisor must carry every reference with it: the reviewing
+// agent's supervisor and a channel pointing at it, on disk and in memory.
+func TestAgentConfig_RenameSupervisor_RewritesRefs(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "denkeeper.toml")
+	initialConfig := `
+[telegram]
+token = "test"
+allowed_users = [1]
+
+[llm.openrouter]
+api_key = "sk-or-test"
+
+[[agents]]
+name = "worker"
+persona_dir = "` + filepath.Join(dir, "worker") + `"
+adapters = ["telegram"]
+session_tier = "supervised"
+
+[[agents]]
+name = "guard"
+persona_dir = "` + filepath.Join(dir, "guard") + `"
+session_tier = "autonomous"
+
+[[channels]]
+name = "ops"
+agent = "guard"
+`
+	if err := os.WriteFile(cfgPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "worker", Tier: "supervised", Adapters: []string{"telegram"}},
+			{Name: "guard", Tier: "autonomous"},
+		},
+		ConfigPath: cfgPath,
+	})
+
+	// Ordered: the supervisor must be set before it is renamed.
+	for _, p := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/api/v1/agents/worker", map[string]any{"supervisor": "guard"}},
+		{"/api/v1/agents/guard", map[string]any{"name": "argus"}},
+	} {
+		if rec := h.Do(h.AuthedRequest(http.MethodPatch, p.path, p.body)); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s: status = %d; body: %s", p.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("the renamed config does not load: %v", err)
+	}
+	if got := cfg.Agents[0].Supervisor; got != "argus" {
+		t.Errorf("persisted worker supervisor = %q, want argus", got)
+	}
+
+	rec := h.Do(h.AuthedRequest(http.MethodGet, "/api/v1/agents/worker", nil))
+	var detail map[string]any
+	DecodeJSON(t, rec, &detail)
+	if detail["supervisor"] != "argus" {
+		t.Errorf("GET worker supervisor = %v, want argus", detail["supervisor"])
+	}
+}
+
+// A PATCH changes only the supervisor knobs it names, and "" or 0 restores a
+// knob's default on the live engine, as it does on the next load.
+func TestAgentConfig_SupervisorKnobs_PartialPatchAndClear(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{
+		Agents: []agentSetup{
+			{Name: "worker", Tier: "supervised", Adapters: []string{"telegram"}},
+			{Name: "guard", Tier: "autonomous"},
+		},
+	})
+	worker := h.Dispatcher.Agent("worker")
+	defTimeout, defCtx := worker.SupervisorTimeout(), worker.SupervisorContextMessages()
+
+	patch := func(body map[string]any) {
+		t.Helper()
+		if rec := h.Do(h.AuthedRequest(http.MethodPatch, "/api/v1/agents/worker", body)); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %v: status = %d; body: %s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	patch(map[string]any{"supervisor": "guard", "supervisor_timeout": "7s"})
+	patch(map[string]any{"supervisor_context_messages": 9})
+	if got := worker.SupervisorTimeout(); got != 7*time.Second {
+		t.Errorf("timeout after a context-only PATCH = %v, want 7s", got)
+	}
+	if got := worker.SupervisorContextMessages(); got != 9 {
+		t.Errorf("context messages = %d, want 9", got)
+	}
+
+	patch(map[string]any{"supervisor_timeout": "", "supervisor_context_messages": 0})
+	if got := worker.SupervisorTimeout(); got != defTimeout {
+		t.Errorf("timeout after clearing = %v, want default %v", got, defTimeout)
+	}
+	if got := worker.SupervisorContextMessages(); got != defCtx {
+		t.Errorf("context messages after clearing = %d, want default %d", got, defCtx)
+	}
+}
+
 func TestAgentConfig_RenameDefault_Succeeds(t *testing.T) {
 	h := NewHarness(t, nil)
 
