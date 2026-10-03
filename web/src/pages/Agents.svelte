@@ -302,18 +302,27 @@
     return ''
   })
 
+  // A new decider starts from defaults, matching what the API persists.
+  function onDeciderSelect() {
+    configDeciderMode = 'shadow'
+    configDeciderApproveAt = ''
+    configDeciderDenyAt = ''
+  }
+
   // The decider fields to PATCH. Leaving the supervised tier clears the
-  // decider: the API rejects one on any other tier.
+  // decider: the API rejects one on any other tier. A decider change sends
+  // the tuning too, since the API resets it otherwise.
   function deciderChanges() {
     const data = {}
     const decider = configTier === 'supervised' ? configDecider : ''
-    if (decider !== (detail.supervisor_decider || '')) data.supervisor_decider = decider
+    const changed = decider !== (detail.supervisor_decider || '')
+    if (changed) data.supervisor_decider = decider
     if (!decider) return data
-    if (configDeciderMode !== (detail.supervisor_decider_mode || 'shadow')) data.supervisor_decider_mode = configDeciderMode
+    if (changed || configDeciderMode !== (detail.supervisor_decider_mode || 'shadow')) data.supervisor_decider_mode = configDeciderMode
     const approve = thresholdValue(configDeciderApproveAt)
-    if (approve !== (detail.supervisor_decider_approve_at ?? 0)) data.supervisor_decider_approve_at = approve
+    if (changed || approve !== (detail.supervisor_decider_approve_at ?? 0)) data.supervisor_decider_approve_at = approve
     const deny = thresholdValue(configDeciderDenyAt)
-    if (deny !== (detail.supervisor_decider_deny_at ?? 0)) data.supervisor_decider_deny_at = deny
+    if (changed || deny !== (detail.supervisor_decider_deny_at ?? 0)) data.supervisor_decider_deny_at = deny
     return data
   }
 
@@ -850,7 +859,7 @@
                 {/if}
                 {#if deciders.length || configDecider}
                   <label class="config-label" for="cfg-decider">Decision Model</label>
-                  <select id="cfg-decider" class="config-input" bind:value={configDecider}>
+                  <select id="cfg-decider" class="config-input" bind:value={configDecider} onchange={onDeciderSelect}>
                     <option value="">None</option>
                     {#if configDecider && !deciders.some(d => d.name === configDecider)}
                       <option value={configDecider}>{configDecider} (not configured)</option>

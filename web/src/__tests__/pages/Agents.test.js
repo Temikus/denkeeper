@@ -277,7 +277,7 @@ describe('Agents permission config', () => {
 
   // Renders the supervised "default" agent with one configured decision model
   // and returns a getter for the body of the next PATCH.
-  function setupDeciderAgent(agentFields = {}) {
+  function setupDeciderAgent(agentFields = {}, deciders = [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }]) {
     const agent = {
       name: 'default', model: 'claude-3-opus', permission_tier: 'supervised',
       skill_count: 0, has_tools: false, max_tool_rounds: 50, fallbacks: [],
@@ -292,7 +292,7 @@ describe('Agents permission config', () => {
       http.get('/api/v1/llm/providers', () => HttpResponse.json({
         default_provider: 'openrouter',
         providers: [{ name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true }],
-        deciders: [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }],
+        deciders,
       })),
       http.patch('/api/v1/agents/:name', async ({ request }) => {
         patchBody = await request.json()
@@ -320,10 +320,37 @@ describe('Agents permission config', () => {
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(patchBody()).not.toBeNull())
+    // A decider change always carries the tuning, so the saved config
+    // matches the form rather than the API's reset defaults.
     expect(patchBody()).toEqual({
       supervisor_decider: 'jev',
       supervisor_decider_mode: 'enforce',
       supervisor_decider_approve_at: 0.9,
+      supervisor_decider_deny_at: 0,
+    })
+  })
+
+  test('switching decision model resets mode and thresholds in the form', async () => {
+    const patchBody = setupDeciderAgent({
+      supervisor_decider: 'jev', supervisor_decider_mode: 'enforce',
+      supervisor_decider_approve_at: 0.6, supervisor_decider_deny_at: 0.4,
+    }, [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }, { name: 'jev2', provider: 'openrouter', model: 'typesafe/jev-1.14' }])
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+    await waitFor(() => screen.getByLabelText('Decision Model Mode'))
+    expect(screen.getByLabelText('Decision Model Mode').value).toBe('enforce')
+
+    await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: 'jev2' } })
+    expect(screen.getByLabelText('Decision Model Mode').value).toBe('shadow')
+    expect(screen.getByLabelText('Approve Threshold').value).toBe('')
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).not.toBeNull())
+    expect(patchBody()).toEqual({
+      supervisor_decider: 'jev2',
+      supervisor_decider_mode: 'shadow',
+      supervisor_decider_approve_at: 0,
+      supervisor_decider_deny_at: 0,
     })
   })
 
