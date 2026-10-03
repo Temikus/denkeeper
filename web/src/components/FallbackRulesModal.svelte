@@ -316,7 +316,7 @@
     border-radius: 4px;
     font-family: monospace;
   }
-  .legend-post { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); }
+  .legend-post { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); }
   .legend-pre { color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); }
 
   .legend-spacer { flex: 1; }

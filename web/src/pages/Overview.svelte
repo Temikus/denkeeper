@@ -194,7 +194,7 @@
   .label { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
   .value { font-size: 28px; font-weight: 700; }
   .value.ok   { color: var(--success); }
-  .value.warn { color: var(--warn); }
+  .value.warn { color: var(--warn-text); }
   .cost-table-wrapper {
     background: var(--surface);
     border: 1px solid var(--border);

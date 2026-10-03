@@ -256,7 +256,7 @@
   }
 
   .session-chip { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
-  .chip-warn { color: var(--warn); background: rgba(186,117,23,0.12); }
+  .chip-warn { color: var(--warn-text); background: rgba(186,117,23,0.12); }
   .chip-error { color: var(--danger); background: rgba(226,75,74,0.10); }
 
   .spacer { flex: 1; }

@@ -216,7 +216,7 @@
 
   .badge {
     display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
-    color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 1px 5px;
+    color: var(--warn-text); border: 1px solid var(--warn); border-radius: 4px; padding: 1px 5px;
   }
   .badge-error { color: var(--danger); border-color: var(--danger); }
 

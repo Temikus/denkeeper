@@ -526,7 +526,7 @@
     font-size: 11px; font-weight: 500; text-transform: capitalize;
   }
   .tier-autonomous { background: rgba(76,175,125,0.15); color: var(--success); }
-  .tier-supervised { background: rgba(240,169,88,0.15); color: var(--warn); }
+  .tier-supervised { background: rgba(240,169,88,0.15); color: var(--warn-text); }
   .tier-restricted { background: rgba(224,92,110,0.15); color: var(--danger); }
 
   /* Rows */

@@ -1827,7 +1827,7 @@
   }
   .defs-req-badge.required {
     background: rgba(200, 126, 48, 0.12);
-    color: var(--warn);
+    color: var(--warn-text);
   }
   .defs-req-badge.optional {
     color: var(--text-muted);
@@ -1845,7 +1845,7 @@
   }
   .defs-tag.write {
     background: rgba(200, 126, 48, 0.12);
-    color: var(--warn);
+    color: var(--warn-text);
   }
 
   .defs-footer {

@@ -2,184 +2,186 @@
   import { navigate } from '../router.js'
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
-  import { panicStatus } from '../wsStore.js'
-  import { relativeTime } from '../relativeTime.js'
+  import { attention } from '../attention.js'
+  import { sections } from '../navItems.js'
 
-  let error = $state('')
+  // Pages that already have a tab in the bottom bar.
+  const TABS = new Set(['overview', 'chat', 'approvals', 'agents'])
 
-  const sections = [
-    {
-      label: 'Agents',
-      items: [
-        { id: 'sessions',  label: 'Sessions' },
-        { id: 'channels',  label: 'Channels' },
-        { id: 'schedules', label: 'Schedules' },
-        { id: 'approvals', label: 'Approvals' },
-        { id: 'audit',     label: 'Audit Log' },
-        { id: 'traces',    label: 'Turn inspector' },
-      ],
-    },
-    {
-      label: 'Platform',
-      items: [
-        { id: 'skills',  label: 'Skills' },
-        { id: 'browser', label: 'Browser' },
-        { id: 'kv',      label: 'KV Store' },
-      ],
-    },
-    {
-      label: 'Admin',
-      items: [
-        { id: 'server',    label: 'Server' },
-        { id: 'providers', label: 'Providers' },
-        { id: 'costs',     label: 'Costs' },
-        { id: 'evals',     label: 'Evals' },
-        { id: 'keys',      label: 'API Keys' },
-        { id: 'settings',  label: 'Settings' },
-      ],
-    },
-  ]
+  const groups = sections
+    .map(s => ({ ...s, items: s.items.filter(i => !TABS.has(i.id)) }))
+    .filter(s => s.items.length > 0)
+
+  // The first group is short and used daily, so it is always listed; the rest
+  // open in place.
+  let open = $state({})
+
+  const broken = $derived($attention.unhealthyTools.length)
 
   function logout() {
     api.logout().catch(() => {})
     token.clear()
     authMode.set(null)
   }
-
-  async function triggerPanic() {
-    if (!confirm('Emergency stop: cancel ALL in-flight requests and pause the scheduler?')) return
-    try {
-      await api.panic()
-    } catch (e) {
-      error = 'Panic failed: ' + e.message
-    }
-  }
-
-  async function triggerResume() {
-    try {
-      await api.resume()
-      error = ''
-    } catch (e) {
-      error = 'Resume failed: ' + e.message
-    }
-  }
 </script>
 
 <h1 class="page-title">More</h1>
 
-{#each sections as section}
-  <div class="section">
-    <span class="section-label">{section.label}</span>
-    <ul class="section-list">
-      {#each section.items as item}
-        <li>
-          <button class="menu-row" onclick={() => navigate(item.id)}>
-            <span>{item.label}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  </div>
+{#each groups as group, gi}
+  <section class="group" aria-labelledby="more-{group.id}">
+    {#if gi === 0}
+      <h2 class="group-label" id="more-{group.id}">{group.label}</h2>
+      <ul class="card">
+        {#each group.items as item}
+          <li>
+            <button class="menu-row" onclick={() => navigate(item.id)}>
+              <span>{item.label}</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <div class="card">
+        <button
+          class="group-row"
+          aria-expanded={!!open[group.id]}
+          aria-controls="more-list-{group.id}"
+          onclick={() => { open[group.id] = !open[group.id] }}
+        >
+          <span class="group-text">
+            <span class="group-name" id="more-{group.id}">{group.label}</span>
+            <span class="group-summary">{group.items.map(i => i.label).join(', ')}</span>
+          </span>
+          {#if group.id === 'platform' && broken > 0}
+            <span class="problem"><span class="problem-dot" aria-hidden="true"></span>{broken} tool{broken === 1 ? '' : 's'} down</span>
+          {/if}
+          <svg class="chevron" class:open={open[group.id]} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <ul class="sub-list" id="more-list-{group.id}" hidden={!open[group.id]}>
+          {#each group.items as item}
+            <li>
+              <button class="menu-row" onclick={() => navigate(item.id)}>
+                <span>{item.label}</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+  </section>
 {/each}
 
-<div class="footer-actions">
-  <button class="menu-row" onclick={() => theme.toggle()}>
-    <span>Theme</span>
-    <span class="meta">{$theme === 'dark' ? 'Dark' : 'Light'}</span>
-  </button>
-
-  {#if $panicStatus.active}
-    <button class="menu-row danger" onclick={triggerResume}>
-      <span>Resume</span>
-      <span class="meta">{$panicStatus.since ? `Paused ${relativeTime($panicStatus.since)}` : 'System paused'}</span>
-    </button>
-  {:else}
-    <button class="menu-row danger" onclick={triggerPanic}>
-      <span>Panic</span>
-      <span class="meta">Emergency stop</span>
-    </button>
-  {/if}
-
-  {#if error}
-    <p class="error-msg">{error}</p>
-  {/if}
-
-  <button class="menu-row" onclick={logout}>
-    <span>Logout</span>
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-  </button>
+<div class="account">
+  <span class="theme-label" id="more-theme">Theme</span>
+  <div class="segmented" role="group" aria-labelledby="more-theme">
+    <button aria-pressed={$theme !== 'dark'} class:on={$theme !== 'dark'} onclick={() => $theme === 'dark' && theme.toggle()}>Light</button>
+    <button aria-pressed={$theme === 'dark'} class:on={$theme === 'dark'} onclick={() => $theme !== 'dark' && theme.toggle()}>Dark</button>
+  </div>
+  <button class="logout" onclick={logout}>Logout</button>
 </div>
 
 <style>
-  .page-title {
-    font-size: 24px;
-    font-weight: 700;
-    margin-bottom: 24px;
-  }
+  .page-title { margin-bottom: 16px; }
 
-  .section {
-    margin-bottom: 24px;
-  }
+  .group { margin-bottom: 16px; }
 
-  .section-label {
-    display: block;
+  .group-label {
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-muted);
-    padding: 0 0 8px;
+    padding: 0 4px 6px;
   }
 
-  .section-list {
+  .card {
     list-style: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
   }
 
-  .menu-row {
+  .sub-list { list-style: none; border-top: 1px solid var(--border); }
+
+  .menu-row, .group-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     width: 100%;
-    padding: 14px 0;
+    padding: 12px 14px;
     background: none;
     border: none;
-    border-bottom: 1px solid var(--border);
     color: var(--text);
+    font: inherit;
     font-size: 15px;
-    font-family: inherit;
     cursor: pointer;
     text-align: left;
     -webkit-tap-highlight-color: transparent;
   }
+  .menu-row { justify-content: space-between; }
+  li + li .menu-row { border-top: 1px solid var(--border); }
+  .menu-row:active, .group-row:active { background: var(--hover-overlay); }
+  .menu-row:focus-visible, .group-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  .menu-row:active {
-    background: var(--hover-overlay);
-  }
+  .menu-row svg, .chevron { color: var(--text-muted); flex-shrink: 0; }
+  .chevron { transition: transform 0.15s; }
+  .chevron.open { transform: rotate(90deg); }
 
-  .menu-row svg {
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
+  .group-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+  .group-name { font-weight: 600; }
+  .group-summary { font-size: 12px; color: var(--text-muted); }
 
-  .menu-row.danger span:first-child {
-    color: var(--danger);
-  }
-
-  .meta {
-    font-size: 13px;
-    color: var(--text-muted);
-  }
-
-  .footer-actions {
-    margin-top: 16px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-  }
-
-  .error-msg {
+  .problem {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12px;
+    font-weight: 600;
     color: var(--danger);
-    padding: 8px 0;
+    white-space: nowrap;
+  }
+  .problem-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+
+  .account {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 4px 0;
+  }
+  .theme-label { flex: 1; font-size: 14px; }
+
+  .segmented {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .segmented button {
+    padding: 4px 10px;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .segmented button.on { background: var(--bg); color: var(--text); font-weight: 600; }
+  .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .logout {
+    padding: 4px 6px;
+    background: none;
+    border: none;
+    color: var(--danger);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
   }
 </style>
