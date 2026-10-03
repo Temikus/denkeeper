@@ -105,7 +105,7 @@ List all LLM providers with their current configuration (API keys are redacted).
 
 **Scope:** `admin`
 
-Create a named provider instance.
+Create a named provider instance. Agents can use it straight away; no restart is needed. If the config has no `default_provider` yet, the new provider becomes the default (`"default": true` in the response).
 
 **Request body:**
 
@@ -117,6 +117,18 @@ Create a named provider instance.
   "api_key": "lm-studio"
 }
 ```
+
+### `POST /api/v1/llm/providers/test`
+
+**Scope:** `admin`
+
+Check a key and base URL without saving anything. Send the provider fields, or `{"name": "..."}` to test a saved provider's key. The answer is always `200`; a refused key is a result, not an error:
+
+```json
+{ "status": "ok", "message": "Key works. 14 models available.", "model_count": 14, "models": ["..."] }
+```
+
+`status` is `ok`, `rejected` (the provider refused the key), `unreachable` or `error`. The key and the provider's response body are never logged or returned.
 
 ### `DELETE /api/v1/llm/providers/{name}`
 
@@ -317,6 +329,16 @@ Read one persona section. `{section}` is `soul`, `user`, or `memory` — corresp
 **Scope:** `agents:write`
 
 Replace a persona section's contents.
+
+### `PUT /api/v1/agents/{name}/identity`
+
+**Scope:** `agents:write`
+
+Set the display name, emoji and theme in `IDENTITY.md`. The server writes the frontmatter and keeps the markdown body, so send plain values:
+
+```json
+{ "name": "Den", "emoji": "🦊", "theme": "helpful general-purpose assistant" }
+```
 
 ## Channels
 
@@ -937,6 +959,8 @@ Set preferred login method (`auto`, `password`, or `apikey`).
 
 Checklist of 5 setup milestones. `show_onboarding` is `false` when all milestones are complete or the card has been dismissed.
 
+The `wizard` block is the setup wizard's progress, worked out from the config: four steps (`provider`, `agent`, `persona`, `chat_app`) with a `detail` object for each, `done_count`, the primary `agent`, `restart_required` (a chat app is saved but its adapter isn't running yet), and `restart.managed` (whether a service manager will bring the server back after `POST /server/restart`).
+
 ### `POST /api/v1/onboarding/dismiss`
 
 Persist `onboarding_dismissed = true` to the TOML config and hide the onboarding card.
@@ -944,6 +968,22 @@ Persist `onboarding_dismissed = true` to the TOML config and hide the onboarding
 ### `POST /api/v1/onboarding/wizard-complete`
 
 Persist `wizard_completed = true` to the TOML config, marking the guided setup wizard as finished.
+
+### `POST /api/v1/onboarding/wizard-skip`
+
+Persist `wizard_completed = true` and `wizard_skipped = true`: the wizard stops opening on login, and the dashboard keeps offering to resume it.
+
+### `POST /api/v1/onboarding/chat-app/verify`
+
+Check a Telegram or Discord bot token: `{"type": "telegram", "token": "..."}`. Answers `200` with `status` and, when it's `ok`, the bot's `username`.
+
+### `POST /api/v1/onboarding/chat-app/pair`
+
+Wait (up to 50 seconds per call) for the first private message to the bot, so the wizard can fill `allowed_users` without asking for a numeric ID. Messages sent before the first call are ignored. On `"status": "timeout"`, call again with the returned `cursor`. Returns `409` if that adapter is already running on this server. Discord answers `"manual"`: enter the user ID by hand.
+
+### `POST /api/v1/onboarding/chat-app/save`
+
+Save the token, `allowed_users` and the agent binding in one checked write. The adapter starts on the next restart.
 
 ## KV Store
 
