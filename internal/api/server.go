@@ -26,6 +26,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -78,6 +79,7 @@ type Deps struct {
 	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
 	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
+	ChatApps          map[string]chatapp.Prober                                                // keyed "telegram"/"discord"; missing = chat-app setup returns 503
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                                   // git commit hash
 	BuildDate         string                                                                   // build timestamp
@@ -110,6 +112,11 @@ type Server struct {
 
 	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
 	wsHub *WSHub
+
+	// pairing marks chat-app types with a pairing long poll in progress; only
+	// one may poll a bot's updates at a time.
+	pairingMu sync.Mutex
+	pairing   map[string]bool
 
 	// bcryptCost controls the bcrypt cost factor for password hashing.
 	// Defaults to 13; tests override to bcrypt.MinCost for speed.
@@ -371,6 +378,9 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/onboarding/dismiss", s.RequireScope("admin", s.handleOnboardingDismiss))
 	mux.HandleFunc("POST /api/v1/onboarding/wizard-complete", s.RequireScope("admin", s.handleWizardComplete))
 	mux.HandleFunc("POST /api/v1/onboarding/wizard-skip", s.RequireScope("admin", s.handleWizardSkip))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/verify", s.RequireScope("admin", s.handleChatAppVerify))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/pair", s.RequireScope("admin", s.handleChatAppPair))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/save", s.RequireScope("admin", s.handleChatAppSave))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)

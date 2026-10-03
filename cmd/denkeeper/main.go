@@ -35,6 +35,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm/llmfactory"
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
+	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -1809,6 +1810,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		RestartManaged:    detectProcessManager(os.Getenv, fileExists),
 		AgentFactory:      agentFactory,
 		Providers:         live,
+		ChatApps:          map[string]chatapp.Prober{"telegram": chatapp.Telegram{}, "discord": chatapp.Discord{}},
 		Version:           version,
 		Commit:            commit,
 		BuildDate:         date,
