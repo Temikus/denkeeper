@@ -39,9 +39,14 @@
   // Progress lives on the server now; this key is from the old wizard.
   try { localStorage.removeItem('dk_wizard_state') } catch { /* storage blocked */ }
 
+  // Bumped on every login and logout, so a check that outlives its login
+  // can't open the wizard for the next one.
+  let authGen = 0
+
   async function checkWizard() {
+    const gen = authGen
     const state = await refreshSetup() // null when this credential can't read onboarding
-    if (state && !state.completed) openWizard()
+    if (gen === authGen && state && !state.completed) openWizard()
   }
 
   // On mount, check if we have a valid session cookie (e.g. after OIDC redirect)
@@ -64,10 +69,12 @@
   })
 
   $effect(() => {
+    authGen++
     if ($isAuthenticated) {
       checkWizard()
       startAttention()
     } else {
+      wizardOpen.set(false)
       stopAttention()
     }
   })
