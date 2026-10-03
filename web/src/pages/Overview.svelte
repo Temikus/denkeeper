@@ -3,6 +3,8 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { navigate } from '../router.js'
+  import { setup, showSetupReminder, refreshSetup, openWizard } from '../setupStore.js'
+  import SetupCard from '../components/SetupCard.svelte'
 
   let data = $state(null)
   let onboarding = $state(null)
@@ -55,6 +57,7 @@
       ])
       data = { health, agents, costs, pendingCount: approvals.length }
       onboarding = ob
+      refreshSetup()
     } catch (e) {
       error = e.message
     }
@@ -64,7 +67,15 @@
 <h1 class="page-title">Overview</h1>
 <ErrorBanner message={error} />
 
-{#if onboarding?.show_onboarding}
+{#if $showSetupReminder && !onboarding?.dismissed}
+  <SetupCard onhide={dismissOnboarding} />
+{:else if $showSetupReminder}
+  <!-- Phones have no sidebar chip, so a hidden card leaves this line. -->
+  <button class="setup-mini" onclick={openWizard} data-testid="setup-mini">
+    <span>Setup · {$setup.doneCount} of {$setup.total}</span>
+    <span class="setup-mini-action">Resume</span>
+  </button>
+{:else if onboarding?.show_onboarding && !$showSetupReminder}
   <div class="onboarding-card">
     {#if onboarding.steps.every(s => !s.done)}
       <p class="welcome-banner">Welcome to Denkeeper! Let's get your agent set up.</p>
@@ -92,9 +103,12 @@
       <div class="label">Status</div>
       <div class="value" class:ok={data.health.status === 'ok'}>{data.health.status}</div>
     </div>
-    <div class="card">
+    <div class="card" class:empty-card={data.agents.length === 0}>
       <div class="label">Agents</div>
       <div class="value">{data.agents.length}</div>
+      {#if data.agents.length === 0}
+        <a class="card-hint" href="#/agents" data-testid="agents-empty-hint">Create your first →</a>
+      {/if}
     </div>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
@@ -193,6 +207,27 @@
   .card.clickable:hover, .card.alert { border-color: var(--warn); }
   .label { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
   .value { font-size: 28px; font-weight: 700; }
+  .setup-mini { display: none; }
+  @media (max-width: 768px) {
+    .setup-mini {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .setup-mini-action { color: var(--accent); }
+  }
+  .card.empty-card { border-style: dashed; }
+  .card-hint { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 500; }
   .value.ok   { color: var(--success); }
   .value.warn { color: var(--warn); }
   .cost-table-wrapper {

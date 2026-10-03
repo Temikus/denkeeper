@@ -248,6 +248,40 @@ describe('Overview page', () => {
     })
   })
 
+  test('after a skip, the setup card replaces the checklist and highlights the next step', async () => {
+    let dismissed = false
+    server.use(
+      http.get('/api/v1/agents', () => HttpResponse.json([])),
+      http.get('/api/v1/onboarding', () => HttpResponse.json({
+        show_onboarding: true,
+        steps: [{ id: 'provider', label: 'Add an LLM provider', done: false }],
+        dismissed,
+        wizard_completed: true,
+        wizard: {
+          completed: true, skipped: true, agent: '', done_count: 0, total: 4,
+          steps: [
+            { id: 'provider', done: false }, { id: 'agent', done: false },
+            { id: 'persona', done: false }, { id: 'chat_app', done: false, optional: true },
+          ],
+          restart_required: false, restart: { available: true, managed: false },
+        },
+      })),
+      http.post('/api/v1/onboarding/dismiss', () => { dismissed = true; return new HttpResponse(null, { status: 204 }) }),
+    )
+
+    render(Overview)
+    const card = await screen.findByTestId('setup-card')
+    expect(card).toHaveTextContent('Setup skipped · 0 of 4')
+    expect(card).toHaveTextContent('nothing can reply yet')
+    expect(card).toHaveTextContent('Start here')
+    expect(card).toHaveTextContent('[[llm.providers]]')
+    expect(screen.queryByText('Setup Checklist')).not.toBeInTheDocument()
+    expect(screen.getByTestId('agents-empty-hint')).toHaveTextContent('Create your first')
+
+    await fireEvent.click(screen.getByTestId('setup-card-hide'))
+    await waitFor(() => expect(screen.queryByTestId('setup-card')).not.toBeInTheDocument())
+  })
+
   test('no cost breakdown section when session_costs is empty', async () => {
     server.use(
       http.get('/api/v1/costs', () =>

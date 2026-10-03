@@ -607,9 +607,38 @@ export const handlers = [
     ],
     dismissed: false,
     wizard_completed: true,
+    wizard: {
+      completed: true,
+      skipped: false,
+      agent: 'default',
+      steps: [
+        { id: 'provider', done: true, detail: { name: 'anthropic', type: 'anthropic' } },
+        { id: 'agent', done: true, detail: { name: 'default', model: 'claude-sonnet-5-5', tier: 'supervised' } },
+        { id: 'persona', done: true, detail: { display_name: 'Den', emoji: '🦊', theme: 'helpful general-purpose assistant' } },
+        { id: 'chat_app', done: false, optional: true, detail: {} },
+      ],
+      done_count: 3,
+      total: 4,
+      restart_required: false,
+      restart: { available: true, managed: false },
+    },
   })),
   http.post('/api/v1/onboarding/dismiss', () => new HttpResponse(null, { status: 204 })),
   http.post('/api/v1/onboarding/wizard-complete', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/onboarding/wizard-skip', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/onboarding/chat-app/verify', () => HttpResponse.json({
+    status: 'ok', message: 'Connected as @my_den_bot', bot: { id: '42', username: 'my_den_bot', display_name: 'Den' },
+  })),
+  http.post('/api/v1/onboarding/chat-app/pair', () => HttpResponse.json({
+    status: 'found', cursor: '8', sender: { id: '4821', username: 'samk', first_name: 'Sam', chat_id: '4821', text: 'hi' },
+  })),
+  http.post('/api/v1/onboarding/chat-app/save', () => HttpResponse.json({
+    status: 'saved', agent: 'assistant', restart_required: true, restart: { available: true, managed: true },
+  })),
+  http.post('/api/v1/llm/providers/test', () => HttpResponse.json({
+    status: 'ok', message: 'Key works. 2 models available.', model_count: 2, models: ['claude-haiku-4-5', 'claude-sonnet-5-5'],
+  })),
+  http.put('/api/v1/agents/:name/identity', async ({ request }) => HttpResponse.json(await request.json())),
 
   // Audit
   http.get('/api/v1/audit', () => HttpResponse.json({ events: auditEvents, total: auditEvents.length })),
