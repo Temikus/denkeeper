@@ -21,6 +21,7 @@ Fetch the spec from any live instance at: GET <base-url>/api/v1/openapi.json
 - Channels:  named routing endpoints decoupling sessions from Telegram/Discord adapters
 - MCP Tools: denkeeper connects outward to MCP servers to give agents external tools
 - Approvals: supervised-tier tool calls require explicit human or API approval
+- Evals:     dry-run saved turns on your current vs. a candidate model, then compare before switching
 
 ## Optional: llms-full.txt
 
