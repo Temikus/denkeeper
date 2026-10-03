@@ -43,6 +43,7 @@ type Config struct {
 	Sandbox   SandboxConfig           `toml:"sandbox"`
 	Web       WebConfig               `toml:"web"`
 	Script    ScriptConfig            `toml:"script"`
+	Decide    DecideConfig            `toml:"decide"`
 	Skills    SkillsConfig            `toml:"skills"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
@@ -325,6 +326,26 @@ func (c *ScriptConfig) ScriptEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// DecideConfig controls the in-process `decide` tool, which lets an agent put
+// typed questions about a JSON state to a decision model instead of answering
+// them with chat-model tokens. Off until a decider is named. The state an
+// agent passes goes to the decider's provider, an additional data processor.
+type DecideConfig struct {
+	// Enabled switches the tool off without unnaming the decider. Default: true.
+	Enabled *bool `toml:"enabled"`
+	// Decider is the [[llm.deciders]] entry the tool calls. Empty = no tool.
+	Decider string `toml:"decider"`
+}
+
+// DecideEnabled reports whether the decide tool is active: a decider must be
+// named and enabled must not be false.
+func (c *DecideConfig) DecideEnabled() bool {
+	if c.Decider == "" {
+		return false
+	}
+	return c.Enabled == nil || *c.Enabled
 }
 
 // SkillsConfig controls skill management (create/update via API, MCP, config MCP).
@@ -2506,6 +2527,9 @@ func validateAdaptersAndProviders(cfg *Config) error {
 	if err := validateEvalJudgeDecider(cfg); err != nil {
 		return fmt.Errorf("config: [eval]: %w", err)
 	}
+	if err := validateDecideTool(cfg); err != nil {
+		return fmt.Errorf("config: [decide]: %w", err)
+	}
 	if err := validateProviderAPIKeys(cfg); err != nil {
 		return err
 	}
@@ -2708,6 +2732,24 @@ func validateEvalJudgeDecider(cfg *Config) error {
 	}
 	if dur, err := time.ParseDuration(e.JudgeDeciderTimeout); err != nil || dur <= 0 {
 		return fmt.Errorf("judge_decider_timeout %q must be a positive duration", e.JudgeDeciderTimeout)
+	}
+	return nil
+}
+
+// validateDecideTool checks [decide]: a named decider must exist, and an
+// explicit enabled = true without one is an orphan the operator should hear
+// about, since the tool stays off.
+func validateDecideTool(cfg *Config) error {
+	d := &cfg.Decide
+	if d.Decider == "" {
+		if d.Enabled != nil && *d.Enabled {
+			return errors.New("enabled is true but decider is not set: the decide tool is off without a decider")
+		}
+		return nil
+	}
+	known := slices.ContainsFunc(cfg.LLM.Deciders, func(dc DeciderConfig) bool { return dc.Name == d.Decider })
+	if !known {
+		return fmt.Errorf("decider %q does not match any [[llm.deciders]] entry", d.Decider)
 	}
 	return nil
 }
