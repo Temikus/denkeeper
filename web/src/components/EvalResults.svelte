@@ -16,11 +16,13 @@
     // True when the run covered a subset of the set, i.e. a Quick check. A
     // clean Quick check earns the escalation CTA.
     quick = false,
-    // The internal judge's model, from GET /eval/config. Empty means [eval]
-    // judge_model is unset and Claude Code over MCP is the only judge path, so
-    // the server-side affordance is absent rather than disabled — there is
-    // nothing the operator could click to fix it from here.
+    // The internal judge's model and decider, from GET /eval/config. Both
+    // empty means neither [eval] judge_model nor judge_decider is set and
+    // Claude Code over MCP is the only judge path, so the server-side
+    // affordance is absent rather than disabled — there is nothing the
+    // operator could click to fix it from here.
     judgeModel = '',
+    judgeDecider = '',
     judgeCostCap = 0,
     onapplied = () => {},
     onrunfull = () => {},
@@ -183,6 +185,23 @@
   // it started and the numbers arrive through the ordinary reload.
   let serverJudge = $state(null)
 
+  // The server-side judge exists when either backend is configured.
+  const serverJudgeAvailable = $derived(Boolean(judgeModel || judgeDecider))
+  // What grades a pass, in the order it is asked: the decider first, then
+  // the model for whatever it could not settle.
+  const serverJudgeLabel = $derived([judgeDecider, judgeModel].filter(Boolean).join(', then '))
+
+  // Verdicts store judge identities, not names: the two internal backends
+  // record under fixed keys, and an MCP judge records under its API key name.
+  // Show the configured names where we know them so the card does not call
+  // one judge two things.
+  function judgeName(ident) {
+    if (ident === 'judge_decider') return judgeDecider || 'the decider'
+    if (ident === 'judge_model') return judgeModel || 'the judge model'
+    return ident
+  }
+  const listFormat = new Intl.ListFormat('en', { type: 'conjunction' })
+
   async function judgeOnServer() {
     serverJudge = { state: 'running' }
     try {
@@ -194,7 +213,7 @@
       serverJudge = {
         state: 'running',
         items: pass.items,
-        message: `Judging ${pass.items} comparison${pass.items === 1 ? '' : 's'} on ${pass.model}.`,
+        message: `Judging ${pass.items} comparison${pass.items === 1 ? '' : 's'} on ${[pass.decider, pass.model].filter(Boolean).join(', then ')}.`,
       }
       // The pass runs in the background; a reload is what turns it into
       // numbers, so poll the same summary the view is already built on rather
@@ -236,7 +255,7 @@
   // the state back up from the server rather than showing an idle button whose
   // next click is a 409.
   async function resumeJudging() {
-    if (!judgeModel) return
+    if (!serverJudgeAvailable) return
     let detail = null
     try {
       detail = await api.evalRun(run.id)
@@ -457,7 +476,7 @@
             {v.judgment.judged_pairs} of {v.judgment.pairs} comparisons are judged. The rest are
             waiting — until they are done, this verdict rests on the objective checks alone.
           </p>
-          {#if judgeModel}
+          {#if serverJudgeAvailable}
             <div class="judge-here">
               <button class="btn-primary btn-sm"
                 onclick={judgeOnServer}
@@ -466,17 +485,18 @@
                 {serverJudge?.state === 'running' ? 'Judging…' : 'Judge on the server'}
               </button>
               <span class="hint">
-                <span class="mono">{judgeModel}</span> grades them here, unattended
+                <span class="mono">{serverJudgeLabel}</span>
+                {judgeModel ? 'grades them here, unattended' : 'grades what it is sure of here; the rest stays pending'}
                 {#if judgeCostCap > 0}· up to ${judgeCostCap.toFixed(2)}{/if}
               </span>
             </div>
             {#if serverJudge?.message}
-              <p class="hint" class:judge-failed={serverJudge.state === 'failed'}
+              <p class="hint" class:judge-failed={serverJudge.state === 'failed'} role="status"
                 data-testid="judge-here-status-{v.variant_id}">{serverJudge.message}</p>
             {/if}
           {/if}
           <p class="pending-step">
-            {judgeModel ? 'Or judge them' : 'Judge them'} from Claude Code with
+            {serverJudgeAvailable ? 'Or judge them' : 'Judge them'} from Claude Code with
             <code>/judge-eval</code>, or run:
           </p>
           <div class="cmd-row">
@@ -551,7 +571,17 @@
           <p class="hint" data-testid="rubric-{v.variant_id}">
             Rubric {v.judgment.rubric_versions.join(', ')}
             {#if v.judgment.rubric_versions.length > 1}
-              — this tally mixes two rubric revisions.
+              — this tally mixes rubric revisions.
+            {/if}
+          </p>
+        {/if}
+        {#if v.judgment.judge_idents?.length}
+          <p class="hint" data-testid="judges-{v.variant_id}">
+            Judged by {listFormat.format(v.judgment.judge_idents.map(judgeName))}
+            {#if v.judgment.mixed_pairs}
+              — {v.judgment.mixed_pairs} of {v.judgment.judged_pairs} comparisons were judged in one
+              order by one judge and in the other by another, so a tie on one of those may be
+              judges disagreeing rather than position bias.
             {/if}
           </p>
         {/if}

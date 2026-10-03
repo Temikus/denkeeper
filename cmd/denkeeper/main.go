@@ -1523,20 +1523,48 @@ func buildEvalRunner(cfg *config.Config, store *eval.Store, dispatcher *agent.Di
 // clone, so judging bills to the agent's own cost tracker and honours its
 // pricing and fallback rules. It is unavailable — not absent — when
 // [eval] judge_model is unset, so the endpoint can say why.
-func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) *eval.Judge {
-	return eval.NewJudge(store, liveEngineSource(dispatcher), auditor, judgeConfigFrom(cfg), logger)
+func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, deciders map[string]*llm.Decider, logger *slog.Logger) *eval.Judge {
+	return eval.NewJudge(store, liveEngineSource(dispatcher), auditor, judgeConfigFrom(cfg, deciders, logger), logger)
 }
 
 // judgeConfigFrom translates the [eval] judge block. Shared with the reload
 // path so a reloaded judge_model cannot mean one thing at boot and another
-// after SIGHUP.
-func judgeConfigFrom(cfg *config.Config) eval.JudgeConfig {
-	return eval.JudgeConfig{
-		Model:         cfg.Eval.JudgeModel,
-		Provider:      cfg.Eval.JudgeProvider,
-		MaxCost:       cfg.Eval.JudgeMaxCostPerRun,
-		MaxConcurrent: cfg.Eval.MaxConcurrent,
+// after SIGHUP. The judge decider is one of the clients built at startup; a
+// name added or changed since then is logged and left unbound, the same rule
+// the supervisor stage follows.
+func judgeConfigFrom(cfg *config.Config, deciders map[string]*llm.Decider, logger *slog.Logger) eval.JudgeConfig {
+	jc := eval.JudgeConfig{
+		Model:           cfg.Eval.JudgeModel,
+		Provider:        cfg.Eval.JudgeProvider,
+		MaxCost:         cfg.Eval.JudgeMaxCostPerRun,
+		MaxConcurrent:   cfg.Eval.MaxConcurrent,
+		DeciderRecordAt: cfg.Eval.JudgeDeciderRecordAt,
 	}
+	if name := cfg.Eval.JudgeDecider; name != "" {
+		d := startedDecider(cfg, deciders, name)
+		if d == nil {
+			logger.Warn("eval judge decider not bound; restart to apply", "decider", name)
+		} else {
+			timeout, _ := time.ParseDuration(cfg.Eval.JudgeDeciderTimeout)
+			jc.Decider = d.WithTimeout(timeout)
+		}
+	}
+	return jc
+}
+
+// startedDecider returns the client built at startup for name, or nil when
+// none matches the current config (clients are not rebuilt on reload).
+func startedDecider(cfg *config.Config, deciders map[string]*llm.Decider, name string) *llm.Decider {
+	d := deciders[name]
+	if d == nil {
+		return nil
+	}
+	for _, dc := range cfg.LLM.Deciders {
+		if dc.Name == name && d.Matches(dc.Provider, dc.Model) {
+			return d
+		}
+	}
+	return nil
 }
 
 // liveEngineSource resolves an agent name to its live engine for the eval
@@ -2139,7 +2167,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// the live engines it owns. Construction starts no goroutine.
 	evalRunner := buildEvalRunner(cfg, st.evalStore, dispatcher, auditor, logger)
 	defer evalRunner.Shutdown()
-	evalJudge := buildEvalJudge(cfg, st.evalStore, dispatcher, auditor, logger)
+	evalJudge := buildEvalJudge(cfg, st.evalStore, dispatcher, auditor, clients.deciders, logger)
 	defer evalJudge.Shutdown()
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
@@ -2264,7 +2292,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		// The internal judge holds its own snapshot of the [eval] judge block,
 		// so it has to be told: without this, turning judge_model on and
 		// reloading still 503s until a restart.
-		evalJudge.SetConfig(judgeConfigFrom(cfg))
+		evalJudge.SetConfig(judgeConfigFrom(cfg, rt.deciders, logger))
 
 		for _, ac := range cfg.Agents {
 			e := dispatcher.Agent(ac.Name)

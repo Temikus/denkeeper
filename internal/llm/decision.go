@@ -199,6 +199,40 @@ func (d *Decider) Model() string { return d.cfg.Model }
 // CostTracker returns the tracker calls are billed to (may be nil).
 func (d *Decider) CostTracker() *CostTracker { return d.costs }
 
+// Matches reports whether this client was built for the given provider and
+// model. Decider clients are built once at startup, so a config entry that has
+// since changed must not be served by the stale client.
+func (d *Decider) Matches(provider, model string) bool {
+	return d.cfg.Provider == provider && d.cfg.Model == model
+}
+
+// WithTimeout returns a shallow clone with a different per-call timeout, so a
+// consumer whose inputs are far larger than the decider's usual ones (the eval
+// judge versus a supervisor review) can give the same model more time without
+// a second [[llm.deciders]] entry.
+func (d *Decider) WithTimeout(timeout time.Duration) *Decider {
+	clone := *d
+	clone.cfg.Timeout = timeout
+	return &clone
+}
+
+// DecisionErrorCause classifies a failed decision call for audit trails. A
+// call refused for budget, one that timed out, one whose input was too large
+// and one whose provider is down all fall through to the next stage, so the
+// distinction has to survive somewhere filterable.
+func DecisionErrorCause(err error) string {
+	switch {
+	case errors.Is(err, ErrHardLimitExceeded):
+		return "cost_limit"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, ErrDecisionTooLarge):
+		return "too_large"
+	default:
+		return "provider_error"
+	}
+}
+
 // Decide asks the configured model the questions about state, billing the
 // call to sessionID. It returns ErrDecisionTooLarge or ErrHardLimitExceeded
 // without calling the provider, and an error if any asked question is left

@@ -1065,7 +1065,7 @@ type evalJudgeInput struct {
 
 // handleJudgeEvalRun godoc
 // @Summary Judge a run's pending pairs with the internal judge
-// @Description Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model; without it the endpoint reports 503 and the MCP judge path is unaffected. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.
+// @Description Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model or judge_decider; without either the endpoint reports 503 and the MCP judge path is unaffected. With a decider it is asked first, five choice questions over the blinded item in one call, and records under judge_ident 'judge_decider' when its winning probability reaches judge_decider_record_at; anything else (an uncertain answer, an oversized item, a timeout, an error) falls through to the judge model when set, or leaves the item pending. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, or one decision call with no tool channel at all, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model' or 'judge_decider', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run across both backends, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.
 // @Tags eval
 // @Accept json
 // @Produce json
@@ -1084,7 +1084,7 @@ func (s *Server) handleJudgeEvalRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.deps.EvalJudge.Available() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "internal judge not configured: set [eval] judge_model"})
+			"error": "internal judge not configured: set [eval] judge_model or judge_decider"})
 		return
 	}
 	id, ok := evalRunID(w, r)

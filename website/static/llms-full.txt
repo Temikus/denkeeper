@@ -403,8 +403,12 @@ but calling a candidate an upgrade also needs the judge win-rate.
 Setting judge_model turns on the internal judge, which works the same queue
 through denkeeper's own router for unattended server-side runs. It is a one-shot
 completion with no tools, sees the same blinded payload the MCP judge does, and
-grades against the same rubric. Left unset there is no internal judge and the
-MCP path is the only one.
+grades against the same rubric. Setting judge_decider puts a decision model (an
+[[llm.deciders]] entry) in front of it: five choice questions over the blinded
+item in one call, recorded under judge_ident "judge_decider" when the winning
+probability reaches judge_decider_record_at, otherwise handed to judge_model or
+left pending. Left unset there is no internal judge and the MCP path is the
+only one.
 
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)
@@ -423,6 +427,10 @@ MCP path is the only one.
                                      # empty uses the base agent's own provider
     judge_max_cost_per_run = 2.0     # USD ceiling for one judging pass;
                                      # defaults to max_cost_per_run
+    judge_decider = ""               # [[llm.deciders]] name asked before judge_model;
+                                     # empty means no decider stage
+    judge_decider_record_at = 0.9    # winning probability needed to record its verdict
+    judge_decider_timeout = "60s"    # per-item deadline for the judge decider
 
 Turn traces record what a turn actually saw: the built system prompt, the
 history window as sent, every tool call with its arguments and result, and the

@@ -316,3 +316,124 @@ func TestSupervisorDecider_NegativeDenyAt(t *testing.T) {
 supervisor_decider_deny_at = -0.1
 `), "0 < deny_at < approve_at < 1")
 }
+
+// --- [eval] judge_decider ---
+
+const jevDecider = `
+[[llm.deciders]]
+name = "jev"
+provider = "or"
+model = "typesafe/jev-1.13"
+`
+
+func TestEvalJudgeDecider_Defaults(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider + `
+[eval]
+judge_decider = "jev"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.JudgeDeciderRecordAt != 0.9 || cfg.Eval.JudgeDeciderTimeout != "60s" {
+		t.Errorf("defaults = %v/%q, want 0.9/60s", cfg.Eval.JudgeDeciderRecordAt, cfg.Eval.JudgeDeciderTimeout)
+	}
+}
+
+// Defaults are gated on a decider being named, so an unset stage leaves the
+// knobs at their zero values instead of advertising thresholds nothing reads.
+func TestEvalJudgeDecider_NoDeciderLeavesKnobsZero(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.JudgeDeciderRecordAt != 0 || cfg.Eval.JudgeDeciderTimeout != "" {
+		t.Errorf("knobs = %v/%q, want zero without judge_decider", cfg.Eval.JudgeDeciderRecordAt, cfg.Eval.JudgeDeciderTimeout)
+	}
+}
+
+func TestEvalJudgeDecider_ExplicitValuesKept(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider + `
+[eval]
+judge_decider = "jev"
+judge_decider_record_at = 0.75
+judge_decider_timeout = "2m"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.JudgeDeciderRecordAt != 0.75 || cfg.Eval.JudgeDeciderTimeout != "2m" {
+		t.Errorf("values = %v/%q, want 0.75/2m", cfg.Eval.JudgeDeciderRecordAt, cfg.Eval.JudgeDeciderTimeout)
+	}
+}
+
+func TestEvalJudgeDecider_UnknownDecider(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider = "nope"
+`, `judge_decider "nope" does not match`)
+}
+
+func TestEvalJudgeDecider_RecordAtMustExceedHalf(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider = "jev"
+judge_decider_record_at = 0.5
+`, "judge_decider_record_at must be in (0.5, 1]")
+}
+
+func TestEvalJudgeDecider_RecordAtOneAccepted(t *testing.T) {
+	if _, err := Parse(deciderConfig(jevDecider + `
+[eval]
+judge_decider = "jev"
+judge_decider_record_at = 1.0
+`)); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+}
+
+func TestEvalJudgeDecider_RecordAtAboveOne(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider = "jev"
+judge_decider_record_at = 1.5
+`, "judge_decider_record_at must be in (0.5, 1]")
+}
+
+func TestEvalJudgeDecider_NaNRecordAtRejected(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider = "jev"
+judge_decider_record_at = nan
+`, "judge_decider_record_at must be in (0.5, 1]")
+}
+
+func TestEvalJudgeDecider_BadTimeout(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider = "jev"
+judge_decider_timeout = "soon"
+`, `judge_decider_timeout "soon" must be a positive duration`)
+}
+
+func TestEvalJudgeDecider_OrphanKnobsRejected(t *testing.T) {
+	parseDeciderErr(t, jevDecider+`
+[eval]
+judge_decider_record_at = 0.9
+`, "judge_decider is not")
+}
+
+// The decider stage and the judge model are independent opt-ins; both at once
+// is the cascade, and must load.
+func TestEvalJudgeDecider_CoexistsWithJudgeModel(t *testing.T) {
+	cfg, err := Parse(deciderConfig(jevDecider + `
+[eval]
+judge_model = "claude-sonnet-4-5"
+judge_decider = "jev"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Eval.JudgeModel == "" || cfg.Eval.JudgeDecider == "" {
+		t.Errorf("eval = %+v, want both judge keys kept", cfg.Eval)
+	}
+}

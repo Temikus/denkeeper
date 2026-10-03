@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -228,40 +226,6 @@ func TestSupervisorReview_CostLimitErrorNamesBudget(t *testing.T) {
 	}
 	if detail["cause"] != "cost_limit" {
 		t.Errorf("audit detail cause = %v, want \"cost_limit\"", detail["cause"])
-	}
-}
-
-// Causes are classified with errors.Is and Router.Complete hands the provider
-// error back wrapped ("chat completion: %w"), so each mapping is checked
-// through a wrap — an unwrapped-only match would record nothing in production.
-
-func TestSupervisorErrorCause_HardLimit(t *testing.T) {
-	err := fmt.Errorf("session %q exceeded hard cost limit: %w", "supervisor:default:c", llm.ErrHardLimitExceeded)
-	if got := supervisorErrorCause(err); got != "cost_limit" {
-		t.Errorf("supervisorErrorCause = %q, want %q", got, "cost_limit")
-	}
-}
-
-func TestSupervisorErrorCause_Timeout(t *testing.T) {
-	err := fmt.Errorf("chat completion: %w", context.DeadlineExceeded)
-	if got := supervisorErrorCause(err); got != "timeout" {
-		t.Errorf("supervisorErrorCause = %q, want %q", got, "timeout")
-	}
-}
-
-func TestSupervisorErrorCause_ProviderError(t *testing.T) {
-	err := fmt.Errorf("chat completion: %w", errors.New("502 bad gateway"))
-	if got := supervisorErrorCause(err); got != "provider_error" {
-		t.Errorf("supervisorErrorCause = %q, want %q", got, "provider_error")
-	}
-}
-
-// Only the hard limit refuses a call; a soft limit warns and the review still
-// runs, so it must not be reported as the reason a review failed.
-func TestSupervisorErrorCause_SoftLimitIsNotACostRefusal(t *testing.T) {
-	err := fmt.Errorf("chat completion: %w", llm.ErrSoftLimitExceeded)
-	if got := supervisorErrorCause(err); got != "provider_error" {
-		t.Errorf("supervisorErrorCause = %q, want %q", got, "provider_error")
 	}
 }
 

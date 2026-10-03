@@ -46,6 +46,13 @@ type evalConfigResponse struct {
 	// JudgeMaxCostPerRun is the ceiling for one judging pass, so a page can
 	// say what it is about to authorise. Omitted with the model.
 	JudgeMaxCostPerRun float64 `json:"judge_max_cost_per_run,omitempty"`
+	// JudgeDecider names the decision model asked before the judge model,
+	// omitted when [eval] judge_decider is unset or not bound. Either judge
+	// key being present means server-side judging is on offer.
+	JudgeDecider string `json:"judge_decider,omitempty"`
+	// JudgeDeciderRecordAt is the winning option's probability a decider
+	// verdict needs before it is recorded. Omitted with the decider.
+	JudgeDeciderRecordAt float64 `json:"judge_decider_record_at,omitempty"`
 	// RubricVersion names the rubric revision the internal judge grades under.
 	RubricVersion string `json:"rubric_version,omitempty"`
 }
@@ -225,6 +232,10 @@ func (s *Server) handleEvalConfig(w http.ResponseWriter, _ *http.Request) {
 		jc := s.deps.EvalJudge.Config()
 		out.JudgeModel = jc.Model
 		out.JudgeMaxCostPerRun = jc.MaxCost
+		if jc.Decider != nil {
+			out.JudgeDecider = jc.Decider.Name()
+			out.JudgeDeciderRecordAt = jc.DeciderRecordAt
+		}
 		out.RubricVersion = eval.RubricVersion
 	}
 	writeJSON(w, http.StatusOK, out)
