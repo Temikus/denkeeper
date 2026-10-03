@@ -333,6 +333,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// LLM provider config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/llm/providers", s.RequireScope("admin", s.handleGetLLMProviders))
 	mux.HandleFunc("POST /api/v1/llm/providers", s.RequireScope("admin", s.handleCreateLLMProvider))
+	mux.HandleFunc("POST /api/v1/llm/providers/test", s.RequireScope("admin", s.handleTestLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
 	mux.HandleFunc("DELETE /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handleDeleteLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
