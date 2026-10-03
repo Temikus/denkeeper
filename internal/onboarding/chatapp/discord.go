@@ -14,7 +14,7 @@ import (
 // ErrUnsupported and the wizard asks for the user ID instead.
 type Discord struct {
 	BaseURL string       // default https://discord.com/api/v10
-	HTTP    *http.Client // default: no timeout (ctx bounds each call), no redirects
+	HTTP    *http.Client // default: no timeout (ctx bounds each call); redirects always refused
 }
 
 // discordInvitePerms is View Channels + Send Messages + Read Message History.
@@ -26,11 +26,13 @@ func (d Discord) Verify(ctx context.Context, token string) (BotInfo, error) {
 	if base == "" {
 		base = "https://discord.com/api/v10"
 	}
-	hc := d.HTTP
-	if hc == nil {
-		// Refuse redirects: one would carry the token header with it.
-		hc = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	hc := &http.Client{}
+	if d.HTTP != nil {
+		clone := *d.HTTP
+		hc = &clone
 	}
+	// Refuse redirects: one would carry the token header with it.
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/users/@me", nil)
 	if err != nil {
 		return BotInfo{}, err

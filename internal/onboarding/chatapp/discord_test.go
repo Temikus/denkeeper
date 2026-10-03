@@ -53,6 +53,9 @@ func TestDiscordVerify_DoesNotFollowRedirects(t *testing.T) {
 	if _, err := (Discord{BaseURL: up.URL}).Verify(shortCtx(t), "good"); err == nil {
 		t.Error("Verify succeeded through a redirect")
 	}
+	if _, err := (Discord{BaseURL: up.URL, HTTP: &http.Client{}}).Verify(shortCtx(t), "good"); err == nil {
+		t.Error("Verify with a supplied client succeeded through a redirect")
+	}
 	if hits.Load() != 0 {
 		t.Error("Verify followed a redirect, which would carry the token header")
 	}
