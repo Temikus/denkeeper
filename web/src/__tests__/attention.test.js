@@ -21,12 +21,13 @@ describe('attention', () => {
   test('counts pending approvals and names broken tool servers', async () => {
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json(pending(2))),
-      http.get('/api/v1/tools', () => HttpResponse.json([
+      // Same shape as handleListTools: {"tools": [...]}.
+      http.get('/api/v1/tools', () => HttpResponse.json({ tools: [
         { name: 'web', status: 'connected' },
         { name: 'github', status: 'error' },
         { name: 'jira', status: 'config_error' },
         { name: 'kv', status: 'disabled' },
-      ])),
+      ] })),
     )
     await refreshAttention()
     expect(get(attention)).toEqual({ pendingApprovals: 2, unhealthyTools: ['github', 'jira'] })
@@ -46,7 +47,7 @@ describe('attention', () => {
     attention.set({ pendingApprovals: 3, unhealthyTools: [] })
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })),
-      http.get('/api/v1/tools', () => HttpResponse.json([{ name: 'github', status: 'error' }])),
+      http.get('/api/v1/tools', () => HttpResponse.json({ tools: [{ name: 'github', status: 'error' }] })),
     )
     await refreshAttention()
     expect(get(attention)).toEqual({ pendingApprovals: 3, unhealthyTools: ['github'] })
@@ -98,5 +99,42 @@ describe('attention', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  test('an older response that lands after a newer one is dropped', async () => {
+    let release
+    let calls = 0
+    server.use(http.get('/api/v1/approvals', async () => {
+      calls++
+      if (calls === 1) await new Promise(r => { release = r })
+      return HttpResponse.json(calls === 1 ? pending(5) : [])
+    }))
+
+    const slow = refreshAttention()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await refreshAttention()
+    expect(get(attention).pendingApprovals).toBe(0)
+
+    release()
+    await slow
+    expect(get(attention).pendingApprovals).toBe(0)
+  })
+
+  test('stopping clears the counts and drops a refresh still in flight', async () => {
+    let release
+    server.use(http.get('/api/v1/approvals', async () => {
+      await new Promise(r => { release = r })
+      return HttpResponse.json(pending(4))
+    }))
+    attention.set({ pendingApprovals: 2, unhealthyTools: ['github'] })
+
+    const inFlight = refreshAttention()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    stopAttention()
+    expect(get(attention)).toEqual({ pendingApprovals: 0, unhealthyTools: [] })
+
+    release()
+    await inFlight
+    expect(get(attention)).toEqual({ pendingApprovals: 0, unhealthyTools: [] })
   })
 })

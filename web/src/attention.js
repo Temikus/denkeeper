@@ -24,17 +24,23 @@ function refreshIfVisible() {
   if (!document.hidden) refreshAttention()
 }
 
+// Bumped by each refresh and by stopAttention, so a response that lands after
+// a newer refresh, or after logout, is dropped instead of overwriting the store.
+let gen = 0
+
 export async function refreshAttention() {
+  const mine = ++gen
   const [approvals, tools] = await Promise.allSettled([
     api.approvals('pending'),
     api.listTools(),
   ])
+  if (mine !== gen) return
   attention.update((a) => ({
     pendingApprovals: approvals.status === 'fulfilled' && Array.isArray(approvals.value)
       ? approvals.value.length
       : a.pendingApprovals,
-    unhealthyTools: tools.status === 'fulfilled' && Array.isArray(tools.value)
-      ? tools.value.filter(t => UNHEALTHY.has(t.status)).map(t => t.name)
+    unhealthyTools: tools.status === 'fulfilled' && Array.isArray(tools.value?.tools)
+      ? tools.value.tools.filter(t => UNHEALTHY.has(t.status)).map(t => t.name)
       : a.unhealthyTools,
   }))
 }
@@ -60,4 +66,8 @@ export function stopAttention() {
   document.removeEventListener('visibilitychange', refreshIfVisible)
   if (panicUnsub) panicUnsub()
   panicUnsub = null
+  gen++
+  // The next credential may lack the scope to refill these, and a failed
+  // poll keeps the old value, so never carry them across a logout.
+  attention.set({ pendingApprovals: 0, unhealthyTools: [] })
 }
