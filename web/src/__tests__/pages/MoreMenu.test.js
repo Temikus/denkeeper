@@ -1,9 +1,14 @@
 import { describe, test, expect, afterEach } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { render, fireEvent } from '@testing-library/svelte'
 import MoreMenu from '../../pages/MoreMenu.svelte'
-import { panicStatus } from '../../wsStore.js'
+import { attention } from '../../attention.js'
+import { get } from 'svelte/store'
+import { theme } from '../../store.js'
 
-afterEach(() => panicStatus.set({ active: false, message: '', since: '' }))
+afterEach(() => {
+  attention.set({ pendingApprovals: 0, unhealthyTools: [] })
+  if (get(theme) === 'dark') theme.toggle()
+})
 
 describe('MoreMenu', () => {
   test('renders all section headings', () => {
@@ -13,36 +18,44 @@ describe('MoreMenu', () => {
     expect(getByText('Admin')).toBeInTheDocument()
   })
 
-  test('renders navigation items', () => {
-    const { getByText } = render(MoreMenu)
+  test('lists the Agents pages that have no tab of their own', () => {
+    const { getByText, queryByRole } = render(MoreMenu)
     expect(getByText('Sessions')).toBeInTheDocument()
     expect(getByText('Channels')).toBeInTheDocument()
-    expect(getByText('Skills')).toBeInTheDocument()
-    expect(getByText('Server')).toBeInTheDocument()
-    expect(getByText('Settings')).toBeInTheDocument()
+    expect(getByText('Turn inspector')).toBeInTheDocument()
+    expect(queryByRole('button', { name: 'Approvals' })).toBeNull()
   })
 
-  test('renders footer actions', () => {
-    const { getByText } = render(MoreMenu)
+  test('Platform and Admin open in place, and Tools is reachable', async () => {
+    const { getByRole, queryByRole } = render(MoreMenu)
+    const platform = getByRole('button', { name: /^Platform/ })
+    expect(platform).toHaveAttribute('aria-expanded', 'false')
+    expect(queryByRole('button', { name: 'Tools' })).toBeNull()
+
+    await fireEvent.click(platform)
+
+    expect(platform).toHaveAttribute('aria-expanded', 'true')
+    expect(getByRole('button', { name: 'Tools' })).toBeInTheDocument()
+    expect(getByRole('button', { name: 'Skills' })).toBeInTheDocument()
+  })
+
+  test('the Platform row says when a tool server is down', () => {
+    attention.set({ pendingApprovals: 0, unhealthyTools: ['github', 'jira'] })
+    const { getByRole } = render(MoreMenu)
+    expect(getByRole('button', { name: /^Platform/ })).toHaveTextContent('2 tools down')
+  })
+
+  test('renders the theme switch and Logout, and no panic action', () => {
+    const { getByText, getByRole, queryByText } = render(MoreMenu)
     expect(getByText('Theme')).toBeInTheDocument()
+    expect(getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
     expect(getByText('Logout')).toBeInTheDocument()
-    expect(getByText('Panic')).toBeInTheDocument()
+    expect(queryByText('Panic')).toBeNull()
   })
 
-  test('offers Resume when the store says the system is panicked', () => {
-    panicStatus.set({ active: true, message: 'paused', since: '' })
-    const { getByText, queryByText } = render(MoreMenu)
-    expect(getByText('Resume')).toBeInTheDocument()
-    expect(queryByText('Panic')).not.toBeInTheDocument()
-  })
-
-  test('dates the pause when the server reported a panic time', () => {
-    panicStatus.set({
-      active: true,
-      message: 'paused',
-      since: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
-    })
-    const { getByText } = render(MoreMenu)
-    expect(getByText('Paused 1h ago')).toBeInTheDocument()
+  test('choosing Dark switches the theme', async () => {
+    const { getByRole } = render(MoreMenu)
+    await fireEvent.click(getByRole('button', { name: 'Dark' }))
+    expect(getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
   })
 })

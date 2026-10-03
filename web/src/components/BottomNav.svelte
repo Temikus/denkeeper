@@ -1,13 +1,14 @@
 <script>
   import { navigate } from '../router.js'
+  import { attention } from '../attention.js'
 
   let { active = '' } = $props()
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'chat', label: 'Chat' },
+    { id: 'approvals', label: 'Approvals' },
     { id: 'agents', label: 'Agents' },
-    { id: 'tools', label: 'Tools' },
     { id: 'more', label: 'More' },
   ]
 
@@ -35,14 +36,18 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
         </svg>
+      {:else if tab.id === 'approvals'}
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+        </svg>
+        {#if $attention.pendingApprovals > 0}
+          <span class="badge" aria-hidden="true">{$attention.pendingApprovals}</span>
+        {/if}
       {:else if tab.id === 'agents'}
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
           <circle cx="12" cy="7" r="4" />
-        </svg>
-      {:else if tab.id === 'tools'}
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-          <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
         </svg>
       {:else if tab.id === 'more'}
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -52,6 +57,9 @@
         </svg>
       {/if}
       <span class="tab-label">{tab.label}</span>
+      {#if tab.id === 'approvals' && $attention.pendingApprovals > 0}
+        <span class="sr-only">, {$attention.pendingApprovals} pending</span>
+      {/if}
     </button>
   {/each}
 </nav>
@@ -76,6 +84,7 @@
   }
 
   .tab {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -84,7 +93,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    color: #B0A090;
+    color: var(--text-muted);
     font-weight: 500;
     -webkit-tap-highlight-color: transparent;
   }
@@ -92,6 +101,21 @@
   .tab.active {
     color: var(--accent);
     font-weight: 600;
+  }
+
+  .badge {
+    position: absolute;
+    top: 0;
+    left: calc(50% + 4px);
+    min-width: 16px;
+    padding: 0 5px;
+    border-radius: 7px;
+    background: var(--warn-badge);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 14px;
+    text-align: center;
   }
 
   .tab-label {

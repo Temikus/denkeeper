@@ -1,81 +1,57 @@
 <script>
   let { active = 'overview' } = $props()
+  import { untrack } from 'svelte'
   import { navigate } from '../router.js'
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
-  import { panicStatus } from '../wsStore.js'
-  import { relativeTime } from '../relativeTime.js'
+  import { attention } from '../attention.js'
+  import { topLinks, sections } from '../navItems.js'
 
-  let error = $state('')
-  let errorTimer
+  const STORAGE_KEY = 'dk_nav_groups'
 
-  function setError(msg) {
-    clearTimeout(errorTimer)
-    error = msg
-    errorTimer = setTimeout(() => { error = '' }, 5000)
-  }
+  // Groups the user closed. Everything starts open; storage can be missing or
+  // throw (private mode, blocked site data), and the nav must still render.
+  let closed = $state(readClosed())
 
-  async function triggerPanic() {
-    if (!confirm('Emergency stop: cancel ALL in-flight requests and pause the scheduler?')) return
+  function readClosed() {
     try {
-      await api.panic()
-      error = ''
-    } catch (e) {
-      setError('Panic failed: ' + e.message)
+      const v = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+      return Array.isArray(v) ? v : []
+    } catch {
+      return []
     }
   }
 
-  async function triggerResume() {
-    try {
-      await api.resume()
-      error = ''
-    } catch (e) {
-      setError('Resume failed: ' + e.message)
-    }
+  function save(next) {
+    closed = next
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) } catch { /* see readClosed */ }
   }
 
-  const topLinks = [
-    { id: 'overview',  label: 'Overview' },
-    { id: 'chat',      label: 'Chat' },
-  ]
+  function toggle(id) {
+    save(closed.includes(id) ? closed.filter(c => c !== id) : [...closed, id])
+  }
 
-  const sections = [
-    {
-      label: 'Agents',
-      id: 'section-agents',
-      items: [
-        { id: 'agents',    label: 'Agents' },
-        { id: 'sessions',  label: 'Sessions' },
-        { id: 'channels',  label: 'Channels' },
-        { id: 'schedules', label: 'Schedules' },
-        { id: 'approvals', label: 'Approvals' },
-        { id: 'audit',     label: 'Audit Log' },
-        { id: 'traces',    label: 'Turn inspector' },
-      ],
-    },
-    {
-      label: 'Platform',
-      id: 'section-platform',
-      items: [
-        { id: 'skills',  label: 'Skills' },
-        { id: 'tools',   label: 'Tools' },
-        { id: 'browser', label: 'Browser' },
-        { id: 'kv',      label: 'KV Store' },
-      ],
-    },
-    {
-      label: 'Admin',
-      id: 'section-admin',
-      items: [
-        { id: 'server',    label: 'Server' },
-        { id: 'providers', label: 'Providers' },
-        { id: 'costs',     label: 'Costs' },
-        { id: 'evals',     label: 'Evals' },
-        { id: 'keys',      label: 'API Keys' },
-        { id: 'settings',  label: 'Settings' },
-      ],
-    },
-  ]
+  // Arriving on a page inside a closed group (from a link or the top bar)
+  // opens that group, so the current page is visible in the sidebar.
+  $effect(() => {
+    const home = sections.find(s => s.items.some(i => i.id === active))
+    untrack(() => {
+      if (home && closed.includes(home.id)) save(closed.filter(c => c !== home.id))
+    })
+  })
+
+  function badge(id) {
+    return id === 'approvals' ? $attention.pendingApprovals : 0
+  }
+
+  // Closing a group must not hide a pending count inside it.
+  function groupBadge(section) {
+    return section.items.reduce((n, i) => n + badge(i.id), 0)
+  }
+
+  function hasProblem(section) {
+    return section.id === 'platform' && $attention.unhealthyTools.length > 0
+  }
 
   function logout() {
     api.logout().catch(() => {})
@@ -138,6 +114,7 @@
             href={'#/' + l.id}
             class="nav-item"
             class:active={active === l.id}
+            aria-current={active === l.id ? 'page' : undefined}
             onclick={(e) => { e.preventDefault(); navigate(l.id) }}
           >
             {l.label}
@@ -147,18 +124,33 @@
     </ul>
 
     {#each sections as section}
-      <div class="section" role="group" aria-labelledby={section.id}>
-        <span class="section-label" id={section.id}>{section.label}</span>
-        <ul class="section-items">
+      {@const open = !closed.includes(section.id)}
+      <div class="section">
+        <button
+          class="section-toggle"
+          aria-expanded={open}
+          aria-controls="nav-{section.id}"
+          onclick={() => toggle(section.id)}
+        >
+          <span class="section-label">
+            {section.label}{#if !open}<span class="count">{` · ${section.items.length}`}</span>{/if}
+            {#if !open && groupBadge(section) > 0}<span class="badge group-badge" aria-hidden="true">{groupBadge(section)}</span><span class="sr-only">({groupBadge(section)} pending)</span>{/if}
+            {#if hasProblem(section)}<span class="problem-dot" title="A tool server is unhealthy"></span><span class="sr-only">(a tool server is unhealthy)</span>{/if}
+          </span>
+          <svg class="chevron" class:open width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg>
+        </button>
+        <ul class="section-items" id="nav-{section.id}" hidden={!open}>
           {#each section.items as l}
             <li>
               <a
                 href={'#/' + l.id}
                 class="nav-item"
                 class:active={active === l.id}
+                aria-current={active === l.id ? 'page' : undefined}
                 onclick={(e) => { e.preventDefault(); navigate(l.id) }}
               >
-                {l.label}
+                <span>{l.label}</span>
+                {#if badge(l.id) > 0}<span class="badge" aria-hidden="true">{badge(l.id)}</span><span class="sr-only">, {badge(l.id)} pending</span>{/if}
               </a>
             </li>
           {/each}
@@ -168,19 +160,6 @@
   </div>
 
   <div class="footer">
-    {#if $panicStatus.active}
-      <button
-        class="btn-panic active"
-        onclick={triggerResume}
-        title={$panicStatus.since ? `Paused ${relativeTime($panicStatus.since)} — resume processing` : 'Resume processing'}
-        data-testid="nav-resume"
-      >Resume</button>
-    {:else}
-      <button class="btn-panic" onclick={triggerPanic} title="Emergency stop all agents" data-testid="nav-panic">Panic</button>
-    {/if}
-    {#if error}
-      <span class="panic-error" role="alert">{error}</span>
-    {/if}
     <button class="logout" onclick={logout} data-testid="logout-btn">Logout</button>
   </div>
 </nav>
@@ -259,15 +238,50 @@
     padding: 0 4px;
   }
 
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 4px 12px 6px;
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    color: var(--sidebar-section-label);
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .section-toggle:hover { color: var(--sidebar-text); }
+  .section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
   .section-label {
-    display: block;
+    white-space: nowrap;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--sidebar-section-label);
-    padding: 0 12px 6px;
   }
+
+  .problem-dot {
+    display: inline-block;
+    vertical-align: middle;
+    margin: -2px 0 0 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+
+  .group-badge {
+    display: inline-block;
+    margin-left: 6px;
+    letter-spacing: 0;
+    vertical-align: middle;
+  }
+
+  .chevron { flex-shrink: 0; transition: transform 0.15s; }
+  .chevron.open { transform: rotate(90deg); }
 
   .section-items {
     list-style: none;
@@ -278,7 +292,10 @@
 
   /* Nav items (shared between top-links and section items) */
   .nav-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 7px 12px;
     color: var(--sidebar-text);
     text-decoration: none;
@@ -298,42 +315,22 @@
     font-weight: 500;
   }
 
+  .badge {
+    min-width: 18px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--warn-badge);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+  }
+
   /* Footer */
   .footer {
     padding: 12px 16px;
     border-top: 1px solid var(--sidebar-divider);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .btn-panic {
-    width: 100%;
-    padding: 8px;
-    background: var(--danger);
-    border: 1px solid var(--danger);
-    color: #fff;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    transition: opacity 0.3s;
-  }
-  .btn-panic:hover { opacity: 0.85; }
-  .btn-panic.active {
-    background: none;
-    border: 1px solid var(--danger);
-    color: var(--danger);
-  }
-  .btn-panic.active:hover {
-    background: var(--danger);
-    color: #fff;
-  }
-
-  .panic-error {
-    font-size: 12px;
-    color: var(--danger);
-    text-align: center;
   }
 
   .logout {
