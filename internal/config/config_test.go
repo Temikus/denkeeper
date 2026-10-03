@@ -81,6 +81,43 @@ api_key = "sk-or-test-key"
 	}
 }
 
+func TestParse_EmptyConfig_StartsWithoutProvider(t *testing.T) {
+	// The first-run path: an empty file must load so the web setup wizard can
+	// add the first provider. No implicit openrouter instance may appear, or
+	// it would demand an api_key nobody has given yet.
+	cfg, err := Parse([]byte(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "" {
+		t.Errorf("default_provider = %q, want empty", cfg.LLM.DefaultProvider)
+	}
+	if len(cfg.LLM.Providers) != 0 {
+		t.Errorf("providers = %+v, want none", cfg.LLM.Providers)
+	}
+	if len(cfg.Agents) != 0 {
+		t.Errorf("agents = %d, want 0", len(cfg.Agents))
+	}
+}
+
+func TestParse_ProviderInstanceWithoutDefault_DefaultsToOpenrouter(t *testing.T) {
+	// Any LLM setup at all keeps the historical openrouter default, so
+	// existing configs that relied on it keep resolving the same provider.
+	tomlData := []byte(`
+[[llm.providers]]
+name = "openrouter"
+type = "openrouter"
+api_key = "sk-or-test-key"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.DefaultProvider != "openrouter" {
+		t.Errorf("default_provider = %q, want openrouter", cfg.LLM.DefaultProvider)
+	}
+}
+
 func TestParse_MissingToken(t *testing.T) {
 	tomlData := []byte(`
 [api]

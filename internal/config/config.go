@@ -1414,6 +1414,7 @@ func applyDefaults(cfg *Config) {
 
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
+	applyDefaultProvider(cfg)
 	synthesizeLegacyProviders(cfg)
 	migrateCostsToProviders(cfg, userSetSoft, userCostSoft, userSetHard, userCostHard)
 	expandEnvVars(cfg)
@@ -1786,10 +1787,29 @@ func applyReplyGuardDefaults(cfg *Config) {
 	}
 }
 
-func applyLLMDefaults(cfg *Config) {
-	if cfg.LLM.DefaultProvider == "" {
-		cfg.LLM.DefaultProvider = "openrouter"
+// applyDefaultProvider defaults llm.default_provider to "openrouter" unless
+// the config has no LLM or adapter setup at all. A blank config must load with
+// no provider so the web setup wizard can add the first one; an implicit
+// openrouter there would fail validation for want of an api_key.
+// Runs after applyEnvOverrides so env-supplied keys count as setup.
+func applyDefaultProvider(cfg *Config) {
+	if cfg.LLM.DefaultProvider != "" || isBlankSetup(cfg) {
+		return
 	}
+	cfg.LLM.DefaultProvider = "openrouter"
+}
+
+func isBlankSetup(cfg *Config) bool {
+	l := &cfg.LLM
+	return len(l.Providers) == 0 && len(l.Fallbacks) == 0 && len(l.Deciders) == 0 &&
+		l.OpenRouter.APIKey == "" &&
+		l.Anthropic.APIKey == "" && l.Anthropic.BaseURL == "" &&
+		l.OpenAI.APIKey == "" && l.OpenAI.BaseURL == "" &&
+		l.Ollama.BaseURL == "" &&
+		len(cfg.Agents) == 0 && cfg.Telegram.Token == "" && cfg.Discord.Token == ""
+}
+
+func applyLLMDefaults(cfg *Config) {
 	if cfg.LLM.DefaultModel == "" {
 		cfg.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
 	}
