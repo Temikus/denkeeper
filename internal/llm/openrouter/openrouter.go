@@ -212,6 +212,9 @@ func (c *Client) ResetUpstreamPreference() { c.resetSticky() }
 
 func (c *Client) Name() string { return c.name }
 
+// SetHTTPClient replaces the HTTP client used for every request.
+func (c *Client) SetHTTPClient(hc *http.Client) { c.http = hc }
+
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }
 
@@ -486,7 +489,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: "listing models failed"}
 	}
 
 	var result struct {
@@ -714,6 +717,27 @@ func (p modelsPricing) outputPerMTok() (float64, error) {
 		return 0, err
 	}
 	return perToken * 1_000_000, nil
+}
+
+// CheckCredentials implements llm.CredentialChecker against GET /key, which
+// unlike the public /models listing rejects an invalid key with 401.
+func (c *Client) CheckCredentials(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/key", nil)
+	if err != nil {
+		return fmt.Errorf("creating key check request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("checking key: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return &llm.LLMError{StatusCode: resp.StatusCode, Message: "key check failed"}
+	}
+	return nil
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {

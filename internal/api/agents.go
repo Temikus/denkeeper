@@ -576,18 +576,7 @@ type agentCreateInput struct {
 	CreateSupervisor *companionSupervisorInput `json:"create_supervisor,omitempty"`
 }
 
-// handleCreateAgent godoc
-// @Summary Create agent
-// @Description Creates a new agent at runtime with persona directory and TOML persistence
-// @Tags agents
-// @Accept json
-// @Produce json
-// @Security BearerAuth
-// @Param body body agentCreateInput true "Agent configuration"
-// @Success 201 {object} map[string]string
-// @Failure 400 {object} map[string]string
-// @Failure 409 {object} map[string]string
-// @Router /agents [post]
+// validateAgentCreateInput checks a create body. A zero status means valid.
 func (s *Server) validateAgentCreateInput(input *agentCreateInput) (int, string) {
 	if !config.ValidResourceName(input.Name) {
 		return http.StatusBadRequest, "invalid agent name: must be lowercase alphanumeric with hyphens, 1-64 chars"
@@ -601,6 +590,18 @@ func (s *Server) validateAgentCreateInput(input *agentCreateInput) (int, string)
 	return 0, ""
 }
 
+// handleCreateAgent godoc
+// @Summary Create agent
+// @Description Creates a new agent at runtime with persona directory and TOML persistence
+// @Tags agents
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body agentCreateInput true "Agent configuration"
+// @Success 201 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /agents [post]
 func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AgentFactory == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent creation not available"})

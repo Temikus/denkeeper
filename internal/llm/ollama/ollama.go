@@ -71,6 +71,9 @@ func NewWithHTTPClient(baseURL string, httpClient *http.Client) *Client {
 
 func (c *Client) Name() string { return c.name }
 
+// SetHTTPClient replaces the HTTP client used for every request.
+func (c *Client) SetHTTPClient(hc *http.Client) { c.http = hc }
+
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }
 
@@ -256,7 +259,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: "listing models failed"}
 	}
 
 	var result struct {

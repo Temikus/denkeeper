@@ -514,6 +514,11 @@ type APIConfig struct {
 	// (or skipped). Set via POST /api/v1/onboarding/wizard-complete.
 	WizardCompleted bool `toml:"wizard_completed"`
 
+	// WizardSkipped records that the wizard was left with "Set up later"
+	// rather than finished, so the dashboard keeps offering to resume it.
+	// Set via POST /api/v1/onboarding/wizard-skip; wizard-complete clears it.
+	WizardSkipped bool `toml:"wizard_skipped"`
+
 	// MCPServer configures the MCP server endpoint that allows external MCP
 	// clients (Claude Code, other AI tools) to interact with Denkeeper agents.
 	MCPServer APIMCPServerConfig `toml:"mcp_server"`
@@ -1416,6 +1421,7 @@ func applyDefaults(cfg *Config) {
 
 	applyLLMDefaults(cfg)
 	applyEnvOverrides(cfg)
+	applyDefaultProvider(cfg)
 	synthesizeLegacyProviders(cfg)
 	migrateCostsToProviders(cfg, userSetSoft, userCostSoft, userSetHard, userCostHard)
 	expandEnvVars(cfg)
@@ -1789,10 +1795,36 @@ func applyReplyGuardDefaults(cfg *Config) {
 	}
 }
 
-func applyLLMDefaults(cfg *Config) {
-	if cfg.LLM.DefaultProvider == "" {
-		cfg.LLM.DefaultProvider = "openrouter"
+// applyDefaultProvider fills an unset llm.default_provider. A blank config
+// stays without one, so it loads and the web setup wizard can add the first
+// provider. Otherwise openrouter keeps its historical place as the default
+// when it is configured (or nothing else is), and failing that the first
+// [[llm.providers]] instance is used, so a config naming only, say, an
+// anthropic instance does not fail for want of an openrouter key.
+// Runs after applyEnvOverrides so env-supplied keys count as setup.
+func applyDefaultProvider(cfg *Config) {
+	if cfg.LLM.DefaultProvider != "" || isBlankSetup(cfg) {
+		return
 	}
+	l := &cfg.LLM
+	if l.OpenRouter.APIKey != "" || l.HasProvider("openrouter") || len(l.Providers) == 0 {
+		l.DefaultProvider = "openrouter"
+		return
+	}
+	l.DefaultProvider = l.Providers[0].Name
+}
+
+func isBlankSetup(cfg *Config) bool {
+	l := &cfg.LLM
+	return len(l.Providers) == 0 && len(l.Fallbacks) == 0 && len(l.Deciders) == 0 &&
+		l.OpenRouter.APIKey == "" &&
+		l.Anthropic.APIKey == "" && l.Anthropic.BaseURL == "" &&
+		l.OpenAI.APIKey == "" && l.OpenAI.BaseURL == "" &&
+		l.Ollama.BaseURL == "" &&
+		len(cfg.Agents) == 0 && cfg.Telegram.Token == "" && cfg.Discord.Token == ""
+}
+
+func applyLLMDefaults(cfg *Config) {
 	if cfg.LLM.DefaultModel == "" {
 		cfg.LLM.DefaultModel = "anthropic/claude-sonnet-4-20250514"
 	}

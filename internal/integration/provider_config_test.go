@@ -59,7 +59,7 @@ func TestProviderCreate_Basic(t *testing.T) {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var result map[string]string
+	var result map[string]any
 	DecodeJSON(t, rec, &result)
 	if result["name"] != "my-ollama" {
 		t.Fatalf("expected name=my-ollama, got %v", result["name"])

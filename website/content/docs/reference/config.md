@@ -441,7 +441,8 @@ Dry-run turns persist nothing — no messages, telemetry, or memory — and exec
 | `login_rate_limit` | int | `5` | Failed password logins allowed per window per IP |
 | `login_rate_window` | string | `"15m"` | Window for `login_rate_limit` |
 | `onboarding_dismissed` | bool | `false` | Set by the dashboard when the onboarding checklist is dismissed |
-| `wizard_completed` | bool | `false` | Set by the dashboard when the setup wizard finishes |
+| `wizard_completed` | bool | `false` | Set by the dashboard when the setup wizard finishes or is left for later |
+| `wizard_skipped` | bool | `false` | Set by the dashboard when the setup wizard is left with "Set up later", so the Overview keeps offering to resume it. Cleared when the wizard finishes |
 
 ## `[[api.keys]]`
 

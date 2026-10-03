@@ -4,6 +4,7 @@
   import { currentRoute } from './router.js'
   import { api } from './api.js'
   import { initWS, destroyWS } from './wsStore.js'
+  import { refreshSetup, openWizard, wizardOpen } from './setupStore.js'
   import { startAttention, stopAttention } from './attention.js'
   import Nav from './components/Nav.svelte'
   import BottomNav from './components/BottomNav.svelte'
@@ -35,19 +36,17 @@
   // Top-level route segment only (e.g. 'agents' from 'agents/detail').
   let route = $derived($currentRoute.split('/')[0])
 
-  let showWizard = $state(false)
+  // Progress lives on the server now; this key is from the old wizard.
+  try { localStorage.removeItem('dk_wizard_state') } catch { /* storage blocked */ }
+
+  // Bumped on every login and logout, so a check that outlives its login
+  // can't open the wizard for the next one.
+  let authGen = 0
 
   async function checkWizard() {
-    if (localStorage.getItem('dk_wizard_state')) {
-      showWizard = true
-      return
-    }
-    try {
-      const ob = await api.onboarding()
-      if (!ob.wizard_completed) {
-        showWizard = true
-      }
-    } catch { /* ignore — e.g. insufficient scope */ }
+    const gen = authGen
+    const state = await refreshSetup() // null when this credential can't read onboarding
+    if (gen === authGen && state && !state.completed) openWizard()
   }
 
   // On mount, check if we have a valid session cookie (e.g. after OIDC redirect)
@@ -70,10 +69,12 @@
   })
 
   $effect(() => {
+    authGen++
     if ($isAuthenticated) {
       checkWizard()
       startAttention()
     } else {
+      wizardOpen.set(false)
       stopAttention()
     }
   })
@@ -81,8 +82,8 @@
 
 {#if !$isAuthenticated}
   <Login />
-{:else if showWizard}
-  <SetupWizard onComplete={() => { showWizard = false }} />
+{:else if $wizardOpen}
+  <SetupWizard />
 {:else}
   <div class="shell">
     <Nav active={route} />
@@ -183,6 +184,9 @@
     --sidebar-active-bg:    rgba(var(--accent-rgb), 0.08);
     --sidebar-hover-bg:     rgba(0, 0, 0, 0.04);
     --sidebar-divider:      rgba(0, 0, 0, 0.08);
+
+    /* Setup wizard: the summary rail sits one step darker than --surface. */
+    --wizard-rail-bg:       #f4ece0;
   }
 
   :global(:root.dark) {
@@ -210,6 +214,8 @@
     --sidebar-active-bg:    rgba(var(--accent-rgb), 0.15);
     --sidebar-hover-bg:     rgba(255, 255, 255, 0.06);
     --sidebar-divider:      rgba(255, 255, 255, 0.08);
+
+    --wizard-rail-bg:       #1f1714;
   }
 
   @media (max-width: 520px) {

@@ -212,6 +212,7 @@ Named routing endpoints decoupling sessions from adapters.
     timezone = "UTC"                 # IANA timezone for cron expressions
     onboarding_dismissed = false     # hide onboarding checklist (set via API)
     wizard_completed = false         # post-auth setup wizard completed (set via API)
+    wizard_skipped = false           # wizard left with "Set up later"; dashboard offers to resume (set via API)
 
 ### [api.mcp_server]
 

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
+import { get } from 'svelte/store'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
@@ -43,6 +44,45 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(screen.getByText('Send a message to start a conversation.')).toBeInTheDocument()
     })
+  })
+
+  test('with no agents, chat explains why and disables the composer', async () => {
+    server.use(http.get('/api/v1/agents', () => HttpResponse.json([])))
+    render(Chat)
+
+    const empty = await screen.findByTestId('chat-no-agents')
+    expect(empty).toHaveTextContent('No one to talk to yet')
+    expect(screen.getByTestId('chat-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-input')).toHaveAttribute('placeholder', 'Finish setup to start chatting')
+    expect(screen.getByTestId('agent-selector')).toHaveTextContent('No agents yet')
+    expect(screen.queryByText('default')).not.toBeInTheDocument()
+  })
+
+  test('Reload config that finds an agent selects it', async () => {
+    let list = []
+    server.use(
+      http.get('/api/v1/agents', () => HttpResponse.json(list)),
+      http.post('/api/v1/server/reload', () => HttpResponse.json({ status: 'reloaded' })),
+    )
+    chatState.update(s => ({ ...s, agent: 'default' }))
+    render(Chat)
+    await screen.findByTestId('chat-no-agents')
+
+    list = [{ name: 'den', permission_tier: 'supervised', skill_count: 0 }]
+    await fireEvent.click(screen.getByRole('button', { name: 'Reload config' }))
+    await waitFor(() => expect(get(chatState).agent).toBe('den'))
+    expect(screen.getByTestId('chat-input')).not.toBeDisabled()
+  })
+
+  test('a queued prompt with send: false prefills instead of sending', async () => {
+    const { pendingSkillTest } = await import('../../chatStore.js')
+    let sent = 0
+    server.use(http.post('/api/v1/chat', () => { sent++; return HttpResponse.json({}) }))
+    pendingSkillTest.set({ agent: 'default', command: 'What can you do for me?', send: false })
+
+    render(Chat)
+    await waitFor(() => expect(screen.getByTestId('chat-input').value).toBe('What can you do for me?'))
+    expect(sent).toBe(0)
   })
 
   test('agent selector is populated from API', async () => {

@@ -5,12 +5,32 @@
   import { isMobile } from '../store.js'
   import { chatState, sendMessage, newSession, setAgent, setChannel, loadSession, initChat, resolveApprovalAction, cancelSession, clearCurrentSession, compactCurrentSession, pendingSkillTest } from '../chatStore.js'
   import { wsStatus, onActivity } from '../wsStore.js'
+  import { setup, openWizard } from '../setupStore.js'
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
 
   let agents = $state([])
+  let agentsLoaded = $state(false)
+  // No agent means nothing can answer: say so instead of offering a fake one.
+  let noAgents = $derived(agentsLoaded && agents.length === 0)
+  let reloading = $state(false)
+  let reloadError = $state('')
   let sessions = $state([])
   let input = $state('')
+
+  async function reloadAndRetry() {
+    reloading = true
+    reloadError = ''
+    try {
+      await api.reloadConfig()
+      await loadAgents()
+      if (agents.length === 0) reloadError = 'Reloaded, but the config still has no [[agents]].'
+    } catch (e) {
+      reloadError = e.message
+    } finally {
+      reloading = false
+    }
+  }
   let messagesEl
   let textareaEl
   let userAtBottom = $state(true)
@@ -61,15 +81,27 @@
     try {
       const res = await api.agents()
       agents = res || []
+      agentsLoaded = true
       await initChat(agents)
-      // If the Skills page queued a test, consume it after successful init.
+      // initChat runs once per page load, so agents created since then
+      // (wizard, Reload config) leave a stale or empty selection.
+      if (agents.length && !agents.some(a => a.name === get(chatState).agent)) {
+        setAgent(agents[0].name)
+      }
+      // The Skills page queues a command to send; the setup wizard queues
+      // one to prefill (send: false), or none to just pick the agent.
       const pending = get(pendingSkillTest)
       if (pending) {
         pendingSkillTest.set(null)
-        setAgent(pending.agent)
+        if (pending.agent) setAgent(pending.agent)
         newSession()
         await tick()
-        await sendMessage(pending.command)
+        if (pending.send === false) {
+          input = pending.command || ''
+          textareaEl?.focus()
+        } else {
+          await sendMessage(pending.command)
+        }
       }
     } catch (e) {
       // non-fatal — default will still work
@@ -361,11 +393,13 @@
   <div class="toolbar" class:mobile-hidden={$isMobile} role="toolbar" aria-label="Chat controls">
     <label>
       Agent
-      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent" data-testid="agent-selector">
+      <select bind:value={$chatState.agent} onchange={(e) => setAgent(e.target.value)} aria-label="Select agent" data-testid="agent-selector" disabled={noAgents}>
         {#each agents as a}
           <option value={a.name}>{a.display_name || a.name}</option>
         {/each}
-        {#if agents.length === 0}
+        {#if noAgents}
+          <option value={$chatState.agent}>No agents yet</option>
+        {:else if agents.length === 0}
           <option value="default">default</option>
         {/if}
       </select>
@@ -445,6 +479,24 @@
           <span class="spinner" aria-hidden="true"></span>
           <p class="muted">Restoring session...</p>
         </div>
+      </div>
+    {:else if noAgents}
+      <div class="empty no-agents" data-testid="chat-no-agents">
+        <h2 class="no-agents-title">No one to talk to yet</h2>
+        <p class="muted">Chat needs an agent, and an agent needs a model provider. Setup takes about three minutes and picks up where you left off.</p>
+        <div class="no-agents-actions">
+          {#if !$setup.completed || $setup.skipped}
+            <button class="btn-primary" onclick={openWizard} data-testid="chat-resume-setup">Resume setup</button>
+            <a href="#/agents">Add an agent by hand</a>
+          {:else}
+            <a class="btn-primary" href="#/agents">Create an agent</a>
+          {/if}
+        </div>
+        <p class="no-agents-reload muted">
+          Already edited denkeeper.toml?
+          <button class="link-btn" onclick={reloadAndRetry} disabled={reloading}>{reloading ? 'Reloading…' : 'Reload config'}</button>
+        </p>
+        {#if reloadError}<p class="inline-error" role="alert">{reloadError}</p>{/if}
       </div>
     {:else if $chatState.messages.length === 0}
       <div class="empty">
@@ -575,15 +627,16 @@
         bind:value={input}
         onkeydown={handleKeydown}
         oninput={handleInput}
-        placeholder={$isMobile ? "Type a message..." : "Type a message... (Enter to send, Shift+Enter for newline)"}
+        placeholder={noAgents ? 'Finish setup to start chatting' : $isMobile ? "Type a message..." : "Type a message... (Enter to send, Shift+Enter for newline)"}
         rows="1"
         aria-label="Chat message input"
         data-testid="chat-input"
+        disabled={noAgents}
       ></textarea>
       {#if $chatState.sending}
         <button class="btn-stop" onclick={cancelSession} aria-label="Stop current request" data-testid="chat-stop">Stop</button>
       {:else}
-        <button class="btn-send" onclick={send} disabled={!input.trim()} aria-label="Send message" data-testid="chat-send">Send</button>
+        <button class="btn-send" onclick={send} disabled={noAgents || !input.trim()} aria-label="Send message" data-testid="chat-send">Send</button>
       {/if}
     </div>
   </div>
@@ -706,6 +759,29 @@
     justify-content: center;
     color: var(--text-muted);
   }
+
+  .no-agents {
+    flex-direction: column;
+    gap: 14px;
+    max-width: 440px;
+    margin: 0 auto;
+    text-align: center;
+    color: var(--text);
+  }
+  .no-agents-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .no-agents-actions { display: flex; align-items: center; gap: 16px; }
+  .no-agents-actions a.btn-primary { color: #fff; }
+  .no-agents-reload { font-size: 12px; }
+  .link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .link-btn:disabled { opacity: 0.6; cursor: default; }
 
   .restoring-indicator {
     display: flex;

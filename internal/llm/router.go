@@ -29,7 +29,7 @@ type FallbackRule struct {
 
 // Router selects the appropriate LLM provider for a request.
 type Router struct {
-	providers         map[string]Provider
+	providers         *ProviderSet
 	defaultProvider   string
 	defaultModel      string
 	costTracker       *CostTracker
@@ -94,7 +94,7 @@ func (r *Router) WithProvider(provider string) *Router {
 // so a caller accepting a provider override can reject an unknown name up
 // front rather than failing every request that follows.
 func (r *Router) HasProvider(provider string) bool {
-	_, ok := r.providers[provider]
+	_, ok := r.providers.Get(provider)
 	return ok
 }
 
@@ -105,7 +105,7 @@ func (r *Router) CostTracker() *CostTracker { return r.costTracker }
 // returns a de-duplicated sorted list of available model names.
 func (r *Router) ListModels(ctx context.Context) []string {
 	seen := make(map[string]bool)
-	for _, p := range r.providers {
+	for _, p := range r.providers.Snapshot() {
 		lister, ok := p.(ModelLister)
 		if !ok {
 			continue
@@ -137,7 +137,7 @@ func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []
 	seen := make(map[string]bool)
 	var result []ModelInfo
 
-	for _, p := range r.providers {
+	for _, p := range r.providers.Snapshot() {
 		if providerFilter != "" && p.Name() != providerFilter {
 			continue
 		}
@@ -244,14 +244,21 @@ func (r *Router) SetDefaultModel(model string) { r.defaultModel = model }
 // SetDefaultProvider changes the router's default provider for subsequent requests.
 // Returns an error if the provider is not registered.
 func (r *Router) SetDefaultProvider(provider string) error {
-	if _, ok := r.providers[provider]; !ok {
+	if _, ok := r.providers.Get(provider); !ok {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	r.defaultProvider = provider
 	return nil
 }
 
+// NewRouter returns a router with its own private provider set.
 func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *Router {
+	return NewRouterWithProviders(defaultProvider, defaultModel, costTracker, NewProviderSet())
+}
+
+// NewRouterWithProviders returns a router that resolves providers from set,
+// which may be shared with other routers.
+func NewRouterWithProviders(defaultProvider, defaultModel string, costTracker *CostTracker, set *ProviderSet) *Router {
 	meter := otel.Meter("denkeeper.llm")
 	tracer := otel.Tracer("denkeeper.llm")
 
@@ -267,7 +274,7 @@ func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *
 		metric.WithDescription("LLM call errors"))
 
 	return &Router{
-		providers:       make(map[string]Provider),
+		providers:       set,
 		defaultProvider: defaultProvider,
 		defaultModel:    defaultModel,
 		costTracker:     costTracker,
@@ -279,8 +286,10 @@ func NewRouter(defaultProvider, defaultModel string, costTracker *CostTracker) *
 	}
 }
 
+// RegisterProvider adds p to the router's provider set. On a shared set,
+// every router built from it sees p.
 func (r *Router) RegisterProvider(p Provider) {
-	r.providers[p.Name()] = p
+	r.providers.Put(p)
 }
 
 // SetFallbacks configures the ordered list of fallback rules.
@@ -362,7 +371,7 @@ func (r *Router) CompleteFinal(ctx context.Context, sessionID string, messages [
 }
 
 func (r *Router) completeInternal(ctx context.Context, sessionID string, messages []Message, opts completeOpts) (*ChatResponse, error) {
-	provider, ok := r.providers[r.defaultProvider]
+	provider, ok := r.providers.Get(r.defaultProvider)
 	if !ok {
 		return nil, fmt.Errorf("provider %q not registered", r.defaultProvider)
 	}
@@ -597,7 +606,7 @@ func (r *Router) applyCostLimitFallback(sessionID string, provider Provider) (Pr
 		case "switch_model":
 			activeModel = rule.Model
 		case "switch_provider":
-			fp, ok := r.providers[rule.Provider]
+			fp, ok := r.providers.Get(rule.Provider)
 			if !ok {
 				slog.Warn("cost_limit fallback provider not registered, skipping", "provider", rule.Provider)
 				continue
@@ -685,7 +694,7 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 		return resp, activeProvider.Name(), retryErr
 
 	case "switch_provider":
-		fp, ok := r.providers[rule.Provider]
+		fp, ok := r.providers.Get(rule.Provider)
 		if !ok {
 			slog.Warn("fallback provider not registered, skipping", "provider", rule.Provider)
 			return nil, "", fmt.Errorf("fallback provider %q not registered", rule.Provider)
@@ -708,7 +717,7 @@ func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, a
 }
 
 func (r *Router) HealthCheck(ctx context.Context) error {
-	for name, p := range r.providers {
+	for name, p := range r.providers.Snapshot() {
 		if err := p.HealthCheck(ctx); err != nil {
 			return fmt.Errorf("provider %q health check failed: %w", name, err)
 		}

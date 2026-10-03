@@ -1,6 +1,8 @@
 import { describe, test, expect, afterEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
+import { get } from 'svelte/store'
 import { attention } from '../../attention.js'
+import { setup, wizardOpen } from '../../setupStore.js'
 import Nav from '../Nav.svelte'
 
 afterEach(() => attention.set({ pendingApprovals: 0, unhealthyTools: [] }))
@@ -33,6 +35,26 @@ describe('Nav', () => {
     const { getByText, queryByTestId } = render(Nav, { props: { active: 'overview' } })
     expect(getByText('Logout')).toBeInTheDocument()
     expect(queryByTestId('nav-panic')).toBeNull()
+  })
+
+  test('shows a resume chip after setup was skipped', async () => {
+    setup.set({
+      loaded: true, completed: true, skipped: true, doneCount: 1, total: 4,
+      steps: [{ id: 'provider', done: true }, { id: 'agent', done: false }, { id: 'persona', done: false }, { id: 'chat_app', done: false, optional: true }],
+    })
+    wizardOpen.set(false)
+    const { getByTestId } = render(Nav, { props: { active: 'overview' } })
+
+    const chip = getByTestId('nav-setup-chip')
+    expect(chip).toHaveTextContent('Setup · 1 of 4')
+    await fireEvent.click(chip)
+    expect(get(wizardOpen)).toBe(true)
+  })
+
+  test('no setup chip once setup is done', () => {
+    setup.set({ loaded: true, completed: true, skipped: false, doneCount: 4, total: 4, steps: [] })
+    const { queryByTestId } = render(Nav, { props: { active: 'overview' } })
+    expect(queryByTestId('nav-setup-chip')).toBeNull()
   })
 
   test('overview is highlighted by default', () => {

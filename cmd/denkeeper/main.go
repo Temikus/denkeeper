@@ -32,12 +32,10 @@ import (
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
-	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
-	"github.com/Temikus/denkeeper/internal/llm/ollama"
-	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
-	"github.com/Temikus/denkeeper/internal/llm/openrouter"
+	"github.com/Temikus/denkeeper/internal/llm/llmfactory"
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
+	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
 	"github.com/Temikus/denkeeper/internal/persona"
 	"github.com/Temikus/denkeeper/internal/plugin"
@@ -185,7 +183,7 @@ func buildChannelResolver(d *agent.Dispatcher) configmcp.ChannelResolver {
 
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
-	providers         map[string]llm.Provider // keyed by instance name
+	providers         *llm.ProviderSet        // shared by every agent router
 	deciders          map[string]*llm.Decider // keyed by [[llm.deciders]] name
 	cost              *llm.CostTracker
 	fallbacks         []llm.FallbackRule
@@ -306,12 +304,14 @@ func initLogger(cfg *config.Config) *slog.Logger {
 }
 
 func initLLMClients(cfg *config.Config) llmClients {
-	providers := make(map[string]llm.Provider, len(cfg.LLM.Providers))
+	providers := llm.NewProviderSet()
 	for _, pc := range cfg.LLM.Providers {
-		p := createProvider(pc, cfg)
-		if p != nil {
-			providers[pc.Name] = p
+		p, err := llmfactory.New(pc, cfg.LLM.OpenRouter, nil)
+		if err != nil {
+			slog.Warn("provider skipped", "provider", pc.Name, "error", err)
+			continue
 		}
+		providers.Put(p)
 	}
 
 	fallbackRules := convertFallbacks(cfg.LLM.Fallbacks)
@@ -328,24 +328,14 @@ func initLLMClients(cfg *config.Config) llmClients {
 			CachedInputPerMTok: mp.CachedInputPerMTok,
 		})
 	}
-	// Per-provider pricing overrides.
 	for _, pc := range cfg.LLM.Providers {
-		if pc.DefaultRatePerKTokens != nil && *pc.DefaultRatePerKTokens > 0 {
-			reg.SetProviderFallbackRate(pc.Name, *pc.DefaultRatePerKTokens)
-		}
-		for model, mp := range pc.ModelPrices {
-			reg.RegisterProviderModel(pc.Name, model, pricing.ModelPrice{
-				InputPerMTok:       mp.InputPerMTok,
-				OutputPerMTok:      mp.OutputPerMTok,
-				CachedInputPerMTok: mp.CachedInputPerMTok,
-			})
-		}
+		applyProviderPricing(reg, pc)
 	}
 
 	cost := buildCostTracker(cfg)
 	return llmClients{
 		providers:         providers,
-		deciders:          buildDeciders(cfg, providers, cost),
+		deciders:          buildDeciders(cfg, providers.Snapshot(), cost),
 		cost:              cost,
 		fallbacks:         fallbackRules,
 		pricing:           reg,
@@ -380,27 +370,17 @@ func newDecider(dc config.DeciderConfig, dp llm.DecisionProvider, cost *llm.Cost
 	}, dp, cost)
 }
 
-// createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
-func createProvider(pc config.ProviderInstanceConfig, cfg *config.Config) llm.Provider {
-	switch pc.Type {
-	case "anthropic":
-		return anthropicllm.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
-	case "openai":
-		return openaillm.NewFull(pc.Name, pc.APIKey, pc.BaseURL, pc.Organization)
-	case "openrouter":
-		client := openrouter.NewFull(pc.Name, pc.APIKey)
-		r := &cfg.LLM.OpenRouter.Reasoning
-		client.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
-		client.SetProviderRouting(
-			cfg.LLM.OpenRouter.ProviderOrder,
-			cfg.LLM.OpenRouter.ProviderAllowFallbacks,
-			cfg.LLM.OpenRouter.ResolveStickyTTL(),
-		)
-		return client
-	case "ollama":
-		return ollama.NewFull(pc.Name, pc.BaseURL)
-	default:
-		return nil
+// applyProviderPricing registers one instance's pricing overrides.
+func applyProviderPricing(reg *pricing.Registry, pc config.ProviderInstanceConfig) {
+	if pc.DefaultRatePerKTokens != nil && *pc.DefaultRatePerKTokens > 0 {
+		reg.SetProviderFallbackRate(pc.Name, *pc.DefaultRatePerKTokens)
+	}
+	for model, mp := range pc.ModelPrices {
+		reg.RegisterProviderModel(pc.Name, model, pricing.ModelPrice{
+			InputPerMTok:       mp.InputPerMTok,
+			OutputPerMTok:      mp.OutputPerMTok,
+			CachedInputPerMTok: mp.CachedInputPerMTok,
+		})
 	}
 }
 
@@ -1201,10 +1181,7 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
 func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
-	router := llm.NewRouter(provider, model, abc.llm.cost)
-	for _, p := range abc.llm.providers {
-		router.RegisterProvider(p)
-	}
+	router := llm.NewRouterWithProviders(provider, model, abc.llm.cost, abc.llm.providers)
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)
 	}
@@ -1795,6 +1772,17 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Logger:          a.logger,
 	})
 
+	agentFactory := func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
+		// Build against the current snapshot, not the boot one, so an
+		// agent created after a reload picks up the reloaded settings.
+		abc := a.abc
+		abc.cfg = a.cfgHolder.Get()
+		return buildAgentEngine(ctx, ac, abc)
+	}
+	live := &liveProviders{set: a.abc.llm.providers}
+	catalog := newCatalogRouter(a.abc.llm)
+	rt := reloadRuntime{providers: live, buildAgent: agentFactory, deciders: a.abc.llm.deciders}
+
 	return startAPIAndWireBroadcast(ctx, cfg, a.dispatcher, a.evalRunner, a.evalJudge, api.Deps{
 		Dispatcher:        a.dispatcher,
 		Scheduler:         a.sched,
@@ -1814,23 +1802,20 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		EvalRunner:        a.evalRunner,
 		EvalJudge:         a.evalJudge,
 		ConfigPath:        a.path,
-		ModelLister:       a.dispatcher.ListModels,
-		ModelDetailLister: a.dispatcher.ListModelDetails,
+		ModelLister:       catalog.ListModels,
+		ModelDetailLister: catalog.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
 		Deciders:          a.deciders,
-		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, a.logger),
+		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, rt, a.logger),
 		RestartFunc:       selfRestartFunc,
-		AgentFactory: func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
-			// Build against the current snapshot, not the boot one, so an
-			// agent created after a reload picks up the reloaded settings.
-			abc := a.abc
-			abc.cfg = a.cfgHolder.Get()
-			return buildAgentEngine(ctx, ac, abc)
-		},
-		Version:   version,
-		Commit:    commit,
-		BuildDate: date,
+		RestartManaged:    detectProcessManager(os.Getenv, fileExists),
+		AgentFactory:      agentFactory,
+		Providers:         live,
+		ChatApps:          map[string]chatapp.Prober{"telegram": chatapp.Telegram{}, "discord": chatapp.Discord{}},
+		Version:           version,
+		Commit:            commit,
+		BuildDate:         date,
 	}, hasActiveKey, a.logger)
 }
 
@@ -2249,13 +2234,28 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 // request in flight during a reload sees one config or the other, never a mix.
 // Per-agent engine knobs (supervisor timeout, max context messages, etc.) are
 // re-applied to live engines so they don't go stale after a reload.
-func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, logger *slog.Logger) func() error {
+// reloadRuntime is what a reload needs beyond config to pick up providers and
+// agents added to the TOML by hand. A zero value skips both.
+type reloadRuntime struct {
+	providers  *liveProviders
+	buildAgent func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error)
+	deciders   map[string]*llm.Decider
+}
+
+func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, rt reloadRuntime, logger *slog.Logger) func() error {
 	return func() error {
 		cfg, err := config.Load(path)
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
 		cfgHolder.Store(cfg)
+
+		if rt.providers != nil {
+			syncProviders(*rt.providers, cfg)
+		}
+		if rt.buildAgent != nil {
+			reloadNewAgents(cfg, dispatcher, rt, logger)
+		}
 
 		// Re-apply the TOML auto-approve policy wholesale: a reload that
 		// narrows a list must narrow the effective rules too.
@@ -2284,6 +2284,40 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		logger.Info("config reloaded from disk", "path", path)
 		return nil
 	}
+}
+
+// reloadNewAgents builds and registers agents present in cfg but not yet
+// running, then wires their supervisors. This is what makes "edit
+// denkeeper.toml, then Reload" work after setup was skipped. Adapter bindings
+// for these agents still need a restart.
+func reloadNewAgents(cfg *config.Config, dispatcher *agent.Dispatcher, rt reloadRuntime, logger *slog.Logger) {
+	var added []config.AgentInstanceConfig
+	for _, ac := range cfg.Agents {
+		if dispatcher.Agent(ac.Name) != nil {
+			continue
+		}
+		e, _, err := rt.buildAgent(ac)
+		if err != nil {
+			logger.Warn("reload: agent not built", "agent", ac.Name, "error", err)
+			continue
+		}
+		if err := dispatcher.AddAgent(ac.Name, e); err != nil {
+			logger.Warn("reload: agent not registered", "agent", ac.Name, "error", err)
+			continue
+		}
+		added = append(added, ac)
+		logger.Info("reload: agent added", "agent", ac.Name)
+	}
+	if len(added) == 0 {
+		return
+	}
+	engines := make(map[string]*agent.Engine, len(cfg.Agents))
+	for _, ac := range cfg.Agents {
+		if e := dispatcher.Agent(ac.Name); e != nil {
+			engines[ac.Name] = e
+		}
+	}
+	wireSupervisors(added, engines, rt.deciders, logger)
 }
 
 // replyGuardFrom translates the TOML reply-guard policy into the engine-side
@@ -2362,6 +2396,26 @@ func agentLocation(cfg *config.Config, ac config.AgentInstanceConfig) *time.Loca
 		return time.UTC
 	}
 	return loc
+}
+
+// detectProcessManager reports whether something will start the process again
+// after selfRestartFunc stops it. A heuristic: the UI only uses it to choose
+// between "restarting…" and "run denkeeper serve again" copy.
+func detectProcessManager(getenv func(string) string, exists func(string) bool) bool {
+	switch {
+	case getenv("INVOCATION_ID") != "": // systemd
+		return true
+	case getenv("KUBERNETES_SERVICE_HOST") != "":
+		return true
+	case strings.HasPrefix(getenv("XPC_SERVICE_NAME"), "homebrew.mxcl."): // brew services
+		return true
+	}
+	return exists("/.dockerenv") || exists("/run/.containerenv")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // selfRestartFunc sends SIGTERM to the current process so that a process

@@ -493,6 +493,13 @@ func (d *Dispatcher) RemoveChannel(ctx context.Context, name string) error {
 	return nil
 }
 
+// HasAdapter reports whether an adapter of that name is running. The adapter
+// set is fixed when the dispatcher is built; adding one needs a restart.
+func (d *Dispatcher) HasAdapter(name string) bool {
+	_, ok := d.adapters[name]
+	return ok
+}
+
 // SendFor returns a SendFunc that routes outgoing messages through the
 // adapter matching the incoming message's adapter name.
 func (d *Dispatcher) SendFor(adapterName string) SendFunc {

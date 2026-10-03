@@ -26,6 +26,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/Temikus/denkeeper/internal/tool"
@@ -76,7 +77,10 @@ type Deps struct {
 	Deciders          map[string]*llm.Decider                                                  // decision models built at startup, keyed by [[llm.deciders]] name
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
+	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
+	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
+	ChatApps          map[string]chatapp.Prober                                                // keyed "telegram"/"discord"; missing = chat-app setup returns 503
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                                   // git commit hash
 	BuildDate         string                                                                   // build timestamp
@@ -109,6 +113,11 @@ type Server struct {
 
 	// wsHub manages active WebSocket connections. Nil when WebSocket is disabled.
 	wsHub *WSHub
+
+	// pairing marks chat-app types with a pairing long poll in progress; only
+	// one may poll a bot's updates at a time.
+	pairingMu sync.Mutex
+	pairing   map[string]bool
 
 	// bcryptCost controls the bcrypt cost factor for password hashing.
 	// Defaults to 13; tests override to bcrypt.MinCost for speed.
@@ -196,6 +205,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/agents/{name}", s.RequireScope("admin", s.handleDeleteAgent))
 	mux.HandleFunc("GET /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:read", s.handleGetPersona))
 	mux.HandleFunc("PUT /api/v1/agents/{name}/persona/{section}", s.RequireScope("agents:write", s.handleUpdatePersona))
+	mux.HandleFunc("PUT /api/v1/agents/{name}/identity", s.RequireScope("agents:write", s.handleUpdateIdentity))
 	mux.HandleFunc("GET /api/v1/costs", s.RequireScope("costs:read", s.handleCosts))
 	mux.HandleFunc("GET /api/v1/models", s.RequireScope("agents:read", s.handleModels))
 	mux.HandleFunc("GET /api/v1/models/details", s.RequireScope("agents:read", s.handleModelDetails))
@@ -333,6 +343,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	// LLM provider config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/llm/providers", s.RequireScope("admin", s.handleGetLLMProviders))
 	mux.HandleFunc("POST /api/v1/llm/providers", s.RequireScope("admin", s.handleCreateLLMProvider))
+	mux.HandleFunc("POST /api/v1/llm/providers/test", s.RequireScope("admin", s.handleTestLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
 	mux.HandleFunc("DELETE /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handleDeleteLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
@@ -367,6 +378,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/onboarding", s.RequireScope("admin", s.handleOnboarding))
 	mux.HandleFunc("POST /api/v1/onboarding/dismiss", s.RequireScope("admin", s.handleOnboardingDismiss))
 	mux.HandleFunc("POST /api/v1/onboarding/wizard-complete", s.RequireScope("admin", s.handleWizardComplete))
+	mux.HandleFunc("POST /api/v1/onboarding/wizard-skip", s.RequireScope("admin", s.handleWizardSkip))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/verify", s.RequireScope("admin", s.handleChatAppVerify))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/pair", s.RequireScope("admin", s.handleChatAppPair))
+	mux.HandleFunc("POST /api/v1/onboarding/chat-app/save", s.RequireScope("admin", s.handleChatAppSave))
 	if s.oidcProvider != nil {
 		mux.HandleFunc("GET /auth/oidc/login", s.oidcProvider.HandleLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcProvider.HandleCallback)

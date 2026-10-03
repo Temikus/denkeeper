@@ -60,6 +60,7 @@ func TestHandleOnboarding_AllComplete(t *testing.T) {
 		},
 		LLM: config.LLMConfig{
 			DefaultProvider: "anthropic",
+			Providers:       []config.ProviderInstanceConfig{{Name: "anthropic", Type: "anthropic", APIKey: "k"}},
 		},
 	}
 	// Auth: set password hash on the server
@@ -189,6 +190,7 @@ func TestHandleOnboarding_PartialSetup(t *testing.T) {
 		},
 		LLM: config.LLMConfig{
 			DefaultProvider: "openrouter",
+			Providers:       []config.ProviderInstanceConfig{{Name: "openrouter", Type: "openrouter", APIKey: "k"}},
 		},
 	}
 	s := testOnboardingServer(t, cfg)

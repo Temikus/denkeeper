@@ -6,6 +6,7 @@
   import { api } from '../api.js'
   import { attention } from '../attention.js'
   import { topLinks, sections } from '../navItems.js'
+  import { setup, showSetupReminder, openWizard } from '../setupStore.js'
 
   const STORAGE_KEY = 'dk_nav_groups'
 
@@ -160,6 +161,17 @@
   </div>
 
   <div class="footer">
+    {#if $showSetupReminder}
+      <button class="setup-chip" onclick={openWizard} data-testid="nav-setup-chip">
+        <span class="setup-chip-row">
+          <span class="setup-chip-label">Setup · {$setup.doneCount} of {$setup.total}</span>
+          <span class="setup-chip-action">Resume</span>
+        </span>
+        <span class="setup-chip-bar" aria-hidden="true">
+          {#each $setup.steps as s (s.id)}<span class:done={s.done}></span>{/each}
+        </span>
+      </button>
+    {/if}
     <button class="logout" onclick={logout} data-testid="logout-btn">Logout</button>
   </div>
 </nav>
@@ -331,7 +343,30 @@
   .footer {
     padding: 12px 16px;
     border-top: 1px solid var(--sidebar-divider);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
+
+  .setup-chip {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+  }
+  .setup-chip:hover { border-color: var(--accent); }
+  .setup-chip-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; }
+  .setup-chip-action { color: var(--accent); }
+  .setup-chip-bar { display: flex; gap: 3px; }
+  .setup-chip-bar span { flex: 1; height: 3px; border-radius: 2px; background: var(--border); }
+  .setup-chip-bar span.done { background: var(--accent); }
 
   .logout {
     width: 100%;

@@ -76,6 +76,28 @@ func (m *mockProvider) SetDelay(d time.Duration) {
 
 func (m *mockProvider) Name() string { return "mock" }
 
+// namedProvider presents the shared mock LLM under a provider instance name.
+type namedProvider struct {
+	*mockProvider
+	name string
+}
+
+func (n namedProvider) Name() string { return n.name }
+
+// harnessProviderRuntime stands in for main.go's liveProviders: every
+// provider the API creates is backed by the mock LLM.
+type harnessProviderRuntime struct {
+	set  *llm.ProviderSet
+	mock *mockProvider
+}
+
+func (h harnessProviderRuntime) Apply(pc config.ProviderInstanceConfig, _ *config.Config) error {
+	h.set.Put(namedProvider{mockProvider: h.mock, name: pc.Name})
+	return nil
+}
+
+func (h harnessProviderRuntime) Remove(name string) { h.set.Remove(name) }
+
 func (m *mockProvider) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	m.mu.Lock()
 	m.requests = append(m.requests, req)
@@ -224,6 +246,13 @@ type HarnessOpts struct {
 	// WithAgentFactory, when true, populates deps.AgentFactory so that
 	// agent CRUD endpoints can build engines at runtime.
 	WithAgentFactory bool
+
+	// LiveProviders, when true, gives agents built by the AgentFactory a
+	// shared provider set routed by their llm_provider, and wires
+	// deps.Providers to put the mock LLM in that set under each created
+	// provider's name — the way main.go makes new providers live. Without
+	// it, an agent on a provider created at runtime has nothing to call.
+	LiveProviders bool
 
 	// PasswordHash sets the bcrypt password hash for /auth/login. The harness
 	// always wires a SessionManager so session-based auth and cookie-bearing
@@ -624,6 +653,12 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		}
 	}
 
+	var liveSet *llm.ProviderSet
+	if opts.LiveProviders {
+		liveSet = llm.NewProviderSet()
+		deps.Providers = harnessProviderRuntime{set: liveSet, mock: mock}
+	}
+
 	if opts.WithAgentFactory {
 		deps.AgentFactory = func(ac config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) {
 			tier := ac.SessionTier
@@ -638,8 +673,13 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 			if err != nil {
 				return nil, nil, err
 			}
-			router := llm.NewRouter("mock", model, costTracker)
-			router.RegisterProvider(mock)
+			var router *llm.Router
+			if liveSet != nil {
+				router = llm.NewRouterWithProviders(ac.LLMProvider, model, costTracker, liveSet)
+			} else {
+				router = llm.NewRouter("mock", model, costTracker)
+				router.RegisterProvider(mock)
+			}
 			e := agent.NewEngine(
 				ac.Name, router, mem, nil, perms, nil,
 				"You are "+ac.Name+" test agent.",
