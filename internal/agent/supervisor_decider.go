@@ -190,7 +190,7 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 	}
 
 	if err != nil {
-		cause := supervisorErrorCause(err)
+		cause := llm.DecisionErrorCause(err)
 		e.logger.Warn("supervisor decider failed", "tool", in.tool, "decider", d.Name(), "cause", cause, "error", err)
 		span.SetAttributes(attribute.String("decider.decision", "error"), attribute.String("decider.cause", cause))
 		detail["decision"], detail["cause"], detail["reason"] = "error", cause, err.Error()

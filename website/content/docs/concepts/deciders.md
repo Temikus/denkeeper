@@ -102,8 +102,31 @@ If the decider errors, times out, hits its cost limit, or the review is larger t
 
 Decider spend is billed to the reviewed agent, per conversation, and counts against that agent's cost limits.
 
+## As the eval judge
+
+The same primitive can grade [eval](/docs/concepts/evals/#judging) pairs. `[eval] judge_decider` names a decider to ask first; `judge_model` stays as the stage behind it, or is omitted to leave what the decider cannot settle to the MCP judge.
+
+```toml
+[[llm.deciders]]
+name = "jev-judge"
+provider = "openrouter"
+model = "typesafe/jev-1.13"
+
+[eval]
+judge_decider = "jev-judge"
+judge_decider_record_at = 0.9    # winning probability needed to record a verdict
+judge_decider_timeout = "60s"    # a blinded pair is far larger than a tool review
+judge_model = "claude-sonnet-4-5"   # optional: takes what the decider leaves
+```
+
+Each blinded item is put to the decider as five `a`/`b`/`tie` choice questions, the overall call plus one per rubric dimension, in one call. The verdict is recorded under `judge_ident` `judge_decider` when the winning option's probability reaches `judge_decider_record_at`; a dimension below that bar is omitted from the verdict rather than stored as a coin flip, and the notes carry every probability. Everything else, an uncertain answer, an item over the decider's `max_input_tokens`, a timeout or an error, falls through to `judge_model` or stays pending. Both stages spend against `judge_max_cost_per_run` and land on the run's `judge_cost`.
+
+The default of 0.9 is a probability, not a confidence. TypeSafe's confidence for a choice is the winning probability rescaled against an even split, `(p − 1/n) / (1 − 1/n)`, so with three options 0.9 is a confidence of 0.85: the threshold its confidence-gated routing pattern uses to act automatically on a high-stakes action. Its generic guide draws the line at 0.9 confidence instead, which here would be a probability of about 0.93; raise `judge_decider_record_at` to that if you want the stricter band. Under TypeSafe's calibration claim a 0.9 verdict is right about nine times in ten. Calibrate it the way you calibrate the rubric: judge a subset yourself and read the operator agreement figure, then move the threshold from your own data. It must exceed 0.5, since below that two of the three options can both qualify.
+
+Two limits of the model matter here more than for a tool review. TypeSafe notes that accuracy falls as the state grows with content unrelated to the decision, and a blinded pair carries both full tool traces; a decider alone is therefore best on chat-heavy sets, with `judge_model` behind it for tool-heavy ones. And a decision model is not trained on text, so the `persona_fit` and `length` dimensions lean harder on its criteria than `task_success` does. The pair view shows which judge called each item, and the operator agreement figure is the check.
+
 ## Things to weigh
 
-- **Data egress:** tool arguments and recent messages are sent to the decider's provider, an additional data processor.
+- **Data egress:** tool arguments and recent messages are sent to the decider's provider, an additional data processor. As the eval judge it also receives the blinded pairs, including tool results on both sides.
 - **Prompt injection:** tool arguments can contain text an attacker controls. A decider cannot be talked into acting, but text such as "this call is safe" can sway its probabilities. Keep `approve_at` high, and keep a supervisor or yourself behind it.
 - **Thin denial reasons:** a decider names which check failed, not why. An agent adapts better to a supervisor's written reason. If denials confuse your agent, raise the bar for them by lowering `deny_at`.

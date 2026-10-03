@@ -3638,22 +3638,6 @@ func supervisorSessionKey(agent, convID string) string {
 	return "supervisor:" + agent + ":" + convID
 }
 
-// supervisorErrorCause classifies a failed review for the audit trail. A
-// supervisor refused for budget and one that is down both fall through to a
-// human, so the distinction has to survive somewhere filterable.
-func supervisorErrorCause(err error) string {
-	switch {
-	case errors.Is(err, llm.ErrHardLimitExceeded):
-		return "cost_limit"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
-	case errors.Is(err, llm.ErrDecisionTooLarge):
-		return "too_large"
-	default:
-		return "provider_error"
-	}
-}
-
 // supervisorReview asks the supervisor agent to evaluate a tool call and return
 // an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
 // one-shot LLM call through the supervisor's Router — no conversation storage,
@@ -3712,7 +3696,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 			"tool":       tc.Function.Name,
 			"arguments":  tc.Function.Arguments,
 			"decision":   "error",
-			"cause":      supervisorErrorCause(err),
+			"cause":      llm.DecisionErrorCause(err),
 			"reason":     err.Error(),
 			"supervisor": e.supervisor.name,
 		})

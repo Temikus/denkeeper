@@ -70,6 +70,15 @@ type Judgment struct {
 	// two versions here means the win-rate mixes two policies. Judges that did
 	// not report a version contribute nothing.
 	RubricVersions []string `json:"rubric_versions,omitempty"`
+	// JudgeIdents is the distinct set of judge identities behind the tally,
+	// sorted, for the same reason: a decider and a model judge working one
+	// queue is a real thing to see.
+	JudgeIdents []string `json:"judge_idents,omitempty"`
+	// MixedPairs counts judged pairs whose two presentation orders were called
+	// by different judges. Such a pair still counts — both calls are judge
+	// calls — but a tie on it may be backend disagreement rather than
+	// position bias, which is worth knowing when reading the win rate.
+	MixedPairs int `json:"mixed_pairs,omitempty"`
 }
 
 // CategoryResult breaks a candidate's performance down by task category. A
@@ -228,6 +237,22 @@ type pairOutcome struct {
 	// rubrics are the non-empty rubric versions the judge verdicts on this
 	// pair's items reported.
 	rubrics []string
+	// idents are the judge identities that called this pair's items.
+	idents []string
+}
+
+// mixed reports whether a decided pair's orders were called by different
+// judges.
+func (po pairOutcome) mixed() bool {
+	if !po.decided || len(po.idents) < 2 {
+		return false
+	}
+	for _, id := range po.idents[1:] {
+		if id != po.idents[0] {
+			return true
+		}
+	}
+	return false
 }
 
 // Pair outcomes, from the candidate's point of view. They follow the
@@ -276,7 +301,7 @@ func resolvePairs(in verdictInput) []pairOutcome {
 		po := pairOutcome{pairID: p.ID, taskID: p.TaskID, candidate: candidateOf(assign, in.variants[0].ID)}
 		po.decided, po.winner = resolveOutcome(itemsByPair[p.ID], judge, assign)
 		po.agreeItems, po.agreed = countAgreement(itemsByPair[p.ID], judge, operator)
-		po.rubrics = pairRubrics(itemsByPair[p.ID], judge)
+		po.rubrics, po.idents = pairRubrics(itemsByPair[p.ID], judge)
 		out = append(out, po)
 	}
 	return out
@@ -327,18 +352,22 @@ func countAgreement(items []JudgmentItem, judge, operator map[int64]Verdict) (in
 	return total, agreed
 }
 
-// pairRubrics collects the rubric versions the judge reported on one pair's
-// items. Only the judge's own calls count: the operator's calibration mark is
-// excluded from the win rate, so it does not describe the rubric the tally was
-// produced under.
-func pairRubrics(items []JudgmentItem, judge map[int64]Verdict) []string {
-	var out []string
+// pairRubrics collects the rubric versions and judge identities reported on
+// one pair's items. Only the judge's own calls count: the operator's
+// calibration mark is excluded from the win rate, so it does not describe the
+// rubric the tally was produced under.
+func pairRubrics(items []JudgmentItem, judge map[int64]Verdict) (rubrics, idents []string) {
 	for _, it := range items {
-		if v, ok := judge[it.ID]; ok && v.RubricVersion != "" {
-			out = append(out, v.RubricVersion)
+		v, ok := judge[it.ID]
+		if !ok {
+			continue
 		}
+		if v.RubricVersion != "" {
+			rubrics = append(rubrics, v.RubricVersion)
+		}
+		idents = append(idents, v.JudgeIdent)
 	}
-	return out
+	return rubrics, idents
 }
 
 // verdictsByItem splits stored verdicts into the judge's and the operator's,
@@ -371,6 +400,7 @@ func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID 
 	j := Judgment{WinThreshold: opts.WinThreshold}
 	var agreeItems, agreed int
 	rubrics := make(map[string]struct{})
+	idents := make(map[string]struct{})
 	for _, po := range outcomes {
 		if po.candidate != candID {
 			continue
@@ -381,10 +411,16 @@ func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID 
 		for _, rv := range po.rubrics {
 			rubrics[rv] = struct{}{}
 		}
+		for _, id := range po.idents {
+			idents[id] = struct{}{}
+		}
 		if !po.decided {
 			continue
 		}
 		j.JudgedPairs++
+		if po.mixed() {
+			j.MixedPairs++
+		}
 		switch po.winner {
 		case candID:
 			j.Wins++
@@ -404,6 +440,7 @@ func tallyJudgment(opts SummaryOpts, outcomes []pairOutcome, baselineID, candID 
 		}
 	}
 	j.RubricVersions = sortedKeys(rubrics)
+	j.JudgeIdents = sortedKeys(idents)
 	return j
 }
 

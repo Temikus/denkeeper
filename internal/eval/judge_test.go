@@ -176,8 +176,8 @@ func TestJudge_RecordsVerdictsUnderItsOwnIdentAndRubric(t *testing.T) {
 	if pass.Items == 0 {
 		t.Fatal("the pass took no items from a fully paired run")
 	}
-	if pass.JudgeIdent != JudgeInternal || pass.RubricVersion != RubricVersion {
-		t.Errorf("pass = %+v, want ident %q and rubric %q", pass, JudgeInternal, RubricVersion)
+	if len(pass.JudgeIdents) != 1 || pass.JudgeIdents[0] != JudgeInternal || pass.RubricVersion != RubricVersion {
+		t.Errorf("pass = %+v, want ident [%q] and rubric %q", pass, JudgeInternal, RubricVersion)
 	}
 	f.awaitPass(t, j)
 

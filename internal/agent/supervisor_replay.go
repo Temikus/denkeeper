@@ -38,4 +38,4 @@ func SupervisorDeciderVerdict(answers map[string]llm.Answer, approveAt, denyAt f
 
 // SupervisorErrorCause classifies a failed review as the audit trail does:
 // cost_limit, timeout, too_large or provider_error.
-func SupervisorErrorCause(err error) string { return supervisorErrorCause(err) }
+func SupervisorErrorCause(err error) string { return llm.DecisionErrorCause(err) }

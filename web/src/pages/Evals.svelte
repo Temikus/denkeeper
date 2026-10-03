@@ -743,6 +743,7 @@
               agent={agents.find(a => a.name === run.base_agent) || null}
               quick={isQuickCheck(run)}
               judgeModel={cfg?.judge_model || ''}
+              judgeDecider={cfg?.judge_decider || ''}
               judgeCostCap={cfg?.judge_max_cost_per_run || 0}
               onapplied={reloadAgents}
               onrunfull={runFull} />

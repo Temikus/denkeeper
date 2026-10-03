@@ -181,6 +181,87 @@ describe('EvalResults — judgment pending', () => {
       .toHaveTextContent('Judging finished'), { timeout: 5000 })
   })
 
+  test('offers server-side judging on a decider alone and names the cascade', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    server.use(
+      http.post('/api/v1/eval/runs/:id/judge', () =>
+        HttpResponse.json({
+          run_id: 2, items: 50, decider: 'jev', model: 'judge-model',
+          judge_idents: ['judge_decider', 'judge_model'], rubric_version: 'v1', cost_cap: 0.5,
+        }, { status: 202 })),
+      http.get('/api/v1/eval/runs/:id', () =>
+        HttpResponse.json({ id: 2, status: 'done', judging: false })),
+    )
+    render(EvalResults, {
+      props: { run: RUN, agent: AGENT, judgeModel: 'judge-model', judgeDecider: 'jev' },
+    })
+
+    await waitFor(() => expect(screen.getByTestId('judge-here-4')).toBeInTheDocument())
+    // Asked in order: the decider first, the model for what it cannot settle.
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('jev, then judge-model')
+
+    await fireEvent.click(screen.getByTestId('judge-here-4'))
+    await waitFor(() => expect(screen.getByTestId('judge-here-status-4'))
+      .toHaveTextContent('Judging 50 comparisons on jev, then judge-model'))
+  })
+
+  test('a decider without a judge model is still a server-side judge', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, pairs: 37, judged_pairs: 12 },
+      }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT, judgeDecider: 'jev' } })
+
+    await waitFor(() => expect(screen.getByTestId('judge-here-4')).toBeInTheDocument())
+    // Without a model behind it, what the decider cannot settle stays pending,
+    // and the hint must not promise otherwise.
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('jev grades what it is sure of here')
+    expect(screen.getByTestId('judgment-pending-4')).toHaveTextContent('stays pending')
+  })
+
+  test('says when two judges split the pairs between them', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: {
+          ...evalSummary.verdicts[0].judgment,
+          judge_idents: ['judge_decider', 'judge_model'], mixed_pairs: 3,
+        },
+      }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT, judgeModel: 'judge-model', judgeDecider: 'jev' } })
+
+    await waitFor(() => expect(screen.getByTestId('judges-4')).toBeInTheDocument())
+    // Plain labels for the fixed identities, never the configured names: an
+    // older run's verdicts predate whatever is configured now.
+    expect(screen.getByTestId('judges-4')).toHaveTextContent('Judged by the decider and the judge model')
+    expect(screen.getByTestId('judges-4')).not.toHaveTextContent('jev')
+    expect(screen.getByTestId('judges-4')).toHaveTextContent('3 of')
+    expect(screen.getByTestId('judges-4')).toHaveTextContent('comparisons')
+  })
+
+  test('names a single judge without the split-pairs warning', async () => {
+    withSummary({
+      verdicts: [{
+        ...evalSummary.verdicts[0],
+        judgment: { ...evalSummary.verdicts[0].judgment, judge_idents: ['claude-code'], mixed_pairs: 0 },
+      }],
+    })
+    render(EvalResults, { props: { run: RUN, agent: AGENT } })
+
+    await waitFor(() => expect(screen.getByTestId('judges-4')).toBeInTheDocument())
+    // An MCP judge records under its API key name, which is already a name.
+    expect(screen.getByTestId('judges-4')).toHaveTextContent('Judged by claude-code')
+    expect(screen.getByTestId('judges-4')).not.toHaveTextContent('position bias')
+  })
+
   test('surfaces the reason a server-side pass was refused', async () => {
     withSummary({
       verdicts: [{

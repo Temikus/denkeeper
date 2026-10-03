@@ -17,9 +17,9 @@ import (
 
 // Errors the judge endpoints map onto status codes.
 var (
-	// ErrJudgeNotConfigured means [eval] judge_model is unset: the internal
-	// judge is opt-in, and its absence is not a failure — the MCP judge path
-	// is unaffected.
+	// ErrJudgeNotConfigured means neither [eval] judge_model nor judge_decider
+	// is set: the internal judge is opt-in, and its absence is not a failure —
+	// the MCP judge path is unaffected.
 	ErrJudgeNotConfigured = errors.New("eval: internal judge not configured")
 	// ErrRunNotTerminal means the run is still producing samples. Judging a
 	// moving queue wastes money on pairs that do not exist yet.
@@ -53,29 +53,40 @@ type judgeLLM interface {
 // disables the cost cap (spend never grows) and loses the judge_cost deltas
 // (a negative delta is never written) for the rest of the pass.
 type judgeSession struct {
+	// llm is nil when only a decider is configured: there is then no model
+	// stage to fall through to.
 	llm     judgeLLM
+	decider *llm.Decider
 	tracker *llm.CostTracker
 }
 
-// cost reads the pass's true spend, for the same reason a sample does:
-// provider-reported cost is only filled in by OpenRouter, so a cap keyed on it
-// would never trip elsewhere.
+// cost reads the pass's true spend across both backends, for the same reason
+// a sample does: provider-reported cost is only filled in by OpenRouter, so a
+// cap keyed on it would never trip elsewhere.
 func (s judgeSession) cost(convID string) float64 {
 	if s.tracker == nil {
 		return 0
 	}
-	return s.tracker.SessionCost(convID)
+	return s.tracker.SessionCost(convID) + s.tracker.SessionCost(deciderConvID(convID))
 }
 
 // JudgeConfig is the judge's snapshot of the [eval] judge keys.
 type JudgeConfig struct {
-	// Model is the judging model. Empty disables the internal judge entirely.
+	// Model is the judging model. Empty with no Decider disables the internal
+	// judge entirely; empty with one means the decider has nothing to fall
+	// through to.
 	Model string
 	// Provider names a registered provider instance, or is empty to use the
 	// base agent's own.
 	Provider string
-	// MaxCost caps one judging pass in USD.
+	// MaxCost caps one judging pass in USD, across both backends.
 	MaxCost float64
+	// Decider, when set, grades each item first; see tryDecider for what falls
+	// through to the model. It arrives already bound to its timeout.
+	Decider *llm.Decider
+	// DeciderRecordAt is the winning option's probability a decider verdict
+	// needs before it is recorded.
+	DeciderRecordAt float64
 	// MaxConcurrent bounds items in flight across every pass. Fixed at
 	// construction — SetConfig does not resize the semaphore — because the
 	// point of the bound is the provider's rate limit, and a live resize would
@@ -133,7 +144,31 @@ func NewJudge(store *Store, engines EngineSource, auditor audit.Emitter, cfg Jud
 }
 
 // Available reports whether an internal judge is configured.
-func (j *Judge) Available() bool { return j != nil && j.Config().Model != "" }
+func (j *Judge) Available() bool { return j != nil && j.Config().enabled() }
+
+// enabled reports whether either backend is configured.
+func (c JudgeConfig) enabled() bool { return c.Model != "" || c.Decider != nil }
+
+// idents lists the judge identities a pass under this config can record,
+// decider first since it is asked first.
+func (c JudgeConfig) idents() []string {
+	var out []string
+	if c.Decider != nil {
+		out = append(out, JudgeDecider)
+	}
+	if c.Model != "" {
+		out = append(out, JudgeInternal)
+	}
+	return out
+}
+
+// deciderName is the decider's name, or "" without one.
+func (c JudgeConfig) deciderName() string {
+	if c.Decider == nil {
+		return ""
+	}
+	return c.Decider.Name()
+}
 
 // Config returns the resolved settings, so a handler can report the model and
 // cap a pass will run under.
@@ -175,13 +210,17 @@ type JudgeOpts struct {
 // JudgePass describes a launched pass, so the caller can report what it will
 // cost and under which policy it is being judged.
 type JudgePass struct {
-	RunID         int64   `json:"run_id"`
-	Items         int     `json:"items"`
-	Model         string  `json:"model"`
-	Provider      string  `json:"provider,omitempty"`
-	JudgeIdent    string  `json:"judge_ident"`
-	RubricVersion string  `json:"rubric_version"`
-	CostCap       float64 `json:"cost_cap"`
+	RunID    int64  `json:"run_id"`
+	Items    int    `json:"items"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// Decider names the decision model asked first, when one is configured.
+	Decider         string  `json:"decider,omitempty"`
+	DeciderRecordAt float64 `json:"decider_record_at,omitempty"`
+	// JudgeIdents are the identities this pass may record under, decider first.
+	JudgeIdents   []string `json:"judge_idents"`
+	RubricVersion string   `json:"rubric_version"`
+	CostCap       float64  `json:"cost_cap"`
 }
 
 // Start launches a judging pass in the background and returns as soon as the
@@ -194,7 +233,7 @@ type JudgePass struct {
 // view's per-item verdicts.
 func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgePass, error) {
 	cfg := j.Config()
-	if cfg.Model == "" {
+	if !cfg.enabled() {
 		return nil, ErrJudgeNotConfigured
 	}
 	run, err := j.store.GetRun(ctx, runID)
@@ -214,13 +253,15 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	}
 
 	pass := &JudgePass{
-		RunID:         runID,
-		Items:         len(items),
-		Model:         cfg.Model,
-		Provider:      cfg.Provider,
-		JudgeIdent:    JudgeInternal,
-		RubricVersion: RubricVersion,
-		CostCap:       cfg.MaxCost,
+		RunID:           runID,
+		Items:           len(items),
+		Model:           cfg.Model,
+		Provider:        cfg.Provider,
+		Decider:         cfg.deciderName(),
+		DeciderRecordAt: cfg.DeciderRecordAt,
+		JudgeIdents:     cfg.idents(),
+		RubricVersion:   RubricVersion,
+		CostCap:         cfg.MaxCost,
 	}
 	if len(items) == 0 {
 		// Nothing to do is not an error and must not register an active pass:
@@ -253,8 +294,12 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	// literally named "eval" — a valid resource name someone may actually
 	// have — merging judge spend into that agent's totals and applying its
 	// [costs] overrides to judging.
+	// The decider bills a sibling key: the tracker remembers one provider per
+	// session for limit resolution, and the two backends can be on different
+	// providers. Both keys carry the same pseudo-identity.
 	if session.tracker != nil {
 		session.tracker.RegisterSessionAgent(st.convID, JudgeAgentIdent(run.BaseAgent))
+		session.tracker.RegisterSessionAgent(deciderConvID(st.convID), JudgeAgentIdent(run.BaseAgent))
 	}
 
 	j.wg.Add(1)
@@ -278,7 +323,9 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 // the judge bills to the agent's own cost tracker and honours its pricing and
 // fallback rules — only the target differs. An unknown provider is rejected
 // here rather than at request time, where it would fail every item instead of
-// the pass.
+// the pass. With a decider only, the model stage is left nil; the tracker is
+// still the agent's (the decider shares the process-wide one in production),
+// falling back to the decider's own when the router has none.
 func (j *Judge) sessionFor(baseAgent string, cfg JudgeConfig) (judgeSession, error) {
 	e, ok := j.engines(baseAgent)
 	if !ok || e == nil {
@@ -288,13 +335,17 @@ func (j *Judge) sessionFor(baseAgent string, cfg JudgeConfig) (judgeSession, err
 	if router == nil {
 		return judgeSession{}, fmt.Errorf("agent %q has no LLM router", baseAgent)
 	}
-	if cfg.Provider != "" && !router.HasProvider(cfg.Provider) {
-		return judgeSession{}, fmt.Errorf("judge provider %q is not registered", cfg.Provider)
+	session := judgeSession{decider: cfg.Decider, tracker: router.CostTracker()}
+	if cfg.Model != "" {
+		if cfg.Provider != "" && !router.HasProvider(cfg.Provider) {
+			return judgeSession{}, fmt.Errorf("judge provider %q is not registered", cfg.Provider)
+		}
+		session.llm = router.WithModel(cfg.Model).WithProvider(cfg.Provider)
 	}
-	return judgeSession{
-		llm:     router.WithModel(cfg.Model).WithProvider(cfg.Provider),
-		tracker: router.CostTracker(),
-	}, nil
+	if session.tracker == nil && cfg.Decider != nil {
+		session.tracker = cfg.Decider.CostTracker()
+	}
+	return session, nil
 }
 
 // Stop cancels an active pass. Reports whether one was running.
@@ -354,6 +405,10 @@ func JudgeConvID(runID, pass int64) string {
 	return fmt.Sprintf("eval:judge:%d:%d", runID, pass)
 }
 
+// deciderConvID is the sibling session key the decider stage of a pass bills
+// to. Its spend is summed with the pass's own by judgeSession.cost.
+func deciderConvID(convID string) string { return convID + ":decider" }
+
 // JudgeAgentIdent is the pseudo-identity judging spend and audit events are
 // attributed to. "#" is rejected by the resource-name validator, so it can
 // never collide with a real agent and never lands in one's totals.
@@ -376,6 +431,28 @@ type passState struct {
 	judged   int
 	failed   int
 	capped   bool
+	// Decider stage counters: decided is recorded by it, abstained is a
+	// low-confidence answer, tooLarge an input over its token cap, escalated
+	// everything it handed to the model stage for any reason.
+	decided   int
+	abstained int
+	tooLarge  int
+	escalated int
+}
+
+// setCapped marks the pass as out of budget.
+func (st *passState) setCapped() {
+	st.mu.Lock()
+	st.capped = true
+	st.mu.Unlock()
+}
+
+// isCapped reports whether a backend tripped the tracker's hard limit, which
+// overCap's spend comparison alone would not see.
+func (st *passState) isCapped() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.capped
 }
 
 // run works the queue.
@@ -391,7 +468,7 @@ func (j *Judge) run(ctx context.Context, run *Run, st *passState, items []Pendin
 		// Checked before dispatch, never mid-flight: an item already asking the
 		// model has been paid for, and its verdict is data. Same rule as the
 		// runner's cap.
-		if overCap(st) {
+		if st.isCapped() || overCap(st) {
 			break
 		}
 		select {
@@ -412,7 +489,8 @@ func (j *Judge) run(ctx context.Context, run *Run, st *passState, items []Pendin
 
 	j.emitLifecycle(bookkeeping, run, "eval_judge_finish", len(items), st)
 	j.logger.Info("eval judging pass finished", "run", run.ID, "model", st.cfg.Model,
-		"items", len(items), "judged", st.judged, "failed", st.failed, "capped", st.capped)
+		"decider", st.cfg.deciderName(), "items", len(items), "judged", st.judged,
+		"decided", st.decided, "escalated", st.escalated, "failed", st.failed, "capped", st.capped)
 }
 
 // overCap reports whether the pass has spent its budget, recording the fact so
@@ -421,9 +499,7 @@ func overCap(st *passState) bool {
 	if st.session.cost(st.convID) < st.cfg.MaxCost {
 		return false
 	}
-	st.mu.Lock()
-	st.capped = true
-	st.mu.Unlock()
+	st.setCapped()
 	return true
 }
 
@@ -431,7 +507,9 @@ func overCap(st *passState) bool {
 //
 // A failure is per item: an unreadable reply or a provider hiccup costs that
 // item's verdict, never the pass. The item stays pending, so a later pass —
-// internal or from Claude Code — picks it up again.
+// internal or from Claude Code — picks it up again. With both backends
+// configured the decider is asked first and the model only sees what it
+// could not settle.
 func (j *Judge) judgeItem(ctx context.Context, run *Run, item PendingItem, st *passState) {
 	bookkeeping := context.WithoutCancel(ctx)
 	defer j.recordCost(bookkeeping, run, st)
@@ -441,6 +519,64 @@ func (j *Judge) judgeItem(ctx context.Context, run *Run, item PendingItem, st *p
 		j.itemFailed(st, item, "reading blinded item", err)
 		return
 	}
+	if st.session.decider != nil {
+		if handled := j.tryDecider(ctx, item, blinded, st); handled || st.session.llm == nil {
+			return
+		}
+		st.count(&st.escalated)
+	}
+	j.judgeWithModel(ctx, item, blinded, st)
+}
+
+// tryDecider runs the decider stage. It reports true when the item is settled
+// (recorded, or failed outright) and false when the model stage should take it.
+//
+// Everything short of a recorded verdict falls through: a low-confidence
+// answer, an input over the decider's token cap, a timeout, a provider error,
+// or a response served by a different model. Nothing was recorded in any of
+// those cases, so none is a failure of the item. The one exception is the
+// tracker's hard limit, which caps the pass: the model stage shares the
+// budget and would only fail the same way.
+func (j *Judge) tryDecider(ctx context.Context, item PendingItem, blinded *BlindedItem, st *passState) bool {
+	d := st.session.decider
+	resp, err := d.Decide(ctx, deciderConvID(st.convID), blinded, judgeDeciderQuestions())
+	if err != nil {
+		switch cause := llm.DecisionErrorCause(err); cause {
+		case "cost_limit":
+			st.setCapped()
+			j.itemFailed(st, item, "decider over budget", err)
+			return true
+		case "too_large":
+			st.count(&st.tooLarge)
+		default:
+			j.logger.Debug("eval judge decider fell through", "item", item.ItemID, "cause", cause, "error", err)
+		}
+		return false
+	}
+	if !servedByJudgeModel(d.Model(), resp.Model) {
+		j.logger.Warn("eval judge decider answered from a different model", "item", item.ItemID,
+			"want", d.Model(), "got", resp.Model)
+		return false
+	}
+	call, ok, err := deciderCall(resp.Answers, st.cfg.DeciderRecordAt)
+	if err != nil {
+		j.itemFailed(st, item, "reading the decider's answers", err)
+		return true
+	}
+	if !ok {
+		st.count(&st.abstained)
+		return false
+	}
+	if !j.record(ctx, item, call, JudgeDecider, st) {
+		return true
+	}
+	st.count(&st.decided)
+	return true
+}
+
+// judgeWithModel is the completion stage: one no-tools call, parsed and
+// recorded under JudgeInternal.
+func (j *Judge) judgeWithModel(ctx context.Context, item PendingItem, blinded *BlindedItem, st *passState) {
 	msgs, err := buildJudgeMessages(blinded)
 	if err != nil {
 		j.itemFailed(st, item, "building judge prompt", err)
@@ -453,6 +589,9 @@ func (j *Judge) judgeItem(ctx context.Context, run *Run, item PendingItem, st *p
 
 	resp, err := st.session.llm.CompleteFinal(ctx, st.convID, wire)
 	if err != nil {
+		if errors.Is(err, llm.ErrHardLimitExceeded) {
+			st.setCapped()
+		}
 		j.itemFailed(st, item, "judging item", err)
 		return
 	}
@@ -469,20 +608,30 @@ func (j *Judge) judgeItem(ctx context.Context, run *Run, item PendingItem, st *p
 		j.itemFailed(st, item, "reading the judge's reply", err)
 		return
 	}
+	j.record(ctx, item, call, JudgeInternal, st)
+}
 
-	if _, err := j.store.RecordVerdict(bookkeeping, Verdict{
+// record writes one verdict under ident and counts it. Reports success.
+func (j *Judge) record(ctx context.Context, item PendingItem, call judgeCall, ident string, st *passState) bool {
+	if _, err := j.store.RecordVerdict(context.WithoutCancel(ctx), Verdict{
 		ItemID:        item.ItemID,
 		Winner:        call.Winner,
 		Dimensions:    encodeDimensions(call.Dimensions),
 		Notes:         call.Notes,
-		JudgeIdent:    JudgeInternal,
+		JudgeIdent:    ident,
 		RubricVersion: RubricVersion,
 	}); err != nil {
 		j.itemFailed(st, item, "recording verdict", err)
-		return
+		return false
 	}
+	st.count(&st.judged)
+	return true
+}
+
+// count bumps one pass counter under the lock.
+func (st *passState) count(n *int) {
 	st.mu.Lock()
-	st.judged++
+	*n++
 	st.mu.Unlock()
 }
 
@@ -538,15 +687,26 @@ func (j *Judge) emitLifecycle(ctx context.Context, run *Run, action string, item
 		"items":          items,
 		"model":          st.cfg.Model,
 		"provider":       st.cfg.Provider,
-		"judge_ident":    JudgeInternal,
+		"judge_idents":   st.cfg.idents(),
 		"rubric_version": RubricVersion,
 		"cost_cap":       st.cfg.MaxCost,
+	}
+	if d := st.cfg.Decider; d != nil {
+		detail["decider"] = d.Name()
+		detail["decider_model"] = d.Model()
+		detail["record_at"] = st.cfg.DeciderRecordAt
 	}
 	if action == "eval_judge_finish" {
 		detail["judged"] = st.judged
 		detail["failed"] = st.failed
 		detail["capped"] = st.capped
 		detail["cost_spent"] = st.recorded
+		if st.cfg.Decider != nil {
+			detail["decided"] = st.decided
+			detail["abstained"] = st.abstained
+			detail["too_large"] = st.tooLarge
+			detail["escalated"] = st.escalated
+		}
 	}
 	st.mu.Unlock()
 	body, _ := json.Marshal(detail)

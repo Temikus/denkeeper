@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +216,62 @@ func TestDecider_Decide_ProviderErrorPropagates(t *testing.T) {
 	var llmErr *LLMError
 	if !errors.As(err, &llmErr) || llmErr.StatusCode != 503 {
 		t.Fatalf("err = %v, want LLMError 503", err)
+	}
+}
+
+func TestDecider_WithTimeout_ClonesWithoutTouchingTheOriginal(t *testing.T) {
+	prov := &stubDecisionProvider{resp: noulResponse(0.9, 0), delay: 50 * time.Millisecond}
+	short := NewDecider(DeciderConfig{Name: "jev", Provider: "openrouter", Model: "m", Timeout: 5 * time.Millisecond}, prov, nil)
+	long := short.WithTimeout(time.Second)
+
+	if _, err := long.Decide(context.Background(), "s", "state", noulQuestions()); err != nil {
+		t.Fatalf("clone with a longer timeout: %v", err)
+	}
+	if _, err := short.Decide(context.Background(), "s", "state", noulQuestions()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("original err = %v, want DeadlineExceeded: WithTimeout must not mutate it", err)
+	}
+	if long.Name() != "jev" || long.Model() != "m" || long.Provider() != "openrouter" {
+		t.Errorf("clone lost its identity: %q %q %q", long.Name(), long.Model(), long.Provider())
+	}
+}
+
+// Causes are classified with errors.Is and callers hand the provider error
+// back wrapped, so each mapping is checked through a wrap — an unwrapped-only
+// match would record nothing in production.
+
+func TestDecisionErrorCause_HardLimit(t *testing.T) {
+	err := fmt.Errorf("session %q exceeded hard cost limit: %w", "supervisor:default:c", ErrHardLimitExceeded)
+	if got := DecisionErrorCause(err); got != "cost_limit" {
+		t.Errorf("DecisionErrorCause = %q, want cost_limit", got)
+	}
+}
+
+func TestDecisionErrorCause_Timeout(t *testing.T) {
+	err := fmt.Errorf("chat completion: %w", context.DeadlineExceeded)
+	if got := DecisionErrorCause(err); got != "timeout" {
+		t.Errorf("DecisionErrorCause = %q, want timeout", got)
+	}
+}
+
+func TestDecisionErrorCause_TooLarge(t *testing.T) {
+	err := errors.Join(errors.New("decider \"jev\""), ErrDecisionTooLarge)
+	if got := DecisionErrorCause(err); got != "too_large" {
+		t.Errorf("DecisionErrorCause = %q, want too_large", got)
+	}
+}
+
+func TestDecisionErrorCause_ProviderError(t *testing.T) {
+	err := fmt.Errorf("chat completion: %w", errors.New("502 bad gateway"))
+	if got := DecisionErrorCause(err); got != "provider_error" {
+		t.Errorf("DecisionErrorCause = %q, want provider_error", got)
+	}
+}
+
+// Only the hard limit refuses a call; a soft limit warns and the call still
+// runs, so it must not be reported as the reason a call failed.
+func TestDecisionErrorCause_SoftLimitIsNotACostRefusal(t *testing.T) {
+	err := fmt.Errorf("chat completion: %w", ErrSoftLimitExceeded)
+	if got := DecisionErrorCause(err); got != "provider_error" {
+		t.Errorf("DecisionErrorCause = %q, want provider_error", got)
 	}
 }

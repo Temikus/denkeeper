@@ -13,6 +13,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/eval"
+	"github.com/Temikus/denkeeper/internal/llm"
 )
 
 // evalReadOnlyKey carries eval:read but no eval:write, so it can list task
@@ -1202,7 +1203,7 @@ func TestJudgeEvalRun_StartsAPassOverThePendingQueue(t *testing.T) {
 	if pass.Items != 2 {
 		t.Errorf("items = %d, want the pair's two presentation orders", pass.Items)
 	}
-	if pass.Model != "judge-model" || pass.JudgeIdent != eval.JudgeInternal {
+	if pass.Model != "judge-model" || len(pass.JudgeIdents) != 1 || pass.JudgeIdents[0] != eval.JudgeInternal {
 		t.Errorf("pass = %+v", pass)
 	}
 	if pass.RubricVersion != eval.RubricVersion {
@@ -1282,6 +1283,65 @@ func TestEvalConfig_AdvertisesTheInternalJudgeOnlyWhenConfigured(t *testing.T) {
 	if body["rubric_version"] != eval.RubricVersion {
 		t.Errorf("rubric_version = %v, want %q", body["rubric_version"], eval.RubricVersion)
 	}
+}
+
+// A decider alone makes the judge available, and the config endpoint names it
+// so the results view can say what will grade a pass.
+func TestEvalConfig_AdvertisesTheJudgeDecider(t *testing.T) {
+	srv, store := evalTestServer(t)
+	dispatcher := srv.deps.Dispatcher
+	decider := llm.NewDecider(llm.DeciderConfig{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13"},
+		staticDecisionProvider{}, nil)
+	judge := eval.NewJudge(store, func(name string) (eval.Engine, bool) {
+		e := dispatcher.Agent(name)
+		if e == nil {
+			return nil, false
+		}
+		return e, true
+	}, nil, eval.JudgeConfig{Decider: decider, DeciderRecordAt: 0.85, MaxCost: 1.0, MaxConcurrent: 1}, testLogger())
+	t.Cleanup(judge.Shutdown)
+	srv.deps.EvalJudge = judge
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/config", "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding config: %v", err)
+	}
+	if body["judge_decider"] != "jev" || body["judge_decider_record_at"] != 0.85 {
+		t.Errorf("decider fields = %v / %v, want jev / 0.85", body["judge_decider"], body["judge_decider_record_at"])
+	}
+	if _, ok := body["judge_model"]; ok {
+		t.Errorf("judge_model must be omitted without one: %v", body)
+	}
+
+	run := seedJudgeableRun(t, store)
+	rec = evalRequest(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/eval/runs/%d/judge", run.ID), "", "dk-test-key")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("judge status = %d, want 202 with a decider alone: %s", rec.Code, rec.Body.String())
+	}
+	var pass eval.JudgePass
+	if err := json.Unmarshal(rec.Body.Bytes(), &pass); err != nil {
+		t.Fatalf("decoding pass: %v", err)
+	}
+	if pass.Decider != "jev" || len(pass.JudgeIdents) != 1 || pass.JudgeIdents[0] != eval.JudgeDecider {
+		t.Errorf("pass = %+v", pass)
+	}
+}
+
+// staticDecisionProvider answers nothing useful; the config test never runs a
+// pass to completion.
+type staticDecisionProvider struct{}
+
+func (staticDecisionProvider) Decide(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	answers := make(map[string]llm.Answer, len(req.Questions))
+	for id := range req.Questions {
+		answers[id] = llm.Answer{Type: llm.QuestionChoice, Choice: "tie", Confidence: 1, Probabilities: map[string]float64{"tie": 1}}
+	}
+	return &llm.DecisionResponse{Model: req.Model, Answers: answers}, nil
 }
 
 // A client that streams its body (chunked transfer encoding, ContentLength -1)

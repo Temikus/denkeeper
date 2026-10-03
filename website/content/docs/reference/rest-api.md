@@ -438,7 +438,7 @@ An eval run compares two or more config variants of one agent over a saved set o
 
 **Scope:** `eval:read`
 
-Returns the `[eval]` defaults and gate thresholds used to size and judge a run — `default_k`, `max_cost_per_run`, `max_concurrent`, `completeness_floor`, `win_threshold`, and the rest of the config used by `POST /eval/runs` and the verdict rule when a request doesn't override them.
+Returns the `[eval]` defaults and gate thresholds used to size and judge a run — `default_k`, `max_cost_per_run`, `max_concurrent`, `completeness_floor`, `win_threshold`, and the rest of the config used by `POST /eval/runs` and the verdict rule when a request doesn't override them. When the internal judge is available it also carries `judge_model`, `judge_decider`, `judge_decider_record_at`, `judge_max_cost_per_run` and `rubric_version`; the two judge keys are omitted when unset, and either one present means `POST /eval/runs/{id}/judge` will work.
 
 ### `GET /api/v1/eval/suggest`
 
@@ -611,7 +611,7 @@ Per-sample transcripts, including the full tool trace with arguments and results
 
 **Scope:** `eval:write`
 
-Starts a server-side judging pass over the run's outstanding blinded pairs with the internal judge, so a run can be judged unattended instead of only from Claude Code over MCP. Requires `[eval] judge_model`; without it the endpoint returns `503` and the MCP judge path is unaffected. Only a terminal run can be judged. The pass runs in the background — progress shows up as `completeness.pairs_judged` on the summary — is bounded by `[eval] judge_max_cost_per_run`, and its spend is recorded separately on the run's `judge_cost`. `202 Accepted` with the pass's item count; `409 Conflict` if the run isn't terminal or is already being judged; optional body `{"sample_n": N, "limit": N}` to judge a calibration subset or cap the pass.
+Starts a server-side judging pass over the run's outstanding blinded pairs with the internal judge, so a run can be judged unattended instead of only from Claude Code over MCP. Requires `[eval] judge_model` or `judge_decider`; without either the endpoint returns `503` and the MCP judge path is unaffected. With a decider configured it is asked first and the judge model only sees the items it could not settle. Only a terminal run can be judged. The pass runs in the background — progress shows up as `completeness.pairs_judged` on the summary — is bounded by `[eval] judge_max_cost_per_run` across both backends, and its spend is recorded separately on the run's `judge_cost`. `202 Accepted` with the pass's item count, the `decider` and `model` it runs on and the `judge_idents` it may record under; `409 Conflict` if the run isn't terminal or is already being judged; optional body `{"sample_n": N, "limit": N}` to judge a calibration subset or cap the pass.
 
 ## Safety
 

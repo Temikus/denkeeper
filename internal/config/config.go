@@ -241,6 +241,23 @@ type EvalConfig struct {
 	// because a judging pass is a separate decision to spend, taken after the
 	// run's own cap has already been consumed. Defaults to MaxCostPerRun.
 	JudgeMaxCostPerRun float64 `toml:"judge_max_cost_per_run"`
+	// JudgeDecider names an [[llm.deciders]] entry that grades blinded pairs
+	// before the judge model does: five choice questions in one call, for a
+	// fraction of a completion's cost. A confident answer is recorded under
+	// judge_ident "judge_decider"; anything else (low confidence, oversized
+	// input, timeout, error) falls through to judge_model when set, or stays
+	// pending for the MCP judge. Empty means no decider stage.
+	JudgeDecider string `toml:"judge_decider"`
+	// JudgeDeciderRecordAt is the probability the decider's winning option must
+	// reach before a verdict is recorded. Must exceed 0.5, or two of the three
+	// options could both qualify. Default: 0.9, which at three options is a
+	// confidence of 0.85, the auto-act threshold in TypeSafe's confidence-gated
+	// routing pattern.
+	JudgeDeciderRecordAt float64 `toml:"judge_decider_record_at"`
+	// JudgeDeciderTimeout is the per-item deadline for the judge decider,
+	// separate from the decider's own timeout because a blinded pair is an
+	// order of magnitude larger than a supervisor review. Default: "60s".
+	JudgeDeciderTimeout string `toml:"judge_decider_timeout"`
 	// Capture turns on L1 trace capture for *live* turns: the built system
 	// prompt, the history window as sent, every tool call with its arguments
 	// and result, and the final response are recorded to turn_traces and shown
@@ -1755,13 +1772,41 @@ func applyEvalDefaults(cfg *Config) {
 	if cfg.Eval.GateCostPct == 0 {
 		cfg.Eval.GateCostPct = 25
 	}
+	applyEvalJudgeDefaults(&cfg.Eval)
+}
+
+// applyEvalJudgeDefaults fills the judge keys of [eval]. The decider knobs
+// are only defaulted when a decider is named, so an unset stage advertises
+// no thresholds.
+func applyEvalJudgeDefaults(e *EvalConfig) {
 	// The judge cap defaults to the run cap rather than to a literal, so an
 	// operator who sets judge_model and nothing else still judges under a
 	// bound they already chose.
-	if cfg.Eval.JudgeMaxCostPerRun == 0 {
-		cfg.Eval.JudgeMaxCostPerRun = cfg.Eval.MaxCostPerRun
+	if e.JudgeMaxCostPerRun == 0 {
+		e.JudgeMaxCostPerRun = e.MaxCostPerRun
+	}
+	if e.JudgeDecider == "" {
+		return
+	}
+	if e.JudgeDeciderRecordAt == 0 {
+		e.JudgeDeciderRecordAt = DefaultJudgeDeciderRecordAt
+	}
+	if e.JudgeDeciderTimeout == "" {
+		e.JudgeDeciderTimeout = DefaultJudgeDeciderTimeout
 	}
 }
+
+// Eval judge decider defaults. The threshold is on the winning option's
+// probability over a three-way a/b/tie choice. Confidence is
+// (p − 1/n)/(1 − 1/n), so 0.9 is a confidence of 0.85 at three options: the
+// auto-act threshold in TypeSafe's confidence-gated routing pattern (its
+// generic guide says 0.9, which would be p ≈ 0.93). Under TypeSafe's
+// calibration claim it is a verdict right about nine times in ten. The timeout
+// is sized for a blinded pair, roughly ten times a supervisor review.
+const (
+	DefaultJudgeDeciderRecordAt = 0.9
+	DefaultJudgeDeciderTimeout  = "60s"
+)
 
 // applyReplyGuardDefaults fills the reply sanity guard settings.
 //
@@ -2458,6 +2503,9 @@ func validateAdaptersAndProviders(cfg *Config) error {
 	if err := validateDeciders(cfg); err != nil {
 		return err
 	}
+	if err := validateEvalJudgeDecider(cfg); err != nil {
+		return fmt.Errorf("config: [eval]: %w", err)
+	}
 	if err := validateProviderAPIKeys(cfg); err != nil {
 		return err
 	}
@@ -2632,6 +2680,34 @@ func validateEvalJudge(e *EvalConfig) error {
 	// rather than leaving an operator to wonder why their judge never ran.
 	if e.JudgeProvider != "" && e.JudgeModel == "" {
 		return errors.New("judge_provider is set but judge_model is not: the internal judge is off without a model")
+	}
+	return nil
+}
+
+// validateEvalJudgeDecider checks the judge_decider keys of [eval]. It needs
+// the whole config, unlike validateEvalJudge, because the decider name is a
+// cross-section reference into [[llm.deciders]].
+func validateEvalJudgeDecider(cfg *Config) error {
+	e := &cfg.Eval
+	if e.JudgeDecider == "" {
+		// Defaults are only applied when a decider is named, so a written
+		// value here is an orphan the operator should hear about.
+		if e.JudgeDeciderRecordAt != 0 || e.JudgeDeciderTimeout != "" {
+			return errors.New("judge_decider_record_at or judge_decider_timeout is set but judge_decider is not: the decider stage is off without a decider")
+		}
+		return nil
+	}
+	known := slices.ContainsFunc(cfg.LLM.Deciders, func(d DeciderConfig) bool { return d.Name == e.JudgeDecider })
+	if !known {
+		return fmt.Errorf("judge_decider %q does not match any [[llm.deciders]] entry", e.JudgeDecider)
+	}
+	// Below 0.5 two of the three options can both clear the bar, and the
+	// recorded winner would be whichever the provider listed first.
+	if p := e.JudgeDeciderRecordAt; math.IsNaN(p) || p <= 0.5 || p > 1 {
+		return fmt.Errorf("judge_decider_record_at must be in (0.5, 1], got %v", p)
+	}
+	if dur, err := time.ParseDuration(e.JudgeDeciderTimeout); err != nil || dur <= 0 {
+		return fmt.Errorf("judge_decider_timeout %q must be a positive duration", e.JudgeDeciderTimeout)
 	}
 	return nil
 }

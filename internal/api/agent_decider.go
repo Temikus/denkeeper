@@ -104,7 +104,7 @@ func (s *Server) planDeciderUpdate(name string, input *agentConfigUpdateInput) (
 func (s *Server) startedDecider(cfg *config.Config, name string) (*llm.Decider, error) {
 	d := s.deps.Deciders[name]
 	for _, dc := range cfg.LLM.Deciders {
-		if dc.Name == name && d != nil && d.Provider() == dc.Provider && d.Model() == dc.Model {
+		if dc.Name == name && d != nil && d.Matches(dc.Provider, dc.Model) {
 			return d, nil
 		}
 	}

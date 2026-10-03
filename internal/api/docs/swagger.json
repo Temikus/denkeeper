@@ -2851,7 +2851,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model; without it the endpoint reports 503 and the MCP judge path is unaffected. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.",
+                "description": "Starts a server-side judging pass over the run's outstanding blinded pairs, so a run can be judged unattended instead of only from Claude Code over MCP. Requires [eval] judge_model or judge_decider; without either the endpoint reports 503 and the MCP judge path is unaffected. With a decider it is asked first, five choice questions over the blinded item in one call, and records under judge_ident 'judge_decider' when its winning probability reaches judge_decider_record_at; anything else (an uncertain answer, an oversized item, a timeout, an error) falls through to the judge model when set, or leaves the item pending. The judge is capability-reduced by construction: one completion per item with no tool definitions in the request, or one decision call with no tool channel at all, reading only the same blinded payload eval_get_pair returns, so it cannot reach the unblinded pair view any more than the MCP judge can. Its verdicts are ordinary verdicts under judge_ident 'judge_model' or 'judge_decider', stamped with the rubric version, and they feed the same win rate. The pass runs in the background — progress shows up as completeness.pairs_judged on the summary — is bounded by [eval] judge_max_cost_per_run across both backends, and records what it spent on the run's judge_cost, apart from the sample spend in cost_spent. Only a terminal run can be judged: judging a moving queue spends money on pairs that do not exist yet.",
                 "consumes": [
                     "application/json"
                 ],
@@ -8905,11 +8905,22 @@
                 "cost_cap": {
                     "type": "number"
                 },
+                "decider": {
+                    "description": "Decider names the decision model asked first, when one is configured.",
+                    "type": "string"
+                },
+                "decider_record_at": {
+                    "type": "number"
+                },
                 "items": {
                     "type": "integer"
                 },
-                "judge_ident": {
-                    "type": "string"
+                "judge_idents": {
+                    "description": "JudgeIdents are the identities this pass may record under, decider first.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "model": {
                     "type": "string"
@@ -8928,11 +8939,22 @@
         "github_com_Temikus_denkeeper_internal_eval.Judgment": {
             "type": "object",
             "properties": {
+                "judge_idents": {
+                    "description": "JudgeIdents is the distinct set of judge identities behind the tally,\nsorted, for the same reason: a decider and a model judge working one\nqueue is a real thing to see.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "judged_pairs": {
                     "description": "JudgedPairs counts pairs whose *both* presentation orders carry a judge\nverdict. A half-judged pair is not evidence.",
                     "type": "integer"
                 },
                 "losses": {
+                    "type": "integer"
+                },
+                "mixed_pairs": {
+                    "description": "MixedPairs counts judged pairs whose two presentation orders were called\nby different judges. Such a pair still counts — both calls are judge\ncalls — but a tie on it may be backend disagreement rather than\nposition bias, which is worth knowing when reading the win rate.",
                     "type": "integer"
                 },
                 "operator_agreement": {
@@ -10356,6 +10378,14 @@
                     "type": "number"
                 },
                 "gate_rounds_pct": {
+                    "type": "number"
+                },
+                "judge_decider": {
+                    "description": "JudgeDecider names the decision model asked before the judge model,\nomitted when [eval] judge_decider is unset or not bound. Either judge\nkey being present means server-side judging is on offer.",
+                    "type": "string"
+                },
+                "judge_decider_record_at": {
+                    "description": "JudgeDeciderRecordAt is the winning option's probability a decider\nverdict needs before it is recorded. Omitted with the decider.",
                     "type": "number"
                 },
                 "judge_max_cost_per_run": {

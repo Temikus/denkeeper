@@ -298,6 +298,14 @@ type HarnessOpts struct {
 	// in — the MCP judge path is unaffected either way.
 	EvalJudgeModel string
 
+	// EvalJudgeDecider puts a decision model in front of the judge model (or
+	// alone), the way [eval] judge_decider does. The harness builds the
+	// decider client itself, billed to the shared cost tracker as main.go
+	// does, so judge_cost sees its spend. EvalJudgeDeciderRecordAt is the
+	// record threshold; zero takes the config default.
+	EvalJudgeDecider         llm.DecisionProvider
+	EvalJudgeDeciderRecordAt float64
+
 	// Deciders are decision models built "at startup": each is listed under
 	// [[llm.deciders]] in the harness config and handed to the API as a
 	// started client, so PATCH can bind it to an agent.
@@ -348,7 +356,7 @@ func allScopes() []string {
 // a runner over the live dispatcher (with the typed-nil guard), and the
 // OnPanic hook that reaches active runs — eval turns are never in the
 // dispatcher's inFlight map, so without this the panic switch would miss them.
-func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher, auditor audit.Emitter, logger *slog.Logger) (*eval.Store, *eval.Runner, *eval.Judge) {
+func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher, auditor audit.Emitter, costTracker *llm.CostTracker, logger *slog.Logger) (*eval.Store, *eval.Runner, *eval.Judge) {
 	t.Helper()
 	store, err := eval.NewInMemoryStore()
 	if err != nil {
@@ -380,10 +388,23 @@ func buildEvalDeps(t *testing.T, opts *HarnessOpts, dispatcher *agent.Dispatcher
 	runner := eval.NewRunner(store, source, auditor, cfg, logger)
 	t.Cleanup(runner.Shutdown)
 
+	recordAt := opts.EvalJudgeDeciderRecordAt
+	if recordAt == 0 {
+		recordAt = config.DefaultJudgeDeciderRecordAt
+	}
+	var decider *llm.Decider
+	if opts.EvalJudgeDecider != nil {
+		timeout, _ := time.ParseDuration(config.DefaultJudgeDeciderTimeout)
+		decider = llm.NewDecider(llm.DeciderConfig{
+			Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", Timeout: timeout, MaxInputTokens: 30000,
+		}, opts.EvalJudgeDecider, costTracker)
+	}
 	judge := eval.NewJudge(store, source, auditor, eval.JudgeConfig{
-		Model:         opts.EvalJudgeModel,
-		MaxCost:       cfg.MaxCostPerRun,
-		MaxConcurrent: cfg.MaxConcurrent,
+		Model:           opts.EvalJudgeModel,
+		Decider:         decider,
+		DeciderRecordAt: recordAt,
+		MaxCost:         cfg.MaxCostPerRun,
+		MaxConcurrent:   cfg.MaxConcurrent,
 	}, logger)
 	t.Cleanup(judge.Shutdown)
 
@@ -604,7 +625,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	var evalRunner *eval.Runner
 	var evalJudge *eval.Judge
 	if opts.WithEval {
-		evalStore, evalRunner, evalJudge = buildEvalDeps(t, opts, dispatcher, auditor, logger)
+		evalStore, evalRunner, evalJudge = buildEvalDeps(t, opts, dispatcher, auditor, costTracker, logger)
 	}
 
 	deps := api.Deps{

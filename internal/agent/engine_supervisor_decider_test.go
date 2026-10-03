@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -495,12 +494,5 @@ func TestSetSupervisorDeciderConfig_RetunesWiredDeciderOnly(t *testing.T) {
 	h.engine.SetSupervisorDecider(nil, DeciderStageConfig{})
 	if h.engine.supervisorDecider.Load() != nil {
 		t.Error("nil decider must unwire")
-	}
-}
-
-func TestSupervisorErrorCause_TooLarge(t *testing.T) {
-	err := errors.Join(errors.New("decider \"jev\""), llm.ErrDecisionTooLarge)
-	if got := supervisorErrorCause(err); got != "too_large" {
-		t.Errorf("supervisorErrorCause = %q, want too_large", got)
 	}
 }
