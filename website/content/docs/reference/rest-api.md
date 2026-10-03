@@ -99,7 +99,7 @@ Get detailed model information including pricing data.
 
 **Scope:** `admin`
 
-List all LLM providers with their current configuration (API keys are redacted).
+List all LLM providers with their current configuration (API keys are redacted). The response also carries `deciders`, the configured `[[llm.deciders]]` entries (`name`, `provider`, `model`).
 
 ### `POST /api/v1/llm/providers`
 
@@ -262,7 +262,7 @@ List all agents with metadata.
 
 **Scope:** `admin`
 
-Get agent details including persona directory, loaded persona sections, and MCP tool names.
+Get agent details including persona directory, loaded persona sections, and MCP tool names. When a [decision model](/docs/concepts/deciders/) is set, the response carries `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, and `supervisor_decider_deny_at`.
 
 ### `POST /api/v1/agents`
 
@@ -294,7 +294,9 @@ Create an agent. Creates the persona directory and persists an `[[agents]]` bloc
 
 **Scope:** `agents:write`
 
-Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
+Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, `supervisor_decider_deny_at`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
+
+The `supervisor_decider*` fields set the agent's [decision model](/docs/concepts/deciders/) and apply to the running agent at once. `supervisor_decider` names a `[[llm.deciders]]` entry and `""` removes it; `supervisor_decider_mode` is `"shadow"` or `"enforce"`; a threshold of `0` restores its default. A request that includes `supervisor_decider` resets the mode and thresholds to their defaults unless it sets them too, so a cleared decider's tuning cannot come back on a later rebind. The request is rejected with `400` if the result would not be a valid config: an unknown decider, thresholds outside `0 < deny_at < approve_at < 1`, or a `session_tier` other than `supervised` while a decider is set. A decider added to the config file after startup needs a restart before it can be selected.
 
 ### `DELETE /api/v1/agents/{name}`
 

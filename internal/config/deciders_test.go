@@ -271,10 +271,22 @@ supervisor_decider = "jev"
 	parseDeciderErr(t, strings.Replace(base, "TIER", "autonomous", 1), "only meaningful when the session tier")
 }
 
-func TestSupervisorDecider_EnforceNotYetSupported(t *testing.T) {
-	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+func TestSupervisorDecider_EnforceAccepted(t *testing.T) {
+	cfg, err := Parse(deciderConfig(deciderAgent(`supervisor_decider = "jev"
 supervisor_decider_mode = "enforce"
-`), "not supported")
+`)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := cfg.Agents[0].SupervisorDeciderMode; got != DeciderModeEnforce {
+		t.Errorf("mode = %q, want enforce", got)
+	}
+}
+
+func TestSupervisorDecider_UnknownModeRejected(t *testing.T) {
+	parseDeciderErr(t, deciderAgent(`supervisor_decider = "jev"
+supervisor_decider_mode = "audit"
+`), `must be "shadow" or "enforce"`)
 }
 
 func TestSupervisorDecider_ThresholdsOutOfOrder(t *testing.T) {

@@ -2956,6 +2956,7 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           "Auto-denied: identical call was denied earlier this turn",
 				ApprovalStatus: "auto_denied",
@@ -3332,8 +3333,8 @@ func approvalDenied(text string) approvalOutcome {
 }
 
 // resolveSupervisedApproval runs the approval chain for supervised tool calls:
-// auto-approve rules → decider (shadow, audit only) → supervisor review →
-// human approval.
+// auto-approve rules → decider (acts in enforce mode, audit only in shadow) →
+// supervisor review → human approval.
 func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc) approvalOutcome {
 	// Stage 1: Auto-approve rules.
 	if autoApproved, scope := e.approvals.ShouldAutoApprove(ctx, e.name, tc.Function.Name, convID); autoApproved {
@@ -3342,6 +3343,7 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           fmt.Sprintf("Auto-approved (%s)", scope),
 				ApprovalStatus: "auto_approved",
@@ -3358,9 +3360,13 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	}
 	in := e.gatherSupervisorInput(ctx, tc, convID)
 
-	// Stage 2: Decider. Shadow only: audited, never changes the outcome.
+	// Stage 2: Decider. ok only for a successful enforce-mode verdict.
 	if stage != nil {
-		e.runSupervisorDecider(ctx, stage, in, convID)
+		if decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID); ok {
+			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, tc, round, onEvent); done {
+				return outcome
+			}
+		}
 	}
 
 	// Stage 3: Supervisor agent review.
@@ -3415,6 +3421,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           supervisorErrorText(supErr),
 				ApprovalStatus: "supervisor_error",
@@ -3429,6 +3436,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           fmt.Sprintf("Approved by supervisor: %s", reason),
 				ApprovalStatus: "supervisor_approved",
@@ -3441,6 +3449,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           fmt.Sprintf("Denied by supervisor: %s", reason),
 				ApprovalStatus: "supervisor_denied",
@@ -3453,6 +3462,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, r
 			onEvent(ChatEvent{
 				Type:           "tool_approval",
 				Tool:           tc.Function.Name,
+				ToolID:         tc.ID,
 				Round:          round,
 				Text:           fmt.Sprintf("Supervisor escalated — awaiting your review: %s", reason),
 				ApprovalStatus: "supervisor_escalated",
@@ -3518,6 +3528,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		onEvent(ChatEvent{
 			Type:             "tool_approval",
 			Tool:             tc.Function.Name,
+			ToolID:           tc.ID,
 			Round:            round,
 			Text:             summary,
 			ApprovalID:       req.ID,
@@ -3564,6 +3575,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		onEvent(ChatEvent{
 			Type:           "tool_approval",
 			Tool:           tc.Function.Name,
+			ToolID:         tc.ID,
 			Round:          round,
 			ApprovalStatus: "denied",
 		})
@@ -3595,6 +3607,7 @@ func (e *Engine) abortPendingApproval(ctx context.Context, id string, tc llm.Too
 		onEvent(ChatEvent{
 			Type:           "tool_approval",
 			Tool:           tc.Function.Name,
+			ToolID:         tc.ID,
 			Round:          round,
 			ApprovalID:     id,
 			ApprovalStatus: "aborted",

@@ -137,27 +137,168 @@ func TestSupervisorDecider_WithoutSupervisorFallsToHuman(t *testing.T) {
 }
 
 // assertDeciderFailureFallsThrough runs one supervised call with a failing
-// decider (seed pre-spends its session) and checks the supervisor still
-// decides and the failure is audited with cause.
+// decider (seed pre-spends its session) in each mode and checks the supervisor
+// still decides and the failure is audited with cause. The supervisor denies,
+// so a failed enforcing decider that approved anyway would show.
 func assertDeciderFailureFallsThrough(t *testing.T, prov *fakeDecisionProvider, cfg llm.DeciderConfig, seed float64, cause string, wantCalls int) {
 	t.Helper()
-	h := newSupervisorCostHarness(t, llm.SessionLimits{Hard: 1.0}, toolCallThenDone(), supervisorSays("APPROVE: fine"))
-	defer h.teardown()
-	wireDecider(h, prov, cfg)
-	if seed > 0 {
-		h.tracker.Record(deciderSessionKey("jev", "default", "default:test:c1"), seed)
-	}
+	for _, mode := range []string{"shadow", DeciderModeEnforce} {
+		prov.calls = 0
+		h := newSupervisorCostHarness(t, llm.SessionLimits{Hard: 1.0}, toolCallThenDone(), supervisorSays("DENY: no"))
+		wireDecider(h, prov, cfg)
+		h.engine.SetSupervisorDeciderConfig(DeciderStageConfig{Mode: mode, ApproveAt: 0.95, DenyAt: 0.05})
+		if seed > 0 {
+			h.tracker.Record(deciderSessionKey("jev", "default", "default:test:c1"), seed)
+		}
 
-	statuses := approvalStatuses(h.chat(t, "default:test:c1", "c1"))
+		events := h.chat(t, "default:test:c1", "c1")
+		statuses := approvalStatuses(events)
+		if len(statuses) != 1 || statuses[0] != "supervisor_denied" {
+			t.Errorf("%s: statuses = %v, want [supervisor_denied]", mode, statuses)
+		} else if text := findApprovalEvent(events, "supervisor_denied").Text; !strings.Contains(text, "by supervisor") {
+			t.Errorf("%s: denial text = %q, want the supervisor's verdict", mode, text)
+		}
+		ev, detail := deciderAudit(t, h)
+		if ev.Status != audit.StatusError || detail["decision"] != "error" || detail["cause"] != cause {
+			t.Errorf("%s: status=%q decision=%v cause=%v, want error/%s", mode, ev.Status, detail["decision"], detail["cause"], cause)
+		}
+		if prov.calls != wantCalls {
+			t.Errorf("%s: provider calls = %d, want %d", mode, prov.calls, wantCalls)
+		}
+		h.teardown()
+	}
+}
+
+// enforce switches h's wired decider to enforce mode.
+func enforce(h *supervisorCostHarness) {
+	h.engine.SetSupervisorDeciderConfig(DeciderStageConfig{Mode: DeciderModeEnforce, ApproveAt: 0.95, DenyAt: 0.05})
+}
+
+// supervisorAuditCount counts audit events written by the LLM supervisor.
+func supervisorAuditCount(h *supervisorCostHarness) int {
+	n := 0
+	for _, ev := range h.auditor.events {
+		if ev.Category == audit.CategorySupervisor && strings.HasPrefix(ev.Source, "supervisor:") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSupervisorDecider_EnforceApproveSkipsSupervisor(t *testing.T) {
+	// A supervisor that would deny: only skipping it lets the call through.
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), supervisorSays("DENY: no"))
+	defer h.teardown()
+	wireDecider(h, &fakeDecisionProvider{p: 0.99}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	statuses := approvalStatuses(events)
 	if len(statuses) != 1 || statuses[0] != "supervisor_approved" {
-		t.Errorf("statuses = %v, want [supervisor_approved]", statuses)
+		t.Fatalf("statuses = %v, want [supervisor_approved]", statuses)
+	}
+	if text := findApprovalEvent(events, "supervisor_approved").Text; !strings.HasPrefix(text, "Approved by decider (jev): ") {
+		t.Errorf("approval text = %q, want it to name the decider", text)
+	}
+	if n := supervisorAuditCount(h); n != 0 {
+		t.Errorf("supervisor reviews = %d, want 0", n)
 	}
 	ev, detail := deciderAudit(t, h)
-	if ev.Status != audit.StatusError || detail["decision"] != "error" || detail["cause"] != cause {
-		t.Errorf("status=%q decision=%v cause=%v, want error/%s", ev.Status, detail["decision"], detail["cause"], cause)
+	if detail["decision"] != "APPROVE" || detail["mode"] != "enforce" {
+		t.Errorf("detail decision/mode = %v/%v, want APPROVE/enforce", detail["decision"], detail["mode"])
 	}
-	if prov.calls != wantCalls {
-		t.Errorf("provider calls = %d, want %d", prov.calls, wantCalls)
+	if _, shadow := detail["would_decide"]; shadow {
+		t.Error("enforce audit must not carry would_decide")
+	}
+	if !strings.HasPrefix(ev.Summary, "APPROVE web_search: ") {
+		t.Errorf("summary = %q", ev.Summary)
+	}
+}
+
+func TestSupervisorDecider_EnforceDenyFeedsReasonToModel(t *testing.T) {
+	// A supervisor that would approve: the decider's denial must win.
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), supervisorSays("APPROVE: fine"))
+	defer h.teardown()
+	wireDecider(h, &fakeDecisionProvider{p: 0.01}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	statuses := approvalStatuses(events)
+	if len(statuses) != 1 || statuses[0] != "supervisor_denied" {
+		t.Fatalf("statuses = %v, want [supervisor_denied]", statuses)
+	}
+	if n := supervisorAuditCount(h); n != 0 {
+		t.Errorf("supervisor reviews = %d, want 0", n)
+	}
+	if _, detail := deciderAudit(t, h); detail["decision"] != "DENY" {
+		t.Errorf("detail decision = %v, want DENY", detail["decision"])
+	}
+
+	const want = "Tool call denied by decider: call does not match the request (p=0.01)"
+	var fed bool
+	for _, m := range h.primary.requests[len(h.primary.requests)-1].Messages {
+		fed = fed || (m.Role == "tool" && strings.Contains(m.Content, want))
+	}
+	if !fed {
+		t.Errorf("the model's follow-up request carries no tool message with %q", want)
+	}
+}
+
+func TestSupervisorDecider_EnforceUncertainGoesToSupervisor(t *testing.T) {
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), supervisorSays("APPROVE: fine"))
+	defer h.teardown()
+	wireDecider(h, &fakeDecisionProvider{p: 0.5}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	statuses := approvalStatuses(events)
+	if len(statuses) != 1 || statuses[0] != "supervisor_approved" {
+		t.Fatalf("statuses = %v, want [supervisor_approved]", statuses)
+	}
+	if text := findApprovalEvent(events, "supervisor_approved").Text; !strings.Contains(text, "by supervisor") {
+		t.Errorf("approval text = %q, want the supervisor's verdict", text)
+	}
+	if _, detail := deciderAudit(t, h); detail["decision"] != "ESCALATE" {
+		t.Errorf("detail decision = %v, want ESCALATE", detail["decision"])
+	}
+}
+
+func TestSupervisorDecider_EnforceApproveWithoutSupervisorRunsCall(t *testing.T) {
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), nil)
+	defer h.teardown()
+	h.engine.SetSupervisor(nil)
+	wireDecider(h, &fakeDecisionProvider{p: 0.99}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	if statuses := approvalStatuses(events); len(statuses) != 1 || statuses[0] != "supervisor_approved" {
+		t.Fatalf("statuses = %v, want [supervisor_approved] and no human prompt", statuses)
+	}
+	for _, ev := range events {
+		if ev.Type == "tool_approval" && ev.ApprovalID != "" {
+			t.Fatal("a decider-approved call still asked a human")
+		}
+	}
+}
+
+func TestSupervisorDecider_EnforceUncertainWithoutSupervisorGoesToHuman(t *testing.T) {
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, toolCallThenDone(), nil)
+	defer h.teardown()
+	h.engine.SetSupervisor(nil)
+	wireDecider(h, &fakeDecisionProvider{p: 0.5}, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+	esc := findApprovalEvent(events, "supervisor_escalated")
+	if esc == nil || !strings.HasPrefix(esc.Text, "Decider (jev) escalated") {
+		t.Fatalf("no decider escalation event; statuses = %v", approvalStatuses(events))
+	}
+	var human bool
+	for _, ev := range events {
+		human = human || (ev.Type == "tool_approval" && ev.ApprovalID != "")
+	}
+	if !human {
+		t.Errorf("no human approval request surfaced; statuses = %v", approvalStatuses(events))
 	}
 }
 

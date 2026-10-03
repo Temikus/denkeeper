@@ -32,7 +32,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Overview** | Instance health, recent activity, onboarding checklist |
 | **Chat** | Talk to an agent, with streaming output and inline approvals |
 | **Sessions** | Browse conversations; per-session cost, tool calls, and skill usage |
-| **Agents** | Create and configure agents, personas, supervisors |
+| **Agents** | Create and configure agents, personas, supervisors, decision models |
 | **Channels** | Routing endpoints and which adapter each is active on |
 | **Skills** | Create, edit, and preview skills |
 | **Schedules** | Recurring jobs, with dry-run previews |

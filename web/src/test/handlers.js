@@ -698,6 +698,7 @@ export const handlers = [
       { name: 'openai', type: 'openai', enabled: false, api_key_set: false },
       { name: 'ollama', type: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
     ],
+    deciders: [],
   })),
   http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'new-provider', status: 'created' }, { status: 201 })),
   http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated' })),
