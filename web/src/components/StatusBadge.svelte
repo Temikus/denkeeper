@@ -21,7 +21,7 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .warn    { background: rgba(240,169,88,0.2);  color: var(--warn); }
+  .warn    { background: rgba(240,169,88,0.2);  color: var(--warn-text); }
   .success { background: rgba(76,175,125,0.2);  color: var(--success); }
   .danger  { background: rgba(224,92,110,0.2);  color: var(--danger); }
   .muted   { background: var(--border); color: var(--text-muted); }

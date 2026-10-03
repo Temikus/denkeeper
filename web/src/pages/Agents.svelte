@@ -1160,12 +1160,12 @@
     font-weight: 500;
   }
   .tier-autonomous { background: rgba(76,175,125,0.15); color: var(--success); }
-  .tier-supervised { background: rgba(240,169,88,0.15); color: var(--warn); }
+  .tier-supervised { background: rgba(240,169,88,0.15); color: var(--warn-text); }
   .tier-restricted { background: rgba(224,92,110,0.15); color: var(--danger); }
 
   /* Tools status */
   .tools-active { color: var(--success); font-weight: 600; }
-  .tools-configured { color: var(--warn); }
+  .tools-configured { color: var(--warn-text); }
   .tools-none { color: var(--text-muted); }
 
   /* Cards */

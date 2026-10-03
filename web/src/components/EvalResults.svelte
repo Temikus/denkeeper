@@ -927,7 +927,7 @@
   .reason { font-size: 13px; color: var(--text); margin: 8px 0 0; line-height: 1.5; }
   .divergence {
     font-size: 12px;
-    color: var(--warn);
+    color: var(--warn-text);
     margin: 6px 0 0;
   }
 
@@ -987,7 +987,7 @@
      rather than one run-on string. */
   .cell-line { display: block; font-size: 11px; color: var(--text-muted); }
   .delta { color: var(--success); margin-left: 6px; font-size: 11px; }
-  .delta.worse { color: var(--warn); }
+  .delta.worse { color: var(--warn-text); }
   .detail-row td { background: var(--surface); }
   tr.row-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 

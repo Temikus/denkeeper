@@ -229,7 +229,7 @@
   .card.empty-card { border-style: dashed; }
   .card-hint { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 500; }
   .value.ok   { color: var(--success); }
-  .value.warn { color: var(--warn); }
+  .value.warn { color: var(--warn-text); }
   .cost-table-wrapper {
     background: var(--surface);
     border: 1px solid var(--border);

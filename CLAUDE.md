@@ -81,7 +81,7 @@ Every user-facing feature gets thoughtful UX:
 
 ## Web Dashboard & WebSocket Transport
 
-`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 18 pages, roughly one per subsystem (routes in `web/src`).
+`internal/web/` embeds a Svelte SPA (`//go:embed dist`). 19 pages, roughly one per subsystem (routes in `web/src`).
 
 **WebSocket** (`internal/api/websocket.go`): `GET /api/v1/ws` upgrades to bidirectional WS; dashboard auto-connects and falls back to SSE after 3 failed reconnects. `WSHub` keeps a per-connection replay buffer. Config: `api.websocket_enabled` (true), `api.websocket_max_connections`, `api.websocket_replay_buffer_ttl` (5m). Frame types in `wsframes.go`.
 

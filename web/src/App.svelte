@@ -5,9 +5,10 @@
   import { api } from './api.js'
   import { initWS, destroyWS } from './wsStore.js'
   import { refreshSetup, openWizard, wizardOpen } from './setupStore.js'
+  import { startAttention, stopAttention } from './attention.js'
   import Nav from './components/Nav.svelte'
   import BottomNav from './components/BottomNav.svelte'
-  import PanicBar from './components/PanicBar.svelte'
+  import TopBar from './components/TopBar.svelte'
   import Login from './pages/Login.svelte'
   import SetupWizard from './pages/SetupWizard.svelte'
   import Overview from './pages/Overview.svelte'
@@ -57,10 +58,18 @@
     }
     initWS()
   })
-  onDestroy(() => destroyWS())
+  onDestroy(() => {
+    destroyWS()
+    stopAttention()
+  })
 
   $effect(() => {
-    if ($isAuthenticated) checkWizard()
+    if ($isAuthenticated) {
+      checkWizard()
+      startAttention()
+    } else {
+      stopAttention()
+    }
   })
 </script>
 
@@ -69,57 +78,57 @@
 {:else if $wizardOpen}
   <SetupWizard />
 {:else}
-  <div class="app">
-    <PanicBar />
-    <div class="shell">
-      <Nav active={route} />
-    <main class="content">
-      {#if route === 'overview' || route === ''}
-        <Overview />
-      {:else if route === 'agents'}
-        <Agents />
-      {:else if route === 'approvals'}
-        <Approvals />
-      {:else if route === 'sessions'}
-        <Sessions />
-      {:else if route === 'schedules'}
-        <Schedules />
-      {:else if route === 'skills'}
-        <Skills />
-      {:else if route === 'tools'}
-        <Tools />
-      {:else if route === 'browser'}
-        <Browser />
-      {:else if route === 'kv'}
-        <KV />
-      {:else if route === 'chat'}
-        <Chat />
-      {:else if route === 'server'}
-        <ServerConfig />
-      {:else if route === 'providers'}
-        <Providers />
-      {:else if route === 'costs'}
-        <Costs />
-      {:else if route === 'keys'}
-        <ApiKeys />
-      {:else if route === 'channels'}
-        <Channels />
-      {:else if route === 'audit'}
-        <AuditLog />
-      {:else if route === 'traces'}
-        <Traces />
-      {:else if route === 'evals'}
-        <Evals />
-      {:else if route === 'settings'}
-        <Settings />
-      {:else if route === 'more'}
-        <MoreMenu />
-      {:else}
-        <p style="color: var(--text-muted)">Page not found.</p>
-      {/if}
-    </main>
-      <BottomNav active={route} />
+  <div class="shell">
+    <Nav active={route} />
+    <div class="main-column">
+      <TopBar active={route} />
+      <main class="content">
+        {#if route === 'overview' || route === ''}
+          <Overview />
+        {:else if route === 'agents'}
+          <Agents />
+        {:else if route === 'approvals'}
+          <Approvals />
+        {:else if route === 'sessions'}
+          <Sessions />
+        {:else if route === 'schedules'}
+          <Schedules />
+        {:else if route === 'skills'}
+          <Skills />
+        {:else if route === 'tools'}
+          <Tools />
+        {:else if route === 'browser'}
+          <Browser />
+        {:else if route === 'kv'}
+          <KV />
+        {:else if route === 'chat'}
+          <Chat />
+        {:else if route === 'server'}
+          <ServerConfig />
+        {:else if route === 'providers'}
+          <Providers />
+        {:else if route === 'costs'}
+          <Costs />
+        {:else if route === 'keys'}
+          <ApiKeys />
+        {:else if route === 'channels'}
+          <Channels />
+        {:else if route === 'audit'}
+          <AuditLog />
+        {:else if route === 'traces'}
+          <Traces />
+        {:else if route === 'evals'}
+          <Evals />
+        {:else if route === 'settings'}
+          <Settings />
+        {:else if route === 'more'}
+          <MoreMenu />
+        {:else}
+          <p style="color: var(--text-muted)">Page not found.</p>
+        {/if}
+      </main>
     </div>
+    <BottomNav active={route} />
   </div>
 {/if}
 
@@ -135,15 +144,21 @@
     --surface:     #faf5eb;
     --border:      #e8dcc8;
     --text:        #3d2a1e;
-    --text-muted:  #8a7a6a;
+    --text-muted:  #6f5f50;
     /* Accent is a terracotta held ~21° off --danger so "active" never reads as
        "destructive"; --accent-rgb is the same colour for rgba() tints. */
     --accent:      #b85a28;
     --accent-rgb:  184, 90, 40;
     --accent-hover:#a44e20;
     --danger:      #c43a3a;
+    /* Fill behind white text; dark --danger is too light for that (3.5:1). */
+    --danger-solid: #c43a3a;
     --success:     #3d8f62;
     --warn:        #c87e30;
+    /* --warn fails 4.5:1 as text on its own tint and under white text; these
+       two are the readable forms. */
+    --warn-text:   #94591a;
+    --warn-badge:  #a5651f;
     --radius:      6px;
     /* One inset for the Evals page's stacked cards (empty state, launcher,
        suggest panel) so they stay aligned at every width; the 520px override
@@ -157,7 +172,7 @@
     /* Sidebar tokens */
     --sidebar-bg:           #FDF8F0;
     --sidebar-text:         #3d3d3a;
-    --sidebar-section-label: rgba(0, 0, 0, 0.4);
+    --sidebar-section-label: var(--text-muted);
     --sidebar-border-accent: rgba(var(--accent-rgb), 0.15);
     --sidebar-active-bg:    rgba(var(--accent-rgb), 0.08);
     --sidebar-hover-bg:     rgba(0, 0, 0, 0.04);
@@ -177,15 +192,17 @@
     --accent-rgb:  224, 122, 90;
     --accent-hover:#eb9070;
     --danger:      #e05c6e;
+    --danger-solid: #b83a4a;
     --success:     #4caf7d;
     --warn:        #f0a958;
+    --warn-text:   #f0a958;
     --hover-overlay: rgba(255, 255, 255, 0.03);
     --overlay-bg:    rgba(0, 0, 0, 0.6);
 
     /* Sidebar tokens */
     --sidebar-bg:           #1E1C19;
     --sidebar-text:         #d4d0c8;
-    --sidebar-section-label: rgba(255, 255, 255, 0.35);
+    --sidebar-section-label: var(--text-muted);
     --sidebar-border-accent: rgba(var(--accent-rgb), 0.25);
     --sidebar-active-bg:    rgba(var(--accent-rgb), 0.15);
     --sidebar-hover-bg:     rgba(255, 255, 255, 0.06);
@@ -217,25 +234,24 @@
     color: var(--accent-hover);
   }
 
-  /* The panic bar is full-bleed above the sidebar, so the shell row is nested
-     inside a column. min-height: 0 lets the row shrink instead of overflowing
-     the viewport when the bar appears. */
-  .app {
+  /* Sidebar beside a column holding the top bar and the scrolling page. The
+     top bar stays put; only .content scrolls. */
+  .shell {
     display: flex;
-    flex-direction: column;
     height: 100vh;
     overflow: hidden;
   }
 
-  .shell {
+  .main-column {
     display: flex;
+    flex-direction: column;
     flex: 1;
-    min-height: 0;
-    overflow: hidden;
+    min-width: 0;
   }
 
   .content {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 28px 32px;
   }

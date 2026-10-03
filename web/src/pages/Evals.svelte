@@ -935,7 +935,7 @@
     color: var(--text-muted);
   }
   .run-error { color: var(--danger); overflow-wrap: anywhere; min-width: 0; }
-  .run-stale { color: var(--warn); }
+  .run-stale { color: var(--warn-text); }
 
   .results-panel {
     margin-top: 12px;
