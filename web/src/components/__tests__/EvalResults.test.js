@@ -239,9 +239,10 @@ describe('EvalResults — judgment pending', () => {
     render(EvalResults, { props: { run: RUN, agent: AGENT, judgeModel: 'judge-model', judgeDecider: 'jev' } })
 
     await waitFor(() => expect(screen.getByTestId('judges-4')).toBeInTheDocument())
-    // Named as the operator configured them, not by the stored identity keys,
-    // so the card calls each judge one thing.
-    expect(screen.getByTestId('judges-4')).toHaveTextContent('Judged by jev and judge-model')
+    // Plain labels for the fixed identities, never the configured names: an
+    // older run's verdicts predate whatever is configured now.
+    expect(screen.getByTestId('judges-4')).toHaveTextContent('Judged by the decider and the judge model')
+    expect(screen.getByTestId('judges-4')).not.toHaveTextContent('jev')
     expect(screen.getByTestId('judges-4')).toHaveTextContent('3 of')
     expect(screen.getByTestId('judges-4')).toHaveTextContent('comparisons')
   })

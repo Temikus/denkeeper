@@ -407,8 +407,8 @@ grades against the same rubric. Setting judge_decider puts a decision model (an
 [[llm.deciders]] entry) in front of it: five choice questions over the blinded
 item in one call, recorded under judge_ident "judge_decider" when the winning
 probability reaches judge_decider_record_at, otherwise handed to judge_model or
-left pending. Left unset there is no internal judge and the MCP path is the
-only one.
+left pending. With neither judge_model nor judge_decider set there is no
+internal judge and the MCP path is the only one.
 
     audit = "full"                   # "full" (record the turn as it ran) or
                                      # "summary" (lifecycle events and errors only)

@@ -193,11 +193,12 @@
 
   // Verdicts store judge identities, not names: the two internal backends
   // record under fixed keys, and an MCP judge records under its API key name.
-  // Show the configured names where we know them so the card does not call
-  // one judge two things.
+  // The fixed keys get a plain label, never the currently configured name: a
+  // verdict recorded before the operator changed judge_decider must not be
+  // attributed to the new one.
   function judgeName(ident) {
-    if (ident === 'judge_decider') return judgeDecider || 'the decider'
-    if (ident === 'judge_model') return judgeModel || 'the judge model'
+    if (ident === 'judge_decider') return 'the decider'
+    if (ident === 'judge_model') return 'the judge model'
     return ident
   }
   const listFormat = new Intl.ListFormat('en', { type: 'conjunction' })
