@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -785,7 +786,8 @@ type AgentInstanceConfig struct {
 	SupervisorDecider string `toml:"supervisor_decider"`
 
 	// SupervisorDeciderMode is "shadow" (default): the decider runs and is
-	// audited but never changes the outcome.
+	// audited but never changes the outcome. "enforce": a verdict past a
+	// threshold approves or denies the call; anything else escalates.
 	SupervisorDeciderMode string `toml:"supervisor_decider_mode"`
 
 	// SupervisorDeciderApproveAt / DenyAt are the probability thresholds the
@@ -1534,21 +1536,22 @@ func validateDeciders(cfg *Config) error {
 		}
 	}
 	for _, a := range cfg.Agents {
-		if err := validateSupervisorDecider(cfg, a, seen); err != nil {
+		if err := ValidateSupervisorDecider(cfg, a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 	}
 	return nil
 }
 
-// validateSupervisorDecider checks an agent's supervisor_decider fields. The
-// tier check resolves an empty session_tier to [session] tier, which is what
-// the engine runs under.
-func validateSupervisorDecider(cfg *Config, a AgentInstanceConfig, deciders map[string]bool) error {
+// ValidateSupervisorDecider checks an agent's supervisor_decider fields, with
+// defaults already applied. The tier check resolves an empty session_tier to
+// [session] tier, which is what the engine runs under.
+func ValidateSupervisorDecider(cfg *Config, a AgentInstanceConfig) error {
 	if a.SupervisorDecider == "" {
 		return nil
 	}
-	if !deciders[a.SupervisorDecider] {
+	known := slices.ContainsFunc(cfg.LLM.Deciders, func(d DeciderConfig) bool { return d.Name == a.SupervisorDecider })
+	if !known {
 		return fmt.Errorf("supervisor_decider %q does not match any [[llm.deciders]] entry", a.SupervisorDecider)
 	}
 	tier := a.SessionTier
@@ -1558,8 +1561,8 @@ func validateSupervisorDecider(cfg *Config, a AgentInstanceConfig, deciders map[
 	if tier != "supervised" {
 		return fmt.Errorf("supervisor_decider is only meaningful when the session tier is \"supervised\" (got %q)", tier)
 	}
-	if a.SupervisorDeciderMode != DeciderModeShadow {
-		return fmt.Errorf("supervisor_decider_mode %q is not supported (only \"shadow\" for now)", a.SupervisorDeciderMode)
+	if a.SupervisorDeciderMode != DeciderModeShadow && a.SupervisorDeciderMode != DeciderModeEnforce {
+		return fmt.Errorf("supervisor_decider_mode must be \"shadow\" or \"enforce\", got %q", a.SupervisorDeciderMode)
 	}
 	lo, hi := a.SupervisorDeciderDenyAt, a.SupervisorDeciderApproveAt
 	if math.IsNaN(lo) || math.IsNaN(hi) || lo <= 0 || hi >= 1 || lo >= hi {
@@ -2176,18 +2179,21 @@ func applyAgentDefaults(cfg *Config) {
 				a.Fallbacks[j].Backoff = "exponential"
 			}
 		}
-		applySupervisorDeciderDefaults(a)
+		ApplySupervisorDeciderDefaults(a)
 	}
 }
 
 // Supervisor decider defaults.
 const (
 	DeciderModeShadow       = "shadow"
+	DeciderModeEnforce      = "enforce"
 	DefaultDeciderApproveAt = 0.95
 	DefaultDeciderDenyAt    = 0.05
 )
 
-func applySupervisorDeciderDefaults(a *AgentInstanceConfig) {
+// ApplySupervisorDeciderDefaults fills an omitted mode and zero thresholds
+// when a decider is set.
+func ApplySupervisorDeciderDefaults(a *AgentInstanceConfig) {
 	if a.SupervisorDecider == "" {
 		return
 	}

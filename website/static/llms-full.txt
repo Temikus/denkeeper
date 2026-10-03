@@ -159,9 +159,9 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     supervisor_body_excerpt_len = 0  # max chars of skill body in supervisor prompt (0 = use default 500)
     supervisor_tool_desc_len = 0     # max chars of tool description in supervisor prompt (0 = use default 200)
     supervisor_decider = ""          # [[llm.deciders]] name scoring tool calls before the supervisor (supervised tier only)
-    supervisor_decider_mode = "shadow" # "shadow": audited verdict only, never changes the outcome
-    supervisor_decider_approve_at = 0.95 # would approve when every answer >= this
-    supervisor_decider_deny_at = 0.05    # would deny when any answer <= this
+    supervisor_decider_mode = "shadow" # "shadow": audited verdict only; "enforce": the verdict approves or denies, uncertain calls escalate
+    supervisor_decider_approve_at = 0.95 # approves when every answer >= this
+    supervisor_decider_deny_at = 0.05    # denies when any answer <= this
     reviewer_model = ""              # LLM model for post-turn review (empty = disabled)
     reviewer_provider = ""           # LLM provider for reviewer (empty = inherit agent's)
     review_max_iterations = 0        # reviewer tool-call rounds (0 = 6)

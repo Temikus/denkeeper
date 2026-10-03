@@ -166,11 +166,20 @@ type llmProvidersResponse struct {
 	CostLimitSoft   float64        `json:"cost_limit_soft"`
 	CostLimitHard   float64        `json:"cost_limit_hard"`
 	Providers       []providerInfo `json:"providers"`
+	Deciders        []deciderInfo  `json:"deciders"`
+}
+
+// deciderInfo is one [[llm.deciders]] entry, listed so a client can offer it
+// as an agent's supervisor_decider.
+type deciderInfo struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
 }
 
 // handleGetLLMProviders godoc
 // @Summary List LLM providers
-// @Description Returns all configured LLM providers with their settings
+// @Description Returns all configured LLM providers with their settings, plus the configured decision models
 // @Tags providers
 // @Produce json
 // @Security BearerAuth
@@ -208,7 +217,13 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 		providers = append(providers, pi)
 	}
 
+	deciders := make([]deciderInfo, 0, len(cfg.Deciders))
+	for _, dc := range cfg.Deciders {
+		deciders = append(deciders, deciderInfo{Name: dc.Name, Provider: dc.Provider, Model: dc.Model})
+	}
+
 	writeJSON(w, http.StatusOK, llmProvidersResponse{
+		Deciders:        deciders,
 		DefaultProvider: cfg.DefaultProvider,
 		DefaultModel:    cfg.DefaultModel,
 		CostLimitSoft:   cfg.CostLimitSoft,

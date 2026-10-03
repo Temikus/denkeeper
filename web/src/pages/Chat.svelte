@@ -312,12 +312,14 @@
     }
   }
 
-  function approvalStatusLabel(status) {
+  // Decider verdicts reuse the supervisor_* statuses with text naming the decider.
+  function approvalStatusLabel(status, text = '') {
+    const stage = text.includes('by decider') ? 'decider' : 'supervisor'
     switch (status) {
       case 'auto_approved': return 'auto-approved'
-      case 'supervisor_approved': return 'supervisor approved'
+      case 'supervisor_approved': return `${stage} approved`
       case 'approved': return 'approved'
-      case 'supervisor_denied': return 'supervisor denied'
+      case 'supervisor_denied': return `${stage} denied`
       case 'denied': return 'denied'
       case 'auto_denied': return 'auto-denied'
       case 'supervisor_escalated': return 'escalated to you'
@@ -531,7 +533,7 @@
                 {#each msg.approvals as appr}
                   <div class="approval-card" class:pending={appr.status === 'pending'} class:auto={appr.status === 'auto_approved' || appr.status === 'supervisor_approved'} class:denied={appr.status === 'supervisor_denied' || appr.status === 'auto_denied'} class:running={appr.execStatus === 'running'} class:error={appr.execStatus === 'error'}>
                     <span class="approval-icon" aria-hidden="true">{appr.execStatus ? toolStatusIcon(appr.execStatus) : approvalStatusIcon(appr.status)}</span>
-                    <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status)}</span>
+                    <span class="sr-only">{appr.execStatus || approvalStatusLabel(appr.status, appr.text)}</span>
                     <span class="tool-name">{appr.tool}</span>
                     {#if appr.status === 'pending'}
                       <div class="approval-actions">
@@ -541,16 +543,16 @@
                         <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
                       </div>
                     {:else}
-                      <span class="approval-badge">{approvalStatusLabel(appr.status)}</span>
+                      <span class="approval-badge">{approvalStatusLabel(appr.status, appr.text)}</span>
                       {#if appr.execStatus === 'running'}
                         <span class="tool-dur">running</span>
                       {:else if appr.duration != null}
                         <span class="tool-dur">{appr.duration}ms</span>
                       {/if}
                     {/if}
-                    {#if appr.status === 'supervisor_denied' && appr.text}
+                    {#if (appr.status === 'supervisor_denied' || appr.status === 'supervisor_error') && appr.text}
                       <span class="tool-error">{appr.text}</span>
-                    {:else if appr.status === 'supervisor_escalated' && appr.text}
+                    {:else if (appr.status === 'supervisor_escalated' || appr.status === 'supervisor_approved') && appr.text}
                       <span class="tool-info">{appr.text}</span>
                     {/if}
                     {#if appr.execError}

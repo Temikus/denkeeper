@@ -14,6 +14,7 @@
   let expandedGroup = $state(null)
   let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
   let defaultProvider = $state('')   // global default_provider from /llm/providers
+  let deciders = $state([])          // [[llm.deciders]] entries: [{ name, provider, model }]
 
   // Inline rename state
   let renamingAgent = $state(null)
@@ -66,6 +67,7 @@
         enabledProviders = providerData.providers.filter(p => p.enabled).map(p => p.name)
         defaultProvider = providerData.default_provider || ''
       }
+      deciders = providerData?.deciders || []
       if (subRoute) {
         const match = agents.find(a => a.name === subRoute)
         if (match) selectAgent(match)
@@ -245,6 +247,10 @@
   let configSupervisor = $state('')
   let configSupervisorTimeout = $state('')
   let configSupervisorContextMessages = $state('')
+  let configDecider = $state('')
+  let configDeciderMode = $state('shadow')
+  let configDeciderApproveAt = $state('')
+  let configDeciderDenyAt = $state('')
   let configSaving = $state(false)
   let configSaveOk = $state(false)
 
@@ -263,6 +269,10 @@
     configSupervisor = d.supervisor || ''
     configSupervisorTimeout = d.supervisor_timeout || ''
     configSupervisorContextMessages = d.supervisor_context_messages ?? ''
+    configDecider = d.supervisor_decider || ''
+    configDeciderMode = d.supervisor_decider_mode || 'shadow'
+    configDeciderApproveAt = d.supervisor_decider_approve_at ?? ''
+    configDeciderDenyAt = d.supervisor_decider_deny_at ?? ''
     configAllowlist = ''
     if (agents.length) {
       const agentConf = agents.find(a => a.name === d.name)
@@ -271,6 +281,49 @@
         configAllowlist = (agentConf.browser_url_allowlist || []).join(', ')
       }
     }
+  }
+
+  const DECIDER_APPROVE_DEFAULT = 0.95
+  const DECIDER_DENY_DEFAULT = 0.05
+
+  // An empty threshold input means "use the default"; the API takes 0 for that.
+  // Svelte sets a cleared number input to undefined.
+  function thresholdValue(v) {
+    return v === '' || v === null || v === undefined ? 0 : Number(v)
+  }
+
+  let deciderError = $derived.by(() => {
+    if (configTier !== 'supervised' || !configDecider) return ''
+    const approve = thresholdValue(configDeciderApproveAt) || DECIDER_APPROVE_DEFAULT
+    const deny = thresholdValue(configDeciderDenyAt) || DECIDER_DENY_DEFAULT
+    if (!(deny > 0 && deny < approve && approve < 1)) {
+      return 'Thresholds must satisfy 0 < deny threshold < approve threshold < 1.'
+    }
+    return ''
+  })
+
+  // A new decider starts from defaults, matching what the API persists.
+  function onDeciderSelect() {
+    configDeciderMode = 'shadow'
+    configDeciderApproveAt = ''
+    configDeciderDenyAt = ''
+  }
+
+  // The decider fields to PATCH. Leaving the supervised tier clears the
+  // decider: the API rejects one on any other tier. A decider change sends
+  // the tuning too, since the API resets it otherwise.
+  function deciderChanges() {
+    const data = {}
+    const decider = configTier === 'supervised' ? configDecider : ''
+    const changed = decider !== (detail.supervisor_decider || '')
+    if (changed) data.supervisor_decider = decider
+    if (!decider) return data
+    if (changed || configDeciderMode !== (detail.supervisor_decider_mode || 'shadow')) data.supervisor_decider_mode = configDeciderMode
+    const approve = thresholdValue(configDeciderApproveAt)
+    if (changed || approve !== (detail.supervisor_decider_approve_at ?? 0)) data.supervisor_decider_approve_at = approve
+    const deny = thresholdValue(configDeciderDenyAt)
+    if (changed || deny !== (detail.supervisor_decider_deny_at ?? 0)) data.supervisor_decider_deny_at = deny
+    return data
   }
 
   function toggleCard(card) {
@@ -311,6 +364,7 @@
         const formCtx = parseInt(configSupervisorContextMessages, 10) || 0
         const currentCtx = detail.supervisor_context_messages || 0
         if (formCtx !== currentCtx) data.supervisor_context_messages = formCtx
+        Object.assign(data, deciderChanges())
       }
       if (Object.keys(data).length) {
         await api.updateAgentConfig(detail.name, data)
@@ -803,6 +857,44 @@
                   <input id="cfg-supervisor-ctx" class="config-input" type="number" min="0" max="50" bind:value={configSupervisorContextMessages} placeholder="5" />
                   <span class="hint">Recent conversation messages shown to the supervisor when reviewing. Empty or 0 = default (5).</span>
                 {/if}
+                {#if deciders.length || configDecider}
+                  <label class="config-label" for="cfg-decider">Decision Model</label>
+                  <select id="cfg-decider" class="config-input" bind:value={configDecider} onchange={onDeciderSelect}>
+                    <option value="">None</option>
+                    {#if configDecider && !deciders.some(d => d.name === configDecider)}
+                      <option value={configDecider}>{configDecider} (not configured)</option>
+                    {/if}
+                    {#each deciders as d}
+                      <option value={d.name}>{d.name} ({d.model})</option>
+                    {/each}
+                  </select>
+                  <span class="hint">Scores each tool call before the supervisor. Tool arguments and recent messages are sent to the decision model's provider.</span>
+                  {#if configDecider}
+                    <label class="config-label" for="cfg-decider-mode">Decision Model Mode</label>
+                    <select id="cfg-decider-mode" class="config-input" bind:value={configDeciderMode}>
+                      <option value="shadow">Shadow (audit only)</option>
+                      <option value="enforce">Enforce (approve and deny)</option>
+                    </select>
+                    {#if configDeciderMode === 'enforce'}
+                      <div class="banner warning" data-testid="decider-enforce-warning">
+                        The decision model approves and denies tool calls on its own, with no review. Uncertain calls go to {configSupervisor ? 'the supervisor' : 'you'}. Pick thresholds from shadow data or <code>denkeeper decide replay</code> first.
+                      </div>
+                    {:else}
+                      <span class="hint">Verdicts are written to the audit log and never change the outcome.</span>
+                    {/if}
+                    <label class="config-label" for="cfg-decider-approve">Approve Threshold</label>
+                    <input id="cfg-decider-approve" class="config-input" type="number" min="0" max="1" step="0.01" bind:value={configDeciderApproveAt} placeholder="0.95"
+                      aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : undefined} />
+                    <span class="hint">Approves when every check scores at or above this probability. Empty or 0 = default (0.95).</span>
+                    <label class="config-label" for="cfg-decider-deny">Deny Threshold</label>
+                    <input id="cfg-decider-deny" class="config-input" type="number" min="0" max="1" step="0.01" bind:value={configDeciderDenyAt} placeholder="0.05"
+                      aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : undefined} />
+                    <span class="hint">Denies when any check scores at or below this probability. Empty or 0 = default (0.05).</span>
+                    {#if deciderError}
+                      <div id="cfg-decider-err" class="inline-error" role="alert">{deciderError}</div>
+                    {/if}
+                  {/if}
+                {/if}
               {/if}
               <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
               <input id="cfg-max-tool-rounds" class="config-input" type="number" min="1" max="500" bind:value={configMaxToolRounds} />
@@ -816,7 +908,7 @@
             </div>
           {/if}
           <div class="config-panel-actions">
-            <button class="btn-save" onclick={saveCardConfig} disabled={configSaving}>
+            <button class="btn-save" onclick={saveCardConfig} disabled={configSaving || (expandedCard === 'permission' && !!deciderError)}>
               {configSaving ? 'Saving…' : 'Save'}
             </button>
             <button class="btn-ghost btn-ghost-sm" onclick={cancelCard}>Cancel</button>

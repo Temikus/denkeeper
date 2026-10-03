@@ -206,13 +206,13 @@ Defaults for agents that do not set their own directories.
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
 | `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
 | `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call (aligned, safe arguments, scoped) before the supervisor. Supervised tier only; works with or without `supervisor` |
-| `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. Only `"shadow"` is supported for now |
-| `supervisor_decider_approve_at` | float | `0.95` | The decider would approve when every answer is at or above this probability |
-| `supervisor_decider_deny_at` | float | `0.05` | The decider would deny when any answer is at or below this probability. Must satisfy `0 < deny_at < approve_at < 1` |
+| `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
+| `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every answer is at or above this probability |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any answer is at or below this probability. Must satisfy `0 < deny_at < approve_at < 1` |
 
-Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything.
+Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 
-On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider for tool calls reviewed after the reload. A review already in progress finishes with it. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload.
+On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider for tool calls reviewed after the reload. A review already in progress finishes with it. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload. `PATCH /api/v1/agents/{name}` and the dashboard are not bound by this: they wire a decider that was configured at startup to the running agent at once.
 
 ### Post-turn reviewer
 

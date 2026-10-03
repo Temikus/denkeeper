@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -14,13 +15,18 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
-// DeciderStageConfig tunes the supervisor decider stage. Mode is "shadow":
-// the verdict is computed and audited, never acted on.
+// DeciderModeEnforce makes the stage act on its verdict. Any other mode is
+// shadow: the verdict is computed and audited, never acted on.
+const DeciderModeEnforce = "enforce"
+
+// DeciderStageConfig tunes the supervisor decider stage.
 type DeciderStageConfig struct {
 	Mode      string
-	ApproveAt float64 // every answer >= this → would approve
-	DenyAt    float64 // any answer <= this → would deny
+	ApproveAt float64 // every answer >= this → approve
+	DenyAt    float64 // any answer <= this → deny
 }
+
+func (c DeciderStageConfig) enforcing() bool { return c.Mode == DeciderModeEnforce }
 
 type deciderStage struct {
 	decider *llm.Decider
@@ -45,11 +51,27 @@ func (e *Engine) SupervisorDecider() *llm.Decider {
 	return nil
 }
 
-// SetSupervisorDeciderConfig re-tunes the wired decider (config reload). No-op
-// when none is wired: binding a decider needs a restart, like supervisor.
-func (e *Engine) SetSupervisorDeciderConfig(cfg DeciderStageConfig) {
+// SupervisorDeciderConfig returns the wired decider's stage config; ok is
+// false when none is wired.
+func (e *Engine) SupervisorDeciderConfig() (cfg DeciderStageConfig, ok bool) {
 	if cur := e.supervisorDecider.Load(); cur != nil {
-		e.supervisorDecider.Store(&deciderStage{decider: cur.decider, cfg: cfg})
+		return cur.cfg, true
+	}
+	return DeciderStageConfig{}, false
+}
+
+// SetSupervisorDeciderConfig re-tunes the wired decider (config reload or
+// PATCH). No-op when none is wired, and a CAS so a concurrent unbind cannot be
+// overwritten with the old decider.
+func (e *Engine) SetSupervisorDeciderConfig(cfg DeciderStageConfig) {
+	for {
+		cur := e.supervisorDecider.Load()
+		if cur == nil {
+			return
+		}
+		if e.supervisorDecider.CompareAndSwap(cur, &deciderStage{decider: cur.decider, cfg: cfg}) {
+			return
+		}
 	}
 }
 
@@ -126,9 +148,10 @@ func deciderSessionKey(decider, agent, convID string) string {
 	return key
 }
 
-// runSupervisorDecider scores the call and audits the verdict it would give.
-// Nothing is returned: in shadow mode the caller must not act on it.
-func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, in *supervisorReviewInput, convID string) {
+// runSupervisorDecider scores the call and audits the verdict. ok is false in
+// shadow mode and on any failure: the caller must then ignore the verdict, so
+// a failed decider can never approve.
+func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, in *supervisorReviewInput, convID string) (decision supervisorDecision, reason string, ok bool) {
 	d := stage.decider
 	ctx, span := e.tracer.Start(ctx, "agent.supervisor_decider", trace.WithAttributes(
 		attribute.String("agent", e.name),
@@ -174,23 +197,58 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 		ev.Summary = fmt.Sprintf("ERROR %s: %v", in.tool, err)
 		ev.Status = audit.StatusError
 		e.emitDeciderAudit(ctx, ev, detail)
-		return
+		return supervisorEscalate, "", false
 	}
 
-	would, reason := decideSupervisorOutcome(resp.Answers, stage.cfg.ApproveAt, stage.cfg.DenyAt)
+	decision, reason = decideSupervisorOutcome(resp.Answers, stage.cfg.ApproveAt, stage.cfg.DenyAt)
+	enforcing := stage.cfg.enforcing()
 	e.logger.Info("supervisor decider complete",
-		"tool", in.tool, "decider", d.Name(), "would_decide", string(would), "reason", reason,
+		"tool", in.tool, "decider", d.Name(), "mode", stage.cfg.Mode, "decision", string(decision), "reason", reason,
 		"cost", resp.CostUSD, "duration_ms", duration.Milliseconds())
-	span.SetAttributes(
-		attribute.String("decider.decision", "shadow"),
-		attribute.String("decider.would_decide", string(would)),
-		attribute.Float64("decider.cost_usd", resp.CostUSD),
-	)
-	detail["decision"], detail["would_decide"], detail["reason"] = "shadow", string(would), reason
-	detail["answers"], detail["cost"], detail["response_model"] = resp.Answers, resp.CostUSD, resp.Model
-	ev.Summary = fmt.Sprintf("SHADOW would %s %s: %s", would, in.tool, reason)
+	span.SetAttributes(attribute.Float64("decider.cost_usd", resp.CostUSD))
+	detail["reason"], detail["answers"], detail["cost"], detail["response_model"] = reason, resp.Answers, resp.CostUSD, resp.Model
+	if enforcing {
+		span.SetAttributes(attribute.String("decider.decision", string(decision)))
+		detail["decision"] = string(decision)
+		ev.Summary = fmt.Sprintf("%s %s: %s", decision, in.tool, reason)
+	} else {
+		span.SetAttributes(
+			attribute.String("decider.decision", "shadow"),
+			attribute.String("decider.would_decide", string(decision)),
+		)
+		detail["decision"], detail["would_decide"] = "shadow", string(decision)
+		ev.Summary = fmt.Sprintf("SHADOW would %s %s: %s", decision, in.tool, reason)
+	}
 	ev.Status = audit.StatusOK
 	e.emitDeciderAudit(ctx, ev, detail)
+	return decision, reason, enforcing
+}
+
+// resolveDeciderVerdict acts on an enforce-mode verdict. done is false when
+// the call must go on to the next stage (supervisor, else human).
+func (e *Engine) resolveDeciderVerdict(stage *deciderStage, decision supervisorDecision, reason string, tc llm.ToolCall, round int, onEvent ChatEventFunc) (outcome approvalOutcome, done bool) {
+	name := stage.decider.Name()
+	reason = strings.TrimPrefix(reason, "decider: ")
+	emit := func(status, text string) {
+		if onEvent != nil {
+			onEvent(ChatEvent{Type: "tool_approval", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Text: text, ApprovalStatus: status})
+		}
+	}
+	switch decision {
+	case supervisorApprove:
+		emit("supervisor_approved", fmt.Sprintf("Approved by decider (%s): %s", name, reason))
+		return approvalApproved, true
+	case supervisorDeny:
+		emit("supervisor_denied", fmt.Sprintf("Denied by decider (%s): %s", name, reason))
+		return approvalDenied("Tool call denied by decider: " + reason), true
+	default:
+		// The supervisor reports its own verdict; only a human hand-off needs
+		// the decider's escalation shown.
+		if e.supervisor == nil {
+			emit("supervisor_escalated", fmt.Sprintf("Decider (%s) escalated — awaiting your review: %s", name, reason))
+		}
+		return approvalOutcome{}, false
+	}
 }
 
 func (e *Engine) emitDeciderAudit(ctx context.Context, ev audit.Event, detail map[string]any) {

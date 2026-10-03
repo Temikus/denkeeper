@@ -74,6 +74,7 @@ type Deps struct {
 	EvalJudge         *eval.Judge                                                              // nil or unconfigured = internal judging returns 503
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
+	Deciders          map[string]*llm.Decider                                                  // decision models built at startup, keyed by [[llm.deciders]] name
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
 	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
@@ -616,8 +617,10 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var supervisorContextMessages int
 	var supervisorBodyExcerptLen int
 	var supervisorToolDescLen int
+	var agentCfg config.AgentInstanceConfig
 	for _, ac := range s.appConfig().Agents {
 		if ac.Name == name {
+			agentCfg = ac
 			adapters = ac.Adapters
 			fallbacks = ac.Fallbacks
 			costLimitSoft = ac.CostLimitSoft
@@ -670,6 +673,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if supervisorToolDescLen > 0 {
 		resp["supervisor_tool_desc_len"] = supervisorToolDescLen
 	}
+	addDeciderDetail(resp, agentCfg)
 	writeJSON(w, http.StatusOK, resp)
 }
 

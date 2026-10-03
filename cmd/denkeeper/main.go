@@ -1728,6 +1728,7 @@ type startAPIWithMCPArgs struct {
 	dispatcher      *agent.Dispatcher
 	sched           *scheduler.Scheduler
 	cost            *llm.CostTracker
+	deciders        map[string]*llm.Decider
 	memory          agent.MemoryStore
 	approvalManager *approval.Manager
 	lifecycleMgr    *tool.LifecycleManager
@@ -1805,6 +1806,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		ModelDetailLister: catalog.ListModelDetails,
 		OAuthDeps:         a.oauthDeps,
 		MCPHandler:        mcpSrv.Handler(),
+		Deciders:          a.deciders,
 		ReloadFunc:        buildReloadFunc(a.path, a.cfgHolder, a.dispatcher, a.approvalManager, a.evalJudge, rt, a.logger),
 		RestartFunc:       selfRestartFunc,
 		RestartManaged:    detectProcessManager(os.Getenv, fileExists),
@@ -2153,6 +2155,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			dispatcher:      dispatcher,
 			sched:           sched,
 			cost:            clients.cost,
+			deciders:        clients.deciders,
 			memory:          st.memory,
 			approvalManager: st.approvalManager,
 			lifecycleMgr:    lifecycleMgr,

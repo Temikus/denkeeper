@@ -3,7 +3,7 @@ title: "Supervisors & Auto-Approval"
 description: "Letting an LLM reviewer, or a standing rule, answer approval prompts for you."
 slug: "supervisors"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-10-02T00:00:00+00:00
 draft: false
 weight: 45
 toc: true
@@ -18,10 +18,11 @@ Denkeeper offers two ways to answer that prompt without you: **auto-approve rule
 For a supervised agent, each tool call runs this gauntlet in order, stopping at the first thing that decides:
 
 1. **Auto-approve rules** — a matching rule executes immediately
-2. **Supervisor agent** — if configured, reviews and returns APPROVE, DENY, or ESCALATE
-3. **Human approval** — the Approve/Deny buttons
+2. **Decision model** — if configured in `enforce` mode, approves or denies the calls it is confident about (see [Decision Models](/docs/concepts/deciders/))
+3. **Supervisor agent** — if configured, reviews and returns APPROVE, DENY, or ESCALATE
+4. **Human approval** — the Approve/Deny buttons
 
-Anything not decided by 1 or 2 reaches you. Nothing skips the chain.
+Anything not decided by 1 to 3 reaches you. Nothing skips the chain.
 
 ## Auto-approve rules
 

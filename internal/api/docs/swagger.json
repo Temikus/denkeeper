@@ -217,7 +217,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, etc.",
+                "description": "Mutates agent settings: tier, provider, model, cost limits, fallbacks, supervisor, supervisor decider, etc.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4548,7 +4548,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns all configured LLM providers with their settings",
+                "description": "Returns all configured LLM providers with their settings, plus the configured decision models",
                 "produces": [
                     "application/json"
                 ],
@@ -9926,6 +9926,22 @@
                 "supervisor_context_messages": {
                     "type": "integer"
                 },
+                "supervisor_decider": {
+                    "description": "[[llm.deciders]] name; empty string to clear",
+                    "type": "string"
+                },
+                "supervisor_decider_approve_at": {
+                    "description": "0 = default 0.95",
+                    "type": "number"
+                },
+                "supervisor_decider_deny_at": {
+                    "description": "0 = default 0.05",
+                    "type": "number"
+                },
+                "supervisor_decider_mode": {
+                    "description": "\"shadow\" or \"enforce\"",
+                    "type": "string"
+                },
                 "supervisor_timeout": {
                     "type": "string"
                 },
@@ -10169,6 +10185,20 @@
                     "type": "string"
                 },
                 "timeout": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.deciderInfo": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
                     "type": "string"
                 }
             }
@@ -10717,6 +10747,12 @@
                 },
                 "cost_limit_soft": {
                     "type": "number"
+                },
+                "deciders": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.deciderInfo"
+                    }
                 },
                 "default_model": {
                     "type": "string"

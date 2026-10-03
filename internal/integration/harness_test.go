@@ -298,6 +298,11 @@ type HarnessOpts struct {
 	// in — the MCP judge path is unaffected either way.
 	EvalJudgeModel string
 
+	// Deciders are decision models built "at startup": each is listed under
+	// [[llm.deciders]] in the harness config and handed to the API as a
+	// started client, so PATCH can bind it to an agent.
+	Deciders []*llm.Decider
+
 	// AutoApproveTools seeds config-scoped ("config") auto-approve rules,
 	// agent name → tool names, standing in for the [[agents]]
 	// auto_approve_tools TOML field that cmd/denkeeper wires at startup.
@@ -633,6 +638,14 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 				CompletenessFloor: 0.8,
 			},
 		}),
+	}
+	if len(opts.Deciders) > 0 {
+		deps.Deciders = make(map[string]*llm.Decider, len(opts.Deciders))
+		for _, d := range opts.Deciders {
+			deps.Deciders[d.Name()] = d
+			deps.Config.Get().LLM.Deciders = append(deps.Config.Get().LLM.Deciders,
+				config.DeciderConfig{Name: d.Name(), Provider: d.Provider(), Model: d.Model()})
+		}
 	}
 	if opts.WithEval {
 		if c := opts.EvalConfig; c.CompletenessFloor > 0 {

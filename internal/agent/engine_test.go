@@ -541,10 +541,12 @@ func TestEngine_HandleMessage_StaleDirectiveStripped(t *testing.T) {
 type sequentialProvider struct {
 	responses []*llm.ChatResponse
 	callIndex int
+	requests  []llm.ChatRequest
 }
 
 func (s *sequentialProvider) Name() string { return "mock" }
-func (s *sequentialProvider) ChatCompletion(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (s *sequentialProvider) ChatCompletion(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	s.requests = append(s.requests, req)
 	if s.callIndex >= len(s.responses) {
 		return nil, fmt.Errorf("no more mock responses (call %d)", s.callIndex)
 	}
