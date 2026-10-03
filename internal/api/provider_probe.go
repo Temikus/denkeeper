@@ -159,12 +159,12 @@ func classifyProbeErr(ctx context.Context, err error, pc config.ProviderInstance
 	label := providerLabels[pc.Type]
 	var le *llm.LLMError
 	if errors.As(err, &le) {
-		switch {
-		case le.StatusCode == http.StatusUnauthorized || le.StatusCode == http.StatusForbidden:
+		switch le.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
 			return providerTestResponse{Status: "rejected", Message: label + " says this key is not valid. Check you copied all of it."}
-		case le.StatusCode == http.StatusNotFound:
+		case http.StatusNotFound:
 			return providerTestResponse{Status: "error", Message: "That base URL doesn't look like the " + label + " API."}
-		case le.StatusCode == http.StatusTooManyRequests:
+		case http.StatusTooManyRequests:
 			return providerTestResponse{Status: "error", Message: label + " is rate limiting this key. Try again in a minute."}
 		default:
 			return providerTestResponse{Status: "error", Message: fmt.Sprintf("%s answered with status %d.", label, le.StatusCode)}
