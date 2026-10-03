@@ -205,6 +205,19 @@ func TestDeciderCall_RejectsAnUnknownOption(t *testing.T) {
 	}
 }
 
+// A malformed dimension fails the item even when the winner is below the
+// bar: a bad answer must never pass as an abstention.
+func TestDeciderCall_RejectsAnUnknownDimensionOptionBelowTheThreshold(t *testing.T) {
+	answers := map[string]llm.Answer{
+		deciderWinnerQuestion: choiceAnswer(WinnerA, 0.6),
+		DimLength:             {Type: llm.QuestionChoice, Choice: "neither", Confidence: 1},
+	}
+	_, ok, err := deciderCall(answers, 0.8)
+	if err == nil || ok {
+		t.Fatalf("ok = %v, err = %v; want an error, not an abstention", ok, err)
+	}
+}
+
 func TestDeciderCall_MissingWinnerIsAnError(t *testing.T) {
 	if _, _, err := deciderCall(map[string]llm.Answer{DimLength: choiceAnswer(WinnerA, 1)}, 0.8); err == nil {
 		t.Fatal("no winner answer must be an error")

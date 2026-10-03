@@ -73,15 +73,15 @@ func deciderCall(answers map[string]llm.Answer, recordAt float64) (judgeCall, bo
 		return judgeCall{}, false, fmt.Errorf("invalid winner %q: want a, b, or tie", winner.Choice)
 	}
 	notes := []string{fmt.Sprintf("decider: winner %s (p=%.2f)", winner.Choice, recordP(winner))}
-	if recordP(winner) < recordAt {
-		return judgeCall{}, false, nil
-	}
 	call := judgeCall{Winner: winner.Choice, Dimensions: make(map[string]string, len(Dimensions()))}
 	for _, dim := range Dimensions() {
 		a, ok := answers[dim]
 		if !ok {
 			continue
 		}
+		// Validated before the threshold check below: a malformed answer must
+		// fail the item even when the winner is too uncertain to record,
+		// not pass as an abstention.
 		if !ValidWinner(a.Choice) {
 			return judgeCall{}, false, fmt.Errorf("dimension %q: invalid winner %q, want a, b, or tie", dim, a.Choice)
 		}
@@ -91,6 +91,9 @@ func deciderCall(answers map[string]llm.Answer, recordAt float64) (judgeCall, bo
 		}
 		call.Dimensions[dim] = a.Choice
 		notes = append(notes, fmt.Sprintf("%s %s (p=%.2f)", dim, a.Choice, recordP(a)))
+	}
+	if recordP(winner) < recordAt {
+		return judgeCall{}, false, nil
 	}
 	call.Notes = strings.Join(notes, "; ")
 	return call, true, nil
