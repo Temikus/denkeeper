@@ -250,8 +250,9 @@ type EvalConfig struct {
 	JudgeDecider string `toml:"judge_decider"`
 	// JudgeDeciderRecordAt is the probability the decider's winning option must
 	// reach before a verdict is recorded. Must exceed 0.5, or two of the three
-	// options could both qualify. Default: 0.9, TypeSafe's "act automatically"
-	// band for a three-way choice (confidence 0.85).
+	// options could both qualify. Default: 0.9, which at three options is a
+	// confidence of 0.85, the auto-act threshold in TypeSafe's confidence-gated
+	// routing pattern.
 	JudgeDeciderRecordAt float64 `toml:"judge_decider_record_at"`
 	// JudgeDeciderTimeout is the per-item deadline for the judge decider,
 	// separate from the decider's own timeout because a blinded pair is an
@@ -1796,10 +1797,12 @@ func applyEvalJudgeDefaults(e *EvalConfig) {
 }
 
 // Eval judge decider defaults. The threshold is on the winning option's
-// probability over a three-way a/b/tie choice: 0.9 is TypeSafe's own
-// "act automatically" band (confidence 0.85 at three options) and, under its
-// calibration claim, a verdict right about nine times in ten. The timeout is
-// sized for a blinded pair, roughly ten times a supervisor review.
+// probability over a three-way a/b/tie choice. Confidence is
+// (p − 1/n)/(1 − 1/n), so 0.9 is a confidence of 0.85 at three options: the
+// auto-act threshold in TypeSafe's confidence-gated routing pattern (its
+// generic guide says 0.9, which would be p ≈ 0.93). Under TypeSafe's
+// calibration claim it is a verdict right about nine times in ten. The timeout
+// is sized for a blinded pair, roughly ten times a supervisor review.
 const (
 	DefaultJudgeDeciderRecordAt = 0.9
 	DefaultJudgeDeciderTimeout  = "60s"
