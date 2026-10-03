@@ -215,6 +215,24 @@ describe('handleToolEvent via SSE path', () => {
     expect(approvals[1].id).toBe('a1')
   })
 
+  test('escalation, human approval, start and end complete the approved card', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', text: 'Decider (jev) escalated', approval_status: 'supervisor_escalated' })
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', approval_id: 'a1', text: 'Run tool: web_search' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-1', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-1', round: 1, duration_ms: 50 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const [escalated, approved] = get(chatState).messages[1].approvals
+    expect(escalated.status).toBe('supervisor_escalated')
+    expect(escalated.execStatus).toBeUndefined()
+    expect(approved.status).toBe('approved')
+    expect(approved.execStatus).toBe('done')
+    expect(approved.duration).toBe(50)
+  })
+
   test('tool_start links to the approval with the same call ID, not an earlier denial', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', text: 'Denied by decider (jev): unsafe', approval_status: 'supervisor_denied' })

@@ -214,7 +214,7 @@ function handleToolEvent(agentMsg, evt) {
   if (evt.type === 'tool_end') {
     // Check approval-linked execution first, then fall back to toolCalls.
     const appr = evt.tool_id
-      ? agentMsg.approvals.find(a => a.tool_id === evt.tool_id)
+      ? agentMsg.approvals.find(a => a.tool_id === evt.tool_id && a.execStatus === 'running')
       : agentMsg.approvals.find(a => a.tool === evt.tool && a.round === evt.round && a.execStatus)
     if (appr) {
       appr.execStatus = evt.error ? 'error' : 'done'
