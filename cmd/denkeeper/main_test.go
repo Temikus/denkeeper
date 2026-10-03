@@ -106,8 +106,8 @@ func TestInitLogger_JSONFormat(t *testing.T) {
 func TestInitLLMClients_NoProviders(t *testing.T) {
 	cfg := &config.Config{}
 	clients := initLLMClients(cfg)
-	if len(clients.providers) != 0 {
-		t.Errorf("expected 0 providers when none configured, got %d", len(clients.providers))
+	if names := clients.providers.Names(); len(names) != 0 {
+		t.Errorf("expected 0 providers when none configured, got %v", names)
 	}
 	if clients.cost == nil {
 		t.Fatal("expected non-nil cost tracker")
@@ -126,7 +126,7 @@ func TestInitLLMClients_WithOpenRouterKey(t *testing.T) {
 		},
 	}
 	clients := initLLMClients(cfg)
-	if clients.providers["openrouter"] == nil {
+	if _, ok := clients.providers.Get("openrouter"); !ok {
 		t.Error("expected non-nil openrouter provider with API key")
 	}
 }
@@ -167,7 +167,7 @@ func TestInitLLMClients_WithAnthropicKey(t *testing.T) {
 		},
 	}
 	clients := initLLMClients(cfg)
-	if clients.providers["anthropic"] == nil {
+	if _, ok := clients.providers.Get("anthropic"); !ok {
 		t.Error("expected non-nil anthropic provider with API key")
 	}
 }

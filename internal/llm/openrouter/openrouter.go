@@ -212,6 +212,9 @@ func (c *Client) ResetUpstreamPreference() { c.resetSticky() }
 
 func (c *Client) Name() string { return c.name }
 
+// SetHTTPClient replaces the HTTP client used for every request.
+func (c *Client) SetHTTPClient(hc *http.Client) { c.http = hc }
+
 // SupportsStreaming implements llm.StreamingProvider.
 func (c *Client) SupportsStreaming() bool { return true }
 

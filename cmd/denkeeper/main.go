@@ -32,10 +32,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/eval"
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
-	anthropicllm "github.com/Temikus/denkeeper/internal/llm/anthropic"
-	"github.com/Temikus/denkeeper/internal/llm/ollama"
-	openaillm "github.com/Temikus/denkeeper/internal/llm/openai"
-	"github.com/Temikus/denkeeper/internal/llm/openrouter"
+	"github.com/Temikus/denkeeper/internal/llm/llmfactory"
 	"github.com/Temikus/denkeeper/internal/llm/pricing"
 	"github.com/Temikus/denkeeper/internal/mcpserver"
 	dkotel "github.com/Temikus/denkeeper/internal/otel"
@@ -185,7 +182,7 @@ func buildChannelResolver(d *agent.Dispatcher) configmcp.ChannelResolver {
 
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
-	providers         map[string]llm.Provider // keyed by instance name
+	providers         *llm.ProviderSet        // shared by every agent router
 	deciders          map[string]*llm.Decider // keyed by [[llm.deciders]] name
 	cost              *llm.CostTracker
 	fallbacks         []llm.FallbackRule
@@ -306,12 +303,14 @@ func initLogger(cfg *config.Config) *slog.Logger {
 }
 
 func initLLMClients(cfg *config.Config) llmClients {
-	providers := make(map[string]llm.Provider, len(cfg.LLM.Providers))
+	providers := llm.NewProviderSet()
 	for _, pc := range cfg.LLM.Providers {
-		p := createProvider(pc, cfg)
-		if p != nil {
-			providers[pc.Name] = p
+		p, err := llmfactory.New(pc, cfg.LLM.OpenRouter, nil)
+		if err != nil {
+			slog.Warn("provider skipped", "provider", pc.Name, "error", err)
+			continue
 		}
+		providers.Put(p)
 	}
 
 	fallbackRules := convertFallbacks(cfg.LLM.Fallbacks)
@@ -328,24 +327,14 @@ func initLLMClients(cfg *config.Config) llmClients {
 			CachedInputPerMTok: mp.CachedInputPerMTok,
 		})
 	}
-	// Per-provider pricing overrides.
 	for _, pc := range cfg.LLM.Providers {
-		if pc.DefaultRatePerKTokens != nil && *pc.DefaultRatePerKTokens > 0 {
-			reg.SetProviderFallbackRate(pc.Name, *pc.DefaultRatePerKTokens)
-		}
-		for model, mp := range pc.ModelPrices {
-			reg.RegisterProviderModel(pc.Name, model, pricing.ModelPrice{
-				InputPerMTok:       mp.InputPerMTok,
-				OutputPerMTok:      mp.OutputPerMTok,
-				CachedInputPerMTok: mp.CachedInputPerMTok,
-			})
-		}
+		applyProviderPricing(reg, pc)
 	}
 
 	cost := buildCostTracker(cfg)
 	return llmClients{
 		providers:         providers,
-		deciders:          buildDeciders(cfg, providers, cost),
+		deciders:          buildDeciders(cfg, providers.Snapshot(), cost),
 		cost:              cost,
 		fallbacks:         fallbackRules,
 		pricing:           reg,
@@ -380,27 +369,17 @@ func newDecider(dc config.DeciderConfig, dp llm.DecisionProvider, cost *llm.Cost
 	}, dp, cost)
 }
 
-// createProvider instantiates an llm.Provider from a ProviderInstanceConfig.
-func createProvider(pc config.ProviderInstanceConfig, cfg *config.Config) llm.Provider {
-	switch pc.Type {
-	case "anthropic":
-		return anthropicllm.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
-	case "openai":
-		return openaillm.NewFull(pc.Name, pc.APIKey, pc.BaseURL, pc.Organization)
-	case "openrouter":
-		client := openrouter.NewFull(pc.Name, pc.APIKey)
-		r := &cfg.LLM.OpenRouter.Reasoning
-		client.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
-		client.SetProviderRouting(
-			cfg.LLM.OpenRouter.ProviderOrder,
-			cfg.LLM.OpenRouter.ProviderAllowFallbacks,
-			cfg.LLM.OpenRouter.ResolveStickyTTL(),
-		)
-		return client
-	case "ollama":
-		return ollama.NewFull(pc.Name, pc.BaseURL)
-	default:
-		return nil
+// applyProviderPricing registers one instance's pricing overrides.
+func applyProviderPricing(reg *pricing.Registry, pc config.ProviderInstanceConfig) {
+	if pc.DefaultRatePerKTokens != nil && *pc.DefaultRatePerKTokens > 0 {
+		reg.SetProviderFallbackRate(pc.Name, *pc.DefaultRatePerKTokens)
+	}
+	for model, mp := range pc.ModelPrices {
+		reg.RegisterProviderModel(pc.Name, model, pricing.ModelPrice{
+			InputPerMTok:       mp.InputPerMTok,
+			OutputPerMTok:      mp.OutputPerMTok,
+			CachedInputPerMTok: mp.CachedInputPerMTok,
+		})
 	}
 }
 
@@ -1201,10 +1180,7 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
 func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
-	router := llm.NewRouter(provider, model, abc.llm.cost)
-	for _, p := range abc.llm.providers {
-		router.RegisterProvider(p)
-	}
+	router := llm.NewRouterWithProviders(provider, model, abc.llm.cost, abc.llm.providers)
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)
 	}

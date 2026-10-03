@@ -21,6 +21,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/llm/llmfactory"
 )
 
 const (
@@ -240,7 +241,11 @@ func replayDecider(cfg *config.Config, dc config.DeciderConfig) (*llm.Decider, e
 	if pi < 0 {
 		return nil, fmt.Errorf("decider %q: provider %q not found", dc.Name, dc.Provider)
 	}
-	dp, ok := createProvider(cfg.LLM.Providers[pi], cfg).(llm.DecisionProvider)
+	p, err := llmfactory.New(cfg.LLM.Providers[pi], cfg.LLM.OpenRouter, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decider %q: %w", dc.Name, err)
+	}
+	dp, ok := p.(llm.DecisionProvider)
 	if !ok {
 		return nil, fmt.Errorf("decider %q: provider %q does not serve decisions", dc.Name, dc.Provider)
 	}
