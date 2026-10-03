@@ -41,6 +41,13 @@ type ModelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+// CredentialChecker is implemented by providers whose model listing does not
+// prove the key is valid (OpenRouter's /models is public). CheckCredentials
+// returns an *LLMError carrying the upstream status when the key is refused.
+type CredentialChecker interface {
+	CheckCredentials(ctx context.Context) error
+}
+
 // ModelDetailLister is an optional interface for providers that can return
 // enriched model metadata (pricing, capabilities). Providers that implement
 // this are preferred over the static heuristic in Router.ListModelDetails.

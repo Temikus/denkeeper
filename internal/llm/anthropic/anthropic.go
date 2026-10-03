@@ -117,7 +117,7 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("listing models returned status %d", resp.StatusCode)
+		return nil, &llm.LLMError{StatusCode: resp.StatusCode, Message: "listing models failed"}
 	}
 
 	var result struct {
