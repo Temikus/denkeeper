@@ -16,9 +16,10 @@ func TestIsIdempotent_BuiltinInProcess(t *testing.T) {
 	m.toolMap["web_search"] = sc
 	m.toolMap["kv_get"] = sc
 	m.toolMap["kv_list"] = sc
+	m.toolMap["decide"] = sc
 	m.toolMap["skill_get"] = sc
 
-	for _, name := range []string{"web_fetch", "web_search", "kv_get", "kv_list"} {
+	for _, name := range []string{"web_fetch", "web_search", "kv_get", "kv_list", "decide"} {
 		if !m.IsIdempotent(name) {
 			t.Errorf("IsIdempotent(%q) = false, want true (built-in allowlist)", name)
 		}
