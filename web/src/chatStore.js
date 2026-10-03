@@ -3,7 +3,12 @@ import { api } from './api.js'
 import { wsStatus, getWSClient, onSessionEvent, offSessionEvent } from './wsStore.js'
 
 const STORAGE_KEY = 'dk_chat_session'
-const SETTLED_APPROVAL_STATUSES = new Set(['auto_approved', 'supervisor_approved', 'supervisor_denied', 'auto_denied'])
+// Statuses nobody has to act on. Escalations and errors are informational:
+// the human prompt that follows arrives as its own pending event.
+const INFO_APPROVAL_STATUSES = new Set([
+  'auto_approved', 'supervisor_approved', 'supervisor_denied', 'auto_denied',
+  'supervisor_escalated', 'supervisor_error',
+])
 
 // Set by Skills page to queue a test run, consumed by Chat on mount.
 export const pendingSkillTest = writable(null) // { agent: string, command: string }
@@ -171,26 +176,27 @@ function handleToolEvent(agentMsg, evt) {
     return
   }
   if (evt.type === 'tool_approval') {
-    // Verdicts nobody has to act on. Escalations and errors still fall
-    // through to the pending branch, since a human prompt follows them.
-    if (SETTLED_APPROVAL_STATUSES.has(evt.approval_status)) {
+    if (INFO_APPROVAL_STATUSES.has(evt.approval_status)) {
       agentMsg.approvals = [...agentMsg.approvals, {
-        id: evt.approval_id, tool: evt.tool, text: evt.text,
+        id: evt.approval_id, tool: evt.tool, tool_id: evt.tool_id, text: evt.text,
         status: evt.approval_status, resolving: false,
       }]
     } else {
       agentMsg.status = `Waiting for approval: ${evt.tool}`
       agentMsg.approvals = [...agentMsg.approvals, {
-        id: evt.approval_id, tool: evt.tool, text: evt.text,
+        id: evt.approval_id, tool: evt.tool, tool_id: evt.tool_id, text: evt.text,
         status: 'pending', resolving: false,
       }]
     }
   }
   if (evt.type === 'tool_start') {
     agentMsg.status = ''
-    // Link execution to the matching approval entry so we don't render
-    // a duplicate tool-call card for the same invocation.
-    const matchAppr = agentMsg.approvals.find(a => a.tool === evt.tool && !a.execStatus)
+    // Link execution to the approval that let it run, by call ID when both
+    // sides carry one, so a denied call cannot capture a later call to the
+    // same tool. Escalation and error cards never run anything themselves.
+    const runnable = a => !a.execStatus && a.status !== 'supervisor_escalated' && a.status !== 'supervisor_error'
+    const matchAppr = (evt.tool_id && agentMsg.approvals.find(a => a.tool_id === evt.tool_id && runnable(a)))
+      || agentMsg.approvals.find(a => a.tool === evt.tool && !a.tool_id && runnable(a))
     if (matchAppr) {
       if (matchAppr.status === 'pending') matchAppr.status = 'approved'
       matchAppr.execStatus = 'running'

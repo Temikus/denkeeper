@@ -202,6 +202,35 @@ describe('handleToolEvent via SSE path', () => {
     expect(agentMsg.toolCalls[0].status).toBe('done')
   })
 
+  test('a decider escalation is informational and the human prompt stays pending', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', text: 'Decider (jev) escalated', approval_status: 'supervisor_escalated' })
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', approval_id: 'a1', text: 'Run tool: web_search' })
+    })
+
+    await sendMessage('search')
+    const approvals = get(chatState).messages[1].approvals
+    expect(approvals.map(a => a.status)).toEqual(['supervisor_escalated', 'pending'])
+    expect(approvals[0].id).toBeUndefined()
+    expect(approvals[1].id).toBe('a1')
+  })
+
+  test('tool_start links to the approval with the same call ID, not an earlier denial', async () => {
+    mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-1', text: 'Denied by decider (jev): unsafe', approval_status: 'supervisor_denied' })
+      onToolEvent({ type: 'tool_approval', tool: 'web_search', tool_id: 'tc-2', text: 'Approved by decider (jev): fine', approval_status: 'supervisor_approved' })
+      onToolEvent({ type: 'tool_start', tool: 'web_search', tool_id: 'tc-2', round: 1 })
+      onToolEvent({ type: 'tool_end', tool: 'web_search', tool_id: 'tc-2', round: 1, duration_ms: 50 })
+      onDone('sess-1')
+    })
+
+    await sendMessage('search')
+    const [denied, approved] = get(chatState).messages[1].approvals
+    expect(denied.execStatus).toBeUndefined()
+    expect(approved.execStatus).toBe('done')
+    expect(get(chatState).messages[1].toolCalls).toHaveLength(0)
+  })
+
   test('tool_start without tool_end is finalized to done on stream end', async () => {
     mockStreamChat.mockImplementation(async (agent, sid, msg, onChunk, onDone, onToolEvent) => {
       onToolEvent({ type: 'tool_start', tool: 'web_search', round: 1 })

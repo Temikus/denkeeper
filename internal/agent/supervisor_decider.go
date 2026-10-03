@@ -231,7 +231,7 @@ func (e *Engine) resolveDeciderVerdict(stage *deciderStage, decision supervisorD
 	reason = strings.TrimPrefix(reason, "decider: ")
 	emit := func(status, text string) {
 		if onEvent != nil {
-			onEvent(ChatEvent{Type: "tool_approval", Tool: tc.Function.Name, Round: round, Text: text, ApprovalStatus: status})
+			onEvent(ChatEvent{Type: "tool_approval", Tool: tc.Function.Name, ToolID: tc.ID, Round: round, Text: text, ApprovalStatus: status})
 		}
 	}
 	switch decision {

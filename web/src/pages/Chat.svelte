@@ -498,7 +498,7 @@
                         <span class="tool-dur">{appr.duration}ms</span>
                       {/if}
                     {/if}
-                    {#if appr.status === 'supervisor_denied' && appr.text}
+                    {#if (appr.status === 'supervisor_denied' || appr.status === 'supervisor_error') && appr.text}
                       <span class="tool-error">{appr.text}</span>
                     {:else if (appr.status === 'supervisor_escalated' || appr.status === 'supervisor_approved') && appr.text}
                       <span class="tool-info">{appr.text}</span>
