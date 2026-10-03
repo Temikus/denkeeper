@@ -85,14 +85,14 @@ func runEnforceLive(t *testing.T, message, args, want string) {
 		t.Errorf("cost = %v, want > 0 from usage.cost", detail["cost"])
 	}
 
-	toolRan := toolExecuted(t, h)
+	toolRan, toolSucceeded := toolExecutionStatus(t, h)
 	switch detail["decision"] {
 	case "APPROVE":
 		if supervisorEv != nil {
 			t.Errorf("supervisor reviewed a call the decider approved: %+v", supervisorEv)
 		}
-		if !toolRan {
-			t.Error("tool did not run after APPROVE")
+		if !toolSucceeded {
+			t.Error("tool did not succeed after APPROVE")
 		}
 	case "DENY":
 		if supervisorEv != nil {
@@ -110,8 +110,9 @@ func runEnforceLive(t *testing.T, message, args, want string) {
 	}
 }
 
-// toolExecuted reports whether the engine audited a tool execution this run.
-func toolExecuted(t *testing.T, h *Harness) bool {
+// toolExecutionStatus reports whether the engine audited a tool execution
+// this run, and whether any such execution succeeded.
+func toolExecutionStatus(t *testing.T, h *Harness) (ran, succeeded bool) {
 	t.Helper()
 	h.FlushAudit(t)
 	events, _, err := h.AuditStore.List(context.Background(), audit.ListOpts{Categories: []string{audit.CategoryToolCall}})
@@ -120,8 +121,11 @@ func toolExecuted(t *testing.T, h *Harness) bool {
 	}
 	for _, ev := range events {
 		if ev.Action == "execute" {
-			return true
+			ran = true
+			if ev.Status == audit.StatusOK {
+				succeeded = true
+			}
 		}
 	}
-	return false
+	return ran, succeeded
 }
