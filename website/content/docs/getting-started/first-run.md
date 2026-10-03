@@ -2,7 +2,7 @@
 title: "First Run"
 description: "Create your first Denkeeper configuration and connect to Telegram."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-10-03T00:00:00+00:00
 draft: false
 weight: 20
 toc: true
@@ -76,7 +76,16 @@ The setup PIN protects against setup hijacking: an attacker with network access 
 
 See the [Web Dashboard guide](/docs/guides/web-dashboard/) for what each page does.
 
-Once you're logged in, the dashboard's setup wizard takes over as the guided path: if your config declares no `[[agents]]`, Denkeeper deliberately starts with no agent so the wizard can walk you through creating the first one — provider, model, permission tier, and persona — writing the result back to your TOML file. An onboarding checklist tracks the remaining milestones.
+Once you're logged in, the dashboard's setup wizard takes over. An empty config file is enough: Denkeeper starts with no provider and no agent so the wizard can create them. It has four steps, and writes each one to your TOML file as you go:
+
+1. **Connect a provider.** Pick Anthropic, OpenAI, OpenRouter or Ollama. The key is checked when you paste it.
+2. **Create an agent.** Choose a name, a model from the provider's list, and a permission tier. Supervised agents get a supervisor that checks tool calls first.
+3. **Give it a personality.** Set a display name, an emoji, a tone, and the house rules it follows.
+4. **Connect a chat app** (optional). Paste a Telegram bot token, then send your bot any message: the wizard reads your user ID from it, so you don't have to look it up. Chat apps start after a restart.
+
+Everything except the chat app works straight away; you can chat in the dashboard as soon as the agent exists. Progress is saved on the server, so you can close the tab and resume later, from any browser.
+
+If you choose **Set up later**, the Overview page shows what's left and a minimal `denkeeper.toml` you can use instead. After editing the file, press **Reload** on the Server page.
 
 ## Logs
 
