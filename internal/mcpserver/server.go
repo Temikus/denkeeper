@@ -131,5 +131,6 @@ func (s *Server) registerTools() {
 	s.registerApprovalTools()
 	s.registerToolMgmtTools()
 	s.registerAuditTools()
+	s.registerDeciderTools()
 	s.registerEvalTools()
 }

@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +17,12 @@ const (
 	// the supervisor review of the same call: the supervisor timeout plus slack.
 	shadowPairWindow = 15 * time.Minute
 	shadowArgsRunes  = 200
+
+	// DefaultShadowReviewWindow is how far back LoadShadowReviews callers look
+	// when the user names no start.
+	DefaultShadowReviewWindow = 30 * 24 * time.Hour
+	shadowReviewsMaxScan      = 10000
+	shadowReviewsPageSize     = 200 // audit.Store.List's cap
 )
 
 // ShadowReview is one shadow-mode decider review paired with the supervisor's
@@ -109,6 +117,51 @@ func PairShadowReviews(events []audit.Event, decider string) (reviews []ShadowRe
 	}
 	slices.Reverse(reviews)
 	return reviews, failed
+}
+
+// ShadowReviewSet is one agent's paired shadow reviews in a time window.
+type ShadowReviewSet struct {
+	Reviews   []ShadowReview // newest first, never nil
+	Failed    int            // decider reviews that errored in the window
+	Truncated bool           // the scan cap was hit; the oldest reviews are missing
+}
+
+// LoadShadowReviews reads agentName's supervisor-category audit events in
+// [since, until] and pairs the named decider's shadow reviews. The REST and
+// MCP surfaces both call it, so they page and cap identically.
+func LoadShadowReviews(ctx context.Context, store audit.Store, agentName, decider string, since, until time.Time) (ShadowReviewSet, error) {
+	return loadShadowReviews(ctx, store, agentName, decider, since, until, shadowReviewsMaxScan)
+}
+
+func loadShadowReviews(ctx context.Context, store audit.Store, agentName, decider string, since, until time.Time, maxScan int) (ShadowReviewSet, error) {
+	var events []audit.Event
+	var set ShadowReviewSet
+	for offset := 0; ; offset += shadowReviewsPageSize {
+		page, _, err := store.List(ctx, audit.ListOpts{
+			Categories: []string{audit.CategorySupervisor},
+			Agent:      agentName,
+			Since:      &since,
+			Until:      &until, // pins the window so offsets stay stable
+			Limit:      shadowReviewsPageSize,
+			Offset:     offset,
+		})
+		if err != nil {
+			return set, fmt.Errorf("listing supervisor events: %w", err)
+		}
+		events = append(events, page...)
+		if len(page) < shadowReviewsPageSize {
+			break
+		}
+		if len(events) >= maxScan {
+			set.Truncated = true
+			break
+		}
+	}
+	set.Reviews, set.Failed = PairShadowReviews(events, decider)
+	if set.Reviews == nil {
+		set.Reviews = []ShadowReview{}
+	}
+	return set, nil
 }
 
 func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {

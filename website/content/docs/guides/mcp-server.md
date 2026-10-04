@@ -60,7 +60,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Approvals | `approval_list`, `approval_resolve` |
 | Tools | `tool_list`, `tool_health`, `tool_restart` |
 | Channels | `channel_list` |
-| Audit | `audit_events`, `audit_summary` |
+| Audit | `audit_events`, `audit_summary`, `decider_reviews` |
 | Evals | `eval_pending`, `eval_get_pair`, `eval_verdict`, `eval_summary`, `eval_run_status` |
 | Telemetry | `cost_summary`, `telemetry_summary` |
 | KV | `kv_get`, `kv_set`, `kv_list`, `kv_delete` |
@@ -69,6 +69,8 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 `agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. Supervisor information is read from live wiring, so it reflects the state after a config reload rather than what the file said at startup.
 
 Skill writes are disk-first: the file is written before memory is updated, so an IO error leaves the skill intact rather than creating a version that exists only in RAM until the next restart.
+
+`decider_reviews` returns the rows behind the dashboard's [decider calibration](/docs/concepts/deciders/) panel: each shadow review's scores paired with the supervisor's verdict on the same call. It returns the newest 50 by default (`limit`, up to 200) and reports the full count as `total`.
 
 They are also journaled. Before any skill write, the file's exact prior bytes are recorded, and `skill_revert` replays them — undoing a create, update, rename or delete exactly once. Call it with a `skill` to undo that skill's most recent change, with a `transition_id` to undo a whole multi-skill edit (newest change first, so a rename followed by an update unwinds in the order that works), or with neither to undo the agent's most recent skill change. A revert is itself a recorded change, so calling it twice in a row *redoes* the original change rather than stepping further back. It restores skill files and nothing else: messages already sent, tool calls already made and KV keys already written while the changed skill was live are unaffected.
 

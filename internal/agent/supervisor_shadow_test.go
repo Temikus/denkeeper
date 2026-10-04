@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +192,76 @@ func TestPairShadowReviews_CutsLongArguments(t *testing.T) {
 	}
 	if reviews[0].Supervisor != "APPROVE" {
 		t.Errorf("supervisor = %q: pairing must use the full arguments", reviews[0].Supervisor)
+	}
+}
+
+// shadowStore returns an in-memory audit store holding n shadow reviews of
+// distinct calls, each followed a second later by the supervisor's approval.
+func shadowStore(t *testing.T, n int) audit.Store {
+	t.Helper()
+	store, err := audit.NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	events := make([]audit.Event, 0, 2*n)
+	for i := range n {
+		at := time.Duration(i) * time.Minute
+		args := fmt.Sprintf(`{"n":%d}`, i)
+		events = append(events,
+			shadowEvent(t, at, "c1", "echo", args, allScores(0.99)),
+			supervisorEvent(t, at+time.Second, "c1", "echo", args, "APPROVE", nil))
+	}
+	if err := store.InsertBatch(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func TestLoadShadowReviews_PagesPastOneListCall(t *testing.T) {
+	const n = 150 // 300 events: more than one shadowReviewsPageSize page
+	store := shadowStore(t, n)
+
+	set, err := LoadShadowReviews(context.Background(), store, "pamela", "jev", shadowT0.Add(-time.Hour), shadowT0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Reviews) != n || set.Truncated || set.Failed != 0 {
+		t.Fatalf("got %d reviews, truncated=%v, failed=%d; want %d, false, 0", len(set.Reviews), set.Truncated, set.Failed, n)
+	}
+	for _, r := range set.Reviews {
+		if r.Supervisor != "APPROVE" {
+			t.Fatalf("review %s unpaired: %+v", r.Arguments, r)
+		}
+	}
+	if !set.Reviews[0].Time.After(set.Reviews[n-1].Time) {
+		t.Error("reviews should be newest first")
+	}
+}
+
+func TestLoadShadowReviews_ScanCapTruncates(t *testing.T) {
+	store := shadowStore(t, 150)
+
+	set, err := loadShadowReviews(context.Background(), store, "pamela", "jev", shadowT0.Add(-time.Hour), shadowT0.Add(24*time.Hour), shadowReviewsPageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Truncated {
+		t.Error("expected truncated once the scan cap is hit")
+	}
+	if len(set.Reviews) == 0 || len(set.Reviews) >= 150 {
+		t.Errorf("got %d reviews, want some but not all of 150", len(set.Reviews))
+	}
+}
+
+func TestLoadShadowReviews_EmptyWindowIsNonNil(t *testing.T) {
+	store := shadowStore(t, 1)
+
+	set, err := LoadShadowReviews(context.Background(), store, "pamela", "jev", shadowT0.Add(time.Hour), shadowT0.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Reviews == nil || len(set.Reviews) != 0 {
+		t.Errorf("reviews = %#v, want an empty non-nil slice", set.Reviews)
 	}
 }
