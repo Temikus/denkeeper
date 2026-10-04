@@ -266,6 +266,7 @@
   // the defaults, so plain #/audit clears a linked filter. Unknown values are ignored.
   let searchText = $state('')
   function applyQuery(q) {
+    clearTimeout(searchTimeout) // a pending search would bring back the old filter
     const a = q.get('agent') || ''
     agent = a
     search = ''
