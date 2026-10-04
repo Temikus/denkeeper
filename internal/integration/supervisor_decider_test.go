@@ -142,3 +142,53 @@ func TestSupervisorDecider_ShadowInFrontOfSupervisor(t *testing.T) {
 		t.Errorf("decider detail = %v, want shadow / would_decide DENY", detail)
 	}
 }
+
+// A real shadow run shows up in the calibration endpoint paired with the
+// supervisor's verdict and the supervisor's billed cost.
+func TestSupervisorDecider_ShadowRunListedByDeciderReviews(t *testing.T) {
+	h := supervisorHarness(t, []*llm.ChatResponse{
+		{
+			FinishReason: "tool_calls",
+			ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Type: "function",
+				Function: llm.FunctionCall{Name: "echo", Arguments: `{"input":"calibrate"}`},
+			}},
+			TokensUsed: llm.TokenUsage{Prompt: 10, Completion: 5, Total: 15},
+			Model:      "test-model",
+		},
+		{Content: "APPROVE: fine", FinishReason: "stop", TokensUsed: llm.TokenUsage{Total: 10}, Model: "test-model", CostUSD: 0.04},
+		{Content: "Tool returned: calibrate", FinishReason: "stop", TokensUsed: llm.TokenUsage{Total: 30}, Model: "test-model"},
+	})
+	h.Dispatcher.Agent("default").SetSupervisorDecider(newJevDecider(denyingDecider{}), agent.DeciderStageConfig{
+		Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05,
+	})
+
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/chat", map[string]string{"message": "please call echo"}))
+	if rec.Code != 200 {
+		t.Fatalf("chat: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	h.FlushAudit(t)
+
+	rec = h.Do(h.AuthedRequest("GET", "/api/v1/agents/default/decider-reviews", nil))
+	if rec.Code != 200 {
+		t.Fatalf("decider-reviews: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Decider string               `json:"decider"`
+		Reviews []agent.ShadowReview `json:"reviews"`
+	}
+	DecodeJSON(t, rec, &body)
+	if body.Decider != "jev" || len(body.Reviews) != 1 {
+		t.Fatalf("body = %+v, want one review by the wired decider", body)
+	}
+	r := body.Reviews[0]
+	if r.Tool != "echo" || r.Supervisor != "APPROVE" || r.SupervisorName != "guard" {
+		t.Errorf("review = %+v, want echo approved by guard", r)
+	}
+	if r.MinScore == nil || *r.MinScore != 0.01 {
+		t.Errorf("min score = %v, want 0.01", r.MinScore)
+	}
+	if r.SupervisorCost == nil || *r.SupervisorCost != 0.04 {
+		t.Errorf("supervisor cost = %v, want the provider-reported 0.04", r.SupervisorCost)
+	}
+}

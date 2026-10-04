@@ -6,6 +6,8 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
   import FallbackRulesModal from '../components/FallbackRulesModal.svelte'
+  import DeciderCalibration from '../components/DeciderCalibration.svelte'
+  import { DECIDER_APPROVE_DEFAULT, DECIDER_DENY_DEFAULT, summarize } from '../deciderCalibration.js'
 
   let agents = $state([])
   let selected = $state(null)
@@ -15,6 +17,7 @@
   let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
   let defaultProvider = $state('')   // global default_provider from /llm/providers
   let deciders = $state([])          // [[llm.deciders]] entries: [{ name, provider, model, ... }]
+  let deciderToReview = $state(0)    // shadow approvals the supervisor did not make, at the saved thresholds
   let decisionProviderReady = $state(false) // an enabled provider can back a decision model
 
   // Inline rename state
@@ -72,9 +75,11 @@
       decisionProviderReady = (providerData?.providers || []).some(p => p.serves_decisions && p.enabled)
       if (subRoute) {
         const match = agents.find(a => a.name === subRoute)
+        // Read before selectAgent: on mobile it navigates, dropping the query.
+        const query = $currentQuery
         if (match) {
           await selectAgent(match)
-          applyDeepLink()
+          applyDeepLink(query)
         } else if (agents.length) selectAgent(agents[0])
       } else if (agents.length && !$isMobile) {
         selectAgent(agents[0])
@@ -97,22 +102,40 @@
       detail = await api.agent(a.name)
       initConfigForm(detail)
       loadAllSections(a.name)
+      loadDeciderToReview(detail)
     } catch(e) {
       error = e.message
     }
   }
 
+  // Counts for the Permission card's "jev · N to review" line. A failure
+  // (no audit:read, no audit log) just leaves the plain mode label.
+  async function loadDeciderToReview(d) {
+    deciderToReview = 0
+    if (!d.supervisor_decider || (d.supervisor_decider_mode || 'shadow') !== 'shadow') return
+    try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString()
+      const res = await api.deciderReviews(d.name, { decider: d.supervisor_decider, since })
+      if (detail?.name !== d.name) return
+      deciderToReview = summarize(res.reviews || [],
+        d.supervisor_decider_approve_at || DECIDER_APPROVE_DEFAULT,
+        d.supervisor_decider_deny_at || DECIDER_DENY_DEFAULT).unsafeApprovals
+    } catch { /* non-critical */ }
+  }
+
   // #/agents/<name>?card=permission[&decider=<name>] opens the Permission
   // card, preselecting a decision model in shadow mode. Nothing is saved.
-  function applyDeepLink() {
-    if ($currentQuery.get('card') !== 'permission' || !detail) return
+  function applyDeepLink(query) {
+    if (query.get('card') !== 'permission' || !detail) return
     initConfigForm(detail)
     expandedCard = 'permission'
-    const name = $currentQuery.get('decider')
+    const name = query.get('decider')
     if (name && configTier === 'supervised' && deciders.some(d => d.name === name)) {
       configDecider = name
       onDeciderSelect()
     }
+    // Land on the chart: it is what the link was for.
+    if (configDecider) requestAnimationFrame(() => document.getElementById('decider-calibration')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }))
   }
 
   // Who reviews this agent's tool calls, for the list meta line.
@@ -304,9 +327,6 @@
       }
     }
   }
-
-  const DECIDER_APPROVE_DEFAULT = 0.95
-  const DECIDER_DENY_DEFAULT = 0.05
 
   // An empty threshold input means "use the default"; the API takes 0 for that.
   // Svelte sets a cleared number input to undefined.
@@ -783,7 +803,10 @@
               <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
             </div>
             {#if detail.supervisor_decider}
-              <div class="stat-sub" data-testid="permission-decider">{detail.supervisor_decider} · {detail.supervisor_decider_mode || 'shadow'}</div>
+              <div class="stat-sub" data-testid="permission-decider">
+                {#if deciderToReview}<span class="review-dot" aria-hidden="true"></span>{detail.supervisor_decider} · {deciderToReview} to review
+                {:else}{detail.supervisor_decider} · {detail.supervisor_decider_mode || 'shadow'}{/if}
+              </div>
             {/if}
           </div>
           <svg class="chevron-toggle down" class:open={expandedCard === 'permission'} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
@@ -895,29 +918,47 @@
                   </select>
                   <span class="hint">Scores each tool call before the supervisor. Tool arguments and recent messages are sent to the decision model's provider.</span>
                   {#if configDecider}
-                    <label class="config-label" for="cfg-decider-mode">Decision Model Mode</label>
-                    <select id="cfg-decider-mode" class="config-input" bind:value={configDeciderMode}>
-                      <option value="shadow">Shadow (audit only)</option>
-                      <option value="enforce">Enforce (approve and deny)</option>
-                    </select>
+                    <div class="decider-row">
+                      <fieldset class="decider-mode">
+                        <legend class="config-label">Mode</legend>
+                        <div class="segmented">
+                          <label class:active={configDeciderMode === 'shadow'}>
+                            <input class="sr-only" type="radio" name="cfg-decider-mode" value="shadow" bind:group={configDeciderMode} />
+                            <span class="seg-title">Shadow</span>
+                            <span class="seg-sub">Logs verdicts only</span>
+                          </label>
+                          <label class:active={configDeciderMode === 'enforce'}>
+                            <input class="sr-only" type="radio" name="cfg-decider-mode" value="enforce" bind:group={configDeciderMode} />
+                            <span class="seg-title">Enforce</span>
+                            <span class="seg-sub">Approves and denies</span>
+                          </label>
+                        </div>
+                      </fieldset>
+                      <div class="decider-threshold">
+                        <label class="config-label" for="cfg-decider-deny"><i class="mark deny" aria-hidden="true"></i>Deny at or below</label>
+                        <input id="cfg-decider-deny" class="config-input mono" type="number" min="0" max="1" step="0.01" bind:value={configDeciderDenyAt} placeholder="0.05"
+                          aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : 'cfg-decider-thr-hint'} />
+                      </div>
+                      <div class="decider-threshold">
+                        <label class="config-label" for="cfg-decider-approve"><i class="mark approve" aria-hidden="true"></i>Approve at or above</label>
+                        <input id="cfg-decider-approve" class="config-input mono" type="number" min="0" max="1" step="0.01" bind:value={configDeciderApproveAt} placeholder="0.95"
+                          aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : 'cfg-decider-thr-hint'} />
+                      </div>
+                    </div>
                     {#if configDeciderMode === 'enforce'}
                       <div class="banner warning" data-testid="decider-enforce-warning">
                         The decision model approves and denies tool calls on its own, with no review. Uncertain calls go to {configSupervisor ? 'the supervisor' : 'you'}. Pick thresholds from shadow data or <code>denkeeper decide replay</code> first.
                       </div>
-                    {:else}
-                      <span class="hint">Verdicts are written to the audit log and never change the outcome.</span>
                     {/if}
-                    <label class="config-label" for="cfg-decider-approve">Approve Threshold</label>
-                    <input id="cfg-decider-approve" class="config-input" type="number" min="0" max="1" step="0.01" bind:value={configDeciderApproveAt} placeholder="0.95"
-                      aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : undefined} />
-                    <span class="hint">Approves when every check scores at or above this probability. Empty or 0 = default (0.95).</span>
-                    <label class="config-label" for="cfg-decider-deny">Deny Threshold</label>
-                    <input id="cfg-decider-deny" class="config-input" type="number" min="0" max="1" step="0.01" bind:value={configDeciderDenyAt} placeholder="0.05"
-                      aria-invalid={!!deciderError} aria-describedby={deciderError ? 'cfg-decider-err' : undefined} />
-                    <span class="hint">Denies when any check scores at or below this probability. Empty or 0 = default (0.05).</span>
+                    <span class="hint" id="cfg-decider-thr-hint">
+                      {configDeciderMode === 'enforce' ? '' : 'Verdicts are written to the audit log and never change the outcome. '}Approves when every check scores at or above the approve threshold, denies when any check is at or below the deny threshold. Empty or 0 = default. Drag the handles on the chart or type a value; nothing is saved until you press Save.
+                    </span>
                     {#if deciderError}
                       <div id="cfg-decider-err" class="inline-error" role="alert">{deciderError}</div>
                     {/if}
+                    <DeciderCalibration agent={detail.name} decider={configDecider} supervisor={configSupervisor}
+                      mode={configDeciderMode} saved={configDecider === detail.supervisor_decider}
+                      bind:approveAt={configDeciderApproveAt} bind:denyAt={configDeciderDenyAt} />
                   {/if}
                 {:else}
                   <div class="decider-empty" data-testid="decider-empty">
@@ -1258,6 +1299,24 @@
   .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
   .stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
   .stat-sub { font-size: 12px; font-weight: 500; color: var(--accent); margin-top: 4px; }
+  .review-dot { display: inline-block; width: 6px; height: 6px; border-radius: 3px; background: var(--accent); margin-right: 5px; vertical-align: middle; }
+
+  /* Decision model mode and thresholds: one row, wrapping under 640px. */
+  .decider-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-top: 4px; }
+  .decider-mode { flex: 2 1 260px; border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .decider-mode legend { padding: 0; margin-bottom: 6px; }
+  .segmented { display: flex; padding: 3px; gap: 3px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .segmented label { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+  .segmented label.active { background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+  .segmented label:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .seg-title { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+  .segmented label.active .seg-title { font-weight: 600; color: var(--text); }
+  .seg-sub { font-size: 11px; color: var(--text-muted); }
+  .decider-threshold { flex: 1 1 120px; display: flex; flex-direction: column; gap: 6px; }
+  .decider-threshold .config-input { font-size: 14px; padding: 8px 10px; }
+  .mark { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+  .mark.deny { background: var(--danger); }
+  .mark.approve { background: var(--success); }
 
   /* Shown in place of the decision model select when none exist. */
   .decider-empty {

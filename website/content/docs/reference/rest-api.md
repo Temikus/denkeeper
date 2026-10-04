@@ -350,6 +350,20 @@ Delete an agent and remove its `[[agents]]` block from the config. Rejected if t
 
 Persona files on disk are **not** deleted.
 
+### `GET /api/v1/agents/{name}/decider-reviews`
+
+**Scope:** `audit:read`
+
+List the agent's shadow-mode [decision model](/docs/concepts/deciders/) reviews from the audit log, newest first. Each review is paired with the supervisor's verdict on the same tool call. This is the data behind the calibration panel on the agent's Permission card. Nothing is re-scored, so the call costs nothing.
+
+Query parameters: `decider` (default: the agent's `supervisor_decider`) and `since` (RFC3339, default: 30 days ago). The response carries `reviews`, `failed` (decider reviews that errored) and `truncated` (only the newest reviews fit). Each review has:
+
+- `scores` for the `aligned`, `safe_args` and `scoped` checks, plus `lowest` and `min_score`. The lowest score decides the verdict. `min_score` is `null` when an answer was missing, and such a call always escalates.
+- `supervisor`: `APPROVE`, `DENY`, `ESCALATE`, or `""` when there is no supervisor verdict for the call.
+- `decider_cost` and `supervisor_cost`. `supervisor_cost` is `null` for reviews recorded before the supervisor's cost was audited.
+
+Enforce-mode reviews are not listed. In enforce mode the supervisor only sees the calls the decider escalated, so a comparison would be skewed.
+
 ## Persona
 
 ### `GET /api/v1/agents/{name}/persona/{section}`

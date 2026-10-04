@@ -277,6 +277,88 @@
                 }
             }
         },
+        "/agents/{name}/decider-reviews": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the agent's shadow-mode decision model reviews from the audit log, newest first, each paired with the supervisor's verdict on the same tool call (matched by conversation, tool and arguments). Each review carries the per-check scores, the lowest one, and both stages' costs; supervisor_cost is null for reviews audited before it was recorded. Enforce-mode reviews are left out, since the supervisor sees only the escalated calls there. Read-only: nothing is re-scored.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agents"
+                ],
+                "summary": "List an agent's shadow decider reviews",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Agent name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "[[llm.deciders]] name (default: the agent's supervisor_decider)",
+                        "name": "decider",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start of the window, RFC3339 (default: 30 days ago)",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderReviewsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid since, or no decider named and none set on the agent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Agent not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Audit not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/agents/{name}/identity": {
             "put": {
                 "security": [
@@ -8569,6 +8651,58 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_agent.ShadowReview": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string"
+                },
+                "audit_id": {
+                    "type": "integer"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "decider_cost": {
+                    "type": "number"
+                },
+                "lowest": {
+                    "description": "check with the lowest score; \"\" when an answer is missing",
+                    "type": "string"
+                },
+                "min_score": {
+                    "description": "nil: an answer is missing, so the call always escalates",
+                    "type": "number"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "scores": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
+                },
+                "supervisor": {
+                    "description": "APPROVE, DENY or ESCALATE; \"\" when no supervisor verdict was recorded",
+                    "type": "string"
+                },
+                "supervisor_cost": {
+                    "description": "nil: not recorded (reviews audited before the cost field)",
+                    "type": "number"
+                },
+                "supervisor_name": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "tool": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_agent.SkillUsageRecord": {
             "type": "object",
             "properties": {
@@ -10526,6 +10660,41 @@
                 },
                 "restart_required": {
                     "type": "boolean"
+                }
+            }
+        },
+        "internal_api.deciderReviewsResponse": {
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string"
+                },
+                "decider": {
+                    "type": "string"
+                },
+                "failed": {
+                    "description": "decider reviews that errored in the window",
+                    "type": "integer"
+                },
+                "reviews": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_agent.ShadowReview"
+                    }
+                },
+                "since": {
+                    "type": "string"
+                },
+                "supervisor": {
+                    "description": "the agent's configured supervisor, \"\" when none",
+                    "type": "string"
+                },
+                "truncated": {
+                    "description": "the scan cap was hit; the oldest reviews are missing",
+                    "type": "boolean"
+                },
+                "until": {
+                    "type": "string"
                 }
             }
         },

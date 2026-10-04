@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
@@ -312,13 +312,13 @@ describe('Agents permission config', () => {
     await waitFor(() => screen.getByLabelText('Decision Model'))
 
     // Mode and thresholds stay hidden until a decision model is chosen.
-    expect(screen.queryByLabelText('Decision Model Mode')).toBeNull()
+    expect(screen.queryByRole('radio', { name: /Enforce/ })).toBeNull()
 
     await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: 'jev' } })
     expect(screen.queryByTestId('decider-enforce-warning')).toBeNull()
-    await fireEvent.change(screen.getByLabelText('Decision Model Mode'), { target: { value: 'enforce' } })
+    await fireEvent.click(screen.getByRole('radio', { name: /Enforce/ }))
     expect(screen.getByTestId('decider-enforce-warning').textContent).toContain('with no review')
-    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '0.9' } })
+    await fireEvent.input(screen.getByLabelText('Approve at or above'), { target: { value: '0.9' } })
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(patchBody()).not.toBeNull())
@@ -339,12 +339,12 @@ describe('Agents permission config', () => {
     }, [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }, { name: 'jev2', provider: 'openrouter', model: 'typesafe/jev-1.14' }])
     await waitFor(() => screen.getByText('PERMISSION'))
     await fireEvent.click(screen.getByText('PERMISSION'))
-    await waitFor(() => screen.getByLabelText('Decision Model Mode'))
-    expect(screen.getByLabelText('Decision Model Mode').value).toBe('enforce')
+    await waitFor(() => screen.getByRole('radio', { name: /Enforce/ }))
+    expect(screen.getByRole('radio', { name: /Enforce/ }).checked).toBe(true)
 
     await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: 'jev2' } })
-    expect(screen.getByLabelText('Decision Model Mode').value).toBe('shadow')
-    expect(screen.getByLabelText('Approve Threshold').value).toBe('')
+    expect(screen.getByRole('radio', { name: /Shadow/ }).checked).toBe(true)
+    expect(screen.getByLabelText('Approve at or above').value).toBe('')
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(patchBody()).not.toBeNull())
@@ -363,12 +363,12 @@ describe('Agents permission config', () => {
     })
     await waitFor(() => screen.getByText('PERMISSION'))
     await fireEvent.click(screen.getByText('PERMISSION'))
-    await waitFor(() => screen.getByLabelText('Decision Model Mode'))
+    await waitFor(() => screen.getByRole('radio', { name: /Enforce/ }))
 
     expect(screen.getByLabelText('Decision Model').value).toBe('jev')
-    expect(screen.getByLabelText('Decision Model Mode').value).toBe('enforce')
-    expect(screen.getByLabelText('Approve Threshold').value).toBe('0.9')
-    expect(screen.getByLabelText('Deny Threshold').value).toBe('0.1')
+    expect(screen.getByRole('radio', { name: /Enforce/ }).checked).toBe(true)
+    expect(screen.getByLabelText('Approve at or above').value).toBe('0.9')
+    expect(screen.getByLabelText('Deny at or below').value).toBe('0.1')
 
     await fireEvent.change(screen.getByLabelText('Decision Model'), { target: { value: '' } })
     await fireEvent.click(screen.getByText('Save'))
@@ -384,9 +384,9 @@ describe('Agents permission config', () => {
     })
     await waitFor(() => screen.getByText('PERMISSION'))
     await fireEvent.click(screen.getByText('PERMISSION'))
-    await waitFor(() => screen.getByLabelText('Approve Threshold'))
+    await waitFor(() => screen.getByLabelText('Approve at or above'))
 
-    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '' } })
+    await fireEvent.input(screen.getByLabelText('Approve at or above'), { target: { value: '' } })
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(patchBody()).not.toBeNull())
@@ -397,10 +397,10 @@ describe('Agents permission config', () => {
     setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow' })
     await waitFor(() => screen.getByText('PERMISSION'))
     await fireEvent.click(screen.getByText('PERMISSION'))
-    await waitFor(() => screen.getByLabelText('Approve Threshold'))
+    await waitFor(() => screen.getByLabelText('Approve at or above'))
 
-    await fireEvent.input(screen.getByLabelText('Approve Threshold'), { target: { value: '0.2' } })
-    await fireEvent.input(screen.getByLabelText('Deny Threshold'), { target: { value: '0.5' } })
+    await fireEvent.input(screen.getByLabelText('Approve at or above'), { target: { value: '0.2' } })
+    await fireEvent.input(screen.getByLabelText('Deny at or below'), { target: { value: '0.5' } })
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('0 < deny threshold < approve threshold < 1'))
     expect(screen.getByText('Save').disabled).toBe(true)
@@ -439,19 +439,58 @@ describe('Agents permission config', () => {
     await waitFor(() => expect(screen.getByTestId('decider-empty-link')).toHaveAttribute('href', '#/providers?add=openrouter'))
   })
 
-  test('deep link opens Permission with the decision model preselected in shadow, unsaved', async () => {
+  test('deep link opens Permission with the decision model preselected in shadow, unsaved, and scrolls to the chart', async () => {
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
     window.location.hash = '#/agents/default?card=permission&decider=jev'
     window.dispatchEvent(new HashChangeEvent('hashchange'))
     try {
       const patchBody = setupDeciderAgent({}, [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13', used_by: [] }])
 
       await waitFor(() => expect(screen.getByLabelText('Decision Model')).toHaveValue('jev'))
-      expect(screen.getByLabelText('Decision Model Mode')).toHaveValue('shadow')
+      expect(screen.getByRole('radio', { name: /Shadow/ })).toBeChecked()
       expect(patchBody()).toBeNull()
+      // An unsaved decider has no reviews yet; the panel says how to get some.
+      await waitFor(() => expect(screen.getByTestId('calibration-empty').textContent).toContain('Save jev in shadow mode'))
+      await waitFor(() => expect(scrolled).toHaveBeenCalled())
     } finally {
+      delete Element.prototype.scrollIntoView
       window.location.hash = ''
       window.dispatchEvent(new HashChangeEvent('hashchange'))
     }
+  })
+
+  test('using the calibration suggestion fills the threshold input and saves it', async () => {
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => HttpResponse.json({
+      decider: 'jev', reviews: [
+        { audit_id: 1, min_score: 0.97, supervisor: 'DENY', supervisor_name: 'argus', time: '2026-10-01T00:00:00Z' },
+      ],
+    })))
+    const patchBody = setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow' })
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+
+    await fireEvent.click(await waitFor(() => screen.getByText('Use 0.98')))
+    expect(screen.getByLabelText('Approve at or above')).toHaveValue(0.98)
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody()).toEqual({ supervisor_decider_approve_at: 0.98 }))
+  })
+
+  test('Permission card counts shadow approvals the supervisor did not make', async () => {
+    server.use(http.get('/api/v1/agents/:name/decider-reviews', () => HttpResponse.json({
+      decider: 'jev', reviews: [
+        { audit_id: 1, min_score: 0.97, supervisor: 'DENY', time: '2026-10-01T00:00:00Z' },
+        { audit_id: 2, min_score: 0.99, supervisor: 'APPROVE', time: '2026-10-01T00:00:00Z' },
+        // An escalation counts too: the decider would have run it unreviewed.
+        { audit_id: 3, min_score: 0.96, supervisor: 'ESCALATE', time: '2026-10-01T00:00:00Z' },
+        // Below the saved approve threshold: escalates, so not counted.
+        { audit_id: 4, min_score: 0.9, supervisor: 'DENY', time: '2026-10-01T00:00:00Z' },
+      ],
+    })))
+    setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'shadow', supervisor_decider_approve_at: 0.95 })
+
+    await waitFor(() => expect(screen.getByTestId('permission-decider').textContent).toContain('jev · 2 to review'))
   })
 
   test('Permission card and agent list name the bound decision model', async () => {

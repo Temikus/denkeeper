@@ -19,6 +19,16 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
+// jsdom has no layout, so no ResizeObserver; Svelte's bind:clientWidth needs
+// one. Elements report width 0, so components draw at their fallback size.
+if (!('ResizeObserver' in window)) {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
 // Node 22+ ships built-in localStorage without .clear().
 // Provide a polyfill that removes all keys.
 function clearStorage(storage) {

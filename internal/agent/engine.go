@@ -3754,6 +3754,7 @@ func (e *Engine) supervisorReview(ctx context.Context, sup *Engine, tc llm.ToolC
 		"reason":       reason,
 		"supervisor":   sup.name,
 		"raw_response": resp.Content,
+		"cost":         resp.BilledUSD,
 	})
 	e.emitAudit(ctx, audit.Event{
 		Category:       audit.CategorySupervisor,
