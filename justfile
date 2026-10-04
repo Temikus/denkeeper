@@ -219,7 +219,15 @@ dev-website:
 release bump:
     #!/usr/bin/env bash
     set -euo pipefail
-    git fetch --tags
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$branch" != "main" ]; then
+        echo "Releases must run from main (on: ${branch})"; exit 1
+    fi
+    git fetch --tags origin main
+    # Equal, not just "not behind": an unpushed local commit would get tagged too.
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "Local main differs from origin/main; pull or push first"; exit 1
+    fi
     latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
     if [ -z "$latest" ]; then
         latest="v0.0.0"
