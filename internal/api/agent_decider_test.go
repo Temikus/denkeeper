@@ -266,3 +266,19 @@ func TestLLMProviders_ListsDeciders(t *testing.T) {
 		t.Errorf("deciders = %+v, want [%+v, late]", resp.Deciders, want)
 	}
 }
+
+func TestAgentList_NamesTheSupervisorDecider(t *testing.T) {
+	deps := deciderDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": "jev"})
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/agents"))
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 || list[0]["supervisor_decider"] != "jev" {
+		t.Errorf("agent list = %v, want default with supervisor_decider jev", list)
+	}
+}

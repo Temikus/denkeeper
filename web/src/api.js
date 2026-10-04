@@ -254,6 +254,22 @@ export const api = {
     body: JSON.stringify(data),
     signal,
   }),
+  // Decision models ([[llm.deciders]]). Changes apply without a restart.
+  createDecider: (data) => apiFetch('/api/v1/llm/deciders', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateDecider: (name, data) => apiFetch(`/api/v1/llm/deciders/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  deleteDecider: (name) => apiFetch(`/api/v1/llm/deciders/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  // Always resolves with {status, message, latency_ms, cost_usd}; a failed call is a result.
+  testDecider: (data, signal) => apiFetch('/api/v1/llm/deciders/test', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    signal,
+  }),
   updateLLMConfig: (data) => apiFetch('/api/v1/llm/config', {
     method: 'PATCH',
     body: JSON.stringify(data),

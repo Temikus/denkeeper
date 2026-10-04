@@ -546,6 +546,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		HasTools       bool     `json:"has_tools"`
 		Adapters       []string `json:"adapters,omitempty"`
 		Supervisor     string   `json:"supervisor,omitempty"`
+		Decider        string   `json:"supervisor_decider,omitempty"`
 	}
 
 	names := s.deps.Dispatcher.Agents()
@@ -553,9 +554,11 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	// Look up configured adapter bindings and supervisor for each agent.
 	bindingMap := make(map[string][]string)
 	supervisorMap := make(map[string]string)
+	deciderMap := make(map[string]string)
 	for _, ac := range s.appConfig().Agents {
 		bindingMap[ac.Name] = ac.Adapters
 		supervisorMap[ac.Name] = ac.Supervisor
+		deciderMap[ac.Name] = ac.SupervisorDecider
 	}
 	for _, name := range names {
 		e := s.deps.Dispatcher.Agent(name)
@@ -572,6 +575,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 			HasTools:       e.HasTools(),
 			Adapters:       bindingMap[name],
 			Supervisor:     supervisorMap[name],
+			Decider:        deciderMap[name],
 		})
 	}
 	writeJSON(w, http.StatusOK, agents)

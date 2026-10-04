@@ -723,7 +723,7 @@ export const handlers = [
     cost_limit_hard: 1.0,
     providers: [
       { name: 'anthropic', type: 'anthropic', enabled: false, api_key_set: false, cost_limit_soft: 5.0, cost_limit_hard: 10.0 },
-      { name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true },
+      { name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true, serves_decisions: true },
       { name: 'openai', type: 'openai', enabled: false, api_key_set: false },
       { name: 'ollama', type: 'ollama', enabled: true, api_key_set: false, base_url: 'http://localhost:11434' },
     ],
@@ -732,6 +732,13 @@ export const handlers = [
   http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'new-provider', status: 'created' }, { status: 201 })),
   http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated' })),
   http.delete('/api/v1/llm/providers/:name', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/llm/deciders', async ({ request }) => {
+    const body = await request.json()
+    return HttpResponse.json({ decider: { ...body, timeout: body.timeout || '5s', max_input_tokens: body.max_input_tokens || 30000, used_by: [] }, restart_required: false }, { status: 201 })
+  }),
+  http.patch('/api/v1/llm/deciders/:name', () => HttpResponse.json({ decider: {}, restart_required: false })),
+  http.delete('/api/v1/llm/deciders/:name', () => new HttpResponse(null, { status: 204 })),
+  http.post('/api/v1/llm/deciders/test', () => HttpResponse.json({ status: 'ok', message: 'Decision model answered', latency_ms: 172, cost_usd: 0.00004 })),
 
   // Server config
   http.get('/api/v1/server/config', () => HttpResponse.json({
