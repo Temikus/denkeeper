@@ -201,6 +201,20 @@ describe('Providers page', () => {
     await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
   })
 
+  test('deleting the provider a restart notice names clears the notice', async () => {
+    server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'openai', status: 'created', restart_required: true }, { status: 201 })))
+    render(Providers)
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getAllByTestId('delete-provider-btn')[2])
+    await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
+
+    await waitFor(() => expect(screen.queryByTestId('provider-create-notice')).not.toBeInTheDocument())
+  })
+
   test('creating a provider that applies live shows no restart notice', async () => {
     server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: false }, { status: 201 })))
     render(Providers)

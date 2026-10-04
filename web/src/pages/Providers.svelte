@@ -233,6 +233,7 @@
   let formError = $state('')
 
   let createNotice = $state('')
+  let createNoticeFor = $state('')  // provider the notice names; deleting it clears the notice
 
   function openAddForm() {
     formName = ''
@@ -267,6 +268,7 @@
       data = await api.llmProviders()
       showAddForm = false
       createNotice = resp?.restart_required ? `${name} is saved. Restart denkeeper to use it.` : ''
+      createNoticeFor = createNotice ? name : ''
     } catch (e) {
       formError = e.message
     } finally {
@@ -288,6 +290,10 @@
       await api.deleteLLMProvider(name)
       data = await api.llmProviders()
       confirmDelete = null
+      if (createNoticeFor === name) {
+        createNotice = ''
+        createNoticeFor = ''
+      }
     } catch (e) {
       deleteError = e.message
     } finally {
@@ -619,7 +625,7 @@
             {/if}
             <button class="btn btn-sm" onclick={() => { providerDraft.model_prices = [...providerDraft.model_prices, { model: '', input: '', output: '', cached_input: '' }] }}>Add Override</button>
           </div>
-          <div class="restart-note">Changes apply at once, except price overrides, which apply after a restart.</div>
+          <div class="restart-note">Changes usually apply at once. Price overrides always need a restart, and the save message says if anything else does.</div>
           <div class="config-actions">
             <button class="btn btn-primary" onclick={saveProvider} disabled={savingProvider}>
               {savingProvider ? 'Saving...' : 'Save'}
