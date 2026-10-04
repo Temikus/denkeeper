@@ -73,6 +73,28 @@ describe('DecisionModels', () => {
     await waitFor(() => expect(screen.getByText(/Test passed · 172 ms/)).toBeInTheDocument())
   })
 
+  test('changing the model hides a test result for the old one', async () => {
+    render(DecisionModels, { props: { providers: [openrouter] } })
+    await fireEvent.click(screen.getByTestId('add-decider-btn'))
+    await fireEvent.input(screen.getByTestId('decider-model-input'), { target: { value: 'typesafe/jev-1.13' } })
+    await fireEvent.click(screen.getByTestId('decider-test-btn'))
+    await waitFor(() => expect(screen.getByText(/Test passed · 172 ms/)).toBeInTheDocument())
+    await fireEvent.input(screen.getByTestId('decider-model-input'), { target: { value: 'typesafe/jev-2' } })
+    expect(screen.queryByText(/Test passed/)).not.toBeInTheDocument()
+  })
+
+  test('saving an edit clears the card test result', async () => {
+    server.use(http.patch('/api/v1/llm/deciders/:name', () => HttpResponse.json({ decider: {}, restart_required: false })))
+    render(DecisionModels, { props: { deciders: [jev], providers: [openrouter], onChange: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    await waitFor(() => expect(screen.getByText(/Test passed · 172 ms/)).toBeInTheDocument())
+    await fireEvent.click(screen.getByText('Edit'))
+    await fireEvent.input(screen.getByTestId('decider-edit-model'), { target: { value: 'typesafe/jev-2' } })
+    await fireEvent.click(screen.getByTestId('decider-edit-save'))
+    await waitFor(() => expect(screen.queryByTestId('decider-edit-save')).not.toBeInTheDocument())
+    expect(screen.queryByText(/Test passed/)).not.toBeInTheDocument()
+  })
+
   test('card tests in flight on two cards each keep their own state', async () => {
     const release = {}
     server.use(http.post('/api/v1/llm/deciders/test', async ({ request }) => {

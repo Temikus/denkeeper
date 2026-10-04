@@ -80,13 +80,18 @@
     }
   }
 
+  // A result is shown only while the form still holds the inputs it tested.
+  const formKey = () => [form.provider, form.model.trim(), form.timeout.trim()].join('\n')
+  let shownFormTest = $derived(formTest?.key === formKey() ? formTest : null)
+
   async function testForm() {
+    const key = formKey()
     formTesting = true
     formTest = null
     try {
-      formTest = await api.testDecider({ provider: form.provider, model: form.model.trim(), timeout: form.timeout.trim() })
+      formTest = { ...await api.testDecider({ provider: form.provider, model: form.model.trim(), timeout: form.timeout.trim() }), key }
     } catch (e) {
-      formTest = { status: 'error', message: e.message }
+      formTest = { status: 'error', message: e.message, key }
     } finally {
       formTesting = false
     }
@@ -142,6 +147,7 @@
         max_input_tokens: tokenLimit(draft.maxTokens),
       })
       editing = ''
+      delete cardTest[d.name]
       await onChange()
     } catch (e) {
       editError = e.message
@@ -265,7 +271,7 @@
             {formTesting ? 'Testing…' : 'Test first'}
           </button>
           <button class="btn-ghost" onclick={() => { showAdd = false }} disabled={saving}>Cancel</button>
-          <span class="dm-test" class:ok={formTest?.status === 'ok'} class:fail={formTest && formTest.status !== 'ok'} role="status">{testSummary(formTest)}</span>
+          <span class="dm-test" class:ok={shownFormTest?.status === 'ok'} class:fail={shownFormTest && shownFormTest.status !== 'ok'} role="status">{testSummary(shownFormTest)}</span>
         </div>
       {/if}
     </div>
