@@ -1,19 +1,10 @@
 package api
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
-	"github.com/Temikus/denkeeper/internal/audit"
-)
-
-const (
-	deciderReviewsWindow   = 30 * 24 * time.Hour
-	deciderReviewsMaxScan  = 10000
-	deciderReviewsPageSize = 200 // audit.Store.List's cap
 )
 
 // deciderReviewsResponse is the body of GET /agents/{name}/decider-reviews.
@@ -56,7 +47,7 @@ func (s *Server) handleDeciderReviews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	until := time.Now().UTC()
-	since := until.Add(-deciderReviewsWindow)
+	since := until.Add(-agent.DefaultShadowReviewWindow)
 	if v := r.URL.Query().Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
@@ -72,20 +63,16 @@ func (s *Server) handleDeciderReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, truncated, err := s.supervisorEvents(r.Context(), name, since, until)
+	set, err := agent.LoadShadowReviews(r.Context(), s.deps.AuditStore, name, decider, since, until)
 	if err != nil {
 		s.logger.Error("listing decider reviews", "agent", name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
 
-	reviews, failed := agent.PairShadowReviews(events, decider)
-	if reviews == nil {
-		reviews = []agent.ShadowReview{}
-	}
 	writeJSON(w, http.StatusOK, deciderReviewsResponse{
 		Agent: name, Decider: decider, Supervisor: supervisor,
-		Since: since, Until: until, Truncated: truncated, Failed: failed, Reviews: reviews,
+		Since: since, Until: until, Truncated: set.Truncated, Failed: set.Failed, Reviews: set.Reviews,
 	})
 }
 
@@ -107,29 +94,4 @@ func (s *Server) reviewedDecider(e *agent.Engine, name, requested string) (super
 		decider = d.Name()
 	}
 	return supervisor, decider
-}
-
-// supervisorEvents pages the agent's supervisor-category audit events in the
-// window. truncated is true when the scan cap cut off the oldest ones.
-func (s *Server) supervisorEvents(ctx context.Context, name string, since, until time.Time) (events []audit.Event, truncated bool, _ error) {
-	for offset := 0; ; offset += deciderReviewsPageSize {
-		page, _, err := s.deps.AuditStore.List(ctx, audit.ListOpts{
-			Categories: []string{audit.CategorySupervisor},
-			Agent:      name,
-			Since:      &since,
-			Until:      &until, // pins the window so offsets stay stable
-			Limit:      deciderReviewsPageSize,
-			Offset:     offset,
-		})
-		if err != nil {
-			return nil, false, fmt.Errorf("listing supervisor events: %w", err)
-		}
-		events = append(events, page...)
-		if len(page) < deciderReviewsPageSize {
-			return events, false, nil
-		}
-		if len(events) >= deciderReviewsMaxScan {
-			return events, true, nil
-		}
-	}
 }
