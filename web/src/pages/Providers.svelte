@@ -274,10 +274,10 @@
       if (formBaseURL) body.base_url = formBaseURL
       if (formOrganization && formType === 'openai') body.organization = formOrganization
       const resp = await api.createLLMProvider(body)
-      data = await api.llmProviders()
-      showAddForm = false
       createNotice = resp?.restart_required ? `${name} is saved. Restart denkeeper to use it.` : ''
       createNoticeFor = createNotice ? name : ''
+      data = await api.llmProviders()
+      showAddForm = false
     } catch (e) {
       formError = e.message
     } finally {

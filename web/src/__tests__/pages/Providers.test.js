@@ -212,6 +212,20 @@ describe('Providers page', () => {
     await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
   })
 
+  test('a failed refresh after create keeps the restart notice', async () => {
+    let created = false
+    server.use(
+      http.post('/api/v1/llm/providers', () => { created = true; return HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: true }, { status: 201 }) }),
+      http.get('/api/v1/llm/providers', () => (created ? HttpResponse.json({ error: 'boom' }, { status: 500 }) : undefined)),
+    )
+    render(Providers)
+    await fireEvent.click(await screen.findByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
+  })
+
   test('deleting the provider a restart notice names clears the notice', async () => {
     server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'openai', status: 'created', restart_required: true }, { status: 201 })))
     render(Providers)
@@ -220,7 +234,7 @@ describe('Providers page', () => {
     await fireEvent.click(screen.getByTestId('provider-save-btn'))
     await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toBeInTheDocument())
 
-    await fireEvent.click(screen.getAllByTestId('delete-provider-btn')[2])
+    await fireEvent.click((await screen.findAllByTestId('delete-provider-btn'))[2])
     await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
 
     await waitFor(() => expect(screen.queryByTestId('provider-create-notice')).not.toBeInTheDocument())
