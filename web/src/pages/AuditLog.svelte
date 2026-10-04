@@ -261,16 +261,18 @@
     return `${r} ago`
   }
 
-  // #/audit?agent=&category=&range= seeds the filters, for links from other
-  // pages (the decision model calibration panel). Unknown values are ignored.
+  // #/audit?agent=&category=&range= sets the filters, for links from other
+  // pages (the decision model calibration panel). Each new query starts from
+  // the defaults, so plain #/audit clears a linked filter. Unknown values are ignored.
   let searchText = $state('')
   function applyQuery(q) {
-    const a = q.get('agent')
-    if (a) { agent = a; searchText = /\s/.test(a) ? `agent:"${a}"` : `agent:${a}` }
-    const cats = queryValues(q.get('category'), categoryItems)
-    if (cats.length) categories = cats
+    const a = q.get('agent') || ''
+    agent = a
+    search = ''
+    searchText = !a ? '' : /\s/.test(a) ? `agent:"${a}"` : `agent:${a}`
+    categories = queryValues(q.get('category'), categoryItems)
     const range = q.get('range')
-    if (timeRanges.some(r => r.value === range && r.value !== 'custom')) timeRange = range
+    timeRange = timeRanges.some(r => r.value === range && r.value !== 'custom') ? range : '24h'
   }
   function queryValues(raw, items) {
     return (raw || '').split(',').filter(v => v && items.some(i => i.value === v))
@@ -364,7 +366,7 @@
   <!-- Search -->
   <div class="search-card">
     <span class="search-icon">{'\u2315'}</span>
-    <input type="text" class="search-input" placeholder="Search events" aria-label="Search audit events" value={searchText} oninput={onSearchInput} />
+    <input type="text" class="search-input" placeholder="Search events" aria-label="Search audit events" bind:value={searchText} oninput={onSearchInput} />
     <!-- Mounted even when empty: a live region inserted together with its
          content is not reliably announced, and the first filter is the one
          that matters. The in-flight marker shares the region rather than

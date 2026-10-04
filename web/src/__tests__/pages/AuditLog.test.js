@@ -174,7 +174,7 @@ describe('AuditLog page', () => {
     }
   })
 
-  test('a new query on the mounted page re-applies the filters', async () => {
+  test('a new query on the mounted page replaces the linked filters', async () => {
     const seen = []
     server.use(http.get('/api/v1/audit', ({ request }) => {
       seen.push(new URL(request.url).searchParams)
@@ -190,6 +190,12 @@ describe('AuditLog page', () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'))
       await waitFor(() => expect(seen.at(-1).get('agent')).toBe('scout'))
       expect(screen.getByLabelText('Search audit events')).toHaveValue('agent:scout')
+
+      // Plain #/audit (the sidebar link) drops the linked filter.
+      window.location.hash = '#/audit'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await waitFor(() => expect(seen.at(-1).get('agent')).toBeNull())
+      expect(screen.getByLabelText('Search audit events')).toHaveValue('')
     } finally {
       window.location.hash = ''
       window.dispatchEvent(new HashChangeEvent('hashchange'))
