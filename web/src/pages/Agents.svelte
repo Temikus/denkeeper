@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { api } from '../api.js'
   import { isMobile } from '../store.js'
-  import { currentRoute, navigate } from '../router.js'
+  import { currentRoute, currentQuery, navigate } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
   import FallbackRulesModal from '../components/FallbackRulesModal.svelte'
@@ -14,7 +14,8 @@
   let expandedGroup = $state(null)
   let enabledProviders = $state([])  // ['anthropic', 'openrouter', ...]
   let defaultProvider = $state('')   // global default_provider from /llm/providers
-  let deciders = $state([])          // [[llm.deciders]] entries: [{ name, provider, model }]
+  let deciders = $state([])          // [[llm.deciders]] entries: [{ name, provider, model, ... }]
+  let decisionProviderReady = $state(false) // an enabled provider can back a decision model
 
   // Inline rename state
   let renamingAgent = $state(null)
@@ -68,10 +69,13 @@
         defaultProvider = providerData.default_provider || ''
       }
       deciders = providerData?.deciders || []
+      decisionProviderReady = (providerData?.providers || []).some(p => p.serves_decisions && p.enabled)
       if (subRoute) {
         const match = agents.find(a => a.name === subRoute)
-        if (match) selectAgent(match)
-        else if (agents.length) selectAgent(agents[0])
+        if (match) {
+          await selectAgent(match)
+          applyDeepLink()
+        } else if (agents.length) selectAgent(agents[0])
       } else if (agents.length && !$isMobile) {
         selectAgent(agents[0])
       }
@@ -96,6 +100,24 @@
     } catch(e) {
       error = e.message
     }
+  }
+
+  // #/agents/<name>?card=permission[&decider=<name>] opens the Permission
+  // card, preselecting a decision model in shadow mode. Nothing is saved.
+  function applyDeepLink() {
+    if ($currentQuery.get('card') !== 'permission' || !detail) return
+    initConfigForm(detail)
+    expandedCard = 'permission'
+    const name = $currentQuery.get('decider')
+    if (name && configTier === 'supervised' && deciders.some(d => d.name === name)) {
+      configDecider = name
+      onDeciderSelect()
+    }
+  }
+
+  // Who reviews this agent's tool calls, for the list meta line.
+  function reviewers(a) {
+    return [a.supervisor, a.supervisor_decider].filter(Boolean).join(' + ')
   }
 
   function startRename(agentName, e) {
@@ -626,9 +648,9 @@
               {#if agents.some(other => other.supervisor === a.name)}
                 <span class="mobile-card-dot"></span>
                 <span class="mobile-card-stat" style="color: var(--accent)">supervisor</span>
-              {:else if a.supervisor}
+              {:else if reviewers(a)}
                 <span class="mobile-card-dot"></span>
-                <span class="mobile-card-stat">via {a.supervisor}</span>
+                <span class="mobile-card-stat">via {reviewers(a)}</span>
               {/if}
             </div>
           </div>
@@ -671,7 +693,7 @@
                 {/if}
               </div>
             {/if}
-            <div class="meta">{a.permission_tier}{#if a.supervisor} (via {a.supervisor}){/if} · {a.skill_count} skills{#if agents.some(other => other.supervisor === a.name)} · <span class="supervisor-role">supervisor</span>{/if}</div>
+            <div class="meta">{a.permission_tier}{#if reviewers(a)} (via {reviewers(a)}){/if} · {a.skill_count} skills{#if agents.some(other => other.supervisor === a.name)} · <span class="supervisor-role">supervisor</span>{/if}</div>
           </div>
         {/if}
       {/each}
@@ -760,6 +782,9 @@
             <div class="stat-value">
               <span class="tier-badge tier-{detail.permission_tier}">{tierLabel(detail.permission_tier)}</span>
             </div>
+            {#if detail.supervisor_decider}
+              <div class="stat-sub" data-testid="permission-decider">{detail.supervisor_decider} · {detail.supervisor_decider_mode || 'shadow'}</div>
+            {/if}
           </div>
           <svg class="chevron-toggle down" class:open={expandedCard === 'permission'} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
@@ -894,6 +919,18 @@
                       <div id="cfg-decider-err" class="inline-error" role="alert">{deciderError}</div>
                     {/if}
                   {/if}
+                {:else}
+                  <div class="decider-empty" data-testid="decider-empty">
+                    <div class="decider-empty-text">
+                      <strong>Pre-screen tool calls with a decision model</strong>
+                      <span class="hint">A decision model scores each call before {configSupervisor ? 'the supervisor reviews it' : 'you review it'}, for about $0.0001 a call. Clear calls skip the review. Start in shadow mode to compare first.</span>
+                    </div>
+                    {#if decisionProviderReady}
+                      <a class="btn-ghost decider-empty-link" href="#/providers?add=decider&for={encodeURIComponent(detail.name)}" data-testid="decider-empty-link">Set one up in Providers →</a>
+                    {:else}
+                      <a class="btn-ghost decider-empty-link" href="#/providers?add=openrouter" data-testid="decider-empty-link">Add an OpenRouter provider first →</a>
+                    {/if}
+                  </div>
                 {/if}
               {/if}
               <label class="config-label" for="cfg-max-tool-rounds">Max Tool Rounds</label>
@@ -1220,6 +1257,19 @@
   .stat-text { flex: 1; min-width: 0; }
   .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
   .stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
+  .stat-sub { font-size: 12px; font-weight: 500; color: var(--accent); margin-top: 4px; }
+
+  /* Shown in place of the decision model select when none exist. */
+  .decider-empty {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 14px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+  }
+  .decider-empty-text { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  /* btn-ghost sized to sit beside the hint text; it wraps under it on narrow screens. */
+  .decider-empty-link { text-decoration: none; font-size: 12px; padding: 6px 12px; }
   /* Chevron rotation: uses shared .chevron-toggle from shared.css */
 
   /* Full-width config panel below stat cards */

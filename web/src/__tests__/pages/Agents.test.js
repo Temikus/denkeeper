@@ -276,8 +276,10 @@ describe('Agents permission config', () => {
   })
 
   // Renders the supervised "default" agent with one configured decision model
-  // and returns a getter for the body of the next PATCH.
-  function setupDeciderAgent(agentFields = {}, deciders = [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }]) {
+  // and returns a getter for the body of the next PATCH. listFields extend the
+  // agent's list entry; providers replace the provider list.
+  function setupDeciderAgent(agentFields = {}, deciders = [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13' }],
+    listFields = {}, providers = [{ name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true, serves_decisions: true }]) {
     const agent = {
       name: 'default', model: 'claude-3-opus', permission_tier: 'supervised',
       skill_count: 0, has_tools: false, max_tool_rounds: 50, fallbacks: [],
@@ -287,11 +289,11 @@ describe('Agents permission config', () => {
     server.use(
       http.get('/api/v1/agents/:name', () => HttpResponse.json(agent)),
       http.get('/api/v1/agents', () => HttpResponse.json([
-        { name: 'default', permission_tier: 'supervised', skill_count: 0, has_tools: false, fallbacks: [] },
+        { name: 'default', permission_tier: 'supervised', skill_count: 0, has_tools: false, fallbacks: [], ...listFields },
       ])),
       http.get('/api/v1/llm/providers', () => HttpResponse.json({
         default_provider: 'openrouter',
-        providers: [{ name: 'openrouter', type: 'openrouter', enabled: true, api_key_set: true }],
+        providers,
         deciders,
       })),
       http.patch('/api/v1/agents/:name', async ({ request }) => {
@@ -417,7 +419,7 @@ describe('Agents permission config', () => {
     expect(patchBody()).toEqual({ session_tier: 'autonomous', supervisor_decider: '' })
   })
 
-  test('decision model control is hidden when no deciders are configured', async () => {
+  test('without decision models the Permission panel links to setting one up', async () => {
     render(Agents)
     await waitFor(() => screen.getByText('PERMISSION'))
     await fireEvent.click(screen.getByText('PERMISSION'))
@@ -426,6 +428,38 @@ describe('Agents permission config', () => {
     await waitFor(() => screen.getByLabelText('Supervisor Agent'))
 
     expect(screen.queryByLabelText('Decision Model')).toBeNull()
+    expect(screen.getByTestId('decider-empty-link')).toHaveAttribute('href', '#/providers?add=decider&for=default')
+  })
+
+  test('without a decision-capable provider the empty state sends you to add OpenRouter', async () => {
+    setupDeciderAgent({}, [], {}, [{ name: 'anthropic', type: 'anthropic', enabled: true, serves_decisions: false }])
+    await waitFor(() => screen.getByText('PERMISSION'))
+    await fireEvent.click(screen.getByText('PERMISSION'))
+
+    await waitFor(() => expect(screen.getByTestId('decider-empty-link')).toHaveAttribute('href', '#/providers?add=openrouter'))
+  })
+
+  test('deep link opens Permission with the decision model preselected in shadow, unsaved', async () => {
+    window.location.hash = '#/agents/default?card=permission&decider=jev'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    try {
+      const patchBody = setupDeciderAgent({}, [{ name: 'jev', provider: 'openrouter', model: 'typesafe/jev-1.13', used_by: [] }])
+
+      await waitFor(() => expect(screen.getByLabelText('Decision Model')).toHaveValue('jev'))
+      expect(screen.getByLabelText('Decision Model Mode')).toHaveValue('shadow')
+      expect(patchBody()).toBeNull()
+    } finally {
+      window.location.hash = ''
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
+  })
+
+  test('Permission card and agent list name the bound decision model', async () => {
+    setupDeciderAgent({ supervisor_decider: 'jev', supervisor_decider_mode: 'enforce' }, undefined,
+      { supervisor: 'argus', supervisor_decider: 'jev' })
+
+    await waitFor(() => expect(screen.getByTestId('permission-decider')).toHaveTextContent('jev · enforce'))
+    expect(screen.getByText(/via argus \+ jev/)).toBeInTheDocument()
   })
 
   test('changing provider and saving sends llm_provider in PATCH', async () => {
