@@ -87,7 +87,7 @@ func (s *Server) planDeciderUpdate(name string, input *agentConfigUpdateInput) (
 	case merged.SupervisorDecider == "":
 		up.unbind = input.SupervisorDecider != nil
 	case input.SupervisorDecider != nil:
-		d, err := s.startedDecider(cfg, merged.SupervisorDecider)
+		d, err := s.liveDecider(merged.SupervisorDecider)
 		if err != nil {
 			return up, err
 		}
@@ -98,17 +98,13 @@ func (s *Server) planDeciderUpdate(name string, input *agentConfigUpdateInput) (
 	return up, nil
 }
 
-// startedDecider returns the decider client built at startup for name, or an
-// error when the running client no longer matches the config (clients are not
-// rebuilt on reload).
-func (s *Server) startedDecider(cfg *config.Config, name string) (*llm.Decider, error) {
-	d := s.deps.Deciders[name]
-	for _, dc := range cfg.LLM.Deciders {
-		if dc.Name == name && d != nil && d.Matches(dc.Provider, dc.Model) {
-			return d, nil
-		}
+// liveDecider returns the running decider for name. Config validation has
+// already checked the name exists; a miss means the decider set was not wired.
+func (s *Server) liveDecider(name string) (*llm.Decider, error) {
+	if d := s.deps.Deciders.Get(name); d != nil {
+		return d, nil
 	}
-	return nil, fmt.Errorf("decider %q was added or changed since startup; restart denkeeper to use it", name)
+	return nil, fmt.Errorf("decider %q is not running", name)
 }
 
 func (up deciderUpdate) apply(e *agent.Engine) {

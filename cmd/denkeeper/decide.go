@@ -249,7 +249,7 @@ func replayDecider(cfg *config.Config, dc config.DeciderConfig) (*llm.Decider, e
 	if !ok {
 		return nil, fmt.Errorf("decider %q: provider %q does not serve decisions", dc.Name, dc.Provider)
 	}
-	return newDecider(dc, dp, nil), nil
+	return llm.NewDecider(deciderConfig(dc), dp, nil), nil
 }
 
 // replayMessages is the slice of the memory store a replay reads.
