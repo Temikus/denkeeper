@@ -1854,10 +1854,13 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		RestartManaged:    detectProcessManager(os.Getenv, fileExists),
 		AgentFactory:      agentFactory,
 		Providers:         live,
-		ChatApps:          map[string]chatapp.Prober{"telegram": chatapp.Telegram{}, "discord": chatapp.Discord{}},
-		Version:           version,
-		Commit:            commit,
-		BuildDate:         date,
+		DeciderRuntime: liveDeciderRuntime{
+			set: a.deciders, providers: a.abc.llm.providers, dispatcher: a.dispatcher, judge: a.evalJudge, logger: a.logger,
+		},
+		ChatApps:  map[string]chatapp.Prober{"telegram": chatapp.Telegram{}, "discord": chatapp.Discord{}},
+		Version:   version,
+		Commit:    commit,
+		BuildDate: date,
 	}, hasActiveKey, a.logger)
 }
 

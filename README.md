@@ -469,6 +469,10 @@ scopes = ["chat", "sessions:read", "costs:read"]
 | `PATCH` | `/api/v1/llm/providers/{name}` | `admin` | Update provider config (API key, base URL) |
 | `DELETE` | `/api/v1/llm/providers/{name}` | `admin` | Remove a provider instance |
 | `PATCH` | `/api/v1/llm/config` | `admin` | Update global LLM config (default provider, model) |
+| `POST` | `/api/v1/llm/deciders` | `admin` | Create a decision model |
+| `PATCH` | `/api/v1/llm/deciders/{name}` | `admin` | Update a decision model (no rename) |
+| `DELETE` | `/api/v1/llm/deciders/{name}` | `admin` | Remove an unused decision model |
+| `POST` | `/api/v1/llm/deciders/test` | `admin` | Ask a decision model one test question |
 | `GET` | `/api/v1/server/config` | `admin` | Server config (version, build info, CORS, WebSocket) |
 | `PATCH` | `/api/v1/server/config` | `admin` | Update server config (CORS origins, WebSocket settings) |
 | `POST` | `/api/v1/server/reload` | `admin` | Reload config from disk |

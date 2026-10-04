@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -707,6 +708,99 @@ func RemoveLLMProviderFromConfig(path, name string) error {
 		llmSection["providers"] = filtered
 	}
 	raw["llm"] = llmSection
+	return WriteRawConfig(path, raw)
+}
+
+// ErrDeciderNotFound is returned when a [[llm.deciders]] entry is missing.
+var ErrDeciderNotFound = errors.New("decider not found")
+
+func rawDeciders(llmSection map[string]any) []any {
+	v, _ := llmSection["deciders"].([]any)
+	return v
+}
+
+// AddDeciderToConfig appends a [[llm.deciders]] entry. An empty timeout and a
+// zero max_input_tokens are omitted, so the defaults apply.
+func AddDeciderToConfig(path string, d DeciderConfig) error {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		return err
+	}
+	entry := map[string]any{"name": d.Name, "provider": d.Provider, "model": d.Model}
+	if d.Timeout != "" {
+		entry["timeout"] = d.Timeout
+	}
+	if d.MaxInputTokens != 0 {
+		entry["max_input_tokens"] = int64(d.MaxInputTokens)
+	}
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		llmSection = map[string]any{}
+	}
+	llmSection["deciders"] = append(rawDeciders(llmSection), entry)
+	raw["llm"] = llmSection
+	return WriteRawConfig(path, raw)
+}
+
+// UpdateDeciderConfig applies changes to the named [[llm.deciders]] entry. A
+// nil value deletes the key, restoring its default. It returns
+// ErrDeciderNotFound when no entry has that name.
+func UpdateDeciderConfig(path, name string, changes map[string]any) error {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		return err
+	}
+	llmSection, _ := raw["llm"].(map[string]any)
+	for _, entry := range rawDeciders(llmSection) {
+		m, ok := entry.(map[string]any)
+		if !ok || m["name"] != name {
+			continue
+		}
+		for k, v := range changes {
+			if v == nil {
+				delete(m, k)
+			} else {
+				m[k] = v
+			}
+		}
+		return WriteRawConfig(path, raw)
+	}
+	return fmt.Errorf("%w: %s", ErrDeciderNotFound, name)
+}
+
+// RemoveDeciderFromConfig removes the named [[llm.deciders]] entry. Removing
+// an absent name is a no-op.
+func RemoveDeciderFromConfig(path, name string) error {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		return err
+	}
+	llmSection, ok := raw["llm"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	deciders := rawDeciders(llmSection)
+	kept := make([]any, 0, len(deciders))
+	for _, entry := range deciders {
+		if m, ok := entry.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if len(kept) == 0 {
+		delete(llmSection, "deciders")
+	} else {
+		llmSection["deciders"] = kept
+	}
 	return WriteRawConfig(path, raw)
 }
 

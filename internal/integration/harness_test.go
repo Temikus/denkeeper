@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -97,6 +98,55 @@ func (h harnessProviderRuntime) Apply(pc config.ProviderInstanceConfig, _ *confi
 }
 
 func (h harnessProviderRuntime) Remove(name string) { h.set.Remove(name) }
+
+// harnessDeciderRuntime stands in for main.go's liveDeciderRuntime: the set
+// resolves every provider name to decide, and Apply rebinds supervisor stages.
+type harnessDeciderRuntime struct {
+	set        *llm.DeciderSet
+	providers  *llm.ProviderSet
+	dispatcher *agent.Dispatcher
+}
+
+func harnessDeciderConfig(dc config.DeciderConfig) llm.DeciderConfig {
+	timeout, _ := time.ParseDuration(dc.Timeout)
+	return llm.DeciderConfig{Name: dc.Name, Provider: dc.Provider, Model: dc.Model, Timeout: timeout, MaxInputTokens: dc.MaxInputTokens}
+}
+
+func (h harnessDeciderRuntime) Apply(snap *config.Config) {
+	cfgs := make([]llm.DeciderConfig, 0, len(snap.LLM.Deciders))
+	for _, dc := range snap.LLM.Deciders {
+		cfgs = append(cfgs, harnessDeciderConfig(dc))
+	}
+	h.set.Sync(cfgs)
+	for _, ac := range snap.Agents {
+		if e := h.dispatcher.Agent(ac.Name); e != nil && e.SupervisorDecider() != h.set.Get(ac.SupervisorDecider) {
+			e.SetSupervisorDecider(h.set.Get(ac.SupervisorDecider), agent.DeciderStageConfig{
+				Mode: ac.SupervisorDeciderMode, ApproveAt: ac.SupervisorDeciderApproveAt, DenyAt: ac.SupervisorDeciderDenyAt,
+			})
+		}
+	}
+}
+
+func (h harnessDeciderRuntime) Test(ctx context.Context, dc config.DeciderConfig) (*llm.DecisionResponse, error) {
+	return llm.NewLiveDecider(harnessDeciderConfig(dc), h.providers, nil).Decide(ctx, "decider-test", "state",
+		map[string]llm.Question{"q": {Type: llm.QuestionNoul, Instructions: "x"}})
+}
+
+// decisionMock is a provider that serves decisions, registered under every
+// provider name a live decider may use.
+type decisionMock struct {
+	name string
+	dp   llm.DecisionProvider
+}
+
+func (d decisionMock) Name() string                      { return d.name }
+func (d decisionMock) HealthCheck(context.Context) error { return nil }
+func (d decisionMock) ChatCompletion(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return nil, errors.New("decision mock does not chat")
+}
+func (d decisionMock) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
+	return d.dp.Decide(ctx, req)
+}
 
 func (m *mockProvider) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	m.mu.Lock()
@@ -247,6 +297,11 @@ type HarnessOpts struct {
 	// agent CRUD endpoints can build engines at runtime.
 	WithAgentFactory bool
 
+	// LiveDeciders, when set, wires a live decider set and runtime, the way
+	// main.go does. Each listed provider name resolves to LiveDeciders.Provider,
+	// so a decider created through the API can decide.
+	LiveDeciders *LiveDecidersOpts
+
 	// LiveProviders, when true, gives agents built by the AgentFactory a
 	// shared provider set routed by their llm_provider, and wires
 	// deps.Providers to put the mock LLM in that set under each created
@@ -315,6 +370,12 @@ type HarnessOpts struct {
 	// agent name → tool names, standing in for the [[agents]]
 	// auto_approve_tools TOML field that cmd/denkeeper wires at startup.
 	AutoApproveTools map[string][]string
+}
+
+// LiveDecidersOpts configures HarnessOpts.LiveDeciders.
+type LiveDecidersOpts struct {
+	ProviderNames []string
+	Provider      llm.DecisionProvider
 }
 
 type agentSetup struct {
@@ -667,6 +728,14 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 			deps.Config.Get().LLM.Deciders = append(deps.Config.Get().LLM.Deciders,
 				config.DeciderConfig{Name: d.Name(), Provider: d.Provider(), Model: d.Model()})
 		}
+	}
+	if ld := opts.LiveDeciders; ld != nil {
+		providers := llm.NewProviderSet()
+		for _, name := range ld.ProviderNames {
+			providers.Put(decisionMock{name: name, dp: ld.Provider})
+		}
+		deps.Deciders = llm.NewDeciderSet(providers, costTracker)
+		deps.DeciderRuntime = harnessDeciderRuntime{set: deps.Deciders, providers: providers, dispatcher: dispatcher}
 	}
 	if opts.WithEval {
 		if c := opts.EvalConfig; c.CompletenessFloor > 0 {

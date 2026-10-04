@@ -80,6 +80,7 @@ type Deps struct {
 	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
 	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
+	DeciderRuntime    DeciderRuntime                                                           // nil = decider edits need a restart; decider test returns 503
 	ChatApps          map[string]chatapp.Prober                                                // keyed "telegram"/"discord"; missing = chat-app setup returns 503
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                                   // git commit hash
@@ -347,6 +348,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
 	mux.HandleFunc("DELETE /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handleDeleteLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
+	mux.HandleFunc("POST /api/v1/llm/deciders", s.RequireScope("admin", s.handleCreateDecider))
+	mux.HandleFunc("POST /api/v1/llm/deciders/test", s.RequireScope("admin", s.handleTestDecider))
+	mux.HandleFunc("PATCH /api/v1/llm/deciders/{name}", s.RequireScope("admin", s.handlePatchDecider))
+	mux.HandleFunc("DELETE /api/v1/llm/deciders/{name}", s.RequireScope("admin", s.handleDeleteDecider))
 
 	// Server config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/server/config", s.RequireScope("admin", s.handleGetServerConfig))
