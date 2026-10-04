@@ -1544,29 +1544,56 @@ func synthesizeLegacyProviders(cfg *Config) {
 	}
 }
 
-// IsProviderReferenced returns true if the named provider is referenced as the
-// default provider, by any agent's llm_provider, by any fallback rule, or by
-// any decider.
+// IsProviderReferenced reports whether any config entry routes to the named
+// provider instance. See ProviderReferrers.
 func IsProviderReferenced(cfg *Config, name string) bool {
+	return len(ProviderReferrers(cfg, name)) > 0
+}
+
+// ProviderReferrers lists what routes to the named provider instance:
+// "llm.default_provider", "llm.fallback", "decider:<name>",
+// "eval.judge_provider", and "agent:<name>.<field>". Add any new provider
+// reference here, or the provider DELETE guard will not protect it.
+func ProviderReferrers(cfg *Config, name string) []string {
+	var refs []string
 	if cfg.LLM.DefaultProvider == name {
-		return true
-	}
-	for _, a := range cfg.Agents {
-		if a.LLMProvider == name {
-			return true
-		}
+		refs = append(refs, "llm.default_provider")
 	}
 	for _, f := range cfg.LLM.Fallbacks {
 		if f.Provider == name {
-			return true
+			refs = append(refs, "llm.fallback")
+			break
 		}
 	}
 	for _, d := range cfg.LLM.Deciders {
 		if d.Provider == name {
-			return true
+			refs = append(refs, "decider:"+d.Name)
 		}
 	}
-	return false
+	if cfg.Eval.JudgeProvider == name {
+		refs = append(refs, "eval.judge_provider")
+	}
+	for _, a := range cfg.Agents {
+		refs = append(refs, agentProviderRefs(a, name)...)
+	}
+	return refs
+}
+
+func agentProviderRefs(a AgentInstanceConfig, name string) []string {
+	var refs []string
+	if a.LLMProvider == name {
+		refs = append(refs, "agent:"+a.Name+".llm_provider")
+	}
+	if a.ReviewerProvider == name {
+		refs = append(refs, "agent:"+a.Name+".reviewer_provider")
+	}
+	for _, f := range a.Fallbacks {
+		if f.Provider == name {
+			refs = append(refs, "agent:"+a.Name+".fallback")
+			break
+		}
+	}
+	return refs
 }
 
 // validateDeciders checks [[llm.deciders]]: unique valid names, a provider

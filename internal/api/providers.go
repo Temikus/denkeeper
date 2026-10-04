@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
@@ -807,14 +808,14 @@ func (s *Server) persistFirstProviderDefault(snap *config.Config, name string) b
 
 // handleDeleteLLMProvider godoc
 // @Summary Delete LLM provider
-// @Description Removes a provider instance. Rejects if referenced by agents or default_provider.
+// @Description Removes a provider instance. Rejected with 409 and a used_by list while default_provider, a fallback rule, a decider, the eval judge, or an agent's llm_provider, reviewer_provider or fallback rule names it.
 // @Tags providers
 // @Produce json
 // @Security BearerAuth
 // @Param name path string true "Provider name"
 // @Success 204 "No Content"
 // @Failure 404 {object} map[string]string
-// @Failure 409 {object} map[string]string
+// @Failure 409 {object} map[string]any
 // @Router /llm/providers/{name} [delete]
 func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
@@ -840,10 +841,10 @@ func (s *Server) handleDeleteLLMProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check dependencies (default_provider, agent llm_provider, fallbacks, deciders).
-	if config.IsProviderReferenced(snap, name) {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "provider is in use: referenced as default_provider, by an agent, by a fallback rule, or by a decider",
+	if refs := config.ProviderReferrers(snap, name); len(refs) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   "provider is in use by " + strings.Join(refs, ", "),
+			"used_by": refs,
 		})
 		return
 	}

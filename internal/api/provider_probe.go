@@ -113,9 +113,6 @@ func (s *Server) resolveProbeTarget(input *providerTestInput) (config.ProviderIn
 	if msg := validateBaseURL(pc.BaseURL); msg != "" {
 		return pc, http.StatusBadRequest, msg
 	}
-	if pc.BaseURL != "" && pc.Type == "openrouter" {
-		return pc, http.StatusBadRequest, "base_url is not supported for openrouter-type providers"
-	}
 	if pc.Organization != "" && pc.Type != "openai" {
 		return pc, http.StatusBadRequest, "organization is only supported for openai-type providers"
 	}

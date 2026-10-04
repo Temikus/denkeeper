@@ -28,7 +28,7 @@ func New(pc config.ProviderInstanceConfig, or config.OpenRouterConfig, hc *http.
 		setHTTP(c, hc)
 		return c, nil
 	case "openrouter":
-		c := openrouter.NewFull(pc.Name, pc.APIKey)
+		c := openrouter.NewFull(pc.Name, pc.APIKey, pc.BaseURL)
 		r := &or.Reasoning
 		c.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
 		c.SetProviderRouting(or.ProviderOrder, or.ProviderAllowFallbacks, or.ResolveStickyTTL())

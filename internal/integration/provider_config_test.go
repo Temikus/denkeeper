@@ -199,10 +199,16 @@ func TestProviderDelete_InUseByDefaultProvider(t *testing.T) {
 		t.Fatalf("expected 409 for default_provider reference, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp map[string]string
+	var resp struct {
+		Error  string   `json:"error"`
+		UsedBy []string `json:"used_by"`
+	}
 	DecodeJSON(t, rec, &resp)
-	if !strings.Contains(resp["error"], "in use") {
-		t.Errorf("error should mention provider is in use: %s", resp["error"])
+	if !strings.Contains(resp.Error, "in use") {
+		t.Errorf("error should mention provider is in use: %s", resp.Error)
+	}
+	if len(resp.UsedBy) != 1 || resp.UsedBy[0] != "llm.default_provider" {
+		t.Errorf("used_by = %v, want [llm.default_provider]", resp.UsedBy)
 	}
 }
 
@@ -226,6 +232,35 @@ func TestProviderDelete_InUseByAgent(t *testing.T) {
 	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/llm/providers/agent-bound", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409 for agent reference, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProviderDelete_InUseByReviewer(t *testing.T) {
+	h := providerCrudHarness(t)
+
+	body := map[string]any{"name": "review-only", "type": "anthropic"}
+	rec := h.Do(h.AuthedRequest("POST", "/api/v1/llm/providers", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create provider: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// The provider serves only an agent's post-turn reviewer.
+	h.Config().Agents = append(h.Config().Agents, config.AgentInstanceConfig{
+		Name:             "reviewed-agent",
+		ReviewerModel:    "claude-x",
+		ReviewerProvider: "review-only",
+	})
+
+	rec = h.Do(h.AuthedRequest("DELETE", "/api/v1/llm/providers/review-only", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for reviewer_provider reference, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		UsedBy []string `json:"used_by"`
+	}
+	DecodeJSON(t, rec, &resp)
+	if len(resp.UsedBy) != 1 || resp.UsedBy[0] != "agent:reviewed-agent.reviewer_provider" {
+		t.Errorf("used_by = %v, want the reviewer_provider reference", resp.UsedBy)
 	}
 }
 

@@ -5026,7 +5026,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Removes a provider instance. Rejects if referenced by agents or default_provider.",
+                "description": "Removes a provider instance. Rejected with 409 and a used_by list while default_provider, a fallback rule, a decider, the eval judge, or an agent's llm_provider, reviewer_provider or fallback rule names it.",
                 "produces": [
                     "application/json"
                 ],
@@ -5060,9 +5060,7 @@
                         "description": "Conflict",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     }
                 }
