@@ -26,7 +26,7 @@ The decider works with or without a supervisor behind it.
 
 ## Setup
 
-Declare the decider once, then point a supervised agent at it:
+Declare the decider once, then point a supervised agent at it. You can also create, change and delete decision models through the [REST API](/docs/reference/rest-api/#decision-models), which applies them without a restart.
 
 ```toml
 [[llm.deciders]]

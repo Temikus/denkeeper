@@ -4541,6 +4541,265 @@
                 }
             }
         },
+        "/llm/deciders": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Adds a [[llm.deciders]] entry, persists it to TOML and makes it usable without a restart. Only provider types that serve decisions (openrouter) are accepted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Create decision model",
+                "parameters": [
+                    {
+                        "description": "Decision model",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderMutationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/llm/deciders/test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Asks one trivial question through a configured decision model (by name) or an unsaved provider and model, and reports latency and cost. A failed call is a 200 with status \"error\". The call is billed by the provider but not to any agent.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Test a decision model",
+                "parameters": [
+                    {
+                        "description": "Decision model to test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderTestInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderTestResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/llm/deciders/{name}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Removes a decision model. Rejected with 409 and a used_by list while an agent, the eval judge or the decide tool uses it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Delete decision model",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Decision model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Changes a decision model's provider, model, timeout or max_input_tokens and applies it without a restart. An empty timeout or a zero max_input_tokens restores the default. Decision models cannot be renamed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Update decision model",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Decision model name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.deciderMutationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/llm/providers": {
             "get": {
                 "security": [
@@ -10214,6 +10473,9 @@
         "internal_api.deciderInfo": {
             "type": "object",
             "properties": {
+                "max_input_tokens": {
+                    "type": "integer"
+                },
                 "model": {
                     "type": "string"
                 },
@@ -10221,6 +10483,86 @@
                     "type": "string"
                 },
                 "provider": {
+                    "type": "string"
+                },
+                "timeout": {
+                    "type": "string"
+                },
+                "used_by": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_api.deciderInput": {
+            "type": "object",
+            "properties": {
+                "max_input_tokens": {
+                    "description": "0 = default 30000",
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "timeout": {
+                    "description": "Go duration; \"\" = default 5s",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.deciderMutationResponse": {
+            "type": "object",
+            "properties": {
+                "decider": {
+                    "$ref": "#/definitions/internal_api.deciderInfo"
+                },
+                "restart_required": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_api.deciderTestInput": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "timeout": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.deciderTestResponse": {
+            "type": "object",
+            "properties": {
+                "cost_usd": {
+                    "type": "number"
+                },
+                "latency_ms": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"ok\" or \"error\"",
                     "type": "string"
                 }
             }
@@ -10930,6 +11272,9 @@
                 },
                 "routing": {
                     "$ref": "#/definitions/internal_api.providerRoutingCfg"
+                },
+                "serves_decisions": {
+                    "type": "boolean"
                 },
                 "type": {
                     "type": "string"

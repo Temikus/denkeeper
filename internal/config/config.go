@@ -1125,6 +1125,19 @@ const (
 // llm.DecisionProvider.
 var decisionProviderTypes = map[string]bool{"openrouter": true}
 
+// ServesDecisions reports whether a provider type can back a decider.
+func ServesDecisions(providerType string) bool { return decisionProviderTypes[providerType] }
+
+// ApplyDeciderDefaults fills an omitted timeout and max_input_tokens.
+func ApplyDeciderDefaults(d *DeciderConfig) {
+	if d.Timeout == "" {
+		d.Timeout = DefaultDeciderTimeout
+	}
+	if d.MaxInputTokens == 0 {
+		d.MaxInputTokens = DefaultDeciderMaxInputTokens
+	}
+}
+
 // ProviderInstanceConfig defines a named LLM provider instance.
 // Multiple instances of the same type are allowed (e.g. two OpenAI-compatible endpoints).
 type ProviderInstanceConfig struct {
@@ -1605,6 +1618,41 @@ func ValidateSupervisorDecider(cfg *Config, a AgentInstanceConfig) error {
 	return nil
 }
 
+// ValidateDecider checks one decider entry against cfg's providers, the way
+// Load would, with defaults applied to a copy. It also requires an API key on
+// the provider, since a referenced key-less provider fails to load.
+func ValidateDecider(cfg *Config, d DeciderConfig) error {
+	ApplyDeciderDefaults(&d)
+	if err := validateDecider(cfg, d); err != nil {
+		return err
+	}
+	for _, p := range cfg.LLM.Providers {
+		if p.Name == d.Provider && providerNeedsAPIKey(p.Type) && p.APIKey == "" {
+			return fmt.Errorf("provider %q has no api_key", p.Name)
+		}
+	}
+	return nil
+}
+
+// DeciderReferrers lists what uses the named decider: "agent:<name>" for a
+// supervisor_decider, "eval.judge_decider" and "decide.decider". Removing a
+// referenced decider would write a config that fails to load.
+func DeciderReferrers(cfg *Config, name string) []string {
+	var refs []string
+	for _, a := range cfg.Agents {
+		if a.SupervisorDecider == name {
+			refs = append(refs, "agent:"+a.Name)
+		}
+	}
+	if cfg.Eval.JudgeDecider == name {
+		refs = append(refs, "eval.judge_decider")
+	}
+	if cfg.Decide.Decider == name {
+		refs = append(refs, "decide.decider")
+	}
+	return refs
+}
+
 func validateDecider(cfg *Config, d DeciderConfig) error {
 	var typ string
 	for _, p := range cfg.LLM.Providers {
@@ -1918,13 +1966,7 @@ func applyLLMDefaults(cfg *Config) {
 	}
 
 	for i := range cfg.LLM.Deciders {
-		d := &cfg.LLM.Deciders[i]
-		if d.Timeout == "" {
-			d.Timeout = DefaultDeciderTimeout
-		}
-		if d.MaxInputTokens == 0 {
-			d.MaxInputTokens = DefaultDeciderMaxInputTokens
-		}
+		ApplyDeciderDefaults(&cfg.LLM.Deciders[i])
 	}
 }
 
