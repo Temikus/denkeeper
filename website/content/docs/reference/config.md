@@ -51,7 +51,7 @@ Named provider instances. Multiple entries of the same `type` are allowed, enabl
 | `name` | string | Unique instance name (used in `default_provider` and per-agent `llm_provider`) |
 | `type` | string | Provider type: `"anthropic"`, `"openai"`, `"openrouter"`, or `"ollama"` |
 | `api_key` | string | API key (required for all types except `ollama`) |
-| `base_url` | string | API endpoint override (useful for Azure, vLLM, LM Studio, etc.) |
+| `base_url` | string | API endpoint override (useful for Azure, vLLM, LM Studio, or a gateway in front of OpenRouter) |
 | `organization` | string | OpenAI organization ID (openai type only) |
 | `cost_limit_soft` | float | Soft per-session cost limit in USD for this provider instance (warns but continues) |
 | `cost_limit_hard` | float | Hard per-session cost limit in USD for this provider instance (stops generation) |

@@ -89,15 +89,18 @@ func New(apiKey string) *Client {
 	}
 }
 
-// NewFull creates a named client.
-func NewFull(name, apiKey string) *Client {
+// NewFull creates a named client. An empty baseURL uses OpenRouter's API.
+func NewFull(name, apiKey, baseURL string) *Client {
 	if name == "" {
 		name = "openrouter"
+	}
+	if baseURL == "" {
+		baseURL = defaultBaseURL
 	}
 	return &Client{
 		name:    name,
 		apiKey:  apiKey,
-		baseURL: defaultBaseURL,
+		baseURL: baseURL,
 		http:    http.DefaultClient,
 	}
 }

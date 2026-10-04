@@ -134,7 +134,7 @@ Check a key and base URL without saving anything. Send the provider fields, or `
 
 **Scope:** `admin`
 
-Delete a provider instance. Rejected if any agent references it, or if it is the global `default_provider`.
+Delete a provider instance. Rejected with `409` while anything uses it: `default_provider`, a fallback rule, a decision model, the eval `judge_provider`, or an agent's `llm_provider`, `reviewer_provider` or fallback rule. The response's `used_by` lists each one, e.g. `agent:pamela.reviewer_provider`.
 
 ### `PATCH /api/v1/llm/providers/{name}`
 

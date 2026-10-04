@@ -66,3 +66,31 @@ func TestNew_HTTPClientOverride_IsUsed(t *testing.T) {
 		t.Errorf("models=%v requests through override=%d; want 1 model via the injected client", models, tr.n.Load())
 	}
 }
+
+func TestNew_OpenRouterHonoursBaseURL(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gw/models" {
+			hits.Add(1)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/gpt-x"}]}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(config.ProviderInstanceConfig{Name: "or", Type: "openrouter", APIKey: "k", BaseURL: srv.URL + "/gw"},
+		config.OpenRouterConfig{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	lister, ok := p.(llm.ModelLister)
+	if !ok {
+		t.Fatal("openrouter client does not list models")
+	}
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if hits.Load() != 1 || len(models) != 1 {
+		t.Errorf("hits=%d models=%v; want one request to the base_url's /models", hits.Load(), models)
+	}
+}

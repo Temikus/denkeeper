@@ -178,10 +178,26 @@ func TestProbeProvider_StoredKeyIgnoresOverrideURL(t *testing.T) {
 	}
 }
 
-func TestProbeProvider_OpenRouterBaseURL400(t *testing.T) {
-	code, _, _ := probe(t, probeServer(&config.Config{}),
-		`{"type":"openrouter","api_key":"k","base_url":"https://example.com"}`)
-	if code != http.StatusBadRequest {
-		t.Errorf("code = %d, want 400: openrouter ignores base_url", code)
+func TestProbeProvider_OpenRouterStoredBaseURL(t *testing.T) {
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+probeKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"openai/gpt-x"}]}`))
+	}))
+	defer up.Close()
+	cfg := &config.Config{LLM: config.LLMConfig{Providers: []config.ProviderInstanceConfig{
+		{Name: "gw", Type: "openrouter", APIKey: probeKey, BaseURL: up.URL},
+	}}}
+
+	code, resp, raw := probe(t, probeServer(cfg), `{"name":"gw"}`)
+	if code != http.StatusOK || resp.Status != "ok" {
+		t.Fatalf("code=%d body=%s, want 200 ok against the stored base_url", code, raw)
+	}
+	if hits.Load() != 2 {
+		t.Errorf("upstream hits = %d, want 2 (/key and /models)", hits.Load())
 	}
 }
