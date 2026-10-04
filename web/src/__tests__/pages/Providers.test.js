@@ -191,6 +191,17 @@ describe('Providers page', () => {
     await waitFor(() => expect(screen.getByText('Saved. Restart to apply price overrides.')).toBeInTheDocument())
   })
 
+  test('an added model price override asks for a restart', async () => {
+    server.use(http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated', restart_required: false })))
+    await editSecondProvider()
+
+    await fireEvent.click(screen.getByText('Add Override'))
+    await fireEvent.input(screen.getByPlaceholderText('model-name'), { target: { value: 'anthropic/claude-sonnet-5-5' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(screen.getByText('Saved. Restart to apply price overrides.')).toBeInTheDocument())
+  })
+
   test('creating a provider without a live runtime says to restart', async () => {
     server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: true }, { status: 201 })))
     render(Providers)
