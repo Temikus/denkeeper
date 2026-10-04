@@ -381,4 +381,22 @@ describe('Providers page', () => {
       expect(deleteCalled).toBe(true)
     })
   })
+
+  test('renders the Decision Models section', async () => {
+    render(Providers)
+    await waitFor(() => expect(screen.getByTestId('decision-models')).toBeInTheDocument())
+    expect(screen.getByTestId('add-decider-btn')).toBeInTheDocument()
+  })
+
+  test('add=openrouter deep link opens the provider form set to OpenRouter', async () => {
+    window.location.hash = '#/providers?add=openrouter'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    try {
+      render(Providers)
+      await waitFor(() => expect(screen.getByTestId('provider-type-select')).toHaveValue('openrouter'))
+    } finally {
+      window.location.hash = ''
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
+  })
 })

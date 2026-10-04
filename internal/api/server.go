@@ -74,12 +74,13 @@ type Deps struct {
 	EvalJudge         *eval.Judge                                                              // nil or unconfigured = internal judging returns 503
 	OAuthDeps         *OAuthDeps                                                               // nil = OAuth tool endpoints return 503
 	MCPHandler        http.Handler                                                             // nil = MCP server endpoint not mounted
-	Deciders          map[string]*llm.Decider                                                  // decision models built at startup, keyed by [[llm.deciders]] name
+	Deciders          *llm.DeciderSet                                                          // live decision models keyed by [[llm.deciders]] name; nil = none
 	ReloadFunc        func() error                                                             // nil = reload endpoint returns 503
 	RestartFunc       func() error                                                             // nil = restart endpoint returns 503
 	RestartManaged    bool                                                                     // a process manager will bring the server back after RestartFunc
 	AgentFactory      func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error) // nil = agent create endpoint returns 503
 	Providers         ProviderRuntime                                                          // nil = provider edits need a restart to take effect
+	DeciderRuntime    DeciderRuntime                                                           // nil = decider edits need a restart; decider test returns 503
 	ChatApps          map[string]chatapp.Prober                                                // keyed "telegram"/"discord"; missing = chat-app setup returns 503
 	Version           string                                                                   // build version (e.g. "1.2.3" or "dev")
 	Commit            string                                                                   // git commit hash
@@ -347,6 +348,10 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("PATCH /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handlePatchLLMProvider))
 	mux.HandleFunc("DELETE /api/v1/llm/providers/{name}", s.RequireScope("admin", s.handleDeleteLLMProvider))
 	mux.HandleFunc("PATCH /api/v1/llm/config", s.RequireScope("admin", s.handlePatchLLMConfig))
+	mux.HandleFunc("POST /api/v1/llm/deciders", s.RequireScope("admin", s.handleCreateDecider))
+	mux.HandleFunc("POST /api/v1/llm/deciders/test", s.RequireScope("admin", s.handleTestDecider))
+	mux.HandleFunc("PATCH /api/v1/llm/deciders/{name}", s.RequireScope("admin", s.handlePatchDecider))
+	mux.HandleFunc("DELETE /api/v1/llm/deciders/{name}", s.RequireScope("admin", s.handleDeleteDecider))
 
 	// Server config endpoints (require admin scope).
 	mux.HandleFunc("GET /api/v1/server/config", s.RequireScope("admin", s.handleGetServerConfig))
@@ -541,6 +546,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 		HasTools       bool     `json:"has_tools"`
 		Adapters       []string `json:"adapters,omitempty"`
 		Supervisor     string   `json:"supervisor,omitempty"`
+		Decider        string   `json:"supervisor_decider,omitempty"`
 	}
 
 	names := s.deps.Dispatcher.Agents()
@@ -548,9 +554,11 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 	// Look up configured adapter bindings and supervisor for each agent.
 	bindingMap := make(map[string][]string)
 	supervisorMap := make(map[string]string)
+	deciderMap := make(map[string]string)
 	for _, ac := range s.appConfig().Agents {
 		bindingMap[ac.Name] = ac.Adapters
 		supervisorMap[ac.Name] = ac.Supervisor
+		deciderMap[ac.Name] = ac.SupervisorDecider
 	}
 	for _, name := range names {
 		e := s.deps.Dispatcher.Agent(name)
@@ -567,6 +575,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, _ *http.Request) {
 			HasTools:       e.HasTools(),
 			Adapters:       bindingMap[name],
 			Supervisor:     supervisorMap[name],
+			Decider:        deciderMap[name],
 		})
 	}
 	writeJSON(w, http.StatusOK, agents)

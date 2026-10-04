@@ -13,4 +13,4 @@ paths:
 - **Validate before write when a write spans sections**: `SaveChatAdapter` (token + `allowed_users` + agent binding) marshals the candidate and runs `Parse` on it before `WriteRawConfig`, returning `ErrInvalidCandidate` and leaving the file untouched — validation rejects a token without users, so the pieces can only be written together. It never synthesizes an `[[agents]]` entry (the legacy path would bind every adapter with a token).
 - **`default_provider` defaulting** (`applyDefaultProvider`, after env overrides): a config with no LLM or adapter setup keeps it empty, so a blank file loads for the setup wizard; otherwise `openrouter` when configured or nothing else is, else the first `[[llm.providers]]` instance.
 
-- **Shared validators** (`internal/config`): `ValidResourceName`, `ValidProviderType`, `IsProviderReferenced` — use for new CRUD endpoints.
+- **Shared validators** (`internal/config`): `ValidResourceName`, `ValidProviderType`, `IsProviderReferenced`, `ValidateDecider`, `DeciderReferrers`, `ServesDecisions` — use for new CRUD endpoints.

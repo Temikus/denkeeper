@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ func (stubDecisionProvider) Decide(context.Context, llm.DecisionRequest) (*llm.D
 	return &llm.DecisionResponse{}, nil
 }
 
-// deciderDeps is testDeps with a supervised "default" agent, a started decider
-// "jev", and a decider "late" that is configured but was never started.
+// deciderDeps is testDeps with a supervised "default" agent, a running decider
+// "jev", and a decider "late" that is configured but not in the live set.
 func deciderDeps() Deps {
 	deps := testDeps()
 	deps.Config = config.NewHolder(&config.Config{
@@ -33,10 +34,13 @@ func deciderDeps() Deps {
 		}},
 		Agents: []config.AgentInstanceConfig{{Name: "default", Adapters: []string{"telegram"}}},
 	})
-	deps.Deciders = map[string]*llm.Decider{
-		"jev": llm.NewDecider(llm.DeciderConfig{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", Timeout: time.Second}, stubDecisionProvider{}, deps.CostTracker),
-	}
+	deps.Deciders = llm.NewDeciderSet(nil, deps.CostTracker)
+	deps.Deciders.Put(stubDecider("jev", deps.CostTracker))
 	return deps
+}
+
+func stubDecider(name string, costs *llm.CostTracker) *llm.Decider {
+	return llm.NewDecider(llm.DeciderConfig{Name: name, Provider: "or", Model: "typesafe/jev-1.13", Timeout: time.Second}, stubDecisionProvider{}, costs)
 }
 
 func patchAgent(t *testing.T, srv *Server, fields map[string]any) *httptest.ResponseRecorder {
@@ -193,8 +197,22 @@ func TestAgentConfigUpdate_DeciderOnNonSupervisedTierRejected(t *testing.T) {
 
 // A decider client is built at startup, so one that only exists in the config
 // cannot be wired live.
-func TestAgentConfigUpdate_UnstartedDeciderRejected(t *testing.T) {
-	assertPatchRejected(t, deciderDeps(), map[string]any{"supervisor_decider": "late"}, "restart denkeeper")
+func TestAgentConfigUpdate_UnwiredDeciderRejected(t *testing.T) {
+	assertPatchRejected(t, deciderDeps(), map[string]any{"supervisor_decider": "late"}, `decider "late" is not running`)
+}
+
+// A decider that joins the live set after the server started binds without a
+// restart.
+func TestAgentConfigUpdate_DeciderAddedAfterStartupBinds(t *testing.T) {
+	deps := deciderDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	deps.Deciders.Put(stubDecider("late", deps.CostTracker))
+
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": "late"})
+
+	if d := deps.Dispatcher.Agent("default").SupervisorDecider(); d == nil || d.Name() != "late" {
+		t.Fatalf("wired decider = %v, want late", d)
+	}
 }
 
 // Leaving the supervised tier with a decider set would persist a config that
@@ -243,8 +261,24 @@ func TestLLMProviders_ListsDeciders(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := deciderInfo{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13"}
-	if len(resp.Deciders) != 2 || resp.Deciders[0] != want {
+	want := deciderInfo{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", UsedBy: []string{}}
+	if len(resp.Deciders) != 2 || !reflect.DeepEqual(resp.Deciders[0], want) {
 		t.Errorf("deciders = %+v, want [%+v, late]", resp.Deciders, want)
+	}
+}
+
+func TestAgentList_NamesTheSupervisorDecider(t *testing.T) {
+	deps := deciderDeps()
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	mustPatchAgent(t, srv, map[string]any{"supervisor_decider": "jev"})
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/agents"))
+	var list []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 || list[0]["supervisor_decider"] != "jev" {
+		t.Errorf("agent list = %v, want default with supervisor_decider jev", list)
 	}
 }

@@ -26,7 +26,7 @@ The decider works with or without a supervisor behind it.
 
 ## Setup
 
-Declare the decider once, then point a supervised agent at it:
+Declare the decider once, then point a supervised agent at it. You can also create, change and delete decision models through the [REST API](/docs/reference/rest-api/#decision-models), which applies them without a restart.
 
 ```toml
 [[llm.deciders]]
@@ -44,7 +44,7 @@ supervisor_decider_approve_at = 0.95
 supervisor_decider_deny_at = 0.05
 ```
 
-The same fields are on the **Agents** page under **Permission**, and on `PATCH /api/v1/agents/{name}`. Both apply to the running agent at once. Editing the TOML by hand is different: a reload applies mode and threshold changes and stops a removed decider, but starting a decider that way needs a restart.
+The same fields are on the **Agents** page under **Permission**, and on `PATCH /api/v1/agents/{name}`. Both apply to the running agent at once. Editing the TOML by hand takes a reload, which applies every decider change, including a new decider.
 
 ## What it is asked
 
@@ -148,7 +148,7 @@ A malformed question, an input over the decider's `max_input_tokens`, a timeout,
 
 The tool only reads, so it is available in the `restricted` tier and in dry runs, and a repeated identical call within one turn is answered from cache. Spend is billed to the calling agent, bucketed per day since a tool call carries no conversation, and counts against that agent's cost limits. The same data-egress point applies: whatever state the agent passes goes to the decider's provider.
 
-Like the other decider stages, naming or changing `[decide] decider` in the TOML needs a restart.
+Changes to the decider it names apply on reload. Turning the tool on or off, or naming a different decider in `[decide] decider`, needs a restart.
 
 ## Things to weigh
 

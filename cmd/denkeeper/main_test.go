@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
@@ -140,21 +142,23 @@ func TestInitLLMClients_BuildsDeciders(t *testing.T) {
 			},
 			Deciders: []config.DeciderConfig{
 				{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", Timeout: "5s", MaxInputTokens: 30000},
-				// Unreachable after config validation; must be skipped, not wired.
+				// Unreachable after config validation; registered, but every call fails closed.
 				{Name: "bad", Provider: "anthropic", Model: "m", Timeout: "5s"},
 			},
 		},
 	}
 	clients := initLLMClients(cfg)
-	d := clients.deciders["jev"]
+	d := clients.deciders.Get("jev")
 	if d == nil {
 		t.Fatal("expected decider jev to be built")
 	}
 	if d.Name() != "jev" || d.Model() != "typesafe/jev-1.13" {
 		t.Errorf("decider = %s/%s", d.Name(), d.Model())
 	}
-	if _, ok := clients.deciders["bad"]; ok {
-		t.Error("decider on a non-decision provider must be skipped")
+	_, err := clients.deciders.Get("bad").Decide(context.Background(), "s", "state",
+		map[string]llm.Question{"q": {Type: llm.QuestionNoul, Instructions: "x"}})
+	if !errors.Is(err, llm.ErrNoDecisionProvider) {
+		t.Errorf("decider on a non-decision provider: err = %v, want ErrNoDecisionProvider", err)
 	}
 }
 

@@ -149,6 +149,7 @@ type providerInfo struct {
 	CostLimitHard         *float64                           `json:"cost_limit_hard,omitempty"`
 	DefaultRatePerKTokens *float64                           `json:"default_rate_per_1k_tokens,omitempty"`
 	ModelPrices           map[string]config.ModelPriceConfig `json:"model_prices,omitempty"`
+	ServesDecisions       bool                               `json:"serves_decisions"`
 }
 
 // providerRoutingCfg is the API shape for OpenRouter upstream provider routing,
@@ -169,12 +170,15 @@ type llmProvidersResponse struct {
 	Deciders        []deciderInfo  `json:"deciders"`
 }
 
-// deciderInfo is one [[llm.deciders]] entry, listed so a client can offer it
-// as an agent's supervisor_decider.
+// deciderInfo is one [[llm.deciders]] entry. UsedBy names what references it
+// (see config.DeciderReferrers); a used decider cannot be deleted.
 type deciderInfo struct {
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Name           string   `json:"name"`
+	Provider       string   `json:"provider"`
+	Model          string   `json:"model"`
+	Timeout        string   `json:"timeout"`
+	MaxInputTokens int      `json:"max_input_tokens"`
+	UsedBy         []string `json:"used_by"`
 }
 
 // handleGetLLMProviders godoc
@@ -186,17 +190,19 @@ type deciderInfo struct {
 // @Success 200 {object} llmProvidersResponse
 // @Router /llm/providers [get]
 func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.appConfig().LLM
+	snap := s.appConfig()
+	cfg := snap.LLM
 
 	providers := make([]providerInfo, 0, len(cfg.Providers))
 	for _, pc := range cfg.Providers {
 		pi := providerInfo{
-			Name:         pc.Name,
-			Type:         pc.Type,
-			Enabled:      pc.APIKey != "" || pc.Type == "ollama",
-			APIKeySet:    pc.APIKey != "",
-			BaseURL:      pc.BaseURL,
-			Organization: pc.Organization,
+			Name:            pc.Name,
+			Type:            pc.Type,
+			Enabled:         pc.APIKey != "" || pc.Type == "ollama",
+			APIKeySet:       pc.APIKey != "",
+			BaseURL:         pc.BaseURL,
+			Organization:    pc.Organization,
+			ServesDecisions: config.ServesDecisions(pc.Type),
 		}
 		if pc.Type == "openrouter" {
 			r := cfg.OpenRouter.Reasoning
@@ -219,7 +225,7 @@ func (s *Server) handleGetLLMProviders(w http.ResponseWriter, _ *http.Request) {
 
 	deciders := make([]deciderInfo, 0, len(cfg.Deciders))
 	for _, dc := range cfg.Deciders {
-		deciders = append(deciders, deciderInfo{Name: dc.Name, Provider: dc.Provider, Model: dc.Model})
+		deciders = append(deciders, newDeciderInfo(snap, dc))
 	}
 
 	writeJSON(w, http.StatusOK, llmProvidersResponse{

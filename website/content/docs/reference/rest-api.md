@@ -99,7 +99,7 @@ Get detailed model information including pricing data.
 
 **Scope:** `admin`
 
-List all LLM providers with their current configuration (API keys are redacted). The response also carries `deciders`, the configured `[[llm.deciders]]` entries (`name`, `provider`, `model`).
+List all LLM providers with their current configuration (API keys are redacted). Each provider has `serves_decisions`, true for types that can back a [decision model](/docs/concepts/deciders/). The response also carries `deciders`, the configured `[[llm.deciders]]` entries (`name`, `provider`, `model`, `timeout`, `max_input_tokens`), each with `used_by`: `agent:<name>`, `eval.judge_decider` or `decide.decider`.
 
 ### `POST /api/v1/llm/providers`
 
@@ -165,6 +165,38 @@ Update global LLM configuration (default provider, default model).
   "default_model": "claude-sonnet-4-5"
 }
 ```
+
+## Decision Models
+
+Create, change and remove `[[llm.deciders]]` entries. Every change is written to the TOML and applies to the running agents, the eval judge and the decide tool without a restart. Only providers with `serves_decisions` (OpenRouter) can back a decision model.
+
+### `POST /api/v1/llm/deciders`
+
+**Scope:** `admin`
+
+```json
+{ "name": "jev", "provider": "openrouter", "model": "typesafe/jev-1.13", "timeout": "5s", "max_input_tokens": 30000 }
+```
+
+`timeout` and `max_input_tokens` are optional (defaults `5s` and `30000`). Returns `201` with the stored entry, `409` if the name is taken, `400` for an invalid name, a provider that does not serve decisions or has no API key.
+
+### `PATCH /api/v1/llm/deciders/{name}`
+
+**Scope:** `admin`
+
+Change `provider`, `model`, `timeout` or `max_input_tokens`. An empty `timeout` or a zero `max_input_tokens` restores the default. Decision models cannot be renamed (`400`). Changing the model means thresholds calibrated on the old model may no longer fit.
+
+### `DELETE /api/v1/llm/deciders/{name}`
+
+**Scope:** `admin`
+
+Returns `204`, or `409` with `used_by` while an agent, the eval judge or the decide tool still uses it.
+
+### `POST /api/v1/llm/deciders/test`
+
+**Scope:** `admin`
+
+Asks one trivial question, either through a configured decision model (`{"name": "jev"}`) or an unsaved one (`{"provider": "openrouter", "model": "typesafe/jev-1.13"}`). Returns `200` with `status` (`ok` or `error`), `message`, `latency_ms` and `cost_usd`. The provider bills the call; no agent is charged for it.
 
 ## Server Admin
 
@@ -308,7 +340,7 @@ Create an agent. Creates the persona directory and persists an `[[agents]]` bloc
 
 Update an agent's configuration. Mutable fields: `name` (rename), `session_tier`, `llm_provider`, `llm_model`, `description`, `max_tool_rounds`, `browser_url_allowlist`, `fallbacks`, `cost_limit_soft`, `cost_limit_hard`, `supervisor`, `supervisor_timeout`, `supervisor_context_messages`, `supervisor_body_excerpt_len`, `supervisor_tool_desc_len`, `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, `supervisor_decider_deny_at`, `reviewer_model`, `reviewer_provider`, `review_max_iterations`, `review_timeout`, `nudge_memory_interval`, `nudge_skill_interval`. Every field is optional and only present ones change; omit a field to leave it as-is.
 
-The `supervisor_decider*` fields set the agent's [decision model](/docs/concepts/deciders/) and apply to the running agent at once. `supervisor_decider` names a `[[llm.deciders]]` entry and `""` removes it; `supervisor_decider_mode` is `"shadow"` or `"enforce"`; a threshold of `0` restores its default. A request that includes `supervisor_decider` resets the mode and thresholds to their defaults unless it sets them too, so a cleared decider's tuning cannot come back on a later rebind. The request is rejected with `400` if the result would not be a valid config: an unknown decider, thresholds outside `0 < deny_at < approve_at < 1`, or a `session_tier` other than `supervised` while a decider is set. A decider added to the config file after startup needs a restart before it can be selected.
+The `supervisor_decider*` fields set the agent's [decision model](/docs/concepts/deciders/) and apply to the running agent at once. `supervisor_decider` names a `[[llm.deciders]]` entry and `""` removes it; `supervisor_decider_mode` is `"shadow"` or `"enforce"`; a threshold of `0` restores its default. A request that includes `supervisor_decider` resets the mode and thresholds to their defaults unless it sets them too, so a cleared decider's tuning cannot come back on a later rebind. The request is rejected with `400` if the result would not be a valid config: an unknown decider, thresholds outside `0 < deny_at < approve_at < 1`, or a `session_tier` other than `supervised` while a decider is set. A decider added to the config file can be selected after a reload.
 
 ### `DELETE /api/v1/agents/{name}`
 
