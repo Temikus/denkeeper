@@ -14,6 +14,11 @@
 
   let decisionProviders = $derived(providers.filter(p => p.serves_decisions && p.enabled))
 
+  // A cleared number input binds to undefined (or null); both mean "use the default".
+  function tokenLimit(v) {
+    return v === '' || v === null || v === undefined ? 0 : Number(v)
+  }
+
   // --- Add ---
   let showAdd = $state(false)
   let form = $state(emptyForm())
@@ -22,6 +27,14 @@
   let created = $state('')
   let formTest = $state(null)
   let formTesting = $state(false)
+
+  // The open form follows the provider list: one added while it is open
+  // (the "Add an OpenRouter provider" path) becomes the selection.
+  $effect(() => {
+    if (showAdd && !decisionProviders.some(p => p.name === form.provider)) {
+      form.provider = decisionProviders[0]?.name || ''
+    }
+  })
 
   function emptyForm() {
     return { name: '', provider: '', model: '', timeout: '', maxTokens: '' }
@@ -39,7 +52,7 @@
   function optionalFields(f) {
     const body = {}
     if (f.timeout.trim()) body.timeout = f.timeout.trim()
-    if (String(f.maxTokens).trim()) body.max_input_tokens = Number(f.maxTokens)
+    if (tokenLimit(f.maxTokens)) body.max_input_tokens = tokenLimit(f.maxTokens)
     return body
   }
 
@@ -126,7 +139,7 @@
         provider: draft.provider,
         model: draft.model.trim(),
         timeout: draft.timeout.trim(),
-        max_input_tokens: String(draft.maxTokens).trim() ? Number(draft.maxTokens) : 0,
+        max_input_tokens: tokenLimit(draft.maxTokens),
       })
       editing = ''
       await onChange()

@@ -133,4 +133,27 @@ describe('DecisionModels', () => {
     expect(screen.getByTestId('decider-delete-confirm')).toBeInTheDocument()
     expect(screen.queryByText('Edit')).not.toBeInTheDocument()
   })
+
+  test('a provider added while the form is open becomes the selection', async () => {
+    const { rerender } = render(DecisionModels, { props: { providers: [anthropic] } })
+    await fireEvent.click(screen.getByTestId('add-decider-btn'))
+    await rerender({ providers: [anthropic, openrouter] })
+
+    expect(screen.getByTestId('decider-provider-select')).toHaveValue('openrouter')
+  })
+
+  test('clearing the token limit in edit sends 0 to restore the default', async () => {
+    let body
+    server.use(http.patch('/api/v1/llm/deciders/:name', async ({ request }) => {
+      body = await request.json()
+      return HttpResponse.json({ decider: {}, restart_required: false })
+    }))
+    render(DecisionModels, { props: { deciders: [{ ...jev, max_input_tokens: 8000 }], providers: [openrouter] } })
+    await fireEvent.click(screen.getByText('Edit'))
+    const input = screen.getByDisplayValue('8000')
+    await fireEvent.input(input, { target: { value: '' } })
+    await fireEvent.click(screen.getByTestId('decider-edit-save'))
+
+    await waitFor(() => expect(body?.max_input_tokens).toBe(0))
+  })
 })
