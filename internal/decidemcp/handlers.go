@@ -13,7 +13,7 @@ import (
 const ToolName = "decide"
 
 func (s *Server) registerTools() {
-	if s.deps.Decider == nil {
+	if s.deps.Resolve == nil {
 		return
 	}
 	s.mcpServer.AddTool(&mcp.Tool{
@@ -25,7 +25,7 @@ func (s *Server) registerTools() {
 			"and returns the probability of each; `score` rates on 2-10 ordered `levels` (worst first). "+
 			"Instructions may reference state fields by path, e.g. `message.subject`. The model reads "+
 			"text only, does no arithmetic and gives no explanation. Inputs over the model's size cap "+
-			"are refused, not truncated: send only the state the question needs.", s.deps.Decider.Model()),
+			"are refused, not truncated: send only the state the question needs.", s.deps.DeciderName),
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -84,8 +84,11 @@ func (s *Server) handleDecide(ctx context.Context, req *mcp.CallToolRequest) (*m
 		}
 	}
 
-	d := s.deps.Decider
-	sessionID := s.sessionKey()
+	d := s.deps.Resolve()
+	if d == nil {
+		return toolError(fmt.Sprintf("decide unavailable: decision model %q is not configured", s.deps.DeciderName)), nil
+	}
+	sessionID := s.sessionKey(d)
 	// Bill the calling agent: its limits apply and its spend shows the cost.
 	if ct := d.CostTracker(); ct != nil {
 		ct.RegisterSessionAgent(sessionID, s.deps.AgentName)
@@ -108,8 +111,8 @@ func (s *Server) handleDecide(ctx context.Context, req *mcp.CallToolRequest) (*m
 // conversation id across the MCP boundary, so the key rotates daily instead:
 // a per-session hard limit then bounds a day of decide spend rather than the
 // agent's lifetime, after which the tool would be refused until restart.
-func (s *Server) sessionKey() string {
-	return "decide:" + s.deps.Decider.Name() + ":" + s.deps.AgentName + ":" + s.deps.Now().UTC().Format("2006-01-02")
+func (s *Server) sessionKey(d *llm.Decider) string {
+	return "decide:" + d.Name() + ":" + s.deps.AgentName + ":" + s.deps.Now().UTC().Format("2006-01-02")
 }
 
 // describeError turns a failed call into text the model can act on.

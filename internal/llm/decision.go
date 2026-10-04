@@ -78,6 +78,10 @@ type DecisionProvider interface {
 // can hide the payload that matters.
 var ErrDecisionTooLarge = errors.New("decision input exceeds max_input_tokens")
 
+// ErrNoDecisionProvider is returned when a live decider's provider instance is
+// not registered or does not serve decisions. The call is never made.
+var ErrNoDecisionProvider = errors.New("provider does not serve decisions")
+
 // ValidateQuestions checks question shapes against the decisions API limits so
 // a malformed question fails before any call is made.
 func ValidateQuestions(qs map[string]Question) error {
@@ -170,14 +174,15 @@ type DeciderConfig struct {
 // DecisionProvider, a model and the cost tracker, and enforces the size,
 // budget and timeout guards around each call.
 type Decider struct {
-	cfg      DeciderConfig
-	provider DecisionProvider
-	costs    *CostTracker
-	tracer   trace.Tracer
+	cfg       DeciderConfig
+	provider  DecisionProvider // fixed client; nil for a live decider
+	providers *ProviderSet     // live decider: cfg.Provider is looked up per call
+	costs     *CostTracker
+	tracer    trace.Tracer
 }
 
-// NewDecider creates a Decider. costs may be nil (no budget guard or
-// recording).
+// NewDecider creates a Decider over a fixed provider client. costs may be nil
+// (no budget guard or recording).
 func NewDecider(cfg DeciderConfig, provider DecisionProvider, costs *CostTracker) *Decider {
 	return &Decider{
 		cfg:      cfg,
@@ -185,6 +190,15 @@ func NewDecider(cfg DeciderConfig, provider DecisionProvider, costs *CostTracker
 		costs:    costs,
 		tracer:   otel.Tracer("denkeeper.llm"),
 	}
+}
+
+// NewLiveDecider creates a Decider that looks cfg.Provider up in providers on
+// every call, so a provider replaced at runtime (a rotated API key) is used
+// from the next call on. costs may be nil.
+func NewLiveDecider(cfg DeciderConfig, providers *ProviderSet, costs *CostTracker) *Decider {
+	d := NewDecider(cfg, nil, costs)
+	d.providers = providers
+	return d
 }
 
 // Name returns the decider's configured name.
@@ -199,11 +213,24 @@ func (d *Decider) Model() string { return d.cfg.Model }
 // CostTracker returns the tracker calls are billed to (may be nil).
 func (d *Decider) CostTracker() *CostTracker { return d.costs }
 
-// Matches reports whether this client was built for the given provider and
-// model. Decider clients are built once at startup, so a config entry that has
-// since changed must not be served by the stale client.
-func (d *Decider) Matches(provider, model string) bool {
-	return d.cfg.Provider == provider && d.cfg.Model == model
+// decisionProvider returns the fixed client, or for a live decider the
+// provider currently registered under cfg.Provider.
+func (d *Decider) decisionProvider() (DecisionProvider, error) {
+	if d.providers == nil {
+		if d.provider == nil {
+			return nil, ErrNoDecisionProvider
+		}
+		return d.provider, nil
+	}
+	p, ok := d.providers.Get(d.cfg.Provider)
+	if !ok {
+		return nil, fmt.Errorf("provider %q is not registered: %w", d.cfg.Provider, ErrNoDecisionProvider)
+	}
+	dp, ok := p.(DecisionProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider %q: %w", d.cfg.Provider, ErrNoDecisionProvider)
+	}
+	return dp, nil
 }
 
 // WithTimeout returns a shallow clone with a different per-call timeout, so a
@@ -278,7 +305,11 @@ func (d *Decider) decide(ctx context.Context, sessionID string, state any, qs ma
 		defer cancel()
 	}
 
-	resp, err := d.provider.Decide(ctx, DecisionRequest{Model: d.cfg.Model, State: state, Questions: qs})
+	provider, err := d.decisionProvider()
+	if err != nil {
+		return nil, fmt.Errorf("decider %q: %w", d.cfg.Name, err)
+	}
+	resp, err := provider.Decide(ctx, DecisionRequest{Model: d.cfg.Model, State: state, Questions: qs})
 	if err != nil {
 		return nil, fmt.Errorf("decider %q: %w", d.cfg.Name, err)
 	}

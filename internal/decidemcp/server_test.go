@@ -297,7 +297,7 @@ func TestDecide_NoDeciderRegistersNoTool(t *testing.T) {
 	}
 }
 
-func TestDecide_DescriptionNamesTheModel(t *testing.T) {
+func TestDecide_DescriptionNamesTheDecider(t *testing.T) {
 	session := newTestServer(t, Deps{Decider: newDecider(&fakeProvider{}, nil, llm.DeciderConfig{}), AgentName: "default"})
 	tools, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -306,7 +306,42 @@ func TestDecide_DescriptionNamesTheModel(t *testing.T) {
 	if len(tools.Tools) != 1 || tools.Tools[0].Name != ToolName {
 		t.Fatalf("tools = %+v, want one decide tool", tools.Tools)
 	}
-	if !strings.Contains(tools.Tools[0].Description, "typesafe/jev-1.13") {
-		t.Errorf("description does not name the model: %q", tools.Tools[0].Description)
+	if !strings.Contains(tools.Tools[0].Description, "decision model jev ") {
+		t.Errorf("description does not name the decider: %q", tools.Tools[0].Description)
+	}
+}
+
+func TestDecide_ResolvesDeciderPerCall(t *testing.T) {
+	first, second := &fakeProvider{p: 0.9}, &fakeProvider{p: 0.1}
+	current := newDecider(first, nil, llm.DeciderConfig{})
+	session := newTestServer(t, Deps{
+		Resolve:     func() *llm.Decider { return current },
+		DeciderName: "jev",
+		AgentName:   "default",
+	})
+	args := map[string]any{"state": "x", "questions": map[string]any{"q": noulQuestion("anything")}}
+
+	callDecide(t, session, args)
+	current = newDecider(second, nil, llm.DeciderConfig{Model: "typesafe/jev-2"})
+	callDecide(t, session, args)
+
+	if first.calls != 1 || second.calls != 1 {
+		t.Errorf("calls first=%d second=%d, want 1 and 1", first.calls, second.calls)
+	}
+	if second.last.Model != "typesafe/jev-2" {
+		t.Errorf("second call model = %q, want the replaced decider's", second.last.Model)
+	}
+}
+
+func TestDecide_UnconfiguredDeciderIsToolError(t *testing.T) {
+	session := newTestServer(t, Deps{
+		Resolve:     func() *llm.Decider { return nil },
+		DeciderName: "jev",
+		AgentName:   "default",
+	})
+
+	r := callDecide(t, session, map[string]any{"state": "x", "questions": map[string]any{"q": noulQuestion("anything")}})
+	if !r.IsError || !strings.Contains(extractText(r), `"jev" is not configured`) {
+		t.Fatalf("result = %v %q, want a not-configured tool error", r.IsError, extractText(r))
 	}
 }

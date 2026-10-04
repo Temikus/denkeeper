@@ -16,8 +16,15 @@ import (
 
 // Deps holds the runtime dependencies injected into the Decide MCP server.
 type Deps struct {
-	// Decider answers the questions. A nil Decider registers no tool.
+	// Decider is a fixed decider, used when Resolve is nil. With neither set,
+	// no tool is registered.
 	Decider *llm.Decider
+	// Resolve returns the decider at each call, so one added or changed at
+	// runtime is used without reconnecting. A nil result is a tool error.
+	Resolve func() *llm.Decider
+	// DeciderName names the decider in the tool description. Defaults to
+	// Decider's name.
+	DeciderName string
 	// AgentName is the agent the decider spend is billed to.
 	AgentName string
 	// Now stamps the billing session key. Defaults to time.Now.
@@ -33,7 +40,7 @@ type Server struct {
 }
 
 // New constructs and wires the Decide MCP server. The decide tool is
-// registered immediately (when a decider is set); the server does not begin
+// registered immediately (when a decider or resolver is set); the server does not begin
 // serving until Connect is called.
 func New(deps Deps) *Server {
 	if deps.Logger == nil {
@@ -41,6 +48,14 @@ func New(deps Deps) *Server {
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now
+	}
+	if d := deps.Decider; d != nil {
+		if deps.Resolve == nil {
+			deps.Resolve = func() *llm.Decider { return d }
+		}
+		if deps.DeciderName == "" {
+			deps.DeciderName = d.Name()
+		}
 	}
 	s := &Server{
 		mcpServer: mcp.NewServer(&mcp.Implementation{

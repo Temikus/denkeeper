@@ -184,8 +184,8 @@ func buildChannelResolver(d *agent.Dispatcher) configmcp.ChannelResolver {
 
 // llmClients holds the initialized LLM provider clients.
 type llmClients struct {
-	providers         *llm.ProviderSet        // shared by every agent router
-	deciders          map[string]*llm.Decider // keyed by [[llm.deciders]] name
+	providers         *llm.ProviderSet // shared by every agent router
+	deciders          *llm.DeciderSet  // live, keyed by [[llm.deciders]] name
 	cost              *llm.CostTracker
 	fallbacks         []llm.FallbackRule
 	pricing           *pricing.Registry
@@ -334,9 +334,11 @@ func initLLMClients(cfg *config.Config) llmClients {
 	}
 
 	cost := buildCostTracker(cfg)
+	deciders := llm.NewDeciderSet(providers, cost)
+	deciders.Sync(deciderConfigs(cfg))
 	return llmClients{
 		providers:         providers,
-		deciders:          buildDeciders(cfg, providers.Snapshot(), cost),
+		deciders:          deciders,
 		cost:              cost,
 		fallbacks:         fallbackRules,
 		pricing:           reg,
@@ -344,31 +346,25 @@ func initLLMClients(cfg *config.Config) llmClients {
 	}
 }
 
-// buildDeciders binds each [[llm.deciders]] entry to its provider instance.
-// Config validation guarantees a decision-capable provider type, so a failed
-// assertion only means the provider itself failed to build.
-func buildDeciders(cfg *config.Config, providers map[string]llm.Provider, cost *llm.CostTracker) map[string]*llm.Decider {
-	deciders := make(map[string]*llm.Decider, len(cfg.LLM.Deciders))
+// deciderConfigs translates [[llm.deciders]] into decider configs. Load has
+// validated each entry, including a decision-capable provider type.
+func deciderConfigs(cfg *config.Config) []llm.DeciderConfig {
+	out := make([]llm.DeciderConfig, 0, len(cfg.LLM.Deciders))
 	for _, dc := range cfg.LLM.Deciders {
-		dp, ok := providers[dc.Provider].(llm.DecisionProvider)
-		if !ok {
-			slog.Warn("decider skipped: provider does not serve decisions", "decider", dc.Name, "provider", dc.Provider)
-			continue
-		}
-		deciders[dc.Name] = newDecider(dc, dp, cost)
+		out = append(out, deciderConfig(dc))
 	}
-	return deciders
+	return out
 }
 
-func newDecider(dc config.DeciderConfig, dp llm.DecisionProvider, cost *llm.CostTracker) *llm.Decider {
+func deciderConfig(dc config.DeciderConfig) llm.DeciderConfig {
 	timeout, _ := time.ParseDuration(dc.Timeout) // validated by config.Load
-	return llm.NewDecider(llm.DeciderConfig{
+	return llm.DeciderConfig{
 		Name:           dc.Name,
 		Provider:       dc.Provider,
 		Model:          dc.Model,
 		Timeout:        timeout,
 		MaxInputTokens: dc.MaxInputTokens,
-	}, dp, cost)
+	}
 }
 
 // applyProviderPricing registers one instance's pricing overrides.
@@ -1110,21 +1106,19 @@ func connectInProcessTools(ctx context.Context, agentName string, permTier func(
 }
 
 // connectDecideMCP creates the per-agent Decide MCP server (decide) and
-// registers it with the agent's tool manager. The decider is one of the
-// clients built at startup, so a [decide] change in the TOML needs a restart.
-func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config, deciders map[string]*llm.Decider, toolMgr *tool.Manager, logger *slog.Logger) error {
+// registers it with the agent's tool manager. The tool looks the decider up in
+// the live set on every call, so editing that decider needs no restart;
+// turning [decide] on or off, or pointing it at another name, does.
+func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config, deciders *llm.DeciderSet, toolMgr *tool.Manager, logger *slog.Logger) error {
 	if !cfg.Decide.DecideEnabled() {
 		return nil
 	}
-	d := startedDecider(cfg, deciders, cfg.Decide.Decider)
-	if d == nil {
-		logger.Warn("decide tool not registered: decider not bound; restart to apply", "agent", agentName, "decider", cfg.Decide.Decider)
-		return nil
-	}
+	name := cfg.Decide.Decider
 	srv := decidemcp.New(decidemcp.Deps{
-		Decider:   d,
-		AgentName: agentName,
-		Logger:    logger,
+		Resolve:     func() *llm.Decider { return deciders.Get(name) },
+		DeciderName: name,
+		AgentName:   agentName,
+		Logger:      logger,
 	})
 	session, err := srv.Connect(ctx)
 	if err != nil {
@@ -1133,7 +1127,7 @@ func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config,
 	if err := toolMgr.RegisterSession(ctx, "decide-"+agentName, session); err != nil {
 		return fmt.Errorf("registering decide MCP for agent %q: %w", agentName, err)
 	}
-	logger.Info("decide MCP registered", "agent", agentName, "decider", d.Name())
+	logger.Info("decide MCP registered", "agent", agentName, "decider", name)
 	return nil
 }
 
@@ -1284,11 +1278,10 @@ func buildDispatcherWithChannels(
 // buildAllAgents creates an Engine for each configured agent and collects their bindings.
 // wireSupervisors links supervisor engines to supervised agents (second pass
 // after all engines are built).
-func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*agent.Engine, deciders map[string]*llm.Decider, logger *slog.Logger) {
+func wireSupervisors(agents []config.AgentInstanceConfig, engines map[string]*agent.Engine, deciders *llm.DeciderSet, logger *slog.Logger) {
 	for _, ac := range agents {
-		if d := deciders[ac.SupervisorDecider]; d != nil && engines[ac.Name] != nil {
-			engines[ac.Name].SetSupervisorDecider(d, deciderStageFrom(ac))
-			logger.Info("supervisor decider wired", "agent", ac.Name, "decider", d.Name(), "mode", ac.SupervisorDeciderMode)
+		if e := engines[ac.Name]; e != nil {
+			bindSupervisorDecider(e, ac, deciders, logger)
 		}
 		if ac.Supervisor == "" {
 			continue
@@ -1560,16 +1553,15 @@ func buildEvalRunner(cfg *config.Config, store *eval.Store, dispatcher *agent.Di
 // clone, so judging bills to the agent's own cost tracker and honours its
 // pricing and fallback rules. It is unavailable — not absent — when
 // [eval] judge_model is unset, so the endpoint can say why.
-func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, deciders map[string]*llm.Decider, logger *slog.Logger) *eval.Judge {
+func buildEvalJudge(cfg *config.Config, store *eval.Store, dispatcher *agent.Dispatcher, auditor audit.Emitter, deciders *llm.DeciderSet, logger *slog.Logger) *eval.Judge {
 	return eval.NewJudge(store, liveEngineSource(dispatcher), auditor, judgeConfigFrom(cfg, deciders, logger), logger)
 }
 
 // judgeConfigFrom translates the [eval] judge block. Shared with the reload
 // path so a reloaded judge_model cannot mean one thing at boot and another
-// after SIGHUP. The judge decider is one of the clients built at startup; a
-// name added or changed since then is logged and left unbound, the same rule
-// the supervisor stage follows.
-func judgeConfigFrom(cfg *config.Config, deciders map[string]*llm.Decider, logger *slog.Logger) eval.JudgeConfig {
+// after a reload. The judge decider comes from the live set, so it is re-read
+// on every reload and decider change.
+func judgeConfigFrom(cfg *config.Config, deciders *llm.DeciderSet, logger *slog.Logger) eval.JudgeConfig {
 	jc := eval.JudgeConfig{
 		Model:           cfg.Eval.JudgeModel,
 		Provider:        cfg.Eval.JudgeProvider,
@@ -1578,30 +1570,15 @@ func judgeConfigFrom(cfg *config.Config, deciders map[string]*llm.Decider, logge
 		DeciderRecordAt: cfg.Eval.JudgeDeciderRecordAt,
 	}
 	if name := cfg.Eval.JudgeDecider; name != "" {
-		d := startedDecider(cfg, deciders, name)
+		d := deciders.Get(name)
 		if d == nil {
-			logger.Warn("eval judge decider not bound; restart to apply", "decider", name)
+			logger.Warn("eval judge decider not running", "decider", name)
 		} else {
 			timeout, _ := time.ParseDuration(cfg.Eval.JudgeDeciderTimeout)
 			jc.Decider = d.WithTimeout(timeout)
 		}
 	}
 	return jc
-}
-
-// startedDecider returns the client built at startup for name, or nil when
-// none matches the current config (clients are not rebuilt on reload).
-func startedDecider(cfg *config.Config, deciders map[string]*llm.Decider, name string) *llm.Decider {
-	d := deciders[name]
-	if d == nil {
-		return nil
-	}
-	for _, dc := range cfg.LLM.Deciders {
-		if dc.Name == name && d.Matches(dc.Provider, dc.Model) {
-			return d
-		}
-	}
-	return nil
 }
 
 // liveEngineSource resolves an agent name to its live engine for the eval
@@ -1793,7 +1770,7 @@ type startAPIWithMCPArgs struct {
 	dispatcher      *agent.Dispatcher
 	sched           *scheduler.Scheduler
 	cost            *llm.CostTracker
-	deciders        map[string]*llm.Decider
+	deciders        *llm.DeciderSet
 	memory          agent.MemoryStore
 	approvalManager *approval.Manager
 	lifecycleMgr    *tool.LifecycleManager
@@ -2304,7 +2281,7 @@ func wireSkillCommands(tgAdapter *telegram.Adapter, engines map[string]*agent.En
 type reloadRuntime struct {
 	providers  *liveProviders
 	buildAgent func(config.AgentInstanceConfig) (*agent.Engine, []agent.Binding, error)
-	deciders   map[string]*llm.Decider
+	deciders   *llm.DeciderSet
 }
 
 func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Dispatcher, approvals *approval.Manager, evalJudge *eval.Judge, rt reloadRuntime, logger *slog.Logger) func() error {
@@ -2318,6 +2295,8 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		if rt.providers != nil {
 			syncProviders(*rt.providers, cfg)
 		}
+		// Before new agents are built, so they bind the reloaded deciders.
+		syncDeciders(cfg, rt.deciders, dispatcher, logger)
 		if rt.buildAgent != nil {
 			reloadNewAgents(cfg, dispatcher, rt, logger)
 		}
@@ -2339,7 +2318,6 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
 			reconcileSupervisor(e, ac, dispatcher, logger)
-			reconcileSupervisorDecider(e, ac, cfg, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
 			e.SetReplyGuard(replyGuardFrom(cfg))
@@ -2411,7 +2389,7 @@ func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
 	e.SetSupervisorContextMessages(ac.SupervisorContextMessages)
 	e.SetSupervisorBodyExcerptLen(ac.SupervisorBodyExcerptLen)
 	e.SetSupervisorToolDescLen(ac.SupervisorToolDescLen)
-	// Re-tunes an already-wired decider only; binding one needs a restart.
+	// Re-tunes the bound decider; syncDeciders does the binding.
 	e.SetSupervisorDeciderConfig(deciderStageFrom(ac))
 }
 
@@ -2430,30 +2408,6 @@ func reconcileSupervisor(e *agent.Engine, ac config.AgentInstanceConfig, dispatc
 	}
 	e.SetSupervisor(want)
 	logger.Info("reload: supervisor rewired", "agent", ac.Name, "supervisor", ac.Supervisor)
-}
-
-// reconcileSupervisorDecider unbinds a wired decider on reload when the agent
-// no longer names it or its provider or model changed: removing a decider must
-// stop review data reaching that destination without a restart. Binding a new
-// one still needs a restart, since decider clients are built at startup.
-func reconcileSupervisorDecider(e *agent.Engine, ac config.AgentInstanceConfig, cfg *config.Config, logger *slog.Logger) {
-	cur := e.SupervisorDecider()
-	if cur == nil {
-		if ac.SupervisorDecider != "" {
-			logger.Warn("supervisor decider not bound; restart to apply", "agent", ac.Name, "decider", ac.SupervisorDecider)
-		}
-		return
-	}
-	if ac.SupervisorDecider == cur.Name() {
-		for _, dc := range cfg.LLM.Deciders {
-			if dc.Name == cur.Name() && dc.Provider == cur.Provider() && dc.Model == cur.Model() {
-				return
-			}
-		}
-	}
-	e.SetSupervisorDecider(nil, agent.DeciderStageConfig{})
-	logger.Warn("supervisor decider unbound on reload; restart to bind a replacement",
-		"agent", ac.Name, "decider", cur.Name(), "configured", ac.SupervisorDecider)
 }
 
 func deciderStageFrom(ac config.AgentInstanceConfig) agent.DeciderStageConfig {

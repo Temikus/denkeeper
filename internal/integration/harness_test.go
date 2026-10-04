@@ -306,9 +306,9 @@ type HarnessOpts struct {
 	EvalJudgeDecider         llm.DecisionProvider
 	EvalJudgeDeciderRecordAt float64
 
-	// Deciders are decision models built "at startup": each is listed under
-	// [[llm.deciders]] in the harness config and handed to the API as a
-	// started client, so PATCH can bind it to an agent.
+	// Deciders are decision models in the live set: each is listed under
+	// [[llm.deciders]] in the harness config and registered in the API's
+	// decider set, so PATCH can bind it to an agent.
 	Deciders []*llm.Decider
 
 	// AutoApproveTools seeds config-scoped ("config") auto-approve rules,
@@ -661,9 +661,9 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		}),
 	}
 	if len(opts.Deciders) > 0 {
-		deps.Deciders = make(map[string]*llm.Decider, len(opts.Deciders))
+		deps.Deciders = llm.NewDeciderSet(nil, nil)
 		for _, d := range opts.Deciders {
-			deps.Deciders[d.Name()] = d
+			deps.Deciders.Put(d)
 			deps.Config.Get().LLM.Deciders = append(deps.Config.Get().LLM.Deciders,
 				config.DeciderConfig{Name: d.Name(), Provider: d.Provider(), Model: d.Model()})
 		}
