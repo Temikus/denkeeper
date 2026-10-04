@@ -276,7 +276,20 @@
     return (raw || '').split(',').filter(v => v && items.some(i => i.value === v))
   }
 
-  onMount(() => { applyQuery($currentQuery); refresh() })
+  // A query-only hash change keeps this page mounted, so re-apply each new
+  // query. The first one is applied before onMount's initial load.
+  let appliedQuery = null
+  $effect(() => {
+    const q = $currentQuery
+    const key = q.toString()
+    if (key === appliedQuery) return
+    const first = appliedQuery === null
+    appliedQuery = key
+    applyQuery(q)
+    if (!first) refresh()
+  })
+
+  onMount(() => { refresh() })
   onDestroy(() => { clearInterval(refreshTimer); clearTimeout(searchTimeout); clearTimeout(filterTimeout) })
 </script>
 

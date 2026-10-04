@@ -174,6 +174,28 @@ describe('AuditLog page', () => {
     }
   })
 
+  test('a new query on the mounted page re-applies the filters', async () => {
+    const seen = []
+    server.use(http.get('/api/v1/audit', ({ request }) => {
+      seen.push(new URL(request.url).searchParams)
+      return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+    }))
+    window.location.hash = '#/audit?agent=pamela'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    try {
+      render(AuditLog)
+      await waitFor(() => expect(seen.some(q => q.get('agent') === 'pamela')).toBe(true))
+
+      window.location.hash = '#/audit?agent=scout'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await waitFor(() => expect(seen.at(-1).get('agent')).toBe('scout'))
+      expect(screen.getByLabelText('Search audit events')).toHaveValue('agent:scout')
+    } finally {
+      window.location.hash = ''
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
+  })
+
   test('shows search input', async () => {
     render(AuditLog)
     await waitFor(() => {
