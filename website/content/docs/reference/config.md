@@ -200,7 +200,7 @@ Defaults for agents that do not set their own directories.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised) |
+| `supervisor` | string | — | Name of another agent that auto-reviews tool calls before they reach you (supervised tier only; supervisor must be autonomous or restricted, not itself supervised). An empty `session_tier` counts as `[session] tier`, which defaults to `supervised`, so give the supervisor an explicit tier |
 | `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval |
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
@@ -211,6 +211,8 @@ Defaults for agents that do not set their own directories.
 | `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any answer is at or below this probability. Must satisfy `0 < deny_at < approve_at < 1` |
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
+
+A config reload applies `supervisor` and the four `supervisor_*` knobs above to running agents: adding, changing, or removing a supervisor takes effect for the next tool call, and removing a knob restores its default. Renaming an agent through the API or dashboard also updates other agents' `supervisor` and any `[[channels]]` `agent` that named it.
 
 On a config reload, removing `supervisor_decider`, pointing it at another decider, or changing that decider's `provider` or `model` stops the old decider for tool calls reviewed after the reload. A review already in progress finishes with it. Starting a decider, including the replacement, needs a restart. Thresholds and mode apply on reload. `PATCH /api/v1/agents/{name}` and the dashboard are not bound by this: they wire a decider that was configured at startup to the running agent at once.
 

@@ -414,7 +414,8 @@ func UpdateAgentInConfig(path, name string, changes map[string]any) error {
 }
 
 // RenameAgentInConfig changes an agent's name in the TOML config and updates
-// any [[schedules]] entries that reference the old name.
+// every reference to the old name: other agents' supervisor, [[channels]]
+// agent and [[schedules]] agent. A missed one fails the next load.
 func RenameAgentInConfig(path, oldName, newName string) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
@@ -439,11 +440,18 @@ func RenameAgentInConfig(path, oldName, newName string) error {
 	if !found {
 		return fmt.Errorf("agent %q not found in config", oldName)
 	}
+	for _, a := range agents {
+		if m, ok := a.(map[string]any); ok && m["supervisor"] == oldName {
+			m["supervisor"] = newName
+		}
+	}
 	raw["agents"] = agents
 
-	for _, s := range rawSchedules(raw) {
-		if m, ok := s.(map[string]any); ok && m["agent"] == oldName {
-			m["agent"] = newName
+	for _, entries := range [][]any{rawChannels(raw), rawSchedules(raw)} {
+		for _, e := range entries {
+			if m, ok := e.(map[string]any); ok && m["agent"] == oldName {
+				m["agent"] = newName
+			}
 		}
 	}
 

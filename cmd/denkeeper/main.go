@@ -2338,6 +2338,7 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			}
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
+			reconcileSupervisor(e, ac, dispatcher, logger)
 			reconcileSupervisorDecider(e, ac, cfg, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))
@@ -2402,18 +2403,33 @@ func replyGuardFrom(cfg *config.Config) agent.ReplyGuard {
 	}
 }
 
+// applySupervisorKnobs sets every knob, so a key cleared on reload reverts to
+// its default instead of keeping the previous override.
 func applySupervisorKnobs(e *agent.Engine, ac config.AgentInstanceConfig) {
-	if ac.SupervisorTimeout != "" {
-		supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout)
-		e.SetSupervisorConfig(supTimeout, ac.SupervisorContextMessages)
-	} else if ac.SupervisorContextMessages > 0 {
-		e.SetSupervisorConfig(0, ac.SupervisorContextMessages)
-	}
-	if ac.SupervisorBodyExcerptLen > 0 || ac.SupervisorToolDescLen > 0 {
-		e.SetSupervisorExcerptConfig(ac.SupervisorBodyExcerptLen, ac.SupervisorToolDescLen)
-	}
+	supTimeout, _ := time.ParseDuration(ac.SupervisorTimeout) // validated at load; "" = 0 = default
+	e.SetSupervisorTimeout(supTimeout)
+	e.SetSupervisorContextMessages(ac.SupervisorContextMessages)
+	e.SetSupervisorBodyExcerptLen(ac.SupervisorBodyExcerptLen)
+	e.SetSupervisorToolDescLen(ac.SupervisorToolDescLen)
 	// Re-tunes an already-wired decider only; binding one needs a restart.
 	e.SetSupervisorDeciderConfig(deciderStageFrom(ac))
+}
+
+// reconcileSupervisor rewires an agent's supervisor on reload to match
+// `supervisor =`. Load has validated the reference; a named supervisor that is
+// not running (it failed to build) is cleared, which sends calls to a human.
+func reconcileSupervisor(e *agent.Engine, ac config.AgentInstanceConfig, dispatcher *agent.Dispatcher, logger *slog.Logger) {
+	var want *agent.Engine
+	if ac.Supervisor != "" {
+		if want = dispatcher.Agent(ac.Supervisor); want == nil {
+			logger.Warn("reload: supervisor not running; tool calls go to a human", "agent", ac.Name, "supervisor", ac.Supervisor)
+		}
+	}
+	if e.Supervisor() == want {
+		return
+	}
+	e.SetSupervisor(want)
+	logger.Info("reload: supervisor rewired", "agent", ac.Name, "supervisor", ac.Supervisor)
 }
 
 // reconcileSupervisorDecider unbinds a wired decider on reload when the agent

@@ -4473,7 +4473,7 @@ session_tier = "autonomous"
 	if err == nil {
 		t.Fatal("expected error for supervisor on non-supervised agent")
 	}
-	if !strings.Contains(err.Error(), "only meaningful when session_tier") {
+	if !strings.Contains(err.Error(), "only meaningful when the session tier") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -4525,7 +4525,79 @@ session_tier = "supervised"
 	if err == nil {
 		t.Fatal("expected error for supervised supervisor")
 	}
-	if !strings.Contains(err.Error(), "must not use session_tier \"supervised\"") {
+	if !strings.Contains(err.Error(), "must not use the \"supervised\" tier") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// An empty session_tier inherits [session] tier (default "supervised"), which
+// is what the engine runs under.
+func TestParse_Agents_SupervisorEmptyTierInheritsSupervisedSession(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+session_tier = "autonomous"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents[0].Supervisor != "guard" {
+		t.Errorf("supervisor = %q, want 'guard'", cfg.Agents[0].Supervisor)
+	}
+}
+
+func TestParse_Agents_SupervisorEmptyTierInheritsAutonomousSession(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[session]
+tier = "autonomous"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for supervisor on an agent inheriting the autonomous tier")
+	}
+	if !strings.Contains(err.Error(), "only meaningful when the session tier") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// A tierless supervisor runs under the default supervised tier and would
+// deadlock waiting on its own approval.
+func TestParse_Agents_SupervisorEmptyTierSupervisorDeadlock(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+session_tier = "supervised"
+supervisor = "guard"
+
+[[agents]]
+name = "guard"
+persona_dir = "/agents/guard"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for a supervisor inheriting the supervised tier")
+	}
+	if !strings.Contains(err.Error(), "must not use the \"supervised\" tier") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

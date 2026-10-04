@@ -1592,11 +1592,7 @@ func ValidateSupervisorDecider(cfg *Config, a AgentInstanceConfig) error {
 	if !known {
 		return fmt.Errorf("supervisor_decider %q does not match any [[llm.deciders]] entry", a.SupervisorDecider)
 	}
-	tier := a.SessionTier
-	if tier == "" {
-		tier = cfg.Session.Tier
-	}
-	if tier != "supervised" {
+	if tier := effectiveTier(a, cfg.Session.Tier); tier != "supervised" {
 		return fmt.Errorf("supervisor_decider is only meaningful when the session tier is \"supervised\" (got %q)", tier)
 	}
 	if a.SupervisorDeciderMode != DeciderModeShadow && a.SupervisorDeciderMode != DeciderModeEnforce {
@@ -2947,7 +2943,7 @@ func validateSandbox(s *SandboxConfig) error {
 
 // validateAgents checks all agent instance entries. Returns the set of valid
 // agent names for cross-referencing by other validators.
-func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
+func validateAgents(agents []AgentInstanceConfig, sessionTier string) (map[string]bool, error) {
 	if len(agents) == 0 {
 		return map[string]bool{}, nil
 	}
@@ -2995,7 +2991,7 @@ func validateAgents(agents []AgentInstanceConfig) (map[string]bool, error) {
 		}
 	}
 
-	if err := validateSupervisorRefs(agents, names); err != nil {
+	if err := validateSupervisorRefs(agents, names, sessionTier); err != nil {
 		return nil, err
 	}
 
@@ -3056,8 +3052,19 @@ func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) e
 	return nil
 }
 
+// effectiveTier is the tier an agent's engine runs under: its own
+// session_tier, else [session] tier.
+func effectiveTier(a AgentInstanceConfig, sessionTier string) string {
+	if a.SessionTier != "" {
+		return a.SessionTier
+	}
+	return sessionTier
+}
+
 // validateSupervisorRefs checks supervisor field references across agents.
-func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool) error {
+// sessionTier is the defaulted [session] tier that an empty session_tier
+// inherits.
+func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool, sessionTier string) error {
 	agentByName := make(map[string]AgentInstanceConfig, len(agents))
 	for _, a := range agents {
 		agentByName[a.Name] = a
@@ -3066,12 +3073,8 @@ func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool)
 		if a.Supervisor == "" {
 			continue
 		}
-		effectiveTier := a.SessionTier
-		if effectiveTier == "" {
-			effectiveTier = "autonomous" // default tier
-		}
-		if effectiveTier != "supervised" {
-			return fmt.Errorf("config: agent %q: supervisor is only meaningful when session_tier = \"supervised\"", a.Name)
+		if tier := effectiveTier(a, sessionTier); tier != "supervised" {
+			return fmt.Errorf("config: agent %q: supervisor is only meaningful when the session tier is \"supervised\" (got %q)", a.Name, tier)
 		}
 		if !names[a.Supervisor] {
 			return fmt.Errorf("config: agent %q: supervisor %q not found", a.Name, a.Supervisor)
@@ -3083,12 +3086,8 @@ func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool)
 		if sup.Supervisor != "" {
 			return fmt.Errorf("config: agent %q: supervisor %q itself has a supervisor — chaining is not supported", a.Name, a.Supervisor)
 		}
-		supTier := sup.SessionTier
-		if supTier == "" {
-			supTier = "autonomous"
-		}
-		if supTier == "supervised" {
-			return fmt.Errorf("config: agent %q: supervisor %q must not use session_tier \"supervised\" (would deadlock)", a.Name, a.Supervisor)
+		if effectiveTier(sup, sessionTier) == "supervised" {
+			return fmt.Errorf("config: agent %q: supervisor %q must not use the \"supervised\" tier (would deadlock); set its session_tier", a.Name, a.Supervisor)
 		}
 	}
 	return nil
@@ -3097,7 +3096,7 @@ func validateSupervisorRefs(agents []AgentInstanceConfig, names map[string]bool)
 // validateAgentRouting validates agents, channels, and schedules together,
 // since channels and schedules both reference agent names.
 func validateAgentRouting(cfg *Config) error {
-	agentNames, err := validateAgents(cfg.Agents)
+	agentNames, err := validateAgents(cfg.Agents, cfg.Session.Tier)
 	if err != nil {
 		return fmt.Errorf("validate agents: %w", err)
 	}

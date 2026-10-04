@@ -366,30 +366,21 @@ type Engine struct {
 
 	logger *slog.Logger
 
-	// supervisor holds a reference to the supervisor Engine that reviews tool
-	// calls before they reach the human approval flow. Set via SetSupervisor
-	// after all engines are constructed. nil = no supervisor.
-	supervisor *Engine
+	// supervisor is the Engine that reviews tool calls before they reach the
+	// human approval flow; nil = none. Atomic: reload and PATCH rewire it
+	// while turns read it, so a review loads it once.
+	supervisor atomic.Pointer[Engine]
 
 	// supervisorDecider is the decision-model stage run ahead of the
 	// supervisor. Atomic because config reload re-tunes it mid-turn.
 	supervisorDecider atomic.Pointer[deciderStage]
 
-	// supervisorContextMessages controls how many recent conversation messages
-	// the supervisor sees when reviewing a tool call. Default 5.
-	supervisorContextMessages int
-
-	// supervisorTimeout is the maximum time to wait for the supervisor's LLM
-	// review call. Default 15s.
-	supervisorTimeout time.Duration
-
-	// supervisorBodyExcerptLen is the max characters of skill body included
-	// in the supervisor review prompt. Default 500.
-	supervisorBodyExcerptLen int
-
-	// supervisorToolDescLen is the max characters of the MCP tool description
-	// included in the supervisor review prompt. Default 200.
-	supervisorToolDescLen int
+	// Supervisor review knobs; 0 = default (see the getters). Atomic because
+	// reload and PATCH write them while reviews read them.
+	supervisorContextMessages atomic.Int64 // recent messages shown to the supervisor
+	supervisorTimeout         atomic.Int64 // nanoseconds
+	supervisorBodyExcerptLen  atomic.Int64 // skill body chars in the prompt
+	supervisorToolDescLen     atomic.Int64 // tool description chars in the prompt
 
 	// Reviewer runs post-turn background reviews. Set via SetReviewer.
 	reviewer      *Engine
@@ -439,35 +430,31 @@ func NewEngine(
 		metric.WithDescription("Tool calls executed"))
 
 	return &Engine{
-		name:                      name,
-		router:                    router,
-		memory:                    memory,
-		sendFunc:                  sendFunc,
-		permissions:               permissions,
-		persona:                   p,
-		fallbackPrompt:            fallbackPrompt,
-		skills:                    skills,
-		tools:                     tools,
-		approvals:                 approvals,
-		maxContextMessages:        defaultMaxContextMessages,
-		maxToolRounds:             defaultMaxToolRounds,
-		approvalTimeout:           defaultApprovalTimeout,
-		supervisorContextMessages: defaultSupervisorContextMessages,
-		supervisorTimeout:         defaultSupervisorTimeout,
-		supervisorBodyExcerptLen:  defaultSupervisorBodyExcerptLen,
-		supervisorToolDescLen:     defaultSupervisorToolDescLen,
-		reviewMaxIter:             defaultReviewMaxIter,
-		reviewTimeout:             defaultReviewTimeout,
-		loc:                       time.UTC,
-		now:                       time.Now,
-		nudgeCounters:             make(map[string]*nudgeState),
-		skillSatisfaction:         make(map[string]string),
-		logger:                    logger.With("agent", name),
-		tracer:                    tracer,
-		mMessages:                 msgs,
-		mSessions:                 sessions,
-		mChatDur:                  chatDur,
-		mToolCalls:                toolCalls,
+		name:               name,
+		router:             router,
+		memory:             memory,
+		sendFunc:           sendFunc,
+		permissions:        permissions,
+		persona:            p,
+		fallbackPrompt:     fallbackPrompt,
+		skills:             skills,
+		tools:              tools,
+		approvals:          approvals,
+		maxContextMessages: defaultMaxContextMessages,
+		maxToolRounds:      defaultMaxToolRounds,
+		approvalTimeout:    defaultApprovalTimeout,
+		reviewMaxIter:      defaultReviewMaxIter,
+		reviewTimeout:      defaultReviewTimeout,
+		loc:                time.UTC,
+		now:                time.Now,
+		nudgeCounters:      make(map[string]*nudgeState),
+		skillSatisfaction:  make(map[string]string),
+		logger:             logger.With("agent", name),
+		tracer:             tracer,
+		mMessages:          msgs,
+		mSessions:          sessions,
+		mChatDur:           chatDur,
+		mToolCalls:         toolCalls,
 	}
 }
 
@@ -686,37 +673,65 @@ func (e *Engine) SetApprovalConfig(timeout time.Duration, retries int) {
 // SetSupervisor configures a supervisor engine that reviews tool calls before
 // they reach the human approval flow. Call this after all engines are constructed.
 func (e *Engine) SetSupervisor(s *Engine) {
-	e.supervisor = s
+	e.supervisor.Store(s)
 }
 
 // Supervisor returns the supervisor engine, if any.
 func (e *Engine) Supervisor() *Engine {
-	return e.supervisor
+	return e.supervisor.Load()
 }
 
-// SetSupervisorConfig configures supervisor review parameters.
-// Zero values are ignored (the existing default is kept): pass 0 for timeout
-// to keep the default 15s, pass 0 for contextMessages to keep the default 5.
-// Call this after NewEngine, before the engine starts handling messages.
-func (e *Engine) SetSupervisorConfig(timeout time.Duration, contextMessages int) {
-	if timeout > 0 {
-		e.supervisorTimeout = timeout
-	}
-	if contextMessages > 0 {
-		e.supervisorContextMessages = contextMessages
-	}
+// The supervisor knob setters store 0 (or a negative value) as "use the
+// default", so clearing a key on reload or PATCH reverts it.
+
+// SetSupervisorTimeout bounds the supervisor's review call (default 30s).
+func (e *Engine) SetSupervisorTimeout(d time.Duration) {
+	e.supervisorTimeout.Store(int64(max(d, 0)))
 }
 
-// SetSupervisorExcerptConfig configures the maximum excerpt lengths included
-// in the supervisor review prompt. Zero values keep the defaults (500 for
-// skill body, 200 for tool description).
-func (e *Engine) SetSupervisorExcerptConfig(bodyExcerptLen, toolDescLen int) {
-	if bodyExcerptLen > 0 {
-		e.supervisorBodyExcerptLen = bodyExcerptLen
+// SetSupervisorContextMessages sets how many recent messages the supervisor
+// sees (default 5).
+func (e *Engine) SetSupervisorContextMessages(n int) {
+	e.supervisorContextMessages.Store(int64(max(n, 0)))
+}
+
+// SetSupervisorBodyExcerptLen caps the skill body excerpt in the review
+// prompt (default 500 chars).
+func (e *Engine) SetSupervisorBodyExcerptLen(n int) {
+	e.supervisorBodyExcerptLen.Store(int64(max(n, 0)))
+}
+
+// SetSupervisorToolDescLen caps the tool description in the review prompt
+// (default 200 chars).
+func (e *Engine) SetSupervisorToolDescLen(n int) {
+	e.supervisorToolDescLen.Store(int64(max(n, 0)))
+}
+
+// SupervisorTimeout returns the effective supervisor review timeout.
+func (e *Engine) SupervisorTimeout() time.Duration {
+	return time.Duration(knobOr(&e.supervisorTimeout, int64(defaultSupervisorTimeout)))
+}
+
+// SupervisorContextMessages returns the effective supervisor context size.
+func (e *Engine) SupervisorContextMessages() int {
+	return int(knobOr(&e.supervisorContextMessages, defaultSupervisorContextMessages))
+}
+
+// SupervisorBodyExcerptLen returns the effective skill body excerpt cap.
+func (e *Engine) SupervisorBodyExcerptLen() int {
+	return int(knobOr(&e.supervisorBodyExcerptLen, defaultSupervisorBodyExcerptLen))
+}
+
+// SupervisorToolDescLen returns the effective tool description cap.
+func (e *Engine) SupervisorToolDescLen() int {
+	return int(knobOr(&e.supervisorToolDescLen, defaultSupervisorToolDescLen))
+}
+
+func knobOr(v *atomic.Int64, def int64) int64 {
+	if n := v.Load(); n > 0 {
+		return n
 	}
-	if toolDescLen > 0 {
-		e.supervisorToolDescLen = toolDescLen
-	}
+	return def
 }
 
 // SetSkillDirs configures the directories used for skill creation and hot-reload.
@@ -3355,7 +3370,8 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	}
 
 	stage := e.supervisorDecider.Load()
-	if stage == nil && e.supervisor == nil {
+	sup := e.supervisor.Load()
+	if stage == nil && sup == nil {
 		return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
 	}
 	in := e.gatherSupervisorInput(ctx, tc, convID)
@@ -3363,15 +3379,15 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	// Stage 2: Decider. ok only for a successful enforce-mode verdict.
 	if stage != nil {
 		if decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID); ok {
-			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, tc, round, onEvent); done {
+			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, sup != nil, tc, round, onEvent); done {
 				return outcome
 			}
 		}
 	}
 
 	// Stage 3: Supervisor agent review.
-	if e.supervisor != nil {
-		return e.resolveSupervisorReview(ctx, tc, round, convID, run, onEvent, in)
+	if sup != nil {
+		return e.resolveSupervisorReview(ctx, sup, tc, round, convID, run, onEvent, in)
 	}
 
 	// Stage 4: Human approval (no supervisor configured).
@@ -3412,8 +3428,8 @@ func supervisorErrorText(err error) string {
 
 // resolveSupervisorReview handles supervisor agent review of a tool call.
 // On ESCALATE or error, falls through to human approval.
-func (e *Engine) resolveSupervisorReview(ctx context.Context, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc, in *supervisorReviewInput) approvalOutcome {
-	decision, reason, supErr := e.supervisorReview(ctx, tc, convID, in)
+func (e *Engine) resolveSupervisorReview(ctx context.Context, sup *Engine, tc llm.ToolCall, round int, convID string, run turnRun, onEvent ChatEventFunc, in *supervisorReviewInput) approvalOutcome {
+	decision, reason, supErr := e.supervisorReview(ctx, sup, tc, convID, in)
 	if supErr != nil {
 		e.logger.Warn("supervisor review failed, falling through to human approval",
 			"tool", tc.Function.Name, "error", supErr)
@@ -3642,15 +3658,15 @@ func supervisorSessionKey(agent, convID string) string {
 // an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
 // one-shot LLM call through the supervisor's Router — no conversation storage,
 // skill matching, or tool loops. Returns the decision, reason, and any error.
-func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID string, in *supervisorReviewInput) (supervisorDecision, string, error) {
-	if e.supervisor == nil {
+func (e *Engine) supervisorReview(ctx context.Context, sup *Engine, tc llm.ToolCall, convID string, in *supervisorReviewInput) (supervisorDecision, string, error) {
+	if sup == nil {
 		return supervisorEscalate, "no supervisor configured", fmt.Errorf("no supervisor configured")
 	}
 
 	ctx, span := e.tracer.Start(ctx, "agent.supervisor_review",
 		trace.WithAttributes(
 			attribute.String("agent", e.name),
-			attribute.String("supervisor", e.supervisor.name),
+			attribute.String("supervisor", sup.name),
 			attribute.String("tool", tc.Function.Name),
 		))
 	defer span.End()
@@ -3659,8 +3675,8 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 
 	// Build system prompt from supervisor's persona.
 	var sysPrompt string
-	if e.supervisor.persona != nil {
-		sysPrompt = e.supervisor.persona.SystemPrompt()
+	if sup.persona != nil {
+		sysPrompt = sup.persona.SystemPrompt()
 	}
 	if sysPrompt == "" {
 		sysPrompt = "You are a security supervisor reviewing tool call requests. " +
@@ -3675,18 +3691,18 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 	// Tools-stripped (CompleteFinal): a review needs none, and the supervisor's
 	// own catalogue would inflate every call and invite a tool call in place
 	// of a decision. Non-streaming.
-	reviewCtx, cancel := context.WithTimeout(ctx, e.supervisorTimeout)
+	reviewCtx, cancel := context.WithTimeout(ctx, e.SupervisorTimeout())
 	defer cancel()
 
 	sessionID := supervisorSessionKey(e.name, convID)
 	// Bill reviews to the supervisor's own agent. The key's first segment would
 	// otherwise parse as an agent literally named "supervisor", which both hides
 	// the spend and skips the supervisor's configured limits.
-	if ct := e.supervisor.router.CostTracker(); ct != nil {
-		ct.RegisterSessionAgent(sessionID, e.supervisor.name)
+	if ct := sup.router.CostTracker(); ct != nil {
+		ct.RegisterSessionAgent(sessionID, sup.name)
 	}
 
-	resp, err := e.supervisor.router.CompleteFinal(reviewCtx, sessionID, messages)
+	resp, err := sup.router.CompleteFinal(reviewCtx, sessionID, messages)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -3698,7 +3714,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 			"decision":   "error",
 			"cause":      llm.DecisionErrorCause(err),
 			"reason":     err.Error(),
-			"supervisor": e.supervisor.name,
+			"supervisor": sup.name,
 		})
 		e.emitAudit(ctx, audit.Event{
 			Category:       audit.CategorySupervisor,
@@ -3707,7 +3723,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 			Detail:         string(errDetailJSON),
 			Status:         audit.StatusError,
 			DurationMs:     duration.Milliseconds(),
-			Source:         "supervisor:" + e.supervisor.name,
+			Source:         "supervisor:" + sup.name,
 			ConversationID: convID,
 		})
 		return supervisorEscalate, fmt.Sprintf("supervisor error: %v", err), err
@@ -3736,7 +3752,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 		"arguments":    tc.Function.Arguments,
 		"decision":     string(decision),
 		"reason":       reason,
-		"supervisor":   e.supervisor.name,
+		"supervisor":   sup.name,
 		"raw_response": resp.Content,
 	})
 	e.emitAudit(ctx, audit.Event{
@@ -3746,7 +3762,7 @@ func (e *Engine) supervisorReview(ctx context.Context, tc llm.ToolCall, convID s
 		Detail:         string(detailJSON),
 		Status:         auditStatus,
 		DurationMs:     duration.Milliseconds(),
-		Source:         "supervisor:" + e.supervisor.name,
+		Source:         "supervisor:" + sup.name,
 		ConversationID: convID,
 	})
 
