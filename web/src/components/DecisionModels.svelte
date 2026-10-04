@@ -94,16 +94,16 @@
 
   // --- Card test ---
   let cardTest = $state({})
-  let cardTesting = $state('')
+  let cardTesting = $state({})
 
   async function testCard(name) {
-    cardTesting = name
+    cardTesting[name] = true
     try {
       cardTest[name] = await api.testDecider({ name })
     } catch (e) {
       cardTest[name] = { status: 'error', message: e.message }
     } finally {
-      cardTesting = ''
+      delete cardTesting[name]
     }
   }
 
@@ -287,7 +287,7 @@
         </div>
         {#if editing !== d.name && confirmDelete !== d.name}
           <div class="dm-card-actions">
-            <button class="btn-ghost dm-compact" onclick={() => testCard(d.name)} disabled={cardTesting === d.name}>{cardTesting === d.name ? 'Testing…' : 'Test'}</button>
+            <button class="btn-ghost dm-compact" onclick={() => testCard(d.name)} disabled={cardTesting[d.name]}>{cardTesting[d.name] ? 'Testing…' : 'Test'}</button>
             <button class="btn-ghost dm-compact" onclick={() => startEdit(d)}>Edit</button>
             <button class="btn-ghost dm-compact dm-danger-text" onclick={() => { confirmDelete = d.name; deleteError = '' }} disabled={(d.used_by || []).length > 0} data-testid="delete-decider-btn">Delete</button>
           </div>

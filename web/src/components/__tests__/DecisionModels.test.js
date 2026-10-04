@@ -73,6 +73,27 @@ describe('DecisionModels', () => {
     await waitFor(() => expect(screen.getByText(/Test passed · 172 ms/)).toBeInTheDocument())
   })
 
+  test('card tests in flight on two cards each keep their own state', async () => {
+    const release = {}
+    server.use(http.post('/api/v1/llm/deciders/test', async ({ request }) => {
+      const { name } = await request.json()
+      await new Promise(resolve => { release[name] = resolve })
+      return HttpResponse.json({ status: 'ok', latency_ms: 10, cost_usd: 0 })
+    }))
+    const other = { ...jev, name: 'jev-b' }
+    render(DecisionModels, { props: { deciders: [jev, other], providers: [openrouter] } })
+    const [a, b] = screen.getAllByRole('button', { name: 'Test' })
+    await fireEvent.click(a)
+    await fireEvent.click(b)
+    await waitFor(() => expect(release['jev'] && release['jev-b']).toBeTruthy())
+    expect(screen.getAllByRole('button', { name: 'Testing…' })).toHaveLength(2)
+    release['jev']()
+    await waitFor(() => expect(screen.getByText(/Test passed · 10 ms/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Testing…' })).toBeDisabled()
+    release['jev-b']()
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Test' })).toHaveLength(2))
+  })
+
   test('a used decision model cannot be deleted and links to its users', () => {
     const used = { ...jev, used_by: ['agent:pamela', 'eval.judge_decider'] }
     render(DecisionModels, { props: { deciders: [used], providers: [openrouter] } })
