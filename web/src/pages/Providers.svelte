@@ -21,6 +21,7 @@
   let providerDraft = $state({})
   let savingProvider = $state(false)
   let saveProviderOk = $state(null)
+  let saveProviderNote = $state('')  // restart hint for the last save, if any
 
   const typeLabels = {
     anthropic: 'Anthropic',
@@ -184,8 +185,14 @@
         patch.model_prices = mp
       }
 
+      // Price overrides are the one setting that waits for a restart.
+      const pricesChanged = rateVal !== (p?.default_rate_per_1k_tokens ?? null) ||
+        (patch.model_prices !== undefined && JSON.stringify(patch.model_prices) !== JSON.stringify(p?.model_prices || {}))
+      saveProviderNote = ''
       if (Object.keys(patch).length > 0) {
-        await api.updateLLMProvider(editingProvider, patch)
+        const resp = await api.updateLLMProvider(editingProvider, patch)
+        if (resp?.restart_required) saveProviderNote = 'Restart to apply.'
+        else if (pricesChanged) saveProviderNote = 'Restart to apply price overrides.'
         if (p) {
           if (patch.api_key) p.api_key_set = true
           if (patch.api_key) p.enabled = true
@@ -227,6 +234,9 @@
   let formSaving = $state(false)
   let formError = $state('')
 
+  let createNotice = $state('')
+  let createNoticeFor = $state('')  // provider the notice names; deleting it clears the notice
+
   function openAddForm() {
     formName = ''
     formType = 'openai'
@@ -263,7 +273,9 @@
       if (formAPIKey) body.api_key = formAPIKey
       if (formBaseURL) body.base_url = formBaseURL
       if (formOrganization && formType === 'openai') body.organization = formOrganization
-      await api.createLLMProvider(body)
+      const resp = await api.createLLMProvider(body)
+      createNotice = resp?.restart_required ? `${name} is saved. Restart denkeeper to use it.` : ''
+      createNoticeFor = createNotice ? name : ''
       data = await api.llmProviders()
       showAddForm = false
     } catch (e) {
@@ -287,6 +299,10 @@
       await api.deleteLLMProvider(name)
       data = await api.llmProviders()
       confirmDelete = null
+      if (createNoticeFor === name) {
+        createNotice = ''
+        createNoticeFor = ''
+      }
     } catch (e) {
       deleteError = e.message
     } finally {
@@ -306,6 +322,10 @@
   <button class="btn btn-sm btn-primary" onclick={openAddForm} data-testid="add-provider-btn">+ Add Provider</button>
 </div>
 <ErrorBanner message={error} />
+
+{#if createNotice}
+  <div class="banner warning" role="status" data-testid="provider-create-notice">{createNotice}</div>
+{/if}
 
 {#if showAddForm}
 <div class="form-card" data-testid="provider-form">
@@ -343,7 +363,6 @@
       <input id="new-provider-org" type="text" class="input" bind:value={formOrganization} disabled={formSaving} placeholder="org-..." />
     </div>
   {/if}
-  <div class="restart-note">New providers require a restart to take effect.</div>
   <div class="config-actions">
     <button class="btn btn-primary" onclick={saveNewProvider} disabled={formSaving || !formName.trim()} data-testid="provider-save-btn">
       {formSaving ? 'Creating\u2026' : 'Create'}
@@ -619,7 +638,7 @@
             {/if}
             <button class="btn btn-sm" onclick={() => { providerDraft.model_prices = [...providerDraft.model_prices, { model: '', input: '', output: '', cached_input: '' }] }}>Add Override</button>
           </div>
-          <div class="restart-note">Changes to provider settings require a restart to take effect.</div>
+          <div class="restart-note">Changes usually apply at once. Price overrides always need a restart, and the save message says if anything else does.</div>
           <div class="config-actions">
             <button class="btn btn-primary" onclick={saveProvider} disabled={savingProvider}>
               {savingProvider ? 'Saving...' : 'Save'}
@@ -629,7 +648,7 @@
         </div>
       {/if}
       {#if saveProviderOk === p.name}
-        <div class="save-ok">Saved — restart to apply</div>
+        <div class="save-ok">Saved{saveProviderNote ? `. ${saveProviderNote}` : ''}</div>
       {/if}
     </div>
   {/each}

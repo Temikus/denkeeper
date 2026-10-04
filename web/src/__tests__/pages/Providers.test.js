@@ -153,32 +153,102 @@ describe('Providers page', () => {
     })
   })
 
-  test('save provider triggers PATCH and shows restart note', async () => {
-    server.use(
-      http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ ok: true }))
-    )
-
+  // Opens the second provider's edit form (openrouter) and returns after Save shows.
+  async function editSecondProvider() {
     render(Providers)
-    await waitFor(() => {
-      expect(screen.getByText('Anthropic')).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('Anthropic')).toBeInTheDocument())
+    await fireEvent.click(screen.getAllByText('Edit')[1])
+    await waitFor(() => expect(screen.getByText('Save')).toBeInTheDocument())
+  }
 
-    const editButtons = screen.getAllByText('Edit')
-    await fireEvent.click(editButtons[1])
+  test('a live save says Saved with no restart hint', async () => {
+    server.use(http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated', restart_required: false })))
+    await editSecondProvider()
 
-    await waitFor(() => {
-      expect(screen.getByText('Save')).toBeInTheDocument()
-    })
-
-    // Enter an API key so the patch has content
-    const apiKeyInput = screen.getByLabelText('API Key')
-    await fireEvent.input(apiKeyInput, { target: { value: 'sk-test-123' } })
-
+    await fireEvent.input(screen.getByLabelText('API Key'), { target: { value: 'sk-test-123' } })
     await fireEvent.click(screen.getByText('Save'))
 
-    await waitFor(() => {
-      expect(screen.getByText('Saved — restart to apply')).toBeInTheDocument()
-    })
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+  })
+
+  test('a save the server could not apply live asks for a restart', async () => {
+    server.use(http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated', restart_required: true })))
+    await editSecondProvider()
+
+    await fireEvent.input(screen.getByLabelText('API Key'), { target: { value: 'sk-test-123' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(screen.getByText('Saved. Restart to apply.')).toBeInTheDocument())
+  })
+
+  test('a changed price override asks for a restart', async () => {
+    server.use(http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated', restart_required: false })))
+    await editSecondProvider()
+
+    await fireEvent.input(screen.getByLabelText('Fallback Rate ($/1K tokens)'), { target: { value: '0.002' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(screen.getByText('Saved. Restart to apply price overrides.')).toBeInTheDocument())
+  })
+
+  test('an added model price override asks for a restart', async () => {
+    server.use(http.patch('/api/v1/llm/providers/:name', () => HttpResponse.json({ status: 'updated', restart_required: false })))
+    await editSecondProvider()
+
+    await fireEvent.click(screen.getByText('Add Override'))
+    await fireEvent.input(screen.getByPlaceholderText('model-name'), { target: { value: 'anthropic/claude-sonnet-5-5' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(screen.getByText('Saved. Restart to apply price overrides.')).toBeInTheDocument())
+  })
+
+  test('creating a provider without a live runtime says to restart', async () => {
+    server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: true }, { status: 201 })))
+    render(Providers)
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
+  })
+
+  test('a failed refresh after create keeps the restart notice', async () => {
+    let created = false
+    server.use(
+      http.post('/api/v1/llm/providers', () => { created = true; return HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: true }, { status: 201 }) }),
+      http.get('/api/v1/llm/providers', () => (created ? HttpResponse.json({ error: 'boom' }, { status: 500 }) : undefined)),
+    )
+    render(Providers)
+    await fireEvent.click(await screen.findByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
+  })
+
+  test('deleting the provider a restart notice names clears the notice', async () => {
+    server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'openai', status: 'created', restart_required: true }, { status: 201 })))
+    render(Providers)
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toBeInTheDocument())
+
+    await fireEvent.click((await screen.findAllByTestId('delete-provider-btn'))[2])
+    await fireEvent.click(screen.getByTestId('delete-confirm-btn'))
+
+    await waitFor(() => expect(screen.queryByTestId('provider-create-notice')).not.toBeInTheDocument())
+  })
+
+  test('creating a provider that applies live shows no restart notice', async () => {
+    server.use(http.post('/api/v1/llm/providers', () => HttpResponse.json({ name: 'my-openai', status: 'created', restart_required: false }, { status: 201 })))
+    render(Providers)
+    await fireEvent.click(screen.getByTestId('add-provider-btn'))
+    await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
+    await fireEvent.click(screen.getByTestId('provider-save-btn'))
+
+    await waitFor(() => expect(screen.queryByTestId('provider-form')).not.toBeInTheDocument())
+    expect(screen.queryByTestId('provider-create-notice')).not.toBeInTheDocument()
   })
 
   test('renders Add Provider button', async () => {
