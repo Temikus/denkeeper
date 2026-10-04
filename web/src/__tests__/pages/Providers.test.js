@@ -223,7 +223,8 @@ describe('Providers page', () => {
     await fireEvent.input(screen.getByTestId('provider-name-input'), { target: { value: 'my-openai' } })
     await fireEvent.click(screen.getByTestId('provider-save-btn'))
 
-    await waitFor(() => expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.'))
+    await screen.findByText('boom')
+    expect(screen.getByTestId('provider-create-notice')).toHaveTextContent('my-openai is saved. Restart denkeeper to use it.')
   })
 
   test('deleting the provider a restart notice names clears the notice', async () => {
