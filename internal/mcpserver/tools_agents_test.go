@@ -283,3 +283,95 @@ func TestAgentChannels_NilDispatcher(t *testing.T) {
 		t.Errorf("expected nil for a nil dispatcher, got %v", got)
 	}
 }
+
+// deciderServer is supervisedServer with a decision model wired ahead of
+// pamela's supervisor. The provider is never called by the read-only tools.
+func deciderServer(t *testing.T, stage agent.DeciderStageConfig) (*Server, *agent.Engine) {
+	t.Helper()
+	s := supervisedServer(t)
+	worker := s.deps.Dispatcher.Agent("pamela")
+	d := llm.NewDecider(llm.DeciderConfig{Name: "jev", Model: "typesafe/jev-1.13"}, nil, nil)
+	worker.SetSupervisorDecider(d, stage)
+	return s, worker
+}
+
+func agentInfoMap(t *testing.T, s *Server, name string) map[string]any {
+	t.Helper()
+	res, _, err := s.handleAgentInfo(agentReadScope(t), nil, agentInfoInput{Agent: name})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", toolResultText(res))
+	}
+	var info map[string]any
+	decodeToolJSON(t, toolResultText(res), &info)
+	return info
+}
+
+func TestAgentInfo_IncludesSupervisorDecider(t *testing.T) {
+	s, _ := deciderServer(t, agent.DeciderStageConfig{Mode: "enforce", ApproveAt: 0.9, DenyAt: 0.1})
+
+	got, ok := agentInfoMap(t, s, "pamela")["supervisor_decider"].(map[string]any)
+	if !ok {
+		t.Fatal("expected a supervisor_decider object")
+	}
+	want := map[string]any{"name": "jev", "model": "typesafe/jev-1.13", "mode": "enforce", "approve_at": 0.9, "deny_at": 0.1}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("supervisor_decider.%s = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestAgentInfo_SupervisorDeciderUnknownModeReportsShadow(t *testing.T) {
+	s, _ := deciderServer(t, agent.DeciderStageConfig{ApproveAt: 0.95, DenyAt: 0.05})
+
+	got, _ := agentInfoMap(t, s, "pamela")["supervisor_decider"].(map[string]any)
+	if got["mode"] != "shadow" {
+		t.Errorf("an empty mode runs as shadow, so it must report shadow; got %v", got["mode"])
+	}
+}
+
+func TestAgentInfo_SupervisorDeciderReflectsRetune(t *testing.T) {
+	s, worker := deciderServer(t, agent.DeciderStageConfig{Mode: "shadow", ApproveAt: 0.95, DenyAt: 0.05})
+	worker.SetSupervisorDeciderConfig(agent.DeciderStageConfig{Mode: "enforce", ApproveAt: 0.8, DenyAt: 0.2})
+
+	got, _ := agentInfoMap(t, s, "pamela")["supervisor_decider"].(map[string]any)
+	if got["mode"] != "enforce" || got["approve_at"] != 0.8 || got["deny_at"] != 0.2 {
+		t.Errorf("expected the re-tuned stage, got %v", got)
+	}
+}
+
+func TestAgentInfo_OmitsSupervisorDeciderWhenUnset(t *testing.T) {
+	s, worker := deciderServer(t, agent.DeciderStageConfig{Mode: "shadow"})
+	worker.SetSupervisorDecider(nil, agent.DeciderStageConfig{})
+
+	if d, ok := agentInfoMap(t, s, "pamela")["supervisor_decider"]; ok {
+		t.Errorf("supervisor_decider should be absent once unbound, got %v", d)
+	}
+}
+
+func TestAgentList_IncludesSupervisorDecider(t *testing.T) {
+	s, _ := deciderServer(t, agent.DeciderStageConfig{Mode: "shadow"})
+
+	res, _, err := s.handleAgentList(agentReadScope(t), nil, agentListInput{})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	var agents []map[string]any
+	decodeToolJSON(t, toolResultText(res), &agents)
+
+	for _, a := range agents {
+		switch a["name"] {
+		case "pamela":
+			if a["supervisor_decider"] != "jev" {
+				t.Errorf("expected supervisor_decider \"jev\", got %v", a["supervisor_decider"])
+			}
+		case "argus":
+			if d, ok := a["supervisor_decider"]; ok {
+				t.Errorf("supervisor_decider should be omitted for argus, got %v", d)
+			}
+		}
+	}
+}
