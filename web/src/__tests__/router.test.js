@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import { currentRoute, navigate } from '../router.js'
+import { currentRoute, currentQuery, navigate } from '../router.js'
 
 beforeEach(() => {
   window.location.hash = ''
@@ -36,5 +36,19 @@ describe('currentRoute store', () => {
     window.location.hash = '#/agents/detail'
     window.dispatchEvent(new HashChangeEvent('hashchange'))
     expect(get(currentRoute)).toBe('agents/detail')
+  })
+
+  test('keeps a query string out of the route', () => {
+    window.location.hash = '#/agents/pamela?card=permission&decider=jev'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    expect(get(currentRoute)).toBe('agents/pamela')
+    expect(get(currentQuery).get('card')).toBe('permission')
+    expect(get(currentQuery).get('decider')).toBe('jev')
+  })
+
+  test('a route without a query has an empty query', () => {
+    window.location.hash = '#/providers'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    expect([...get(currentQuery).keys()]).toEqual([])
   })
 })

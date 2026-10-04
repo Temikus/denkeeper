@@ -3,6 +3,8 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import ModelSelector from '../components/ModelSelector.svelte'
+  import DecisionModels from '../components/DecisionModels.svelte'
+  import { currentQuery } from '../router.js'
 
   let data = $state(null)
   let loading = $state(true)
@@ -235,6 +237,13 @@
     showAddForm = true
   }
 
+  // Decision models need an openrouter instance; this is their way here.
+  function openOpenRouterForm() {
+    openAddForm()
+    formType = 'openrouter'
+    window.scrollTo?.({ top: 0, behavior: 'smooth' })
+  }
+
   function closeAddForm() {
     showAddForm = false
     formError = ''
@@ -285,7 +294,11 @@
     }
   }
 
-  onMount(fetchData)
+  onMount(() => {
+    fetchData()
+    // #/providers?add=openrouter, from the Agents page when no provider can back a decision model.
+    if ($currentQuery.get('add') === 'openrouter') openOpenRouterForm()
+  })
 </script>
 
 <div class="page-header">
@@ -620,6 +633,15 @@
       {/if}
     </div>
   {/each}
+
+  <DecisionModels
+    deciders={data.deciders || []}
+    providers={data.providers || []}
+    onChange={fetchData}
+    onAddProvider={openOpenRouterForm}
+    openAdd={$currentQuery.get('add') === 'decider'}
+    addFor={$currentQuery.get('for') || ''}
+  />
 {/if}
 
 <style>
