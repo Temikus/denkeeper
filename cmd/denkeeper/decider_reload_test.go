@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -160,5 +162,29 @@ func TestJudgeConfigFrom_ReadsTheLiveSet(t *testing.T) {
 	set.Sync(deciderConfigs(cfg))
 	if jc := judgeConfigFrom(cfg, set, slog.Default()); jc.Decider == nil || jc.Decider.Name() != "jev2" {
 		t.Errorf("judge decider = %v, want jev2 from the live set", jc.Decider)
+	}
+}
+
+func TestLiveDeciderRuntime_ApplyBindsWithoutReload(t *testing.T) {
+	cfg := deciderReloadConfig()
+	cfg.Agents[0].SupervisorDecider = ""
+	f := newDeciderFixture(t, cfg)
+	rt := liveDeciderRuntime{set: f.clients.deciders, providers: f.clients.providers, dispatcher: f.dispatcher, logger: slog.Default()}
+
+	cfg.Agents[0].SupervisorDecider = "jev2"
+	rt.Apply(cfg)
+
+	if d := f.engine().SupervisorDecider(); d == nil || d.Name() != "jev2" {
+		t.Errorf("bound decider = %v, want jev2", d)
+	}
+}
+
+func TestLiveDeciderRuntime_TestUnknownProviderFails(t *testing.T) {
+	f := newDeciderFixture(t, deciderReloadConfig())
+	rt := liveDeciderRuntime{set: f.clients.deciders, providers: f.clients.providers, dispatcher: f.dispatcher, logger: slog.Default()}
+
+	_, err := rt.Test(context.Background(), config.DeciderConfig{Name: "t", Provider: "missing", Model: "m", Timeout: "5s"})
+	if !errors.Is(err, llm.ErrNoDecisionProvider) {
+		t.Errorf("err = %v, want ErrNoDecisionProvider", err)
 	}
 }

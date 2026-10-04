@@ -99,7 +99,7 @@ Get detailed model information including pricing data.
 
 **Scope:** `admin`
 
-List all LLM providers with their current configuration (API keys are redacted). The response also carries `deciders`, the configured `[[llm.deciders]]` entries (`name`, `provider`, `model`).
+List all LLM providers with their current configuration (API keys are redacted). Each provider has `serves_decisions`, true for types that can back a [decision model](/docs/concepts/deciders/). The response also carries `deciders`, the configured `[[llm.deciders]]` entries (`name`, `provider`, `model`, `timeout`, `max_input_tokens`), each with `used_by`: `agent:<name>`, `eval.judge_decider` or `decide.decider`.
 
 ### `POST /api/v1/llm/providers`
 
@@ -165,6 +165,38 @@ Update global LLM configuration (default provider, default model).
   "default_model": "claude-sonnet-4-5"
 }
 ```
+
+## Decision Models
+
+Create, change and remove `[[llm.deciders]]` entries. Every change is written to the TOML and applies to the running agents, the eval judge and the decide tool without a restart. Only providers with `serves_decisions` (OpenRouter) can back a decision model.
+
+### `POST /api/v1/llm/deciders`
+
+**Scope:** `admin`
+
+```json
+{ "name": "jev", "provider": "openrouter", "model": "typesafe/jev-1.13", "timeout": "5s", "max_input_tokens": 30000 }
+```
+
+`timeout` and `max_input_tokens` are optional (defaults `5s` and `30000`). Returns `201` with the stored entry, `409` if the name is taken, `400` for an invalid name, a provider that does not serve decisions or has no API key.
+
+### `PATCH /api/v1/llm/deciders/{name}`
+
+**Scope:** `admin`
+
+Change `provider`, `model`, `timeout` or `max_input_tokens`. An empty `timeout` or a zero `max_input_tokens` restores the default. Decision models cannot be renamed (`400`). Changing the model means thresholds calibrated on the old model may no longer fit.
+
+### `DELETE /api/v1/llm/deciders/{name}`
+
+**Scope:** `admin`
+
+Returns `204`, or `409` with `used_by` while an agent, the eval judge or the decide tool still uses it.
+
+### `POST /api/v1/llm/deciders/test`
+
+**Scope:** `admin`
+
+Asks one trivial question, either through a configured decision model (`{"name": "jev"}`) or an unsaved one (`{"provider": "openrouter", "model": "typesafe/jev-1.13"}`). Returns `200` with `status` (`ok` or `error`), `message`, `latency_ms` and `cost_usd`. The provider bills the call; no agent is charged for it.
 
 ## Server Admin
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -260,8 +261,8 @@ func TestLLMProviders_ListsDeciders(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := deciderInfo{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13"}
-	if len(resp.Deciders) != 2 || resp.Deciders[0] != want {
+	want := deciderInfo{Name: "jev", Provider: "or", Model: "typesafe/jev-1.13", UsedBy: []string{}}
+	if len(resp.Deciders) != 2 || !reflect.DeepEqual(resp.Deciders[0], want) {
 		t.Errorf("deciders = %+v, want [%+v, late]", resp.Deciders, want)
 	}
 }
