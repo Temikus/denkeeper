@@ -86,7 +86,7 @@ The audit event then carries `decision` = `APPROVE`, `DENY` or `ESCALATE`. In ch
 
 Start in shadow. A decider's probabilities are not calibrated to your tools and your requests, so thresholds should come from data:
 
-1. Run in `shadow` and compare the decider's `would_decide` with what the supervisor decided on the same calls.
+1. Run in `shadow`, then open the agent's Permission card in the dashboard. Its calibration panel compares the decider's scores with what the supervisor decided on the same calls. Drag the deny and approve thresholds on the chart to see how many calls the decider would settle, and which ones it would get wrong.
 2. Or run [`denkeeper decide replay`](/docs/reference/cli/#denkeeper-decide-replay) over existing supervisor history to see the agreement at each threshold.
 3. Pick thresholds where the decider's approvals and denials match the supervisor's, then switch that agent to `enforce`.
 

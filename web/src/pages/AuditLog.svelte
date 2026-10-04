@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { api } from '../api.js'
   import { parseAuditSearch } from '../auditSearch.js'
+  import { currentQuery } from '../router.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import AuditSession from '../components/AuditSession.svelte'
   import AuditRow from '../components/AuditRow.svelte'
@@ -260,7 +261,22 @@
     return `${r} ago`
   }
 
-  onMount(() => { refresh() })
+  // #/audit?agent=&category=&range= seeds the filters, for links from other
+  // pages (the decision model calibration panel). Unknown values are ignored.
+  let searchText = $state('')
+  function applyQuery(q) {
+    const a = q.get('agent')
+    if (a) { agent = a; searchText = /\s/.test(a) ? `agent:"${a}"` : `agent:${a}` }
+    const cats = queryValues(q.get('category'), categoryItems)
+    if (cats.length) categories = cats
+    const range = q.get('range')
+    if (timeRanges.some(r => r.value === range && r.value !== 'custom')) timeRange = range
+  }
+  function queryValues(raw, items) {
+    return (raw || '').split(',').filter(v => v && items.some(i => i.value === v))
+  }
+
+  onMount(() => { applyQuery($currentQuery); refresh() })
   onDestroy(() => { clearInterval(refreshTimer); clearTimeout(searchTimeout); clearTimeout(filterTimeout) })
 </script>
 
@@ -335,7 +351,7 @@
   <!-- Search -->
   <div class="search-card">
     <span class="search-icon">{'\u2315'}</span>
-    <input type="text" class="search-input" placeholder="Search events" aria-label="Search audit events" oninput={onSearchInput} />
+    <input type="text" class="search-input" placeholder="Search events" aria-label="Search audit events" value={searchText} oninput={onSearchInput} />
     <!-- Mounted even when empty: a live region inserted together with its
          content is not reliably announced, and the first filter is the one
          that matters. The in-flight marker shares the region rather than

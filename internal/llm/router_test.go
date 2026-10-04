@@ -172,6 +172,28 @@ func TestRouter_CostTracking(t *testing.T) {
 	}
 }
 
+// A provider that reports no cost still yields the estimated cost the router
+// recorded, so callers can audit it.
+func TestRouter_BilledUSDMatchesRecordedCost(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
+	r := NewRouter("mock", "test-model", ct)
+	r.RegisterProvider(&mockProvider{
+		name:     "mock",
+		response: &ChatResponse{Content: "Hi", TokensUsed: TokenUsage{Total: 1000}},
+	})
+
+	resp, err := r.CompleteFinal(context.Background(), "s1", []Message{{Role: "user", Content: "Hi"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.CostUSD != 0 {
+		t.Fatalf("CostUSD = %f, want the provider's 0 left alone", resp.CostUSD)
+	}
+	if resp.BilledUSD <= 0 || resp.BilledUSD != ct.SessionCost("s1") {
+		t.Errorf("BilledUSD = %f, want the recorded session cost %f", resp.BilledUSD, ct.SessionCost("s1"))
+	}
+}
+
 func TestRouter_HealthCheck_AllHealthy(t *testing.T) {
 	ct := NewCostTracker(SessionLimits{Hard: 10.0}, nil)
 	r := NewRouter("mock", "test-model", ct)

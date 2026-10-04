@@ -430,6 +430,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 			"tokens_total", resp.TokensUsed.Total,
 		)
 		cost, source := TokenCost(resp, r.pricing, activeProvider.Name())
+		resp = withBilled(resp, cost)
 		r.recordOTelSuccess(start, resp, cost, source, attrs)
 		r.setSpanResponseAttrs(span, resp, cost)
 		r.costTracker.RecordWithProvider(sessionID, activeProvider.Name(), cost, resp.TokensUsed, source)
@@ -458,6 +459,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 	}
 
 	cost, source := TokenCost(resp, r.pricing, resolvedProvider)
+	resp = withBilled(resp, cost)
 	r.recordOTelSuccess(start, resp, cost, source, attrs)
 	r.setSpanResponseAttrs(span, resp, cost)
 	r.costTracker.RecordWithProvider(sessionID, resolvedProvider, cost, resp.TokensUsed, source)
@@ -475,6 +477,14 @@ func (r *Router) primaryCompletion(ctx context.Context, sessionID string, provid
 		return r.retryLeakedToolCall(ctx, sessionID, provider, req, resp, onStream, attrs)
 	}
 	return resp, err
+}
+
+// withBilled returns a copy carrying the recorded cost. A provider may hand the
+// same response to concurrent callers, so the router never writes to it.
+func withBilled(resp *ChatResponse, cost float64) *ChatResponse {
+	out := *resp
+	out.BilledUSD = cost
+	return &out
 }
 
 // retryLeakedToolCall re-issues a completion whose "final" answer was a tool

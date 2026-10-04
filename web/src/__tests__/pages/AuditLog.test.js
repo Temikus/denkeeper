@@ -151,6 +151,29 @@ describe('AuditLog page', () => {
     expect(followBtn.classList.contains('active')).toBe(false)
   })
 
+  test('seeds agent, category and range filters from the link it was opened with', async () => {
+    const seen = []
+    server.use(http.get('/api/v1/audit', ({ request }) => {
+      seen.push(new URL(request.url).searchParams)
+      return HttpResponse.json({ events: auditEvents, total: auditEvents.length })
+    }))
+    window.location.hash = '#/audit?agent=pamela&category=supervisor,bogus&range=7d'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    try {
+      render(AuditLog)
+      await waitFor(() => expect(seen.length).toBeGreaterThan(0))
+      const q = seen[0]
+      expect(q.get('agent')).toBe('pamela')
+      expect(q.get('category')).toBe('supervisor')
+      const since = new Date(q.get('since')).getTime()
+      expect(Date.now() - since).toBeGreaterThan(6.9 * 86400000)
+      expect(screen.getByLabelText('Search audit events')).toHaveValue('agent:pamela')
+    } finally {
+      window.location.hash = ''
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
+  })
+
   test('shows search input', async () => {
     render(AuditLog)
     await waitFor(() => {

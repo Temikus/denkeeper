@@ -33,7 +33,9 @@ async function apiFetch(path, options = {}) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.error || `HTTP ${res.status}`)
+    const err = new Error(body.error || `HTTP ${res.status}`)
+    err.status = res.status
+    throw err
   }
   // 204 No Content has no body.
   if (res.status === 204) return null
@@ -49,6 +51,13 @@ export const api = {
   models: () => apiFetch('/api/v1/models').then(r => r.models || []).catch(() => []),
   modelDetails: (provider) => apiFetch(`/api/v1/models/details${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`).then(r => r.models || []).catch(() => []),
   agent: name => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`),
+  // Shadow decider reviews paired with the supervisor's verdicts (audit:read).
+  deciderReviews: (name, { decider, since } = {}) => {
+    const params = new URLSearchParams()
+    if (decider) params.set('decider', decider)
+    if (since) params.set('since', since)
+    return apiFetch(`/api/v1/agents/${encodeURIComponent(name)}/decider-reviews?${params}`)
+  },
 
   // Agent config mutation
   updateAgentConfig: (name, data) => apiFetch(`/api/v1/agents/${encodeURIComponent(name)}`, {

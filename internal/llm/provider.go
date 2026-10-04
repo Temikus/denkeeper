@@ -155,6 +155,10 @@ type ChatResponse struct {
 	Model           string
 	FinishReason    string
 	CostUSD         float64 // provider-reported or estimated cost in USD
+	// BilledUSD is what the router recorded for this response after pricing
+	// lookup. CostUSD stays provider-reported (0 for providers that report
+	// none). A leaked attempt the router retried away is not included.
+	BilledUSD float64
 	// Upstream is the provider-reported serving upstream (OpenRouter's routed
 	// provider). Empty when the provider has no such concept.
 	Upstream string
