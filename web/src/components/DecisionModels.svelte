@@ -100,13 +100,17 @@
   // --- Card test ---
   let cardTest = $state({})
   let cardTesting = $state({})
+  // Bumped when an edit saves, so a test of the old config cannot report back.
+  const cardGen = {}
 
   async function testCard(name) {
+    const gen = cardGen[name] ?? 0
     cardTesting[name] = true
     try {
-      cardTest[name] = await api.testDecider({ name })
+      const result = await api.testDecider({ name })
+      if ((cardGen[name] ?? 0) === gen) cardTest[name] = result
     } catch (e) {
-      cardTest[name] = { status: 'error', message: e.message }
+      if ((cardGen[name] ?? 0) === gen) cardTest[name] = { status: 'error', message: e.message }
     } finally {
       delete cardTesting[name]
     }
@@ -148,6 +152,7 @@
       })
       editing = ''
       delete cardTest[d.name]
+      cardGen[d.name] = (cardGen[d.name] ?? 0) + 1
       await onChange()
     } catch (e) {
       editError = e.message
