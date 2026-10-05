@@ -2,7 +2,7 @@
 title: "Web Dashboard"
 description: "The built-in browser UI for chat, approvals, configuration, and audit."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-09-11T00:00:00+00:00
+lastmod: 2026-10-05T00:00:00+00:00
 draft: false
 weight: 5
 toc: true
@@ -32,7 +32,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Overview** | Instance health, recent activity, onboarding checklist; after "Set up later", what setup still needs |
 | **Chat** | Talk to an agent, with streaming output and inline approvals |
 | **Sessions** | Browse conversations; per-session cost, tool calls, and skill usage |
-| **Agents** | Create and configure agents, personas, supervisors, decision models |
+| **Agents** | Create and configure agents, personas, supervisors, and each agent's decision model, with a panel for calibrating its thresholds |
 | **Channels** | Routing endpoints and which adapter each is active on |
 | **Skills** | Create, edit, and preview skills |
 | **Schedules** | Recurring jobs, with dry-run previews |
@@ -44,7 +44,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Turn inspector** | Per-turn traces: system prompt, tool calls, timings, usage ([Turn traces](/docs/concepts/evals/#turn-traces-and-the-inspector)) |
 | **Costs** | Spend by agent, model, and time range |
 | **KV** | Inspect and edit the agent key-value store |
-| **Providers** | LLM provider instances and global defaults |
+| **Providers** | LLM provider instances, decision models, and global defaults |
 | **API Keys** | Create, rotate, and revoke keys |
 | **Server Config** | Runtime settings, reload, restart |
 | **Settings** | Login preferences and session management |

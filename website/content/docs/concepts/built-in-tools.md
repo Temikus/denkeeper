@@ -1,8 +1,8 @@
 ---
 title: "Built-in Tools"
-description: "Web search and fetch, JavaScript execution, the KV store, and browser automation."
+description: "Web search and fetch, JavaScript execution, decision-model classification, the KV store, and browser automation."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-21T00:00:00+00:00
+lastmod: 2026-10-05T00:00:00+00:00
 draft: false
 weight: 35
 toc: true
@@ -62,6 +62,17 @@ There is no per-VM heap cap. `max_concurrent` bounds how many snippets can alloc
 `max_concurrent` is process-global, shared across every agent. Add `max_concurrent_per_agent` if you want to stop one agent monopolizing the pool.
 {{< /callout >}}
 
+## Classifying with a decision model
+
+`decide` puts typed questions about a JSON `state` to a [decision model](/docs/concepts/deciders/#as-an-agent-tool) and returns a probability for each answer. Skills use it to triage, route or filter for a fraction of a chat completion's cost.
+
+```toml
+[decide]
+decider = "jev"   # an [[llm.deciders]] entry
+```
+
+It only reads, so it works in every tier and in dry runs. Whatever `state` the agent passes goes to the decider's provider.
+
 ## The KV store
 
 Per-agent key-value storage with optional TTL, exposed as `kv_get`, `kv_set`, `kv_set_nx`, `kv_delete`, and `kv_list`.
@@ -113,6 +124,6 @@ A browser with a persistent profile is the most powerful capability an agent can
 
 ## Memoization
 
-Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools/). Of the built-ins, `web_search`, `web_fetch`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
+Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools/). Of the built-ins, `web_search`, `web_fetch`, `decide`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
 
-See the [configuration reference](/docs/reference/config/) for every option in `[web]`, `[script]`, `[kv]`, and `[browser]`.
+See the [configuration reference](/docs/reference/config/) for every option in `[web]`, `[script]`, `[decide]`, `[kv]`, and `[browser]`.

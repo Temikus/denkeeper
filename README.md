@@ -124,7 +124,7 @@ cosign verify \
 - **Runtime tool management** — add and remove MCP tools and plugins at runtime without restarting; changes are persisted to TOML config
 - **Agent KV store** — per-agent key-value storage with optional TTL, exposed as MCP tools (`kv_get`/`kv_set`/`kv_delete`/`kv_list`/`kv_set_nx`); useful for locks, counters, caches, and cross-session state
 - **Supervisor agents** — a supervised agent can designate another agent as its supervisor via `supervisor = "agent-name"` in TOML; the supervisor sits between auto-approve rules and human approval, returning APPROVE/DENY/ESCALATE for each tool call; supervisor prompt includes skill/schedule context for scheduled invocations; configurable timeout (`supervisor_timeout`, default 30s) and context message count (`supervisor_context_messages`, default 5); LLM failures emit a `supervisor_error` event before falling through to human approval
-- **Decision models (deciders)** — `[[llm.deciders]]` declares a non-generative classifier (e.g. `typesafe/jev-1.13` via OpenRouter) that scores each supervised tool call not matched by an auto-approve rule, before the supervisor; `supervisor_decider_mode` is `shadow` (audit only, default) or `enforce`, with `supervisor_decider_approve_at` / `supervisor_decider_deny_at` thresholds; a failed decider never approves; `denkeeper decide replay --agent NAME` re-scores past supervisor reviews to calibrate thresholds
+- **Decision models (deciders)** — `[[llm.deciders]]` declares a non-generative classifier (e.g. `typesafe/jev-1.13` via OpenRouter) that scores each supervised tool call not matched by an auto-approve rule, before the supervisor; `supervisor_decider_mode` is `shadow` (audit only, default) or `enforce`, with `supervisor_decider_approve_at` / `supervisor_decider_deny_at` thresholds; a failed decider never approves; calibrate thresholds from shadow reviews in the Agents page's calibration panel, or with `denkeeper decide replay --agent NAME` over past supervisor reviews; managed from the Providers page or `/api/v1/llm/deciders` without a restart. The same deciders can grade eval pairs ahead of the judge model (`[eval] judge_decider`) and back an agent-facing `decide` tool (`[decide]`)
 - **Dry runs** — preview what a schedule or skill would actually do without letting it do anything: the real persona, skills, and read-only tools run, while every write is suppressed and nothing is persisted, sent to an adapter, or remembered; returns a full transcript with suppressed calls marked, and accepts an `as_of` clock so a preview of a dated task is reproducible
 - **Audit log** — unified audit trail with buffered emitter, SQLite storage, and 12 event categories (`tool_call`, `skill`, `channel`, `approval`, `schedule`, `llm`, `config`, `session`, `mcp`, `safety`, `supervisor`, `eval`); web UI page with timeline and table views, category/status/agent/time filters, and a source-exclusion filter that hides dry-run noise by default
 - **Channels** — named routing endpoints (`[[channels]]`) that decouple sessions from adapters; cross-adapter session sharing, ephemeral session mode, `/session` command for runtime switching; auto-synthesized from agent `adapters` bindings when absent (backward compatible)
@@ -210,7 +210,7 @@ Key sections:
 | `[llm.anthropic]` | Anthropic API key — legacy single-slot syntax, auto-converted to `[[llm.providers]]` |
 | `[llm.openrouter]` | OpenRouter API key — legacy single-slot syntax |
 | `[llm.ollama]` | Ollama base URL — legacy single-slot syntax |
-| `[[llm.deciders]]` | Named decision models (`name`, `provider`, `model`, `timeout`, `max_input_tokens`) used via `supervisor_decider` |
+| `[[llm.deciders]]` | Named decision models (`name`, `provider`, `model`, `timeout`, `max_input_tokens`) used via `supervisor_decider`, `[eval] judge_decider`, and `[decide]` |
 | `[[llm.fallback]]` | Fallback strategies (error/rate_limit/cost_limit triggers) |
 | `[session]` | Default permission tier (supervised/autonomous/restricted) |
 | `[[agents]]` | Multi-agent definitions (persona, skills, LLM provider/model override, adapter bindings, supervisor, supervisor_decider (+ `_mode`, `_approve_at`, `_deny_at`), supervisor_timeout, supervisor_context_messages, cost limits) |
@@ -227,6 +227,7 @@ Key sections:
 | `[[schedules]]` | Recurring tasks (cron, interval, or named schedules) |
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `list_max_bytes`, `list_value_head_bytes`, `cleanup_interval`) |
 | `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
+| `[decide]` | Agent-facing `decide` classification tool (`decider`, `enabled`) |
 | `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, `[web.fetch.jina]` fallback |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |

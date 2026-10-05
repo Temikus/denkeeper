@@ -1,9 +1,9 @@
 ---
 title: "Decision Models"
-description: "A cheap, fast classifier that approves or denies routine tool calls before the supervisor sees them."
+description: "A cheap, fast classifier that settles routine tool-call approvals, grades eval pairs, and gives agents a decide tool."
 slug: "deciders"
 date: 2026-10-02T00:00:00+00:00
-lastmod: 2026-10-02T00:00:00+00:00
+lastmod: 2026-10-05T00:00:00+00:00
 draft: false
 weight: 47
 toc: true
@@ -26,7 +26,7 @@ The decider works with or without a supervisor behind it.
 
 ## Setup
 
-Declare the decider once, then point a supervised agent at it. You can also create, change and delete decision models through the [REST API](/docs/reference/rest-api/#decision-models), which applies them without a restart.
+Declare the decider once, then point a supervised agent at it. You can also create, test, change and delete decision models on the dashboard's **Providers** page or through the [REST API](/docs/reference/rest-api/#decision-models), which apply them without a restart.
 
 ```toml
 [[llm.deciders]]
