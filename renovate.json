@@ -3,9 +3,6 @@
   "extends": [
     "config:recommended"
   ],
-  "reviewers": [
-    "Temikus"
-  ],
   "schedule": [
     "before 9am on monday"
   ],
