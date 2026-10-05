@@ -20,7 +20,7 @@
 
   function dotClass(outcome) {
     if (outcome === 'suppressed') return 'dot-suppressed'
-    if (outcome === 'failed' || outcome === 'rejected' || outcome === 'denied') return 'dot-error'
+    if (['failed', 'rejected', 'denied', 'approval_timeout', 'supervisor_error'].includes(outcome)) return 'dot-error'
     return 'dot-ok'
   }
 

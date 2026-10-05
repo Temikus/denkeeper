@@ -1382,6 +1382,7 @@ func TestGetTelemetrySummary_SplitsRejectionAndFailure(t *testing.T) {
 
 // The legacy combined error_count field was removed from the payload (issue
 // #215): it conflated approval denials (a healthy outcome) with real failures.
+// The match is on the quoted key, since supervisor_error_count is a real field.
 func TestToolUsageSummary_JSONHasNoErrorCount(t *testing.T) {
 	blob, err := json.Marshal(ToolUsageSummary{
 		ToolName: "schedule_update", CallCount: 7,
@@ -1390,7 +1391,7 @@ func TestToolUsageSummary_JSONHasNoErrorCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal ToolUsageSummary: %v", err)
 	}
-	if bytes.Contains(blob, []byte("error_count")) {
+	if bytes.Contains(blob, []byte(`"error_count"`)) {
 		t.Errorf("ToolUsageSummary JSON must not contain error_count: %s", blob)
 	}
 }
@@ -1403,7 +1404,7 @@ func TestToolSkillUsageSummary_JSONHasNoErrorCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal ToolSkillUsageSummary: %v", err)
 	}
-	if bytes.Contains(blob, []byte("error_count")) {
+	if bytes.Contains(blob, []byte(`"error_count"`)) {
 		t.Errorf("ToolSkillUsageSummary JSON must not contain error_count: %s", blob)
 	}
 }

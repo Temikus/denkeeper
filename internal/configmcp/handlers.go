@@ -74,6 +74,11 @@ func (s *Server) registerTools() {
 	if s.deps.SearchMessages != nil {
 		s.registerSearchTools()
 	}
+
+	// Own audit view. Without an agent name the scope filter would match nothing.
+	if s.deps.AuditStore != nil && s.deps.AgentName != "" {
+		s.registerAuditTools()
+	}
 }
 
 // registerSkillTools registers the skill_* tools, each gated on the deps its
@@ -1344,7 +1349,7 @@ func (s *Server) handleSetFallback(ctx context.Context, req *mcp.CallToolRequest
 func (s *Server) registerCostTools() {
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "get_cost_summary",
-		Description: "Return cost tracking data. global_cost/session_costs come from the in-memory tracker — spend since the last restart, and they drive live budget enforcement. lifetime_cost/window_cost/by_model/by_tool/by_skill/by_tool_skill come from persistent storage and are global across all agents. Without 'days' the persistent total lands in lifetime_cost (all-time); with 'days' it lands in window_cost alongside window_days (restart-proof spend over the last N days) and lifetime_cost is omitted — use window_cost, not global_cost, for week-over-week trends. by_model carries per-model cost/token totals; by_tool/by_skill carry call counts, outcome counts, and average duration. Each by_tool/by_tool_skill entry splits non-ok outcomes into failure_count (transport/exec failure — the real broken-tool signal), rejection_count (bad args), and denial_count (approval denied — not a fault); there is no combined error field — do not sum these into an 'error rate', a denial is a healthy outcome. by_tool_skill keys those per owning (skill_name, skill_version) so a skill's tool reliability can be compared across versions.",
+		Description: "Return cost tracking data. global_cost/session_costs come from the in-memory tracker — spend since the last restart, and they drive live budget enforcement. lifetime_cost/window_cost/by_model/by_tool/by_skill/by_tool_skill come from persistent storage and are global across all agents. Without 'days' the persistent total lands in lifetime_cost (all-time); with 'days' it lands in window_cost alongside window_days (restart-proof spend over the last N days) and lifetime_cost is omitted — use window_cost, not global_cost, for week-over-week trends. by_model carries per-model cost/token totals; by_tool/by_skill carry call counts, outcome counts, and average duration. Each by_tool/by_tool_skill entry splits non-ok outcomes into failure_count (transport/exec failure — the real broken-tool signal), rejection_count (bad args), denial_count (a reviewer or operator said no — governance working, not a fault), approval_timeout_count (no operator answered in time) and supervisor_error_count (the supervisor or decider failed and nobody answered the hand-off — the reviewer is broken, not the tool; approval_audit shows the cause). There is no combined error field — do not sum these into an 'error rate'. by_tool_skill keys those per owning (skill_name, skill_version) so a skill's tool reliability can be compared across versions.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {"days": {"type": "integer", "description": "Restrict per-tool/per-skill stats to the last N days (0 or absent = all time)"}}}`),
 	}, s.handleGetCostSummary)
 }

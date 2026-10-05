@@ -210,7 +210,7 @@ func TestExecuteToolCallDeduped_DeniedThenNeverCached(t *testing.T) {
 	e, execCount := newCacheTestEngine(t, config.ToolConfig{Idempotent: idempotentTrue()}, "autonomous")
 	tc := llm.ToolCall{ID: "c1", Function: llm.FunctionCall{Name: "lookup", Arguments: `{"query":"x"}`}}
 	state := newTurnToolState()
-	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
+	state.denied[toolDedupeKey(tc)] = deniedToolCall{text: "Tool call was denied by the operator.", outcome: outcomeDenied}
 
 	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{grant: grantAll}, nil, state)
 	if record.Outcome != "denied" {

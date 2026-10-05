@@ -542,7 +542,9 @@ func applyResult(smp *Sample, result *agent.TurnResult, logger *slog.Logger) {
 			smp.OutcomeRejected++
 		case "failed":
 			smp.OutcomeFailed++
-		case "denied":
+		case "denied", "approval_timeout", "supervisor_error":
+			// A sample has one "did not run for approval" column; the split
+			// lives in tool_calls telemetry, which eval turns never write.
 			smp.OutcomeDenied++
 		case "cached":
 			smp.OutcomeCached++

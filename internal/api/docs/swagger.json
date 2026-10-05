@@ -8750,7 +8750,7 @@
                     "type": "integer"
                 },
                 "outcome": {
-                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), \"denied\" (approval denied),\n\"cached\" (identical idempotent call served from the within-turn cache;\nSuccess true, DurationMs 0, nothing executed), or \"suppressed\" (a write\nrefused by a dry-run/eval execution policy; Success true, nothing ran).",
+                    "description": "Outcome refines Success: \"ok\", \"rejected\" (healthy tool, bad args),\n\"failed\" (transport/exec failure), \"denied\" (a reviewer or operator\nsaid no), \"approval_timeout\" (no operator answered in time),\n\"supervisor_error\" (a supervisor or enforcing decider failed and the\nhand-off it caused went unanswered),\n\"cached\" (identical idempotent call served from the within-turn cache;\nSuccess true, DurationMs 0, nothing executed), or \"suppressed\" (a write\nrefused by a dry-run/eval execution policy; Success true, nothing ran).",
                     "type": "string"
                 },
                 "result": {

@@ -24,6 +24,8 @@ type supervisorCostHarness struct {
 	auditor     *collectingAuditor
 	teardown    func()
 	supProvider *sequentialProvider
+	store       *SQLiteMemoryStore
+	approvals   *approval.Manager
 }
 
 // newSupervisorCostHarness wires a real engine, supervisor and cost tracker so
@@ -75,6 +77,8 @@ func newSupervisorCostHarness(t *testing.T, limits llm.SessionLimits, primaryRes
 		tracker:     tracker,
 		auditor:     auditor,
 		supProvider: supProvider,
+		store:       store,
+		approvals:   mgr,
 		teardown: func() {
 			_ = store.Close()
 			_ = approvalStore.Close()

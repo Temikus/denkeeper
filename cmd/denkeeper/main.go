@@ -269,6 +269,15 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 	}, nil
 }
 
+// auditReader returns st as an audit.Store, or a nil interface when the audit
+// store is disabled. A nil *SQLiteStore in the interface would pass a nil check.
+func auditReader(st *audit.SQLiteStore) audit.Store {
+	if st == nil {
+		return nil
+	}
+	return st
+}
+
 // closeStores closes all persistence stores in reverse order.
 func (s stores) Close() {
 	if s.auditStore != nil {
@@ -817,6 +826,7 @@ type agentBuildCtx struct {
 	adapters        []adapter.Adapter
 	dispatcher      *agent.Dispatcher
 	auditor         audit.Emitter
+	auditStore      audit.Store // nil when [audit] is disabled
 	evalStore       *eval.Store
 	scriptSem       chan struct{}
 	logger          *slog.Logger
@@ -894,6 +904,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		SetActiveChannel:         abc.dispatcher.SetActiveChannelByKey,
 		ActiveChannelsForChannel: abc.dispatcher.ActiveChannelsForChannel,
 		Auditor:                  abc.auditor,
+		AuditStore:               abc.auditStore,
 		IsSkillPinned:            buildIsSkillPinned(agentName, abc.memory),
 		BumpSkillView:            buildSkillBump(abc.memory, abc.logger, "view"),
 		BumpSkillPatch:           buildSkillBump(abc.memory, abc.logger, "patch"),
@@ -2153,6 +2164,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		adapters:        adapters,
 		dispatcher:      dispatcher,
 		auditor:         auditor,
+		auditStore:      auditReader(st.auditStore),
 		evalStore:       st.evalStore,
 		scriptSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrent),
 		logger:          logger,
@@ -2206,7 +2218,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			lifecycleMgr:    lifecycleMgr,
 			browserProfiles: browserProfiles,
 			kvStore:         st.kvStore,
-			auditStore:      st.auditStore,
+			auditStore:      auditReader(st.auditStore),
 			auditor:         auditor,
 			evalStore:       st.evalStore,
 			evalRunner:      evalRunner,

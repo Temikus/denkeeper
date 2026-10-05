@@ -948,11 +948,14 @@ func (m *Manager) ToolServer(toolName string) string {
 // safe to memoize within one turn. Keyed by MCP tool name; consulted only for
 // session-registered (in-process) servers.
 var builtinIdempotentTools = map[string]bool{
-	"decide":     true,
-	"kv_get":     true,
-	"kv_list":    true,
-	"web_fetch":  true,
-	"web_search": true,
+	// A config-MCP read, unlike the others: listed so dry-run turns run it.
+	// A repeat in one turn may miss events written since the first call.
+	"approval_audit": true,
+	"decide":         true,
+	"kv_get":         true,
+	"kv_list":        true,
+	"web_fetch":      true,
+	"web_search":     true,
 }
 
 // builtinReadOnlyTools names in-process tools that only read. Broader than
@@ -961,6 +964,7 @@ var builtinIdempotentTools = map[string]bool{
 // between two calls. Keyed by MCP tool name; consulted only for
 // session-registered (in-process) servers.
 var builtinReadOnlyTools = map[string]bool{
+	"approval_audit":       true,
 	"browser_profile_info": true,
 	"browser_profile_list": true,
 	"channel_info":         true,

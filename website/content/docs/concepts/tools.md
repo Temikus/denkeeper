@@ -82,6 +82,7 @@ Each agent has access to a built-in MCP server that exposes Denkeeper's own conf
 - **Sessions**: `session_search`
 - **Fallback**: `set_fallback`
 - **Costs**: `get_cost_summary`
+- **Audit**: `approval_audit` (read-only; the calling agent's own `supervisor` and `approval` events, registered when `[audit]` is enabled)
 
 Registration is dependency-gated: a tool is advertised only when the subsystem it needs is wired. An agent with no browser configured does not see the `browser_profile_*` tools at all, rather than seeing them and getting errors — so the advertised tool set is an accurate statement of what the agent can actually do.
 
