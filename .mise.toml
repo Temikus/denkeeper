@@ -3,7 +3,7 @@ go = "1.27.1"
 hugo-extended = "0.166.0"
 # Dart Sass for the website build (Hugo shells out to it).
 "aqua:sass/dart-sass" = "1.89.1"
-"golangci-lint" = "2.13.2"
+"golangci-lint" = "2.14.0"
 # go backend so swag is compiled with the pinned Go: its go/parser must
 # understand the stdlib syntax it parses via --parseDependency.
 "go:github.com/swaggo/swag/cmd/swag" = "1.16.6"
