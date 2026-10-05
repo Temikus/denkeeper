@@ -22,7 +22,7 @@ The instance also serves a compact discovery file at: GET <base-url>/llms.txt
 - Skills:    markdown files injected into the system prompt to shape agent behaviour
 - Channels:  named routing endpoints decoupling sessions from Telegram/Discord adapters
 - MCP Tools: denkeeper connects outward to MCP servers to give agents external tools
-- Approvals: supervised tool calls pass auto-approve rules → decider (optional) → supervisor agent (optional) → human/API
+- Approvals: a supervised tool call stops at the first stage that settles it: auto-approve rules → decider (optional; settles only confident calls, in enforce mode) → supervisor agent (optional) → human/API
 - Deciders:  cheap classifiers that score tool calls, grade eval pairs, or back the agent-facing decide tool
 - Fallbacks: automatic provider/model switching on cost limits, rate limits, or errors
 
