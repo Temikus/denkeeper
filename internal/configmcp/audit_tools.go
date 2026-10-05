@@ -3,6 +3,7 @@ package configmcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,6 +18,10 @@ const (
 	// flood the model's context.
 	approvalAuditSummaryBytes = 300
 	approvalAuditReasonBytes  = 500
+	// A search scans this many of the newest events, in pages of the store's
+	// List cap.
+	approvalAuditScanMax  = 2000
+	approvalAuditScanPage = 200
 )
 
 // approvalAuditCategories is the whole surface of approval_audit. Other
@@ -26,7 +31,8 @@ var approvalAuditCategories = []string{audit.CategorySupervisor, audit.CategoryA
 // approvalAuditDetailKeys are the detail fields worth reading back. The rest
 // (arguments, raw_response, answers) is large and already in the transcript.
 // would_decide is left out on purpose: a shadow verdict never affects the call,
-// and showing it would teach the agent what the decider flags.
+// and showing it would teach the agent what the decider flags. The verdict is
+// also in a shadow event's summary and reason, so redactShadow strips those.
 var approvalAuditDetailKeys = []string{"tool", "decision", "cause", "reason", "stage", "mode", "supervisor", "decider", "scope", "error"}
 
 type approvalAuditEvent struct {
@@ -58,7 +64,7 @@ func (s *Server) registerAuditTools() {
 			"properties": {
 				"category": {"type": "string", "enum": ["supervisor", "approval"], "description": "Restrict to one category (omit for both)"},
 				"status":   {"type": "string", "description": "Comma-separated statuses to keep, e.g. \"error,denied\" (omit for all)"},
-				"search":   {"type": "string", "description": "Substring of the event summary. Supervisor summaries name the tool, e.g. run_javascript"},
+				"search":   {"type": "string", "description": "Case-insensitive substring of the event summary, checked against the newest 2000 events. Supervisor summaries name the tool, e.g. run_javascript"},
 				"days":     {"type": "integer", "minimum": 0, "description": "Only events from the last N days (0 or absent = everything retained)"},
 				"limit":    {"type": "integer", "minimum": 1, "description": "Max events returned (default 20, max 100)"}
 			}
@@ -80,18 +86,19 @@ func (s *Server) handleApprovalAudit(ctx context.Context, req *mcp.CallToolReque
 		}
 	}
 
-	opts, errText := s.approvalAuditOpts(input.Category, input.Status, input.Search, input.Days, input.Limit)
+	opts, errText := s.approvalAuditOpts(input.Category, input.Status, input.Days, input.Limit)
 	if errText != "" {
 		return toolError(errText), nil
 	}
-	events, total, err := s.deps.AuditStore.List(ctx, opts)
+	var out approvalAuditResult
+	var err error
+	if input.Search == "" {
+		out, err = s.listApprovalAudit(ctx, opts)
+	} else {
+		out, err = s.searchApprovalAudit(ctx, opts, input.Search)
+	}
 	if err != nil {
 		return toolError("listing audit events: " + err.Error()), nil
-	}
-
-	out := approvalAuditResult{Events: make([]approvalAuditEvent, 0, len(events)), Total: total}
-	for i := range events {
-		out.Events = append(out.Events, compactAuditEvent(&events[i]))
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
@@ -102,12 +109,11 @@ func (s *Server) handleApprovalAudit(ctx context.Context, req *mcp.CallToolReque
 
 // approvalAuditOpts builds the store query. Agent and categories are fixed
 // here, never taken from input: they are the scope of the view.
-func (s *Server) approvalAuditOpts(category, status, search string, days, limit int) (audit.ListOpts, string) {
+func (s *Server) approvalAuditOpts(category, status string, days, limit int) (audit.ListOpts, string) {
 	opts := audit.ListOpts{
 		Agent:      s.deps.AgentName,
 		Categories: approvalAuditCategories,
 		Statuses:   audit.ParseFilterList(status),
-		Search:     search,
 		Limit:      approvalAuditDefaultLimit,
 	}
 	switch category {
@@ -135,6 +141,49 @@ func (s *Server) approvalAuditOpts(category, status, search string, days, limit 
 	return opts, ""
 }
 
+func (s *Server) listApprovalAudit(ctx context.Context, opts audit.ListOpts) (approvalAuditResult, error) {
+	events, total, err := s.deps.AuditStore.List(ctx, opts)
+	if err != nil {
+		return approvalAuditResult{}, err
+	}
+	out := approvalAuditResult{Events: make([]approvalAuditEvent, 0, len(events)), Total: total}
+	for i := range events {
+		out.Events = append(out.Events, compactAuditEvent(&events[i]))
+	}
+	return out, nil
+}
+
+// searchApprovalAudit matches search against the redacted summary, never the
+// stored one. A store-side LIKE would let "would DENY" pick out the calls a
+// shadow decider would have denied. It scans the newest approvalAuditScanMax
+// events, so total counts matches within that window.
+func (s *Server) searchApprovalAudit(ctx context.Context, opts audit.ListOpts, search string) (approvalAuditResult, error) {
+	limit := opts.Limit
+	needle := strings.ToLower(search)
+	out := approvalAuditResult{Events: []approvalAuditEvent{}}
+	opts.Limit = approvalAuditScanPage
+	for opts.Offset = 0; opts.Offset < approvalAuditScanMax; opts.Offset += approvalAuditScanPage {
+		events, _, err := s.deps.AuditStore.List(ctx, opts)
+		if err != nil {
+			return approvalAuditResult{}, err
+		}
+		for i := range events {
+			ev := compactAuditEvent(&events[i])
+			if !strings.Contains(strings.ToLower(ev.Summary), needle) {
+				continue
+			}
+			out.Total++
+			if len(out.Events) < limit {
+				out.Events = append(out.Events, ev)
+			}
+		}
+		if len(events) < approvalAuditScanPage {
+			break
+		}
+	}
+	return out, nil
+}
+
 // compactAuditEvent keeps the fields that explain a decision and drops the
 // bulky rest. A detail that is not a JSON object is left out.
 func compactAuditEvent(ev *audit.Event) approvalAuditEvent {
@@ -150,8 +199,10 @@ func compactAuditEvent(ev *audit.Event) approvalAuditEvent {
 	}
 	var detail map[string]any
 	if json.Unmarshal([]byte(ev.Detail), &detail) != nil {
+		redactShadow(&out, nil)
 		return out
 	}
+	redactShadow(&out, detail)
 	for _, key := range approvalAuditDetailKeys {
 		v, ok := detail[key]
 		if !ok {
@@ -166,4 +217,18 @@ func compactAuditEvent(ev *audit.Event) approvalAuditEvent {
 		out.Detail[key] = v
 	}
 	return out
+}
+
+// redactShadow hides a shadow decider review's verdict and reasoning. The
+// summary reads "SHADOW would DENY <tool>: <reason>", so it is replaced, and
+// detail.reason is dropped. It edits detail in place.
+func redactShadow(out *approvalAuditEvent, detail map[string]any) {
+	if detail["decision"] != "shadow" && !strings.HasPrefix(out.Summary, "SHADOW") {
+		return
+	}
+	out.Summary = "SHADOW review"
+	if tool, ok := detail["tool"].(string); ok {
+		out.Summary = "SHADOW review of " + truncateUTF8(tool, approvalAuditSummaryBytes)
+	}
+	delete(detail, "reason")
 }

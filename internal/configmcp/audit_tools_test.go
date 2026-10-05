@@ -125,21 +125,47 @@ func TestApprovalAudit_KeepsCauseDropsArguments(t *testing.T) {
 	}
 }
 
-// A shadow verdict never affects the call, so the agent must not see it.
+// A shadow verdict never affects the call, so the agent must not see it in
+// the detail, the summary, the reason, or through which searches match.
 func TestApprovalAudit_HidesShadowVerdict(t *testing.T) {
 	session, store := newAuditServer(t)
+	reason := "decider: arguments flagged as unsafe (p=0.03)"
 	detail, _ := json.Marshal(map[string]any{
 		"tool": "web_fetch", "stage": "decider", "mode": "shadow",
-		"decision": "shadow", "would_decide": "DENY",
+		"decision": "shadow", "would_decide": "DENY", "reason": reason,
 	})
-	insertAudit(t, store, audit.Event{Category: audit.CategorySupervisor, Action: "review", Agent: "test-agent", Status: audit.StatusOK, Source: "decider:jev", Summary: "SHADOW web_fetch", Detail: string(detail)})
+	insertAudit(t, store, audit.Event{Category: audit.CategorySupervisor, Action: "review", Agent: "test-agent", Status: audit.StatusOK, Source: "decider:jev", Summary: "SHADOW would DENY web_fetch: " + reason, Detail: string(detail)})
 
-	resp := callApprovalAudit(t, session, nil)
-	if len(resp.Events) != 1 || resp.Events[0].Detail["stage"] != "decider" || resp.Events[0].Detail["mode"] != "shadow" {
-		t.Fatalf("events = %+v, want detail.stage and detail.mode", resp.Events)
+	text, _ := callTool(t, session, "approval_audit", nil)
+	for _, leak := range []string{"DENY", "unsafe", "would_decide"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("response contains %q:\n%s", leak, text)
+		}
 	}
-	if _, ok := resp.Events[0].Detail["would_decide"]; ok {
-		t.Error("detail.would_decide returned")
+	resp := callApprovalAudit(t, session, map[string]any{"search": "web_fetch"})
+	if resp.Total != 1 || resp.Events[0].Detail["stage"] != "decider" || resp.Events[0].Detail["mode"] != "shadow" {
+		t.Fatalf("search web_fetch = %+v, want the shadow event with detail.stage and detail.mode", resp)
+	}
+	for _, probe := range []string{"would DENY", "unsafe"} {
+		if resp := callApprovalAudit(t, session, map[string]any{"search": probe}); resp.Total != 0 {
+			t.Errorf("search %q matched %d events, want 0", probe, resp.Total)
+		}
+	}
+}
+
+// Search pages past the store's 200-row List cap and still counts every match.
+func TestApprovalAudit_SearchCountsAcrossPages(t *testing.T) {
+	session, store := newAuditServer(t)
+	for i := range 250 {
+		tool := "kv_set"
+		if i%2 == 0 {
+			tool = "run_javascript"
+		}
+		insertAudit(t, store, audit.Event{Category: audit.CategorySupervisor, Action: "review", Agent: "test-agent", Status: audit.StatusOK, Source: "supervisor:argus", Summary: "APPROVE " + tool})
+	}
+	resp := callApprovalAudit(t, session, map[string]any{"search": "RUN_JAVASCRIPT", "limit": 5})
+	if resp.Total != 125 || len(resp.Events) != 5 {
+		t.Fatalf("total = %d, events = %d; want 125 and 5", resp.Total, len(resp.Events))
 	}
 }
 
