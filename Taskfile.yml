@@ -189,7 +189,7 @@ tasks:
       - exclude: web/**
       - exclude: pkg/**
     cmds:
-      - go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101,G104,G120 ./...
+      - gosec -exclude=G101,G104,G120 ./...
 
   scan:govulncheck:
     desc: Check Go sources against the official vulnerability database
@@ -200,7 +200,7 @@ tasks:
       - exclude: web/**
       - exclude: pkg/**
     cmds:
-      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - govulncheck ./...
 
   scan:grype:
     desc: Filesystem vulnerability scan (matches CI's Grype job; uses .grype.yaml)
