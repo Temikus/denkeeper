@@ -1,10 +1,15 @@
 [tools]
 go = "1.27.1"
 hugo-extended = "0.166.0"
+# Dart Sass for the website build (Hugo shells out to it).
+"aqua:sass/dart-sass" = "1.89.1"
 "golangci-lint" = "2.13.2"
 # go backend so swag is compiled with the pinned Go: its go/parser must
 # understand the stdlib syntax it parses via --parseDependency.
 "go:github.com/swaggo/swag/cmd/swag" = "1.16.6"
+# Same reason for the scanners: both load and type-check the module.
+"go:github.com/securego/gosec/v2/cmd/gosec" = "2.29.0"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.8.0"
 task = "3.53.1"
 "go:github.com/air-verse/air" = "1.67.4"
 "aqua:casey/just" = "1.58.0"

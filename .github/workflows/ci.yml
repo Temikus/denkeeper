@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Cache Go modules and build
         uses: actions/cache@v6
         with:
@@ -84,7 +84,7 @@ jobs:
         with:
           name: web-ui-dist
           path: internal/web/dist/
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Cache Go modules and build
         uses: actions/cache@v6
         with:
@@ -112,7 +112,7 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
           args: ""
@@ -128,7 +128,7 @@ jobs:
         with:
           name: web-ui-dist
           path: internal/web/dist/
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Cache Go modules and build
         uses: actions/cache@v6
         with:
@@ -158,7 +158,7 @@ jobs:
         with:
           name: web-ui-dist
           path: internal/web/dist/
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Cache Go modules and build
         uses: actions/cache@v6
         with:
@@ -169,7 +169,7 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: govulncheck ./...
 
   build:
     name: Build
@@ -191,7 +191,7 @@ jobs:
         with:
           name: web-ui-dist
           path: internal/web/dist/
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Cache Go modules and build
         uses: actions/cache@v6
         with:
@@ -221,7 +221,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm

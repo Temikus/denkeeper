@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -34,19 +34,11 @@ jobs:
         run: npm ci
         working-directory: website
 
-      - name: Setup Hugo
-        uses: peaceiris/actions-hugo@v3
+      # Hugo and Dart Sass versions come from .mise.toml, same as `just build-website`.
+      - name: Install Hugo and Dart Sass
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          hugo-version: "0.159.1"
-          extended: true
-
-      - name: Install Dart Sass
-        run: |
-          SASS_VERSION="1.89.1"
-          curl -fsSL "https://github.com/sass/dart-sass/releases/download/${SASS_VERSION}/dart-sass-${SASS_VERSION}-linux-x64.tar.gz" \
-            | sudo tar -xz -C /usr/local/lib --strip-components=1
-          sudo ln -s /usr/local/lib/sass /usr/local/bin/sass
-          sass --version
+          install_args: hugo-extended aqua:sass/dart-sass
 
       - name: Build site
         run: hugo --minify --gc --environment production
