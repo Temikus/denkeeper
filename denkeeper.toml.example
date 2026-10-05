@@ -84,6 +84,22 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # action  = "switch_model"
 # model   = "meta-llama/llama-3.1-8b-instruct:free"
 
+# ---------------------------------------------------------------------------
+# Decision Models (Deciders)
+# ---------------------------------------------------------------------------
+# A decider is a non-generative classifier that answers typed questions with
+# probabilities. It can score supervised tool calls (supervisor_decider on an
+# agent), grade eval pairs ([eval] judge_decider) or back the agent-facing
+# decide tool ([decide]). It never chats. Data egress: tool arguments and
+# conversation excerpts go to the decider's provider, an extra processor.
+
+# [[llm.deciders]]
+# name             = "jev"
+# provider         = "openrouter"         # provider instance of type openrouter
+# model            = "typesafe/jev-1.13"
+# timeout          = "5s"                 # per-call timeout
+# max_input_tokens = 30000                # larger inputs are refused, never truncated
+
 [session]
 # Permission tier controls what the agent can do.
 # "supervised"  — chat, memory, tools (default; future actions require approval)
@@ -119,6 +135,14 @@ api_key = "YOUR_OPENROUTER_API_KEY"
 # # resets, and is read-only at runtime — changing it means editing this file
 # # and reloading (POST /api/v1/server/reload), never the API or chat buttons.
 # # auto_approve_tools = ["run_javascript", "find-completed-tasks"]
+# #
+# # Score each tool call with a decider before the supervisor. Supervised
+# # tier only. "shadow" (default) audits the verdict it would give and changes
+# # nothing; "enforce" acts on it and sends uncertain calls to the next stage.
+# # supervisor_decider            = "jev"
+# # supervisor_decider_mode       = "shadow"
+# # supervisor_decider_approve_at = 0.95   # approve when every answer >= this
+# # supervisor_decider_deny_at    = 0.05   # deny when any answer <= this
 
 # [[agents]]
 # name         = "work-assistant"
@@ -150,6 +174,8 @@ format = "text"
 # [eval]
 # audit = "full"      # "full" (default) records the turn exactly as it ran;
 #                     # "summary" keeps only lifecycle events and errors
+# judge_decider = "jev"          # decider that grades blinded pairs first
+# judge_decider_record_at = 0.9  # winning probability needed to record a verdict
 #
 # Turn traces record what a turn actually saw — the built system prompt, the
 # history window as sent, every tool call with its arguments and result, and the
@@ -317,6 +343,17 @@ format = "text"
 # max_input_bytes  = 262144        # cap on accepted input payload (256 KiB)
 # max_concurrent   = 4             # process-global cap on simultaneous VM executions (0 = default 4; negative = unbounded)
 # max_concurrent_per_agent = 0     # per-agent cap so one agent can't monopolize the pool (0 = off; negative = unbounded)
+
+# ---------------------------------------------------------------------------
+# Decide tool
+# ---------------------------------------------------------------------------
+# Adds a read-only decide tool to every agent. It puts typed questions about
+# a JSON state to a decider and returns probabilities. Off until a decider is
+# named. Turning it on or off, or naming another decider, needs a restart.
+
+# [decide]
+# enabled = true                   # default: true; needs decider to be set
+# decider = "jev"                  # [[llm.deciders]] entry the tool calls
 
 # ---------------------------------------------------------------------------
 # Skill management
