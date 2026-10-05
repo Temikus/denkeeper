@@ -75,13 +75,20 @@ type cachedToolResult struct {
 // (returned from cache on identical retry). Both keyed by name+"\x00"+args.
 // Scoped to one turn: a new user message resets both.
 type turnToolState struct {
-	denied map[string]string
+	denied map[string]deniedToolCall
 	cache  map[string]cachedToolResult
+}
+
+// deniedToolCall is what a repeat of a refused call gets back. The outcome
+// carries over so a repeated timeout is not counted as a denial.
+type deniedToolCall struct {
+	text    string
+	outcome string
 }
 
 func newTurnToolState() *turnToolState {
 	return &turnToolState{
-		denied: make(map[string]string),
+		denied: make(map[string]deniedToolCall),
 		cache:  make(map[string]cachedToolResult),
 	}
 }
@@ -2980,7 +2987,7 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 	}
 
 	key := toolDedupeKey(tc)
-	if denyText, deniedBefore := state.denied[key]; deniedBefore {
+	if prior, deniedBefore := state.denied[key]; deniedBefore {
 		e.logger.Info("auto-denying repeated tool call denied earlier this turn",
 			"tool", tc.Function.Name, "round", round, "conversation", convID)
 		if onEvent != nil {
@@ -2993,13 +3000,13 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 				ApprovalStatus: "auto_denied",
 			})
 		}
-		result := denyText + " (This identical call was already denied this turn — do not retry it with the same arguments.)"
+		result := prior.text + " (This identical call was already denied this turn — do not retry it with the same arguments.)"
 		record := ToolCallRecord{
 			ToolName: tc.Function.Name,
 			Round:    round,
 			Success:  false,
-			Outcome:  "denied",
-			ErrorMsg: "denied (repeat)",
+			Outcome:  prior.outcome,
+			ErrorMsg: prior.outcome + " (repeat)",
 		}
 		if e.tools != nil {
 			record.ServerName = e.tools.ToolServer(tc.Function.Name)
@@ -3016,8 +3023,8 @@ func (e *Engine) executeToolCallDeduped(ctx context.Context, tc llm.ToolCall, ro
 	if aborted {
 		return "", ToolCallRecord{}, true
 	}
-	if !record.Success && record.ErrorMsg == "denied" {
-		state.denied[key] = result
+	if !record.Success && notApprovedOutcome(record.Outcome) {
+		state.denied[key] = deniedToolCall{text: result, outcome: record.Outcome}
 	}
 	// Only real executions are cacheable. A suppressed write ran nothing, so
 	// caching its marker would let a later identical call claim a "result from
@@ -3203,8 +3210,8 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 		}
 		if outcome.denied {
 			record.Success = false
-			record.Outcome = "denied"
-			record.ErrorMsg = "denied"
+			record.Outcome = outcome.outcome
+			record.ErrorMsg = outcome.outcome
 			return outcome.denyText, record, false
 		}
 	}
@@ -3346,21 +3353,57 @@ func grantFor(perms *security.PermissionEngine) toolGrant {
 
 // approvalOutcome represents the result of the supervised approval chain.
 type approvalOutcome struct {
-	denied   bool   // true if the tool call was denied
-	denyText string // denial reason fed to the LLM (only set when denied)
+	denied   bool   // true if the tool call was not allowed to run
+	denyText string // reason fed to the LLM (only set when denied)
+	// outcome is the tool_calls outcome when denied: outcomeDenied when a
+	// reviewer or operator said no, otherwise why nobody did.
+	outcome string
+	// unanswered marks a human hand-off nobody answered (timeout, no adapter,
+	// submit failure). Only these are blamed on a reviewer error upstream.
+	unanswered bool
 	// aborted marks the one outcome that is not a decision: the turn was
 	// stopped while the approval was pending, so nobody denied anything and
 	// nothing ran. The caller drops the call entirely rather than recording it.
 	aborted bool
 }
 
+// Tool-call outcomes for calls the approval chain did not let run.
+const (
+	outcomeDenied          = "denied"
+	outcomeApprovalTimeout = "approval_timeout"
+	outcomeSupervisorError = "supervisor_error"
+)
+
+// notApprovedOutcome reports whether outcome is one the approval chain wrote.
+func notApprovedOutcome(outcome string) bool {
+	return outcome == outcomeDenied || outcome == outcomeApprovalTimeout || outcome == outcomeSupervisorError
+}
+
 var (
 	approvalApproved = approvalOutcome{}
 	approvalAborted  = approvalOutcome{aborted: true}
+	approvalTimedOut = approvalOutcome{denied: true, denyText: approvalTimedOutResult, outcome: outcomeApprovalTimeout, unanswered: true}
 )
 
 func approvalDenied(text string) approvalOutcome {
-	return approvalOutcome{denied: true, denyText: text}
+	return approvalOutcome{denied: true, denyText: text, outcome: outcomeDenied}
+}
+
+// approvalUnanswered is a hand-off that failed before anyone could answer.
+// It stays "denied" unless a reviewer error put the call there.
+func approvalUnanswered(text string) approvalOutcome {
+	return approvalOutcome{denied: true, denyText: text, outcome: outcomeDenied, unanswered: true}
+}
+
+// afterReviewerError blames an unanswered hand-off on the reviewer whose
+// failure caused it. A human's explicit answer stands as given.
+func (o approvalOutcome) afterReviewerError(reviewer string) approvalOutcome {
+	if !o.unanswered {
+		return o
+	}
+	o.outcome = outcomeSupervisorError
+	o.denyText = reviewer + " review failed, so the call needed an operator. " + o.denyText
+	return o
 }
 
 // resolveSupervisedApproval runs the approval chain for supervised tool calls:
@@ -3392,22 +3435,31 @@ func (e *Engine) resolveSupervisedApproval(ctx context.Context, tc llm.ToolCall,
 	}
 	in := e.gatherSupervisorInput(ctx, tc, convID)
 
-	// Stage 2: Decider. ok only for a successful enforce-mode verdict.
+	// Stage 2: Decider. ok only for a successful enforce-mode verdict, so
+	// !ok while enforcing means the decider failed. Shadow errors change nothing.
+	var deciderFailed bool
 	if stage != nil {
-		if decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID); ok {
+		decision, reason, ok := e.runSupervisorDecider(ctx, stage, in, convID)
+		if ok {
 			if outcome, done := e.resolveDeciderVerdict(stage, decision, reason, sup != nil, tc, round, onEvent); done {
 				return outcome
 			}
 		}
+		deciderFailed = !ok && stage.cfg.enforcing()
 	}
 
-	// Stage 3: Supervisor agent review.
+	// Stage 3: Supervisor agent review. It decides why a call reaches a
+	// human, so a decider error before it is not blamed for a timeout.
 	if sup != nil {
 		return e.resolveSupervisorReview(ctx, sup, tc, round, convID, run, onEvent, in)
 	}
 
 	// Stage 4: Human approval (no supervisor configured).
-	return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
+	outcome := e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
+	if deciderFailed {
+		outcome = outcome.afterReviewerError("Decider")
+	}
+	return outcome
 }
 
 // auditAutoApprove records a Stage-1 auto-approval in the audit log. Emitted
@@ -3462,7 +3514,7 @@ func (e *Engine) resolveSupervisorReview(ctx context.Context, sup *Engine, tc ll
 				ApprovalStatus: "supervisor_error",
 			})
 		}
-		return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent)
+		return e.awaitToolApproval(ctx, tc, round, convID, run, onEvent).afterReviewerError("Supervisor")
 	}
 
 	switch decision {
@@ -3524,7 +3576,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 	if onEvent == nil {
 		e.logger.Warn("tool approval denied: no event handler wired — approval cannot be surfaced to an operator",
 			"tool", tc.Function.Name, "round", round, "conversation", convID)
-		return approvalDenied("Tool call denied — no adapter is connected to surface the approval dialog. " +
+		return approvalUnanswered("Tool call denied — no adapter is connected to surface the approval dialog. " +
 			"Ensure the session is routed through an adapter (Telegram, Discord, web) or use autonomous permission tier for unattended sessions.")
 	}
 
@@ -3557,7 +3609,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		)
 		if err != nil {
 			e.logger.Warn("tool approval submit failed", "tool", tc.Function.Name, "error", err)
-			return approvalDenied(fmt.Sprintf("Tool call approval failed: %v", err))
+			return approvalUnanswered(fmt.Sprintf("Tool call approval failed: %v", err))
 		}
 
 		onEvent(ChatEvent{
@@ -3595,7 +3647,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 			e.logger.Warn("tool approval timed out",
 				"tool", tc.Function.Name, "id", req.ID,
 				"timeout", e.approvalTimeout)
-			return approvalDenied(approvalTimedOutResult)
+			return approvalTimedOut
 		}
 
 		if status == approval.StatusApproved {
@@ -3616,7 +3668,7 @@ func (e *Engine) awaitToolApproval(ctx context.Context, tc llm.ToolCall, round i
 		})
 		return approvalDenied("Tool call was denied by the operator.")
 	}
-	return approvalDenied(approvalTimedOutResult)
+	return approvalTimedOut
 }
 
 // approvalTimedOutResult is fed to the LLM when no operator answered.

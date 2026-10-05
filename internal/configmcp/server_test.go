@@ -1567,7 +1567,7 @@ func TestGetCostSummary_WithTelemetry(t *testing.T) {
 		t.Errorf("ByTool = %+v, want web_search with 3 failures", result.ByTool)
 	}
 	// The legacy combined error_count field must not appear in the payload (issue #215).
-	if strings.Contains(text, "error_count") {
+	if strings.Contains(text, `"error_count"`) { // quoted: supervisor_error_count is a real field
 		t.Errorf("get_cost_summary payload must not contain error_count: %s", text)
 	}
 	if len(result.BySkill) != 1 || result.BySkill[0].SkillName != "self-audit" {

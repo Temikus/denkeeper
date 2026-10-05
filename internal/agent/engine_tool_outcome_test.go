@@ -120,7 +120,7 @@ func TestExecuteToolCallDeduped_OutcomeDenied(t *testing.T) {
 	e := newOutcomeTestEngine(t)
 	tc := llm.ToolCall{Function: llm.FunctionCall{Name: "ok_tool", Arguments: `{"value":"x"}`}}
 	state := newTurnToolState()
-	state.denied[toolDedupeKey(tc)] = "Tool call was denied by the operator."
+	state.denied[toolDedupeKey(tc)] = deniedToolCall{text: "Tool call was denied by the operator.", outcome: outcomeDenied}
 
 	_, record, _ := e.executeToolCallDeduped(context.Background(), tc, 2, "conv:1", false, turnRun{grant: grantAll}, nil, state)
 	if record.Success {

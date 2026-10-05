@@ -164,6 +164,10 @@ type Deps struct {
 	// Auditor emits audit events. If nil, broadcast delivery audit is disabled.
 	Auditor audit.Emitter
 
+	// AuditStore reads the audit log for approval_audit, which only ever
+	// returns AgentName's supervisor and approval events. Nil = not registered.
+	AuditStore audit.Store
+
 	// IsSkillPinned checks if a skill is pinned (curator-immune). Nil = not pinned.
 	IsSkillPinned func(name string) (bool, error)
 

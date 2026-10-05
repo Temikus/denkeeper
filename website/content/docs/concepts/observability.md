@@ -55,10 +55,16 @@ Every tool call is recorded with an outcome, and the distinction between them is
 | `ok` | Succeeded |
 | `rejected` | The tool was healthy and refused the arguments |
 | `failed` | Transport or execution fault |
-| `denied` | Blocked at approval |
+| `denied` | A decider, supervisor or operator said no |
+| `approval_timeout` | Sent to an operator, and nobody answered in time |
+| `supervisor_error` | The supervisor (or an enforcing decider) failed, and the hand-off to an operator went unanswered |
 | `cached` | Served from the within-turn memo cache |
 
-Summaries expose these as `rejection_count`, `failure_count`, `denial_count`, and `cached_count`. **`failure_count` is the "broken tool" signal** — a denial is a policy decision, and a rejection usually means the model passed bad arguments, so folding them together produces a number that cannot tell you anything. `cached` results are excluded from fault counts and from duration averages, since nothing executed.
+Summaries expose these as `rejection_count`, `failure_count`, `denial_count`, `approval_timeout_count`, `supervisor_error_count`, and `cached_count`. **`failure_count` is the "broken tool" signal** — a denial is a policy decision, and a rejection usually means the model passed bad arguments, so folding them together produces a number that cannot tell you anything. `supervisor_error_count` is the "broken reviewer" signal: the audit log's `supervisor` events carry the cause. `cached` results are excluded from fault counts and from duration averages, since nothing executed.
+
+When a reviewer fails but an operator then answers, the operator's answer is the outcome. A decider failure only counts as `supervisor_error` when no supervisor ran after it, since a working supervisor decides why the call reached a human. Rows written before these two outcomes existed recorded both cases as `denied`.
+
+An agent can read its own `supervisor` and `approval` audit events through the config MCP tool `approval_audit`. It never returns other agents' events or other categories.
 
 Each call is attributed to at most one owning skill and version. Attribution is conservative: an explicit skill name wins, a single matched skill is used, and anything ambiguous is left blank rather than guessed. `by_tool_skill` then groups reliability per skill and version, so you can tell whether the edit you made to a skill last week made its tool use worse.
 

@@ -51,7 +51,10 @@ type ToolCallRecord struct {
 	DurationMs     int64  `db:"duration_ms"     json:"duration_ms"`
 	Success        bool   `db:"success"         json:"success"`
 	// Outcome refines Success: "ok", "rejected" (healthy tool, bad args),
-	// "failed" (transport/exec failure), "denied" (approval denied),
+	// "failed" (transport/exec failure), "denied" (a reviewer or operator
+	// said no), "approval_timeout" (no operator answered in time),
+	// "supervisor_error" (a supervisor or enforcing decider failed and the
+	// hand-off it caused went unanswered),
 	// "cached" (identical idempotent call served from the within-turn cache;
 	// Success true, DurationMs 0, nothing executed), or "suppressed" (a write
 	// refused by a dry-run/eval execution policy; Success true, nothing ran).
@@ -1064,10 +1067,15 @@ type ToolUsageSummary struct {
 	// broken. The legacy combined error_count field (rejected + failed + denied)
 	// was removed from the payload — it conflated denials with real failures and
 	// was misread as a "broken tool" signal (see issue #215). Reconstruct the old
-	// total as RejectionCount + FailureCount + DenialCount if needed.
+	// total as the sum of all five non-ok counts below if needed.
 	RejectionCount int `db:"rejection_count" json:"rejection_count"`
 	FailureCount   int `db:"failure_count"   json:"failure_count"`
 	DenialCount    int `db:"denial_count"    json:"denial_count"`
+	// ApprovalTimeoutCount and SupervisorErrorCount are calls that did not run
+	// because nobody decided, not because anyone said no (issue #433). Rows
+	// written before that fix counted both as denials.
+	ApprovalTimeoutCount int `db:"approval_timeout_count" json:"approval_timeout_count"`
+	SupervisorErrorCount int `db:"supervisor_error_count" json:"supervisor_error_count"`
 	// CachedCount counts calls served from the within-turn idempotent-result
 	// cache. Included in CallCount (the model did make the call) but excluded
 	// from AvgDuration (0ms hits would make a slow tool look fast).
@@ -1081,16 +1089,18 @@ type ToolUsageSummary struct {
 // "broken tool" signal and read DenialCount separately (approval denials aren't
 // faults).
 type ToolSkillUsageSummary struct {
-	SkillName      string  `db:"skill_name"      json:"skill_name"`
-	SkillVersion   string  `db:"skill_version"   json:"skill_version"`
-	ToolName       string  `db:"tool_name"       json:"tool_name"`
-	ServerName     string  `db:"server_name"     json:"server_name"`
-	CallCount      int     `db:"call_count"      json:"call_count"`
-	RejectionCount int     `db:"rejection_count" json:"rejection_count"`
-	FailureCount   int     `db:"failure_count"   json:"failure_count"`
-	DenialCount    int     `db:"denial_count"    json:"denial_count"`
-	CachedCount    int     `db:"cached_count"    json:"cached_count"`
-	AvgDuration    float64 `db:"avg_duration"    json:"avg_duration_ms"`
+	SkillName            string  `db:"skill_name"      json:"skill_name"`
+	SkillVersion         string  `db:"skill_version"   json:"skill_version"`
+	ToolName             string  `db:"tool_name"       json:"tool_name"`
+	ServerName           string  `db:"server_name"     json:"server_name"`
+	CallCount            int     `db:"call_count"      json:"call_count"`
+	RejectionCount       int     `db:"rejection_count"        json:"rejection_count"`
+	FailureCount         int     `db:"failure_count"          json:"failure_count"`
+	DenialCount          int     `db:"denial_count"           json:"denial_count"`
+	ApprovalTimeoutCount int     `db:"approval_timeout_count" json:"approval_timeout_count"`
+	SupervisorErrorCount int     `db:"supervisor_error_count" json:"supervisor_error_count"`
+	CachedCount          int     `db:"cached_count"           json:"cached_count"`
+	AvgDuration          float64 `db:"avg_duration"           json:"avg_duration_ms"`
 }
 
 // SkillUsageSummary aggregates skill usage data per skill.
@@ -1141,6 +1151,8 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
+	              SUM(CASE WHEN outcome = 'approval_timeout' THEN 1 ELSE 0 END) AS approval_timeout_count,
+	              SUM(CASE WHEN outcome = 'supervisor_error' THEN 1 ELSE 0 END) AS supervisor_error_count,
 	              SUM(CASE WHEN outcome = 'cached' THEN 1 ELSE 0 END) AS cached_count,
 	              COALESCE(AVG(CASE WHEN outcome != 'cached' THEN duration_ms END), 0) AS avg_duration
 	              FROM tool_calls WHERE 1=1` + timeFilter + `
@@ -1172,6 +1184,8 @@ func (s *SQLiteMemoryStore) GetTelemetrySummary(ctx context.Context, since, unti
 	              SUM(CASE WHEN outcome = 'rejected' THEN 1 ELSE 0 END) AS rejection_count,
 	              SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failure_count,
 	              SUM(CASE WHEN outcome = 'denied' THEN 1 ELSE 0 END) AS denial_count,
+	              SUM(CASE WHEN outcome = 'approval_timeout' THEN 1 ELSE 0 END) AS approval_timeout_count,
+	              SUM(CASE WHEN outcome = 'supervisor_error' THEN 1 ELSE 0 END) AS supervisor_error_count,
 	              SUM(CASE WHEN outcome = 'cached' THEN 1 ELSE 0 END) AS cached_count,
 	              COALESCE(AVG(CASE WHEN outcome != 'cached' THEN duration_ms END), 0) AS avg_duration
 	              FROM tool_calls WHERE skill_name != ''` + timeFilter + `
