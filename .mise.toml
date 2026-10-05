@@ -10,7 +10,7 @@ hugo-extended = "0.167.0"
 # Same reason for the scanners: both load and type-check the module.
 "go:github.com/securego/gosec/v2/cmd/gosec" = "2.29.0"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.8.0"
-task = "3.53.1"
+task = "3.54.0"
 "go:github.com/air-verse/air" = "1.67.4"
 "aqua:casey/just" = "1.58.0"
 "aqua:anchore/grype" = "0.120.0"
