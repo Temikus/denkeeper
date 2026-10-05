@@ -79,6 +79,8 @@ When a tool call reaches the supervisor, it gets a one-shot LLM call — the too
 
 A timeout or an error also falls through to human approval. The supervisor fails **open to you**, never open to the tool.
 
+Tool calls whose arguments exceed `supervisor_max_args_bytes` (default 16 KB) skip the review entirely and go to you, audited with `cause: "too_large"`. The arguments are not truncated, since a reviewer shown part of a payload could approve the part it never saw.
+
 ### Constraints
 
 Validation rejects configurations that would deadlock or recurse:

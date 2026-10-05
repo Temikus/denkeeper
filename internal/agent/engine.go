@@ -42,6 +42,10 @@ const defaultSupervisorContextMessages = 5
 const defaultSupervisorTimeout = 30 * time.Second
 const defaultSupervisorBodyExcerptLen = 500
 const defaultSupervisorToolDescLen = 200
+
+// defaultSupervisorMaxArgsBytes caps tool-call arguments sent for supervisor
+// review; larger calls escalate to a human without an LLM call.
+const defaultSupervisorMaxArgsBytes = 16384
 const maxConversationIDLen = 256
 const defaultReviewMaxIter = 6
 const defaultReviewTimeout = 2 * time.Minute
@@ -381,6 +385,7 @@ type Engine struct {
 	supervisorTimeout         atomic.Int64 // nanoseconds
 	supervisorBodyExcerptLen  atomic.Int64 // skill body chars in the prompt
 	supervisorToolDescLen     atomic.Int64 // tool description chars in the prompt
+	supervisorMaxArgsBytes    atomic.Int64 // largest arguments payload reviewed
 
 	// Reviewer runs post-turn background reviews. Set via SetReviewer.
 	reviewer      *Engine
@@ -732,6 +737,17 @@ func knobOr(v *atomic.Int64, def int64) int64 {
 		return n
 	}
 	return def
+}
+
+// SetSupervisorMaxArgsBytes sets the largest arguments payload the supervisor
+// reviews; 0 (or negative) restores the default 16384.
+func (e *Engine) SetSupervisorMaxArgsBytes(n int) {
+	e.supervisorMaxArgsBytes.Store(int64(max(n, 0)))
+}
+
+// SupervisorMaxArgsBytes returns the effective supervisor arguments cap.
+func (e *Engine) SupervisorMaxArgsBytes() int {
+	return int(knobOr(&e.supervisorMaxArgsBytes, defaultSupervisorMaxArgsBytes))
 }
 
 // SetSkillDirs configures the directories used for skill creation and hot-reload.
@@ -3423,6 +3439,9 @@ func supervisorErrorText(err error) string {
 	if errors.Is(err, llm.ErrHardLimitExceeded) {
 		return fmt.Sprintf("Supervisor hit its cost limit for this conversation (%v) — awaiting your review", err)
 	}
+	if errors.Is(err, errSupervisorArgsTooLarge) {
+		return fmt.Sprintf("Supervisor review skipped: %v — awaiting your review", err)
+	}
 	return fmt.Sprintf("Supervisor unavailable (%v) — awaiting your review", err)
 }
 
@@ -3654,6 +3673,45 @@ func supervisorSessionKey(agent, convID string) string {
 	return "supervisor:" + agent + ":" + convID
 }
 
+// errSupervisorArgsTooLarge marks a call whose arguments exceed the
+// supervisor's cap. Truncating instead would let the reviewer approve a
+// payload it never saw.
+var errSupervisorArgsTooLarge = errors.New("tool arguments too large for supervisor review")
+
+// checkSupervisorArgsSize audits and returns errSupervisorArgsTooLarge when
+// tc's arguments exceed the cap, so the review never reaches the LLM. The
+// audit keeps the arguments: shadow pairing matches on them.
+func (e *Engine) checkSupervisorArgsSize(ctx context.Context, span trace.Span, sup *Engine, tc llm.ToolCall, convID string) error {
+	size, limit := len(tc.Function.Arguments), e.SupervisorMaxArgsBytes()
+	if size <= limit {
+		return nil
+	}
+	err := fmt.Errorf("%w: %d bytes > %d", errSupervisorArgsTooLarge, size, limit)
+	e.logger.Warn("supervisor review skipped: arguments too large",
+		"tool", tc.Function.Name, "arguments_bytes", size, "max_args_bytes", limit)
+	span.SetAttributes(attribute.String("supervisor.decision", "error"), attribute.Int("supervisor.args_bytes", size))
+	detail, _ := json.Marshal(map[string]any{
+		"tool":            tc.Function.Name,
+		"arguments":       tc.Function.Arguments,
+		"decision":        "error",
+		"cause":           "too_large",
+		"reason":          err.Error(),
+		"supervisor":      sup.name,
+		"arguments_bytes": size,
+		"max_args_bytes":  limit,
+	})
+	e.emitAudit(ctx, audit.Event{
+		Category:       audit.CategorySupervisor,
+		Action:         "review",
+		Summary:        fmt.Sprintf("ERROR %s: %v", tc.Function.Name, err),
+		Detail:         string(detail),
+		Status:         audit.StatusError,
+		Source:         "supervisor:" + sup.name,
+		ConversationID: convID,
+	})
+	return err
+}
+
 // supervisorReview asks the supervisor agent to evaluate a tool call and return
 // an APPROVE/DENY/ESCALATE decision with reasoning. It makes a lightweight,
 // one-shot LLM call through the supervisor's Router — no conversation storage,
@@ -3670,6 +3728,10 @@ func (e *Engine) supervisorReview(ctx context.Context, sup *Engine, tc llm.ToolC
 			attribute.String("tool", tc.Function.Name),
 		))
 	defer span.End()
+
+	if err := e.checkSupervisorArgsSize(ctx, span, sup, tc, convID); err != nil {
+		return supervisorEscalate, err.Error(), err
+	}
 
 	start := time.Now()
 
