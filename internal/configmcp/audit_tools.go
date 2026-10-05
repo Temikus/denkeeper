@@ -25,7 +25,9 @@ var approvalAuditCategories = []string{audit.CategorySupervisor, audit.CategoryA
 
 // approvalAuditDetailKeys are the detail fields worth reading back. The rest
 // (arguments, raw_response, answers) is large and already in the transcript.
-var approvalAuditDetailKeys = []string{"tool", "decision", "would_decide", "cause", "reason", "stage", "mode", "supervisor", "decider", "scope", "error"}
+// would_decide is left out on purpose: a shadow verdict never affects the call,
+// and showing it would teach the agent what the decider flags.
+var approvalAuditDetailKeys = []string{"tool", "decision", "cause", "reason", "stage", "mode", "supervisor", "decider", "scope", "error"}
 
 type approvalAuditEvent struct {
 	ID             int64          `json:"id"`

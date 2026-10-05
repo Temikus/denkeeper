@@ -125,6 +125,24 @@ func TestApprovalAudit_KeepsCauseDropsArguments(t *testing.T) {
 	}
 }
 
+// A shadow verdict never affects the call, so the agent must not see it.
+func TestApprovalAudit_HidesShadowVerdict(t *testing.T) {
+	session, store := newAuditServer(t)
+	detail, _ := json.Marshal(map[string]any{
+		"tool": "web_fetch", "stage": "decider", "mode": "shadow",
+		"decision": "shadow", "would_decide": "DENY",
+	})
+	insertAudit(t, store, audit.Event{Category: audit.CategorySupervisor, Action: "review", Agent: "test-agent", Status: audit.StatusOK, Source: "decider:jev", Summary: "SHADOW web_fetch", Detail: string(detail)})
+
+	resp := callApprovalAudit(t, session, nil)
+	if len(resp.Events) != 1 || resp.Events[0].Detail["stage"] != "decider" || resp.Events[0].Detail["mode"] != "shadow" {
+		t.Fatalf("events = %+v, want detail.stage and detail.mode", resp.Events)
+	}
+	if _, ok := resp.Events[0].Detail["would_decide"]; ok {
+		t.Error("detail.would_decide returned")
+	}
+}
+
 func TestApprovalAudit_LimitDefaultsAndCaps(t *testing.T) {
 	session, store := newAuditServer(t)
 	for i := range 120 {
