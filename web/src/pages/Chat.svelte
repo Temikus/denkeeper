@@ -8,6 +8,8 @@
   import { setup, openWizard } from '../setupStore.js'
   import KebabMenu from '../components/KebabMenu.svelte'
   import SaveTestCase from '../components/SaveTestCase.svelte'
+  import ToolCallArgs from '../components/ToolCallArgs.svelte'
+  import { parseToolCall } from '../approvalFormat.js'
 
   let agents = $state([])
   let agentsLoaded = $state(false)
@@ -453,18 +455,26 @@
     <div class="pending-banner" role="alert">
       <span class="pending-label">Pending approvals ({pendingApprovals.length})</span>
       {#each pendingApprovals as appr}
+        {@const call = parseToolCall(appr)}
+        {@const label = call?.tool || appr.summary}
         <div class="approval-card pending">
           <span class="approval-icon" aria-hidden="true">{approvalStatusIcon('pending')}</span>
           <span class="sr-only">pending</span>
           <div class="pending-info">
-            <span class="tool-name">{appr.summary}</span>
+            <span><span class="tool-name">{label}</span>{#if call?.retry} <span class="pill">{call.retry}</span>{/if}</span>
+            {#if call?.args === null || call?.args?.length}
+              <details class="pending-args">
+                <summary>Show arguments</summary>
+                <ToolCallArgs {call} head={false} />
+              </details>
+            {/if}
             <span class="pending-meta">{appr.agent_name} · {appr.adapter_name}:{appr.external_id?.slice(0, 8)}</span>
           </div>
           <div class="approval-actions">
-            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {appr.summary}">Approve</button>
-            <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {appr.summary}">Deny</button>
-            <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.summary} for 15 minutes">15 min</button>
-            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.summary}">Always</button>
+            <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {label}">Approve</button>
+            <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {label}">Deny</button>
+            <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {label} for 15 minutes">15 min</button>
+            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {label}">Always</button>
           </div>
         </div>
       {/each}
@@ -709,6 +719,9 @@
 
   .pending-banner {
     flex-shrink: 0;
+    /* Expanded args must not push the messages and input off screen. */
+    max-height: 40vh;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -737,6 +750,13 @@
     font-size: 12px;
     word-break: break-word;
   }
+  .pending-args summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .pending-args :global(.tool-call) { margin-top: 4px; }
   .pending-meta {
     font-size: 11px;
     color: var(--text-muted);

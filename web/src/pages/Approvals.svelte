@@ -3,6 +3,8 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import ToolCallArgs from '../components/ToolCallArgs.svelte'
+  import { parseToolCall } from '../approvalFormat.js'
 
   let filter = 'pending'
   let approvals = []
@@ -114,6 +116,8 @@
 {#if approvals.length === 0 && !error}
   <p class="empty">No approvals{filter ? ` with status "${filter}"` : ''}.</p>
 {:else}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scroll region needs a tab stop to be reachable at all) -->
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Approvals">
   <table class="table">
     <thead>
       <tr>
@@ -123,12 +127,17 @@
     </thead>
     <tbody>
       {#each approvals as a}
+        {@const call = parseToolCall(a)}
         <tr>
           <td class="id">{a.id.slice(0, 8)}…</td>
           <td>{a.kind}</td>
           <td class="summary">
-            {a.summary}
-            {#if a.payload}
+            {#if call}
+              <ToolCallArgs {call} />
+            {:else}
+              {a.summary}
+            {/if}
+            {#if a.payload && !call}
               <details class="payload-details">
                 <summary>Show payload</summary>
                 <pre>{a.payload}</pre>
@@ -155,6 +164,7 @@
       {/each}
     </tbody>
   </table>
+  </div>
 {/if}
 
 <!-- Auto-Approve Rules Section -->
@@ -230,7 +240,8 @@
   .filter-btn:hover  { color: var(--text); border-color: var(--text-muted); }
   .filter-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }
   .id { font-family: monospace; color: var(--text-muted); white-space: nowrap; }
-  .summary { max-width: 380px; }
+  .summary { max-width: 560px; }
+  @media (min-width: 768px) { .summary { min-width: 240px; } }
   .payload-details {
     margin-top: 4px;
     border: 1px solid var(--border);

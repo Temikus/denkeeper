@@ -113,6 +113,27 @@ describe('Approvals page', () => {
     })
   })
 
+  test('tool call args render as labelled rows, not one JSON line', async () => {
+    const args = JSON.stringify({ code: 'var a = 1;\nreturn a;', input: { emails: [] } })
+    server.use(
+      http.get('/api/v1/approvals', () => HttpResponse.json([{
+        id: 'appr-2', agent_name: 'default', kind: 'tool_call', status: 'pending',
+        summary: `Execute tool "run_javascript" with args: ${args}`, payload: args,
+        created_at: '2026-01-01T10:00:00Z', expires_at: '2026-01-01T11:00:00Z',
+      }]))
+    )
+
+    render(Approvals)
+    await waitFor(() => {
+      expect(screen.getByText('run_javascript')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Execute tool/)).not.toBeInTheDocument()
+    expect(screen.getByText('code')).toBeInTheDocument()
+    expect(screen.getByLabelText('run_javascript code').textContent).toBe('var a = 1;\nreturn a;')
+    expect(screen.getByLabelText('run_javascript input').textContent).toBe('{\n  "emails": []\n}')
+    expect(screen.queryByText('Show payload')).not.toBeInTheDocument()
+  })
+
   test('empty state message when no approvals', async () => {
     server.use(
       http.get('/api/v1/approvals', () => HttpResponse.json([]))
