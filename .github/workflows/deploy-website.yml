@@ -3,19 +3,17 @@ name: Deploy Website
 on:
   push:
     branches: [main]
-    paths:
+    paths: &paths
       - "website/**"
+      - ".mise.toml"
       - ".github/workflows/deploy-website.yml"
+  # Build only, so a toolchain change that breaks the site fails before merge.
+  pull_request:
+    paths: *paths
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -38,13 +36,14 @@ jobs:
       - name: Install Hugo and Dart Sass
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: hugo-extended aqua:sass/dart-sass
+          install_args: hugo-extended github:sass/dart-sass
 
       - name: Build site
         run: hugo --minify --gc --environment production
         working-directory: website
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
           path: website/public
@@ -52,7 +51,14 @@ jobs:
   deploy:
     name: Deploy
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
