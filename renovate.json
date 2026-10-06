@@ -1,20 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ],
-  "schedule": [
-    "before 9am on monday"
-  ],
-  "osvVulnerabilityAlerts": true,
-  "vulnerabilityAlerts": {
-    "schedule": [
-      "at any time"
-    ],
-    "labels": [
-      "security"
-    ]
-  },
+  "extends": ["github>Temikus/.github"],
   "packageRules": [
     {
       "description": "Track indirect Go modules (off by default) so vulnerability alerts cover them; routine bumps wait for dashboard approval",
