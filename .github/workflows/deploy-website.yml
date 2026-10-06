@@ -38,7 +38,7 @@ jobs:
       - name: Install Hugo and Dart Sass
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: hugo-extended aqua:sass/dart-sass
+          install_args: hugo-extended github:sass/dart-sass
 
       - name: Build site
         run: hugo --minify --gc --environment production
