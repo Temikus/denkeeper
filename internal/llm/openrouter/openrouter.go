@@ -46,6 +46,7 @@ type Client struct {
 
 	providerOrder          []string
 	providerAllowFallbacks *bool
+	providerIgnore         []string
 
 	// Sticky provider routing: after a successful response, prefer the upstream
 	// provider that served it for stickyTTL, so the upstream's automatic prompt
@@ -163,11 +164,29 @@ func (c *Client) SetProviderRouting(order []string, allowFallbacks *bool, sticky
 	c.stickyTTL = stickyTTL
 }
 
-// buildProviderParam constructs the provider routing parameter for the request.
-// Explicit config order wins; otherwise an active sticky preference is applied
-// (always with fallbacks, so a now-unavailable provider degrades gracefully).
-// Returns nil when nothing is configured (the field is then omitted entirely).
+// SetProviderIgnore sets the upstream provider slugs OpenRouter must never
+// route to. The list rides on every request, whatever order applies.
+func (c *Client) SetProviderIgnore(ignore []string) { c.providerIgnore = ignore }
+
+// buildProviderParam constructs the provider routing parameter for the request,
+// adding the ignore list to whichever routing applies.
 func (c *Client) buildProviderParam() *providerParam {
+	p := c.routingParam()
+	if len(c.providerIgnore) == 0 {
+		return p
+	}
+	if p == nil {
+		p = &providerParam{}
+	}
+	p.Ignore = c.providerIgnore
+	return p
+}
+
+// routingParam picks the upstream order. Explicit config order wins; otherwise
+// an active sticky preference is applied (always with fallbacks, so a
+// now-unavailable provider degrades gracefully). Returns nil when nothing is
+// configured (the field is then omitted entirely).
+func (c *Client) routingParam() *providerParam {
 	if len(c.providerOrder) > 0 {
 		return &providerParam{Order: c.providerOrder, AllowFallbacks: c.providerAllowFallbacks}
 	}
@@ -786,6 +805,7 @@ type reasoningParam struct {
 type providerParam struct {
 	Order          []string `json:"order,omitempty"`
 	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
+	Ignore         []string `json:"ignore,omitempty"`
 }
 
 // apiMessage handles both outgoing requests (content as string) and incoming

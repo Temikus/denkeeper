@@ -91,6 +91,7 @@ cached_input = 1.5
 | `api_key` | string | *required* | OpenRouter API key |
 | `provider_order` | []string | none | Explicit preference list of upstream provider slugs (e.g. `"moonshotai"`) that overrides sticky routing when set — usually unnecessary |
 | `provider_allow_fallbacks` | bool | unset (OpenRouter default: allowed) | Whether OpenRouter may fall back to providers outside `provider_order` |
+| `provider_ignore` | []string | none | Upstream provider slugs (e.g. `"inceptron"`) OpenRouter must never route to. Sent on every request, alongside `provider_order` and sticky routing. TOML only; the Providers page doesn't edit it yet |
 | `provider_sticky` | bool | `true` | Prefer the last-served upstream provider for `provider_sticky_ttl` after a successful response, so upstream prompt caching keeps hitting. Reset by upstream errors (429/5xx/network), not by client cancellation or 4xx |
 | `provider_sticky_ttl` | duration string | `"1h"` | How long to keep the sticky provider preference |
 

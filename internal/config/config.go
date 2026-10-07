@@ -1223,6 +1223,11 @@ type OpenRouterConfig struct {
 	// back to providers outside ProviderOrder. Leave unset (nil) to keep
 	// OpenRouter's default (fallbacks allowed) — preferred for resilience.
 	ProviderAllowFallbacks *bool `toml:"provider_allow_fallbacks" json:"provider_allow_fallbacks,omitempty"`
+	// ProviderIgnore lists OpenRouter upstream slugs (e.g. "inceptron") never
+	// to route to. Sent on every request, alongside order and sticky routing.
+	// Use it to skip an upstream that mangles responses, such as one that
+	// drops tool-call arguments.
+	ProviderIgnore []string `toml:"provider_ignore" json:"provider_ignore,omitempty"`
 	// ProviderSticky enables sticky provider routing (default ON). After a
 	// successful response the served upstream provider is preferred for
 	// ProviderStickyTTL, so the upstream's automatic prompt caching keeps
@@ -2854,6 +2859,11 @@ func validateOpenRouter(o *OpenRouterConfig) error {
 		}
 		if d < 0 {
 			return fmt.Errorf("provider_sticky_ttl must not be negative")
+		}
+	}
+	for i, slug := range o.ProviderIgnore {
+		if strings.TrimSpace(slug) == "" {
+			return fmt.Errorf("provider_ignore[%d] must not be blank", i)
 		}
 	}
 	return nil
