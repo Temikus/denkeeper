@@ -165,6 +165,35 @@ func TestProviderPatch_Routing_ClearRemovesStaleTOML(t *testing.T) {
 	}
 }
 
+// provider_ignore is TOML-only: the routing PATCH doesn't carry it, so its
+// full replace must leave the key alone in memory and on disk.
+func TestProviderPatch_Routing_KeepsProviderIgnore(t *testing.T) {
+	h := providerCrudHarness(t)
+	withOpenRouterProvider(h)
+	if err := config.UpdateLLMProviderConfig(h.ConfigPath(), "openrouter",
+		map[string]any{"provider_ignore": []string{"inceptron"}}); err != nil {
+		t.Fatalf("seeding provider_ignore: %v", err)
+	}
+	h.Config().LLM.OpenRouter.ProviderIgnore = []string{"inceptron"}
+
+	rec := h.Do(h.AuthedRequest("PATCH", "/api/v1/llm/providers/mock-or",
+		map[string]any{"routing": map[string]any{"sticky": true, "order": []string{"moonshotai"}}}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(h.ConfigPath())
+	if err != nil {
+		t.Fatalf("reading TOML: %v", err)
+	}
+	if toml := string(content); !strings.Contains(toml, "provider_ignore") || !strings.Contains(toml, "inceptron") {
+		t.Errorf("routing PATCH dropped provider_ignore from TOML:\n%s", toml)
+	}
+	if got := h.Config().LLM.OpenRouter.ProviderIgnore; len(got) != 1 || got[0] != "inceptron" {
+		t.Errorf("ProviderIgnore = %v after routing PATCH, want [inceptron]", got)
+	}
+}
+
 // Reasoning persists as a single nested [llm.openrouter.reasoning] table that
 // is replaced wholesale, so clearing a sub-field (here: effort) drops it from
 // TOML rather than leaving a stale value — unlike the flat routing keys, which

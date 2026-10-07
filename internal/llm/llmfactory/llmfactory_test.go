@@ -2,6 +2,7 @@ package llmfactory
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -92,5 +93,31 @@ func TestNew_OpenRouterHonoursBaseURL(t *testing.T) {
 	}
 	if hits.Load() != 1 || len(models) != 1 {
 		t.Errorf("hits=%d models=%v; want one request to the base_url's /models", hits.Load(), models)
+	}
+}
+
+func TestNew_OpenRouterSendsProviderIgnore(t *testing.T) {
+	var body struct {
+		Provider struct {
+			Ignore []string `json:"ignore"`
+		} `json:"provider"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(config.ProviderInstanceConfig{Name: "or", Type: "openrouter", APIKey: "k", BaseURL: srv.URL},
+		config.OpenRouterConfig{ProviderIgnore: []string{"inceptron"}}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: "user", Content: "hi"}}}
+	if _, err := p.ChatCompletion(context.Background(), req); err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	if len(body.Provider.Ignore) != 1 || body.Provider.Ignore[0] != "inceptron" {
+		t.Errorf("provider.ignore = %v, want [inceptron]", body.Provider.Ignore)
 	}
 }

@@ -4974,12 +4974,31 @@ func TestResolveStickyTTL_CustomDuration(t *testing.T) {
 }
 
 func TestValidate_RejectsBadStickyTTL(t *testing.T) {
-	tomlData := []byte(baseConfig + `
-[llm.openrouter]
-provider_sticky_ttl = "not-a-duration"
+	// baseConfig ends inside [llm.openrouter], so the key lands in that table.
+	tomlData := []byte(baseConfig + `provider_sticky_ttl = "not-a-duration"
 `)
-	if _, err := Parse(tomlData); err == nil {
-		t.Fatal("expected validation error for bad provider_sticky_ttl")
+	if _, err := Parse(tomlData); err == nil || !strings.Contains(err.Error(), "provider_sticky_ttl") {
+		t.Fatalf("expected a provider_sticky_ttl validation error, got %v", err)
+	}
+}
+
+func TestParse_ProviderIgnore(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `provider_ignore = ["inceptron", "deepinfra"]
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := cfg.LLM.OpenRouter.ProviderIgnore
+	if len(got) != 2 || got[0] != "inceptron" || got[1] != "deepinfra" {
+		t.Fatalf("ProviderIgnore = %v, want [inceptron deepinfra]", got)
+	}
+}
+
+func TestValidate_RejectsBlankProviderIgnoreEntry(t *testing.T) {
+	_, err := Parse([]byte(baseConfig + `provider_ignore = ["inceptron", " "]
+`))
+	if err == nil || !strings.Contains(err.Error(), "provider_ignore") {
+		t.Fatalf("expected a provider_ignore validation error, got %v", err)
 	}
 }
 

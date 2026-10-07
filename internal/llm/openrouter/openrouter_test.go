@@ -856,6 +856,62 @@ func TestProviderRouting_ExplicitOrderWinsOverSticky(t *testing.T) {
 	}
 }
 
+func TestProviderRouting_IgnoreSentWhenNothingElseConfigured(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting(nil, nil, 0)
+	c.SetProviderIgnore([]string{"inceptron"})
+	p := c.buildProviderParam()
+	if p == nil || len(p.Ignore) != 1 || p.Ignore[0] != "inceptron" {
+		t.Fatalf("ignore should be sent on its own, got %+v", p)
+	}
+	if len(p.Order) != 0 || p.AllowFallbacks != nil {
+		t.Errorf("ignore alone must not add order or allow_fallbacks, got %+v", p)
+	}
+}
+
+func TestProviderRouting_IgnoreKeptWithExplicitOrder(t *testing.T) {
+	c := New("k")
+	c.SetProviderRouting([]string{"moonshotai"}, nil, time.Hour)
+	c.SetProviderIgnore([]string{"inceptron"})
+	p := c.buildProviderParam()
+	if p == nil || len(p.Order) != 1 || p.Order[0] != "moonshotai" {
+		t.Fatalf("explicit order should still win, got %+v", p)
+	}
+	if len(p.Ignore) != 1 || p.Ignore[0] != "inceptron" {
+		t.Errorf("ignore dropped alongside explicit order, got %+v", p.Ignore)
+	}
+}
+
+func TestProviderRouting_IgnoreSentOnEveryStickyRequest(t *testing.T) {
+	var bodies []apiRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req apiRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		bodies = append(bodies, req)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(okResponseWithProvider("Chutes"))
+	}))
+	defer srv.Close()
+
+	c := NewWithHTTPClient("k", srv.URL, srv.Client())
+	c.SetProviderRouting(nil, nil, time.Hour)
+	c.SetProviderIgnore([]string{"inceptron"})
+
+	for i := range 2 {
+		if _, err := c.ChatCompletion(context.Background(), simpleReq()); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	for i, b := range bodies {
+		if b.Provider == nil || len(b.Provider.Ignore) != 1 || b.Provider.Ignore[0] != "inceptron" {
+			t.Errorf("call %d: ignore missing from provider routing, got %+v", i+1, b.Provider)
+		}
+	}
+	if p := bodies[1].Provider; p == nil || len(p.Order) != 1 || p.Order[0] != "Chutes" {
+		t.Errorf("call 2 should still prefer the sticky provider, got %+v", p)
+	}
+}
+
 func TestStickyRouting_RecordsAndPrefersServedProvider(t *testing.T) {
 	var bodies []apiRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

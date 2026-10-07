@@ -32,6 +32,7 @@ func New(pc config.ProviderInstanceConfig, or config.OpenRouterConfig, hc *http.
 		r := &or.Reasoning
 		c.SetReasoning(r.Enabled, r.Effort, r.MaxTokens, r.Exclude)
 		c.SetProviderRouting(or.ProviderOrder, or.ProviderAllowFallbacks, or.ResolveStickyTTL())
+		c.SetProviderIgnore(or.ProviderIgnore)
 		setHTTP(c, hc)
 		return c, nil
 	case "ollama":

@@ -71,6 +71,7 @@ All paths default relative to `data_dir`. Override with `DENKEEPER_*` env vars.
     api_key = ""                     # OpenRouter API key
     provider_order = []              # explicit upstream provider preference (e.g. ["moonshotai"]); overrides sticky routing
     provider_allow_fallbacks = true  # allow OpenRouter to fall back outside provider_order
+    provider_ignore = []             # upstream slugs never to route to (e.g. ["inceptron"]); sent on every request
     provider_sticky = true           # prefer the last-served provider so upstream prompt caching keeps hitting
     provider_sticky_ttl = "1h"       # how long to prefer the last-served provider (Go duration)
 
