@@ -1505,10 +1505,12 @@ var supervisorStatusRenders = map[string]supervisorStatusRender{
 		alogLine: func(_ ChatEvent) string { return "↑ escalated — awaiting your review" },
 	},
 	"supervisor_error": {
+		// evt.Text names the cause (size cap, cost limit, outage); see
+		// supervisorErrorText. Most are skips, not outages.
 		debugText: func(evt ChatEvent) string {
-			return fmt.Sprintf("Supervisor unavailable for **%s** — awaiting your review (%s)", evt.Tool, evt.Text)
+			return fmt.Sprintf("Tool **%s**: %s", evt.Tool, evt.Text)
 		},
-		alogLine: func(_ ChatEvent) string { return "⚠ supervisor unavailable — awaiting your review" },
+		alogLine: func(evt ChatEvent) string { return "⚠ " + evt.Text },
 	},
 	"auto_denied": {
 		debugText: func(evt ChatEvent) string {
