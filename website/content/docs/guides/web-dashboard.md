@@ -39,7 +39,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Tools** | MCP servers: health, enable/disable, restart, OAuth |
 | **Browser** | Browser profiles and active sessions |
 | **Approvals** | Pending approvals and auto-approve rules |
-| **Evals** | Compare a candidate model against your current one on saved test cases ([Evals](/docs/concepts/evals/)) |
+| **Evals** | Compare a candidate model against your current one on saved test cases, with a **Test sets** tab to browse, edit, export, and fill them ([Evals](/docs/concepts/evals/)) |
 | **Audit Log** | Filterable event history |
 | **Turn inspector** | Per-turn traces: system prompt, tool calls, timings, usage ([Turn traces](/docs/concepts/evals/#turn-traces-and-the-inspector)) |
 | **Costs** | Spend by agent, model, and time range |

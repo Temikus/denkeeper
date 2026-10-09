@@ -306,7 +306,7 @@ List all agents with metadata.
 
 **Scope:** `admin`
 
-Get agent details including persona directory, loaded persona sections, and MCP tool names. When a [decision model](/docs/concepts/deciders/) is set, the response carries `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, and `supervisor_decider_deny_at`.
+Get agent details including persona directory, loaded persona sections, and MCP tool names, plus `command_skills` and `schedules` (what the agent can produce for command-triggered and scheduled turns, which the Evals page uses to tell a coverage gap from a kind the agent cannot generate). When a [decision model](/docs/concepts/deciders/) is set, the response carries `supervisor_decider`, `supervisor_decider_mode`, `supervisor_decider_approve_at`, and `supervisor_decider_deny_at`.
 
 ### `POST /api/v1/agents`
 
@@ -490,7 +490,7 @@ Returns the `[eval]` defaults and gate thresholds used to size and judge a run â
 
 **Scope:** `eval:read`
 
-Past turns worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Filters: `?agent=`, `?limit=` (default 20, max 100), `?since=` (RFC3339, default 90 days ago).
+Past turns worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Filters: `?agent=`, `?limit=` (default 20, max 100), `?since=` (RFC3339, default 90 days ago), `?category=` (one of `chat`, `skill_command`, `scheduled`, `tool_heavy`). With `?category=` the pass is narrowed to that one kind, which then gets the whole `limit`, and the kind is applied before the pool is drawn so a rare kind is not crowded out by newer turns of other kinds. `category=probe` and unknown values return `400`; probes come from `/eval/probes`.
 
 Each candidate carries `prompt`, `category`, `conversation_id`, `message_id`, `created_at`, the `signals` that earned it a place, and `preceding` â€” the turns before it, ready to pin as the test case's history.
 
