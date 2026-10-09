@@ -1647,8 +1647,40 @@ type InterestingTurn struct {
 // into MemoryStore or TelemetryStore: obtain one by type-asserting a
 // MemoryStore, the same way the API layer reaches TelemetryStore.
 type InterestingTurnStore interface {
-	ListInterestingTurns(ctx context.Context, agent string, since time.Time, limit int) ([]InterestingTurn, error)
+	ListInterestingTurns(ctx context.Context, q InterestingTurnQuery) ([]InterestingTurn, error)
 }
+
+// InterestingTurnQuery bounds a ListInterestingTurns call.
+type InterestingTurnQuery struct {
+	// Agent scopes the pool to one agent; empty means every agent.
+	Agent string
+	// Since is the oldest turn considered.
+	Since time.Time
+	// Limit bounds the candidate pool, not the number of suggestions.
+	Limit int
+	// Kind, when set, keeps only turns of that TurnKind. It is applied in SQL,
+	// before Limit, so a rare kind is not crowded out of the pool.
+	Kind string
+}
+
+// A past turn's kind, by the first rule that matches: a command-triggered
+// skill, then a scheduler-generated prompt, then tool weight, else chat. The
+// values are eval's history category slugs, and eval's categoryFor applies the
+// same rules in Go; TestCategoryFor_AgreesWithStoreKind pins the two together.
+const (
+	TurnKindSkillCommand = "skill_command"
+	TurnKindScheduled    = "scheduled"
+	TurnKindToolHeavy    = "tool_heavy"
+	TurnKindChat         = "chat"
+)
+
+// ToolHeavyThreshold is the tool-call count, or the round count, at which a
+// turn reads as tool-heavy.
+const ToolHeavyThreshold = 3
+
+// ScheduledPrefix opens every prompt scheduler.FormatScheduledText builds,
+// for both of its labels.
+const ScheduledPrefix = "[Scheduled"
 
 const (
 	// precedingTurns is how many messages of context travel with a candidate,
@@ -1669,12 +1701,25 @@ const (
 	sqliteDatetimeLayout = "2006-01-02 15:04:05"
 )
 
+// turnKindSQL classifies a row of interestingTurnsQuery by the TurnKind rules.
+// Built from the shared constants so the thresholds cannot drift from Go's.
+var turnKindSQL = fmt.Sprintf(`CASE
+        WHEN COALESCE(ms.command_matches, 0) > 0 THEN '%s'
+        WHEN substr(c.content, 1, %d) = '%s' THEN '%s'
+        WHEN COALESCE(tc.tool_calls, 0) >= %d OR COALESCE(tc.max_round, 0) >= %d THEN '%s'
+        ELSE '%s'
+    END`,
+	TurnKindSkillCommand,
+	len(ScheduledPrefix), ScheduledPrefix, TurnKindScheduled,
+	ToolHeavyThreshold, ToolHeavyThreshold, TurnKindToolHeavy,
+	TurnKindChat)
+
 // interestingTurnsQuery pairs each user message with the assistant message
 // that answered it (the next assistant row in the conversation) and rolls up
 // that reply's tool calls. Agent scoping goes through conversation_stats,
 // LEFT-joined so an unfiltered call still sees turns whose stats row was
 // pruned.
-const interestingTurnsQuery = `
+var interestingTurnsQuery = `
 SELECT
     c.message_id,
     c.conversation_id,
@@ -1714,14 +1759,14 @@ LEFT JOIN (
            SUM(CASE WHEN match_type = 'command' THEN 1 ELSE 0 END) AS command_matches
     FROM message_skills GROUP BY message_id
 ) ms ON ms.message_id = c.message_id
+WHERE (? = '' OR ` + turnKindSQL + ` = ?)
 ORDER BY c.created_at DESC, c.message_id DESC
 LIMIT ?`
 
-// ListInterestingTurns returns the most recent answered user turns since the
-// given time, newest first, with the reply telemetry a suggestion ranker needs.
-// An empty agent means every agent. The limit bounds the candidate pool, not
-// the number of suggestions.
-func (s *SQLiteMemoryStore) ListInterestingTurns(ctx context.Context, agent string, since time.Time, limit int) ([]InterestingTurn, error) {
+// ListInterestingTurns returns the most recent answered user turns matching q,
+// newest first, with the reply telemetry a suggestion ranker needs.
+func (s *SQLiteMemoryStore) ListInterestingTurns(ctx context.Context, q InterestingTurnQuery) ([]InterestingTurn, error) {
+	limit := q.Limit
 	if limit <= 0 || limit > interestingTurnsMaxLimit {
 		limit = interestingTurnsMaxLimit
 	}
@@ -1729,11 +1774,11 @@ func (s *SQLiteMemoryStore) ListInterestingTurns(ctx context.Context, agent stri
 	// Bound as SQLite's own DATETIME text rather than a time.Time: created_at
 	// is stored by CURRENT_TIMESTAMP in that layout, and the comparison is a
 	// string comparison whichever way the driver renders the parameter.
-	sinceText := since.UTC().Format(sqliteDatetimeLayout)
+	sinceText := q.Since.UTC().Format(sqliteDatetimeLayout)
 	// Bind order is statement-text order: the reply cap sits in the outer
 	// select list, ahead of the subquery's own bounds.
 	if err := s.db.SelectContext(ctx, &turns, interestingTurnsQuery,
-		replyPreviewMax+1, sinceText, agent, agent, limit); err != nil {
+		replyPreviewMax+1, sinceText, q.Agent, q.Agent, q.Kind, q.Kind, limit); err != nil {
 		return nil, fmt.Errorf("listing interesting turns: %w", err)
 	}
 	for i := range turns {

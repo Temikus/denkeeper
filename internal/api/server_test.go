@@ -626,6 +626,39 @@ func TestAgent_SingleAgent(t *testing.T) {
 	}
 }
 
+func TestAgent_ReportsCommandSkillsAndSchedules(t *testing.T) {
+	cfg := testConfig(allScopesKey())
+	deps := testDeps()
+	// No agent named: it runs on the fallback agent, which is "default".
+	_ = deps.Scheduler.Register(scheduler.Config{
+		Name: "morning", Type: "agent", Schedule: "@daily", Skill: "greet", Enabled: true,
+	}, func(_ scheduler.Entry) {})
+	_ = deps.Scheduler.Register(scheduler.Config{
+		Name: "elsewhere", Type: "agent", Schedule: "@daily", Agent: "argus", Enabled: true,
+	}, func(_ scheduler.Entry) {})
+	srv := New(cfg, deps, testLogger())
+
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/agents/default"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var detail struct {
+		CommandSkills []string `json:"command_skills"`
+		Schedules     []string `json:"schedules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// greet has command:hello; help has no trigger at all.
+	if len(detail.CommandSkills) != 1 || detail.CommandSkills[0] != "greet" {
+		t.Errorf("command_skills = %v, want [greet]", detail.CommandSkills)
+	}
+	if len(detail.Schedules) != 1 || detail.Schedules[0] != "morning" {
+		t.Errorf("schedules = %v, want [morning] — another agent's schedule must not count", detail.Schedules)
+	}
+}
+
 func TestAgent_ContextFields_NoPersonaNoTools(t *testing.T) {
 	cfg := testConfig(allScopesKey())
 	srv := New(cfg, testDeps(), testLogger())

@@ -1,5 +1,5 @@
 [tools]
-go = "1.27.1"
+go = "1.27.2"
 hugo-extended = "0.167.0"
 # Dart Sass for the website build (Hugo shells out to it). github backend,
 # not aqua: aqua installs the musl build, which can't run on Ubuntu runners.

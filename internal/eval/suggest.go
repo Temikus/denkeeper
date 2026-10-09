@@ -24,18 +24,20 @@ const (
 	SignalCommandSkill = "command_skill"
 )
 
-// roundsThreshold is the round count at which a turn reads as tool-heavy,
-// matching the toolCallsThreshold below: both are "the model had to work".
-const roundsThreshold = 3
-
-// toolCallsThreshold is the call count at which a turn reads as tool-heavy.
-const toolCallsThreshold = 3
+// roundsThreshold and toolCallsThreshold are the round and call counts at
+// which a turn reads as tool-heavy: both are "the model had to work". They are
+// the store's own line, so the kind its SQL filter selects is the category
+// categoryFor names.
+const (
+	roundsThreshold    = agent.ToolHeavyThreshold
+	toolCallsThreshold = agent.ToolHeavyThreshold
+)
 
 // scheduledPrefix is what scheduler.FormatScheduledText opens with, for both
 // its labels ("[Scheduled: <skill>" and "[Scheduled trigger: <name>"). Matched
 // as a prefix rather than parsed — the category only needs to know a schedule
 // fired this turn.
-const scheduledPrefix = "[Scheduled"
+const scheduledPrefix = agent.ScheduledPrefix
 
 // scheduledLabels are the two openings FormatScheduledText emits: a skill name
 // and a bare schedule name respectively.
@@ -83,6 +85,9 @@ type SuggestOpts struct {
 	// Exclude holds SourceKey values for turns already saved as tasks, so an
 	// accepted suggestion does not resurface.
 	Exclude map[string]struct{}
+	// Category, when set, keeps only turns of that history category and gives
+	// it the whole limit. Empty means every history category.
+	Category string
 }
 
 // SourceKey identifies a turn by its source conversation and message, the pair
@@ -118,6 +123,9 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 			continue
 		}
 		category := categoryFor(t)
+		if opts.Category != "" && category != opts.Category {
+			continue
+		}
 		byCategory[category] = append(byCategory[category], scored{
 			candidate: Candidate{
 				Prompt:         t.Content,
@@ -148,14 +156,17 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 			return group[i].candidate.CreatedAt.After(group[j].candidate.CreatedAt)
 		})
 	}
-	return stratify(byCategory, limit)
+	cats := HistoryCategories()
+	if opts.Category != "" {
+		cats = []string{opts.Category}
+	}
+	return stratify(byCategory, cats, limit)
 }
 
-// stratify draws limit/len(HistoryCategories()) from each category, then hands
-// the leftover slots round-robin to whichever categories still have surplus, so
-// a thin category costs the total nothing.
-func stratify(byCategory map[string][]scored, limit int) []Candidate {
-	cats := HistoryCategories()
+// stratify draws limit/len(cats) from each category, then hands the leftover
+// slots round-robin to whichever categories still have surplus, so a thin
+// category costs the total nothing.
+func stratify(byCategory map[string][]scored, cats []string, limit int) []Candidate {
 	share := limit / len(cats)
 	taken := make(map[string]int, len(cats))
 	out := make([]Candidate, 0, limit)
@@ -211,7 +222,8 @@ func signalsFor(t agent.InterestingTurn, costThreshold float64) []string {
 // categoryFor infers which history category a turn belongs to. CategoryProbe
 // is never inferred: a probe is generated from written intent, not sampled.
 // The order is the discriminating one: a command match is what the turn *was*,
-// while tool weight is only how it went.
+// while tool weight is only how it went. agent's turnKindSQL applies the same
+// rules in SQL; TestCategoryFor_AgreesWithStoreKind keeps them in step.
 func categoryFor(t agent.InterestingTurn) string {
 	switch {
 	case t.CommandMatches > 0:

@@ -5,6 +5,7 @@ import { server } from '../../test/server.js'
 import { evalRuns, evalProbeSet } from '../../test/handlers.js'
 import { token, authMode } from '../../store.js'
 import { evalProgress } from '../../wsStore.js'
+import { currentQuery } from '../../router.js'
 import Evals from '../../pages/Evals.svelte'
 
 const AGENTS = [
@@ -24,6 +25,9 @@ beforeEach(() => {
   token.set('test-key')
   authMode.set('token')
   evalProgress.set(new Map())
+  // Tabs write the hash, and the router's store outlives a test.
+  window.location.hash = '#/evals'
+  currentQuery.set(new URLSearchParams())
   server.use(http.get('/api/v1/agents', () => HttpResponse.json(AGENTS)))
 })
 
@@ -513,6 +517,9 @@ describe('Evals page — results panel', () => {
     await fireEvent.click(screen.getByTestId('results-2'))
     await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
     await fireEvent.click(screen.getByTestId('apply-4'))
+    // The launcher already read this agent's detail on mount; only the read
+    // the apply triggers counts here.
+    read = ''
     await fireEvent.click(screen.getByTestId('apply-confirm-btn'))
 
     await waitFor(() => expect(read).toBe('default'))
@@ -556,24 +563,115 @@ describe('Evals page — results panel', () => {
   })
 })
 
-describe('Evals page — suggestions', () => {
-  test('the header toggle mounts the panel above the launcher and closes it again', async () => {
+/** Opens the Test sets tab, where the fill panels and the case table live. */
+async function openSetsTab() {
+  await waitFor(() => expect(screen.getByTestId('tab-sets')).toBeInTheDocument())
+  await fireEvent.click(screen.getByTestId('tab-sets'))
+  await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+}
+
+describe('Evals page — tabs', () => {
+  test('Runs is the default and Test sets swaps the launcher for the cases', async () => {
     render(Evals)
     await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    expect(screen.getByTestId('tab-runs')).toHaveAttribute('aria-selected', 'true')
+
+    await openSetsTab()
+    expect(screen.getByTestId('tab-sets')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.queryByTestId('launcher')).not.toBeInTheDocument()
+    expect(window.location.hash).toBe('#/evals?tab=sets')
+    await waitFor(() => expect(screen.getByTestId('case-101')).toBeInTheDocument())
+  })
+
+  test('?tab=sets opens straight onto the Test sets tab', async () => {
+    window.location.hash = '#/evals?tab=sets'
+    currentQuery.set(new URLSearchParams('tab=sets'))
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+    expect(screen.queryByTestId('launcher')).not.toBeInTheDocument()
+  })
+
+  test('arrow keys move between tabs', async () => {
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.keyDown(screen.getByTestId('tab-runs'), { key: 'ArrowRight' })
+    await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+    expect(document.activeElement).toBe(screen.getByTestId('tab-sets'))
+  })
+
+  test('the launcher shows the chosen set\'s mix of kinds and links to it', async () => {
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('coverage-compact')).toBeInTheDocument())
+    expect(screen.getByTestId('coverage-compact')).toHaveTextContent('Chat / persona 1')
+    expect(screen.getByTestId('coverage-compact')).toHaveTextContent('2 kinds missing')
+
+    await fireEvent.click(screen.getByTestId('coverage-see'))
+    await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+  })
+
+  test('kinds the compared agent cannot produce are not reported as gaps', async () => {
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) => HttpResponse.json({
+        ...AGENTS.find(a => a.name === params.name), command_skills: [], schedules: ['morning'],
+      })),
+    )
+    render(Evals)
+    // golden-set has chat, tool_heavy and scheduled; probe is the one real gap.
+    await waitFor(() => expect(screen.getByTestId('coverage-compact')).toHaveTextContent('1 kind missing'))
+
+    await openSetsTab()
+    await waitFor(() => expect(screen.getByTestId('coverage-skipped'))
+      .toHaveTextContent('Not gaps for default: skill command (no command skills).'))
+    expect(screen.queryByTestId('gap-skill_command')).not.toBeInTheDocument()
+    expect(screen.getByTestId('gap-probe')).toBeInTheDocument()
+  })
+
+  test('a first import from the empty state lands on the Test sets tab', async () => {
+    let listCalls = 0
+    server.use(
+      http.get('/api/v1/eval/task-sets', () => {
+        listCalls++
+        return HttpResponse.json(listCalls === 1 ? [] : [{ id: 9, name: 'golden-set', task_count: 3 }])
+      }),
+      http.get('/api/v1/eval/runs', () => HttpResponse.json([])),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+
+    await fireEvent.click(screen.getByTestId('empty-import-cta'))
+    const file = new File(['{"prompt":"hi","category":"chat"}\n'], 'golden-set.jsonl', { type: 'text/plain' })
+    const picker = document.querySelector('input[type="file"]')
+    Object.defineProperty(picker, 'files', { value: [file] })
+    await fireEvent.change(picker)
+    await waitFor(() => expect(screen.getByText('Import')).not.toBeDisabled())
+    await fireEvent.click(screen.getByText('Import'))
+
+    await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+    // The panel that did the import stays open with its result.
+    expect(screen.getByText(/Imported 3 test cases into "golden-set"/)).toBeInTheDocument()
+  })
+})
+
+describe('Evals page — suggestions', () => {
+  test('the Add cases toggle mounts the panel above the cases and closes it again', async () => {
+    render(Evals)
+    await openSetsTab()
 
     await fireEvent.click(screen.getByTestId('suggest-toggle'))
     await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
 
     const panel = screen.getByTestId('suggest-panel')
-    const launcher = screen.getByTestId('launcher')
-    // Node.compareDocumentPosition: 4 = launcher follows the panel.
-    expect(panel.compareDocumentPosition(launcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const cases = screen.getByTestId('test-sets')
+    // Node.compareDocumentPosition: 4 = the cases follow the panel.
+    expect(panel.compareDocumentPosition(cases) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await fireEvent.click(screen.getByTestId('suggest-close'))
     await waitFor(() => expect(screen.queryByTestId('suggest-panel')).not.toBeInTheDocument())
   })
 
-  test('accepting a case re-reads the test sets and points the launcher at it', async () => {
+  test('accepting a case re-reads the test sets and selects it', async () => {
     let listCalls = 0
     server.use(
       http.get('/api/v1/eval/task-sets', () => {
@@ -594,7 +692,7 @@ describe('Evals page — suggestions', () => {
       http.post('/api/v1/eval/task-sets/:name/tasks', () => HttpResponse.json({ id: 1 }, { status: 201 })),
     )
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    await openSetsTab()
 
     await fireEvent.click(screen.getByTestId('suggest-toggle'))
     await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
@@ -603,29 +701,49 @@ describe('Evals page — suggestions', () => {
     await fireEvent.input(screen.getByTestId('suggest-new-set'), { target: { value: 'fresh-set' } })
     await fireEvent.click(screen.getByTestId('accept-chan:ops:101'))
 
+    await waitFor(() => expect(screen.getByTestId('sets-select')).toHaveValue('fresh-set'))
+    await fireEvent.click(screen.getByTestId('tab-runs'))
     await waitFor(() => expect(screen.getByTestId('task-set-select')).toHaveValue('fresh-set'))
+  })
+
+  test('a coverage gap opens Suggest narrowed to that kind', async () => {
+    let category = null
+    server.use(
+      http.get('/api/v1/eval/suggest', ({ request }) => {
+        category = new URL(request.url).searchParams.get('category')
+        return HttpResponse.json({ candidates: [] })
+      }),
+    )
+    render(Evals)
+    await openSetsTab()
+
+    await waitFor(() => expect(screen.getByTestId('gap-skill_command')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('gap-skill_command'))
+
+    await waitFor(() => expect(category).toBe('skill_command'))
+    expect(screen.getByTestId('suggest-title')).toHaveTextContent('Skill command')
   })
 })
 
 describe('Evals page — behaviour probes', () => {
-  test('the header toggle mounts the probe panel above the launcher and closes it again', async () => {
+  test('the Add cases toggle mounts the probe panel above the cases and closes it again', async () => {
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    await openSetsTab()
 
     await fireEvent.click(screen.getByTestId('probes-toggle'))
     await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
 
     const panel = screen.getByTestId('probes-panel')
-    const launcher = screen.getByTestId('launcher')
-    expect(panel.compareDocumentPosition(launcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const cases = screen.getByTestId('test-sets')
+    expect(panel.compareDocumentPosition(cases) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await fireEvent.click(screen.getByTestId('probes-close'))
     await waitFor(() => expect(screen.queryByTestId('probes-panel')).not.toBeInTheDocument())
   })
 
-  test('the fill panels take turns rather than stacking the launcher off screen', async () => {
+  test('the fill panels take turns rather than stacking', async () => {
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    await openSetsTab()
 
     await fireEvent.click(screen.getByTestId('suggest-toggle'))
     await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
@@ -645,11 +763,20 @@ describe('Evals page — behaviour probes', () => {
       }),
     )
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    await openSetsTab()
 
     await fireEvent.click(screen.getByTestId('probes-toggle'))
     await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
     expect(seen).toBe('default')
+  })
+
+  test('the probe gap opens Generate probes', async () => {
+    render(Evals)
+    await openSetsTab()
+
+    await waitFor(() => expect(screen.getByTestId('gap-probe')).toBeInTheDocument())
+    await fireEvent.click(screen.getByTestId('gap-probe'))
+    await waitFor(() => expect(screen.getByTestId('probes-cards')).toBeInTheDocument())
   })
 
   test('the empty-state CTA opens the probe cards', async () => {

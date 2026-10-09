@@ -3311,6 +3311,12 @@
                         "description": "RFC3339 lower bound on turn time (default 90 days ago)",
                         "name": "since",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this history category, which then gets the whole limit (chat, skill_command, scheduled, tool_heavy)",
+                        "name": "category",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3321,7 +3327,7 @@
                         }
                     },
                     "400": {
-                        "description": "Bad limit or since",
+                        "description": "Bad limit, since or category",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

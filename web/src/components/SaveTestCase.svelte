@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte'
   import { api } from '../api.js'
+  import { CATEGORIES } from '../evalCategories.js'
 
   // Saves one chat turn as an eval test case. Rendered in place under the
   // message bubble (never a modal — house rule), because the thing being saved
@@ -21,14 +22,6 @@
     sourceMessageId = null,
     onclose = undefined,
   } = $props()
-
-  const CATEGORIES = [
-    { value: 'chat', label: 'Chat / persona' },
-    { value: 'skill_command', label: 'Skill command' },
-    { value: 'scheduled', label: 'Scheduled' },
-    { value: 'tool_heavy', label: 'Tool-heavy' },
-    { value: 'probe', label: 'Behaviour probe' },
-  ]
 
   let sets = $state([])
   let loading = $state(true)

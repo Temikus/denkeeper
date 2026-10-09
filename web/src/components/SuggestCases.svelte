@@ -3,6 +3,7 @@
   import { api } from '../api.js'
   import { navigate } from '../router.js'
   import { relativeTime } from '../relativeTime.js'
+  import { categoryLabel } from '../evalCategories.js'
 
   // Offers past turns worth keeping as test cases, mined by GET /eval/suggest.
   // Cold-start fill: an operator with no test set has nothing to compare on,
@@ -16,17 +17,11 @@
     agent = '',
     sets = [],
     defaultSet = '',
+    // Narrows the pass to one history category, e.g. from a coverage gap.
+    category = '',
     onaccepted = undefined,
     onclose = undefined,
   } = $props()
-
-  const CATEGORY_LABEL = {
-    chat: 'Chat / persona',
-    skill_command: 'Skill command',
-    scheduled: 'Scheduled',
-    tool_heavy: 'Tool-heavy',
-    probe: 'Behaviour probe',
-  }
 
   // Why this turn is worth keeping, in the operator's words. The API's signal
   // names are the store's vocabulary, not a reason anyone can read.
@@ -76,10 +71,6 @@
 
   function keyOf(c) {
     return `${c.conversation_id}:${c.message_id}`
-  }
-
-  function categoryLabel(c) {
-    return CATEGORY_LABEL[c] || c
   }
 
   /**
@@ -149,7 +140,7 @@
     acceptError = ''
     savedMsg = ''
     try {
-      const res = await api.evalSuggest({ agent: agent || undefined, limit: 20 })
+      const res = await api.evalSuggest({ agent: agent || undefined, limit: 20, category: category || undefined })
       if (seq !== requestSeq) return
       // The endpoint answers {candidates: [...]}; tolerate a bare array so an
       // older server does not render as an error.
@@ -183,9 +174,11 @@
     return `${s.name} (${n} case${n === 1 ? '' : 's'})`
   }
 
-  // Refetch when the agent changes: suggestions are that agent's history.
+  // Refetch when the agent or category changes: suggestions are that
+  // agent's history, of that kind.
   $effect(() => {
     void agent
+    void category
     load()
   })
 
@@ -342,7 +335,9 @@
 <section class="suggest" data-testid="suggest-panel" aria-label="Suggested test cases"
   aria-busy={busy} onkeydown={handleKeydown}>
   <div class="head">
-    <h2 class="section-title">Suggest from history</h2>
+    <h2 class="section-title" data-testid="suggest-title">
+      Suggest from history{category ? ` · ${categoryLabel(category)}` : ''}
+    </h2>
     <div class="head-actions">
       <button class="btn-ghost btn-sm" onclick={load} disabled={loading || busy}
         data-testid="suggest-refresh">Refresh</button>
@@ -366,7 +361,11 @@
     <button class="btn-ghost btn-sm" onclick={load}>Try again</button>
   {:else if visible.length === 0}
     <p class="muted" data-testid="suggest-empty">
-      {#if candidates.length === 0}
+      {#if candidates.length === 0 && category}
+        No {categoryLabel(category).toLowerCase()} turns worth testing yet. A turn becomes a
+        candidate once it shows a failed tool call, several tool rounds, an unusually
+        expensive reply, or a skill command.
+      {:else if candidates.length === 0}
         Nothing to suggest yet. Turns become candidates once they show something worth
         testing — a failed tool call, several tool rounds, an unusually expensive reply,
         or a skill command.
