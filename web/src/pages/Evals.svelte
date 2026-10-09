@@ -185,8 +185,10 @@
   $effect(() => {
     void setsVersion
     const name = taskSetName
-    if (!name || tab !== 'runs') return
+    // Invalidates any read in flight, so another set's counts never land.
     const seq = ++launchSeq
+    launchTasks = null
+    if (!name || tab !== 'runs') return
     api.evalTaskSet(name)
       .then(d => { if (seq === launchSeq) launchTasks = d?.tasks || [] })
       // The line is a hint; without it the launcher still works.

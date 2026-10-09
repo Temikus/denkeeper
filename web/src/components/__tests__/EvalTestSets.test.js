@@ -174,20 +174,27 @@ describe('EvalTestSets — deleting', () => {
 
 describe('EvalTestSets — export', () => {
   test('Export downloads the set as <name>.jsonl', async () => {
+    // jsdom has no object URLs, so these are stubbed and put back afterwards.
+    const { createObjectURL, revokeObjectURL } = URL
     const created = []
     URL.createObjectURL = vi.fn((blob) => { created.push(blob); return 'blob:x' })
     URL.revokeObjectURL = vi.fn()
-    let downloaded = ''
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
-      downloaded = this.download
-    })
-    await renderSets()
+    try {
+      let downloaded = ''
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+        downloaded = this.download
+      })
+      await renderSets()
 
-    await fireEvent.click(screen.getByTestId('export-set'))
+      await fireEvent.click(screen.getByTestId('export-set'))
 
-    await waitFor(() => expect(downloaded).toBe('golden-set.jsonl'))
-    expect(await created[0].text()).toBe('{"prompt":"hi","category":"chat"}\n')
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:x')
+      await waitFor(() => expect(downloaded).toBe('golden-set.jsonl'))
+      expect(await created[0].text()).toBe('{"prompt":"hi","category":"chat"}\n')
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:x')
+    } finally {
+      URL.createObjectURL = createObjectURL
+      URL.revokeObjectURL = revokeObjectURL
+    }
   })
 
   test('a failed export says so', async () => {
