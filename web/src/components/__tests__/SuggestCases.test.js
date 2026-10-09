@@ -82,6 +82,34 @@ describe('SuggestCases — listing', () => {
     expect(seen).toBe('helper')
   })
 
+  test('a category narrows the request and names the kind', async () => {
+    let seen = null
+    server.use(
+      http.get('/api/v1/eval/suggest', ({ request }) => {
+        seen = new URL(request.url).searchParams.get('category')
+        return HttpResponse.json({ candidates: [] })
+      }),
+    )
+    render(SuggestCases, { sets: SETS, category: 'tool_heavy' })
+
+    await waitFor(() => expect(screen.getByTestId('suggest-empty')).toBeInTheDocument())
+    expect(seen).toBe('tool_heavy')
+    expect(screen.getByTestId('suggest-title')).toHaveTextContent('Suggest from history · Tool-heavy')
+    expect(screen.getByTestId('suggest-empty')).toHaveTextContent('No tool-heavy turns worth testing yet')
+  })
+
+  test('without a category the request carries none', async () => {
+    let params = null
+    server.use(
+      http.get('/api/v1/eval/suggest', ({ request }) => {
+        params = new URL(request.url).searchParams
+        return HttpResponse.json(evalSuggestions)
+      }),
+    )
+    await renderPanel()
+    expect(params.has('category')).toBe(false)
+  })
+
   test('shows a spinner line while loading', async () => {
     server.use(
       http.get('/api/v1/eval/suggest', async () => {

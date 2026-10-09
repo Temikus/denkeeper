@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -214,6 +215,43 @@ func TestEvalSuggest_RejectsMalformedParams(t *testing.T) {
 	rec = evalRequest(t, srv, http.MethodGet, "/api/v1/eval/suggest?since=yesterday", "", "dk-test-key")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("since=yesterday status = %d, want 400", rec.Code)
+	}
+}
+
+func TestEvalSuggest_CategoryNarrowsToOneKind(t *testing.T) {
+	srv, _ := evalTestServer(t, allScopesKey())
+	ids := seedOneTurnPerCategory(t, srv, "chan:main", "default")
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/suggest?category=tool_heavy", "", "dk-test-key")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := decodeSuggestions(t, rec.Body.Bytes())
+	if len(got.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want only the tool-heavy turn: %+v", len(got.Candidates), got.Candidates)
+	}
+	if c := got.Candidates[0]; c.Category != eval.CategoryToolHeavy || c.MessageID != ids[eval.CategoryToolHeavy] {
+		t.Errorf("candidate = %s/%d, want %s/%d", c.Category, c.MessageID, eval.CategoryToolHeavy, ids[eval.CategoryToolHeavy])
+	}
+}
+
+func TestEvalSuggest_RejectsUnknownOrProbeCategory(t *testing.T) {
+	srv, _ := evalTestServer(t, allScopesKey())
+
+	rec := evalRequest(t, srv, http.MethodGet, "/api/v1/eval/suggest?category=banter", "", "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("category=banter status = %d, want 400", rec.Code)
+	}
+	rec = evalRequest(t, srv, http.MethodGet, "/api/v1/eval/suggest?category=probe", "", "dk-test-key")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("category=probe status = %d, want 400", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding error body: %v", err)
+	}
+	if !strings.Contains(body["error"], "/eval/probes") {
+		t.Errorf("probe error = %q, want it to point at /eval/probes", body["error"])
 	}
 }
 

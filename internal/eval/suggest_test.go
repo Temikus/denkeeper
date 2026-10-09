@@ -182,6 +182,26 @@ func TestSuggest_LeftoverSlotsGoToCategoriesWithSurplus(t *testing.T) {
 	}
 }
 
+func TestSuggest_CategoryFilterFillsLimitFromOneKind(t *testing.T) {
+	// Stratified, tool_heavy would get one of four slots; filtered, it gets all.
+	var turns []agent.InterestingTurn
+	for i := int64(1); i <= 5; i++ {
+		turns = append(turns, turn(i, "dig", func(x *agent.InterestingTurn) { x.Faults = 1; x.MaxRound = 4 }))
+	}
+	turns = append(turns,
+		turn(20, "/report", func(x *agent.InterestingTurn) { x.CommandMatches = 1 }),
+		turn(21, "just chatting", func(x *agent.InterestingTurn) { x.ReplyCost = 20 }),
+	)
+
+	got := Suggest(turns, SuggestOpts{Limit: 4, Category: CategoryToolHeavy})
+	if len(got) != 4 {
+		t.Fatalf("candidates = %d, want 4 — the one kind gets the whole limit: %+v", len(got), got)
+	}
+	if counts := candidateCategories(got); counts[CategoryToolHeavy] != 4 {
+		t.Errorf("counts = %v, want 4 tool_heavy and nothing else", counts)
+	}
+}
+
 func TestSuggest_RanksBySignalCountThenRecency(t *testing.T) {
 	turns := []agent.InterestingTurn{
 		turn(1, "one signal", func(x *agent.InterestingTurn) { x.MaxRound = 3 }),

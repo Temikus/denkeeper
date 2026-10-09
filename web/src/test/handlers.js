@@ -64,6 +64,14 @@ export const evalTaskSets = [
   { id: 2, name: 'tool-heavy', description: '', task_count: 8, created_at: '2026-08-05T09:00:00Z' },
 ]
 
+// Cases in golden-set: three kinds present, skill_command and probe missing.
+export const evalTasks = [
+  { id: 101, set_id: 1, prompt: 'What is on my calendar tomorrow?', category: 'chat', tags: [], notes: '', created_at: '2026-08-01T09:00:00Z' },
+  { id: 102, set_id: 1, prompt: 'Summarise yesterday and file the follow-ups', category: 'tool_heavy', tags: [], notes: 'Needs kv + web_fetch',
+    pinned_history: [{ role: 'user', content: 'morning' }, { role: 'assistant', content: 'Morning!' }], created_at: '2026-08-01T09:00:00Z' },
+  { id: 103, set_id: 1, prompt: '[Scheduled: heartbeat | 2026-08-01T10:00:00Z UTC]', category: 'scheduled', tags: [], notes: '', created_at: '2026-08-01T09:00:00Z' },
+]
+
 export const evalConfig = {
   default_k: 3,
   max_cost_per_run: 2,
@@ -649,7 +657,9 @@ export const handlers = [
   http.get('/api/v1/eval/task-sets', () => HttpResponse.json(evalTaskSets)),
   http.get('/api/v1/eval/task-sets/:name', ({ params }) => {
     const set = evalTaskSets.find(s => s.name === params.name)
-    return set ? HttpResponse.json({ ...set, tasks: [] }) : new HttpResponse(null, { status: 404 })
+    return set
+      ? HttpResponse.json({ ...set, tasks: set.name === 'golden-set' ? evalTasks : [] })
+      : new HttpResponse(null, { status: 404 })
   }),
   http.post('/api/v1/eval/task-sets', async ({ request }) => {
     const body = await request.json()
@@ -658,7 +668,10 @@ export const handlers = [
   http.patch('/api/v1/eval/task-sets/:name', () => HttpResponse.json({ ok: true })),
   http.delete('/api/v1/eval/task-sets/:name', () => new HttpResponse(null, { status: 204 })),
   http.post('/api/v1/eval/task-sets/:name/tasks', () => HttpResponse.json({ id: 1 }, { status: 201 })),
-  http.patch('/api/v1/eval/task-sets/:name/tasks/:id', () => HttpResponse.json({ ok: true })),
+  http.patch('/api/v1/eval/task-sets/:name/tasks/:id', async ({ params, request }) => {
+    const task = evalTasks.find(t => String(t.id) === params.id)
+    return task ? HttpResponse.json({ ...task, ...(await request.json()) }) : new HttpResponse(null, { status: 404 })
+  }),
   http.delete('/api/v1/eval/task-sets/:name/tasks/:id', () => new HttpResponse(null, { status: 204 })),
   http.get('/api/v1/eval/task-sets/:name/export', () => HttpResponse.text('{"prompt":"hi","category":"chat"}\n')),
   http.post('/api/v1/eval/task-sets/:name/import', () => HttpResponse.json({ imported: 3 })),

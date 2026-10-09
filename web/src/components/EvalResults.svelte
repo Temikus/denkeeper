@@ -9,6 +9,7 @@
   import { api, evalSampleTranscript } from '../api.js'
   import ErrorBanner from './ErrorBanner.svelte'
   import DryRunTranscript from './DryRunTranscript.svelte'
+  import { categoryLabel as categoryOf } from '../evalCategories.js'
 
   let {
     run,
@@ -74,16 +75,6 @@
     rejected_rate: 'Rejected tool calls',
     mean_rounds: 'Rounds per test case',
     mean_cost_per_task: 'Cost per test case',
-  }
-
-  // Categories are stored as slugs; SuggestCases.svelte labels them the same
-  // way, and the two lists have to agree.
-  const CATEGORY_LABEL = {
-    chat: 'Chat / persona',
-    skill_command: 'Skill command',
-    scheduled: 'Scheduled',
-    tool_heavy: 'Tool-heavy',
-    probe: 'Behaviour probe',
   }
 
   const OUTCOME_LABEL = {
@@ -159,7 +150,7 @@
   }
 
   function categoryLabel(c) {
-    return CATEGORY_LABEL[c] || c || '—'
+    return c ? categoryOf(c) : '—'
   }
 
   /** The candidate's own metrics row, for the objective table's ordering. */

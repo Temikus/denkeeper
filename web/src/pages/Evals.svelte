@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { api } from '../api.js'
-  import { navigate } from '../router.js'
+  import { navigate, currentQuery } from '../router.js'
   import { inert } from '../inert.js'
   import { evalProgress } from '../wsStore.js'
   import { relativeTime } from '../relativeTime.js'
@@ -11,6 +11,9 @@
   import EvalResults from '../components/EvalResults.svelte'
   import SuggestCases from '../components/SuggestCases.svelte'
   import GenerateProbes from '../components/GenerateProbes.svelte'
+  import EvalTestSets from '../components/EvalTestSets.svelte'
+  import EvalCoverage from '../components/EvalCoverage.svelte'
+  import { PROBE } from '../evalCategories.js'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
   const QUICK_TASKS = 10
@@ -53,17 +56,87 @@
   let importError = $state('')
   let importOk = $state('')
 
+  // --- Tabs ---
+  // Runs holds the launcher and results; Test sets holds the cases and the
+  // panels that fill them. Synced to ?tab=sets so a link can open either.
+  const TABS = [
+    { value: 'runs', label: 'Runs' },
+    { value: 'sets', label: 'Test sets' },
+  ]
+  let tab = $state('runs')
+  // Bumped after any write to a set, so views holding its cases re-read.
+  let setsVersion = $state(0)
+
+  let appliedQuery = null
+  $effect(() => {
+    const q = $currentQuery
+    const key = q.toString()
+    if (key === appliedQuery) return
+    appliedQuery = key
+    tab = q.get('tab') === 'sets' ? 'sets' : 'runs'
+  })
+
+  function setTab(next) {
+    tab = next
+    const q = next === 'sets' ? 'tab=sets' : ''
+    // Replaced, not pushed: a tab is a view of this page, and pushing would
+    // make Back walk through every arrow-key press.
+    history.replaceState(history.state, '', `#/evals${q ? `?${q}` : ''}`)
+    appliedQuery = q
+    currentQuery.set(new URLSearchParams(q))
+  }
+
+  /** Arrow keys move between tabs, per the WAI-ARIA tabs pattern. */
+  function tabKeydown(e) {
+    const i = TABS.findIndex(t => t.value === tab)
+    let j = -1
+    if (e.key === 'ArrowRight') j = (i + 1) % TABS.length
+    else if (e.key === 'ArrowLeft') j = (i - 1 + TABS.length) % TABS.length
+    else if (e.key === 'Home') j = 0
+    else if (e.key === 'End') j = TABS.length - 1
+    if (j < 0) return
+    e.preventDefault()
+    setTab(TABS[j].value)
+    document.getElementById(`eval-tab-${TABS[j].value}`)?.focus()
+  }
+
   // --- Suggestions and probes ---
   let showSuggest = $state(false)
   let showProbes = $state(false)
+  // Narrows the suggestion pass to one kind when opened from a coverage gap.
+  let suggestCategory = $state('')
 
   function toggleSuggest() {
-    showSuggest = !showSuggest
-    // Stacked panels above the launcher push it off screen, so they take turns.
     if (showSuggest) {
-      showImport = false
-      showProbes = false
+      showSuggest = false
+      return
     }
+    openSuggest('')
+  }
+
+  function openSuggest(category) {
+    suggestCategory = category
+    showSuggest = true
+    // Stacked panels push what is below them off screen, so they take turns.
+    showImport = false
+    showProbes = false
+  }
+
+  /** A coverage gap prompt: open the fill path for that kind and show it. */
+  function fillGap(category) {
+    if (category === PROBE) {
+      if (!showProbes) toggleProbes()
+      reveal('eval-probes-panel')
+    } else {
+      openSuggest(category)
+      reveal('eval-suggest-panel')
+    }
+  }
+
+  /** The panels open above the gap prompt that asked for them. */
+  function reveal(id) {
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    document.getElementById(id)?.scrollIntoView?.({ behavior: still ? 'auto' : 'smooth', block: 'start' })
   }
 
   function toggleProbes() {
@@ -78,10 +151,47 @@
   // the launcher should now be pointing at. Shared by both fill paths.
   async function onSuggestAccepted(name) {
     try {
-      await loadTaskSets()
-      if (name) taskSetName = name
+      await afterFill(name)
     } catch { /* the panel already reported the write; the count can lag */ }
   }
+
+  // The first fill ends the empty state, and the panel that did it lives in
+  // the Test sets tab, so the page follows it there.
+  async function afterFill(name) {
+    const wasEmpty = isEmpty
+    await loadTaskSets()
+    if (name) taskSetName = name
+    setsVersion++
+    if (wasEmpty && !isEmpty) setTab('sets')
+  }
+
+  /** After a case or set is deleted from the Test sets tab. */
+  async function onSetsChanged(deleted) {
+    try {
+      await loadTaskSets()
+    } catch (e) {
+      error = e.message
+    }
+    if (deleted || !taskSets.some(t => t.name === taskSetName)) {
+      taskSetName = taskSets[0]?.name || ''
+    }
+    setsVersion++
+  }
+
+  // The launcher's set, read for its mix of kinds. Only while the Runs tab is
+  // showing: the Test sets tab reads the same set itself.
+  let launchTasks = $state(null)
+  let launchSeq = 0
+  $effect(() => {
+    void setsVersion
+    const name = taskSetName
+    if (!name || tab !== 'runs') return
+    const seq = ++launchSeq
+    api.evalTaskSet(name)
+      .then(d => { if (seq === launchSeq) launchTasks = d?.tasks || [] })
+      // The line is a hint; without it the launcher still works.
+      .catch(() => { if (seq === launchSeq) launchTasks = null })
+  })
 
   // The launcher section, so an escalation from a result can move focus and
   // the viewport back to it.
@@ -101,6 +211,8 @@
   let k = $derived(preset === 'quick' ? 1 : (cfg?.default_k || FALLBACK_K))
   let sampleTasks = $derived(preset === 'quick' ? QUICK_TASKS : 0)
   let isEmpty = $derived(!loading && taskSets.length === 0 && runs.length === 0)
+  // The tablist renders only once loaded and non-empty.
+  let hasTabs = $derived(!loading && !isEmpty)
   let canStart = $derived(!!baseAgent && !!candidate.trim() && !!taskSetName && !starting)
 
   /** Names the input still missing, so a disabled Start says why. */
@@ -347,8 +459,7 @@
       // filename beside a disabled Import button reads as a broken button.
       importFile = null
       if (fileEl) fileEl.value = ''
-      await loadTaskSets()
-      taskSetName = name
+      await afterFill(name)
     } catch (e) {
       importError = e.message
     } finally {
@@ -489,25 +600,23 @@
 
 <div class="page-header">
   <h1 class="page-title">Evals</h1>
-  {#if !isEmpty}
-    <button class="btn-ghost btn-sm" onclick={toggleSuggest}
-      aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
-      data-testid="suggest-toggle">Suggest from history</button>
-    <button class="btn-ghost btn-sm" onclick={toggleProbes} disabled={!baseAgent}
-      title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
-      aria-expanded={showProbes} aria-controls="eval-probes-panel"
-      data-testid="probes-toggle">Generate probes</button>
-    <button class="btn-ghost btn-sm" onclick={toggleImport}
-      aria-expanded={showImport} aria-controls="eval-import-panel"
-      data-testid="import-toggle">Import JSONL</button>
-  {/if}
 </div>
 
 <ErrorBanner message={error} />
 
 {#if loading}
   <p class="muted">Loading…</p>
-{:else if isEmpty}
+{:else if !isEmpty}
+  <div class="tabs" role="tablist" aria-label="Evals views">
+    {#each TABS as t (t.value)}
+      <button class="tab" class:active={tab === t.value} role="tab" id="eval-tab-{t.value}"
+        aria-selected={tab === t.value} aria-controls="eval-tabpanel"
+        tabindex={tab === t.value ? 0 : -1}
+        onclick={() => setTab(t.value)} onkeydown={tabKeydown}
+        data-testid="tab-{t.value}">{t.label}</button>
+    {/each}
+  </div>
+{:else}
   <div class="empty-state" data-testid="evals-empty">
     <p class="empty-lead">
       Save real conversations as test cases, then compare your current model against a
@@ -528,6 +637,27 @@
   </div>
 {/if}
 
+<div id="eval-tabpanel" role={hasTabs ? 'tabpanel' : undefined}
+  aria-labelledby={hasTabs ? `eval-tab-${tab}` : undefined}>
+{#if !loading && !isEmpty && tab === 'sets'}
+  <div class="add-cases" data-testid="add-cases">
+    <span class="field-label">Add cases</span>
+    <button class="btn-ghost btn-sm" onclick={toggleSuggest}
+      aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
+      data-testid="suggest-toggle">Suggest from history</button>
+    <button class="btn-ghost btn-sm" onclick={toggleProbes} disabled={!baseAgent}
+      title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
+      aria-expanded={showProbes} aria-controls="eval-probes-panel"
+      data-testid="probes-toggle">Generate probes</button>
+    <button class="btn-ghost btn-sm" onclick={toggleImport}
+      aria-expanded={showImport} aria-controls="eval-import-panel"
+      data-testid="import-toggle">Import JSONL</button>
+    <button class="btn-ghost btn-sm" onclick={() => navigate('chat')}
+      data-testid="chat-toggle">Save from Chat</button>
+  </div>
+{/if}
+
+{#if isEmpty || tab === 'sets'}
 <div class="inline-panel" id="eval-import-panel" class:open={showImport} use:inert={!showImport}>
   <div class="inline-panel-inner">
     <div class="inline-form" data-testid="import-form">
@@ -565,6 +695,7 @@
     {#if showSuggest}
       <SuggestCases
         agent={baseAgent}
+        category={suggestCategory}
         sets={taskSets}
         defaultSet={taskSetName}
         onaccepted={onSuggestAccepted}
@@ -588,8 +719,19 @@
     {/if}
   </div>
 </div>
+{/if}
 
-{#if !loading && !isEmpty}
+{#if !loading && !isEmpty && tab === 'sets'}
+  <EvalTestSets
+    sets={taskSets}
+    bind:selected={taskSetName}
+    version={setsVersion}
+    onchanged={onSetsChanged}
+    onfill={fillGap}
+    canProbe={!!baseAgent} />
+{/if}
+
+{#if !loading && !isEmpty && tab === 'runs'}
   <section class="launcher" data-testid="launcher" bind:this={launcherEl} tabindex="-1">
     <h2 class="section-title">Compare current vs candidate</h2>
     {#if launchError}<div class="inline-error" role="alert">{launchError}</div>{/if}
@@ -616,14 +758,17 @@
         <span class="hint">The model to test against the one running now.</span>
       </label>
 
-      <label class="field">
-        <span class="field-label">Test set</span>
-        <select bind:value={taskSetName} disabled={starting} data-testid="task-set-select">
+      <div class="field">
+        <label class="field-label" for="launch-set">Test set</label>
+        <select id="launch-set" bind:value={taskSetName} disabled={starting} data-testid="task-set-select">
           {#each taskSets as t}
             <option value={t.name}>{t.name} ({t.task_count} case{t.task_count === 1 ? '' : 's'})</option>
           {/each}
         </select>
-      </label>
+        {#if launchTasks}
+          <EvalCoverage tasks={launchTasks} compact onsee={() => setTab('sets')} />
+        {/if}
+      </div>
     </div>
 
     <div class="launch-row">
@@ -753,6 +898,7 @@
     {/each}
   </section>
 {/if}
+</div>
 
 {#if confirmStop != null}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -820,6 +966,37 @@
     flex-wrap: wrap;
     gap: 8px;
   }
+
+  /* Tabs: an underline bar, since the page has one level of navigation. */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .tab {
+    border: none;
+    background: none;
+    padding: 8px 12px;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .add-cases {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .add-cases .field-label { margin-right: 4px; }
 
   /* Launcher */
   .launcher {

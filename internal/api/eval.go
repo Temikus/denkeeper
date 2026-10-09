@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -981,29 +982,57 @@ const (
 	suggestMinPool    = 100
 )
 
+// suggestQuery is a parsed GET /eval/suggest query string.
+type suggestQuery struct {
+	agent    string
+	since    time.Time
+	limit    int
+	category string
+}
+
 // suggestParams parses the query string, writing a 400 and reporting false on
 // a malformed one.
-func suggestParams(w http.ResponseWriter, r *http.Request) (agentName string, since time.Time, limit int, ok bool) {
-	agentName = r.URL.Query().Get("agent")
-	limit = suggestDefaultLimit
+func suggestParams(w http.ResponseWriter, r *http.Request) (suggestQuery, bool) {
+	q := suggestQuery{
+		agent: r.URL.Query().Get("agent"),
+		limit: suggestDefaultLimit,
+		since: time.Now().Add(-suggestDefaultWindow),
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be a positive integer"})
-			return "", time.Time{}, 0, false
+			return suggestQuery{}, false
 		}
-		limit = min(n, suggestMaxLimit)
+		q.limit = min(n, suggestMaxLimit)
 	}
-	since = time.Now().Add(-suggestDefaultWindow)
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "since must be an RFC3339 timestamp"})
-			return "", time.Time{}, 0, false
+			return suggestQuery{}, false
 		}
-		since = t
+		q.since = t
 	}
-	return agentName, since, limit, true
+	q.category = r.URL.Query().Get("category")
+	if msg := suggestCategoryError(q.category); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return suggestQuery{}, false
+	}
+	return q, true
+}
+
+// suggestCategoryError explains why category cannot narrow a suggestion pass,
+// or returns "" when it can. Empty means every history category.
+func suggestCategoryError(category string) string {
+	switch {
+	case category == "" || slices.Contains(eval.HistoryCategories(), category):
+		return ""
+	case category == eval.CategoryProbe:
+		return "probe cases are not mined from history; generate them with GET /eval/probes"
+	default:
+		return "category must be one of: " + strings.Join(eval.HistoryCategories(), ", ")
+	}
 }
 
 // handleEvalSuggest godoc
@@ -1015,8 +1044,9 @@ func suggestParams(w http.ResponseWriter, r *http.Request) (agentName string, si
 // @Param agent query string false "Only turns handled by this agent"
 // @Param limit query int false "Candidates returned across all categories (default 20, max 100)"
 // @Param since query string false "RFC3339 lower bound on turn time (default 90 days ago)"
+// @Param category query string false "Only this history category, which then gets the whole limit (chat, skill_command, scheduled, tool_heavy)"
 // @Success 200 {object} evalSuggestResult "Stratified candidates"
-// @Failure 400 {object} map[string]string "Bad limit or since"
+// @Failure 400 {object} map[string]string "Bad limit, since or category"
 // @Failure 500 {object} map[string]string "Store error"
 // @Failure 501 {object} map[string]string "Telemetry not available"
 // @Failure 503 {object} map[string]string "Eval subsystem not configured"
@@ -1030,15 +1060,15 @@ func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "telemetry not available"})
 		return
 	}
-	agentName, since, limit, ok := suggestParams(w, r)
+	q, ok := suggestParams(w, r)
 	if !ok {
 		return
 	}
 
-	pool := max(limit*suggestPoolFactor, suggestMinPool)
-	turns, err := store.ListInterestingTurns(r.Context(), agentName, since, pool)
+	pool := max(q.limit*suggestPoolFactor, suggestMinPool)
+	turns, err := store.ListInterestingTurns(r.Context(), q.agent, q.since, pool)
 	if err != nil {
-		s.logger.Error("listing interesting turns", "error", err, "agent", agentName)
+		s.logger.Error("listing interesting turns", "error", err, "agent", q.agent)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
@@ -1049,7 +1079,7 @@ func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, evalSuggestResult{
-		Candidates: eval.Suggest(turns, eval.SuggestOpts{Limit: limit, Exclude: saved}),
+		Candidates: eval.Suggest(turns, eval.SuggestOpts{Limit: q.limit, Exclude: saved, Category: q.category}),
 	})
 }
 

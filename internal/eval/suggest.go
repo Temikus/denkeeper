@@ -83,6 +83,9 @@ type SuggestOpts struct {
 	// Exclude holds SourceKey values for turns already saved as tasks, so an
 	// accepted suggestion does not resurface.
 	Exclude map[string]struct{}
+	// Category, when set, keeps only turns of that history category and gives
+	// it the whole limit. Empty means every history category.
+	Category string
 }
 
 // SourceKey identifies a turn by its source conversation and message, the pair
@@ -118,6 +121,9 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 			continue
 		}
 		category := categoryFor(t)
+		if opts.Category != "" && category != opts.Category {
+			continue
+		}
 		byCategory[category] = append(byCategory[category], scored{
 			candidate: Candidate{
 				Prompt:         t.Content,
@@ -148,14 +154,17 @@ func Suggest(turns []agent.InterestingTurn, opts SuggestOpts) []Candidate {
 			return group[i].candidate.CreatedAt.After(group[j].candidate.CreatedAt)
 		})
 	}
-	return stratify(byCategory, limit)
+	cats := HistoryCategories()
+	if opts.Category != "" {
+		cats = []string{opts.Category}
+	}
+	return stratify(byCategory, cats, limit)
 }
 
-// stratify draws limit/len(HistoryCategories()) from each category, then hands
-// the leftover slots round-robin to whichever categories still have surplus, so
-// a thin category costs the total nothing.
-func stratify(byCategory map[string][]scored, limit int) []Candidate {
-	cats := HistoryCategories()
+// stratify draws limit/len(cats) from each category, then hands the leftover
+// slots round-robin to whichever categories still have surplus, so a thin
+// category costs the total nothing.
+func stratify(byCategory map[string][]scored, cats []string, limit int) []Candidate {
 	share := limit / len(cats)
 	taken := make(map[string]int, len(cats))
 	out := make([]Candidate, 0, limit)
