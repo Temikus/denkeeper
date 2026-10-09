@@ -13,7 +13,7 @@
   import GenerateProbes from '../components/GenerateProbes.svelte'
   import EvalTestSets from '../components/EvalTestSets.svelte'
   import EvalCoverage from '../components/EvalCoverage.svelte'
-  import { PROBE } from '../evalCategories.js'
+  import { PROBE, inapplicableKinds } from '../evalCategories.js'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
   const QUICK_TASKS = 10
@@ -177,6 +177,22 @@
     }
     setsVersion++
   }
+
+  // The compared agent's detail says which kinds it can produce at all, so
+  // coverage does not report a gap nothing could fill.
+  let agentDetail = $state(null)
+  let detailSeq = 0
+  $effect(() => {
+    const name = baseAgent
+    const seq = ++detailSeq
+    agentDetail = null
+    if (!name) return
+    api.agent(name)
+      .then(d => { if (seq === detailSeq) agentDetail = d })
+      // Without it every kind counts, which is the old behaviour.
+      .catch(() => {})
+  })
+  let notApplicable = $derived(inapplicableKinds(agentDetail))
 
   // The launcher's set, read for its mix of kinds. Only while the Runs tab is
   // showing: the Test sets tab reads the same set itself.
@@ -730,7 +746,9 @@
     version={setsVersion}
     onchanged={onSetsChanged}
     onfill={fillGap}
-    canProbe={!!baseAgent} />
+    canProbe={!!baseAgent}
+    {notApplicable}
+    agent={baseAgent} />
 {/if}
 
 {#if !loading && !isEmpty && tab === 'runs'}
@@ -768,7 +786,8 @@
           {/each}
         </select>
         {#if launchTasks}
-          <EvalCoverage tasks={launchTasks} compact onsee={() => setTab('sets')} />
+          <EvalCoverage tasks={launchTasks} compact {notApplicable}
+            onsee={() => setTab('sets')} />
         {/if}
       </div>
     </div>

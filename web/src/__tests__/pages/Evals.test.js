@@ -517,6 +517,9 @@ describe('Evals page — results panel', () => {
     await fireEvent.click(screen.getByTestId('results-2'))
     await waitFor(() => expect(screen.getByTestId('apply-4')).toBeInTheDocument())
     await fireEvent.click(screen.getByTestId('apply-4'))
+    // The launcher already read this agent's detail on mount; only the read
+    // the apply triggers counts here.
+    read = ''
     await fireEvent.click(screen.getByTestId('apply-confirm-btn'))
 
     await waitFor(() => expect(read).toBe('default'))
@@ -606,6 +609,23 @@ describe('Evals page — tabs', () => {
 
     await fireEvent.click(screen.getByTestId('coverage-see'))
     await waitFor(() => expect(screen.getByTestId('test-sets')).toBeInTheDocument())
+  })
+
+  test('kinds the compared agent cannot produce are not reported as gaps', async () => {
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) => HttpResponse.json({
+        ...AGENTS.find(a => a.name === params.name), command_skills: [], schedules: ['morning'],
+      })),
+    )
+    render(Evals)
+    // golden-set has chat, tool_heavy and scheduled; probe is the one real gap.
+    await waitFor(() => expect(screen.getByTestId('coverage-compact')).toHaveTextContent('1 kind missing'))
+
+    await openSetsTab()
+    await waitFor(() => expect(screen.getByTestId('coverage-skipped'))
+      .toHaveTextContent('Not gaps for default: skill command (no command skills).'))
+    expect(screen.queryByTestId('gap-skill_command')).not.toBeInTheDocument()
+    expect(screen.getByTestId('gap-probe')).toBeInTheDocument()
   })
 
   test('a first import from the empty state lands on the Test sets tab', async () => {

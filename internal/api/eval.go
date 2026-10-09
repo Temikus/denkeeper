@@ -1066,7 +1066,11 @@ func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pool := max(q.limit*suggestPoolFactor, suggestMinPool)
-	turns, err := store.ListInterestingTurns(r.Context(), q.agent, q.since, pool)
+	// The category narrows the pool in SQL too, so a rare kind is drawn from
+	// its own recent turns rather than whatever survived the newest pool.
+	turns, err := store.ListInterestingTurns(r.Context(), agent.InterestingTurnQuery{
+		Agent: q.agent, Since: q.since, Limit: pool, Kind: q.category,
+	})
 	if err != nil {
 		s.logger.Error("listing interesting turns", "error", err, "agent", q.agent)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})

@@ -469,7 +469,26 @@ func commandTrigger(sk skill.Skill) string {
 // fallback agent, the same resolution handleDryRunSchedule does. Entries()
 // walks a map, so the result is sorted rather than left in map order.
 func (s *Server) schedulesForSkill(agentName, skillName string) []string {
-	if s.deps.Scheduler == nil || skillName == "" {
+	if skillName == "" {
+		return nil
+	}
+	return s.schedulesWhere(agentName, func(e scheduler.Entry) bool { return e.Skill == skillName })
+}
+
+// schedulesForAgent returns the names of every user schedule that fires on the
+// given agent, skill-driven or not, sorted. Never nil, so it encodes as [].
+func (s *Server) schedulesForAgent(agentName string) []string {
+	names := s.schedulesWhere(agentName, func(e scheduler.Entry) bool { return e.Type == scheduler.ScheduleTypeAgent })
+	if names == nil {
+		names = []string{}
+	}
+	return names
+}
+
+// schedulesWhere returns the sorted names of the schedules that match keep and
+// run on agentName, resolving an entry with no agent to the fallback agent.
+func (s *Server) schedulesWhere(agentName string, keep func(scheduler.Entry) bool) []string {
+	if s.deps.Scheduler == nil {
 		return nil
 	}
 	fallback := ""
@@ -478,7 +497,7 @@ func (s *Server) schedulesForSkill(agentName, skillName string) []string {
 	}
 	var names []string
 	for _, e := range s.deps.Scheduler.Entries() {
-		if e.Skill != skillName {
+		if !keep(e) {
 			continue
 		}
 		owner := e.Agent

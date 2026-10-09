@@ -24,18 +24,20 @@ const (
 	SignalCommandSkill = "command_skill"
 )
 
-// roundsThreshold is the round count at which a turn reads as tool-heavy,
-// matching the toolCallsThreshold below: both are "the model had to work".
-const roundsThreshold = 3
-
-// toolCallsThreshold is the call count at which a turn reads as tool-heavy.
-const toolCallsThreshold = 3
+// roundsThreshold and toolCallsThreshold are the round and call counts at
+// which a turn reads as tool-heavy: both are "the model had to work". They are
+// the store's own line, so the kind its SQL filter selects is the category
+// categoryFor names.
+const (
+	roundsThreshold    = agent.ToolHeavyThreshold
+	toolCallsThreshold = agent.ToolHeavyThreshold
+)
 
 // scheduledPrefix is what scheduler.FormatScheduledText opens with, for both
 // its labels ("[Scheduled: <skill>" and "[Scheduled trigger: <name>"). Matched
 // as a prefix rather than parsed — the category only needs to know a schedule
 // fired this turn.
-const scheduledPrefix = "[Scheduled"
+const scheduledPrefix = agent.ScheduledPrefix
 
 // scheduledLabels are the two openings FormatScheduledText emits: a skill name
 // and a bare schedule name respectively.
@@ -220,7 +222,8 @@ func signalsFor(t agent.InterestingTurn, costThreshold float64) []string {
 // categoryFor infers which history category a turn belongs to. CategoryProbe
 // is never inferred: a probe is generated from written intent, not sampled.
 // The order is the discriminating one: a command match is what the turn *was*,
-// while tool weight is only how it went.
+// while tool weight is only how it went. agent's turnKindSQL applies the same
+// rules in SQL; TestCategoryFor_AgreesWithStoreKind keeps them in step.
 func categoryFor(t agent.InterestingTurn) string {
 	switch {
 	case t.CommandMatches > 0:

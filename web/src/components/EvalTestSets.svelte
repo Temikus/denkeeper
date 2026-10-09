@@ -17,6 +17,9 @@
     onfill = undefined,
     // False when no agent exists to generate probes from.
     canProbe = true,
+    // Kinds the compared agent cannot produce; see EvalCoverage.
+    notApplicable = {},
+    agent = '',
   } = $props()
 
   const PROMPT_PREVIEW = 140
@@ -282,7 +285,7 @@
       turns, generate probes from the agent's configuration, or import a JSONL file.
     </p>
   {:else if detail}
-    <EvalCoverage {tasks} {onfill} {canProbe} />
+    <EvalCoverage {tasks} {onfill} {canProbe} {notApplicable} {agent} />
 
     <div class="table-wrap" tabindex="0" role="region" aria-label="Test cases">
       <table class="table" data-testid="cases-table">

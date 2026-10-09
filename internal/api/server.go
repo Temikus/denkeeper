@@ -609,12 +609,18 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	skills := e.Skills()
 	skillList := make([]skillInfo, len(skills))
+	// Skills a user can invoke by command, and schedules that fire here: what
+	// decides whether this agent can produce skill_command or scheduled turns.
+	commandSkills := []string{}
 	for i, sk := range skills {
 		skillList[i] = skillInfo{
 			Name:        sk.Name,
 			Description: sk.Description,
 			Version:     sk.Version,
 			Triggers:    sk.Triggers,
+		}
+		if commandTrigger(sk) != "" {
+			commandSkills = append(commandSkills, sk.Name)
 		}
 	}
 
@@ -659,6 +665,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		"has_tools":        e.HasTools(),
 		"adapters":         adapters,
 		"skills":           skillList,
+		"command_skills":   commandSkills,
+		"schedules":        s.schedulesForAgent(name),
 		"tool_names":       e.ToolNames(),
 		"persona_dir":      e.PersonaDir(),
 		"persona_sections": e.PersonaSections(),

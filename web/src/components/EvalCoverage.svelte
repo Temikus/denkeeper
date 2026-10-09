@@ -13,6 +13,10 @@
     onsee = undefined,
     // False when no agent exists to generate probes from.
     canProbe = true,
+    // Kinds the agent cannot produce, slug to reason. Not counted as gaps.
+    notApplicable = {},
+    // The agent notApplicable describes, named in the line that explains it.
+    agent = '',
   } = $props()
 
   // Must match DrawStratified's per-run draw for a Quick check.
@@ -29,7 +33,10 @@
   let counts = $derived(countByCategory(tasks))
   let total = $derived(tasks.length)
   let present = $derived(CATEGORIES.filter(c => counts[c.value] > 0))
-  let missing = $derived(CATEGORIES.filter(c => counts[c.value] === 0))
+  let missing = $derived(CATEGORIES.filter(c => counts[c.value] === 0 && !notApplicable[c.value]))
+  // A kind with cases is present whatever the agent can produce now: the set
+  // may predate a config change, or have been built for another agent.
+  let skipped = $derived(CATEGORIES.filter(c => counts[c.value] === 0 && notApplicable[c.value]))
 
   function plural(n, word) {
     return `${n} ${word}${n === 1 ? '' : 's'}`
@@ -59,9 +66,10 @@
     </div>
     <ul class="legend">
       {#each CATEGORIES as c (c.value)}
+        {@const na = counts[c.value] === 0 && notApplicable[c.value]}
         <li class:empty={counts[c.value] === 0} data-testid="coverage-{c.value}">
           <span class="swatch seg-{c.value}" aria-hidden="true"></span>
-          {c.label} <strong>{counts[c.value]}</strong>
+          {c.label} <strong>{na ? 'n/a' : counts[c.value]}</strong>
         </li>
       {/each}
     </ul>
@@ -84,6 +92,12 @@
           {/each}
         </ul>
       </div>
+    {/if}
+
+    {#if skipped.length}
+      <p class="hint" data-testid="coverage-skipped">
+        Not gaps{agent ? ` for ${agent}` : ''}: {skipped.map(c => `${c.label.toLowerCase()} (${notApplicable[c.value]})`).join(', ')}.
+      </p>
     {/if}
 
     <p class="hint" data-testid="coverage-quick">

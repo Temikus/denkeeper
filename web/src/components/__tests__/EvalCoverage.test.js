@@ -39,6 +39,31 @@ describe('EvalCoverage', () => {
     expect(screen.getByTestId('gap-tool_heavy')).not.toBeDisabled()
   })
 
+  test('a kind the agent cannot produce is n/a, not a gap', () => {
+    const notApplicable = { scheduled: 'no schedules', skill_command: 'no command skills' }
+    render(EvalCoverage, { tasks: [task('chat')], onfill: vi.fn(), notApplicable, agent: 'pamela' })
+
+    expect(screen.getByTestId('coverage-scheduled')).toHaveTextContent('Scheduled n/a')
+    expect(screen.queryByTestId('gap-scheduled')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('gap-skill_command')).not.toBeInTheDocument()
+    expect(screen.getByTestId('gap-tool_heavy')).toBeInTheDocument()
+    expect(screen.getByTestId('coverage-skipped'))
+      .toHaveTextContent('Not gaps for pamela: skill command (no command skills), scheduled (no schedules).')
+  })
+
+  test('cases of an n/a kind still count as present', () => {
+    render(EvalCoverage, { tasks: [task('scheduled')], notApplicable: { scheduled: 'no schedules' } })
+    expect(screen.getByTestId('coverage-scheduled')).toHaveTextContent('Scheduled 1')
+  })
+
+  test('the compact line leaves n/a kinds out of the missing count', () => {
+    render(EvalCoverage, {
+      tasks: [task('chat')], compact: true, notApplicable: { scheduled: 'no schedules' },
+    })
+    // tool_heavy, skill_command and probe are missing; scheduled is n/a.
+    expect(screen.getByTestId('coverage-compact')).toHaveTextContent('3 kinds missing')
+  })
+
   test('a set with every kind has no gap prompts', () => {
     const all = ['chat', 'skill_command', 'scheduled', 'tool_heavy', 'probe'].map(task)
     render(EvalCoverage, { tasks: all, onfill: vi.fn() })

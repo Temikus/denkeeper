@@ -56,7 +56,7 @@ func TestListInterestingTurns_CarriesReplyTelemetry(t *testing.T) {
 		},
 		[]SkillUsageRecord{{SkillName: "calendar", MatchType: "command"}})
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestListInterestingTurns_IgnoresAmbientAndScheduledMatches(t *testing.T) {
 		{SkillName: "heartbeat", MatchType: "schedule"},
 	})
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestListInterestingTurns_ScopesToAgent(t *testing.T) {
 	seedTurn(t, store, mine, "pamela", "mine", 0.01, nil, nil)
 	seedTurn(t, store, theirs, "argus", "theirs", 0.01, nil, nil)
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestListInterestingTurns_ScopesToAgent(t *testing.T) {
 		t.Errorf("Content = %q, want %q — another agent's turns must never appear", turns[0].Content, "mine")
 	}
 
-	all, err := store.ListInterestingTurns(ctx, "", time.Now().Add(-time.Hour), 10)
+	all, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns(all agents): %v", err)
 	}
@@ -162,7 +162,7 @@ func TestListInterestingTurns_CarriesPrecedingContext(t *testing.T) {
 		seedTurn(t, store, convID, "pamela", p, 0.01, nil, nil)
 	}
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestListInterestingTurns_CapsPrecedingContent(t *testing.T) {
 	seedTurn(t, store, convID, "pamela", huge, 0.01, nil, nil)
 	seedTurn(t, store, convID, "pamela", "next", 0.01, nil, nil)
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestListInterestingTurns_SkipsUnansweredTurns(t *testing.T) {
 		t.Fatalf("adding message: %v", err)
 	}
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestListInterestingTurns_HonoursSince(t *testing.T) {
 		t.Fatalf("backdating message: %v", err)
 	}
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-90*24*time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-90 * 24 * time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestListInterestingTurns_CarriesAgentAndReply(t *testing.T) {
 	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "1")
 	seedTurn(t, store, convID, "pamela", "check the calendar", 0.01, nil, nil)
 
-	turns, err := store.ListInterestingTurns(ctx, "", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
@@ -323,11 +323,50 @@ func TestListInterestingTurns_CapsReplyContent(t *testing.T) {
 	// seedTurn's reply is "reply to " + prompt, so a huge prompt is a huge reply.
 	seedTurn(t, store, convID, "pamela", huge, 0.01, nil, nil)
 
-	turns, err := store.ListInterestingTurns(ctx, "pamela", time.Now().Add(-time.Hour), 10)
+	turns, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: time.Now().Add(-time.Hour), Limit: 10})
 	if err != nil {
 		t.Fatalf("ListInterestingTurns: %v", err)
 	}
 	if got := []rune(turns[0].ReplyContent); len(got) != replyPreviewMax+1 {
 		t.Errorf("ReplyContent = %d runes, want %d plus the ellipsis", len(got), replyPreviewMax)
+	}
+}
+
+func TestListInterestingTurns_KindFiltersBeforeTheLimit(t *testing.T) {
+	store, err := NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	convID, _ := store.GetOrCreateConversation(ctx, "telegram", "1")
+	heavy := seedTurn(t, store, convID, "pamela", "dig through the logs", 0, []ToolCallRecord{
+		{ToolName: "web_fetch", Round: 1, Success: true, Outcome: "ok"},
+		{ToolName: "web_fetch", Round: 2, Success: true, Outcome: "ok"},
+		{ToolName: "kv_get", Round: 3, Success: true, Outcome: "ok"},
+	}, nil)
+	// Newer chat turns that would fill a pool of two on their own.
+	for i := 0; i < 3; i++ {
+		seedTurn(t, store, convID, "pamela", "just chatting", 0, nil, nil)
+	}
+	since := time.Now().Add(-time.Hour)
+
+	unfiltered, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: since, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListInterestingTurns: %v", err)
+	}
+	for _, turn := range unfiltered {
+		if turn.MessageID == heavy {
+			t.Fatalf("the oldest turn made a pool of two without a filter; the test proves nothing")
+		}
+	}
+
+	got, err := store.ListInterestingTurns(ctx, InterestingTurnQuery{Agent: "pamela", Since: since, Limit: 2, Kind: TurnKindToolHeavy})
+	if err != nil {
+		t.Fatalf("ListInterestingTurns(tool_heavy): %v", err)
+	}
+	if len(got) != 1 || got[0].MessageID != heavy {
+		t.Fatalf("turns = %+v, want only the tool-heavy turn %d", got, heavy)
 	}
 }
