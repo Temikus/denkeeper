@@ -1,8 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { tick } from 'svelte'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { evalTaskSets } from '../../test/handlers.js'
+import { api } from '../../api.js'
 import { token, authMode } from '../../store.js'
 
 const EvalTestSets = (await import('../EvalTestSets.svelte')).default
@@ -91,6 +93,7 @@ describe('EvalTestSets — editing', () => {
 
   test('a save that lands after switching sets does not touch the new set', async () => {
     let release
+    const update = vi.spyOn(api, 'updateEvalTask')
     server.use(
       http.patch('/api/v1/eval/task-sets/:name/tasks/:id', async () => {
         await new Promise(r => { release = r })
@@ -106,7 +109,10 @@ describe('EvalTestSets — editing', () => {
     await waitFor(() => expect(screen.getByTestId('sets-empty')).toBeInTheDocument())
 
     release()
-    await new Promise(r => setTimeout(r, 20))
+    // The component's continuation was registered first, so it has run once
+    // this settles; tick flushes what it wrote.
+    await update.mock.results[0].value
+    await tick()
     expect(screen.getByTestId('sets-empty')).toBeInTheDocument()
     expect(screen.queryByText('late')).not.toBeInTheDocument()
     // Nor announce a save for a row that is no longer on screen.
