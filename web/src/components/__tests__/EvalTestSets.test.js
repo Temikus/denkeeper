@@ -89,6 +89,30 @@ describe('EvalTestSets — editing', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('edit-case-101')))
   })
 
+  test('a save that lands after switching sets does not touch the new set', async () => {
+    let release
+    server.use(
+      http.patch('/api/v1/eval/task-sets/:name/tasks/:id', async () => {
+        await new Promise(r => { release = r })
+        return HttpResponse.json({ id: 101, set_id: 1, prompt: 'x', category: 'chat', notes: 'late' })
+      }),
+    )
+    await renderSets()
+
+    await fireEvent.click(screen.getByTestId('edit-case-101'))
+    await fireEvent.click(screen.getByTestId('save-case-101'))
+    await waitFor(() => expect(release).toBeTypeOf('function'))
+    await fireEvent.change(screen.getByTestId('sets-select'), { target: { value: 'tool-heavy' } })
+    await waitFor(() => expect(screen.getByTestId('sets-empty')).toBeInTheDocument())
+
+    release()
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.getByTestId('sets-empty')).toBeInTheDocument()
+    expect(screen.queryByText('late')).not.toBeInTheDocument()
+    // Nor announce a save for a row that is no longer on screen.
+    expect(screen.queryByText('Case saved')).not.toBeInTheDocument()
+  })
+
   test('a failed save keeps the row open with the error', async () => {
     server.use(
       http.patch('/api/v1/eval/task-sets/:name/tasks/:id', () =>

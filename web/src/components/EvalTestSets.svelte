@@ -131,11 +131,14 @@
   async function saveEdit(t) {
     editSaving = true
     editError = ''
+    // A set switch mid-save reloads detail; the late reply must not patch it.
+    const seq = requestSeq
     try {
       const updated = await api.updateEvalTask(selected, t.id, {
         category: editKind,
         notes: editNotes,
       })
+      if (seq !== requestSeq) return
       detail = {
         ...detail,
         tasks: tasks.map(x => (x.id === t.id ? { ...x, ...updated } : x)),
