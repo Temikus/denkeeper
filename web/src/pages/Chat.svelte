@@ -325,7 +325,7 @@
       case 'denied': return 'denied'
       case 'auto_denied': return 'auto-denied'
       case 'supervisor_escalated': return 'escalated to you'
-      case 'supervisor_error': return 'supervisor unavailable'
+      case 'supervisor_error': return 'not reviewed by supervisor'
       case 'aborted': return 'aborted (turn stopped)'
       default: return 'pending'
     }

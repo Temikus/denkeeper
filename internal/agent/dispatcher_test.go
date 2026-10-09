@@ -2481,6 +2481,44 @@ func TestDispatcher_Pipeline_SupervisorEscalatedRendersInActivityLog(t *testing.
 	}
 }
 
+func TestDispatcher_Pipeline_SupervisorArgsTooLarge_ActivityLogNamesCause(t *testing.T) {
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+	handle := d.buildEventHandler(context.Background(), adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"})
+
+	text := supervisorErrorText(fmt.Errorf("%w: 23000 bytes > 16384", errSupervisorArgsTooLarge))
+	handle(ChatEvent{Type: "tool_approval", Tool: "run_javascript", Text: text, ApprovalStatus: "supervisor_error"})
+
+	if got := len(ma.Sent()); got != 1 {
+		t.Fatalf("expected 1 SendAndGetID for the alog message, got %d", got)
+	}
+	rendered := ma.Sent()[0].Text
+	if !strings.Contains(rendered, "Supervisor review skipped: tool arguments too large") {
+		t.Errorf("activity log should carry the engine's cause: %s", rendered)
+	}
+	if strings.Contains(rendered, "unavailable") {
+		t.Errorf("a size skip must not read as an outage: %s", rendered)
+	}
+}
+
+func TestDispatcher_RouteApprovalStatus_SupervisorCostLimit_DebugShowsEngineText(t *testing.T) {
+	ma := &editorMockAdapter{name: "telegram"}
+	d := newPipelineDispatcher(t, ma)
+	msg := adapter.IncomingMessage{Adapter: "telegram", ExternalID: "12345"}
+
+	text := supervisorErrorText(fmt.Errorf("session: %w", llm.ErrHardLimitExceeded))
+	d.routeApprovalStatus(context.Background(), ma, msg,
+		ChatEvent{Type: "tool_approval", Tool: "run_javascript", Text: text, ApprovalStatus: "supervisor_error"}, true, nil)
+
+	sent := ma.Sent()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 debug message, got %d", len(sent))
+	}
+	if want := "Tool **run_javascript**: " + text; sent[0].Text != want {
+		t.Errorf("debug text = %q, want %q", sent[0].Text, want)
+	}
+}
+
 func TestDispatcher_Pipeline_AutoApprovedAccumulatesInActivityLog(t *testing.T) {
 	// Several auto-approved tools should accumulate as lines in a single
 	// activity log message, not produce separate messages.
