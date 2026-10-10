@@ -32,10 +32,12 @@ A test set is a named collection of test cases. A case is a prompt, a category, 
 
 Pinned history is captured at save time rather than re-read from the source conversation at run time, because the source drifts: clearing a session empties it, retention prunes it, and its latest window is not the window that preceded the saved message. A test case that silently re-scopes itself between runs is not a test case.
 
+The Evals page has two tabs, **Runs** and **Test sets** (`?tab=sets`). Test sets lists a set's cases, lets you edit a case's category and notes inline, export the set as JSONL, and delete a case or the whole set. A coverage bar counts cases per category and offers a fill path for each one that is missing. A category the selected agent cannot produce, such as `scheduled` for an agent with no schedules, shows as n/a rather than as a gap.
+
 There are four fill paths:
 
 - **Save as test case** in the Chat page's message menu, optionally pinning the preceding turns.
-- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four history categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. Nothing is written — accepting a candidate is a separate call.
+- **Suggest from history** on the Evals page (`GET /api/v1/eval/suggest`) mines past turns for ones worth saving: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates come back **stratified across the four history categories** rather than ranked overall, because a set drawn purely by interestingness would be all failures and would represent nothing the agent normally does. Turns already saved as a task are skipped. `?category=` narrows a pass to one category, which is what a coverage gap uses. Nothing is written — accepting a candidate is a separate call.
 - **Generate probes** on the Evals page (`GET /api/v1/eval/probes`) works the other way round: top-down from the agent's own written intent rather than bottom-up from its history. See [Behaviour probes](#behaviour-probes) below.
 - **Import JSONL** — `POST /api/v1/eval/task-sets/{name}/import`, one case per line, all-or-none so a typo halfway down leaves the set untouched. `GET .../export` is the other half, so a curated set can be hand-edited or committed to git.
 
