@@ -480,9 +480,13 @@ func TestSanitizeStaleDirectives_NoTag(t *testing.T) {
 
 func TestSanitizeStaleDirectives_MissingCloseTag(t *testing.T) {
 	text := "Answer.\n\n[MEMORY_UPDATE]\n# Memory\n- lives in Lisbon\n# User\n- private details"
-	cleaned := sanitizeStaleDirectives(text, testLogger())
+	var buf bytes.Buffer
+	cleaned := sanitizeStaleDirectives(text, slog.New(slog.NewTextHandler(&buf, nil)))
 	if cleaned != "Answer." {
 		t.Errorf("cleaned = %q, want %q", cleaned, "Answer.")
+	}
+	if strings.Contains(buf.String(), "Lisbon") {
+		t.Errorf("unclosed payload leaked into log: %q", buf.String())
 	}
 }
 

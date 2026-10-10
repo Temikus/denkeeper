@@ -4067,9 +4067,12 @@ func sanitizeStaleDirectives(text string, logger *slog.Logger) string {
 				end = len(rest)
 			}
 			payload := strings.TrimSpace(rest[:end])
-			// Truncate logged payload to avoid flooding logs.
+			// Truncate logged payload to avoid flooding logs. Unclosed blocks
+			// usually hold the system prompt, so their payload is not logged.
 			logPayload := payload
-			if len(logPayload) > 500 {
+			if !closed {
+				logPayload = "(omitted: unclosed block)"
+			} else if len(logPayload) > 500 {
 				logPayload = logPayload[:500] + "...(truncated)"
 			}
 			logger.Warn("stripped stale directive from response — content discarded, use MCP tools instead",
