@@ -1364,6 +1364,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		p = persona.NewEmpty(ac.PersonaDir)
 	} else {
 		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
+		agent.WarnStaleDirectivesInPersona(p, ac.Name, abc.logger)
 	}
 	p.SetCharLimits(abc.cfg.Memory.PersonaMemoryCharLimit, abc.cfg.Memory.PersonaUserCharLimit)
 

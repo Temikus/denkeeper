@@ -4047,6 +4047,8 @@ var staleDirectiveTags = [][2]string{
 // still appear if the LLM has cached conversation context. The content inside
 // the tags is discarded (not processed) — MCP tools are the sole mechanism now.
 // The full payload is logged at Warn level so operators can see what was lost.
+// An unclosed block runs to the end of the text: models fill it with their
+// system prompt, so leaving it in would leak persona memory to the chat.
 func sanitizeStaleDirectives(text string, logger *slog.Logger) string {
 	for _, pair := range staleDirectiveTags {
 		openTag, closeTag := pair[0], pair[1]
@@ -4057,24 +4059,52 @@ func sanitizeStaleDirectives(text string, logger *slog.Logger) string {
 			}
 			rest := text[start+len(openTag):]
 			end := strings.Index(rest, closeTag)
-			if end == -1 {
-				break
+			closed := end != -1
+			tail := ""
+			if closed {
+				tail = rest[end+len(closeTag):]
+			} else {
+				end = len(rest)
 			}
 			payload := strings.TrimSpace(rest[:end])
-			// Truncate logged payload to avoid flooding logs.
+			// Truncate logged payload to avoid flooding logs. Unclosed blocks
+			// usually hold the system prompt, so their payload is not logged.
 			logPayload := payload
-			if len(logPayload) > 500 {
+			if !closed {
+				logPayload = "(omitted: unclosed block)"
+			} else if len(logPayload) > 500 {
 				logPayload = logPayload[:500] + "...(truncated)"
 			}
 			logger.Warn("stripped stale directive from response — content discarded, use MCP tools instead",
 				"tag", openTag,
 				"payload_len", len(payload),
 				"payload", logPayload,
+				"closed", closed,
 			)
-			text = strings.TrimSpace(text[:start] + rest[end+len(closeTag):])
+			text = strings.TrimSpace(text[:start] + tail)
 		}
 	}
 	return text
+}
+
+// WarnStaleDirectivesInPersona logs a warning for each persona section that
+// still mentions a removed directive tag. Such text re-teaches the model the
+// old format on every turn, and its output then gets stripped from replies.
+func WarnStaleDirectivesInPersona(p *persona.Persona, agentName string, logger *slog.Logger) {
+	sections := map[string]string{
+		"soul":     p.GetSoul(),
+		"user":     p.GetUser(),
+		"memory":   p.GetMemory(),
+		"identity": p.GetIdentityRaw(),
+	}
+	for _, name := range []string{"soul", "user", "memory", "identity"} {
+		for _, pair := range staleDirectiveTags {
+			if strings.Contains(sections[name], pair[0]) {
+				logger.Warn("persona section mentions a removed directive; edit it to use MCP tools instead",
+					"agent", agentName, "section", name, "tag", pair[0])
+			}
+		}
+	}
 }
 
 // HandleMessage processes a single incoming message and sends the response
