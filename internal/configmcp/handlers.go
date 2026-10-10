@@ -433,6 +433,13 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	if strings.TrimSpace(input.Body) == "" {
 		return toolError("body is required"), nil
 	}
+	exists, err := s.skillExists(input.Name)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+	if exists {
+		return toolError(fmt.Sprintf("skill %q already exists; use skill_update to change it", input.Name)), nil
+	}
 
 	version := input.Version
 	if version == "" {
@@ -454,6 +461,19 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 
 	return s.applyLintedSkill(ctx, nil, approval.ActionKindCreateSkill,
 		"Create new skill: "+input.Name, payload, applyFn)
+}
+
+// skillExists reports whether name is a loaded skill or already has a file on
+// disk. The disk check matters because GetSkill does not gate skill_create and
+// may be nil, and a file can exist that failed to load.
+func (s *Server) skillExists(name string) (bool, error) {
+	if s.deps.GetSkill != nil {
+		if _, ok := s.deps.GetSkill(name); ok {
+			return true, nil
+		}
+	}
+	_, ok, err := ReadSkillFile(s.deps.AgentSkillsDir, name)
+	return ok, err
 }
 
 func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

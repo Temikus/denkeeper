@@ -2094,6 +2094,32 @@ func TestEngine_UpdateSkill(t *testing.T) {
 	}
 }
 
+func TestEngine_AppendSkill_ReplacesSameName(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{{Name: "greet", Version: "1.0"}, {Name: "other"}, {Name: "greet", Version: "1.1"}}, nil, nil, testLogger())
+
+	eng.AppendSkill(skill.Skill{Name: "greet", Version: "2.0"})
+
+	skills := eng.Skills()
+	if len(skills) != 2 {
+		t.Fatalf("got %d skills, want 2: appending a known name must leave one entry for it", len(skills))
+	}
+	if skills[0].Name != "greet" || skills[0].Version != "2.0" {
+		t.Errorf("first skill = %s %s, want greet 2.0 in the original slot", skills[0].Name, skills[0].Version)
+	}
+	if skills[1].Name != "other" {
+		t.Errorf("second skill = %q, want other kept", skills[1].Name)
+	}
+}
+
 func TestEngine_UpdateSkill_NotFound(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()
