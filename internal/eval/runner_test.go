@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -663,8 +664,35 @@ func TestRunner_TraceCarriesArgumentsAndTruncatesLongFields(t *testing.T) {
 	if trace[0].Arguments != `{"v":1}` {
 		t.Errorf("arguments = %q, want them preserved", trace[0].Arguments)
 	}
-	if len(trace[0].Result) != maxTraceFieldLen {
-		t.Errorf("result length = %d, want it trimmed to %d", len(trace[0].Result), maxTraceFieldLen)
+	wantResult := huge[:maxTraceFieldLen] + fmt.Sprintf("...[truncated, %d bytes total]", len(huge))
+	if trace[0].Result != wantResult {
+		t.Errorf("result = %d bytes ending %q, want it trimmed to %d bytes plus a truncation marker",
+			len(trace[0].Result), trace[0].Result[len(trace[0].Result)-40:], maxTraceFieldLen)
+	}
+}
+
+func TestTruncate_CutsOnRuneBoundary(t *testing.T) {
+	// One ASCII byte shifts the 2-byte runes so the cap lands mid-rune.
+	s := "x" + strings.Repeat("é", maxTraceFieldLen)
+
+	got := truncate(s)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated value is not valid UTF-8")
+	}
+	marker := fmt.Sprintf("...[truncated, %d bytes total]", len(s))
+	if !strings.HasSuffix(got, marker) {
+		t.Fatalf("truncated value ends %q, want marker %q", got[len(got)-40:], marker)
+	}
+	if body := strings.TrimSuffix(got, marker); len(body) != maxTraceFieldLen-1 {
+		t.Errorf("kept %d bytes, want %d (cap backed off to the rune start)", len(body), maxTraceFieldLen-1)
+	}
+}
+
+func TestTruncate_LeavesShortValueAlone(t *testing.T) {
+	s := strings.Repeat("x", maxTraceFieldLen)
+	if got := truncate(s); got != s {
+		t.Errorf("value at the cap was changed: %d bytes", len(got))
 	}
 }
 

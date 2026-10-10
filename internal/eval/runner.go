@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/adapter"
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -576,11 +577,17 @@ func encodeTrace(records []agent.ToolCallRecord) (string, error) {
 	return string(b), nil
 }
 
+// truncate cuts s to the cap on a rune boundary and marks the cut, so a judge
+// can tell a clipped result from a complete one.
 func truncate(s string) string {
 	if len(s) <= maxTraceFieldLen {
 		return s
 	}
-	return s[:maxTraceFieldLen]
+	cut := maxTraceFieldLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("...[truncated, %d bytes total]", len(s))
 }
 
 // sessionCost reads the sample's true spend from the router's cost tracker.
