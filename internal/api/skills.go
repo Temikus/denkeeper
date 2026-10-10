@@ -155,7 +155,13 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
 		return
 	}
-	if _, exists := e.GetSkill(input.Name); exists {
+	// The file check catches a skill whose file exists but failed to load.
+	_, onDisk, err := configmcp.ReadSkillFile(skillsDir, input.Name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("checking skill: %v", err)})
+		return
+	}
+	if _, loaded := e.GetSkill(input.Name); loaded || onDisk {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("skill %q already exists", input.Name)})
 		return
 	}
