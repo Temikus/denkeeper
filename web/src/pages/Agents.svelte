@@ -299,6 +299,15 @@
   let configSaving = $state(false)
   let configSaveOk = $state(false)
 
+  // A model edit can be tried in Evals before it is saved.
+  let compareHref = $derived.by(() => {
+    const model = configModel.trim()
+    if (!detail || !model || model === (detail.model || '')) return ''
+    const q = new URLSearchParams({ agent: detail.name, candidate: model })
+    if (configProvider) q.set('provider', configProvider)
+    return `#/evals?${q}`
+  })
+
   // Fallback rules modal
   let showFallbackModal = $state(false)
   let fallbackRules = $state([])
@@ -878,6 +887,9 @@
               <ModelSelector bind:value={configModel} onchange={(id, prov) => { if (prov) configProvider = prov }} />
               <label class="config-label" for="cfg-desc">Description</label>
               <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
+              {#if compareHref}
+                <span class="hint" id="compare-hint" data-testid="compare-hint">Compare in Evals opens a cheap check of this model against the current one, before you switch. It does not save the change here.</span>
+              {/if}
             </div>
           {:else if expandedCard === 'permission'}
             <div class="config-panel-title">Permission Configuration</div>
@@ -989,6 +1001,9 @@
             <button class="btn-save" onclick={saveCardConfig} disabled={configSaving || (expandedCard === 'permission' && !!deciderError)}>
               {configSaving ? 'Saving…' : 'Save'}
             </button>
+            {#if expandedCard === 'model' && compareHref}
+              <a class="btn-ghost btn-ghost-sm" href={compareHref} aria-describedby="compare-hint" data-testid="compare-in-evals">Compare in Evals first</a>
+            {/if}
             <button class="btn-ghost btn-ghost-sm" onclick={cancelCard}>Cancel</button>
           </div>
         </div>

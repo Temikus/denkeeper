@@ -43,6 +43,10 @@
   transition: background 0.15s;
 }
 .btn-sm:hover { background: var(--accent); color: #fff; }
+/* .btn-sm comes later at equal specificity, so without this a small primary
+   button renders in the neutral .btn-sm grey. */
+.btn-primary.btn-sm { background: var(--accent); color: #fff; }
+.btn-primary.btn-sm:hover:not(:disabled) { background: var(--accent-hover); }
 .btn-sm.danger:hover { background: var(--danger); }
 
 .btn-danger {
