@@ -1092,13 +1092,22 @@ func (e *Engine) Skills() []skill.Skill {
 func (e *Engine) AppendSkill(s skill.Skill) {
 	e.skillsMu.Lock()
 	defer e.skillsMu.Unlock()
-	for i, existing := range e.skills {
-		if existing.Name == s.Name {
-			e.skills[i] = s
-			return
+	kept := make([]skill.Skill, 0, len(e.skills)+1)
+	replaced := false
+	for _, existing := range e.skills {
+		if existing.Name != s.Name {
+			kept = append(kept, existing)
+			continue
+		}
+		if !replaced {
+			kept = append(kept, s)
+			replaced = true
 		}
 	}
-	e.skills = append(e.skills, s)
+	if !replaced {
+		kept = append(kept, s)
+	}
+	e.skills = kept
 }
 
 // RemoveSkill removes a skill by name from the engine's in-memory skill list.

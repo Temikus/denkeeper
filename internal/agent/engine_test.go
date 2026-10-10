@@ -2104,16 +2104,19 @@ func TestEngine_AppendSkill_ReplacesSameName(t *testing.T) {
 	perms, _ := security.NewPermissionEngine("autonomous")
 
 	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
-		[]skill.Skill{{Name: "greet", Version: "1.0"}}, nil, nil, testLogger())
+		[]skill.Skill{{Name: "greet", Version: "1.0"}, {Name: "other"}, {Name: "greet", Version: "1.1"}}, nil, nil, testLogger())
 
 	eng.AppendSkill(skill.Skill{Name: "greet", Version: "2.0"})
 
 	skills := eng.Skills()
-	if len(skills) != 1 {
-		t.Fatalf("got %d skills, want 1: appending a known name must replace it", len(skills))
+	if len(skills) != 2 {
+		t.Fatalf("got %d skills, want 2: appending a known name must leave one entry for it", len(skills))
 	}
-	if skills[0].Version != "2.0" {
-		t.Errorf("version = %q, want the appended 2.0", skills[0].Version)
+	if skills[0].Name != "greet" || skills[0].Version != "2.0" {
+		t.Errorf("first skill = %s %s, want greet 2.0 in the original slot", skills[0].Name, skills[0].Version)
+	}
+	if skills[1].Name != "other" {
+		t.Errorf("second skill = %q, want other kept", skills[1].Name)
 	}
 }
 

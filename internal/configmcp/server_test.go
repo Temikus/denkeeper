@@ -271,6 +271,33 @@ func TestSkillCreate_ExistingName_Refused(t *testing.T) {
 	}
 }
 
+// Without GetSkill wired, the file on disk is what marks the name as taken.
+func TestSkillCreate_ExistingFileWithoutGetSkill_Refused(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+	if text, isErr := callTool(t, session, "skill_create", map[string]any{
+		"name": "test-skill",
+		"body": "original body",
+	}); isErr {
+		t.Fatalf("first create: %s", text)
+	}
+
+	text, isErr := callTool(t, session, "skill_create", map[string]any{
+		"name": "test-skill",
+		"body": "replacement body",
+	})
+
+	if !isErr {
+		t.Fatalf("expected an error for an existing file, got: %s", text)
+	}
+	got, err := os.ReadFile(filepath.Join(deps.AgentSkillsDir, "test-skill.md"))
+	if err != nil {
+		t.Fatalf("reading skill file: %v", err)
+	}
+	if !strings.Contains(string(got), "original body") {
+		t.Errorf("skill file was overwritten:\n%s", got)
+	}
+}
+
 func TestSkillCreate_MissingName(t *testing.T) {
 	session, _ := newTestServer(t, nil)
 	text, isErr := callTool(t, session, "skill_create", map[string]any{
