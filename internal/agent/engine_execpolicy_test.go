@@ -24,7 +24,7 @@ type policyToolArgs struct {
 }
 
 // newPolicyTestEngine builds an engine whose tool server hosts one tool
-// declared idempotent ("read_thing") and one that is not ("write_thing"), so a
+// declared read-only ("read_thing") and one that is not ("write_thing"), so a
 // single turn can exercise both sides of the suppression split. The counters
 // report real handler invocations.
 func newPolicyTestEngine(t *testing.T, responses []*llm.ChatResponse, tier string) (*Engine, *SQLiteMemoryStore, *atomic.Int64, *atomic.Int64) {
@@ -117,10 +117,10 @@ func TestDryRun_SuppressesWritesAndExecutesReads(t *testing.T) {
 	}
 
 	if got := writes.Load(); got != 0 {
-		t.Errorf("write_thing executed %d times, want 0 — the policy must suppress non-idempotent tools", got)
+		t.Errorf("write_thing executed %d times, want 0 — the policy must suppress non-read-only tools", got)
 	}
 	if got := reads.Load(); got != 1 {
-		t.Errorf("read_thing executed %d times, want 1 — idempotent tools run for real", got)
+		t.Errorf("read_thing executed %d times, want 1 — read-only tools run for real", got)
 	}
 	if len(result.ToolCalls) != 2 {
 		t.Fatalf("recorded %d tool calls, want 2", len(result.ToolCalls))
@@ -142,6 +142,34 @@ func TestDryRun_SuppressesWritesAndExecutesReads(t *testing.T) {
 	}
 	if result.Response != "all done" {
 		t.Errorf("Response = %q, want %q", result.Response, "all done")
+	}
+}
+
+// An in-process config read is read-only but not memoisable. The policy must
+// still run it, or every "what does /X do?" preview reads a suppression stub.
+func TestDryRun_ExecutesInProcessReadOnlyTools(t *testing.T) {
+	mgr := tool.NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	t.Cleanup(func() { _ = mgr.Close() })
+	registerSatisfactionTools(t, mgr, "config", "skill_get", "skill_create")
+	e := newSatisfactionEngine(t, mgr, nil, &sequentialProvider{responses: []*llm.ChatResponse{
+		toolCallResponse("c1", "skill_get", `{}`),
+		toolCallResponse("c2", "skill_create", `{}`),
+		{Content: "done", FinishReason: "stop", Model: "test-model"},
+	}})
+
+	result, err := e.DryRun(context.Background(), adapter.IncomingMessage{Text: "go"}, dryRunPolicy())
+	if err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("recorded %d tool calls, want 2", len(result.ToolCalls))
+	}
+	if got := result.ToolCalls[0]; got.Outcome != "ok" || got.Result != "ok" {
+		t.Errorf("skill_get outcome/result = %q/%q, want it executed", got.Outcome, got.Result)
+	}
+	if got := result.ToolCalls[1].Outcome; got != outcomeSuppressed {
+		t.Errorf("skill_create outcome = %q, want %q", got, outcomeSuppressed)
 	}
 }
 
