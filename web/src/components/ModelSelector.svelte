@@ -183,8 +183,8 @@
               onmousedown={(e) => { e.preventDefault(); select(m) }}
             >
               <div class="model-option-left">
-                <span class="model-option-name">{m.name}</span>
-                <span class="model-option-id mono">{m.id}</span>
+                <span class="model-option-name" title={m.name}>{m.name}</span>
+                <span class="model-option-id mono" title={m.id}>{m.id}</span>
               </div>
               <div class="model-option-right">
                 {#if m.weekly_tokens}
@@ -331,10 +331,13 @@
     flex: 1;
   }
 
+  /* The metadata wraps under the name rather than squeezing it to an
+     ellipsis when the dropdown is narrower than name + metadata. */
   .model-option {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 4px 8px;
     width: 100%;
     padding: 8px 10px;
     background: none;
@@ -354,7 +357,7 @@
     flex-direction: column;
     gap: 1px;
     min-width: 0;
-    flex: 1;
+    flex: 1 1 200px;
   }
 
   .model-option-name {
@@ -375,9 +378,11 @@
 
   .model-option-right {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
+    gap: 4px 8px;
+    flex: 0 1 auto;
+    min-width: 0;
     font-size: 10px;
     color: var(--text-muted);
   }
