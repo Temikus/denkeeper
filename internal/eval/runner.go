@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -489,6 +490,12 @@ func (r *Runner) runSample(ctx context.Context, st *runState, task Task, k int, 
 	default:
 		smp.Status = SampleOK
 		applyResult(&smp, result, r.logger)
+		// A blank reply is a failure, not a pairable answer: pairing it would
+		// hand the other variant a free win and hide it from failed_rate.
+		if strings.TrimSpace(smp.Response) == "" {
+			smp.Status = SampleFailed
+			smp.Error = "empty final response"
+		}
 	}
 
 	// Detached: a sample cancelled by Stop or panic must still leave its row
