@@ -25,6 +25,7 @@ beforeEach(() => {
   token.set('test-key')
   authMode.set('token')
   evalProgress.set(new Map())
+  localStorage.removeItem('dk_eval_agent')
   // Tabs write the hash, and the router's store outlives a test.
   window.location.hash = '#/evals'
   currentQuery.set(new URLSearchParams())
@@ -36,14 +37,15 @@ afterEach(() => {
 })
 
 describe('Evals page — empty state', () => {
-  test('teaches the loop and offers every fill path', async () => {
+  test('teaches the loop as three steps and offers every fill path', async () => {
     emptyInstance()
     render(Evals)
 
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
-    expect(
-      screen.getByText(/Save real conversations as test cases, then compare your current model against a candidate on them/)
-    ).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
+    expect(screen.getByTestId('checklist-title')).toHaveTextContent('Three steps.')
+    expect(screen.getByTestId('step-build')).toHaveClass('current')
+    expect(screen.getByTestId('step-quick')).not.toHaveClass('current')
+    expect(screen.getByTestId('step-verdict')).toHaveTextContent('Read the verdict')
     expect(screen.getByTestId('empty-suggest-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-probes-cta')).toBeInTheDocument()
     expect(screen.getByTestId('empty-chat-cta')).toBeInTheDocument()
@@ -54,7 +56,7 @@ describe('Evals page — empty state', () => {
     emptyInstance()
     render(Evals)
 
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
     expect(screen.queryByTestId('suggest-panel')).not.toBeInTheDocument()
 
     await fireEvent.click(screen.getByTestId('empty-suggest-cta'))
@@ -66,7 +68,7 @@ describe('Evals page — empty state', () => {
     emptyInstance()
     render(Evals)
 
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
     expect(screen.queryByTestId('launcher')).not.toBeInTheDocument()
   })
 
@@ -85,7 +87,7 @@ describe('Evals page — empty state', () => {
       }),
     )
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
 
     await fireEvent.click(screen.getByTestId('empty-import-cta'))
 
@@ -270,6 +272,190 @@ describe('Evals page — launcher', () => {
     await fireEvent.click(screen.getByTestId('start-run'))
 
     await waitFor(() => expect(screen.getByText('task set is empty')).toBeInTheDocument())
+  })
+})
+
+/** Answers the estimate with the case count and k the request asked for. */
+function echoEstimate(seen = []) {
+  server.use(
+    http.post('/api/v1/eval/estimate', async ({ request }) => {
+      const body = await request.json()
+      seen.push(body)
+      const tasks = body.sample_tasks ? Math.min(body.sample_tasks, 37) : 37
+      return HttpResponse.json({ low: 0.18, high: 0.71, currency: 'USD', basis: 'history', tasks, k: body.k, per_variant: [] })
+    }),
+  )
+  return seen
+}
+
+/** Opens the page as a Compare link from Agents would. */
+function openLink(query) {
+  window.location.hash = `#/evals?${query}`
+  currentQuery.set(new URLSearchParams(query))
+}
+
+describe('Evals page — sentence launcher', () => {
+  test('the estimate leads, with the cap beside it and the turns spelled out', async () => {
+    echoEstimate()
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    // No <label> wraps the inline inputs, so each carries its own name.
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Candidate model' }), { target: { value: 'openai/gpt-4o' } })
+    expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveValue('default')
+
+    await waitFor(() => expect(screen.getByTestId('estimate')).toHaveTextContent('$0.18–$0.71'))
+    expect(screen.getByTestId('estimate')).toHaveTextContent('stops at $2.00')
+    expect(screen.getByTestId('preset-hint')).toHaveTextContent('10 cases × 1 run × 2 models = 20 turns')
+    expect(screen.getByTestId('start-run')).toHaveTextContent('Start Quick check')
+
+    await fireEvent.click(screen.getByTestId('preset-full'))
+    await waitFor(() => expect(screen.getByTestId('preset-hint'))
+      .toHaveTextContent('All 37 cases × 3 runs × 2 models = 222 turns'))
+    expect(screen.getByTestId('start-run')).toHaveTextContent('Start Full eval')
+  })
+
+  test('a Quick check on a small set counts the cases it really has', async () => {
+    // No estimate, so the line comes from the set's own size.
+    server.use(http.post('/api/v1/eval/estimate', () => new HttpResponse(null, { status: 404 })))
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+
+    await fireEvent.change(screen.getByTestId('task-set-select'), { target: { value: 'tool-heavy' } })
+    await waitFor(() => expect(screen.getByTestId('preset-hint'))
+      .toHaveTextContent('8 cases × 1 run × 2 models = 16 turns'))
+  })
+
+  test('the cost cap lives under Options and still reaches the run', async () => {
+    let body = null
+    server.use(
+      http.post('/api/v1/eval/runs', async ({ request }) => {
+        body = await request.json()
+        return HttpResponse.json({ id: 3, task_set_id: 1, status: 'pending', k: 1, cost_cap: 5, cost_spent: 0, variants: [], samples_done: 0, samples_total: 0, active: true }, { status: 201 })
+      }),
+    )
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    expect(screen.getByTestId('launch-options')).not.toBeVisible()
+
+    await fireEvent.click(screen.getByTestId('options-toggle'))
+    expect(screen.getByTestId('options-toggle')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('launch-options')).toBeVisible()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('cost-cap')))
+    expect(screen.getByTestId('launch-options')).toHaveTextContent('runs each case 3 times')
+    await waitFor(() => expect(screen.getByTestId('cost-cap')).toHaveValue(2))
+    await fireEvent.input(screen.getByTestId('cost-cap'), { target: { value: '5' } })
+
+    await fireEvent.input(document.querySelector('.model-selector input'), { target: { value: 'openai/gpt-4o' } })
+    await waitFor(() => expect(screen.getByTestId('start-run')).not.toBeDisabled())
+    await fireEvent.click(screen.getByTestId('start-run'))
+    await waitFor(() => expect(body).not.toBeNull())
+    expect(body.cost_cap).toBe(5)
+  })
+})
+
+describe('Evals page — which agent the launcher starts on', () => {
+  test('it skips an agent that only supervises others', async () => {
+    server.use(http.get('/api/v1/agents', () => HttpResponse.json([
+      { name: 'argus', model: 'haiku', permission_tier: 'autonomous' },
+      { name: 'pamela', model: 'kimi-k2.6', permission_tier: 'supervised', supervisor: 'argus' },
+    ])))
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('agent-select')).toHaveValue('pamela'))
+  })
+
+  test('the agent last compared on wins over that guess, and a change is remembered', async () => {
+    localStorage.setItem('dk_eval_agent', 'helper')
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('agent-select')).toHaveValue('helper'))
+
+    await fireEvent.change(screen.getByTestId('agent-select'), { target: { value: 'default' } })
+    expect(localStorage.getItem('dk_eval_agent')).toBe('default')
+  })
+
+  test('a remembered agent that no longer exists falls back to the guess', async () => {
+    localStorage.setItem('dk_eval_agent', 'retired')
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('agent-select')).toHaveValue('default'))
+  })
+})
+
+describe('Evals page — Compare link from Agents', () => {
+  test('prefills the agent, candidate and provider, and estimates that pair', async () => {
+    localStorage.setItem('dk_eval_agent', 'default')
+    const seen = echoEstimate()
+    openLink('tab=sets&agent=helper&candidate=openai%2Fgpt-4o&provider=openrouter')
+    render(Evals)
+
+    // The link names a comparison, so it lands on Runs whatever tab it carried.
+    await waitFor(() => expect(screen.getByTestId('launcher')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('agent-select')).toHaveValue('helper'))
+    expect(document.querySelector('.model-selector input')).toHaveValue('openai/gpt-4o')
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0))
+    const last = seen[seen.length - 1]
+    expect(last.base_agent).toBe('helper')
+    expect(last.variants[1]).toEqual({ name: 'openai/gpt-4o', llm_model: 'openai/gpt-4o', llm_provider: 'openrouter' })
+    // Following a link is not choosing an agent.
+    expect(localStorage.getItem('dk_eval_agent')).toBe('default')
+  })
+
+  test('with no runs yet, the checklist asks the linked question', async () => {
+    server.use(http.get('/api/v1/eval/runs', () => HttpResponse.json([])))
+    openLink('agent=helper&candidate=openai%2Fgpt-4o')
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('checklist-title'))
+      .toHaveTextContent('Is openai/gpt-4o better for helper? Three steps.'))
+  })
+})
+
+describe('Evals page — checklist', () => {
+  test('with cases but no runs, step 1 is done and the launcher is the next step', async () => {
+    server.use(http.get('/api/v1/eval/runs', () => HttpResponse.json([])))
+    echoEstimate()
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
+    expect(screen.getByTestId('step-build')).toHaveClass('done')
+    expect(screen.getByTestId('step-build')).toHaveTextContent('Build a test set · 45 cases')
+    expect(screen.getByTestId('step-quick')).toHaveClass('current')
+    // The fill buttons go once the step is done.
+    expect(screen.queryByTestId('empty-suggest-cta')).not.toBeInTheDocument()
+    expect(screen.getByTestId('launcher')).toBeInTheDocument()
+    expect(screen.queryByTestId('no-runs')).not.toBeInTheDocument()
+
+    await fireEvent.input(document.querySelector('.model-selector input'), { target: { value: 'openai/gpt-4o' } })
+    await waitFor(() => expect(screen.getByTestId('step-quick')).toHaveTextContent('Run a Quick check · $0.18–$0.71'))
+  })
+
+  test('sets with no cases keep step 1 open, and its buttons open the Test sets tab', async () => {
+    server.use(
+      http.get('/api/v1/eval/runs', () => HttpResponse.json([])),
+      http.get('/api/v1/eval/task-sets', () => HttpResponse.json([{ id: 5, name: 'blank', task_count: 0 }])),
+      http.get('/api/v1/eval/task-sets/:name', () => HttpResponse.json({ id: 5, name: 'blank', task_count: 0, tasks: [] })),
+    )
+    render(Evals)
+
+    await waitFor(() => expect(screen.getByTestId('empty-suggest-cta')).toBeInTheDocument())
+    expect(screen.getByTestId('step-build')).toHaveClass('current')
+    await fireEvent.click(screen.getByTestId('empty-suggest-cta'))
+
+    await waitFor(() => expect(screen.getByTestId('tab-sets')).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() => expect(screen.getByTestId('suggest-cards')).toBeInTheDocument())
+    // The clicked button left with the Runs tab; focus went to the panel, not <body>.
+    expect(document.getElementById('eval-suggest-panel').contains(document.activeElement)).toBe(true)
+  })
+
+  test('the checklist goes once the first run starts', async () => {
+    server.use(http.get('/api/v1/eval/runs', () => HttpResponse.json([])))
+    render(Evals)
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
+
+    await fireEvent.input(document.querySelector('.model-selector input'), { target: { value: 'openai/gpt-4o' } })
+    await waitFor(() => expect(screen.getByTestId('start-run')).not.toBeDisabled())
+    await fireEvent.click(screen.getByTestId('start-run'))
+
+    await waitFor(() => expect(screen.queryByTestId('eval-checklist')).not.toBeInTheDocument())
   })
 })
 
@@ -638,7 +824,7 @@ describe('Evals page — tabs', () => {
       http.get('/api/v1/eval/runs', () => HttpResponse.json([])),
     )
     render(Evals)
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
 
     await fireEvent.click(screen.getByTestId('empty-import-cta'))
     const file = new File(['{"prompt":"hi","category":"chat"}\n'], 'golden-set.jsonl', { type: 'text/plain' })
@@ -783,7 +969,7 @@ describe('Evals page — behaviour probes', () => {
     emptyInstance()
     render(Evals)
 
-    await waitFor(() => expect(screen.getByTestId('evals-empty')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('eval-checklist')).toBeInTheDocument())
     expect(screen.queryByTestId('probes-panel')).not.toBeInTheDocument()
 
     await fireEvent.click(screen.getByTestId('empty-probes-cta'))

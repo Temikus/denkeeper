@@ -2,7 +2,8 @@
   import { api } from '../api.js'
   import { computeBreakpoints, popularityBars as computePopularityBars } from '../popularity.js'
 
-  let { value = $bindable(''), onchange, provider = '' } = $props()
+  // ariaLabel names the input when no <label> wraps the selector.
+  let { value = $bindable(''), onchange, provider = '', ariaLabel = undefined } = $props()
 
   let models = $state([])
   let search = $state('')
@@ -126,6 +127,7 @@
     type="text"
     bind:value={value}
     placeholder="e.g. anthropic/claude-sonnet-4-20250514"
+    aria-label={ariaLabel}
     onfocus={handleFocus}
     autocomplete="off"
   />

@@ -154,6 +154,37 @@ describe('Agents model config', () => {
     })
   })
 
+  test('a changed model offers Compare in Evals, with every value encoded', async () => {
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) =>
+        HttpResponse.json({ name: params.name, model: 'kimi-k2.6', provider: 'openrouter', permission_tier: 'autonomous' })),
+    )
+    render(Agents)
+    await waitFor(() => screen.getByText('MODEL'))
+    await fireEvent.click(screen.getByText('MODEL'))
+    await waitFor(() => screen.getByText('Model Configuration'))
+
+    // The saved model is not a comparison.
+    expect(screen.queryByTestId('compare-in-evals')).not.toBeInTheDocument()
+
+    const input = document.querySelector('.model-selector input')
+    await fireEvent.input(input, { target: { value: 'org/model a&b' } })
+
+    const link = await screen.findByTestId('compare-in-evals')
+    const href = link.getAttribute('href')
+    expect(href.startsWith('#/evals?')).toBe(true)
+    expect(href).not.toContain('&b')
+    const q = new URLSearchParams(href.slice('#/evals?'.length))
+    expect(q.get('agent')).toBe('default')
+    expect(q.get('candidate')).toBe('org/model a&b')
+    expect(q.get('provider')).toBe('openrouter')
+    expect(screen.getByTestId('compare-hint')).toHaveTextContent('before you switch')
+
+    // An empty field names nothing to compare.
+    await fireEvent.input(input, { target: { value: '' } })
+    await waitFor(() => expect(screen.queryByTestId('compare-in-evals')).not.toBeInTheDocument())
+  })
+
   test('Save button calls updateAgentConfig API', async () => {
     let patchCalled = false
     server.use(

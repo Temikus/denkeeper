@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack, tick } from 'svelte'
   import { api } from '../api.js'
   import { navigate, currentQuery } from '../router.js'
   import { inert } from '../inert.js'
@@ -14,6 +14,7 @@
   import EvalTestSets from '../components/EvalTestSets.svelte'
   import EvalCoverage from '../components/EvalCoverage.svelte'
   import { PROBE, inapplicableKinds } from '../evalCategories.js'
+  import { pickBaseAgent, recallAgent, rememberAgent, turnsLine } from '../evalLaunch.js'
 
   // Quick check draws this many test cases; Full eval runs the whole set.
   const QUICK_TASKS = 10
@@ -47,6 +48,11 @@
   let estimating = $state(false)
   let starting = $state(false)
   let launchError = $state('')
+  // The cap and the reason Full eval repeats each case, kept out of the sentence.
+  let showOptions = $state(false)
+  // Set by a Compare link from Agents (?agent=&candidate=&provider=).
+  let linkedAgent = ''
+  let fromLink = $state(false)
 
   // --- Import ---
   let showImport = $state(false)
@@ -74,7 +80,32 @@
     if (key === appliedQuery) return
     appliedQuery = key
     tab = q.get('tab') === 'sets' ? 'sets' : 'runs'
+    untrack(() => applyLaunchLink(q))
   })
+
+  /** Prefills the launcher from a Compare link and shows it. */
+  function applyLaunchLink(q) {
+    const model = (q.get('candidate') || '').trim()
+    const name = q.get('agent') || ''
+    if (!model && !name) return
+    if (model) {
+      candidate = model
+      candidateProvider = q.get('provider') || ''
+      providerFor = model
+      fromLink = true
+    }
+    if (name) {
+      linkedAgent = name
+      // Before the agent list loads, onMount applies it instead.
+      if (agents.some(a => a.name === name)) baseAgent = name
+    }
+    tab = 'runs'
+  }
+
+  function chooseAgent(name) {
+    baseAgent = name
+    rememberAgent(name)
+  }
 
   function setTab(next) {
     tab = next
@@ -228,7 +259,32 @@
   let selectedSet = $derived(taskSets.find(t => t.name === taskSetName) || null)
   let k = $derived(preset === 'quick' ? 1 : (cfg?.default_k || FALLBACK_K))
   let sampleTasks = $derived(preset === 'quick' ? QUICK_TASKS : 0)
+  let fullK = $derived(cfg?.default_k || FALLBACK_K)
+  // A Quick check over a set of ten or fewer runs every case.
+  let runTasks = $derived.by(() => {
+    const n = selectedSet?.task_count ?? 0
+    return preset === 'quick' ? Math.min(QUICK_TASKS, n) : n
+  })
+  let turns = $derived.by(() => {
+    // The estimate is the server's own count, so it wins once it is current.
+    const known = !estimating && estimate?.tasks
+    return turnsLine({
+      tasks: known ? estimate.tasks : runTasks,
+      k: known && estimate.k ? estimate.k : k,
+      whole: preset === 'full',
+    })
+  })
+  // What the run will stop at: the cap typed in Options, else the server default.
+  let capUSD = $derived.by(() => {
+    const v = parseFloat(costCap)
+    return !Number.isNaN(v) && v > 0 ? v : (cfg?.max_cost_per_run ?? FALLBACK_CAP)
+  })
+  let presetName = $derived(preset === 'quick' ? 'Quick check' : 'Full eval')
   let isEmpty = $derived(!loading && taskSets.length === 0 && runs.length === 0)
+  // The three-step checklist stands in for an empty page until the first run.
+  let showChecklist = $derived(!loading && runs.length === 0)
+  let totalCases = $derived(taskSets.reduce((n, t) => n + (t.task_count || 0), 0))
+  let hasCases = $derived(totalCases > 0)
   // The tablist renders only once loaded and non-empty.
   let hasTabs = $derived(!loading && !isEmpty)
   let canStart = $derived(!!baseAgent && !!candidate.trim() && !!taskSetName && !starting)
@@ -312,13 +368,12 @@
    * The estimate line, or '' when there is nothing honest to say. An unknown
    * basis shows the cap alone rather than a number nobody can stand behind.
    */
-  let estimateLabel = $derived.by(() => {
-    if (!estimate) return ''
-    const basis = BASIS_LABEL[estimate.basis]
-    if (!basis) return ''
+  let estimateRange = $derived.by(() => {
+    if (!estimate || !BASIS_LABEL[estimate.basis]) return ''
     if (estimate.low == null || estimate.high == null) return ''
-    return `~${fmtUSD(estimate.low)}–${fmtUSD(estimate.high)}, ${basis}`
+    return `${fmtUSD(estimate.low)}–${fmtUSD(estimate.high)}`
   })
+  let estimateBasis = $derived(estimateRange ? BASIS_LABEL[estimate.basis] : '')
 
   async function loadTaskSets() {
     taskSets = (await api.evalTaskSets()) || []
@@ -336,7 +391,7 @@
       runs = runList || []
       agents = agentList || []
       if (taskSets.length) taskSetName = taskSets[0].name
-      if (agents.length) baseAgent = agents[0].name
+      baseAgent = pickBaseAgent(agents, linkedAgent, recallAgent())
     } catch (e) {
       error = e.message
     } finally {
@@ -433,6 +488,34 @@
   }
 
   // --- Import ---------------------------------------------------------------
+
+  /**
+   * A checklist fill button. With sets on the page the panels live in the Test
+   * sets tab, so the page moves there and opens the panel rather than toggling.
+   */
+  async function fillFromChecklist(which) {
+    const moving = !isEmpty && tab !== 'sets'
+    if (moving) {
+      setTab('sets')
+      showSuggest = showProbes = showImport = false
+    }
+    if (which === 'suggest') toggleSuggest()
+    else if (which === 'probes') toggleProbes()
+    else toggleImport()
+    if (!moving) return
+    // The clicked button is gone with the Runs tab, so focus follows the panel.
+    await tick()
+    const panel = document.getElementById(`eval-${which}-panel`)
+    const target = panel?.querySelector('button, input, select, textarea') || document.getElementById('eval-tab-sets')
+    target?.focus()
+  }
+
+  async function toggleOptions() {
+    showOptions = !showOptions
+    if (!showOptions) return
+    await tick()
+    document.querySelector('[data-testid="cost-cap"]')?.focus()
+  }
 
   function toggleImport() {
     showImport = !showImport
@@ -624,35 +707,88 @@
 
 {#if loading}
   <p class="muted">Loading…</p>
-{:else if !isEmpty}
-  <div class="tabs" role="tablist" aria-label="Evals views">
-    {#each TABS as t (t.value)}
-      <button class="tab" class:active={tab === t.value} role="tab" id="eval-tab-{t.value}"
-        aria-selected={tab === t.value} aria-controls="eval-tabpanel"
-        tabindex={tab === t.value ? 0 : -1}
-        onclick={() => setTab(t.value)} onkeydown={tabKeydown}
-        data-testid="tab-{t.value}">{t.label}</button>
-    {/each}
-  </div>
 {:else}
-  <div class="empty-state" data-testid="evals-empty">
-    <p class="empty-lead">
-      Save real conversations as test cases, then compare your current model against a
-      candidate on them.
-    </p>
-    <div class="empty-actions">
-      <button class="btn-primary" onclick={toggleSuggest}
-        aria-expanded={showSuggest} aria-controls="eval-suggest-panel"
-        data-testid="empty-suggest-cta">Suggest from history</button>
-      <button class="btn-ghost" onclick={toggleProbes} disabled={!baseAgent}
-        title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
-        aria-expanded={showProbes} aria-controls="eval-probes-panel"
-        data-testid="empty-probes-cta">Generate probes</button>
-      <button class="btn-ghost" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>
-      <button class="btn-ghost" onclick={toggleImport} data-testid="empty-import-cta"
-        aria-expanded={showImport} aria-controls="eval-import-panel">Import JSONL</button>
+  {#if showChecklist}
+    <section class="checklist" data-testid="eval-checklist" aria-labelledby="checklist-title">
+      <h2 class="checklist-title" id="checklist-title" data-testid="checklist-title">
+        {#if fromLink && candidate.trim() && baseAgent}
+          Is {candidate.trim()} better for {baseAgent}? Three steps.
+        {:else}
+          Find out whether another model would serve an agent better. Three steps.
+        {/if}
+      </h2>
+      <!-- role="list": Safari drops list semantics under list-style: none. -->
+      <ol class="steps" role="list">
+        <li class="step" class:done={hasCases} class:current={!hasCases} data-testid="step-build">
+          <span class="step-num" aria-hidden="true">{hasCases ? '✓' : '1'}</span>
+          <div class="step-body">
+            <span class="step-name">
+              Build a test set{hasCases ? ` · ${totalCases} case${totalCases === 1 ? '' : 's'}` : ''}
+              <span class="sr-only">{hasCases ? '(done)' : '(next)'}</span>
+            </span>
+            {#if !hasCases}
+              <span class="hint">
+                Real conversations make the best cases. Suggest them from history, generate
+                probes from the agent's setup, save turns from Chat, or import JSONL.
+              </span>
+              {#if isEmpty || tab === 'runs'}
+                <div class="step-actions">
+                  <button class="btn-primary btn-sm" onclick={() => fillFromChecklist('suggest')}
+                    aria-expanded={isEmpty ? showSuggest : undefined}
+                    aria-controls={isEmpty ? 'eval-suggest-panel' : undefined}
+                    data-testid="empty-suggest-cta">Suggest from history</button>
+                  <button class="btn-ghost btn-sm" onclick={() => fillFromChecklist('probes')} disabled={!baseAgent}
+                    title={baseAgent ? undefined : 'Configure an agent first — probes come from its configuration'}
+                    aria-expanded={isEmpty ? showProbes : undefined}
+                    aria-controls={isEmpty ? 'eval-probes-panel' : undefined}
+                    data-testid="empty-probes-cta">Generate probes</button>
+                  <button class="btn-ghost btn-sm" onclick={() => navigate('chat')} data-testid="empty-chat-cta">Go to Chat</button>
+                  <button class="btn-ghost btn-sm" onclick={() => fillFromChecklist('import')}
+                    aria-expanded={isEmpty ? showImport : undefined}
+                    aria-controls={isEmpty ? 'eval-import-panel' : undefined}
+                    data-testid="empty-import-cta">Import JSONL</button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        </li>
+        <li class="step" class:current={hasCases} data-testid="step-quick">
+          <span class="step-num" aria-hidden="true">2</span>
+          <div class="step-body">
+            <span class="step-name">
+              Run a Quick check{hasCases && estimateRange ? ` · ${estimateRange}` : ''}
+              {#if hasCases}<span class="sr-only">(next)</span>{/if}
+            </span>
+            <span class="hint">
+              {#if hasCases}
+                Pick the candidate below and start it. Up to ten cases, one run each, for a cheap first signal.
+              {:else}
+                Up to ten cases, one run each, for a cheap first signal. The launcher appears once a set exists.
+              {/if}
+            </span>
+          </div>
+        </li>
+        <li class="step" data-testid="step-verdict">
+          <span class="step-num" aria-hidden="true">3</span>
+          <div class="step-body">
+            <span class="step-name">Read the verdict</span>
+            <span class="hint">If the candidate wins, apply it to the agent from the results.</span>
+          </div>
+        </li>
+      </ol>
+    </section>
+  {/if}
+  {#if !isEmpty}
+    <div class="tabs" role="tablist" aria-label="Evals views">
+      {#each TABS as t (t.value)}
+        <button class="tab" class:active={tab === t.value} role="tab" id="eval-tab-{t.value}"
+          aria-selected={tab === t.value} aria-controls="eval-tabpanel"
+          tabindex={tab === t.value ? 0 : -1}
+          onclick={() => setTab(t.value)} onkeydown={tabKeydown}
+          data-testid="tab-{t.value}">{t.label}</button>
+      {/each}
     </div>
-  </div>
+  {/if}
 {/if}
 
 <div id="eval-tabpanel" role={hasTabs ? 'tabpanel' : undefined}
@@ -752,103 +888,103 @@
 {/if}
 
 {#if !loading && !isEmpty && tab === 'runs'}
-  <section class="launcher" data-testid="launcher" bind:this={launcherEl} tabindex="-1">
-    <h2 class="section-title">Compare current vs candidate</h2>
+  <section class="launcher" data-testid="launcher" bind:this={launcherEl} tabindex="-1"
+    aria-labelledby="launcher-title">
+    <h2 class="section-title" id="launcher-title">Compare models</h2>
     {#if launchError}<div class="inline-error" role="alert">{launchError}</div>{/if}
 
-    <div class="launch-grid">
-      <label class="field">
-        <span class="field-label">Agent</span>
-        <select bind:value={baseAgent} disabled={starting} data-testid="agent-select">
-          {#each agents as a}
-            <option value={a.name}>{a.name}</option>
-          {/each}
-        </select>
-        {#if currentAgent}
-          <span class="hint">
-            Current: {currentAgent.model || 'default model'}{currentAgent.provider ? ` · ${currentAgent.provider}` : ''}
-          </span>
-        {/if}
-      </label>
-
-      <label class="field">
-        <span class="field-label">Candidate</span>
-        <ModelSelector bind:value={candidate}
+    <!-- One sentence with the inputs inline; it wraps at narrow widths. -->
+    <div class="sentence" data-testid="launch-sentence">
+      <span class="word">Compare</span>
+      <select class="inline-select" value={baseAgent} disabled={starting}
+        onchange={(e) => chooseAgent(e.currentTarget.value)}
+        aria-label="Agent" data-testid="agent-select">
+        {#each agents as a}
+          <option value={a.name}>{a.name}</option>
+        {/each}
+      </select>
+      {#if currentAgent}
+        <span class="word muted" data-testid="current-model">
+          (now {currentAgent.model || 'its default model'}{currentAgent.provider ? ` · ${currentAgent.provider}` : ''})
+        </span>
+      {/if}
+      <span class="word">against</span>
+      <div class="candidate">
+        <ModelSelector bind:value={candidate} ariaLabel="Candidate model"
           onchange={(id, provider) => { candidate = id; candidateProvider = provider || ''; providerFor = id }} />
-        <span class="hint">The model to test against the one running now.</span>
-      </label>
-
-      <div class="field">
-        <label class="field-label" for="launch-set">Test set</label>
-        <select id="launch-set" bind:value={taskSetName} disabled={starting} data-testid="task-set-select">
-          {#each taskSets as t}
-            <option value={t.name}>{t.name} ({t.task_count} case{t.task_count === 1 ? '' : 's'})</option>
-          {/each}
-        </select>
-        {#if launchTasks}
-          <EvalCoverage tasks={launchTasks} compact {notApplicable}
-            onsee={() => setTab('sets')} />
-        {/if}
       </div>
+      <span class="word">on</span>
+      <select class="inline-select" bind:value={taskSetName} disabled={starting}
+        aria-label="Test set" data-testid="task-set-select">
+        {#each taskSets as t}
+          <option value={t.name}>{t.name} ({t.task_count} case{t.task_count === 1 ? '' : 's'})</option>
+        {/each}
+      </select>
+      <span class="word">as a</span>
+      <FilterChips
+        items={[
+          { value: 'quick', label: 'Quick check', testid: 'preset-quick' },
+          { value: 'full', label: 'Full eval', testid: 'preset-full' },
+        ]}
+        value={preset}
+        label="Run depth"
+        size="sm"
+        onselect={(v) => preset = v} />
     </div>
 
-    <div class="launch-row">
-      <div class="field">
-        <span class="field-label">Depth</span>
-        <FilterChips
-          items={[
-            { value: 'quick', label: 'Quick check', testid: 'preset-quick' },
-            { value: 'full', label: 'Full eval', testid: 'preset-full' },
-          ]}
-          value={preset}
-          label="Run depth"
-          size="sm"
-          onselect={(v) => preset = v} />
-        <span class="hint" data-testid="preset-hint">
-          {#if preset === 'quick'}
-            {QUICK_TASKS} cases, 1 run each — a cheap first signal.
-          {:else if cfg}
-            All {selectedSet?.task_count ?? 0} cases, {k} runs each.
-          {:else}
-            All {selectedSet?.task_count ?? 0} cases, at the configured number of runs each.
-          {/if}
-        </span>
-      </div>
+    {#if launchTasks}
+      <EvalCoverage tasks={launchTasks} compact {notApplicable}
+        onsee={() => setTab('sets')} />
+    {/if}
 
+    <div class="estimate-block">
+      <div class="estimate" data-testid="estimate" aria-live="polite">
+        {#if estimating}
+          <span class="estimate-pending">Estimating…</span>
+        {:else if estimateRange}
+          <span class="estimate-figure">{estimateRange}</span>
+          <span class="estimate-cap">· stops at {fmtUSD(capUSD)}</span>
+          <span class="hint estimate-basis">{estimateBasis}</span>
+        {:else}
+          <span class="hint">No estimate yet. The run stops cleanly at the cap ({fmtUSD(capUSD)}) and keeps what it produced.</span>
+        {/if}
+      </div>
+      {#if !estimating && estimate?.note}
+        <span class="hint" data-testid="estimate-note">{estimate.note}</span>
+      {/if}
+      {#if turns}
+        <span class="hint" data-testid="preset-hint">{turns}</span>
+      {/if}
+    </div>
+
+    <div class="launch-actions">
+      <button class="btn-primary" onclick={start} disabled={!canStart} data-testid="start-run">
+        {starting ? 'Starting…' : `Start ${presetName}`}
+      </button>
+      <button class="btn-ghost btn-sm" onclick={toggleOptions}
+        aria-expanded={showOptions} aria-controls="launch-options"
+        data-testid="options-toggle">Options</button>
+      {#if startBlocker && !starting}
+        <span class="hint" data-testid="start-blocker">{startBlocker}</span>
+      {/if}
+    </div>
+
+    <div class="launch-options" id="launch-options" hidden={!showOptions} data-testid="launch-options">
       <label class="field cap-field">
         <span class="field-label">Cost cap (USD)</span>
         <input type="number" min="0.01" step="0.5" bind:value={costCap} disabled={starting}
-          data-testid="cost-cap" aria-label="Cost cap in USD" />
-        <span class="hint" data-testid="estimate">
-          {#if estimating}
-            Estimating…
-          {:else if estimateLabel}
-            Estimated {estimateLabel}
-          {:else}
-            The run stops cleanly at the cap and keeps what it produced.
-          {/if}
-        </span>
-        {#if !estimating && estimate?.note}
-          <span class="hint" data-testid="estimate-note">{estimate.note}</span>
-        {/if}
+          data-testid="cost-cap" />
+        <span class="hint">The run stops cleanly here and keeps what it produced.</span>
       </label>
-
-      <div class="field start-field">
-        <button class="btn-primary" onclick={start} disabled={!canStart} data-testid="start-run">
-          {starting ? 'Starting…' : 'Start'}
-        </button>
-        {#if startBlocker && !starting}
-          <span class="hint" data-testid="start-blocker">{startBlocker}</span>
-        {/if}
-      </div>
+      <p class="hint">
+        Full eval runs each case {fullK} times, so one lucky reply can't decide the verdict.
+      </p>
     </div>
   </section>
 
+  {#if runs.length > 0}
   <section class="runs">
     <h2 class="section-title">Runs</h2>
-    {#if runs.length === 0}
-      <p class="muted" data-testid="no-runs">No runs yet. Pick a candidate above to compare it against your current model.</p>
-    {/if}
     {#each runs as run (run.id)}
       {@const total = run.samples_total ?? 0}
       {@const done = run.samples_done ?? 0}
@@ -918,6 +1054,7 @@
       </article>
     {/each}
   </section>
+  {/if}
 {/if}
 </div>
 
@@ -964,8 +1101,8 @@
     margin: 0 0 12px;
   }
 
-  /* Empty state */
-  .empty-state {
+  /* Checklist: stands in for an empty page until the first run. */
+  .checklist {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -974,18 +1111,55 @@
     padding: var(--card-inset);
     margin-bottom: 24px;
   }
-  .empty-lead {
-    font-size: 14px;
-    color: var(--text);
-    margin-bottom: 16px;
-    line-height: 1.6;
-    /* Card is full width; the prose is not. */
+  .checklist-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    overflow-wrap: anywhere;
+  }
+  .steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .step {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step.current .step-num { border-color: var(--accent); color: var(--accent); }
+  .step.done .step-num { border-color: var(--success); color: var(--success); }
+  .step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    /* Prose stays readable on a wide card. */
     max-width: 620px;
   }
-  .empty-actions {
+  .step-name { font-size: 13px; font-weight: 600; padding-top: 3px; }
+  .step:not(.current):not(.done) .step-name { color: var(--text-muted); }
+  .step-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
+    margin-top: 6px;
   }
 
   /* Tabs: an underline bar, since the page has one level of navigation. */
@@ -1029,18 +1203,62 @@
     padding: var(--card-inset);
     margin-bottom: 24px;
   }
-  .launch-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
-    margin-bottom: 16px;
-  }
-  .launch-row {
+  .sentence {
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 16px;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 12px;
   }
+  .word { white-space: nowrap; }
+  .word.muted { color: var(--text-muted); font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
+  .candidate { flex: 1 1 240px; min-width: 0; max-width: 360px; }
+  .inline-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 5px 8px;
+    font-size: 13px;
+    max-width: 100%;
+  }
+  .inline-select:focus { outline: none; border-color: var(--accent); }
+  .inline-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .estimate-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 16px 0;
+  }
+  .estimate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+  }
+  /* The second-loudest thing on the card, after the sentence. */
+  .estimate-figure { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .estimate-cap { font-size: 13px; color: var(--text-muted); }
+  .estimate-pending { font-size: 13px; color: var(--text-muted); }
+
+  .launch-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .launch-options {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .launch-options[hidden] { display: none; }
   .field {
     display: flex;
     flex-direction: column;
@@ -1048,7 +1266,6 @@
     min-width: 0;
   }
   .cap-field { width: 160px; }
-  .start-field { justify-content: flex-end; padding-top: 20px; }
   .field-label {
     font-size: 11px;
     font-weight: 500;
@@ -1056,7 +1273,6 @@
     text-transform: uppercase;
     letter-spacing: 0.3px;
   }
-  .field select,
   .field input[type="number"] {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -1066,7 +1282,6 @@
     font-size: 13px;
     width: 100%;
   }
-  .field select:focus,
   .field input:focus { outline: none; border-color: var(--accent); }
 
   .inline-error { margin-bottom: 10px; }
@@ -1143,8 +1358,7 @@
     font-size: 12px;
   }
   @media (max-width: 520px) {
-    .launch-row { flex-direction: column; align-items: stretch; }
+    .candidate { flex-basis: 100%; max-width: none; }
     .cap-field { width: 100%; }
-    .start-field { padding-top: 0; }
   }
 </style>
