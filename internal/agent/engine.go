@@ -1822,7 +1822,7 @@ func (e *Engine) ChatWithEvents(ctx context.Context, msg adapter.IncomingMessage
 }
 
 // DryRun executes one turn under an execution policy and returns the full
-// transcript. Nothing is persisted, nothing is sent, and every non-idempotent
+// transcript. Nothing is persisted, nothing is sent, and every non-read-only
 // tool call is suppressed — the caller gets the response and the tool trace to
 // store (or show) wherever it wants.
 //
@@ -3185,7 +3185,7 @@ func (e *Engine) executeToolCall(ctx context.Context, tc llm.ToolCall, round int
 	// read-only calls run for real so the model sees a truthful world, and
 	// everything else — including every unknown tool — is suppressed before it
 	// can reach the approval chain or the tool manager.
-	if run.policy.suppresses(tc.Function.Name, e.idempotencyCheck()) {
+	if run.policy.suppresses(tc.Function.Name, e.readOnlyCheck()) {
 		result, record := e.suppressToolCall(ctx, tc, round, convID, onEvent)
 		return result, record, false
 	}
@@ -3317,19 +3317,10 @@ func (e *Engine) routerFor(policy *ExecPolicy) *llm.Router {
 	return e.router.WithModel(policy.Model).WithProvider(policy.Provider)
 }
 
-// idempotencyCheck returns the "safe to execute" predicate an execution policy
-// consults, or nil when no tool manager is wired (in which case a policy
-// suppresses everything, which is the correct fail-closed answer).
-func (e *Engine) idempotencyCheck() func(string) bool {
-	if e.tools == nil {
-		return nil
-	}
-	return e.tools.IsIdempotent
-}
-
-// readOnlyCheck returns the read-only classifier the tool grant consults, or
-// nil when no tool manager is wired — nothing is classified, so a read-only
-// grant admits nothing.
+// readOnlyCheck returns the read-only classifier the tool grant and an
+// execution policy consult, or nil when no tool manager is wired — nothing is
+// classified, so a read-only grant admits nothing and a policy suppresses
+// everything (fail closed).
 func (e *Engine) readOnlyCheck() func(string) bool {
 	if e.tools == nil {
 		return nil

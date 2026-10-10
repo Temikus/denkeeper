@@ -440,7 +440,7 @@ Setting `judge_decider` puts a [decision model](/docs/concepts/deciders/#as-the-
 
 Live capture is off by default and should stay off unless you want that record: a trace is the most sensitive data Denkeeper stores. Eval samples are traced regardless of the switch, because the judge reads the trace and a verdict has to stay re-checkable; those turns never touch a live conversation. Traces get their own `retention_days` rather than riding on `[memory]`'s for the same reason.
 
-Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only idempotent tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
+Dry-run turns persist nothing — no messages, telemetry, or memory — and execute only read-only tools; everything else returns a suppressed marker. `"full"` is the default because a preview that is audited like a live turn is easier to trust; the resulting noise is handled by *marking* rather than by recording less. Preview events are attributed to a pseudo-agent (`{name}#dryrun` / `{name}#eval:{variant}`) and carry `source` = `dryrun`/`eval`, so the Audit Log page's "Previews" toggle can filter them out of both the event list and the statistics.
 
 ## `[api]`
 
