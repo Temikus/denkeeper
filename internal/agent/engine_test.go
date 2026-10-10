@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -478,10 +479,47 @@ func TestSanitizeStaleDirectives_NoTag(t *testing.T) {
 }
 
 func TestSanitizeStaleDirectives_MissingCloseTag(t *testing.T) {
-	text := "Answer.\n\n[MEMORY_UPDATE]\nSome content without close tag."
+	text := "Answer.\n\n[MEMORY_UPDATE]\n# Memory\n- lives in Lisbon\n# User\n- private details"
 	cleaned := sanitizeStaleDirectives(text, testLogger())
-	if cleaned != text {
-		t.Errorf("cleaned should be unchanged when close tag is missing")
+	if cleaned != "Answer." {
+		t.Errorf("cleaned = %q, want %q", cleaned, "Answer.")
+	}
+}
+
+func TestSanitizeStaleDirectives_MissingCloseTagAfterClosedBlock(t *testing.T) {
+	text := "Answer.\n[USER_UPDATE]\nx\n[/USER_UPDATE]\nMore.\n[MEMORY_UPDATE]\nleaked"
+	cleaned := sanitizeStaleDirectives(text, testLogger())
+	if cleaned != "Answer.\n\nMore." {
+		t.Errorf("cleaned = %q, want %q", cleaned, "Answer.\n\nMore.")
+	}
+}
+
+func TestWarnStaleDirectivesInPersona_FlagsSection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Be kind."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memory := "To save memory, include [MEMORY_UPDATE] <content> at the end of my response."
+	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte(memory), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := persona.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	WarnStaleDirectivesInPersona(p, "pamela", logger)
+
+	out := buf.String()
+	if strings.Count(out, "level=WARN") != 1 {
+		t.Fatalf("want exactly one warning, got %q", out)
+	}
+	for _, want := range []string{"section=memory", "agent=pamela", "tag=[MEMORY_UPDATE]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q missing %q", out, want)
+		}
 	}
 }
 
