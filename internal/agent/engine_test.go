@@ -2094,6 +2094,29 @@ func TestEngine_UpdateSkill(t *testing.T) {
 	}
 }
 
+func TestEngine_AppendSkill_ReplacesSameName(t *testing.T) {
+	store, _ := NewInMemoryStore()
+	defer func() { _ = store.Close() }()
+
+	costTracker := llm.NewCostTracker(llm.SessionLimits{Hard: 1.0}, nil)
+	router := llm.NewRouter("mock", "test-model", costTracker)
+	router.RegisterProvider(&mockProvider{response: &llm.ChatResponse{Content: "ok"}})
+	perms, _ := security.NewPermissionEngine("autonomous")
+
+	eng := NewEngine("default", router, store, nil, perms, nil, "fallback",
+		[]skill.Skill{{Name: "greet", Version: "1.0"}}, nil, nil, testLogger())
+
+	eng.AppendSkill(skill.Skill{Name: "greet", Version: "2.0"})
+
+	skills := eng.Skills()
+	if len(skills) != 1 {
+		t.Fatalf("got %d skills, want 1: appending a known name must replace it", len(skills))
+	}
+	if skills[0].Version != "2.0" {
+		t.Errorf("version = %q, want the appended 2.0", skills[0].Version)
+	}
+}
+
 func TestEngine_UpdateSkill_NotFound(t *testing.T) {
 	store, _ := NewInMemoryStore()
 	defer func() { _ = store.Close() }()

@@ -433,6 +433,13 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	if strings.TrimSpace(input.Body) == "" {
 		return toolError("body is required"), nil
 	}
+	// GetSkill does not gate skill_create, so it may be absent. Without it the
+	// effector journals the overwrite and AppendSkill replaces the old entry.
+	if s.deps.GetSkill != nil {
+		if _, exists := s.deps.GetSkill(input.Name); exists {
+			return toolError(fmt.Sprintf("skill %q already exists; use skill_update to change it", input.Name)), nil
+		}
+	}
 
 	version := input.Version
 	if version == "" {

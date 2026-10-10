@@ -7215,6 +7215,15 @@
                             }
                         }
                     },
+                    "409": {
+                        "description": "Skill already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Creation failed",
                         "schema": {

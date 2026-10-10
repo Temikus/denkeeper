@@ -220,6 +220,57 @@ func TestSkillCreate_Autonomous_Success(t *testing.T) {
 	}
 }
 
+func TestSkillCreate_ExistingName_Refused(t *testing.T) {
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.GetSkill = func(name string) (skill.Skill, bool) {
+			for _, sk := range d.GetSkills() {
+				if sk.Name == name {
+					return sk, true
+				}
+			}
+			return skill.Skill{}, false
+		}
+	})
+	if text, isErr := callTool(t, session, "skill_create", map[string]any{
+		"name": "test-skill",
+		"body": "original body",
+	}); isErr {
+		t.Fatalf("first create: %s", text)
+	}
+	skillFile := filepath.Join(deps.AgentSkillsDir, "test-skill.md")
+	before, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("reading skill file: %v", err)
+	}
+
+	text, isErr := callTool(t, session, "skill_create", map[string]any{
+		"name": "test-skill",
+		"body": "replacement body",
+	})
+
+	if !isErr {
+		t.Fatalf("expected an error for an existing name, got: %s", text)
+	}
+	if !strings.Contains(text, "skill_update") {
+		t.Errorf("error %q should point at skill_update", text)
+	}
+	after, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("reading skill file: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("skill file changed:\n%s", after)
+	}
+	listText, _ := callTool(t, session, "skill_list", map[string]any{})
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(listText), &listed); err != nil {
+		t.Fatalf("parsing skill_list result: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Errorf("got %d skills in memory, want 1", len(listed))
+	}
+}
+
 func TestSkillCreate_MissingName(t *testing.T) {
 	session, _ := newTestServer(t, nil)
 	text, isErr := callTool(t, session, "skill_create", map[string]any{

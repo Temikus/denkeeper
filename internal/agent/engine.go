@@ -1086,10 +1086,18 @@ func (e *Engine) Skills() []skill.Skill {
 	return e.skills
 }
 
-// AppendSkill appends a new skill to the engine's in-memory skill list.
+// AppendSkill adds a skill to the engine's in-memory skill list, replacing any
+// skill with the same name so a create over an existing file never leaves two
+// live definitions.
 func (e *Engine) AppendSkill(s skill.Skill) {
 	e.skillsMu.Lock()
 	defer e.skillsMu.Unlock()
+	for i, existing := range e.skills {
+		if existing.Name == s.Name {
+			e.skills[i] = s
+			return
+		}
+	}
 	e.skills = append(e.skills, s)
 }
 

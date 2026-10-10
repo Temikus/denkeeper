@@ -187,6 +187,28 @@ func TestCreateSkill_Success(t *testing.T) {
 	}
 }
 
+func TestCreateSkill_ExistingName_Conflict(t *testing.T) {
+	deps := testDepsWithSkillsDir(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/skills/default", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer dk-test-key")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post(`{"name":"dup","body":"first"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("first create: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	rec := post(`{"name":"dup","body":"second"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
 func TestCreateSkill_NoSkillsDir(t *testing.T) {
 	deps := testDeps() // no SetSkillDirs — SkillsDir() returns ""
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
