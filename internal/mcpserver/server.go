@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -69,6 +70,10 @@ func (s *Server) Handler() http.Handler {
 	return s.authMiddleware(handler)
 }
 
+// maxSessionlessBody caps what requireSessionMiddleware buffers. Without a
+// session only initialize is valid, and its body is a few hundred bytes.
+const maxSessionlessBody = 1 << 20
+
 // requireSessionMiddleware answers 400 to a POST with no Mcp-Session-Id that
 // is not initialize, as the MCP spec asks of stateful servers. The SDK instead
 // replies 200 with a JSON-RPC error, which clients that retry the handshake
@@ -79,7 +84,12 @@ func requireSessionMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSessionlessBody))
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "failed to read body")
 			return

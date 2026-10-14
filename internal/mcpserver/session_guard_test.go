@@ -68,6 +68,16 @@ func TestSessionGuard_ToolsListWithoutSession_Returns400(t *testing.T) {
 	}
 }
 
+func TestSessionGuard_OversizedBodyReturns413(t *testing.T) {
+	ts := startGuardServer(t, false)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"pad":"` + strings.Repeat("x", 2<<20) + `"}}`
+	resp := postRPC(t, ts, guardTestKey, "", body)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
 func TestSessionGuard_UnknownSessionPassesThrough(t *testing.T) {
 	ts := startGuardServer(t, false)
 
