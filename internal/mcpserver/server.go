@@ -97,7 +97,8 @@ func requireSessionMiddleware(next http.Handler) http.Handler {
 		_ = r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 
-		if methods, ok := jsonRPCMethods(body); ok && !slices.Contains(methods, "initialize") {
+		// initialize must be sent alone: the spec bars it from a batch.
+		if methods, ok := jsonRPCMethods(body); ok && !slices.Equal(methods, []string{"initialize"}) {
 			writeJSONError(w, http.StatusBadRequest, "missing Mcp-Session-Id header; send initialize first")
 			return
 		}

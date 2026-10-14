@@ -78,6 +78,16 @@ func TestSessionGuard_OversizedBodyReturns413(t *testing.T) {
 	}
 }
 
+func TestSessionGuard_BatchedInitializeWithoutSession_Returns400(t *testing.T) {
+	ts := startGuardServer(t, false)
+
+	batch := `[{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}},` + toolsListBody + `]`
+	resp := postRPC(t, ts, guardTestKey, "", batch)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestSessionGuard_UnknownSessionPassesThrough(t *testing.T) {
 	ts := startGuardServer(t, false)
 
