@@ -1,9 +1,13 @@
 package mcpserver
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -59,8 +63,70 @@ func (s *Server) Handler() http.Handler {
 				Logger:         s.deps.Logger,
 			},
 		)
+		if !s.cfg.Stateless {
+			handler = requireSessionMiddleware(handler)
+		}
 	}
 	return s.authMiddleware(handler)
+}
+
+// maxSessionlessBody caps what requireSessionMiddleware buffers. Without a
+// session only initialize is valid, and its body is a few hundred bytes.
+const maxSessionlessBody = 1 << 20
+
+// requireSessionMiddleware answers 400 to a POST with no Mcp-Session-Id that
+// is not initialize, as the MCP spec asks of stateful servers. The SDK instead
+// replies 200 with a JSON-RPC error, which clients that retry the handshake
+// only on 400 (e.g. Paperclip) treat as fatal.
+func requireSessionMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Mcp-Session-Id") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSessionlessBody))
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "failed to read body")
+			return
+		}
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		// initialize must be sent alone: the spec bars it from a batch.
+		if methods, ok := jsonRPCMethods(body); ok && !slices.Equal(methods, []string{"initialize"}) {
+			writeJSONError(w, http.StatusBadRequest, "missing Mcp-Session-Id header; send initialize first")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// jsonRPCMethods returns the methods in a single message or a batch. It
+// reports false for a body it cannot parse, leaving the error to the SDK.
+func jsonRPCMethods(body []byte) ([]string, bool) {
+	type message struct {
+		Method string `json:"method"`
+	}
+	var batch []message
+	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != '[' {
+		var single message
+		if err := json.Unmarshal(body, &single); err != nil {
+			return nil, false
+		}
+		batch = []message{single}
+	} else if err := json.Unmarshal(body, &batch); err != nil {
+		return nil, false
+	}
+	methods := make([]string, 0, len(batch))
+	for _, m := range batch {
+		methods = append(methods, m.Method)
+	}
+	return methods, true
 }
 
 // authMiddleware extracts a Bearer token and performs two-tier key lookup:
