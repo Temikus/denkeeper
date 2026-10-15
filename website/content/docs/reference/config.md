@@ -481,7 +481,7 @@ key = "dk_..."
 scopes = ["chat", "sessions:read"]
 ```
 
-**Valid scopes:** `admin`, `chat`, `health`, `sessions:read`, `sessions:write`, `costs:read`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `browser:read`, `browser:write`, `kv:read`, `kv:write`, `audit:read`, `channels:read`, `channels:write`, `eval:read`, `eval:write`. `admin` implies every other scope.
+**Valid scopes:** `admin`, `chat`, `health`, `sessions:read`, `sessions:write`, `costs:read`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `browser:read`, `browser:write`, `kv:read`, `kv:write`, `audit:read`, `channels:read`, `channels:write`, `eval:read`, `eval:write`, `tasks:read`, `tasks:write`. `admin` implies every other scope.
 
 ## `[api.mcp_server]`
 

@@ -34,6 +34,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skill/skilltest"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -229,6 +230,7 @@ type Harness struct {
 	Dispatcher  *agent.Dispatcher
 	Scheduler   *scheduler.Scheduler
 	KVStore     kv.Store
+	Tasks       *task.Service
 	AuditStore  audit.Store
 	Auditor     audit.Emitter
 	auditorBE   *audit.BufferedEmitter // concrete type for Flush/Close
@@ -410,6 +412,7 @@ func allScopes() []string {
 		"audit:read",
 		"channels:read", "channels:write",
 		"eval:read", "eval:write",
+		"tasks:read", "tasks:write",
 	}
 }
 
@@ -689,6 +692,22 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		evalStore, evalRunner, evalJudge = buildEvalDeps(t, opts, dispatcher, auditor, costTracker, logger)
 	}
 
+	// Tasks mirror cmd/denkeeper/main.go: a store on its own handle and a
+	// directory of the den's agents. External members come from API keys,
+	// which the harness only has with WithKeyStore, so they are left out.
+	taskStore, err := task.NewInMemoryStore()
+	if err != nil {
+		t.Fatalf("creating task store: %v", err)
+	}
+	t.Cleanup(func() { _ = taskStore.Close() })
+	tasks := task.NewService(taskStore, task.DirectoryFunc(func(context.Context) ([]task.Member, error) {
+		var ms []task.Member
+		for _, name := range dispatcher.Agents() {
+			ms = append(ms, task.Member{ID: task.AgentID(name), Name: name, Kind: "agent"})
+		}
+		return ms, nil
+	}), auditor)
+
 	deps := api.Deps{
 		Dispatcher:        dispatcher,
 		Scheduler:         sched,
@@ -696,6 +715,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Memory:            mem,
 		Approvals:         approvalMgr,
 		KVStore:           kvStore,
+		Tasks:             tasks,
 		AuditStore:        auditStore,
 		Auditor:           auditor,
 		ConfigPath:        opts.ConfigPath,
@@ -793,6 +813,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		Dispatcher:  dispatcher,
 		Scheduler:   sched,
 		KVStore:     kvStore,
+		Tasks:       tasks,
 		AuditStore:  auditStore,
 		Auditor:     auditor,
 		auditorBE:   auditor,

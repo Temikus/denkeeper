@@ -708,11 +708,8 @@ type APIKeyConfig struct {
 	// Key is the secret API key value. Loaded from config or env.
 	Key string `toml:"key"`
 
-	// Scopes controls what this key can access.
-	// Valid scopes: "chat", "sessions:read", "sessions:write", "costs:read", "skills:read",
-	// "skills:write", "schedules:read", "schedules:write", "approvals:read",
-	// "approvals:write", "tools:read", "tools:write", "browser:read",
-	// "browser:write", "health", "admin".
+	// Scopes controls what this key can access. The valid values are the
+	// keys of scope.Valid (internal/scope); "admin" implies all of them.
 	Scopes []string `toml:"scopes"`
 }
 
