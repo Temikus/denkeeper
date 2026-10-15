@@ -7523,6 +7523,451 @@
                 }
             }
         },
+        "/tasks": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns tasks newest first: every open task, plus tasks closed within closed_within (default 168h). Each task carries its subtask counts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "List tasks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated statuses: todo, in_progress, review, blocked, done, cancelled",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Member ID or name, e.g. agent:pamela, claude-code, human",
+                        "name": "assignee",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Only subtasks of this task",
+                        "name": "parent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only tasks without a parent",
+                        "name": "top_level",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Go duration; how far back closed tasks reach (default 168h)",
+                        "name": "closed_within",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum tasks (default and cap 500)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Object with a tasks array",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid filter",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Files a task. Admin keys and dashboard sessions act as the operator (human); other keys act as the member named after the key. Assignee is optional: an unassigned task waits in To do and anyone may claim it. The operator reviews the task before it's done unless no_review is set.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "File a task",
+                "parameters": [
+                    {
+                        "description": "The new task",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskCreateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "The created task",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskView"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input or a broken task rule",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Parent task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/members": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns everyone a task can be assigned to: the operator (\"human\"), each den agent (\"agent:\u003cname\u003e\") and each API key with tasks:write (\"ext:\u003ckey name\u003e\").",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "List task members",
+                "responses": {
+                    "200": {
+                        "description": "Object with a members array",
+                        "schema": {
+                            "type": "object"
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a task with its thread (comments and events in order), its subtasks and its parent. The id may be numeric or a display key like DK-131.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get a task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID or key",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The task with its thread",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskDetailView"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid id",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Changes a task's title, body, assignee or status. Admin keys and dashboard sessions act as the operator; other keys follow the member rules (e.g. only the reviewer closes a reviewed task). Fields left out are unchanged; assignee \"\" unassigns. Changes apply in the order edit, reassign, status. Reassigning drops any hold.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Update a task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID or key",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskUpdateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The updated task",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskView"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid input or a broken task rule",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/comments": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Adds a comment to a task's thread, authored by the caller (human for admin keys and sessions). Closed tasks take comments too.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Comment on a task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID or key",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "The comment",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskCommentInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "The comment event",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_task.Event"
+                        }
+                    },
+                    "400": {
+                        "description": "Empty or oversized comment",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/release": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Drops whoever holds the task and returns in-progress work to To do. The assignee stays. The operator can release any claim; another key only its own.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Release a task's hold",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID or key",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The released task",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.taskView"
+                        }
+                    },
+                    "400": {
+                        "description": "The task isn't held",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Tasks not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/telemetry/summary": {
             "get": {
                 "security": [
@@ -10088,6 +10533,32 @@
                 }
             }
         },
+        "github_com_Temikus_denkeeper_internal_task.Event": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "type": "string"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "data": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "github_com_Temikus_denkeeper_internal_tool.OAuthStatusInfo": {
             "type": "object",
             "properties": {
@@ -11798,6 +12269,141 @@
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "internal_api.taskCommentInput": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.taskCreateInput": {
+            "type": "object",
+            "properties": {
+                "assignee": {
+                    "description": "member ID or name; empty = unassigned",
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "no_review": {
+                    "description": "skip the \"you review before it's done\" step",
+                    "type": "boolean"
+                },
+                "parent_id": {
+                    "description": "makes the task a subtask",
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.taskDetailView": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api.taskView"
+                    }
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_Temikus_denkeeper_internal_task.Event"
+                    }
+                },
+                "parent": {
+                    "$ref": "#/definitions/internal_api.taskView"
+                },
+                "task": {
+                    "$ref": "#/definitions/internal_api.taskView"
+                }
+            }
+        },
+        "internal_api.taskUpdateInput": {
+            "type": "object",
+            "properties": {
+                "assignee": {
+                    "description": "\"\" unassigns",
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "required when status is \"blocked\"",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.taskView": {
+            "type": "object",
+            "properties": {
+                "assignee": {
+                    "type": "string"
+                },
+                "blocked_reason": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "children_done": {
+                    "type": "integer"
+                },
+                "children_total": {
+                    "type": "integer"
+                },
+                "closed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "depth": {
+                    "type": "integer"
+                },
+                "held_at": {
+                    "type": "string"
+                },
+                "holder": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "parent_id": {
+                    "type": "integer"
+                },
+                "reviewer": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },

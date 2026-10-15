@@ -242,6 +242,7 @@ func adminScopes() []string {
 		"agents:read", "agents:write",
 		"channels:read", "channels:write", "audit:read",
 		"eval:read", "eval:write",
+		"tasks:read", "tasks:write",
 	}
 }
 

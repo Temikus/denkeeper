@@ -29,6 +29,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -60,6 +61,7 @@ type Deps struct {
 	MetricsHandler    http.Handler                                                             // nil = no /metrics endpoint
 	KeyStore          *KeyStore                                                                // nil = API key CRUD endpoints return 503
 	KVStore           kv.Store                                                                 // nil = KV endpoints return 503
+	Tasks             *task.Service                                                            // nil = task endpoints return 503
 	ConfigPath        string                                                                   // TOML config path for schedule persistence
 	Sessions          *SessionManager                                                          // nil = no session-based auth
 	OIDCProvider      *OIDCProvider                                                            // nil = no OIDC endpoints
@@ -335,6 +337,16 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/browser/profiles/{name}", s.RequireScope("browser:write", s.handleDeleteBrowserProfile))
 	mux.HandleFunc("GET /api/v1/browser/sessions", s.RequireScope("browser:read", s.handleListBrowserSessions))
 	mux.HandleFunc("GET /api/v1/browser/config", s.RequireScope("browser:read", s.handleBrowserConfig))
+
+	// Task endpoints. The members route is registered before {id} for
+	// readability; the mux prefers the literal segment either way.
+	mux.HandleFunc("GET /api/v1/tasks", s.RequireScope("tasks:read", s.handleListTasks))
+	mux.HandleFunc("POST /api/v1/tasks", s.RequireScope("tasks:write", s.handleCreateTask))
+	mux.HandleFunc("GET /api/v1/tasks/members", s.RequireScope("tasks:read", s.handleTaskMembers))
+	mux.HandleFunc("GET /api/v1/tasks/{id}", s.RequireScope("tasks:read", s.handleGetTask))
+	mux.HandleFunc("PATCH /api/v1/tasks/{id}", s.RequireScope("tasks:write", s.handleUpdateTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/comments", s.RequireScope("tasks:write", s.handleCommentTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/release", s.RequireScope("tasks:write", s.handleReleaseTask))
 
 	// KV store endpoints.
 	mux.HandleFunc("GET /api/v1/kv/{agent}", s.RequireScope("kv:read", s.handleListKV))

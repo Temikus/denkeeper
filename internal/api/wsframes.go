@@ -115,6 +115,16 @@ type EvalProgressFrame struct {
 	ETASeconds   int     `json:"eta_seconds,omitempty"`
 }
 
+// TaskUpdatedFrame says a task changed. Server→client only. Like
+// EvalProgressFrame it is droppable and not replayed: the client re-fetches
+// GET /tasks (and the open task) on each frame and on reconnect, so a lost
+// frame costs staleness until the next change, never a wrong board.
+type TaskUpdatedFrame struct {
+	Type   string `json:"type"` // "task_updated"
+	TaskID int64  `json:"task_id"`
+	Kind   string `json:"kind"` // the task event kind, e.g. "claimed"
+}
+
 // --- Frame type constants ---
 
 const (
@@ -128,6 +138,7 @@ const (
 	FrameTypePanic            = "panic"
 	FrameTypePanicStatus      = "panic_status"
 	FrameTypeEvalProgress     = "eval_progress"
+	FrameTypeTaskUpdated      = "task_updated"
 )
 
 // validateApprovalResponseFrame checks required fields and action validity.

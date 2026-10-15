@@ -54,6 +54,8 @@
     { value: 'schedules:write',  label: 'schedules:write' },
     { value: 'sessions:read',    label: 'sessions:read' },
     { value: 'sessions:write',   label: 'sessions:write' },
+    { value: 'tasks:read',       label: 'tasks:read' },
+    { value: 'tasks:write',      label: 'tasks:write' },
     { value: 'skills:read',      label: 'skills:read' },
     { value: 'skills:write',     label: 'skills:write' },
     { value: 'tools:read',       label: 'tools:read' },

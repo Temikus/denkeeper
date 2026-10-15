@@ -33,6 +33,8 @@ var Valid = map[string]struct{}{
 	"channels:write":  {},
 	"eval:read":       {},
 	"eval:write":      {},
+	"tasks:read":      {},
+	"tasks:write":     {},
 	"health":          {},
 }
 
