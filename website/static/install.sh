@@ -2,8 +2,8 @@
 # Denkeeper installer — https://github.com/Temikus/denkeeper
 #
 # Usage:
-#   curl -fsSL https://get.denkeeper.io | sh
-#   curl -fsSL https://get.denkeeper.io | sh -s -- --version v1.2.3
+#   curl -fsSL https://denkeeper.io/install.sh | sh
+#   curl -fsSL https://denkeeper.io/install.sh | sh -s -- --version v1.2.3
 #
 # The script:
 #   1. Detects OS and architecture
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --help|-h)
-      printf 'Usage: curl -fsSL https://get.denkeeper.io | sh -s -- [OPTIONS]\n\n'
+      printf 'Usage: curl -fsSL https://denkeeper.io/install.sh | sh -s -- [OPTIONS]\n\n'
       printf 'Options:\n'
       printf '  --version VERSION   Install a specific version (e.g. v1.2.3)\n'
       printf '  --help              Show this help\n\n'
@@ -133,7 +133,7 @@ github_curl -o "${TMPDIR}/checksums.txt" "${BASE_URL}/checksums.txt"
 
 info "Verifying SHA256 checksum..."
 
-EXPECTED="$(grep "${TARBALL}" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
+EXPECTED="$(awk -v f="${TARBALL}" '$2 == f { print $1 }' "${TMPDIR}/checksums.txt")"
 if [ -z "$EXPECTED" ]; then
   error "checksum not found for ${TARBALL} in checksums.txt"
 fi
