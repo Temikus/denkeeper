@@ -13,13 +13,13 @@ toc: true
 The fastest way to install Denkeeper is the one-liner script. It detects your OS and architecture, downloads the latest release, verifies the SHA256 checksum, and installs to `/usr/local/bin`:
 
 ```bash
-curl -fsSL https://denkeeper.io/install.sh | sh
+curl -fsSL https://get.denkeeper.io | sh
 ```
 
 To pin a specific version:
 
 ```bash
-curl -fsSL https://denkeeper.io/install.sh | sh -s -- --version v0.0.1
+curl -fsSL https://get.denkeeper.io | sh -s -- --version v0.0.1
 ```
 
 ## Homebrew (macOS)

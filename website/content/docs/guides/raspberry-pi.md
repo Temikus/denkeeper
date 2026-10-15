@@ -22,7 +22,7 @@ Denkeeper is designed to run on a Raspberry Pi 5 as its primary target. The stat
 Use the install script:
 
 ```bash
-curl -fsSL https://denkeeper.io/install.sh | sh
+curl -fsSL https://get.denkeeper.io | sh
 ```
 
 Or install the `.deb` package:
