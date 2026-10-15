@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -284,5 +285,15 @@ func TestTasks_NonAdminKeyActsAsExternalMember(t *testing.T) {
 	rec = doTaskRequest(t, srv, http.MethodPatch, "/api/v1/tasks/"+tk.Key(), map[string]any{"status": "done"})
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "needs review by human") {
 		t.Errorf("harness close: %d %s, want 400 review refusal", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTasks_InternalErrorIsGeneric(t *testing.T) {
+	deps := testDepsWithTasks(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	rec := httptest.NewRecorder()
+	srv.writeTaskError(rec, errors.New("committing task transaction: database is locked"))
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "database") {
+		t.Errorf("500 body = %d %s, want a generic message", rec.Code, rec.Body.String())
 	}
 }

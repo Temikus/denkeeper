@@ -82,7 +82,9 @@ func (s *Server) tasksRequired(w http.ResponseWriter) bool {
 
 // writeTaskError maps task errors to status codes: a lost claim is 409 and
 // names the holder, a broken rule or bad input is 400, a missing task 404.
-func writeTaskError(w http.ResponseWriter, err error) {
+// Anything else is logged and answered with a generic 500, so storage errors
+// never reach the client.
+func (s *Server) writeTaskError(w http.ResponseWriter, err error) {
 	var ce *task.ConflictError
 	var re *task.RuleError
 	switch {
@@ -93,7 +95,8 @@ func writeTaskError(w http.ResponseWriter, err error) {
 	case errors.As(err, &re):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": re.Message})
 	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		s.logger.Error("task request failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 	}
 }
 
@@ -129,12 +132,12 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := s.taskFilter(r)
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	ts, err := s.deps.Tasks.List(r.Context(), f)
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": viewsOf(ts)})
@@ -210,7 +213,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Title: in.Title, Body: in.Body, Assignee: in.Assignee, ParentID: in.ParentID, NoReview: in.NoReview,
 	})
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, viewOf(t))
@@ -231,7 +234,7 @@ func (s *Server) handleTaskMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	ms, err := s.deps.Tasks.Members(r.Context())
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"members": ms})
@@ -259,7 +262,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.deps.Tasks.Detail(r.Context(), id)
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	out := taskDetailView{Task: viewOf(&d.Task), Events: d.Events, Children: viewsOf(d.Children)}
@@ -301,7 +304,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		Title: in.Title, Body: in.Body, Assignee: in.Assignee, Status: in.Status, Reason: in.Reason,
 	})
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewOf(t))
@@ -336,7 +339,7 @@ func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ev, err := s.deps.Tasks.Comment(r.Context(), s.taskActor(r), id, in.Body)
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, ev)
@@ -364,7 +367,7 @@ func (s *Server) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.deps.Tasks.Release(r.Context(), s.taskActor(r), id)
 	if err != nil {
-		writeTaskError(w, err)
+		s.writeTaskError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewOf(t))

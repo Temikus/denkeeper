@@ -519,3 +519,13 @@ func TestGet_NotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestCheckoutConflict_HolderWithoutTimestamp(t *testing.T) {
+	// A row edited by hand can carry a holder without held_at; the refusal
+	// must still read cleanly instead of panicking.
+	err := checkoutConflict(&Task{ID: 5, Holder: scout, Status: StatusInProgress}, pamela)
+	var ce *ConflictError
+	if !errors.As(err, &ce) || ce.Message != "DK-5 is held by scout. Don't retry. Pick another task, or comment on this one." {
+		t.Errorf("conflict = %v", err)
+	}
+}

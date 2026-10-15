@@ -288,8 +288,12 @@ func checkoutConflict(t *Task, actor string) error {
 	c := &ConflictError{TaskID: t.ID, Holder: t.Holder}
 	switch {
 	case t.Holder != "" && t.Holder != actor:
-		c.Message = fmt.Sprintf("%s is held by %s since %s. Don't retry. Pick another task, or comment on this one.",
-			t.Key(), MemberName(t.Holder), t.HeldAt.UTC().Format("15:04 MST"))
+		since := ""
+		if t.HeldAt != nil {
+			since = " since " + t.HeldAt.UTC().Format("15:04 MST")
+		}
+		c.Message = fmt.Sprintf("%s is held by %s%s. Don't retry. Pick another task, or comment on this one.",
+			t.Key(), MemberName(t.Holder), since)
 	case t.Assignee != "" && t.Assignee != actor:
 		c.Message = fmt.Sprintf("%s is assigned to %s. Don't retry. Comment on it if you think it should move to you.",
 			t.Key(), MemberName(t.Assignee))
