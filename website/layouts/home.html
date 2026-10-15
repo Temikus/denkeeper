@@ -10,7 +10,7 @@
     <h1 class="dk-headline">{{ .Params.headline | safeHTML }}</h1>
     <p class="dk-lead">{{ .Params.lead }}</p>
     <div class="dk-install">
-      {{- highlight "curl -fsSL https://get.denkeeper.io | sh" "bash" "" -}}
+      {{- highlight "curl -fsSL https://denkeeper.io/install.sh | sh" "bash" "" -}}
     </div>
     <div class="dk-cta">
       <a class="btn btn-primary rounded-pill dk-btn" href="/docs/getting-started/installation/">Read the docs</a>
