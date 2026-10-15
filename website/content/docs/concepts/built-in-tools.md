@@ -99,6 +99,17 @@ Reads are allowed at every tier; writes are denied in `restricted`.
 
 The namespaces an agent chooses are its own. Treat any convention you suggest as a starting point rather than a schema it must obey.
 
+## Tasks
+
+Tasks are how work moves between your agents, outside harnesses such as Claude Code, and you. Each agent gets `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, and `task_update`, and acts on tasks as itself.
+
+- **Delegating** is filing a task with an assignee. Passing `parent` makes it a subtask of the agent's own task; subtasks nest at most three deep.
+- **Claiming** with `task_checkout` is atomic: one agent holds a task at a time. A refused claim names the holder, and the agent should move on rather than retry.
+- **Review**: the filer reviews by default, so an assignee moves finished work to `review` and the filer closes it.
+- **Unassigned** tasks are plain to-dos that anyone may claim.
+
+Reads (`task_list`, `task_get`) work at every tier; the rest are denied in `restricted`. Outside harnesses get the same tools over the [MCP server](/docs/guides/mcp-server/).
+
 ## Browser automation
 
 Off by default. When enabled, the agent drives a real browser running in a container.

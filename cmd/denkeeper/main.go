@@ -844,6 +844,7 @@ type agentBuildCtx struct {
 	auditor         audit.Emitter
 	auditStore      audit.Store // nil when [audit] is disabled
 	evalStore       *eval.Store
+	tasks           *task.Service
 	scriptSem       chan struct{}
 	logger          *slog.Logger
 }
@@ -880,6 +881,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
 		KVStore:        abc.kvStore,
+		Tasks:          abc.tasks,
 
 		KVListMaxBytes:       abc.cfg.KV.ListMaxBytes,
 		KVListValueHeadBytes: abc.cfg.KV.ListValueHeadBytes,
@@ -1840,6 +1842,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Auditor:         a.auditor,
 		AuditStore:      a.auditStore,
 		EvalStore:       a.evalStore,
+		Tasks:           a.tasks,
 		ConfigPath:      a.path,
 		Version:         version,
 		Logger:          a.logger,
@@ -2196,6 +2199,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		auditor:         auditor,
 		auditStore:      auditReader(st.auditStore),
 		evalStore:       st.evalStore,
+		tasks:           tasks,
 		scriptSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrent),
 		logger:          logger,
 	}

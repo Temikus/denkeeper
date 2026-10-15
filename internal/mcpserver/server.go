@@ -28,6 +28,8 @@ func New(cfg config.APIMCPServerConfig, deps Deps) *Server {
 	instructions := "Denkeeper personal AI agent. " +
 		"Use the chat tool to send messages to agents. " +
 		"Use agent_list to discover available agents. " +
+		"Use task_list to find work assigned to you (your API key's name is who you are on tasks); " +
+		"claim a task with task_checkout before working on it, and never retry a refused claim. " +
 		"All tools require an API key with appropriate scopes."
 
 	s := &Server{
@@ -199,4 +201,5 @@ func (s *Server) registerTools() {
 	s.registerAuditTools()
 	s.registerDeciderTools()
 	s.registerEvalTools()
+	s.registerTaskTools()
 }

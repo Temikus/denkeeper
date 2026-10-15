@@ -23,6 +23,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -94,6 +95,10 @@ type Deps struct {
 
 	// KVStore is the per-agent key-value store. If nil, kv_* tools are disabled.
 	KVStore kv.Store
+
+	// Tasks is the shared task service. If nil, task_* tools are disabled.
+	// The agent acts on tasks as "agent:<AgentName>".
+	Tasks *task.Service
 
 	// KVListMaxBytes caps the total serialised size of a kv_list response.
 	// 0 or negative falls back to defaultKVListMaxBytes. Sourced from
