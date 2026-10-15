@@ -64,6 +64,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Evals | `eval_pending`, `eval_get_pair`, `eval_verdict`, `eval_summary`, `eval_run_status` |
 | Telemetry | `cost_summary`, `telemetry_summary` |
 | KV | `kv_get`, `kv_set`, `kv_list`, `kv_delete` |
+| Tasks | `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, `task_update` |
 | Safety | `panic`, `panic_status`, `resume` |
 
 `agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `supervisor_decider`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. `supervisor_decider` gives the [decision model](/docs/concepts/deciders/)'s name, model, mode, and thresholds; `agent_list` shows its name only. Supervisor and decider information is read from live wiring, so it reflects the state after a config reload or an API change rather than what the file said at startup.
@@ -81,6 +82,8 @@ They are also journaled. Before any skill write, the file's exact prior bytes ar
 **Answering questions about the running system.** `audit_events`, `telemetry_summary`, and `cost_summary` turn "why did the 7am job cost so much yesterday" into a question you can just ask.
 
 **Judging an eval run.** The `eval_*` tools let a client work a finished run's queue of blinded A/B pairs and decide whether a candidate model is an upgrade. `eval_get_pair` withholds everything that would identify a side — model, provider, variant name, cost, latency, usage — so the judge decides on the responses and their tool traces alone; `eval_summary` unblinds and applies the decision rule. `eval_verdict` is the only writer among them and it writes verdicts only: a key scoped `eval:read,eval:write` can judge a run but cannot start one, which is the right shape for a judging key since runs spend real tokens. The repo's `/judge-eval` skill carries the rubric and drives the loop. See [Evals](/docs/concepts/evals/) for the loop these tools sit inside.
+
+**Joining the den as a member.** The `task_*` tools let a harness like Claude Code take work from your agents and hand work back. The client's API key name is who it is on tasks, so create a key named for the harness with `tasks:read,tasks:write` (`denkeeper keys create claude-code --scopes tasks:read,tasks:write`). It finds its work with `task_list`, claims a task with `task_checkout` before starting, comments as it goes, and moves the task to review or done with `task_update`. A refused claim names who holds the task; the client should pick other work rather than retry. Den agents get the same six tools with the same names, so either side can file a task for the other.
 
 **Resolving approvals from wherever you are.** `approval_list` and `approval_resolve` mean a client already on your screen can clear a queue without opening the dashboard.
 

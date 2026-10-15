@@ -54,6 +54,11 @@ func (s *Server) registerTools() {
 		s.registerKVTools()
 	}
 
+	// Task tools (registered only when the task service and an agent name are provided).
+	if s.deps.Tasks != nil && s.deps.AgentName != "" {
+		s.registerTaskTools()
+	}
+
 	// Browser profile tools (registered only when browser automation is enabled).
 	if s.deps.BrowserProfiles != nil {
 		s.registerBrowserTools()

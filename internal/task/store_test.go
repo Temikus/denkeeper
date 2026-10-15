@@ -481,6 +481,10 @@ func TestList_FiltersAndClosedWindow(t *testing.T) {
 	if len(mine) != 1 || mine[0].ID != a.ID || mine[0].ChildrenTotal != 1 {
 		t.Errorf("pamela's = %+v", mine)
 	}
+	nobody, _ := s.List(ctx, Filter{Unassigned: true})
+	if len(nobody) != 1 || nobody[0].Title != "child" {
+		t.Errorf("unassigned = %+v", nobody)
+	}
 	top, _ := s.List(ctx, Filter{TopLevel: true})
 	if len(top) != 2 {
 		t.Errorf("top-level = %d, want 2", len(top))

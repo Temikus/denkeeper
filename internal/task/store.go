@@ -210,6 +210,7 @@ func (s *Store) Detail(ctx context.Context, id int64) (*Detail, error) {
 type Filter struct {
 	Statuses    []string
 	Assignee    string
+	Unassigned  bool // only tasks nobody is assigned to; ignored when Assignee is set
 	ParentID    *int64
 	TopLevel    bool
 	ClosedSince time.Time
@@ -229,6 +230,8 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Task, error) {
 	if f.Assignee != "" {
 		where = append(where, "t.assignee = ?")
 		args = append(args, f.Assignee)
+	} else if f.Unassigned {
+		where = append(where, "t.assignee = ''")
 	}
 	if f.ParentID != nil {
 		where = append(where, "t.parent_id = ?")

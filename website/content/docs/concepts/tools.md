@@ -76,6 +76,7 @@ Each agent has access to a built-in MCP server that exposes Denkeeper's own conf
 - **Tools**: `tool_list`, `tool_add`, `tool_remove`, `tool_restart`
 - **Plugins**: `plugin_list`, `plugin_add`, `plugin_remove`
 - **KV store**: `kv_get`, `kv_set`, `kv_delete`, `kv_list`, `kv_set_nx`
+- **Tasks**: `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, `task_update`
 - **Channels**: `channel_list`, `channel_switch`, `channel_info`
 - **Persona**: `persona_get`, `persona_update`, `persona_memory_manage`
 - **Browser profiles**: `browser_profile_list`, `browser_profile_info`, `browser_profile_clear`, `browser_profile_delete`
