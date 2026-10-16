@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store'
-import { api } from './api.js'
+
+export const RETRY_MS = 15000
 
 /**
  * Server features that are off unless the config turns them on. Read from
@@ -8,11 +9,21 @@ import { api } from './api.js'
  */
 export const features = writable({ tasks: false })
 
+let retry = null
+
+/**
+ * Reads /health. A failed read is not "off": the store keeps its last value
+ * and the check runs again after RETRY_MS until one succeeds.
+ */
 export async function refreshFeatures() {
+  clearTimeout(retry)
+  retry = null
   try {
-    const h = await api.health()
+    const res = await fetch('/api/v1/health')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const h = await res.json()
     features.set({ tasks: !!h?.tasks_enabled })
   } catch {
-    // Server unreachable: keep what we last knew.
+    retry = setTimeout(refreshFeatures, RETRY_MS)
   }
 }

@@ -191,6 +191,23 @@ describe('Task detail', () => {
     await waitFor(() => expect(patches[1]).toEqual({ status: 'blocked', reason: 'Need an app password' }))
   })
 
+  test('pressing Enter twice on the reason sends one change', async () => {
+    let calls = 0
+    server.use(http.patch('/api/v1/tasks/:id', async () => {
+      calls++
+      await new Promise(r => setTimeout(r, 50))
+      return HttpResponse.json(taskDetail.task)
+    }))
+    render(Tasks)
+    await fireEvent.change(await screen.findByLabelText('Status'), { target: { value: 'blocked' } })
+    const input = screen.getByLabelText("What's in the way?")
+    await fireEvent.input(input, { target: { value: 'No key' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await vi.advanceTimersByTimeAsync(100)
+    await waitFor(() => expect(calls).toBe(1))
+  })
+
   test('a refused change shows why and puts the select back', async () => {
     server.use(http.patch('/api/v1/tasks/:id', () => HttpResponse.json({ error: 'DK-131 needs review by human.' }, { status: 400 })))
     render(Tasks)

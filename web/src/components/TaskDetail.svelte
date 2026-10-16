@@ -103,7 +103,7 @@
   }
 
   async function markBlocked() {
-    if (!reason.trim()) return
+    if (!reason.trim() || saving !== '') return
     if (await patch('status', { status: 'blocked', reason: reason.trim() })) {
       blocking = false
       reason = ''
