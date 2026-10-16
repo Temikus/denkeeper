@@ -170,12 +170,11 @@ func TestTasks_HeadlessCheckInClaimsWork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs, err := h.Memory.GetMessages(ctx, "sched:check-tasks-default", 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) == 0 {
-		t.Fatal("no turn stored for the headless run")
+	// The claim proves the turn ran; three model calls are the two tool rounds
+	// and the reply. (The harness memory store is per-connection in-memory
+	// SQLite, so reading it from the test goroutine can see an empty database.)
+	if n := h.MockLLM.CallCount(); n < 3 {
+		t.Errorf("model calls = %d, want at least 3", n)
 	}
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
