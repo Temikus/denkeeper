@@ -44,6 +44,7 @@ type Config struct {
 	Web       WebConfig               `toml:"web"`
 	Script    ScriptConfig            `toml:"script"`
 	Decide    DecideConfig            `toml:"decide"`
+	Tasks     TasksConfig             `toml:"tasks"`
 	Skills    SkillsConfig            `toml:"skills"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
@@ -337,6 +338,13 @@ type DecideConfig struct {
 	Enabled *bool `toml:"enabled"`
 	// Decider is the [[llm.deciders]] entry the tool calls. Empty = no tool.
 	Decider string `toml:"decider"`
+}
+
+// TasksConfig controls the shared task board: the task REST endpoints, the
+// task_* MCP tools on both servers, and the dashboard's Tasks page. Off by
+// default while the feature settles. Changing it needs a restart.
+type TasksConfig struct {
+	Enabled bool `toml:"enabled"`
 }
 
 // DecideEnabled reports whether the decide tool is active: a decider must be

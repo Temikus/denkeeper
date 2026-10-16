@@ -521,6 +521,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
 	}
+	if s.deps.Tasks != nil {
+		resp["tasks_enabled"] = true
+	}
 	if cfg := s.appConfig(); cfg.API.IsMCPServerEnabled() {
 		resp["mcp_server_enabled"] = true
 		resp["mcp_server_endpoint"] = mcpServerEndpoint(cfg)

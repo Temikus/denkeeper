@@ -3,14 +3,15 @@
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
   import { attention } from '../attention.js'
-  import { sections } from '../navItems.js'
+  import { visibleSections } from '../navItems.js'
+  import { features } from '../features.js'
 
   // Pages that already have a tab in the bottom bar.
   const TABS = new Set(['overview', 'chat', 'approvals', 'agents'])
 
-  const groups = sections
+  const groups = $derived(visibleSections($features)
     .map(s => ({ ...s, items: s.items.filter(i => !TABS.has(i.id)) }))
-    .filter(s => s.items.length > 0)
+    .filter(s => s.items.length > 0))
 
   // The first group is short and used daily, so it is always listed; the rest
   // open in place.

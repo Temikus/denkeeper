@@ -74,7 +74,7 @@ func viewsOf(ts []task.Task) []taskView {
 
 func (s *Server) tasksRequired(w http.ResponseWriter) bool {
 	if s.deps.Tasks == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tasks not configured"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tasks are off: set [tasks] enabled = true in the config and restart"})
 		return false
 	}
 	return true
@@ -124,7 +124,7 @@ func taskIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // @Param limit query int false "Maximum tasks (default and cap 500)"
 // @Success 200 {object} object "Object with a tasks array"
 // @Failure 400 {object} map[string]string "Invalid filter"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks [get]
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -198,7 +198,7 @@ func (s *Server) taskFilter(r *http.Request) (task.Filter, error) {
 // @Success 201 {object} taskView "The created task"
 // @Failure 400 {object} map[string]string "Invalid input or a broken task rule"
 // @Failure 404 {object} map[string]string "Parent task not found"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks [post]
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -226,7 +226,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} object "Object with a members array"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks/members [get]
 func (s *Server) handleTaskMembers(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -250,7 +250,7 @@ func (s *Server) handleTaskMembers(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} taskDetailView "The task with its thread"
 // @Failure 400 {object} map[string]string "Invalid id"
 // @Failure 404 {object} map[string]string "Task not found"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks/{id} [get]
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -285,7 +285,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} taskView "The updated task"
 // @Failure 400 {object} map[string]string "Invalid input or a broken task rule"
 // @Failure 404 {object} map[string]string "Task not found"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks/{id} [patch]
 func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -322,7 +322,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 // @Success 201 {object} task.Event "The comment event"
 // @Failure 400 {object} map[string]string "Empty or oversized comment"
 // @Failure 404 {object} map[string]string "Task not found"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks/{id}/comments [post]
 func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {
@@ -355,7 +355,7 @@ func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} taskView "The released task"
 // @Failure 400 {object} map[string]string "The task isn't held"
 // @Failure 404 {object} map[string]string "Task not found"
-// @Failure 503 {object} map[string]string "Tasks not configured"
+// @Failure 503 {object} map[string]string "Tasks are off ([tasks] enabled = false)"
 // @Router /tasks/{id}/release [post]
 func (s *Server) handleReleaseTask(w http.ResponseWriter, r *http.Request) {
 	if !s.tasksRequired(w) {

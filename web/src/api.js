@@ -138,6 +138,15 @@ export const api = {
   sessionToolCalls: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/tool-calls`),
   sessionSkills: id => apiFetch(`/api/v1/sessions/${encodeURIComponent(id)}/skills`),
 
+  // Tasks ([tasks] enabled). {id} accepts 131 or DK-131.
+  tasks: () => apiFetch('/api/v1/tasks').then(r => r.tasks || []),
+  task: id => apiFetch(`/api/v1/tasks/${encodeURIComponent(id)}`),
+  taskMembers: () => apiFetch('/api/v1/tasks/members').then(r => r.members || []),
+  createTask: body => apiFetch('/api/v1/tasks', { method: 'POST', body: JSON.stringify(body) }),
+  updateTask: (id, body) => apiFetch(`/api/v1/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  commentTask: (id, body) => apiFetch(`/api/v1/tasks/${encodeURIComponent(id)}/comments`, { method: 'POST', body: JSON.stringify({ body }) }),
+  releaseTask: id => apiFetch(`/api/v1/tasks/${encodeURIComponent(id)}/release`, { method: 'POST' }),
+
   // Approvals
   approvals: (status = '') => apiFetch(`/api/v1/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`),
   approval: id => apiFetch(`/api/v1/approvals/${encodeURIComponent(id)}`),

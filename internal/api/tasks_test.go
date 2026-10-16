@@ -297,3 +297,47 @@ func TestTasks_InternalErrorIsGeneric(t *testing.T) {
 		t.Errorf("500 body = %d %s, want a generic message", rec.Code, rec.Body.String())
 	}
 }
+
+// The dashboard reads tasks_enabled from /health to decide whether to show
+// the Tasks page, and llms.txt lists task endpoints only when they answer.
+func TestTasks_OffHidesHealthFlagAndLLMsTxt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		deps Deps
+		want bool
+	}{
+		{"off", testDeps(), false},
+		{"on", testDepsWithTasks(t), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(testConfig(), tc.deps, testLogger())
+
+			rec := httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+			var health map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+				t.Fatal(err)
+			}
+			if got := health["tasks_enabled"] == true; got != tc.want {
+				t.Errorf("health tasks_enabled = %v, want %v", health["tasks_enabled"], tc.want)
+			}
+
+			rec = httptest.NewRecorder()
+			srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/llms.txt", nil))
+			if got := strings.Contains(rec.Body.String(), "/api/v1/tasks"); got != tc.want {
+				t.Errorf("llms.txt lists tasks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTasks_OffAnswersWithHowToTurnOn(t *testing.T) {
+	srv := New(testConfig(allScopesKey()), testDeps(), testLogger())
+	rec := doTaskRequest(t, srv, http.MethodGet, "/api/v1/tasks", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "[tasks] enabled = true") {
+		t.Errorf("body = %s, want it to say how to turn tasks on", rec.Body)
+	}
+}

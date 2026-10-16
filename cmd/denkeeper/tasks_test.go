@@ -6,6 +6,7 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/api"
 	"github.com/Temikus/denkeeper/internal/config"
+	"github.com/Temikus/denkeeper/internal/task"
 )
 
 func TestTaskDirectory_AgentsAndTaskKeys(t *testing.T) {
@@ -17,7 +18,9 @@ func TestTaskDirectory_AgentsAndTaskKeys(t *testing.T) {
 	if _, _, err := ks.Create(ctx, "claude-code", []string{"tasks:read", "tasks:write"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ks.Create(ctx, "dashboard", []string{"admin"}); err != nil {
+	// The dashboard key lists tasks scopes too, since REST matches scopes
+	// exactly, but it is the operator, not a member.
+	if _, _, err := ks.Create(ctx, "dashboard", []string{"admin", "tasks:read", "tasks:write"}); err != nil {
 		t.Fatal(err)
 	}
 	gone, _, err := ks.Create(ctx, "old-harness", []string{"tasks:write"})
@@ -56,5 +59,21 @@ func TestTaskDirectory_AgentsAndTaskKeys(t *testing.T) {
 		if ids[i] != want[i] {
 			t.Errorf("member %d = %q, want %q", i, ids[i], want[i])
 		}
+	}
+}
+
+func TestNewTaskService_FollowsFlag(t *testing.T) {
+	st, err := task.NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	if svc := newTaskService(&config.Config{}, st, nil, nil); svc != nil {
+		t.Error("service built with [tasks] off; want nil so tasks stay hidden")
+	}
+	on := &config.Config{Tasks: config.TasksConfig{Enabled: true}}
+	if svc := newTaskService(on, st, nil, nil); svc == nil {
+		t.Error("no service with [tasks] enabled = true")
 	}
 }
