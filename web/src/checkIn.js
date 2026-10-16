@@ -43,8 +43,9 @@ export function agentOf(memberID) {
 }
 
 /**
- * Map of agent name to its check-in schedule, from GET /schedules. null means
- * the schedules couldn't be read, which is not the same as "none set up".
+ * Map of agent name to its check-in schedule, from GET /schedules, paused ones
+ * included (check `enabled`). null means the schedules couldn't be read, which
+ * is not the same as "none set up".
  */
 export async function loadCheckIns() {
   try {

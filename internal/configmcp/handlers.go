@@ -234,13 +234,14 @@ func (s *Server) registerScheduleTools() {
 					"name":         {"type": "string",  "description": "Unique schedule identifier"},
 					"schedule":     {"type": "string",  "description": "Timing expression: @daily, @every 5m, or 5-field cron"},
 					"skill":        {"type": "string",  "description": "Skill name to invoke when the schedule fires"},
-					"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context."},
+					"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context. Required unless headless."},
 					"session_mode": {"type": "string",  "description": "shared or isolated (default: isolated)"},
 					"session_tier": {"type": "string",  "description": "Permission tier override for this schedule"},
 					"tags":         {"type": "array", "items": {"type": "string"}, "description": "Freeform labels"},
-					"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"}
+					"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"},
+					"headless":     {"type": "boolean", "description": "Run with no chat: the turn is stored and nothing is sent. Leave channel empty. Use it for work that reports elsewhere, such as checking your tasks."}
 				},
-				"required": ["name", "schedule", "channel"]
+				"required": ["name", "schedule"]
 			}`),
 		}, s.handleScheduleAdd)
 
@@ -257,7 +258,8 @@ func (s *Server) registerScheduleTools() {
 					"session_mode": {"type": "string",  "description": "shared or isolated"},
 					"session_tier": {"type": "string",  "description": "Permission tier override"},
 					"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
-					"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"}
+					"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"},
+					"headless":     {"type": "boolean", "description": "Run with no chat (channel must then be empty)"}
 				},
 				"required": ["name"]
 			}`),
@@ -873,6 +875,7 @@ type scheduleAddInput struct {
 	SessionTier string   `json:"session_tier"`
 	Tags        []string `json:"tags"`
 	Enabled     *bool    `json:"enabled"`
+	Headless    bool     `json:"headless"`
 }
 
 func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
@@ -886,20 +889,10 @@ func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
 	if strings.TrimSpace(input.Schedule) == "" {
 		return input, "schedule is required"
 	}
-	if strings.TrimSpace(input.Channel) == "" {
-		return input, "channel is required"
-	}
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return input, "invalid schedule expression: " + err.Error()
 	}
-	if config.IsChannelRef(input.Channel) {
-		if _, ok := config.ParseChannelRef(input.Channel); !ok {
-			return input, fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", input.Channel)
-		}
-	} else if _, _, ok := config.ParseChannel(input.Channel); !ok {
-		return input, fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
-	}
-	return input, ""
+	return input, ValidateScheduleDelivery(input.Channel, input.Headless)
 }
 
 func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -936,7 +929,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	payload, err := BuildSchedulePayload(input.Name, input.Schedule, input.Skill,
-		input.Channel, sessionMode, input.SessionTier, input.Tags, enabled)
+		input.Channel, sessionMode, input.SessionTier, input.Tags, enabled, input.Headless)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
 	}
@@ -950,6 +943,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
+		Headless:    input.Headless,
 		Tags:        input.Tags,
 		Enabled:     enabled,
 	}
@@ -1204,7 +1198,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
-		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled)
+		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled, cfg.Headless)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
 	}
@@ -2063,7 +2057,7 @@ func BuildSkillPayload(name, description, version string, triggers []string, bod
 
 // BuildSchedulePayload marshals the schedule config to TOML for storage as
 // approval payload.
-func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled bool) (string, error) {
+func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled, headless bool) (string, error) {
 	type payload struct {
 		Name        string   `toml:"name"`
 		Schedule    string   `toml:"schedule"`
@@ -2073,6 +2067,7 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 		SessionTier string   `toml:"session_tier,omitempty"`
 		Tags        []string `toml:"tags,omitempty"`
 		Enabled     bool     `toml:"enabled"`
+		Headless    bool     `toml:"headless,omitempty"`
 	}
 	data, err := toml.Marshal(payload{
 		Name:        name,
@@ -2083,6 +2078,7 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 		SessionTier: sessionTier,
 		Tags:        tags,
 		Enabled:     enabled,
+		Headless:    headless,
 	})
 	if err != nil {
 		return "", err

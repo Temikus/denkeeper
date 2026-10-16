@@ -63,8 +63,12 @@ func TestValidateScheduleCreateInput_MissingChannel(t *testing.T) {
 		Name:     "test",
 		Schedule: "0 9 * * *",
 	}
-	if msg := validateScheduleCreateInput(input); msg != "channel is required" {
-		t.Errorf("expected 'channel is required', got %q", msg)
+	if msg := validateScheduleCreateInput(input); msg != "channel is required unless the schedule is headless" {
+		t.Errorf("expected the channel-required message, got %q", msg)
+	}
+	input.Headless = true
+	if msg := validateScheduleCreateInput(input); msg != "" {
+		t.Errorf("headless schedule with no channel rejected: %q", msg)
 	}
 }
 

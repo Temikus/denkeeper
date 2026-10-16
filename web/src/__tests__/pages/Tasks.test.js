@@ -313,8 +313,27 @@ describe('Task detail', () => {
       })),
     )
     render(Tasks)
-    expect(await screen.findByText('scout picks this up at its next check-in.')).toBeInTheDocument()
+    expect(await screen.findByText('scout works on this at its next check-in.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Check every 30 min' })).toBeNull()
+  })
+
+  test('a paused check-in says so instead of promising a pickup', async () => {
+    server.use(http.get('/api/v1/schedules', () => HttpResponse.json([
+      { name: 'check-tasks-pamela', agent: 'pamela', skill: 'check-tasks', headless: true, enabled: false },
+    ])))
+    render(Tasks)
+    expect(await screen.findByText("pamela's check-in is paused. Resume it on the Schedules page.")).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Check every 30 min' })).toBeNull()
+  })
+
+  test('no check-in message for a task the check-in skill would not take', async () => {
+    server.use(http.get('/api/v1/tasks/:id', () => HttpResponse.json({
+      ...taskDetail,
+      task: { ...taskDetail.task, status: 'review', holder: '' },
+    })))
+    render(Tasks)
+    await screen.findByRole('heading', { name: 'Add Fastmail to the weekly digest' })
+    expect(screen.queryByText(/check-in|check its tasks/)).toBeNull()
   })
 
   test('no check-in prompt when the schedules can\'t be read', async () => {

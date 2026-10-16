@@ -21,11 +21,12 @@ type scheduleCreateInput struct {
 	Schedule    string   `json:"schedule" jsonschema:"Cron expression (e.g. '*/5 * * * *')"`
 	Agent       string   `json:"agent,omitempty" jsonschema:"Agent name to run the schedule on. Omit for default agent."`
 	Skill       string   `json:"skill,omitempty" jsonschema:"Skill to trigger when the schedule fires"`
-	Channel     string   `json:"channel" jsonschema:"Target channel in adapter:externalID or @channelname format"`
+	Channel     string   `json:"channel,omitempty" jsonschema:"Target channel in adapter:externalID or @channelname format. Required unless headless"`
 	SessionMode string   `json:"session_mode,omitempty" jsonschema:"Session mode: isolated (default) or shared"`
 	SessionTier string   `json:"session_tier,omitempty" jsonschema:"Permission tier override for this schedule"`
 	Tags        []string `json:"tags,omitempty" jsonschema:"Tags for categorization"`
 	Enabled     *bool    `json:"enabled,omitempty" jsonschema:"Whether the schedule is enabled (default true)"`
+	Headless    bool     `json:"headless,omitempty" jsonschema:"Run with no chat: the turn is stored and nothing is sent. Leave channel empty"`
 }
 
 type scheduleUpdateInput struct {
@@ -38,6 +39,7 @@ type scheduleUpdateInput struct {
 	Agent       *string  `json:"agent,omitempty" jsonschema:"New agent name to run the schedule"`
 	Tags        []string `json:"tags,omitempty" jsonschema:"New tags (replaces existing)"`
 	Enabled     *bool    `json:"enabled,omitempty" jsonschema:"Enable or disable"`
+	Headless    *bool    `json:"headless,omitempty" jsonschema:"Run with no chat (channel must then be empty)"`
 }
 
 type scheduleDeleteInput struct {
@@ -157,6 +159,7 @@ func (s *Server) handleScheduleCreate(ctx context.Context, _ *mcp.CallToolReques
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
+		Headless:    input.Headless,
 		Tags:        input.Tags,
 		Enabled:     enabled,
 	}
@@ -210,6 +213,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, _ *mcp.CallToolReques
 		Agent:       input.Agent,
 		Tags:        input.Tags,
 		Enabled:     input.Enabled,
+		Headless:    input.Headless,
 	})
 	if errMsg != "" {
 		return toolError(errMsg), nil, nil
@@ -286,20 +290,10 @@ func validateScheduleCreateInput(input scheduleCreateInput) string {
 	if strings.TrimSpace(input.Schedule) == "" {
 		return "schedule is required"
 	}
-	if strings.TrimSpace(input.Channel) == "" {
-		return "channel is required"
-	}
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return "invalid schedule expression: " + err.Error()
 	}
-	if config.IsChannelRef(input.Channel) {
-		if _, ok := config.ParseChannelRef(input.Channel); !ok {
-			return fmt.Sprintf("channel %q is an invalid channel reference", input.Channel)
-		}
-	} else if _, _, ok := config.ParseChannel(input.Channel); !ok {
-		return fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
-	}
-	return ""
+	return configmcp.ValidateScheduleDelivery(input.Channel, input.Headless)
 }
 
 func (s *Server) rollbackSchedule(entry scheduler.Entry, e *agent.Engine) error {

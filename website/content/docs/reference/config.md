@@ -518,7 +518,7 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | `agent` | string | `"default"` | Target agent |
 | `session_tier` | string | `"supervised"` | Permission tier for this schedule |
 | `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`). Without one, a schedule does nothing unless it is `headless` |
-| `headless` | bool | `false` | Run with no chat: the turn runs and is kept in Sessions and the Turn inspector, and nothing is sent. Leave `channel` empty. Used by task check-ins |
+| `headless` | bool | `false` | Run with no chat: the turn runs and is kept in Sessions (and in the Turn inspector when `[eval] capture` is on), and nothing is sent. Leave `channel` empty. Used by task check-ins |
 | `tags` | string[] | — | Freeform labels |
 | `enabled` | bool | `true` | Enable/disable without removing |
 | `session_mode` | string | `"shared"` | `"shared"` reuses the target channel's existing conversation history; `"isolated"` starts a fresh conversation with no prior context for each run. Note: schedules created via `POST /schedules` default to `"isolated"` instead — the default differs by creation path |

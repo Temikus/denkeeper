@@ -90,9 +90,10 @@ export function assignHint(id, members = [], checkIns = null) {
   if (id === 'human') return 'Lands on your list.'
   const name = memberName(id, members)
   if (id.startsWith('agent:') && checkIns) {
-    return checkIns.has(id.slice('agent:'.length))
-      ? `${name} picks it up at its next check-in.`
-      : `${name} doesn't check its tasks yet, so it won't pick this up.`
+    const s = checkIns.get(id.slice('agent:'.length))
+    if (!s) return `${name} doesn't check its tasks yet, so it won't pick this up.`
+    if (s.enabled === false) return `${name}'s check-in is paused, so it won't pick this up.`
+    return `${name} picks it up at its next check-in.`
   }
   return `${name} picks it up when it next checks its tasks.`
 }
