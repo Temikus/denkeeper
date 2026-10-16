@@ -1075,13 +1075,13 @@ List tasks newest first: every open task, plus tasks closed within `?closed_with
 
 **Scope:** `tasks:write`
 
-File a task. Body: `{"title": "...", "body": "...", "assignee": "agent:pamela", "parent_id": 12, "no_review": false}`. Only `title` is required. An unassigned task waits in To do and anyone may claim it. Unless `no_review` is set, the operator reviews the task before it is done. Returns `201` with the task.
+File a task. Body: `{"title": "...", "body": "...", "assignee": "agent:pamela", "parent_id": 12, "no_review": false}`. Only `title` is required. An unassigned task waits in To do and anyone may claim it. Unless `no_review` is set, the filer reviews the task before it is done; a task assigned to its own filer has no reviewer. Returns `201` with the task.
 
 ### `GET /api/v1/tasks/members`
 
 **Scope:** `tasks:read`
 
-Everyone a task can be assigned to: the operator, each den agent (`agent:<name>`), and each API key with `tasks:write` (`ext:<key name>`).
+Everyone a task can be assigned to: the operator, each den agent (`agent:<name>`), and each eligible API key with `tasks:write` (`ext:<key name>`). Admin-scoped and revoked keys, and keys with an empty or duplicate name, are omitted.
 
 ### `GET /api/v1/tasks/{id}`
 
@@ -1107,7 +1107,7 @@ Add a comment to the thread. Body: `{"body": "..."}`. Closed tasks take comments
 
 Drop the hold on a claimed task and return in-progress work to To do; the assignee stays. The operator can release any claim, another key only its own. Returns `400` if the task is not held.
 
-A lost claim answers `409` with a `holder` field naming who has the task; a broken rule or bad input answers `400` with an agent-readable message.
+A broken rule or bad input answers `400` with an agent-readable message.
 
 ## Auth Endpoints
 
