@@ -81,13 +81,21 @@ export function memberGroups(members = []) {
 }
 
 /**
- * What assigning to this member will do, in one line. Nothing wakes an agent
- * yet: den agents and harnesses both find their work when they next check.
+ * What assigning to this member will do, in one line. Nothing wakes an agent:
+ * a den agent finds work at its check-in, a harness when it next looks.
+ * checkIns maps agent name to its check-in schedule; null means unknown.
  */
-export function assignHint(id, members = []) {
+export function assignHint(id, members = [], checkIns = null) {
   if (!id) return 'Waits in To do. Anyone may claim it.'
   if (id === 'human') return 'Lands on your list.'
-  return `${memberName(id, members)} picks it up when it next checks its tasks.`
+  const name = memberName(id, members)
+  if (id.startsWith('agent:') && checkIns) {
+    const s = checkIns.get(id.slice('agent:'.length))
+    if (!s) return `${name} doesn't check its tasks yet, so it won't pick this up.`
+    if (s.enabled === false) return `${name}'s check-in is paused, so it won't pick this up.`
+    return `${name} picks it up at its next check-in.`
+  }
+  return `${name} picks it up when it next checks its tasks.`
 }
 
 /**

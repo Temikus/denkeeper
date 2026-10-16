@@ -53,5 +53,8 @@ describe('tasks display rules', () => {
   test('assign hint never promises an agent starts now', () => {
     expect(assignHint('', members)).toMatch(/Anyone may claim/)
     expect(assignHint('agent:pamela', members)).toBe('pamela picks it up when it next checks its tasks.')
+    expect(assignHint('agent:pamela', members, new Map())).toBe("pamela doesn't check its tasks yet, so it won't pick this up.")
+    expect(assignHint('agent:pamela', members, new Map([['pamela', { enabled: false }]]))).toBe("pamela's check-in is paused, so it won't pick this up.")
+    expect(assignHint('agent:pamela', members, new Map([['pamela', { enabled: true }]]))).toBe('pamela picks it up at its next check-in.')
   })
 })

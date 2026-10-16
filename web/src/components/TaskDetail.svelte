@@ -9,11 +9,14 @@
   } from '../tasks.js'
   import ErrorBanner from './ErrorBanner.svelte'
   import TasksOff from './TasksOff.svelte'
+  import CheckInSetup from './CheckInSetup.svelte'
+  import { agentOf, loadCheckIns } from '../checkIn.js'
 
   let { id } = $props()
 
   let detail = $state(null)
   let members = $state([])
+  let checkIns = $state(null)
   let loading = $state(true)
   let off = $state(false)
   let missing = $state(false)
@@ -41,14 +44,27 @@
   }
 
   const t = $derived(detail?.task)
+  // Whether the den assignee's check-in will work on this task: 'set', 'paused'
+  // or 'none', or '' when it doesn't apply or can't be known. The check-tasks
+  // skill takes To do tasks and In progress tasks the agent already holds.
+  const checkInState = $derived.by(() => {
+    const agent = agentOf(t?.assignee)
+    if (!agent || !checkIns) return ''
+    const eligible = t.status === 'todo' || (t.status === 'in_progress' && t.holder === t.assignee)
+    if (!eligible) return ''
+    const s = checkIns.get(agent)
+    if (!s) return 'none'
+    return s.enabled === false ? 'paused' : 'set'
+  })
   const groups = $derived(memberGroups(members))
   const kindLabel = { agent: 'den agent', external: 'external' }
 
   async function load() {
     try {
-      const [d, ms] = await Promise.all([api.task(id), api.taskMembers()])
+      const [d, ms, ci] = await Promise.all([api.task(id), api.taskMembers(), loadCheckIns()])
       detail = d
       members = ms
+      checkIns = ci
       error = ''
       missing = false
       off = false
@@ -282,6 +298,16 @@
               </optgroup>
             </select>
           </dd>
+          {#if checkInState === 'none'}
+            <dd class="extra">
+              <span class="hint">{agentOf(t.assignee)} doesn't check its tasks yet, so it won't pick this up.</span>
+              <CheckInSetup agent={agentOf(t.assignee)} {checkIns} ondone={async () => { checkIns = await loadCheckIns() }} />
+            </dd>
+          {:else if checkInState === 'paused'}
+            <dd class="extra"><span class="hint">{agentOf(t.assignee)}'s check-in is paused. Resume it on the Schedules page.</span></dd>
+          {:else if checkInState === 'set'}
+            <dd class="extra"><span class="hint">{agentOf(t.assignee)} works on this at its next check-in.</span></dd>
+          {/if}
         </div>
         <div class="field">
           <dt>Held by</dt>

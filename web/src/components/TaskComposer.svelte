@@ -2,8 +2,10 @@
   import { onMount } from 'svelte'
   import { api } from '../api.js'
   import { memberGroups, assignHint } from '../tasks.js'
+  import { agentOf } from '../checkIn.js'
+  import CheckInSetup from './CheckInSetup.svelte'
 
-  let { members = [], onfiled = () => {}, oncancel = () => {} } = $props()
+  let { members = [], checkIns = null, oncheckin = () => {}, onfiled = () => {}, oncancel = () => {} } = $props()
 
   let title = $state('')
   let body = $state('')
@@ -15,7 +17,7 @@
   let titleEl
 
   const groups = $derived(memberGroups(members))
-  const hint = $derived(assignHint(assignee, members))
+  const hint = $derived(assignHint(assignee, members, checkIns))
 
   onMount(() => titleEl?.focus())
 
@@ -49,7 +51,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Esc anywhere in the form cancels) -->
-<form class="composer" aria-label="New task" onsubmit={(e) => { e.preventDefault(); file() }} {onkeydown}>
+<form id="task-composer" class="composer" aria-label="New task" onsubmit={(e) => { e.preventDefault(); file() }} {onkeydown}>
   <label class="sr-only" for="task-title">Title</label>
   <input
     id="task-title"
@@ -106,6 +108,7 @@
     </button>
     <button type="button" class="btn-ghost" onclick={oncancel} disabled={saving}>Cancel</button>
     <span class="hint">{hint}</span>
+    <CheckInSetup agent={agentOf(assignee)} {checkIns} ondone={oncheckin} />
   </div>
 </form>
 

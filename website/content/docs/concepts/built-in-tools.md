@@ -110,6 +110,8 @@ Tasks are how work moves between your agents, outside harnesses such as Claude C
 
 Reads (`task_list`, `task_get`) work at every tier; the rest are denied in `restricted`. Outside harnesses get the same tools over the [MCP server](/docs/guides/mcp-server/).
 
+**Check-ins.** Nothing wakes an agent when a task is assigned to it. Instead, the agent checks its list on a schedule. On the Tasks page, assigning a task to an agent with no check-in offers **Check every 30 min**. That adds a `check-tasks` skill to the agent and a [`headless`](/docs/reference/config/#schedules) schedule that runs it every 30 minutes with no chat. Each check-in claims one task, works on it, and reports in the task thread. You can also run it yourself with `/check-tasks`. Every check-in is a model call, even when there is nothing to do, so change the interval or pause it on the **Schedules** page. A check-in has no chat to ask you in, so a `supervised` agent's tool calls that need approval go to its [supervisor](/docs/concepts/supervisors/), and are denied if it has none.
+
 ## Browser automation
 
 Off by default. When enabled, the agent drives a real browser running in a container.

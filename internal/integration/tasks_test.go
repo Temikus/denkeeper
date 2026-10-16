@@ -6,9 +6,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Temikus/denkeeper/internal/audit"
+	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/task"
 )
 
@@ -110,5 +115,72 @@ func TestTasks_AgentCannotSkipReview(t *testing.T) {
 	DecodeJSON(t, rec, &detail)
 	if detail.Task.Status != task.StatusInProgress || detail.Task.Holder != agentID {
 		t.Errorf("task after refused close = %+v", detail.Task)
+	}
+}
+
+// A headless check-in schedule runs with no chat: the agent claims its task
+// and nothing is sent anywhere.
+func TestTasks_HeadlessCheckInClaimsWork(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHarness(t, &HarnessOpts{
+		ConfigPath:    cfgPath,
+		WithTaskTools: true,
+		// A supervised agent with no supervisor would have every call denied:
+		// a headless run has no chat to ask in.
+		Agents: []agentSetup{{Name: "default", Tier: "autonomous"}},
+		Responses: []*llm.ChatResponse{
+			{ToolCalls: []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "task_list", Arguments: `{}`}}}, FinishReason: "tool_calls", Model: "test-model"},
+			{ToolCalls: []llm.ToolCall{{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "task_checkout", Arguments: `{"id":"DK-1"}`}}}, FinishReason: "tool_calls", Model: "test-model"},
+			{Content: "Claimed DK-1.", Model: "test-model", FinishReason: "stop"},
+		},
+	})
+	t.Cleanup(h.Scheduler.Stop)
+	ctx := context.Background()
+
+	tk, err := h.Tasks.Create(ctx, task.Human, task.CreateRequest{Title: "Check Fastmail rate limits", Assignee: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name": "check-tasks-default", "schedule": "@every 1s", "agent": "default",
+		"session_mode": "shared", "headless": true,
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create schedule: %d %s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := h.Tasks.Get(ctx, tk.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Holder == task.AgentID("default") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("check-in never claimed the task: %+v", got)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := h.Scheduler.Unregister("check-tasks-default"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The claim proves the turn ran; three model calls are the two tool rounds
+	// and the reply. (The harness memory store is per-connection in-memory
+	// SQLite, so reading it from the test goroutine can see an empty database.)
+	if n := h.MockLLM.CallCount(); n < 3 {
+		t.Errorf("model calls = %d, want at least 3", n)
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "headless = true") {
+		t.Errorf("persisted schedule:\n%s", raw)
 	}
 }

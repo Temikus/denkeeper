@@ -1382,6 +1382,11 @@ type ScheduleConfig struct {
 	// Tags are freeform labels for organizing and filtering schedules.
 	Tags []string `toml:"tags"`
 
+	// Headless runs the schedule with no chat: the turn runs and is stored,
+	// and nothing is sent. Without it, a schedule with no channel does nothing.
+	// Channel must be empty.
+	Headless bool `toml:"headless"`
+
 	// Enabled controls whether this schedule is active. Use a pointer so that
 	// an omitted field can be distinguished from an explicit false, allowing
 	// applyDefaults to set the value to true when unspecified.
@@ -3411,11 +3416,20 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool, c
 			return fmt.Errorf("config: schedule %q: agent %q does not exist", s.Name, s.Agent)
 		}
 
-		if err := validateScheduleChannel(s.Name, s.Channel, channelNames); err != nil {
+		if err := validateScheduleDelivery(s, channelNames); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validateScheduleDelivery checks where a schedule's reply goes: a channel,
+// or nowhere for a headless schedule, never both.
+func validateScheduleDelivery(s ScheduleConfig, channelNames map[string]bool) error {
+	if s.Headless && s.Channel != "" {
+		return fmt.Errorf("config: schedule %q: a headless schedule answers in no chat, so leave channel empty", s.Name)
+	}
+	return validateScheduleChannel(s.Name, s.Channel, channelNames)
 }
 
 // ParseChannel splits a channel string like "telegram:123456" into adapter

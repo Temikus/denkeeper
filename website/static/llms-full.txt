@@ -307,7 +307,8 @@ Global MCP settings.
     skill = "daily-summary"          # skill to invoke
     agent = "default"                # target agent
     session_tier = "supervised"      # permission tier
-    channel = "telegram:123"         # delivery channel
+    channel = "telegram:123"         # delivery channel; without one a schedule does nothing unless headless
+    headless = false                 # run with no chat: turn is stored, nothing is sent (leave channel empty)
     tags = ["daily"]                 # freeform labels
     enabled = true                   # enable/disable
 

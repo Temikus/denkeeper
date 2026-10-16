@@ -4124,7 +4124,7 @@ func (e *Engine) HandleMessageWithEvents(ctx context.Context, msg adapter.Incomi
 	}
 	convID := turn.convID
 
-	if e.sendFunc != nil {
+	if e.sendFunc != nil && !msg.Headless {
 		out := adapter.OutgoingMessage{
 			Adapter:    msg.Adapter,
 			ExternalID: msg.ExternalID,

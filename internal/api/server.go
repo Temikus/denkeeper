@@ -997,6 +997,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		SessionTier string   `json:"session_tier,omitempty"`
 		SessionMode string   `json:"session_mode,omitempty"`
 		Channel     string   `json:"channel,omitempty"`
+		Headless    bool     `json:"headless,omitempty"`
 		Tags        []string `json:"tags,omitempty"`
 		Enabled     bool     `json:"enabled"`
 		LastRun     string   `json:"last_run,omitempty"`
@@ -1014,6 +1015,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			SessionTier: e.SessionTier,
 			SessionMode: e.SessionMode,
 			Channel:     e.Channel,
+			Headless:    e.Headless,
 			Tags:        e.Tags,
 			Enabled:     e.Enabled,
 		}
