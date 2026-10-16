@@ -5,7 +5,8 @@
   import { token, authMode, theme } from '../store.js'
   import { api } from '../api.js'
   import { attention } from '../attention.js'
-  import { topLinks, sections } from '../navItems.js'
+  import { topLinks, visibleSections } from '../navItems.js'
+  import { features } from '../features.js'
   import { setup, showSetupReminder, openWizard } from '../setupStore.js'
 
   const STORAGE_KEY = 'dk_nav_groups'
@@ -13,6 +14,8 @@
   // Groups the user closed. Everything starts open; storage can be missing or
   // throw (private mode, blocked site data), and the nav must still render.
   let closed = $state(readClosed())
+
+  const sections = $derived(visibleSections($features))
 
   function readClosed() {
     try {

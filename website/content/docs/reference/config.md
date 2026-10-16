@@ -339,6 +339,16 @@ Gives every agent an in-process `decide` tool that puts typed questions about a 
 
 The tool is classified read-only, so it is available in the `restricted` tier and in dry runs, and identical calls within one turn are served from cache. Spend is billed to the calling agent under a per-day session key and counts against its cost limits. The state an agent passes goes to the decider's provider. Changes to the named decider apply on reload; turning `[decide]` on or off, or naming another decider, needs a restart, like `[script]`.
 
+## `[tasks]`
+
+The shared task board that your agents, outside harnesses such as Claude Code, and you hand work through. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turns on the `/api/v1/tasks` endpoints, the `task_*` tools on every agent and on the [MCP server](/docs/guides/mcp-server/), and the dashboard's **Tasks** page |
+
+While it is off, the task endpoints answer `503` and the tools aren't offered. Changing it needs a restart. See [Tasks](/docs/concepts/built-in-tools/#tasks).
+
 ## `[skills]`
 
 | Key | Type | Default | Description |

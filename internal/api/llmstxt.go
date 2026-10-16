@@ -52,10 +52,14 @@ API keys are scoped. Required scopes are noted per endpoint below.
 - POST /api/v1/eval/runs/{id}/judge    (scope: eval:write)      Judge a run's pending pairs with the internal judge (judge_decider, then judge_model)
 - POST /api/v1/eval/estimate           (scope: eval:read)       Cost range for a run before starting it
 - GET  /api/v1/eval/config             (scope: eval:read)       Eval defaults and verdict thresholds
-- GET  /api/v1/tasks                   (scope: tasks:read)      Tasks agents and you hand to each other; ?status=&assignee=
+`)
+	if s.deps.Tasks != nil {
+		b.WriteString(`- GET  /api/v1/tasks                   (scope: tasks:read)      Tasks agents and you hand to each other; ?status=&assignee=
 - POST /api/v1/tasks                   (scope: tasks:write)     File a task; assignee optional (unassigned = anyone may claim)
 - GET  /api/v1/tasks/{id}              (scope: tasks:read)      A task with its thread, subtasks and parent
-- POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests
+`)
+	}
+	b.WriteString(`- POST /api/v1/panic                   (scope: admin)           Emergency stop all in-flight requests
 
 ## Full API Reference
 

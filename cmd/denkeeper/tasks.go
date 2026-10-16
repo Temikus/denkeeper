@@ -7,13 +7,24 @@ import (
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/api"
+	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/task"
 )
 
+// newTaskService returns nil unless [tasks] enabled is set. A nil service
+// leaves the task endpoints, the task_* tools and the Tasks page off.
+func newTaskService(cfg *config.Config, st *task.Store, dir task.Directory, auditor audit.Emitter) *task.Service {
+	if !cfg.Tasks.Enabled {
+		return nil
+	}
+	return task.NewService(st, dir, auditor)
+}
+
 // taskDirectory lists task members: every den agent, plus every live API key
-// that lists tasks:write itself. "admin" alone doesn't count, or the
-// dashboard's own key would show up as an assignee.
+// that lists tasks:write itself and not admin. An admin key is the operator
+// (REST treats it as "human"), and REST matches scopes exactly, so the
+// dashboard's key lists tasks:write too and would otherwise be an assignee.
 //
 // main builds a placeholder dispatcher and replaces it once the engines exist,
 // and opens the key store later still, so both are set after construction.
@@ -38,7 +49,7 @@ func (d *taskDirectory) Members(ctx context.Context) ([]task.Member, error) {
 	}
 	seen := map[string]bool{}
 	addKey := func(name string, scopes []string) {
-		if name == "" || seen[name] || !slices.Contains(scopes, "tasks:write") {
+		if name == "" || seen[name] || !slices.Contains(scopes, "tasks:write") || slices.Contains(scopes, "admin") {
 			return
 		}
 		seen[name] = true

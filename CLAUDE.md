@@ -113,6 +113,7 @@ Every user-facing feature gets thoughtful UX:
 | Eval acquisition (history + spec probes) | `internal/eval/suggest.go`, `probes.go`, `internal/api/evalprobes.go` | `[eval]` |
 | Turn traces & inspector | `internal/agent/trace.go`, `internal/eval/trace.go`, `internal/api/traces.go` | `[eval]` (`capture`, `max_trace_bytes`, `retention_days`) |
 | Decision models / supervisor decider | `internal/llm/decision.go`, `internal/llm/openrouter/decide.go`, `internal/agent/supervisor_decider.go`, `cmd/denkeeper/decide.go` | `[[llm.deciders]]`, `supervisor_decider*` |
+| Tasks (board, checkout, task tools) | `internal/task/`, `internal/tasktools/`, `web/src/pages/Tasks.svelte` | `[tasks]` (off by default) |
 | Skill undo journal | `internal/skilleffect/` | (none — on whenever a SQLite store is wired) |
 
 ## Detailed Invariants

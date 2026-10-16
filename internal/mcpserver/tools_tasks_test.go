@@ -119,3 +119,33 @@ func TestTaskTools_ScopesGateWrites(t *testing.T) {
 		t.Errorf("reader checkout = %q, %v", text, isErr)
 	}
 }
+
+func TestTaskTools_OffMeansNoToolsAndNoInstructions(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := mcpserver.New(config.APIMCPServerConfig{Transport: "streamable", SessionTimeout: "30m"}, mcpserver.Deps{
+		Dispatcher: agent.NewDispatcher(map[string]*agent.Engine{}, nil, nil, logger),
+		TOMLKeys:   []config.APIKeyConfig{{Name: "claude-code", Key: taskWriterKey, Scopes: []string{"tasks:read", "tasks:write"}}},
+		Logger:     logger,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	cc := taskClient(t, ts.URL, taskWriterKey)
+
+	if got := cc.InitializeResult().Instructions; strings.Contains(got, "task_") {
+		t.Errorf("instructions mention task tools with tasks off: %q", got)
+	}
+	tools, err := cc.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if strings.HasPrefix(tool.Name, "task_") {
+			t.Errorf("%s offered with tasks off", tool.Name)
+		}
+	}
+
+	on, _ := startTaskServer(t)
+	if got := taskClient(t, on.URL, taskWriterKey).InitializeResult().Instructions; !strings.Contains(got, "task_checkout") {
+		t.Errorf("instructions with tasks on = %q, want the claim rule", got)
+	}
+}

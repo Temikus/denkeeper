@@ -365,9 +365,49 @@ export const evalPairs = {
   ],
 }
 
+// --- Task fixtures ---------------------------------------------------------
+
+export const taskMembers = [
+  { id: 'human', name: 'you', kind: 'human' },
+  { id: 'agent:pamela', name: 'pamela', kind: 'agent' },
+  { id: 'agent:scout', name: 'scout', kind: 'agent' },
+  { id: 'ext:claude-code', name: 'claude-code', kind: 'external' },
+]
+
+const taskBase = { body: '', created_by: 'human', reviewer: 'human', depth: 0, holder: '', children_total: 0, children_done: 0, created_at: '2026-10-16T09:00:00Z', updated_at: '2026-10-16T09:00:00Z' }
+
+export const taskRows = [
+  { ...taskBase, id: 131, key: 'DK-131', title: 'Add Fastmail to the weekly digest', status: 'in_progress', assignee: 'agent:pamela', holder: 'agent:pamela', held_at: '2026-10-16T09:02:00Z', children_total: 2, children_done: 1 },
+  { ...taskBase, id: 134, key: 'DK-134', title: 'Check Fastmail API rate limits', status: 'todo', assignee: 'ext:claude-code', parent_id: 131, depth: 1, created_by: 'agent:pamela', reviewer: 'agent:pamela' },
+  { ...taskBase, id: 130, key: 'DK-130', title: 'Renew the denkeeper.dev domain', status: 'todo', assignee: '' },
+  { ...taskBase, id: 129, key: 'DK-129', title: 'Pick a Saturday for the passport appointment', status: 'todo', assignee: 'human', created_by: 'agent:pamela' },
+  { ...taskBase, id: 125, key: 'DK-125', title: 'Summarise October spending by category', status: 'review', assignee: 'agent:scout' },
+  { ...taskBase, id: 127, key: 'DK-127', title: 'Plan next week\'s groceries', status: 'blocked', assignee: 'agent:scout', blocked_reason: 'No shop picked' },
+  { ...taskBase, id: 124, key: 'DK-124', title: 'Book the boiler service', status: 'done', assignee: 'agent:pamela', closed_at: '2026-10-15T09:00:00Z' },
+]
+
+export const taskDetail = {
+  task: { ...taskRows[0], body: 'The Sunday digest only covers Gmail.' },
+  events: [
+    { id: 1, task_id: 131, at: '2026-10-16T09:00:00Z', actor: 'human', kind: 'created', body: '', data: '{"assignee":"agent:pamela","reviewer":"human"}' },
+    { id: 2, task_id: 131, at: '2026-10-16T09:02:00Z', actor: 'agent:pamela', kind: 'claimed', body: '' },
+    { id: 3, task_id: 131, at: '2026-10-16T09:03:00Z', actor: 'agent:pamela', kind: 'comment', body: 'Plan: Scout compares JMAP and IMAP.' },
+    { id: 4, task_id: 131, at: '2026-10-16T09:03:30Z', actor: 'agent:pamela', kind: 'subtask', body: 'Check Fastmail API rate limits', data: '{"child_id":134,"assignee":"ext:claude-code"}' },
+  ],
+  children: [
+    taskRows[1],
+    { ...taskBase, id: 133, key: 'DK-133', title: 'Compare JMAP and IMAP', status: 'done', assignee: 'agent:scout', parent_id: 131, depth: 1 },
+  ],
+}
+
 export const handlers = [
   // Health
   http.get('/api/v1/health', () => HttpResponse.json({ status: 'ok' })),
+
+  // Tasks
+  http.get('/api/v1/tasks', () => HttpResponse.json({ tasks: taskRows })),
+  http.get('/api/v1/tasks/members', () => HttpResponse.json({ members: taskMembers })),
+  http.get('/api/v1/tasks/:id', () => HttpResponse.json(taskDetail)),
 
   // Agents
   http.get('/api/v1/agents', () => HttpResponse.json(agents)),

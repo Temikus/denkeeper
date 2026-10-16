@@ -2179,7 +2179,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	st.approvalManager.Auditor = auditor
 
 	taskDir := &taskDirectory{cfg: cfgHolder}
-	tasks := task.NewService(st.taskStore, taskDir, auditor)
+	tasks := newTaskService(cfg, st.taskStore, taskDir, auditor)
 
 	abc := agentBuildCtx{
 		cfg:             cfg,

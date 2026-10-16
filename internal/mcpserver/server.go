@@ -27,10 +27,12 @@ type Server struct {
 func New(cfg config.APIMCPServerConfig, deps Deps) *Server {
 	instructions := "Denkeeper personal AI agent. " +
 		"Use the chat tool to send messages to agents. " +
-		"Use agent_list to discover available agents. " +
-		"Use task_list to find work assigned to you (your API key's name is who you are on tasks); " +
-		"claim a task with task_checkout before working on it, and never retry a refused claim. " +
-		"All tools require an API key with appropriate scopes."
+		"Use agent_list to discover available agents. "
+	if deps.Tasks != nil {
+		instructions += "Use task_list to find work assigned to you (your API key's name is who you are on tasks); " +
+			"claim a task with task_checkout before working on it, and never retry a refused claim. "
+	}
+	instructions += "All tools require an API key with appropriate scopes."
 
 	s := &Server{
 		mcpServer: mcp.NewServer(

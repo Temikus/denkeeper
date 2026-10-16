@@ -101,7 +101,7 @@ The namespaces an agent chooses are its own. Treat any convention you suggest as
 
 ## Tasks
 
-Tasks are how work moves between your agents, outside harnesses such as Claude Code, and you. Each agent gets `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, and `task_update`, and acts on tasks as itself.
+Tasks are how work moves between your agents, outside harnesses such as Claude Code, and you. They are off until you set [`[tasks] enabled = true`](/docs/reference/config/#tasks). Each agent then gets `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, and `task_update`, and acts on tasks as itself.
 
 - **Delegating** is filing a task with an assignee. Passing `parent` makes it a subtask of the agent's own task; subtasks nest at most three deep.
 - **Claiming** with `task_checkout` is atomic: one agent holds a task at a time. A refused claim names the holder, and the agent should move on rather than retry.

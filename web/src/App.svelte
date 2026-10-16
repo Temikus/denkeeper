@@ -6,6 +6,7 @@
   import { initWS, destroyWS } from './wsStore.js'
   import { refreshSetup, openWizard, wizardOpen } from './setupStore.js'
   import { startAttention, stopAttention } from './attention.js'
+  import { refreshFeatures } from './features.js'
   import Nav from './components/Nav.svelte'
   import BottomNav from './components/BottomNav.svelte'
   import TopBar from './components/TopBar.svelte'
@@ -28,6 +29,7 @@
   import Settings from './pages/Settings.svelte'
   import AuditLog from './pages/AuditLog.svelte'
   import Traces from './pages/Traces.svelte'
+  import Tasks from './pages/Tasks.svelte'
   import Channels from './pages/Channels.svelte'
   import Evals from './pages/Evals.svelte'
   import MoreMenu from './pages/MoreMenu.svelte'
@@ -62,6 +64,7 @@
       // Session check failed — fall through to login.
     }
     initWS()
+    refreshFeatures()
   })
   onDestroy(() => {
     destroyWS()
@@ -124,6 +127,8 @@
           <AuditLog />
         {:else if route === 'traces'}
           <Traces />
+        {:else if route === 'tasks'}
+          <Tasks />
         {:else if route === 'evals'}
           <Evals />
         {:else if route === 'settings'}

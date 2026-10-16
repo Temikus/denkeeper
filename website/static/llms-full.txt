@@ -352,6 +352,10 @@ Global MCP settings.
     enabled = true                   # enable the decide tool once a decider is named; set false to switch it off without unnaming the decider
     decider = ""                     # [[llm.deciders]] entry the agent-facing decide tool calls; empty = no tool (on/off and renames restart-only)
 
+### [tasks]
+
+    enabled = false                  # the task board: /api/v1/tasks, task_* tools on agents and the MCP server, the dashboard Tasks page (restart to change)
+
 ### [skills]
 
     max_bytes = 1048576              # cap on a single persisted skill file (frontmatter + body); 1 MiB default, negative = unlimited
