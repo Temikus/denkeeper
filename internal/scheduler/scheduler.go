@@ -77,6 +77,9 @@ type Config struct {
 	// "isolated": creates a fresh conversation for each run.
 	SessionMode string
 
+	// Headless runs with no chat; see config.ScheduleConfig.Headless.
+	Headless bool
+
 	// Tags are freeform labels for organizing and filtering schedules.
 	Tags []string
 
@@ -96,6 +99,7 @@ type Entry struct {
 	SessionTier string
 	SessionMode string
 	Channel     string
+	Headless    bool
 	Tags        []string
 	Enabled     bool
 	LastRun     time.Time // zero if never fired
@@ -186,6 +190,7 @@ func (s *Scheduler) Register(cfg Config, job JobFunc) error {
 			SessionTier: cfg.SessionTier,
 			SessionMode: cfg.SessionMode,
 			Channel:     cfg.Channel,
+			Headless:    cfg.Headless,
 			Tags:        cfg.Tags,
 			Enabled:     cfg.Enabled,
 		},
@@ -238,6 +243,7 @@ func (s *Scheduler) RegisterAndStart(cfg Config, job JobFunc) error {
 			SessionTier: cfg.SessionTier,
 			SessionMode: cfg.SessionMode,
 			Channel:     cfg.Channel,
+			Headless:    cfg.Headless,
 			Tags:        cfg.Tags,
 			Enabled:     cfg.Enabled,
 		},

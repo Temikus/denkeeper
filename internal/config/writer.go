@@ -78,7 +78,7 @@ func WriteRawConfig(path string, raw map[string]any) error {
 // Schedule config persistence
 // ---------------------------------------------------------------------------
 
-func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) map[string]any {
+func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) map[string]any {
 	m := map[string]any{
 		"name":     name,
 		"type":     "agent",
@@ -97,6 +97,9 @@ func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier
 	}
 	if agent != "" {
 		m["agent"] = agent
+	}
+	if headless {
+		m["headless"] = true
 	}
 	if len(tags) > 0 {
 		t := make([]any, len(tags))
@@ -120,7 +123,7 @@ func rawSchedules(raw map[string]any) []any {
 }
 
 // AddScheduleToConfig appends a [[schedules]] entry to the TOML config.
-func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -129,7 +132,7 @@ func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode,
 		return err
 	}
 
-	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled, headless)
 
 	schedules := rawSchedules(raw)
 	schedules = append(schedules, entry)
@@ -138,7 +141,7 @@ func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode,
 }
 
 // UpdateScheduleInConfig replaces a [[schedules]] entry matched by name.
-func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -147,7 +150,7 @@ func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMo
 		return err
 	}
 
-	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled, headless)
 
 	schedules := rawSchedules(raw)
 	found := false

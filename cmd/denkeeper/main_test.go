@@ -385,6 +385,27 @@ func TestRegisterSchedules_MissingSkillSkips(t *testing.T) {
 	}
 }
 
+func TestRegisterSchedules_HeadlessRegistersWithoutChannel(t *testing.T) {
+	disp := testDispatcher(t, "default", []skill.Skill{{Name: "check-tasks"}})
+	sched := scheduler.New(slog.Default(), nil)
+	cfg := &config.Config{Schedules: []config.ScheduleConfig{{
+		Name: "check-tasks-default", Type: "agent", Schedule: "@every 30m",
+		Skill: "check-tasks", Agent: "default", Headless: true, Enabled: testBoolPtr(true),
+	}}}
+
+	if err := registerSchedules(context.Background(), cfg, sched, disp, nil, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := sched.GetEntry("check-tasks-default")
+	if !ok || !entry.Headless {
+		t.Fatalf("entry = %+v, %v; want a registered headless schedule", entry, ok)
+	}
+	msg := buildScheduledMessage(cfg.Schedules[0], entry, agent.AdapterBinding{}, "sched:check-tasks-default", time.UTC, time.Now())
+	if !msg.Headless {
+		t.Error("scheduled message not marked headless, so the engine would try to send a reply")
+	}
+}
+
 func TestRegisterSchedules_UnknownAgentErrors(t *testing.T) {
 	disp := testDispatcher(t, "default", nil)
 	sched := scheduler.New(slog.Default(), nil)

@@ -1723,6 +1723,11 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 
 		targets := resolved.targets
 		conversationID := resolved.conversationID
+		if sc.Headless {
+			// One run with no chat target; the engine sends nothing.
+			targets = []agent.AdapterBinding{{}}
+			conversationID = configmcp.HeadlessConversationID(sc.Name)
+		}
 		broadcast := len(targets) > 1
 		targetAgent := sc.Agent // defaults to "default" from applyDefaults
 
@@ -1735,10 +1740,11 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			SessionTier: sc.SessionTier,
 			SessionMode: sc.SessionMode,
 			Channel:     sc.Channel,
+			Headless:    sc.Headless,
 			Tags:        sc.Tags,
 			Enabled:     *sc.Enabled,
 		}, func(entry scheduler.Entry) {
-			if sc.Channel == "" {
+			if sc.Channel == "" && !sc.Headless {
 				logger.Debug("schedule fired, no channel configured", "name", entry.Name)
 				return
 			}
@@ -1778,6 +1784,7 @@ func buildScheduledMessage(sc config.ScheduleConfig, entry scheduler.Entry, targ
 		ScheduleName:   sc.Name,
 		ScheduleCron:   sc.Schedule,
 		IsScheduled:    true,
+		Headless:       sc.Headless,
 		Timestamp:      now,
 	}
 	if entry.SessionMode == "isolated" {

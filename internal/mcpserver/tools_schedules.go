@@ -171,7 +171,7 @@ func (s *Server) handleScheduleCreate(ctx context.Context, _ *mcp.CallToolReques
 	if s.deps.ConfigPath != "" {
 		if err := config.AddScheduleToConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
 			cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
-			agentName, cfg.Tags, cfg.Enabled); err != nil {
+			agentName, cfg.Tags, cfg.Enabled, cfg.Headless); err != nil {
 			s.deps.Logger.Error("schedule created but config persistence failed",
 				"name", cfg.Name, "error", err)
 		}
@@ -237,7 +237,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, _ *mcp.CallToolReques
 	if s.deps.ConfigPath != "" {
 		if err := config.UpdateScheduleInConfig(s.deps.ConfigPath, merged.Name, merged.Schedule,
 			merged.Skill, merged.Channel, merged.SessionMode, merged.SessionTier,
-			merged.Agent, merged.Tags, merged.Enabled); err != nil {
+			merged.Agent, merged.Tags, merged.Enabled, merged.Headless); err != nil {
 			s.deps.Logger.Error("schedule updated but config persistence failed",
 				"name", merged.Name, "error", err)
 		}
@@ -312,6 +312,7 @@ func (s *Server) rollbackSchedule(entry scheduler.Entry, e *agent.Engine) error 
 		SessionTier: entry.SessionTier,
 		SessionMode: entry.SessionMode,
 		Channel:     entry.Channel,
+		Headless:    entry.Headless,
 		Tags:        entry.Tags,
 		Enabled:     entry.Enabled,
 	}

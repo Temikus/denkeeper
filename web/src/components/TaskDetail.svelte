@@ -9,11 +9,14 @@
   } from '../tasks.js'
   import ErrorBanner from './ErrorBanner.svelte'
   import TasksOff from './TasksOff.svelte'
+  import CheckInSetup from './CheckInSetup.svelte'
+  import { agentOf, loadCheckIns } from '../checkIn.js'
 
   let { id } = $props()
 
   let detail = $state(null)
   let members = $state([])
+  let checkIns = $state(null)
   let loading = $state(true)
   let off = $state(false)
   let missing = $state(false)
@@ -41,14 +44,21 @@
   }
 
   const t = $derived(detail?.task)
+  // Whether the den assignee will find this task on its own: '' when that
+  // can't be known (no den assignee, closed task, schedules unreadable).
+  const checkInState = $derived(
+    !t || isClosed(t.status) || !checkIns || !agentOf(t.assignee) ? ''
+      : checkIns.has(agentOf(t.assignee)) ? 'set' : 'none'
+  )
   const groups = $derived(memberGroups(members))
   const kindLabel = { agent: 'den agent', external: 'external' }
 
   async function load() {
     try {
-      const [d, ms] = await Promise.all([api.task(id), api.taskMembers()])
+      const [d, ms, ci] = await Promise.all([api.task(id), api.taskMembers(), loadCheckIns()])
       detail = d
       members = ms
+      checkIns = ci
       error = ''
       missing = false
       off = false
@@ -282,6 +292,14 @@
               </optgroup>
             </select>
           </dd>
+          {#if checkInState === 'none'}
+            <dd class="extra">
+              <span class="hint">{agentOf(t.assignee)} doesn't check its tasks yet, so it won't pick this up.</span>
+              <CheckInSetup agent={agentOf(t.assignee)} {checkIns} ondone={async () => { checkIns = await loadCheckIns() }} />
+            </dd>
+          {:else if checkInState === 'set' && !t.holder}
+            <dd class="extra"><span class="hint">{agentOf(t.assignee)} picks this up at its next check-in.</span></dd>
+          {/if}
         </div>
         <div class="field">
           <dt>Held by</dt>

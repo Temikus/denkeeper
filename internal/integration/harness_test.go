@@ -295,6 +295,10 @@ type HarnessOpts struct {
 	// Requires Channels to be set.
 	WithConfigMCP bool
 
+	// WithTaskTools, when true, registers a Config MCP server carrying the
+	// task_* tools for the first agent, so its turns can work on tasks.
+	WithTaskTools bool
+
 	// WithAgentFactory, when true, populates deps.AgentFactory so that
 	// agent CRUD endpoints can build engines at runtime.
 	WithAgentFactory bool
@@ -556,7 +560,7 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 	}
 
 	// Pre-create ToolManager when Config MCP is requested so engines get it.
-	if opts.WithConfigMCP && opts.ToolManager == nil {
+	if (opts.WithConfigMCP || opts.WithTaskTools) && opts.ToolManager == nil {
 		opts.ToolManager = tool.NewManager(logger)
 	}
 
@@ -707,6 +711,22 @@ func NewHarness(t *testing.T, opts *HarnessOpts) *Harness {
 		}
 		return ms, nil
 	}), auditor)
+	if opts.WithTaskTools {
+		taskSrv := configmcp.New(configmcp.Deps{
+			AgentName:      agents[0].Name,
+			PermissionTier: func() string { return "autonomous" },
+			Tasks:          tasks,
+			Logger:         logger,
+		})
+		session, err := taskSrv.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("task tools connect: %v", err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		if err := opts.ToolManager.RegisterSession(context.Background(), "config-tasks", session); err != nil {
+			t.Fatalf("registering task tools: %v", err)
+		}
+	}
 
 	deps := api.Deps{
 		Dispatcher:        dispatcher,

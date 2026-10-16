@@ -9,11 +9,13 @@
   import TaskComposer from './TaskComposer.svelte'
   import TasksOff from './TasksOff.svelte'
   import FilterChips from './FilterChips.svelte'
+  import { loadCheckIns } from '../checkIn.js'
 
   const DONE_PREVIEW = 3
 
   let tasks = $state([])
   let members = $state([])
+  let checkIns = $state(null)
   let loading = $state(true)
   let off = $state(false)
   let error = $state('')
@@ -28,9 +30,10 @@
 
   async function load() {
     try {
-      const [ts, ms] = await Promise.all([api.tasks(), api.taskMembers()])
+      const [ts, ms, ci] = await Promise.all([api.tasks(), api.taskMembers(), loadCheckIns()])
       tasks = ts
       members = ms
+      checkIns = ci
       error = ''
       off = false
       updatedAt = Date.now()
@@ -80,8 +83,8 @@
 
   const liveLabel = $derived($wsStatus === 'connected' ? 'Live' : 'Checking every 15s')
 
-  // Closing the composer unmounts it, so hand focus back to the button that
-  // opened it. A filed task shows under All, whatever filter was on.
+  // Closing the composer unmounts the focused field, so hand focus back to the
+  // button that opened it. A filed task shows under All, whatever filter was on.
   async function closeComposer() {
     composing = false
     await tick()
@@ -97,8 +100,9 @@
 
 <div class="page-header">
   <h1 class="page-title">Tasks</h1>
-  {#if !off && !composing}
-    <button class="btn-primary" bind:this={newBtn} onclick={() => { composing = true }} disabled={loading}>+ New task</button>
+  {#if !off}
+    <button class="btn-primary" bind:this={newBtn} aria-expanded={composing} aria-controls="task-composer"
+      onclick={() => { composing = true }}>+ New task</button>
   {/if}
 </div>
 
@@ -106,7 +110,7 @@
   <TasksOff />
 {:else}
   {#if composing}
-    <TaskComposer {members} onfiled={filed} oncancel={closeComposer} />
+    <TaskComposer {members} {checkIns} oncheckin={async () => { checkIns = await loadCheckIns() }} onfiled={filed} oncancel={closeComposer} />
   {/if}
 
   <ErrorBanner message={error} />
@@ -124,7 +128,7 @@
     <div class="empty">
       <p>No tasks yet. File one for yourself, hand one to an agent, or leave it unassigned for anyone to claim.</p>
       {#if !composing}
-        <button class="btn-primary" onclick={() => { composing = true }}>+ New task</button>
+        <button class="btn-primary" onclick={() => { composing = true }}>File your first task</button>
       {/if}
     </div>
   {:else}

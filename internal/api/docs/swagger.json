@@ -9521,6 +9521,10 @@
                 "enabled": {
                     "type": "boolean"
                 },
+                "headless": {
+                    "description": "Headless runs with no chat; channel must then be empty. Absent = keep.",
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -12049,6 +12053,10 @@
                     "type": "string"
                 },
                 "enabled": {
+                    "type": "boolean"
+                },
+                "headless": {
+                    "description": "Headless runs with no chat: nothing is sent, and channel must be empty.",
                     "type": "boolean"
                 },
                 "name": {

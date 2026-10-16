@@ -350,3 +350,53 @@ func TestListSchedules_AgentFilter(t *testing.T) {
 		t.Errorf("filtered list leaked bob's schedule: %s", body)
 	}
 }
+
+func doScheduleReq(t *testing.T, srv *Server, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCreateSchedule_HeadlessNeedsNoChannel(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := doScheduleReq(t, srv, http.MethodPost, "/api/v1/schedules",
+		`{"name":"check-tasks","schedule":"@every 30m","skill":"greet","headless":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body)
+	}
+	if e, ok := deps.Scheduler.GetEntry("check-tasks"); !ok || !e.Headless {
+		t.Fatalf("entry = %+v, %v; want headless", e, ok)
+	}
+
+	rec = doScheduleReq(t, srv, http.MethodGet, "/api/v1/schedules", "")
+	if !strings.Contains(rec.Body.String(), `"headless":true`) {
+		t.Errorf("list doesn't show headless: %s", rec.Body)
+	}
+
+	rec = doScheduleReq(t, srv, http.MethodPatch, "/api/v1/schedules/check-tasks", `{"schedule":"@every 1h"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit status = %d; body: %s", rec.Code, rec.Body)
+	}
+	if e, _ := deps.Scheduler.GetEntry("check-tasks"); !e.Headless || e.Expr != "@every 1h" {
+		t.Errorf("after edit = %+v, want headless kept", e)
+	}
+}
+
+func TestCreateSchedule_HeadlessWithChannelRejected(t *testing.T) {
+	deps := testDeps()
+	deps.ConfigPath = "/dev/null"
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := doScheduleReq(t, srv, http.MethodPost, "/api/v1/schedules",
+		`{"name":"x","schedule":"@every 30m","channel":"telegram:1","headless":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "leave channel empty") {
+		t.Errorf("status = %d; body: %s", rec.Code, rec.Body)
+	}
+}
