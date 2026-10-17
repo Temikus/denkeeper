@@ -372,6 +372,49 @@ func TestRunner_SampleFailureDoesNotFailRun(t *testing.T) {
 	}
 }
 
+func TestRunner_EmptyResponseFailsSampleAndSkipsPairing(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a", "b")
+	f.engine.respond = func(call int, policy agent.ExecPolicy) (*agent.TurnResult, error) {
+		if call == 1 {
+			return &agent.TurnResult{ConversationID: policy.ConvID, Response: " \n", Rounds: 0}, nil
+		}
+		return &agent.TurnResult{ConversationID: policy.ConvID, Response: "fine", Rounds: 1}, nil
+	}
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+
+	if err := f.runner.StartRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if got := waitForTerminal(t, f.store, run.ID); got.Status != StatusDone {
+		t.Fatalf("status = %q, want %q", got.Status, StatusDone)
+	}
+
+	samples, err := f.store.ListSamples(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("ListSamples: %v", err)
+	}
+	failed := 0
+	for _, smp := range samples {
+		if smp.Status == SampleFailed {
+			failed++
+			if smp.Error != "empty final response" {
+				t.Errorf("failed sample error = %q, want %q", smp.Error, "empty final response")
+			}
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("%d failed samples, want exactly 1", failed)
+	}
+	pairs, err := f.store.CountPairs(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("CountPairs: %v", err)
+	}
+	if pairs != 1 {
+		t.Errorf("got %d pairs, want 1: the task with an empty side must not pair", pairs)
+	}
+}
+
 func TestRunner_CostCapStopsDispatchWithCappedStatus(t *testing.T) {
 	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
 	f.addTasks(t, "a", "b", "c", "d")
