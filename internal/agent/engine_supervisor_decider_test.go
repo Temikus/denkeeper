@@ -12,7 +12,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
-// fakeDecisionProvider answers every question with p, or fails with err.
+// fakeDecisionProvider answers so that every check scores p, or fails with err.
 type fakeDecisionProvider struct {
 	p     float64
 	cost  float64
@@ -37,7 +37,7 @@ func (f *fakeDecisionProvider) Decide(ctx context.Context, req llm.DecisionReque
 	}
 	answers := make(map[string]llm.Answer, len(req.Questions))
 	for id := range req.Questions {
-		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: f.p}
+		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: DeciderAnswerForScore(id, f.p)}
 	}
 	return &llm.DecisionResponse{Model: req.Model, Answers: answers, Usage: llm.TokenUsage{Prompt: 50, Completion: 3}, CostUSD: f.cost}, nil
 }
@@ -91,8 +91,8 @@ func TestSupervisorDecider_ShadowDenyDoesNotBlockSupervisorApproval(t *testing.T
 	if detail["decision"] != "shadow" || detail["would_decide"] != "DENY" || detail["stage"] != "decider" {
 		t.Errorf("detail = %v, want decision=shadow would_decide=DENY", detail)
 	}
-	if answers, ok := detail["answers"].(map[string]any); !ok || len(answers) != 3 {
-		t.Errorf("answers = %v, want 3", detail["answers"])
+	if answers, ok := detail["answers"].(map[string]any); !ok || len(answers) != len(deciderQuestionIDs) {
+		t.Errorf("answers = %v, want %d", detail["answers"], len(deciderQuestionIDs))
 	}
 }
 
@@ -368,8 +368,8 @@ func TestSupervisorDecider_StateEmbedsArgumentsAsJSON(t *testing.T) {
 	if state.UserRequest != "search" {
 		t.Errorf("user_request = %q, want %q", state.UserRequest, "search")
 	}
-	if len(prov.last.Questions) != 3 {
-		t.Errorf("questions = %d, want 3", len(prov.last.Questions))
+	if len(prov.last.Questions) != len(deciderQuestionIDs) {
+		t.Errorf("questions = %d, want %d", len(prov.last.Questions), len(deciderQuestionIDs))
 	}
 }
 
@@ -412,12 +412,13 @@ func TestRawJSONOrString_NonJSONArgumentsBecomeString(t *testing.T) {
 	}
 }
 
+// allAnswers answers every question so that every check scores p.
 func allAnswers(p float64) map[string]llm.Answer {
-	return map[string]llm.Answer{
-		deciderQAligned:  {Noul: p},
-		deciderQSafeArgs: {Noul: p},
-		deciderQScoped:   {Noul: p},
+	a := make(map[string]llm.Answer, len(deciderQuestionIDs))
+	for _, id := range deciderQuestionIDs {
+		a[id] = llm.Answer{Noul: DeciderAnswerForScore(id, p)}
 	}
+	return a
 }
 
 func TestDecideSupervisorOutcome_ApproveAtBoundary(t *testing.T) {
@@ -437,12 +438,12 @@ func TestDecideSupervisorOutcome_JustBelowApproveEscalates(t *testing.T) {
 
 func TestDecideSupervisorOutcome_DenyAtBoundary(t *testing.T) {
 	a := allAnswers(0.99)
-	a[deciderQSafeArgs] = llm.Answer{Noul: 0.05}
+	a[deciderQInjection] = llm.Answer{Noul: 0.95}
 	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
 	if got != supervisorDeny {
-		t.Fatalf("one answer at deny_at = %s, want DENY", got)
+		t.Fatalf("one check at deny_at = %s, want DENY", got)
 	}
-	if reason != "decider: arguments flagged as unsafe (p=0.05)" {
+	if reason != "decider: arguments contain instructions aimed at an AI (p=0.05)" {
 		t.Errorf("reason = %q", reason)
 	}
 }

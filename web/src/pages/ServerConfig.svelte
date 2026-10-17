@@ -3,6 +3,7 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { timezoneGroups, allTimezones } from '../timezones.js'
+  import { features } from '../features.js'
 
   let config = $state(null)
   let loading = $state(true)
@@ -41,6 +42,11 @@
   let webFetchDraft = $state(null)
   let webFetchError = $state('')
   let webFetchSaveTimer = null
+
+  // Tasks. The saved value applies on restart; until then it differs from what
+  // /health says is running, and the page says so.
+  let savingTasks = $state(false)
+  const tasksPending = $derived(!!config && $features.loaded && config.tasks_enabled !== $features.tasks)
 
   async function fetchConfig() {
     loading = true
@@ -115,7 +121,15 @@
       .filter(g => g.zones.length > 0)
   }
 
-  async function toggleMcp() {
+  // Inputs here are one-way (checked={...}, value={...}). After a failed save
+  // config is unchanged, so Svelte won't redraw: put the control back by hand.
+  function revert(el, value) {
+    if (el.type === 'checkbox') el.checked = value
+    else el.value = String(value)
+  }
+
+  async function toggleMcp(e) {
+    const input = e.currentTarget
     savingMcp = true
     error = ''
     try {
@@ -124,14 +138,18 @@
       config.mcp_server_enabled = enabled
       saveMcpOk = true
       setTimeout(() => { saveMcpOk = false }, 3000)
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.mcp_server_enabled)
     } finally {
       savingMcp = false
     }
   }
 
-  async function saveMcpField(field, value) {
+  // What the timeout inputs show when the config leaves them empty.
+  const MCP_FIELD_SHOWN_DEFAULT = { mcp_server_session_timeout: '30m', mcp_server_chat_timeout: '2m' }
+
+  async function saveMcpField(field, value, el) {
     savingMcp = true
     error = ''
     try {
@@ -141,12 +159,14 @@
       setTimeout(() => { saveMcpOk = false }, 3000)
     } catch (e) {
       error = e.message
+      if (el) revert(el, config[field] || MCP_FIELD_SHOWN_DEFAULT[field] || config[field])
     } finally {
       savingMcp = false
     }
   }
 
-  async function toggleWebTools() {
+  async function toggleWebTools(e) {
+    const input = e.currentTarget
     savingWeb = true
     error = ''
     try {
@@ -154,8 +174,9 @@
       const res = await api.updateServerConfig({ web_tools_enabled: enabled })
       config.web_tools_enabled = enabled
       if (res?.restart_required) toolsRestartHint = true
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.web_tools_enabled)
     } finally {
       savingWeb = false
     }
@@ -203,7 +224,8 @@
     }
   }
 
-  async function toggleScript() {
+  async function toggleScript(e) {
+    const input = e.currentTarget
     savingScript = true
     error = ''
     try {
@@ -211,10 +233,27 @@
       const res = await api.updateServerConfig({ script_enabled: enabled })
       config.script_enabled = enabled
       if (res?.restart_required) toolsRestartHint = true
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.script_enabled)
     } finally {
       savingScript = false
+    }
+  }
+
+  async function toggleTasks(e) {
+    const input = e.currentTarget
+    savingTasks = true
+    error = ''
+    try {
+      const enabled = !config.tasks_enabled
+      await api.updateServerConfig({ tasks_enabled: enabled })
+      config.tasks_enabled = enabled
+    } catch (err) {
+      error = err.message
+      revert(input, config.tasks_enabled)
+    } finally {
+      savingTasks = false
     }
   }
 
@@ -402,7 +441,7 @@
           <select
             class="input inline-select"
             value={config.mcp_server_transport}
-            onchange={(e) => saveMcpField('mcp_server_transport', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_transport', e.target.value, e.target)}
             disabled={savingMcp}
           >
             <option value="streamable">Streamable HTTP</option>
@@ -418,7 +457,7 @@
             class="input inline-input"
             value={config.mcp_server_session_timeout || '30m'}
             disabled={savingMcp}
-            onchange={(e) => saveMcpField('mcp_server_session_timeout', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_session_timeout', e.target.value, e.target)}
             placeholder="30m"
           />
         </div>
@@ -431,7 +470,7 @@
             class="input inline-input"
             value={config.mcp_server_chat_timeout || '2m'}
             disabled={savingMcp}
-            onchange={(e) => saveMcpField('mcp_server_chat_timeout', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_chat_timeout', e.target.value, e.target)}
             placeholder="2m"
           />
         </div>
@@ -442,7 +481,7 @@
           <select
             class="input inline-select"
             value={config.mcp_server_stateless ? 'true' : 'false'}
-            onchange={(e) => saveMcpField('mcp_server_stateless', e.target.value === 'true')}
+            onchange={(e) => saveMcpField('mcp_server_stateless', e.target.value === 'true', e.target)}
             disabled={savingMcp}
           >
             <option value="false">No</option>
@@ -541,6 +580,36 @@
       Saved. Restart the server (Process Control below) for the change to take effect.
     </div>
   {/if}
+
+  <h2 class="section-title">Features</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Tasks</div>
+        <div class="config-desc">
+          A shared task board for you, your agents and outside harnesses like Claude Code:
+          the Tasks page, the task_* tools and the task API. Applies on restart.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <span class="status-dot" class:status-on={config.tasks_enabled} class:status-off={!config.tasks_enabled}></span>
+        <span class="config-value">{config.tasks_enabled ? 'Enabled' : 'Disabled'}</span>
+        <label class="switch switch-sm">
+          <input type="checkbox" aria-label="Tasks" checked={config.tasks_enabled} onchange={toggleTasks} disabled={savingTasks} />
+          <span class="switch-slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+  <!-- The live region stays mounted so screen readers announce the text when it appears. -->
+  <div role="status">
+    {#if tasksPending}
+      <div class="mcp-hint" data-testid="tasks-pending">
+        Saved as {config.tasks_enabled ? 'on' : 'off'}, but the server is still running with tasks {$features.tasks ? 'on' : 'off'}.
+        Restart it (Process Control below) to apply.
+      </div>
+    {/if}
+  </div>
 
   <h2 class="section-title">External Access</h2>
   <div class="config-card">

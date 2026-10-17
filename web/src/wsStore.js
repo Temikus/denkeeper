@@ -40,6 +40,13 @@ export const panicStatus = writable({ active: false, message: '', since: '' })
  */
 export const evalProgress = writable(new Map())
 
+/**
+ * Bumped by every task_updated frame. Like eval_progress it is a wake-up, not
+ * truth: the Tasks page re-reads the board on a change, and on reconnect,
+ * because frames sent while away are never replayed.
+ */
+export const taskUpdates = writable({ seq: 0, taskID: 0 })
+
 const PANIC_MESSAGE = 'Emergency stop triggered — all processing paused'
 
 /** Bumped by every panic_status frame, so a slow hydrate can tell it is stale. */
@@ -144,6 +151,10 @@ export function getWSClient() {
           next.set(frame.run_id, frame)
           return next
         })
+        return
+      }
+      if (frame.type === 'task_updated') {
+        taskUpdates.update(t => ({ seq: t.seq + 1, taskID: frame.task_id }))
         return
       }
       // Frames without a registered session are silently dropped.

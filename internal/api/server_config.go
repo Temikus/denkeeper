@@ -31,10 +31,13 @@ type serverConfigResponse struct {
 	WebToolsEnabled          bool     `json:"web_tools_enabled"`
 	WebFetchMaxResponseChars int      `json:"web_fetch_max_response_chars"`
 	ScriptEnabled            bool     `json:"script_enabled"`
-	Version                  string   `json:"version"`
-	Commit                   string   `json:"commit"`
-	BuildDate                string   `json:"build_date"`
-	GoVersion                string   `json:"go_version"`
+	// TasksEnabled is the configured [tasks] enabled. The running process
+	// changes only on restart; /health tasks_enabled reports what is running.
+	TasksEnabled bool   `json:"tasks_enabled"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildDate    string `json:"build_date"`
+	GoVersion    string `json:"go_version"`
 }
 
 // serverConfigUpdateInput holds the mutable fields for PATCH /api/v1/server/config.
@@ -51,6 +54,7 @@ type serverConfigUpdateInput struct {
 	// bounds match config.validateWeb so the API and TOML paths agree.
 	WebFetchMaxResponseChars *int  `json:"web_fetch_max_response_chars,omitempty"`
 	ScriptEnabled            *bool `json:"script_enabled,omitempty"`
+	TasksEnabled             *bool `json:"tasks_enabled,omitempty"`
 }
 
 // Bounds for web_fetch_max_response_chars, kept in step with config.validateWeb.
@@ -91,6 +95,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		WebToolsEnabled:          snap.Web.WebEnabled(),
 		WebFetchMaxResponseChars: snap.Web.Fetch.MaxResponseChars,
 		ScriptEnabled:            snap.Script.ScriptEnabled(),
+		TasksEnabled:             snap.Tasks.Enabled,
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -104,7 +109,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePatchServerConfig godoc
 // @Summary      Update server configuration
-// @Description  Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, or web_fetch_max_response_chars returns restart_required: true, since the in-process MCP tools are registered — and their limits read — only at process start. web_fetch_max_response_chars must be between 1 and 100000.
+// @Description  Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, tasks_enabled, and web_fetch_max_response_chars). Changes are saved to the TOML config file in one write, then applied in memory; if the save fails, nothing changes and the call returns 500. Changing web_tools_enabled, script_enabled, tasks_enabled, or web_fetch_max_response_chars returns restart_required: true, since those features are wired, and their limits read, only at process start. web_fetch_max_response_chars must be between 1 and 100000.
 // @Tags         server
 // @Accept       json
 // @Produce      json
@@ -114,6 +119,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 // @Failure      400   {object}  map[string]string        "Invalid JSON or validation error"
 // @Failure      401   {object}  map[string]string        "Unauthorized"
 // @Failure      403   {object}  map[string]string        "Forbidden — requires admin scope"
+// @Failure      500   {object}  map[string]string        "Config file could not be saved; nothing was changed"
 // @Router       /server/config [patch]
 func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request) {
 	var input serverConfigUpdateInput
@@ -127,12 +133,23 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	s.serverConfigMu.Lock()
+	defer s.serverConfigMu.Unlock()
+
+	// Save first, so a failed write leaves the running config matching the file.
+	if s.deps.ConfigPath != "" {
+		if err := config.UpdateSections(s.deps.ConfigPath, serverConfigSections(&input)); err != nil {
+			s.logger.Error("failed to save server config", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config file could not be saved, nothing was changed: " + err.Error()})
+			return
+		}
+	}
+
 	var restartRequired bool
 	s.deps.Config.Update(func(c *config.Config) {
 		applyServerConfigInput(&c.API, &input)
 		restartRequired = applyInProcessToolInput(c, &input)
 	})
-	s.persistServerConfig(&input)
 
 	resp := map[string]any{"status": "updated"}
 	if restartRequired {
@@ -169,6 +186,13 @@ func applyInProcessToolInput(cfg *config.Config, input *serverConfigUpdateInput)
 			changed = true
 		}
 		cfg.Script.Enabled = input.ScriptEnabled
+	}
+	if input.TasksEnabled != nil {
+		// main builds the task service, its tools and its routes at start.
+		if cfg.Tasks.Enabled != *input.TasksEnabled {
+			changed = true
+		}
+		cfg.Tasks.Enabled = *input.TasksEnabled
 	}
 	return changed
 }
@@ -295,71 +319,57 @@ func (s *Server) handleRestartProcess(w http.ResponseWriter, _ *http.Request) {
 	}()
 }
 
-func (s *Server) persistServerConfig(input *serverConfigUpdateInput) {
-	if s.deps.ConfigPath == "" {
-		return
-	}
-
-	s.persistInProcessToolConfig(input)
-
-	changes := make(map[string]any)
+// serverConfigSections maps a PATCH to the TOML tables it touches: [api]
+// (with [api.mcp_server]), [web] (with [web.fetch]), [script] and [tasks].
+func serverConfigSections(input *serverConfigUpdateInput) map[string]map[string]any {
+	api := make(map[string]any)
 	if input.ExternalURL != nil {
-		changes["external_url"] = *input.ExternalURL
+		api["external_url"] = *input.ExternalURL
 	}
 	if input.Timezone != nil {
-		changes["timezone"] = *input.Timezone
+		api["timezone"] = *input.Timezone
 	}
-
-	mcpChanges := make(map[string]any)
+	mcp := make(map[string]any)
 	if input.MCPServerEnabled != nil {
-		mcpChanges["enabled"] = *input.MCPServerEnabled
+		mcp["enabled"] = *input.MCPServerEnabled
 	}
 	if input.MCPServerTransport != nil {
-		mcpChanges["transport"] = *input.MCPServerTransport
+		mcp["transport"] = *input.MCPServerTransport
 	}
 	if input.MCPServerSessionTimeout != nil {
-		mcpChanges["session_timeout"] = *input.MCPServerSessionTimeout
+		mcp["session_timeout"] = *input.MCPServerSessionTimeout
 	}
 	if input.MCPServerChatTimeout != nil {
-		mcpChanges["chat_timeout"] = *input.MCPServerChatTimeout
+		mcp["chat_timeout"] = *input.MCPServerChatTimeout
 	}
 	if input.MCPServerStateless != nil {
-		mcpChanges["stateless"] = *input.MCPServerStateless
+		mcp["stateless"] = *input.MCPServerStateless
 	}
-	if len(mcpChanges) > 0 {
-		changes["mcp_server"] = mcpChanges
+	if len(mcp) > 0 {
+		api["mcp_server"] = mcp
 	}
 
-	if len(changes) > 0 {
-		if err := config.UpdateAPIConfig(s.deps.ConfigPath, changes); err != nil {
-			s.logger.Warn("failed to persist server config", "error", err)
-		}
-	}
-}
-
-// persistInProcessToolConfig writes the [web]/[script] enabled toggles to their
-// top-level TOML sections. Persisted separately from the [api] changes because
-// they live in distinct tables.
-func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
-	webChanges := make(map[string]any)
+	web := make(map[string]any)
 	if input.WebToolsEnabled != nil {
-		webChanges["enabled"] = *input.WebToolsEnabled
+		web["enabled"] = *input.WebToolsEnabled
 	}
 	if input.WebFetchMaxResponseChars != nil {
-		// Nested so it lands in [web.fetch]; updateTopLevelSection merges the
-		// sub-table key-by-key, leaving timeout/user_agent/etc. intact.
-		webChanges["fetch"] = map[string]any{"max_response_chars": *input.WebFetchMaxResponseChars}
+		web["fetch"] = map[string]any{"max_response_chars": *input.WebFetchMaxResponseChars}
 	}
-	if len(webChanges) > 0 {
-		if err := config.UpdateWebConfig(s.deps.ConfigPath, webChanges); err != nil {
-			s.logger.Warn("failed to persist web config", "error", err)
+
+	sections := make(map[string]map[string]any)
+	for name, changes := range map[string]map[string]any{"api": api, "web": web} {
+		if len(changes) > 0 {
+			sections[name] = changes
 		}
 	}
 	if input.ScriptEnabled != nil {
-		if err := config.UpdateScriptConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.ScriptEnabled}); err != nil {
-			s.logger.Warn("failed to persist script config", "error", err)
-		}
+		sections["script"] = map[string]any{"enabled": *input.ScriptEnabled}
 	}
+	if input.TasksEnabled != nil {
+		sections["tasks"] = map[string]any{"enabled": *input.TasksEnabled}
+	}
+	return sections
 }
 
 // mcpServerEndpoint takes the caller's snapshot rather than re-reading the

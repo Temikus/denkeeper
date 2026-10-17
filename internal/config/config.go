@@ -44,6 +44,7 @@ type Config struct {
 	Web       WebConfig               `toml:"web"`
 	Script    ScriptConfig            `toml:"script"`
 	Decide    DecideConfig            `toml:"decide"`
+	Tasks     TasksConfig             `toml:"tasks"`
 	Skills    SkillsConfig            `toml:"skills"`
 	Browser   BrowserConfig           `toml:"browser"`
 	OTel      OTelConfig              `toml:"otel"`
@@ -337,6 +338,13 @@ type DecideConfig struct {
 	Enabled *bool `toml:"enabled"`
 	// Decider is the [[llm.deciders]] entry the tool calls. Empty = no tool.
 	Decider string `toml:"decider"`
+}
+
+// TasksConfig controls the shared task board: the task REST endpoints, the
+// task_* MCP tools on both servers, and the dashboard's Tasks page. Off by
+// default while the feature settles. Changing it needs a restart.
+type TasksConfig struct {
+	Enabled bool `toml:"enabled"`
 }
 
 // DecideEnabled reports whether the decide tool is active: a decider must be
@@ -708,11 +716,8 @@ type APIKeyConfig struct {
 	// Key is the secret API key value. Loaded from config or env.
 	Key string `toml:"key"`
 
-	// Scopes controls what this key can access.
-	// Valid scopes: "chat", "sessions:read", "sessions:write", "costs:read", "skills:read",
-	// "skills:write", "schedules:read", "schedules:write", "approvals:read",
-	// "approvals:write", "tools:read", "tools:write", "browser:read",
-	// "browser:write", "health", "admin".
+	// Scopes controls what this key can access. The valid values are the
+	// keys of scope.Valid (internal/scope); "admin" implies all of them.
 	Scopes []string `toml:"scopes"`
 }
 
@@ -921,9 +926,14 @@ type MCPConfig struct {
 	SSEKeepAliveSecs int `toml:"sse_keep_alive_secs"`
 	// AutoRestart enables automatic restart of crashed MCP servers. Default: true.
 	AutoRestart *bool `toml:"auto_restart"`
-	// MaxRestartAttempts is the maximum number of consecutive restart attempts before
-	// a server is disabled. Default: 3.
+	// MaxRestartAttempts is the number of quick consecutive restart attempts
+	// (1s, 2s, 4s, ...) before retries slow down to max_restart_backoff pacing.
+	// A server is never disabled for failing health checks. Default: 3.
 	MaxRestartAttempts int `toml:"max_restart_attempts"`
+	// MaxRestartBackoff caps the wait between restart attempts once
+	// max_restart_attempts is used up. The wait starts at 30s and doubles.
+	// Default: "5m".
+	MaxRestartBackoff string `toml:"max_restart_backoff"`
 	// RestartCooldown is the duration a server must stay connected before its
 	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
 	RestartCooldown string `toml:"restart_cooldown"`
@@ -1377,6 +1387,11 @@ type ScheduleConfig struct {
 	// Tags are freeform labels for organizing and filtering schedules.
 	Tags []string `toml:"tags"`
 
+	// Headless runs the schedule with no chat: the turn runs and is stored,
+	// and nothing is sent. Without it, a schedule with no channel does nothing.
+	// Channel must be empty.
+	Headless bool `toml:"headless"`
+
 	// Enabled controls whether this schedule is active. Use a pointer so that
 	// an omitted field can be distinguished from an explicit false, allowing
 	// applyDefaults to set the value to true when unspecified.
@@ -1791,6 +1806,9 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.MaxRestartAttempts == 0 {
 		mcp.MaxRestartAttempts = 3
+	}
+	if mcp.MaxRestartBackoff == "" {
+		mcp.MaxRestartBackoff = "5m"
 	}
 	if mcp.RestartCooldown == "" {
 		mcp.RestartCooldown = "5m"
@@ -3406,11 +3424,20 @@ func validateSchedules(schedules []ScheduleConfig, agentNames map[string]bool, c
 			return fmt.Errorf("config: schedule %q: agent %q does not exist", s.Name, s.Agent)
 		}
 
-		if err := validateScheduleChannel(s.Name, s.Channel, channelNames); err != nil {
+		if err := validateScheduleDelivery(s, channelNames); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validateScheduleDelivery checks where a schedule's reply goes: a channel,
+// or nowhere for a headless schedule, never both.
+func validateScheduleDelivery(s ScheduleConfig, channelNames map[string]bool) error {
+	if s.Headless && s.Channel != "" {
+		return fmt.Errorf("config: schedule %q: a headless schedule answers in no chat, so leave channel empty", s.Name)
+	}
+	return validateScheduleChannel(s.Name, s.Channel, channelNames)
 }
 
 // ParseChannel splits a channel string like "telegram:123456" into adapter
@@ -3626,6 +3653,15 @@ func validateMCP(mcp *MCPConfig) error {
 	}
 	if mcp.MaxRestartAttempts < 0 {
 		return fmt.Errorf("config: mcp.max_restart_attempts must be non-negative")
+	}
+	if mcp.MaxRestartBackoff != "" {
+		d, err := time.ParseDuration(mcp.MaxRestartBackoff)
+		if err != nil {
+			return fmt.Errorf("config: mcp.max_restart_backoff: invalid duration %q: %w", mcp.MaxRestartBackoff, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("config: mcp.max_restart_backoff must be positive")
+		}
 	}
 	if mcp.RestartCooldown != "" {
 		if _, err := time.ParseDuration(mcp.RestartCooldown); err != nil {

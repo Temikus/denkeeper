@@ -46,6 +46,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 	"github.com/Temikus/denkeeper/internal/skilleffect"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 	openaivoice "github.com/Temikus/denkeeper/internal/voice/openai"
 	"github.com/Temikus/denkeeper/internal/web"
@@ -200,6 +201,7 @@ type stores struct {
 	kvStore         *kv.SQLiteStore
 	auditStore      *audit.SQLiteStore
 	evalStore       *eval.Store
+	taskStore       *task.Store
 }
 
 // initStores creates the memory, approval, and KV stores that share a single
@@ -245,12 +247,22 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 		return stores{}, fmt.Errorf("initializing eval store: %w", err)
 	}
 
+	taskStore, err := task.NewSQLiteStore(cfg.Memory.DBPath)
+	if err != nil {
+		_ = evalStore.Close()
+		_ = kvStore.Close()
+		_ = approvalStore.Close()
+		_ = memory.Close()
+		return stores{}, fmt.Errorf("initializing task store: %w", err)
+	}
+
 	// Audit store uses a separate DB file to avoid contention with the main store.
 	var auditStore *audit.SQLiteStore
 	if cfg.Audit.AuditEnabled() {
 		auditDBPath := filepath.Join(filepath.Dir(cfg.Memory.DBPath), "audit.db")
 		auditStore, err = audit.NewSQLiteStore(auditDBPath)
 		if err != nil {
+			_ = taskStore.Close()
 			_ = evalStore.Close()
 			_ = kvStore.Close()
 			_ = approvalStore.Close()
@@ -266,6 +278,7 @@ func initStores(cfg *config.Config, logger *slog.Logger) (stores, error) {
 		kvStore:         kvStore,
 		auditStore:      auditStore,
 		evalStore:       evalStore,
+		taskStore:       taskStore,
 	}, nil
 }
 
@@ -282,6 +295,9 @@ func auditReader(st *audit.SQLiteStore) audit.Store {
 func (s stores) Close() {
 	if s.auditStore != nil {
 		_ = s.auditStore.Close()
+	}
+	if s.taskStore != nil {
+		_ = s.taskStore.Close()
 	}
 	if s.evalStore != nil {
 		_ = s.evalStore.Close()
@@ -828,6 +844,7 @@ type agentBuildCtx struct {
 	auditor         audit.Emitter
 	auditStore      audit.Store // nil when [audit] is disabled
 	evalStore       *eval.Store
+	tasks           *task.Service
 	scriptSem       chan struct{}
 	logger          *slog.Logger
 }
@@ -864,6 +881,7 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 		PermissionTier: e.PermissionTier,
 		LifecycleMgr:   abc.lifecycleMgr,
 		KVStore:        abc.kvStore,
+		Tasks:          abc.tasks,
 
 		KVListMaxBytes:       abc.cfg.KV.ListMaxBytes,
 		KVListValueHeadBytes: abc.cfg.KV.ListValueHeadBytes,
@@ -1364,6 +1382,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 		p = persona.NewEmpty(ac.PersonaDir)
 	} else {
 		abc.logger.Info("persona loaded", "agent", ac.Name, "dir", ac.PersonaDir)
+		agent.WarnStaleDirectivesInPersona(p, ac.Name, abc.logger)
 	}
 	p.SetCharLimits(abc.cfg.Memory.PersonaMemoryCharLimit, abc.cfg.Memory.PersonaUserCharLimit)
 
@@ -1704,6 +1723,11 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 
 		targets := resolved.targets
 		conversationID := resolved.conversationID
+		if sc.Headless {
+			// One run with no chat target; the engine sends nothing.
+			targets = []agent.AdapterBinding{{}}
+			conversationID = configmcp.HeadlessConversationID(sc.Name)
+		}
 		broadcast := len(targets) > 1
 		targetAgent := sc.Agent // defaults to "default" from applyDefaults
 
@@ -1716,10 +1740,11 @@ func registerSchedules(ctx context.Context, cfg *config.Config, sched *scheduler
 			SessionTier: sc.SessionTier,
 			SessionMode: sc.SessionMode,
 			Channel:     sc.Channel,
+			Headless:    sc.Headless,
 			Tags:        sc.Tags,
 			Enabled:     *sc.Enabled,
 		}, func(entry scheduler.Entry) {
-			if sc.Channel == "" {
+			if sc.Channel == "" && !sc.Headless {
 				logger.Debug("schedule fired, no channel configured", "name", entry.Name)
 				return
 			}
@@ -1759,6 +1784,7 @@ func buildScheduledMessage(sc config.ScheduleConfig, entry scheduler.Entry, targ
 		ScheduleName:   sc.Name,
 		ScheduleCron:   sc.Schedule,
 		IsScheduled:    true,
+		Headless:       sc.Headless,
 		Timestamp:      now,
 	}
 	if entry.SessionMode == "isolated" {
@@ -1792,6 +1818,8 @@ type startAPIWithMCPArgs struct {
 	evalStore       *eval.Store
 	evalRunner      *eval.Runner
 	evalJudge       *eval.Judge
+	tasks           *task.Service
+	taskDir         *taskDirectory
 	oauthDeps       *api.OAuthDeps
 	abc             agentBuildCtx
 	cfgHolder       *config.Holder
@@ -1804,6 +1832,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 	if err != nil {
 		return err
 	}
+	a.taskDir.setKeyStore(keyStore)
 
 	mcpSrv := mcpserver.New(cfg.API.MCPServer, mcpserver.Deps{
 		Dispatcher:      a.dispatcher,
@@ -1820,6 +1849,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		Auditor:         a.auditor,
 		AuditStore:      a.auditStore,
 		EvalStore:       a.evalStore,
+		Tasks:           a.tasks,
 		ConfigPath:      a.path,
 		Version:         version,
 		Logger:          a.logger,
@@ -1854,6 +1884,7 @@ func startAPIWithMCP(ctx context.Context, cfg *config.Config, a startAPIWithMCPA
 		EvalStore:         a.evalStore,
 		EvalRunner:        a.evalRunner,
 		EvalJudge:         a.evalJudge,
+		Tasks:             a.tasks,
 		ConfigPath:        a.path,
 		ModelLister:       catalog.ListModels,
 		ModelDetailLister: catalog.ListModelDetails,
@@ -1958,6 +1989,12 @@ func startAPIAndWireBroadcast(ctx context.Context, cfg *config.Config, dispatche
 				})
 			}
 		}
+	}
+
+	if hub != nil && deps.Tasks != nil {
+		deps.Tasks.SetOnChange(func(c task.Change) {
+			hub.Broadcast(api.TaskUpdatedFrame{Type: api.FrameTypeTaskUpdated, TaskID: c.TaskID, Kind: c.Kind})
+		})
 	}
 
 	// Wire panic/resume hooks — pause scheduler and broadcast status.
@@ -2148,6 +2185,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 	sharedToolMgr.Auditor = auditor
 	st.approvalManager.Auditor = auditor
 
+	taskDir := &taskDirectory{cfg: cfgHolder}
+	tasks := newTaskService(cfg, st.taskStore, taskDir, auditor)
+
 	abc := agentBuildCtx{
 		cfg:             cfg,
 		cfgHolder:       cfgHolder,
@@ -2166,6 +2206,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		auditor:         auditor,
 		auditStore:      auditReader(st.auditStore),
 		evalStore:       st.evalStore,
+		tasks:           tasks,
 		scriptSem:       scriptmcp.NewSemaphore(cfg.Script.MaxConcurrent),
 		logger:          logger,
 	}
@@ -2188,6 +2229,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// Update abc.dispatcher so the AgentFactory closure captures the final
 	// dispatcher (with channels and engines wired up).
 	abc.dispatcher = dispatcher
+	taskDir.setDispatcher(dispatcher)
 
 	wireCallbackResolver(tgAdapter, st.approvalManager, logger)
 	wireSkillCommands(tgAdapter, engines, logger)
@@ -2223,6 +2265,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 			evalStore:       st.evalStore,
 			evalRunner:      evalRunner,
 			evalJudge:       evalJudge,
+			tasks:           tasks,
+			taskDir:         taskDir,
 			oauthDeps:       oauthDeps,
 			abc:             abc,
 			cfgHolder:       cfgHolder,

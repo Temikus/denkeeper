@@ -44,17 +44,22 @@ func supervisorEvent(t *testing.T, at time.Duration, conv, tool, args, decision 
 	}
 }
 
+// allScores answers every question so that every check scores p.
 func allScores(p float64) map[string]float64 {
-	return map[string]float64{deciderQAligned: p, deciderQSafeArgs: p, deciderQScoped: p}
+	s := make(map[string]float64, len(deciderQuestionIDs))
+	for _, id := range deciderQuestionIDs {
+		s[id] = DeciderAnswerForScore(id, p)
+	}
+	return s
 }
 
 func TestPairShadowReviews_PairsWithSupervisorVerdict(t *testing.T) {
 	cost := 0.04
+	answers := allScores(0.99)
+	answers[deciderQSecrets] = 0.07
 	events := []audit.Event{
 		supervisorEvent(t, 2*time.Second, "c1", "web_fetch", `{"url":"a"}`, "DENY", &cost),
-		shadowEvent(t, 0, "c1", "web_fetch", `{"url":"a"}`, map[string]float64{
-			deciderQAligned: 0.99, deciderQSafeArgs: 0.93, deciderQScoped: 0.97,
-		}),
+		shadowEvent(t, 0, "c1", "web_fetch", `{"url":"a"}`, answers),
 	}
 	reviews, failed := PairShadowReviews(events, "jev")
 	if failed != 0 || len(reviews) != 1 {
@@ -64,8 +69,8 @@ func TestPairShadowReviews_PairsWithSupervisorVerdict(t *testing.T) {
 	if r.Supervisor != "DENY" || r.SupervisorName != "argus" {
 		t.Errorf("supervisor = %q/%q, want DENY/argus", r.Supervisor, r.SupervisorName)
 	}
-	if r.MinScore == nil || *r.MinScore != 0.93 || r.Lowest != deciderQSafeArgs {
-		t.Errorf("min = %v on %q, want 0.93 on safe_args", r.MinScore, r.Lowest)
+	if r.MinScore == nil || *r.MinScore != 0.93 || r.Lowest != deciderCheckNoSecrets {
+		t.Errorf("min = %v on %q, want 0.93 on no_secrets", r.MinScore, r.Lowest)
 	}
 	if r.SupervisorCost == nil || *r.SupervisorCost != 0.04 {
 		t.Errorf("supervisor cost = %v, want 0.04", r.SupervisorCost)

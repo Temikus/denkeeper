@@ -33,6 +33,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Chat** | Talk to an agent, with streaming output and inline approvals |
 | **Sessions** | Browse conversations; per-session cost, tool calls, and skill usage |
 | **Agents** | Create and configure agents, personas, supervisors, and each agent's decision model, with a panel for calibrating its thresholds |
+| **Tasks** | The task board: file a task, assign it to an agent, Claude Code or yourself (or leave it for anyone), and follow its thread. Shown once [`[tasks]`](/docs/reference/config/#tasks) is on, which you can switch on the Server Config page |
 | **Channels** | Routing endpoints and which adapter each is active on |
 | **Skills** | Create, edit, and preview skills |
 | **Schedules** | Recurring jobs, with dry-run previews |

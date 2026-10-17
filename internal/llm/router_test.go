@@ -952,6 +952,39 @@ func TestRouter_ListModelDetails_FallbackToStaticEnrichment(t *testing.T) {
 	}
 }
 
+func TestRouter_ListModelDetails_DetailListerMissingPricingUsesRegistry(t *testing.T) {
+	ct := NewCostTracker(SessionLimits{}, nil)
+	r := NewRouter("p1", "m", ct)
+	reported := 99.0
+	p := &modelDetailsMockProvider{
+		mockProvider: mockProvider{name: "p1", response: &ChatResponse{}},
+		models: []ModelInfo{
+			{ID: "claude-sonnet-5-5", Provider: "p1"},
+			{ID: "claude-opus-5-5", Provider: "p1", InputPerMTok: &reported, OutputPerMTok: &reported},
+			{ID: "claude-haiku-5-5", Provider: "p1", InputPerMTok: &reported},
+		},
+	}
+	r.RegisterProvider(p)
+	r.SetPricing(pricing.New())
+
+	got := r.ListModelDetails(context.Background(), "")
+	byID := map[string]ModelInfo{}
+	for _, m := range got {
+		byID[m.ID] = m
+	}
+	sonnet := byID["claude-sonnet-5-5"]
+	if sonnet.InputPerMTok == nil || *sonnet.InputPerMTok != 2.0 || *sonnet.OutputPerMTok != 10.0 {
+		t.Errorf("sonnet pricing = %v/%v, want registry 2/10", sonnet.InputPerMTok, sonnet.OutputPerMTok)
+	}
+	if opus := byID["claude-opus-5-5"]; *opus.InputPerMTok != 99.0 {
+		t.Errorf("opus InputPerMTok = %v, want provider-reported 99", *opus.InputPerMTok)
+	}
+	haiku := byID["claude-haiku-5-5"]
+	if *haiku.InputPerMTok != 99.0 || haiku.OutputPerMTok == nil || *haiku.OutputPerMTok != 0.50 {
+		t.Errorf("haiku pricing = %v/%v, want provider 99 + registry 0.50", *haiku.InputPerMTok, haiku.OutputPerMTok)
+	}
+}
+
 func TestRouter_ListModelDetails_DetailListerErrorFallsThrough(t *testing.T) {
 	ct := NewCostTracker(SessionLimits{}, nil)
 	r := NewRouter("p1", "m", ct)

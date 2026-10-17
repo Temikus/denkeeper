@@ -36,6 +36,19 @@ func SupervisorDeciderVerdict(answers map[string]llm.Answer, approveAt, denyAt f
 	return string(d), reason
 }
 
+// DeciderAnswerForScore returns the answer to questionID that gives its check
+// the given score, so a fake decider can put every check at one value.
+func DeciderAnswerForScore(questionID string, score float64) float64 {
+	switch questionID {
+	case deciderQInjection, deciderQSecrets, deciderQSendsExternal:
+		return 1 - score
+	case deciderQPrivateData:
+		return 1 // no_leak = 1 - sends_external, which is 1 - (1 - score)
+	default:
+		return score
+	}
+}
+
 // SupervisorErrorCause classifies a failed review as the audit trail does:
 // cost_limit, timeout, too_large or provider_error.
 func SupervisorErrorCause(err error) string { return llm.DecisionErrorCause(err) }

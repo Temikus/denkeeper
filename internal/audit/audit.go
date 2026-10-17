@@ -52,6 +52,9 @@ const (
 	// keep their ordinary categories (llm, tool_call) and are told apart by
 	// their source, not by this category.
 	CategoryEval = "eval"
+	// CategoryTask covers task lifecycle changes (filed, claimed, released,
+	// reassigned, status, comment), whoever made them.
+	CategoryTask = "task"
 )
 
 // Event statuses.

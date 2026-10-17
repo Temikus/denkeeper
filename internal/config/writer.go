@@ -78,7 +78,7 @@ func WriteRawConfig(path string, raw map[string]any) error {
 // Schedule config persistence
 // ---------------------------------------------------------------------------
 
-func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) map[string]any {
+func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) map[string]any {
 	m := map[string]any{
 		"name":     name,
 		"type":     "agent",
@@ -97,6 +97,9 @@ func scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier
 	}
 	if agent != "" {
 		m["agent"] = agent
+	}
+	if headless {
+		m["headless"] = true
 	}
 	if len(tags) > 0 {
 		t := make([]any, len(tags))
@@ -120,7 +123,7 @@ func rawSchedules(raw map[string]any) []any {
 }
 
 // AddScheduleToConfig appends a [[schedules]] entry to the TOML config.
-func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -129,7 +132,7 @@ func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode,
 		return err
 	}
 
-	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled, headless)
 
 	schedules := rawSchedules(raw)
 	schedules = append(schedules, entry)
@@ -138,7 +141,7 @@ func AddScheduleToConfig(path, name, schedExpr, skillName, channel, sessionMode,
 }
 
 // UpdateScheduleInConfig replaces a [[schedules]] entry matched by name.
-func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled bool) error {
+func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMode, sessionTier, agent string, tags []string, enabled, headless bool) error {
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -147,7 +150,7 @@ func UpdateScheduleInConfig(path, name, schedExpr, skillName, channel, sessionMo
 		return err
 	}
 
-	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled)
+	entry := scheduleToMap(name, schedExpr, skillName, channel, sessionMode, sessionTier, agent, tags, enabled, headless)
 
 	schedules := rawSchedules(raw)
 	found := false
@@ -855,6 +858,16 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 // handling — so updating one sub-key does not clobber its siblings. Scalars are
 // replaced.
 func updateTopLevelSection(path, section string, changes map[string]any) error {
+	return UpdateSections(path, map[string]map[string]any{section: changes})
+}
+
+// UpdateSections applies partial updates to several top-level tables in one
+// read-modify-write, with updateTopLevelSection's merge rules. Either every
+// section is saved or the file is left as it was.
+func UpdateSections(path string, sections map[string]map[string]any) error {
+	if len(sections) == 0 {
+		return nil
+	}
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -862,23 +875,23 @@ func updateTopLevelSection(path, section string, changes map[string]any) error {
 	if err != nil {
 		return err
 	}
-
-	sec, ok := raw[section].(map[string]any)
-	if !ok {
-		sec = map[string]any{}
-	}
-	for k, v := range changes {
-		switch val := v.(type) {
-		case nil:
-			delete(sec, k)
-		case map[string]any:
-			sec[k] = mergeSubTable(sec[k], val)
-		default:
-			sec[k] = v
+	for section, changes := range sections {
+		sec, ok := raw[section].(map[string]any)
+		if !ok {
+			sec = map[string]any{}
 		}
+		for k, v := range changes {
+			switch val := v.(type) {
+			case nil:
+				delete(sec, k)
+			case map[string]any:
+				sec[k] = mergeSubTable(sec[k], val)
+			default:
+				sec[k] = v
+			}
+		}
+		raw[section] = sec
 	}
-	raw[section] = sec
-
 	return WriteRawConfig(path, raw)
 }
 

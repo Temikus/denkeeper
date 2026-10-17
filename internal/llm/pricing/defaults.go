@@ -4,7 +4,20 @@ package pricing
 // Prices are per million tokens (input / output / cached-input).
 // Sources: Anthropic, OpenAI, Google, and Meta published pricing pages.
 func (r *Registry) loadDefaults() {
-	// --- Anthropic (cached = 10% of input) ---
+	// --- Anthropic (cached = 10% of input unless noted) ---
+	// Haiku 5.5 charges $0.50/$2.50 for prompts over 100K tokens; the
+	// registry has one rate per model, so long prompts are under-counted.
+	r.RegisterPrefix("claude-fable-5-1", ModelPrice{10.0, 50.0, 0.25})
+	r.RegisterPrefix("claude-fable-5", ModelPrice{10.0, 50.0, 1.0})
+	r.RegisterPrefix("claude-opus-5-5", ModelPrice{4.0, 20.0, 0.20})
+	r.RegisterPrefix("claude-opus-5", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-sonnet-5", ModelPrice{2.0, 10.0, 0.20})
+	r.RegisterPrefix("claude-haiku-5", ModelPrice{0.10, 0.50, 0.01})
+	r.RegisterPrefix("claude-opus-4-8", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-opus-4-7", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-opus-4-6", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-opus-4-5", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-haiku-4-5", ModelPrice{1.0, 5.0, 0.10})
 	r.RegisterPrefix("claude-opus-4", ModelPrice{15.0, 75.0, 1.50})
 	r.RegisterPrefix("claude-sonnet-4", ModelPrice{3.0, 15.0, 0.30})
 	r.RegisterPrefix("claude-3-7-sonnet", ModelPrice{3.0, 15.0, 0.30})
