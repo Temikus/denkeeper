@@ -9128,6 +9128,10 @@
                     "description": "check with the lowest score; \"\" when an answer is missing",
                     "type": "string"
                 },
+                "min_deny_score": {
+                    "description": "lowest check that can deny (no_leak only escalates); nil when an answer is missing",
+                    "type": "number"
+                },
                 "min_score": {
                     "description": "nil: an answer is missing, so the call always escalates",
                     "type": "number"
@@ -9136,6 +9140,7 @@
                     "type": "string"
                 },
                 "scores": {
+                    "description": "check scores by name; high means safe",
                     "type": "object",
                     "additionalProperties": {
                         "type": "number",

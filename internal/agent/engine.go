@@ -41,7 +41,7 @@ const approvalAbortTimeout = 5 * time.Second
 const defaultSupervisorContextMessages = 5
 const defaultSupervisorTimeout = 30 * time.Second
 const defaultSupervisorBodyExcerptLen = 500
-const defaultSupervisorToolDescLen = 200
+const defaultSupervisorToolDescLen = 1000
 
 // defaultSupervisorMaxArgsBytes caps tool-call arguments sent for supervisor
 // review; larger calls escalate to a human without an LLM call.
