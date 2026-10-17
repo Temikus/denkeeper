@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
 import ServerConfig from '../../pages/ServerConfig.svelte'
+import { features } from '../../features.js'
 
 beforeEach(() => {
   token.set('test-key')
@@ -606,6 +607,91 @@ describe('ServerConfig page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Toggle failed')).toBeInTheDocument()
+    })
+    expect(webToggle.checked).toBe(true)
+  })
+
+  test('a failed MCP transport save puts the old value back', async () => {
+    server.use(
+      http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [],
+        mcp_server_enabled: true, mcp_server_transport: 'streamable',
+      })),
+      http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'config file could not be saved' }, { status: 500 })
+      ),
+    )
+    const { container } = render(ServerConfig)
+    await screen.findByText('Transport')
+    const select = container.querySelector('select.inline-select')
+
+    await fireEvent.change(select, { target: { value: 'sse' } })
+
+    await screen.findByText('config file could not be saved')
+    expect(select.value).toBe('streamable')
+  })
+
+  describe('Tasks toggle', () => {
+    beforeEach(() => features.set({ tasks: false, loaded: true }))
+
+    test('turning tasks on saves it and says a restart applies it', async () => {
+      let body = null
+      server.use(
+        http.patch('/api/v1/server/config', async ({ request }) => {
+          body = await request.json()
+          return HttpResponse.json({ status: 'updated', restart_required: true })
+        }),
+      )
+      render(ServerConfig)
+      const toggle = await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(toggle.checked).toBe(false)
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+
+      await fireEvent.change(toggle, { target: { checked: true } })
+
+      await waitFor(() => expect(body).toEqual({ tasks_enabled: true }))
+      expect(await screen.findByTestId('tasks-pending')).toHaveTextContent(
+        'Saved as on, but the server is still running with tasks off.')
+    })
+
+    test('a saved setting the server hasn\'t picked up yet is flagged on load', async () => {
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      expect(await screen.findByTestId('tasks-pending')).toHaveTextContent('Restart it')
+    })
+
+    test('no notice once the running server matches', async () => {
+      features.set({ tasks: true, loaded: true })
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+    })
+
+    test('no notice while /health hasn\'t answered yet', async () => {
+      features.set({ tasks: false, loaded: false })
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+    })
+
+    test('a failed save puts the switch back', async () => {
+      server.use(http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'write failed' }, { status: 500 })))
+      render(ServerConfig)
+      const toggle = await screen.findByRole('checkbox', { name: 'Tasks' })
+
+      await fireEvent.change(toggle, { target: { checked: true } })
+
+      await waitFor(() => expect(toggle.checked).toBe(false))
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
     })
   })
 })

@@ -35,7 +35,7 @@ func readTestConfig(t *testing.T, path string) string {
 func TestAddScheduleToConfig(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	err := AddScheduleToConfig(path, "daily-report", "@daily", "greet", "telegram:123", "isolated", "", "default", nil, true)
+	err := AddScheduleToConfig(path, "daily-report", "@daily", "greet", "telegram:123", "isolated", "", "default", nil, true, false)
 	if err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestAddScheduleToConfig(t *testing.T) {
 func TestAddScheduleToConfig_WithTags(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	err := AddScheduleToConfig(path, "tagged", "@hourly", "", "telegram:1", "", "", "", []string{"tag1", "tag2"}, true)
+	err := AddScheduleToConfig(path, "tagged", "@hourly", "", "telegram:1", "", "", "", []string{"tag1", "tag2"}, true, false)
 	if err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
@@ -66,11 +66,11 @@ func TestAddScheduleToConfig_WithTags(t *testing.T) {
 func TestUpdateScheduleInConfig(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	if err := AddScheduleToConfig(path, "update-me", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+	if err := AddScheduleToConfig(path, "update-me", "@daily", "", "telegram:1", "", "", "", nil, true, false); err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
 
-	err := UpdateScheduleInConfig(path, "update-me", "@hourly", "skill1", "telegram:1", "shared", "", "", nil, false)
+	err := UpdateScheduleInConfig(path, "update-me", "@hourly", "skill1", "telegram:1", "shared", "", "", nil, false, false)
 	if err != nil {
 		t.Fatalf("UpdateScheduleInConfig: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestUpdateScheduleInConfig(t *testing.T) {
 func TestUpdateScheduleInConfig_NotFound(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	err := UpdateScheduleInConfig(path, "nonexistent", "@daily", "", "telegram:1", "", "", "", nil, true)
+	err := UpdateScheduleInConfig(path, "nonexistent", "@daily", "", "telegram:1", "", "", "", nil, true, false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent schedule, got nil")
 	}
@@ -99,10 +99,10 @@ func TestUpdateScheduleInConfig_NotFound(t *testing.T) {
 func TestRemoveScheduleFromConfig(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	if err := AddScheduleToConfig(path, "keep", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+	if err := AddScheduleToConfig(path, "keep", "@daily", "", "telegram:1", "", "", "", nil, true, false); err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
-	if err := AddScheduleToConfig(path, "remove-me", "@hourly", "", "telegram:2", "", "", "", nil, true); err != nil {
+	if err := AddScheduleToConfig(path, "remove-me", "@hourly", "", "telegram:2", "", "", "", nil, true, false); err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestRemoveScheduleFromConfig(t *testing.T) {
 func TestRemoveScheduleFromConfig_LastEntry(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	if err := AddScheduleToConfig(path, "only-one", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+	if err := AddScheduleToConfig(path, "only-one", "@daily", "", "telegram:1", "", "", "", nil, true, false); err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
 
@@ -955,7 +955,7 @@ api_key = "sk-test"
 func TestWriteRawConfig_CreatesBackup(t *testing.T) {
 	path := writeTestConfig(t, "[api]\nenabled = true\n")
 
-	if err := AddScheduleToConfig(path, "test", "@daily", "", "telegram:1", "", "", "", nil, true); err != nil {
+	if err := AddScheduleToConfig(path, "test", "@daily", "", "telegram:1", "", "", "", nil, true, false); err != nil {
 		t.Fatalf("AddScheduleToConfig: %v", err)
 	}
 
@@ -984,7 +984,7 @@ func TestConcurrentConfigWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errs[i] = AddScheduleToConfig(path, fmt.Sprintf("sched-%d", i),
-				"@daily", "", "telegram:1", "", "", "", nil, true)
+				"@daily", "", "telegram:1", "", "", "", nil, true, false)
 		}()
 	}
 	wg.Wait()
@@ -1203,5 +1203,49 @@ func TestRenameAgentInConfig_RewritesChannelAgent(t *testing.T) {
 	}
 	if _, err := Load(path); err != nil {
 		t.Errorf("Load after rename: %v", err)
+	}
+}
+
+func TestUpdateSections_SavesEverySectionAndKeepsSiblings(t *testing.T) {
+	path := writeTestConfig(t, "[api]\nlisten = \":8443\"\n[api.mcp_server]\nchat_timeout = \"30s\"\n[script]\ntimeout = \"2s\"\n")
+
+	err := UpdateSections(path, map[string]map[string]any{
+		"api":    {"timezone": "UTC", "mcp_server": map[string]any{"transport": "sse"}},
+		"script": {"enabled": true, "timeout": nil},
+		"tasks":  {"enabled": true},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSections: %v", err)
+	}
+
+	raw, err := ReadRawConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := raw["api"].(map[string]any)
+	mcp, _ := api["mcp_server"].(map[string]any)
+	script, _ := raw["script"].(map[string]any)
+	tasks, _ := raw["tasks"].(map[string]any)
+	if api["listen"] != ":8443" || api["timezone"] != "UTC" {
+		t.Errorf("[api] = %v", api)
+	}
+	if mcp["chat_timeout"] != "30s" || mcp["transport"] != "sse" {
+		t.Errorf("[api.mcp_server] = %v", mcp)
+	}
+	if _, ok := script["timeout"]; ok || script["enabled"] != true {
+		t.Errorf("[script] = %v, want enabled and timeout deleted", script)
+	}
+	if tasks["enabled"] != true {
+		t.Errorf("[tasks] = %v", tasks)
+	}
+}
+
+func TestUpdateSections_NothingToSaveLeavesFileAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.toml")
+	if err := UpdateSections(path, nil); err != nil {
+		t.Fatalf("UpdateSections(nil) = %v, want nil", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file was created: %v", err)
 	}
 }

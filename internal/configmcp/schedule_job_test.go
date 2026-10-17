@@ -69,3 +69,66 @@ func TestBuildScheduleJob_NilLocationDefaultsUTC(t *testing.T) {
 		t.Errorf("Text = %q, should fall back to UTC", captured.Text)
 	}
 }
+
+func TestBuildScheduleJob_HeadlessRunsOnceWithNoTarget(t *testing.T) {
+	var got []adapter.IncomingMessage
+	handleMsg := func(_ context.Context, msg adapter.IncomingMessage) error {
+		got = append(got, msg)
+		return nil
+	}
+	cfg := scheduler.Config{Name: "check-tasks-pamela", Schedule: "@every 30m", Skill: "check-tasks", Headless: true}
+	job := BuildScheduleJob(cfg, handleMsg, slog.Default(), nil, BuildScheduleJobOpts{})
+	job(scheduler.Entry{Name: "check-tasks-pamela", Skill: "check-tasks"})
+
+	if len(got) != 1 {
+		t.Fatalf("handled %d messages, want 1", len(got))
+	}
+	m := got[0]
+	if !m.Headless || m.Adapter != "" || m.ExternalID != "" {
+		t.Errorf("message = headless %v, target %q:%q; want headless with no target", m.Headless, m.Adapter, m.ExternalID)
+	}
+	if m.ConversationID != "sched:check-tasks-pamela" {
+		t.Errorf("ConversationID = %q, want sched:check-tasks-pamela", m.ConversationID)
+	}
+}
+
+func TestMergeScheduleUpdate_KeepsHeadless(t *testing.T) {
+	existing := scheduler.Entry{Name: "check-tasks-pamela", Expr: "@every 30m", Skill: "check-tasks", Agent: "pamela", Headless: true, Enabled: true}
+	paused := false
+	cfg, errMsg := MergeScheduleUpdate(existing, ScheduleUpdateInput{Name: existing.Name, Enabled: &paused})
+	if errMsg != "" {
+		t.Fatalf("merge refused an edit to a headless schedule: %s", errMsg)
+	}
+	if !cfg.Headless || cfg.Channel != "" || cfg.Enabled {
+		t.Errorf("merged = %+v, want headless kept, no channel, disabled", cfg)
+	}
+
+	ch := "telegram:1"
+	if _, errMsg := MergeScheduleUpdate(existing, ScheduleUpdateInput{Name: existing.Name, Channel: &ch}); errMsg == "" {
+		t.Error("a channel on a headless schedule was accepted")
+	}
+	off := false
+	cfg, errMsg = MergeScheduleUpdate(existing, ScheduleUpdateInput{Name: existing.Name, Channel: &ch, Headless: &off})
+	if errMsg != "" || cfg.Headless || cfg.Channel != ch {
+		t.Errorf("switching to a channel = %+v, %q", cfg, errMsg)
+	}
+}
+
+func TestValidateScheduleDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		channel  string
+		headless bool
+		ok       bool
+	}{
+		{"", true, true},
+		{"telegram:1", true, false},
+		{"", false, false},
+		{"telegram:1", false, true},
+		{"@main", false, true},
+		{"telegram", false, false},
+	} {
+		if got := ValidateScheduleDelivery(tc.channel, tc.headless) == ""; got != tc.ok {
+			t.Errorf("ValidateScheduleDelivery(%q, %v) ok = %v, want %v", tc.channel, tc.headless, got, tc.ok)
+		}
+	}
+}

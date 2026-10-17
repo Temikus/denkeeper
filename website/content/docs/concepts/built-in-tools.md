@@ -99,6 +99,19 @@ Reads are allowed at every tier; writes are denied in `restricted`.
 
 The namespaces an agent chooses are its own. Treat any convention you suggest as a starting point rather than a schema it must obey.
 
+## Tasks
+
+Tasks are how work moves between your agents, outside harnesses such as Claude Code, and you. They are off until you set [`[tasks] enabled = true`](/docs/reference/config/#tasks). Each agent then gets `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, and `task_update`, and acts on tasks as itself.
+
+- **Delegating** is filing a task with an assignee. Passing `parent` makes it a subtask of the agent's own task; subtasks nest at most three deep.
+- **Claiming** with `task_checkout` is atomic: one agent holds a task at a time. A refused claim names the holder, and the agent should move on rather than retry.
+- **Review**: the filer reviews by default, so an assignee moves finished work to `review` and the filer closes it.
+- **Unassigned** tasks are plain to-dos that anyone may claim.
+
+Reads (`task_list`, `task_get`) work at every tier; the rest are denied in `restricted`. Outside harnesses get the same tools over the [MCP server](/docs/guides/mcp-server/).
+
+**Check-ins.** Nothing wakes an agent when a task is assigned to it. Instead, the agent checks its list on a schedule. On the Tasks page, assigning a task to an agent with no check-in offers **Check every 30 min**. That adds a `check-tasks` skill to the agent and a [`headless`](/docs/reference/config/#schedules) schedule that runs it every 30 minutes with no chat. Each check-in claims one task, works on it, and reports in the task thread. You can also run it yourself with `/check-tasks`. Every check-in is a model call, even when there is nothing to do, so change the interval or pause it on the **Schedules** page. A check-in has no chat to ask you in, so a `supervised` agent's tool calls that need approval go to its [supervisor](/docs/concepts/supervisors/), and are denied if it has none.
+
 ## Browser automation
 
 Off by default. When enabled, the agent drives a real browser running in a container.

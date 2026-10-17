@@ -205,12 +205,12 @@ Defaults for agents that do not set their own directories.
 | `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval |
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
-| `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
+| `supervisor_tool_desc_len` | int | `1000` | Max characters of tool description included in the review prompt |
 | `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
-| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call (aligned, safe arguments, scoped) before the supervisor. Supervised tier only; works with or without `supervisor` |
+| `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call before the supervisor: six yes/no questions, combined into five checks where high means safe (see [Decision Models](/docs/concepts/deciders/#the-checks)). Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |
-| `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every answer is at or above this probability |
-| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any answer is at or below this probability. Must satisfy `0 < deny_at < approve_at < 1` |
+| `supervisor_decider_approve_at` | float | `0.95` | The decider approves when every check is at or above this score |
+| `supervisor_decider_deny_at` | float | `0.05` | The decider denies when any check except `no_leak` (which only escalates) is at or below this score. Must satisfy `0 < deny_at < approve_at < 1` |
 
 Decider spend is billed to the reviewed agent, per conversation. A decider failure (timeout, cost limit, input too large) is audited and never approves anything. See [Decision Models](/docs/concepts/deciders/) for how to move from shadow to enforce.
 
@@ -338,6 +338,16 @@ Gives every agent an in-process `decide` tool that puts typed questions about a 
 | `enabled` | bool | `true` | Switch the tool off without unnaming the decider. `true` without a `decider` is rejected |
 
 The tool is classified read-only, so it is available in the `restricted` tier and in dry runs, and identical calls within one turn are served from cache. Spend is billed to the calling agent under a per-day session key and counts against its cost limits. The state an agent passes goes to the decider's provider. Changes to the named decider apply on reload; turning `[decide]` on or off, or naming another decider, needs a restart, like `[script]`.
+
+## `[tasks]`
+
+The shared task board that your agents, outside harnesses such as Claude Code, and you hand work through. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turns on the `/api/v1/tasks` endpoints, the `task_*` tools on every agent and on the [MCP server](/docs/guides/mcp-server/), and the dashboard's **Tasks** page |
+
+While it is off, the task endpoints answer `503` and the tools aren't offered. Changing it needs a restart. You can also switch it under **Features** on the dashboard's Server page, which writes this key and tells you when a restart is still needed. See [Tasks](/docs/concepts/built-in-tools/#tasks).
 
 ## `[skills]`
 
@@ -481,7 +491,7 @@ key = "dk_..."
 scopes = ["chat", "sessions:read"]
 ```
 
-**Valid scopes:** `admin`, `chat`, `health`, `sessions:read`, `sessions:write`, `costs:read`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `browser:read`, `browser:write`, `kv:read`, `kv:write`, `audit:read`, `channels:read`, `channels:write`, `eval:read`, `eval:write`. `admin` implies every other scope.
+**Valid scopes:** `admin`, `chat`, `health`, `sessions:read`, `sessions:write`, `costs:read`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `schedules:read`, `schedules:write`, `approvals:read`, `approvals:write`, `tools:read`, `tools:write`, `browser:read`, `browser:write`, `kv:read`, `kv:write`, `audit:read`, `channels:read`, `channels:write`, `eval:read`, `eval:write`, `tasks:read`, `tasks:write`. `admin` implies every other scope.
 
 ## `[api.mcp_server]`
 
@@ -507,7 +517,8 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | `skill` | string | — | Skill to invoke |
 | `agent` | string | `"default"` | Target agent |
 | `session_tier` | string | `"supervised"` | Permission tier for this schedule |
-| `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`) |
+| `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`). Without one, a schedule does nothing unless it is `headless` |
+| `headless` | bool | `false` | Run with no chat: the turn runs and is kept in Sessions (and in the Turn inspector when `[eval] capture` is on), and nothing is sent. Leave `channel` empty. Used by task check-ins |
 | `tags` | string[] | — | Freeform labels |
 | `enabled` | bool | `true` | Enable/disable without removing |
 | `session_mode` | string | `"shared"` | `"shared"` reuses the target channel's existing conversation history; `"isolated"` starts a fresh conversation with no prior context for each run. Note: schedules created via `POST /schedules` default to `"isolated"` instead — the default differs by creation path |
@@ -595,7 +606,8 @@ Global settings that apply to all MCP tool servers.
 |---|---|---|---|
 | `request_timeout_secs` | int | `30` | Per-request timeout for MCP calls (0 = no timeout) |
 | `auto_restart` | bool | `true` | Automatically restart crashed stdio servers |
-| `max_restart_attempts` | int | `3` | Consecutive failures before disabling a server |
+| `max_restart_attempts` | int | `3` | Quick restart attempts (1s, 2s, 4s apart) before retries slow down. A failing server is never disabled |
+| `max_restart_backoff` | string | `"5m"` | Longest wait between restart attempts after the quick ones. The wait starts at 30s and doubles |
 | `restart_cooldown` | string | `"5m"` | Duration a server must stay connected to reset the failure counter |
 | `drain_timeout` | string | `"35s"` | How long teardown waits for in-flight tool calls before forcing the transport closed |
 | `url_allowlist` | string[] | — | Allowed hostnames/wildcards for SSE tool server URLs (empty = all non-blocked hosts) |

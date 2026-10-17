@@ -29,6 +29,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/onboarding/chatapp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/scope"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -60,6 +61,7 @@ type Deps struct {
 	MetricsHandler    http.Handler                                                             // nil = no /metrics endpoint
 	KeyStore          *KeyStore                                                                // nil = API key CRUD endpoints return 503
 	KVStore           kv.Store                                                                 // nil = KV endpoints return 503
+	Tasks             *task.Service                                                            // nil = task endpoints return 503
 	ConfigPath        string                                                                   // TOML config path for schedule persistence
 	Sessions          *SessionManager                                                          // nil = no session-based auth
 	OIDCProvider      *OIDCProvider                                                            // nil = no OIDC endpoints
@@ -102,6 +104,11 @@ type Server struct {
 	// TOCTOU race where two concurrent requests both see setup_required=true
 	// and both succeed in creating a key.
 	setupMu sync.Mutex
+
+	// serverConfigMu holds a PATCH server/config across its file write and its
+	// live-config update, so concurrent PATCHes can't save and apply in
+	// different orders and leave the two disagreeing.
+	serverConfigMu sync.Mutex
 
 	// Auth: session-based login (password + OIDC).
 	sessions     *SessionManager
@@ -336,6 +343,16 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/browser/sessions", s.RequireScope("browser:read", s.handleListBrowserSessions))
 	mux.HandleFunc("GET /api/v1/browser/config", s.RequireScope("browser:read", s.handleBrowserConfig))
 
+	// Task endpoints. The members route is registered before {id} for
+	// readability; the mux prefers the literal segment either way.
+	mux.HandleFunc("GET /api/v1/tasks", s.RequireScope("tasks:read", s.handleListTasks))
+	mux.HandleFunc("POST /api/v1/tasks", s.RequireScope("tasks:write", s.handleCreateTask))
+	mux.HandleFunc("GET /api/v1/tasks/members", s.RequireScope("tasks:read", s.handleTaskMembers))
+	mux.HandleFunc("GET /api/v1/tasks/{id}", s.RequireScope("tasks:read", s.handleGetTask))
+	mux.HandleFunc("PATCH /api/v1/tasks/{id}", s.RequireScope("tasks:write", s.handleUpdateTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/comments", s.RequireScope("tasks:write", s.handleCommentTask))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/release", s.RequireScope("tasks:write", s.handleReleaseTask))
+
 	// KV store endpoints.
 	mux.HandleFunc("GET /api/v1/kv/{agent}", s.RequireScope("kv:read", s.handleListKV))
 	mux.HandleFunc("GET /api/v1/kv/{agent}/{key...}", s.RequireScope("kv:read", s.handleGetKV))
@@ -508,6 +525,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status":     "ok",
 		"ws_enabled": s.wsHub != nil,
+	}
+	if s.deps.Tasks != nil {
+		resp["tasks_enabled"] = true
 	}
 	if cfg := s.appConfig(); cfg.API.IsMCPServerEnabled() {
 		resp["mcp_server_enabled"] = true
@@ -982,6 +1002,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		SessionTier string   `json:"session_tier,omitempty"`
 		SessionMode string   `json:"session_mode,omitempty"`
 		Channel     string   `json:"channel,omitempty"`
+		Headless    bool     `json:"headless,omitempty"`
 		Tags        []string `json:"tags,omitempty"`
 		Enabled     bool     `json:"enabled"`
 		LastRun     string   `json:"last_run,omitempty"`
@@ -999,6 +1020,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 			SessionTier: e.SessionTier,
 			SessionMode: e.SessionMode,
 			Channel:     e.Channel,
+			Headless:    e.Headless,
 			Tags:        e.Tags,
 			Enabled:     e.Enabled,
 		}

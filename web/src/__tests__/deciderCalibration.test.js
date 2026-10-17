@@ -17,6 +17,11 @@ describe('verdict', () => {
   test('a review with a missing answer always escalates', () => {
     expect(verdict(row(null), 0.01, 0.001)).toBe('ESCALATE')
   })
+
+  test('a low escalate-only check blocks approval but does not deny', () => {
+    expect(verdict(row(0.02, 'APPROVE', { min_deny_score: 0.97 }), 0.95, 0.05)).toBe('ESCALATE')
+    expect(verdict(row(0.02, 'APPROVE', { min_deny_score: 0.03 }), 0.95, 0.05)).toBe('DENY')
+  })
 })
 
 describe('summarize', () => {

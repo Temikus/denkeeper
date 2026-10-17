@@ -30,6 +30,9 @@ type IncomingMessage struct {
 	// Used to correctly attribute audit events and distinguish scheduled
 	// invocations from user-initiated ones.
 	IsScheduled bool
+	// Headless marks a scheduled run with no chat to answer in. The turn runs
+	// and is stored, but the engine sends no reply.
+	Headless bool
 	// IsVoice is true when the original message was a voice note.
 	// The adapter sets this after transcribing the audio via STT.
 	IsVoice bool

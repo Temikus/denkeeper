@@ -54,6 +54,11 @@ func (s *Server) registerTools() {
 		s.registerKVTools()
 	}
 
+	// Task tools (registered only when the task service and an agent name are provided).
+	if s.deps.Tasks != nil && s.deps.AgentName != "" {
+		s.registerTaskTools()
+	}
+
 	// Browser profile tools (registered only when browser automation is enabled).
 	if s.deps.BrowserProfiles != nil {
 		s.registerBrowserTools()
@@ -229,13 +234,14 @@ func (s *Server) registerScheduleTools() {
 					"name":         {"type": "string",  "description": "Unique schedule identifier"},
 					"schedule":     {"type": "string",  "description": "Timing expression: @daily, @every 5m, or 5-field cron"},
 					"skill":        {"type": "string",  "description": "Skill name to invoke when the schedule fires"},
-					"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context."},
+					"channel":      {"type": "string",  "description": "Delivery channel in adapter:externalID format (e.g. telegram:387956986, discord:1234567890). Use the channel from your Session Context. Required unless headless."},
 					"session_mode": {"type": "string",  "description": "shared or isolated (default: isolated)"},
 					"session_tier": {"type": "string",  "description": "Permission tier override for this schedule"},
 					"tags":         {"type": "array", "items": {"type": "string"}, "description": "Freeform labels"},
-					"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"}
+					"enabled":      {"type": "boolean", "description": "Whether to start immediately (default: true)"},
+					"headless":     {"type": "boolean", "description": "Run with no chat: the turn is stored and nothing is sent. Leave channel empty. Use it for work that reports elsewhere, such as checking your tasks."}
 				},
-				"required": ["name", "schedule", "channel"]
+				"required": ["name", "schedule"]
 			}`),
 		}, s.handleScheduleAdd)
 
@@ -252,7 +258,8 @@ func (s *Server) registerScheduleTools() {
 					"session_mode": {"type": "string",  "description": "shared or isolated"},
 					"session_tier": {"type": "string",  "description": "Permission tier override"},
 					"tags":         {"type": "array", "items": {"type": "string"}, "description": "New tag list (replaces existing)"},
-					"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"}
+					"enabled":      {"type": "boolean", "description": "Enable or disable the schedule"},
+					"headless":     {"type": "boolean", "description": "Run with no chat (channel must then be empty)"}
 				},
 				"required": ["name"]
 			}`),
@@ -868,6 +875,7 @@ type scheduleAddInput struct {
 	SessionTier string   `json:"session_tier"`
 	Tags        []string `json:"tags"`
 	Enabled     *bool    `json:"enabled"`
+	Headless    bool     `json:"headless"`
 }
 
 func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
@@ -881,20 +889,10 @@ func parseScheduleAddInput(args json.RawMessage) (scheduleAddInput, string) {
 	if strings.TrimSpace(input.Schedule) == "" {
 		return input, "schedule is required"
 	}
-	if strings.TrimSpace(input.Channel) == "" {
-		return input, "channel is required"
-	}
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return input, "invalid schedule expression: " + err.Error()
 	}
-	if config.IsChannelRef(input.Channel) {
-		if _, ok := config.ParseChannelRef(input.Channel); !ok {
-			return input, fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", input.Channel)
-		}
-	} else if _, _, ok := config.ParseChannel(input.Channel); !ok {
-		return input, fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
-	}
-	return input, ""
+	return input, ValidateScheduleDelivery(input.Channel, input.Headless)
 }
 
 func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -931,7 +929,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	payload, err := BuildSchedulePayload(input.Name, input.Schedule, input.Skill,
-		input.Channel, sessionMode, input.SessionTier, input.Tags, enabled)
+		input.Channel, sessionMode, input.SessionTier, input.Tags, enabled, input.Headless)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
 	}
@@ -945,6 +943,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
+		Headless:    input.Headless,
 		Tags:        input.Tags,
 		Enabled:     enabled,
 	}
@@ -964,7 +963,7 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 		if configPath != "" {
 			return config.AddScheduleToConfig(configPath, cfg.Name, cfg.Schedule,
 				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
-				agentName, cfg.Tags, cfg.Enabled)
+				agentName, cfg.Tags, cfg.Enabled, cfg.Headless)
 		}
 		return nil
 	})
@@ -986,6 +985,7 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 		Agent       string `json:"agent,omitempty"`
 		Channel     string `json:"channel,omitempty"`
 		SessionMode string `json:"session_mode,omitempty"`
+		Headless    bool   `json:"headless,omitempty"`
 		Enabled     bool   `json:"enabled"`
 	}
 
@@ -1000,6 +1000,7 @@ func (s *Server) handleScheduleList(_ context.Context, _ *mcp.CallToolRequest) (
 			Agent:       e.Agent,
 			Channel:     e.Channel,
 			SessionMode: e.SessionMode,
+			Headless:    e.Headless,
 			Enabled:     e.Enabled,
 		}
 	}
@@ -1024,6 +1025,8 @@ type ScheduleUpdateInput struct {
 	Agent       *string  `json:"agent"`
 	Tags        []string `json:"tags"`
 	Enabled     *bool    `json:"enabled"`
+	// Headless runs with no chat; channel must then be empty. Absent = keep.
+	Headless *bool `json:"headless"`
 }
 
 // MergeScheduleUpdate applies partial updates from input onto an existing entry
@@ -1045,12 +1048,12 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 	if input.Channel != nil {
 		channel = *input.Channel
 	}
-	if config.IsChannelRef(channel) {
-		if _, ok := config.ParseChannelRef(channel); !ok {
-			return scheduler.Config{}, fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", channel)
-		}
-	} else if _, _, ok := config.ParseChannel(channel); !ok {
-		return scheduler.Config{}, fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", channel)
+	headless := existing.Headless
+	if input.Headless != nil {
+		headless = *input.Headless
+	}
+	if errMsg := ValidateScheduleDelivery(channel, headless); errMsg != "" {
+		return scheduler.Config{}, errMsg
 	}
 	sessionMode := existing.SessionMode
 	if input.SessionMode != nil {
@@ -1086,9 +1089,33 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 		SessionTier: sessionTier,
 		SessionMode: sessionMode,
 		Channel:     channel,
+		Headless:    headless,
 		Tags:        tags,
 		Enabled:     enabled,
 	}, ""
+}
+
+// ValidateScheduleDelivery checks where a schedule's reply goes: a channel in
+// adapter:externalID or @name form, or, for a headless schedule, nowhere.
+// Returns an error message, or "" when valid.
+func ValidateScheduleDelivery(channel string, headless bool) string {
+	if headless {
+		if channel != "" {
+			return "a headless schedule answers in no chat, so leave channel empty"
+		}
+		return ""
+	}
+	if channel == "" {
+		return "channel is required unless the schedule is headless"
+	}
+	if config.IsChannelRef(channel) {
+		if _, ok := config.ParseChannelRef(channel); !ok {
+			return fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", channel)
+		}
+	} else if _, _, ok := config.ParseChannel(channel); !ok {
+		return fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", channel)
+	}
+	return ""
 }
 
 // ownsSchedule reports whether the named schedule exists and is owned by this
@@ -1171,7 +1198,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	}
 
 	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,
-		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled)
+		cfg.Channel, cfg.SessionMode, cfg.SessionTier, cfg.Tags, cfg.Enabled, cfg.Headless)
 	if err != nil {
 		return toolError("building schedule payload: " + err.Error()), nil
 	}
@@ -1192,7 +1219,7 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 		if configPath != "" {
 			return config.UpdateScheduleInConfig(configPath, cfg.Name, cfg.Schedule,
 				cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier,
-				agentName, cfg.Tags, cfg.Enabled)
+				agentName, cfg.Tags, cfg.Enabled, cfg.Headless)
 		}
 		return nil
 	})
@@ -2030,7 +2057,7 @@ func BuildSkillPayload(name, description, version string, triggers []string, bod
 
 // BuildSchedulePayload marshals the schedule config to TOML for storage as
 // approval payload.
-func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled bool) (string, error) {
+func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessionTier string, tags []string, enabled, headless bool) (string, error) {
 	type payload struct {
 		Name        string   `toml:"name"`
 		Schedule    string   `toml:"schedule"`
@@ -2040,6 +2067,7 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 		SessionTier string   `toml:"session_tier,omitempty"`
 		Tags        []string `toml:"tags,omitempty"`
 		Enabled     bool     `toml:"enabled"`
+		Headless    bool     `toml:"headless,omitempty"`
 	}
 	data, err := toml.Marshal(payload{
 		Name:        name,
@@ -2050,6 +2078,7 @@ func BuildSchedulePayload(name, schedule, skillName, channel, sessionMode, sessi
 		SessionTier: sessionTier,
 		Tags:        tags,
 		Enabled:     enabled,
+		Headless:    headless,
 	})
 	if err != nil {
 		return "", err
@@ -2113,9 +2142,16 @@ func BuildScheduledMessage(cfg scheduler.Config, target agent.AdapterBinding, co
 		ScheduleName:   cfg.Name,
 		ScheduleCron:   cfg.Schedule,
 		IsScheduled:    true,
+		Headless:       cfg.Headless,
 		SessionTier:    cfg.SessionTier,
 		Timestamp:      fireTime,
 	}
+}
+
+// HeadlessConversationID is the shared conversation a headless schedule runs
+// in. An isolated one replaces it with a fresh ID per run.
+func HeadlessConversationID(scheduleName string) string {
+	return "sched:" + scheduleName
 }
 
 // BuildScheduleJob returns a JobFunc that dispatches a message when the
@@ -2125,7 +2161,11 @@ func BuildScheduleJob(cfg scheduler.Config, handleMsg func(context.Context, adap
 	var targets []agent.AdapterBinding
 	var broadcast bool
 
-	if channelName, isRef := config.ParseChannelRef(cfg.Channel); isRef {
+	if cfg.Headless {
+		// One run with no chat target; the engine sends nothing.
+		targets = []agent.AdapterBinding{{}}
+		conversationID = HeadlessConversationID(cfg.Name)
+	} else if channelName, isRef := config.ParseChannelRef(cfg.Channel); isRef {
 		if resolve == nil {
 			logger.Error("schedule references channel but no resolver configured", "name", cfg.Name, "channel", cfg.Channel)
 		} else if result := resolve(channelName); result == nil {

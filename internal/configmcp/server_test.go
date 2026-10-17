@@ -331,6 +331,26 @@ func TestScheduleAdd_Autonomous_Success(t *testing.T) {
 	}
 }
 
+func TestScheduleAdd_HeadlessNeedsNoChannel(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "check-tasks", "schedule": "@every 30m", "headless": true,
+	})
+	if isErr {
+		t.Fatalf("schedule_add returned error: %s", text)
+	}
+	if e, ok := deps.Sched.GetEntry("check-tasks"); !ok || !e.Headless || e.Channel != "" {
+		t.Errorf("entry = %+v, %v; want a headless schedule with no channel", e, ok)
+	}
+
+	text, isErr = callTool(t, session, "schedule_add", map[string]any{
+		"name": "both", "schedule": "@every 30m", "headless": true, "channel": "telegram:1",
+	})
+	if !isErr || !strings.Contains(text, "leave channel empty") {
+		t.Errorf("headless with a channel = %q, want a refusal", text)
+	}
+}
+
 func TestScheduleAdd_InvalidExpression(t *testing.T) {
 	session, _ := newTestServer(t, nil)
 	text, isErr := callTool(t, session, "schedule_add", map[string]any{
