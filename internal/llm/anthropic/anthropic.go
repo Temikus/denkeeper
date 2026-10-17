@@ -104,7 +104,41 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 
 // ListModels returns available model IDs from the Anthropic API.
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
+	data, err := c.fetchModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]string, len(data))
+	for i, m := range data {
+		models[i] = m.ID
+	}
+	return models, nil
+}
+
+// ListModelDetails returns models with their API display names. Pricing is
+// left nil for the router to fill from the pricing registry. The Models API
+// has no client-tool flag, but every model it lists supports tool use.
+func (c *Client) ListModelDetails(ctx context.Context) ([]llm.ModelInfo, error) {
+	data, err := c.fetchModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]llm.ModelInfo, len(data))
+	for i, m := range data {
+		models[i] = llm.ModelInfo{ID: m.ID, Name: m.DisplayName, Provider: c.name, SupportsTools: true}
+	}
+	return models, nil
+}
+
+type apiModel struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
+// fetchModels reads one page of /v1/models. The default page is 20 models;
+// 1000 is the API maximum.
+func (c *Client) fetchModels(ctx context.Context) ([]apiModel, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models?limit=1000", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating models request: %w", err)
 	}
@@ -121,19 +155,12 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	}
 
 	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Data []apiModel `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("parsing models response: %w", err)
 	}
-
-	models := make([]string, len(result.Data))
-	for i, m := range result.Data {
-		models[i] = m.ID
-	}
-	return models, nil
+	return result.Data, nil
 }
 
 func (c *Client) ChatCompletion(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
