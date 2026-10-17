@@ -46,7 +46,7 @@
   // Tasks. The saved value applies on restart; until then it differs from what
   // /health says is running, and the page says so.
   let savingTasks = $state(false)
-  const tasksPending = $derived(!!config && config.tasks_enabled !== $features.tasks)
+  const tasksPending = $derived(!!config && $features.loaded && config.tasks_enabled !== $features.tasks)
 
   async function fetchConfig() {
     loading = true
@@ -224,15 +224,18 @@
     }
   }
 
-  async function toggleTasks() {
+  async function toggleTasks(e) {
+    const input = e.currentTarget
     savingTasks = true
     error = ''
     try {
       const enabled = !config.tasks_enabled
       await api.updateServerConfig({ tasks_enabled: enabled })
       config.tasks_enabled = enabled
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      // checked is one-way and config didn't change, so put the switch back.
+      input.checked = config.tasks_enabled
     } finally {
       savingTasks = false
     }
@@ -582,12 +585,15 @@
       </div>
     </div>
   </div>
-  {#if tasksPending}
-    <div class="mcp-hint" role="status" data-testid="tasks-pending">
-      Saved as {config.tasks_enabled ? 'on' : 'off'}, but the server is still running with tasks {$features.tasks ? 'on' : 'off'}.
-      Restart it (Process Control below) to apply.
-    </div>
-  {/if}
+  <!-- The live region stays mounted so screen readers announce the text when it appears. -->
+  <div role="status">
+    {#if tasksPending}
+      <div class="mcp-hint" data-testid="tasks-pending">
+        Saved as {config.tasks_enabled ? 'on' : 'off'}, but the server is still running with tasks {$features.tasks ? 'on' : 'off'}.
+        Restart it (Process Control below) to apply.
+      </div>
+    {/if}
+  </div>
 
   <h2 class="section-title">External Access</h2>
   <div class="config-card">

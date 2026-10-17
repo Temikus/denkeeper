@@ -611,7 +611,7 @@ describe('ServerConfig page', () => {
   })
 
   describe('Tasks toggle', () => {
-    beforeEach(() => features.set({ tasks: false }))
+    beforeEach(() => features.set({ tasks: false, loaded: true }))
 
     test('turning tasks on saves it and says a restart applies it', async () => {
       let body = null
@@ -642,12 +642,34 @@ describe('ServerConfig page', () => {
     })
 
     test('no notice once the running server matches', async () => {
-      features.set({ tasks: true })
+      features.set({ tasks: true, loaded: true })
       server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
         version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
       })))
       render(ServerConfig)
       await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+    })
+
+    test('no notice while /health hasn\'t answered yet', async () => {
+      features.set({ tasks: false, loaded: false })
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+    })
+
+    test('a failed save puts the switch back', async () => {
+      server.use(http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'write failed' }, { status: 500 })))
+      render(ServerConfig)
+      const toggle = await screen.findByRole('checkbox', { name: 'Tasks' })
+
+      await fireEvent.change(toggle, { target: { checked: true } })
+
+      await waitFor(() => expect(toggle.checked).toBe(false))
       expect(screen.queryByTestId('tasks-pending')).toBeNull()
     })
   })
