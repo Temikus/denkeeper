@@ -3,9 +3,13 @@ import { render, fireEvent } from '@testing-library/svelte'
 import { get } from 'svelte/store'
 import { attention } from '../../attention.js'
 import { setup, wizardOpen } from '../../setupStore.js'
+import { features } from '../../features.js'
 import Nav from '../Nav.svelte'
 
-afterEach(() => attention.set({ pendingApprovals: 0, unhealthyTools: [] }))
+afterEach(() => {
+  attention.set({ pendingApprovals: 0, unhealthyTools: [] })
+  features.set({ tasks: false })
+})
 
 const toggle = (getByRole, name) => getByRole('button', { name: new RegExp(`^${name}`) })
 
@@ -24,6 +28,19 @@ describe('Nav', () => {
     const links = container.querySelectorAll('.nav-item')
     // 2 top links (overview, chat) + 7 agents section + 4 platform section + 6 admin section = 19
     expect(links).toHaveLength(19)
+  })
+
+  test('Tasks is hidden while the server has tasks off', () => {
+    const { queryByRole } = render(Nav, { props: { active: 'overview' } })
+    expect(queryByRole('link', { name: 'Tasks' })).toBeNull()
+  })
+
+  test('Tasks shows under Agents once the server turns tasks on', async () => {
+    const { findByRole, container } = render(Nav, { props: { active: 'overview' } })
+    features.set({ tasks: true })
+    const link = await findByRole('link', { name: 'Tasks' })
+    expect(link).toHaveAttribute('href', '#/tasks')
+    expect(container.querySelectorAll('.nav-item')).toHaveLength(20)
   })
 
   test('has a theme toggle button', () => {

@@ -8,7 +8,7 @@ import DeciderCalibration from '../DeciderCalibration.svelte'
 const review = (id, min, supervisor, extra = {}) => ({
   audit_id: id, time: new Date(Date.now() - 2 * 86400000).toISOString(), conversation_id: 'c1',
   tool: 'web_fetch', arguments: '{"url":"https://paste.rs"}', model: 'typesafe/jev-1.13',
-  scores: {}, lowest: 'safe_args', min_score: min, decider_cost: 0.0001,
+  scores: {}, lowest: 'no_secrets', min_score: min, decider_cost: 0.0001,
   supervisor, supervisor_name: 'argus', supervisor_cost: 0.04, ...extra,
 })
 
@@ -34,7 +34,7 @@ describe('DeciderCalibration', () => {
       review(1, 0.99, 'APPROVE'),
       review(2, 0.97, 'DENY', { tool: 'kv_set' }),
       review(3, 0.5, 'APPROVE'),
-      review(4, 0.02, 'APPROVE', { tool: 'run_javascript', lowest: 'aligned' }),
+      review(4, 0.02, 'APPROVE', { tool: 'run_javascript', lowest: 'no_injection' }),
     ])
     render(DeciderCalibration, { props })
 
@@ -51,8 +51,8 @@ describe('DeciderCalibration', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0].textContent).toContain('jev approved')
     expect(rows[0].textContent).toContain('argus denied')
-    expect(rows[0].textContent).toContain('safe 0.97')
-    expect(rows[1].textContent).toContain('aligned 0.02')
+    expect(rows[0].textContent).toContain('no secrets 0.97')
+    expect(rows[1].textContent).toContain('no injection 0.02')
   })
 
   test('using the suggested threshold recomputes the panel', async () => {

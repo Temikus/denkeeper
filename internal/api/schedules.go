@@ -26,6 +26,8 @@ type scheduleCreateInput struct {
 	Agent       string   `json:"agent"`
 	Tags        []string `json:"tags"`
 	Enabled     *bool    `json:"enabled"`
+	// Headless runs with no chat: nothing is sent, and channel must be empty.
+	Headless bool `json:"headless"`
 }
 
 // channelResolver returns a ChannelResolver that looks up channels from the
@@ -70,23 +72,10 @@ func validateScheduleInput(input scheduleCreateInput) string {
 	if strings.TrimSpace(input.Schedule) == "" {
 		return "schedule is required"
 	}
-	if strings.TrimSpace(input.Channel) == "" {
-		return "channel is required"
-	}
 	if err := scheduler.ValidateExpr(input.Schedule); err != nil {
 		return "invalid schedule expression: " + err.Error()
 	}
-	if config.IsChannelRef(input.Channel) {
-		if _, ok := config.ParseChannelRef(input.Channel); !ok {
-			return fmt.Sprintf("channel %q is an invalid channel reference (use \"@channelname\")", input.Channel)
-		}
-	} else {
-		colonIdx := strings.IndexByte(input.Channel, ':')
-		if colonIdx <= 0 || colonIdx == len(input.Channel)-1 {
-			return fmt.Sprintf("channel %q is not in adapter:externalID or @channelname format", input.Channel)
-		}
-	}
-	return ""
+	return configmcp.ValidateScheduleDelivery(input.Channel, input.Headless)
 }
 
 // handleCreateSchedule godoc
@@ -163,6 +152,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		SessionTier: input.SessionTier,
 		SessionMode: sessionMode,
 		Channel:     input.Channel,
+		Headless:    input.Headless,
 		Tags:        input.Tags,
 		Enabled:     enabled,
 	}
@@ -175,7 +165,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	if err := config.AddScheduleToConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
 		cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier, agentName,
-		cfg.Tags, cfg.Enabled); err != nil {
+		cfg.Tags, cfg.Enabled, cfg.Headless); err != nil {
 		s.logger.Error("schedule created but config persistence failed", "name", cfg.Name, "error", err)
 	}
 
@@ -264,7 +254,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	if err := config.UpdateScheduleInConfig(s.deps.ConfigPath, cfg.Name, cfg.Schedule,
 		cfg.Skill, cfg.Channel, cfg.SessionMode, cfg.SessionTier, agentName,
-		cfg.Tags, cfg.Enabled); err != nil {
+		cfg.Tags, cfg.Enabled, cfg.Headless); err != nil {
 		s.logger.Error("schedule updated but config persistence failed", "name", cfg.Name, "error", err)
 	}
 

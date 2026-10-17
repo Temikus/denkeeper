@@ -20,6 +20,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/kv"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/task"
 	"github.com/Temikus/denkeeper/internal/tool"
 )
 
@@ -52,6 +53,7 @@ type Deps struct {
 	// surface only — the runner that creates and cancels runs is not wired
 	// here, so a judge key cannot start spend.
 	EvalStore  *eval.Store
+	Tasks      *task.Service // nil = task tools are not registered
 	ConfigPath string
 	Version    string
 	Logger     *slog.Logger

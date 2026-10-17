@@ -29,8 +29,8 @@ func TestReplaySupervisorDecider_RendersLiveStateAndQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReplaySupervisorDecider: %v", err)
 	}
-	if resp.CostUSD != 0.0002 || len(resp.Answers) != 3 {
-		t.Errorf("resp cost/answers = %v/%d, want 0.0002/3", resp.CostUSD, len(resp.Answers))
+	if resp.CostUSD != 0.0002 || len(resp.Answers) != len(deciderQuestionIDs) {
+		t.Errorf("resp cost/answers = %v/%d, want 0.0002/%d", resp.CostUSD, len(resp.Answers), len(deciderQuestionIDs))
 	}
 
 	b, err := json.Marshal(prov.last.State)
@@ -61,7 +61,7 @@ func TestReplaySupervisorDecider_RendersLiveStateAndQuestions(t *testing.T) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	want := slices.Sorted(slices.Values(deciderQuestionOrder))
+	want := slices.Sorted(slices.Values(deciderQuestionIDs))
 	if !slices.Equal(ids, want) {
 		t.Errorf("question ids = %v, want the live stage's %v", ids, want)
 	}
@@ -80,11 +80,9 @@ func TestReplaySupervisorDecider_ErrorCauseMatchesAudit(t *testing.T) {
 
 func TestSupervisorDeciderVerdict_ThresholdsAreInclusive(t *testing.T) {
 	answers := func(p float64) map[string]llm.Answer {
-		return map[string]llm.Answer{
-			deciderQAligned:  {Noul: 0.99},
-			deciderQSafeArgs: {Noul: p},
-			deciderQScoped:   {Noul: 0.99},
-		}
+		a := allAnswers(0.99)
+		a[deciderQScoped] = llm.Answer{Noul: p}
+		return a
 	}
 	if v, _ := SupervisorDeciderVerdict(answers(0.95), 0.95, 0.05); v != "APPROVE" {
 		t.Errorf("min p at approve_at = %s, want APPROVE", v)

@@ -3,17 +3,6 @@
   "extends": ["github>Temikus/.github"],
   "packageRules": [
     {
-      "description": "Track indirect Go modules (off by default) so vulnerability alerts cover them; routine bumps wait for dashboard approval",
-      "matchManagers": [
-        "gomod"
-      ],
-      "matchDepTypes": [
-        "indirect"
-      ],
-      "enabled": true,
-      "dependencyDashboardApproval": true
-    },
-    {
       "description": "Bump the Go toolchain in mise and the Docker build image in one PR, so the pins can't drift. Go releases carry stdlib security fixes that vulnerability alerts never match to these deps, so they skip the weekly schedule. go.mod's go directive is the minimum language version and stays out",
       "matchManagers": [
         "mise",

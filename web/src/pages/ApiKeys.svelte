@@ -28,6 +28,7 @@
     'browser:read', 'browser:write',
     'costs:read',
     'eval:read', 'eval:write',
+    'tasks:read', 'tasks:write',
     'kv:read', 'kv:write',
     'schedules:read', 'schedules:write',
     'sessions:read', 'sessions:write',
@@ -52,6 +53,7 @@
     { name: 'Channels', desc: 'View and manage channels', levels: ['none', 'read', 'readwrite'], scopes: { read: ['channels:read'], readwrite: ['channels:read', 'channels:write'] } },
     { name: 'Audit Log', desc: 'View audit trail', levels: ['none', 'read'], scopes: { read: ['audit:read'] } },
     { name: 'Evals', desc: 'Test sets and comparison runs', levels: ['none', 'read', 'readwrite'], scopes: { read: ['eval:read'], readwrite: ['eval:read', 'eval:write'] } },
+    { name: 'Tasks', desc: 'Tasks agents and you hand to each other', levels: ['none', 'read', 'readwrite'], scopes: { read: ['tasks:read'], readwrite: ['tasks:read', 'tasks:write'] } },
   ]
 
   // Track permission level per resource group

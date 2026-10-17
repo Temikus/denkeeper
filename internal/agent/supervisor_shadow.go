@@ -34,9 +34,10 @@ type ShadowReview struct {
 	Tool           string             `json:"tool"`
 	Arguments      string             `json:"arguments"`
 	Model          string             `json:"model"`
-	Scores         map[string]float64 `json:"scores"`
-	Lowest         string             `json:"lowest"`    // check with the lowest score; "" when an answer is missing
-	MinScore       *float64           `json:"min_score"` // nil: an answer is missing, so the call always escalates
+	Scores         map[string]float64 `json:"scores"`         // check scores by name; high means safe
+	Lowest         string             `json:"lowest"`         // check with the lowest score; "" when an answer is missing
+	MinScore       *float64           `json:"min_score"`      // nil: an answer is missing, so the call always escalates
+	MinDenyScore   *float64           `json:"min_deny_score"` // lowest check that can deny (no_leak only escalates); nil when an answer is missing
 	DeciderCost    float64            `json:"decider_cost"`
 	Supervisor     string             `json:"supervisor"` // APPROVE, DENY or ESCALATE; "" when no supervisor verdict was recorded
 	SupervisorName string             `json:"supervisor_name,omitempty"`
@@ -169,6 +170,11 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 	if json.Unmarshal([]byte(ev.Detail), &d) != nil || d.Decision != "shadow" {
 		return ShadowReview{}, false
 	}
+	// Scores from the old bundled safety question are not comparable with
+	// the split checks, so they stay out of calibration.
+	if isLegacyDeciderAnswers(d.Answers) {
+		return ShadowReview{}, false
+	}
 	r := ShadowReview{
 		AuditID:        ev.ID,
 		Time:           ev.Timestamp,
@@ -176,27 +182,16 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 		Tool:           d.Tool,
 		Arguments:      d.Arguments,
 		Model:          d.Model,
-		Scores:         make(map[string]float64, len(deciderQuestionOrder)),
 		DeciderCost:    d.Cost,
 	}
-	// Same rule as decideSupervisorOutcome: the lowest answer decides, and a
-	// missing one escalates.
-	low, complete := 2.0, true
-	for _, id := range deciderQuestionOrder {
-		a, ok := d.Answers[id]
-		if !ok {
-			complete = false
-			continue
-		}
-		r.Scores[id] = a.Noul
-		if a.Noul < low {
-			r.Lowest, low = id, a.Noul
-		}
-	}
-	if complete {
-		r.MinScore = &low
-	} else {
-		r.Lowest = ""
+	// Same rule as decideSupervisorOutcome: the lowest check decides, and a
+	// missing answer escalates.
+	scores, order, missing := deciderChecks(d.Answers)
+	r.Scores = scores
+	if missing == "" {
+		lowID, low := lowestCheck(scores, order)
+		_, denyLow := lowestCheck(scores, denyingChecks(order))
+		r.Lowest, r.MinScore, r.MinDenyScore = lowID, &low, &denyLow
 	}
 	return r, true
 }

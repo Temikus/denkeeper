@@ -1,2 +1,31 @@
 # E2E test token — intentionally hardcoded dummy value
 2fb74e70f3b26786f5ba6fc3e1d0017a6fcab71b:.github/workflows/ci.yml:curl-auth-header:217
+
+# betterleaks 1.9.0 generic-password: test fixtures, Swagger examples and UI code, not credentials
+6f542fe95d9bd39afc4ba7de33e97a4bd0e5825d:internal/api/auth.go:generic-password:131
+6f542fe95d9bd39afc4ba7de33e97a4bd0e5825d:internal/api/auth.go:generic-password:420
+dc8beea4be50bcdcc48dc1b0c39b086bc85c588a:internal/api/auth_test.go:generic-password:75
+dc8beea4be50bcdcc48dc1b0c39b086bc85c588a:internal/api/auth_test.go:generic-password:103
+dc8beea4be50bcdcc48dc1b0c39b086bc85c588a:internal/api/auth_test.go:generic-password:120
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:341
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:361
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:376
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:391
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:408
+6889674ecd51e978eabc88d49abfe85b7273029e:internal/api/auth_test.go:generic-password:415
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:39
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:100
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:120
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:135
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:155
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:186
+beb9c0fc3b71a66e5890d1e921a22ec686c0fa32:internal/api/setup_account_test.go:generic-password:194
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:16
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:51
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:138
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:139
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:152
+59ad5b62c5c2c85e8d660f5a53f156e5f0cf3044:internal/integration/auth_session_test.go:generic-password:159
+3d5c018fa5426729565ee56448d764155991194d:web/src/pages/Login.svelte:generic-password:98
+e14a668ccfed76ef1fdfda94c628538976e850ed:web/src/pages/Login.svelte:generic-password:126
+6889674ecd51e978eabc88d49abfe85b7273029e:web/src/pages/Settings.svelte:generic-password:205

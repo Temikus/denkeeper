@@ -151,6 +151,7 @@ func allScopesKey() config.APIKeyConfig {
 			"kv:read", "kv:write",
 			"channels:read", "channels:write", "audit:read",
 			"eval:read", "eval:write",
+			"tasks:read", "tasks:write",
 		},
 	}
 }

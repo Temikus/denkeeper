@@ -60,7 +60,7 @@ func (f *toolDecisionProvider) Decide(_ context.Context, req llm.DecisionRequest
 	}
 	answers := make(map[string]llm.Answer, len(req.Questions))
 	for id := range req.Questions {
-		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: p}
+		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: agent.DeciderAnswerForScore(id, p)}
 	}
 	return &llm.DecisionResponse{Model: req.Model, Answers: answers, CostUSD: 0.0001}, nil
 }

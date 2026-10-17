@@ -13,7 +13,9 @@
     approveAt = $bindable(''), denyAt = $bindable(''),
   } = $props()
 
-  const CHECK_LABELS = { aligned: 'aligned', safe_args: 'safe', scoped: 'scoped' }
+  const CHECK_LABELS = {
+    aligned: 'aligned', scoped: 'scoped', no_injection: 'no injection', no_secrets: 'no secrets', no_leak: 'no leak',
+  }
   const RANGES = [{ days: 7, label: 'Last 7 days' }, { days: 30, label: 'Last 30 days' }]
   const SHOWN = 5
   const STEP = 0.01

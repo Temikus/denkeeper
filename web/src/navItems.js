@@ -12,6 +12,7 @@ export const sections = [
     label: 'Agents',
     items: [
       { id: 'agents',    label: 'Agents' },
+      { id: 'tasks',     label: 'Tasks', requires: 'tasks' },
       { id: 'sessions',  label: 'Sessions' },
       { id: 'channels',  label: 'Channels' },
       { id: 'schedules', label: 'Schedules' },
@@ -43,6 +44,16 @@ export const sections = [
     ],
   },
 ]
+
+/**
+ * The sections with pages whose server feature is off removed. An item's
+ * `requires` names a key of the features store.
+ */
+export function visibleSections(features) {
+  return sections
+    .map(s => ({ ...s, items: s.items.filter(i => !i.requires || features[i.requires]) }))
+    .filter(s => s.items.length > 0)
+}
 
 /** Returns { section, item } for a top-level route; section is null for top links. */
 export function findItem(route) {
