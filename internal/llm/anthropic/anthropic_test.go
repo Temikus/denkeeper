@@ -258,6 +258,69 @@ func TestChatCompletion_ToolResult(t *testing.T) {
 	}
 }
 
+// sentToolUseInput replays an assistant tool call with the given arguments
+// and returns the raw "input" of the tool_use block the server received.
+func sentToolUseInput(t *testing.T, arguments string) (json.RawMessage, bool) {
+	t.Helper()
+	var raw struct {
+		Messages []struct {
+			Content []map[string]json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Errorf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Content: []contentBlock{{Type: "text", Text: "ok"}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []llm.Message{
+			{Role: "user", Content: "List schedules"},
+			{Role: "assistant", ToolCalls: []llm.ToolCall{{
+				ID:       "toolu_01",
+				Type:     "function",
+				Function: llm.FunctionCall{Name: "schedule_list", Arguments: arguments},
+			}}},
+			{Role: "tool", ToolCallID: "toolu_01", Content: "[]"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(raw.Messages) != 3 || len(raw.Messages[1].Content) != 1 {
+		t.Fatalf("unexpected request shape: %+v", raw)
+	}
+	input, ok := raw.Messages[1].Content[0]["input"]
+	return input, ok
+}
+
+func TestChatCompletion_ToolUseEmptyArgumentsSendsEmptyInput(t *testing.T) {
+	input, ok := sentToolUseInput(t, "")
+	if !ok {
+		t.Fatal("tool_use block has no input key; the API rejects it")
+	}
+	if string(input) != "{}" {
+		t.Errorf("input = %s, want {}", input)
+	}
+}
+
+func TestChatCompletion_ToolUseEmptyObjectArgumentsSendsEmptyInput(t *testing.T) {
+	input, ok := sentToolUseInput(t, "{}")
+	if !ok {
+		t.Fatal("tool_use block has no input key; the API rejects it")
+	}
+	if string(input) != "{}" {
+		t.Errorf("input = %s, want {}", input)
+	}
+}
+
 func TestChatCompletion_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

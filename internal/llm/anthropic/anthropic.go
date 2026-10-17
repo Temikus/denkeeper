@@ -500,6 +500,11 @@ func convertMessage(m llm.Message) (apiMessage, error) {
 					return apiMessage{}, fmt.Errorf("parsing tool call arguments: %w", err)
 				}
 			}
+			// The API requires input on every tool_use block, so a call with
+			// no arguments sends {} rather than leaving the key out.
+			if input == nil {
+				input = map[string]any{}
+			}
 			blocks = append(blocks, contentBlock{
 				Type:  "tool_use",
 				ID:    tc.ID,
@@ -604,9 +609,11 @@ type contentBlock struct {
 	Thinking string `json:"thinking,omitempty"`
 
 	// tool_use
-	ID    string         `json:"id,omitempty"`
-	Name  string         `json:"name,omitempty"`
-	Input map[string]any `json:"input,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	// any, not map: omitempty drops an empty map but keeps a non-nil
+	// interface, so an empty tool_use input still marshals as {}.
+	Input any `json:"input,omitempty"`
 
 	// tool_result
 	ToolUseID string `json:"tool_use_id,omitempty"`
