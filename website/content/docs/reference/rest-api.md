@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-30T00:00:00+00:00
+lastmod: 2026-10-16T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -1058,6 +1058,56 @@ Set a value. Body: `{"value": "...", "ttl": "5m"}` (`ttl` is optional; omit for 
 **Scope:** `kv:write`
 
 Delete a key.
+
+## Tasks
+
+Available when [`[tasks]`](/docs/reference/config/#tasks) is on. While it is off (the default), every task route answers `503`. See [Tasks](/docs/concepts/built-in-tools/#tasks) for how agents and harnesses use the board.
+
+Admin keys and dashboard sessions act as the operator (`human`). Any other key acts as the member named after it (`ext:<key name>`) and is held to the member rules, so a harness key cannot close a reviewed task on the operator's behalf. In every `{id}` position, `131` and `DK-131` both work.
+
+### `GET /api/v1/tasks`
+
+**Scope:** `tasks:read`
+
+List tasks newest first: every open task, plus tasks closed within `?closed_within=` (a Go duration, default `168h`). Other filters: `?status=` (comma-separated: `todo`, `in_progress`, `review`, `blocked`, `done`, `cancelled`), `?assignee=`, `?parent=`, `?top_level=true`, and `?limit=` (default and cap 500). Each task carries its subtask counts.
+
+### `POST /api/v1/tasks`
+
+**Scope:** `tasks:write`
+
+File a task. Body: `{"title": "...", "body": "...", "assignee": "agent:pamela", "parent_id": 12, "no_review": false}`. Only `title` is required. An unassigned task waits in To do and anyone may claim it. Unless `no_review` is set, the filer reviews the task before it is done; a task assigned to its own filer has no reviewer. Returns `201` with the task.
+
+### `GET /api/v1/tasks/members`
+
+**Scope:** `tasks:read`
+
+Everyone a task can be assigned to: the operator, each den agent (`agent:<name>`), and each eligible API key with `tasks:write` (`ext:<key name>`). Admin-scoped and revoked keys, and keys with an empty or duplicate name, are omitted.
+
+### `GET /api/v1/tasks/{id}`
+
+**Scope:** `tasks:read`
+
+A task with its thread (comments and events in order), its subtasks, and its parent. Returns `404` if it does not exist.
+
+### `PATCH /api/v1/tasks/{id}`
+
+**Scope:** `tasks:write`
+
+Change `title`, `body`, `assignee` (`""` unassigns) or `status`. Fields left out are unchanged. Moving a task to `blocked` requires a `reason`. Reassigning drops any hold. A move the caller's role does not allow returns `400` with a message saying what they can do instead.
+
+### `POST /api/v1/tasks/{id}/comments`
+
+**Scope:** `tasks:write`
+
+Add a comment to the thread. Body: `{"body": "..."}`. Closed tasks take comments too. Returns `201`.
+
+### `POST /api/v1/tasks/{id}/release`
+
+**Scope:** `tasks:write`
+
+Drop the hold on a claimed task and return in-progress work to To do; the assignee stays. The operator can release any claim, another key only its own. Returns `400` if the task is not held.
+
+A broken rule or bad input answers `400` with an agent-readable message.
 
 ## Auth Endpoints
 
