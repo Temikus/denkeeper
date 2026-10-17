@@ -289,7 +289,8 @@ Global MCP settings.
     request_timeout_secs = 30        # per-request timeout
     sse_keep_alive_secs = 15         # TCP keepalive interval
     auto_restart = true              # auto-restart crashed servers
-    max_restart_attempts = 3         # failure threshold before giving up
+    max_restart_attempts = 3         # quick restarts (1s, 2s, 4s) before slowing down
+    max_restart_backoff = "5m"       # cap on the wait between later restarts (30s, doubling)
     restart_cooldown = "5m"          # cooldown before reset
     drain_timeout = "35s"            # wait for in-flight tool calls before teardown closes the transport
     health_fail_threshold = 3        # consecutive probe failures before remote servers emit health_fail audit

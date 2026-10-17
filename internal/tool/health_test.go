@@ -242,7 +242,7 @@ func TestRestartServer_NotRegistered(t *testing.T) {
 	}
 }
 
-func TestHandleServerFailure_MaxAttempts(t *testing.T) {
+func TestHandleServerFailure_PastMaxAttempts_SchedulesRetryInsteadOfDisabling(t *testing.T) {
 	m := NewManager(testLogger())
 	sc := &serverConn{
 		name:         "test",
@@ -253,11 +253,14 @@ func TestHandleServerFailure_MaxAttempts(t *testing.T) {
 
 	m.handleServerFailure(t.Context(), sc, 3, 5*time.Minute, "test error")
 
-	if !sc.disabled {
-		t.Error("expected server to be disabled after max attempts")
+	if sc.disabled {
+		t.Error("server disabled after max attempts; it should keep retrying")
 	}
 	if sc.restartCount != 4 {
 		t.Errorf("restartCount = %d, want 4", sc.restartCount)
+	}
+	if d := time.Until(sc.nextRetryAt); d <= 25*time.Second || d > 30*time.Second {
+		t.Errorf("next retry in %v, want ~30s", d)
 	}
 }
 
@@ -589,5 +592,116 @@ func TestServerStatus_UserDisabledTakesPriority(t *testing.T) {
 	}
 	if status.Status != "disabled" {
 		t.Errorf("Status = %q, want %q (userDisabled should take priority)", status.Status, "disabled")
+	}
+}
+
+// closedConnServer registers name against a live streamable server, tears it
+// down, and puts the closed conn back the way handleServerFailure does, so the
+// next probe fails. With stopServer the server is also shut, so restarts fail.
+func closedConnServer(t *testing.T, m *Manager, name string, stopServer bool) *serverConn {
+	t.Helper()
+	ts := startStreamableServer(t)
+	cfg := config.ToolConfig{Transport: "sse", URL: ts.URL, AllowLoopback: true}
+	if err := m.RegisterServer(context.Background(), name, cfg); err != nil {
+		t.Fatalf("RegisterServer failed: %v", err)
+	}
+	// Runs before ts.Close, which otherwise waits on a reconnected session's stream.
+	t.Cleanup(func() { _ = m.Close() })
+	m.mu.RLock()
+	sc := m.servers[name]
+	m.mu.RUnlock()
+	if err := m.UnregisterServer(name); err != nil {
+		t.Fatalf("UnregisterServer: %v", err)
+	}
+	if stopServer {
+		ts.Close()
+	}
+	m.mu.Lock()
+	m.servers[name] = sc
+	m.mu.Unlock()
+	return sc
+}
+
+func TestCheckServers_PastMaxAttempts_ReconnectsWhenServerIsBack(t *testing.T) {
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	sc := closedConnServer(t, m, "todoist", false)
+	m.mu.Lock()
+	sc.restartCount = 7 // well past max_restart_attempts
+	m.mu.Unlock()
+
+	m.checkServers(context.Background(), 3, 5*time.Minute, 3)
+
+	status, ok := m.ServerInfo("todoist")
+	if !ok {
+		t.Fatal("server missing after restart")
+	}
+	if status.Status != "connected" {
+		t.Errorf("Status = %q, want connected (a server past max_restart_attempts must still come back)", status.Status)
+	}
+	if len(m.ToolDefs()) == 0 {
+		t.Error("tools not advertised after reconnect")
+	}
+}
+
+func TestCheckServers_PastMaxAttempts_WaitsOutDoublingDelay(t *testing.T) {
+	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
+	sc := closedConnServer(t, m, "todoist", true)
+
+	retryIn := func() time.Duration {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return time.Until(sc.nextRetryAt)
+	}
+	attempts := func() int {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return sc.restartCount
+	}
+
+	// maxAttempts=0 puts every failure past the quick retries, so none sleeps.
+	m.checkServers(context.Background(), 0, 5*time.Minute, 1)
+	if got := attempts(); got != 1 {
+		t.Fatalf("restartCount = %d, want 1", got)
+	}
+	if d := retryIn(); d <= 25*time.Second || d > 30*time.Second {
+		t.Fatalf("first wait = %v, want ~30s", d)
+	}
+	if status, _ := m.ServerInfo("todoist"); status.Status == "disabled" {
+		t.Fatal("server disabled; it should keep retrying")
+	}
+
+	// Inside the wait: no probe, no restart.
+	m.checkServers(context.Background(), 0, 5*time.Minute, 1)
+	if got := attempts(); got != 1 {
+		t.Fatalf("restartCount = %d during the wait, want 1", got)
+	}
+
+	// Wait over: the next failure doubles it.
+	m.mu.Lock()
+	sc.nextRetryAt = time.Now().Add(-time.Second)
+	m.mu.Unlock()
+	m.checkServers(context.Background(), 0, 5*time.Minute, 1)
+	if got := attempts(); got != 2 {
+		t.Fatalf("restartCount = %d after the wait, want 2", got)
+	}
+	if d := retryIn(); d <= 55*time.Second || d > 60*time.Second {
+		t.Fatalf("second wait = %v, want ~60s", d)
+	}
+}
+
+func TestSlowRetryDelay_DoublesFrom30sUpToCap(t *testing.T) {
+	limit := 5 * time.Minute
+	if got := slowRetryDelay(1, limit); got != 30*time.Second {
+		t.Errorf("first delay = %v, want 30s", got)
+	}
+	if got := slowRetryDelay(4, limit); got != 4*time.Minute {
+		t.Errorf("fourth delay = %v, want 4m", got)
+	}
+	if got := slowRetryDelay(5, limit); got != limit {
+		t.Errorf("fifth delay = %v, want the 5m cap", got)
+	}
+	// A large n must not overflow the shift and wrap below the cap.
+	if got := slowRetryDelay(100, limit); got != limit {
+		t.Errorf("hundredth delay = %v, want the 5m cap", got)
 	}
 }

@@ -447,10 +447,8 @@ func TestCheckServers_SkipsDrainingServer(t *testing.T) {
 // handleServerFailure re-inserts the conn it just unregistered — closed session
 // and all — precisely so the next probe fails and drives another restart
 // attempt. Widening the skip above to "any non-live conn" would strand such a
-// server forever: never probed, so restartCount stops climbing, so
-// max_restart_attempts never trips and it never reaches the disabled state that
-// makes the failure visible. This test fails if the condition is ever tidied
-// back to `!= drainStateLive`.
+// server forever: never probed, so never restarted. This test fails if the
+// condition is ever tidied back to `!= drainStateLive`.
 func TestCheckServers_ProbesClosedConn(t *testing.T) {
 	ts := startStreamableServer(t)
 	m := NewManager(testLogger(), config.MCPConfig{RequestTimeoutSecs: 10})
@@ -461,6 +459,8 @@ func TestCheckServers_ProbesClosedConn(t *testing.T) {
 	if err := m.RegisterServer(context.Background(), "flaky", cfg); err != nil {
 		t.Fatalf("RegisterServer failed: %v", err)
 	}
+	// The probe failure restarts the server; close it before ts.Close waits on it.
+	t.Cleanup(func() { _ = m.Close() })
 	m.mu.RLock()
 	sc := m.servers["flaky"]
 	m.mu.RUnlock()
@@ -477,8 +477,7 @@ func TestCheckServers_ProbesClosedConn(t *testing.T) {
 	m.servers["flaky"] = sc
 	m.mu.Unlock()
 
-	// maxAttempts=0 makes handleServerFailure disable on the first failure and
-	// return, so the probe is exercised without a restart backoff.
+	// maxAttempts=0 skips the quick-retry sleep.
 	m.checkServers(context.Background(), 0, 5*time.Minute, 1)
 
 	if got := len(auditor.byAction("health_fail")); got != 1 {
@@ -486,9 +485,6 @@ func TestCheckServers_ProbesClosedConn(t *testing.T) {
 	}
 	if sc.restartCount != 1 {
 		t.Errorf("restartCount = %d, want 1 (the probe failure must drive a retry)", sc.restartCount)
-	}
-	if !sc.disabled {
-		t.Error("server should be disabled after exhausting restart attempts")
 	}
 }
 

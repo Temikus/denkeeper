@@ -3611,6 +3611,9 @@ func TestParse_MCPDefaults(t *testing.T) {
 	if cfg.MCP.RestartCooldown != "5m" {
 		t.Errorf("MCP.RestartCooldown = %q, want 5m", cfg.MCP.RestartCooldown)
 	}
+	if cfg.MCP.MaxRestartBackoff != "5m" {
+		t.Errorf("MCP.MaxRestartBackoff = %q, want 5m", cfg.MCP.MaxRestartBackoff)
+	}
 	// Must sit above the engine's 30s per-tool-call timeout so a call that is
 	// going to complete survives a teardown drain.
 	if cfg.MCP.DrainTimeout != "35s" {
@@ -3683,6 +3686,48 @@ restart_cooldown = "not-a-duration"
 		t.Fatal("expected error for invalid restart_cooldown")
 	}
 	if !strings.Contains(err.Error(), "restart_cooldown") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_MCPMaxRestartBackoffExplicit(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+max_restart_backoff = "15m"
+`)
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MCP.MaxRestartBackoff != "15m" {
+		t.Errorf("MCP.MaxRestartBackoff = %q, want 15m", cfg.MCP.MaxRestartBackoff)
+	}
+}
+
+func TestParse_MCPMaxRestartBackoffInvalidRejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+max_restart_backoff = "soon"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for invalid max_restart_backoff")
+	}
+	if !strings.Contains(err.Error(), "max_restart_backoff") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_MCPMaxRestartBackoffZeroRejected(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[mcp]
+max_restart_backoff = "0s"
+`)
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for zero max_restart_backoff")
+	}
+	if !strings.Contains(err.Error(), "max_restart_backoff") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

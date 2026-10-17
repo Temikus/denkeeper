@@ -606,7 +606,8 @@ Global settings that apply to all MCP tool servers.
 |---|---|---|---|
 | `request_timeout_secs` | int | `30` | Per-request timeout for MCP calls (0 = no timeout) |
 | `auto_restart` | bool | `true` | Automatically restart crashed stdio servers |
-| `max_restart_attempts` | int | `3` | Consecutive failures before disabling a server |
+| `max_restart_attempts` | int | `3` | Quick restart attempts (1s, 2s, 4s apart) before retries slow down. A failing server is never disabled |
+| `max_restart_backoff` | string | `"5m"` | Longest wait between restart attempts after the quick ones. The wait starts at 30s and doubles |
 | `restart_cooldown` | string | `"5m"` | Duration a server must stay connected to reset the failure counter |
 | `drain_timeout` | string | `"35s"` | How long teardown waits for in-flight tool calls before forcing the transport closed |
 | `url_allowlist` | string[] | — | Allowed hostnames/wildcards for SSE tool server URLs (empty = all non-blocked hosts) |
