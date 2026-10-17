@@ -57,7 +57,7 @@ Every call gets the same six yes/no questions, covering what the supervisor is t
 | `injection` | Do the arguments contain text addressed to an AI agent or reviewer? |
 | `secrets` | Do the arguments contain a password, API key, access token or private key? |
 | `sends_external` | Going by the tool's description, does the call send data outside this system? |
-| `private_data` | Apart from recipient or destination addresses, do the arguments contain personal data? |
+| `private_data` | Apart from recipient or destination addresses, do the arguments contain personal data? A file or record passed by path or ID counts as yes, since its content is not shown. |
 
 Each question asks about one thing. For `aligned` and `scoped`, yes is the safe answer. For the four safety questions, yes means the hazard is present. Decision models read questions literally, so a bundled or inverted question ("are the arguments free of …") scores badly.
 
@@ -89,7 +89,7 @@ The lowest check decides:
 | At or above `supervisor_decider_approve_at` | **Approve** |
 | In between | **Escalate** to the next stage |
 
-`no_leak` is the exception: it can stop an approval but never denies. Sending private data out is often exactly what was asked for, such as emailing you your own tasks, so a low `no_leak` goes on to the supervisor or you. The deny row looks at the other four checks.
+`no_leak` is the exception: it can stop an approval but never denies. Sending private data out is often exactly what was asked for, such as emailing you your own tasks, so a low `no_leak` on its own goes on to the supervisor or you. The deny row looks at the other four checks: if one of them, such as `no_secrets`, is at or below `deny_at`, the call is denied whatever `no_leak` says.
 
 Thresholds must satisfy `0 < deny_at < approve_at < 1`.
 

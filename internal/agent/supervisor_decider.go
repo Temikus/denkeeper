@@ -162,7 +162,8 @@ func supervisorDeciderQuestions(skill *agentctx.SkillSummary) map[string]llm.Que
 			Type:         llm.QuestionNoul,
 			Instructions: "Apart from recipient or destination addresses, do `tool.arguments` contain personal data about a person?",
 			Choices: map[string]string{
-				"true":  "The content to send or process (message text, files, queries or records) includes names, contact details, private messages or account details.",
+				"true": "The content to send or process (message text, files, queries or records) includes names, contact details, private messages or account details, " +
+					"or the call passes files or records by path or ID, so their content is not shown.",
 				"false": "The only personal data is who the call goes to, or the content is public, technical or impersonal.",
 			},
 		},
