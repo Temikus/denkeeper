@@ -133,6 +133,9 @@ func (s *Server) handlePatchServerConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	s.serverConfigMu.Lock()
+	defer s.serverConfigMu.Unlock()
+
 	// Save first, so a failed write leaves the running config matching the file.
 	if s.deps.ConfigPath != "" {
 		if err := config.UpdateSections(s.deps.ConfigPath, serverConfigSections(&input)); err != nil {

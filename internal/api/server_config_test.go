@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/config"
@@ -775,5 +776,40 @@ func TestPatchServerConfig_EverySectionSavedTogether(t *testing.T) {
 	}
 	if script["enabled"] != true || tasks["enabled"] != true {
 		t.Errorf("[script] = %v, [tasks] = %v", script, tasks)
+	}
+}
+
+// Each PATCH saves and then applies; without one lock across both, the last
+// save and the last apply can come from different requests. The window is
+// small: without the lock this fails roughly one run in ten.
+func TestPatchServerConfig_ConcurrentPatchesLeaveFileAndMemoryAgreeing(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[api]\nlisten = \":8443\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDepsWithServerConfig()
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	zones := []string{"UTC", "Europe/London", "Asia/Tokyo", "America/New_York"}
+	var wg sync.WaitGroup
+	for i := range 400 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if rec := patchServerConfig(t, srv, map[string]any{"timezone": zones[i%len(zones)]}); rec.Code != http.StatusOK {
+				t.Errorf("status = %d; body: %s", rec.Code, rec.Body)
+			}
+		}()
+	}
+	wg.Wait()
+
+	raw, err := config.ReadRawConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := raw["api"].(map[string]any)
+	if live := deps.Config.Get().API.Timezone; api["timezone"] != live {
+		t.Errorf("file timezone = %v, live timezone = %q", api["timezone"], live)
 	}
 }
