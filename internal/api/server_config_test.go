@@ -650,3 +650,54 @@ func TestGetServerConfig_EndpointMatchesExternalURLUnderReload(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors a deployed config written before tasks existed: no [tasks] section.
+func TestPatchServerConfig_EnableTasks_PersistsAndRequestsRestart(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[script]\ntimeout = \"2s\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDepsWithServerConfig()
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	patch := func() map[string]any {
+		body, _ := json.Marshal(map[string]any{"tasks_enabled": true})
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer dk-test-key")
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; body: %s", rec.Code, rec.Body)
+		}
+		var resp map[string]any
+		_ = json.NewDecoder(rec.Body).Decode(&resp)
+		return resp
+	}
+
+	if resp := patch(); resp["restart_required"] != true {
+		t.Errorf("restart_required = %v, want true", resp["restart_required"])
+	}
+	if !deps.Config.Get().Tasks.Enabled {
+		t.Error("in-memory tasks still off")
+	}
+	loaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("persisted config does not load: %v", err)
+	}
+	if !loaded.Tasks.Enabled || loaded.Script.Timeout != "2s" {
+		t.Errorf("persisted tasks=%v script timeout=%q; want tasks on and siblings kept", loaded.Tasks.Enabled, loaded.Script.Timeout)
+	}
+
+	if resp := patch(); resp["restart_required"] != nil {
+		t.Errorf("no-op patch asked for a restart: %v", resp)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/config", nil)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"tasks_enabled":true`)) {
+		t.Errorf("GET server/config doesn't report tasks_enabled: %s", rec.Body)
+	}
+}

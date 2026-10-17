@@ -1,6 +1,6 @@
 <div class="off">
   <h2>Tasks are off</h2>
-  <p>Tasks let you, your agents and outside harnesses like Claude Code hand work to each other. Turn them on in the server config and restart:</p>
+  <p>Tasks let you, your agents and outside harnesses like Claude Code hand work to each other. Turn them on under Features on the <a href="#/server">Server</a> page and restart, or set this in the config:</p>
   <pre><code>[tasks]
 enabled = true</code></pre>
 </div>

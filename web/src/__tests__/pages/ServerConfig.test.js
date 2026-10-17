@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../../test/server.js'
 import { token, authMode } from '../../store.js'
 import ServerConfig from '../../pages/ServerConfig.svelte'
+import { features } from '../../features.js'
 
 beforeEach(() => {
   token.set('test-key')
@@ -606,6 +607,48 @@ describe('ServerConfig page', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Toggle failed')).toBeInTheDocument()
+    })
+  })
+
+  describe('Tasks toggle', () => {
+    beforeEach(() => features.set({ tasks: false }))
+
+    test('turning tasks on saves it and says a restart applies it', async () => {
+      let body = null
+      server.use(
+        http.patch('/api/v1/server/config', async ({ request }) => {
+          body = await request.json()
+          return HttpResponse.json({ status: 'updated', restart_required: true })
+        }),
+      )
+      render(ServerConfig)
+      const toggle = await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(toggle.checked).toBe(false)
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
+
+      await fireEvent.change(toggle, { target: { checked: true } })
+
+      await waitFor(() => expect(body).toEqual({ tasks_enabled: true }))
+      expect(await screen.findByTestId('tasks-pending')).toHaveTextContent(
+        'Saved as on, but the server is still running with tasks off.')
+    })
+
+    test('a saved setting the server hasn\'t picked up yet is flagged on load', async () => {
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      expect(await screen.findByTestId('tasks-pending')).toHaveTextContent('Restart it')
+    })
+
+    test('no notice once the running server matches', async () => {
+      features.set({ tasks: true })
+      server.use(http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [], tasks_enabled: true,
+      })))
+      render(ServerConfig)
+      await screen.findByRole('checkbox', { name: 'Tasks' })
+      expect(screen.queryByTestId('tasks-pending')).toBeNull()
     })
   })
 })

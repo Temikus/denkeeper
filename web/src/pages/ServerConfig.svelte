@@ -3,6 +3,7 @@
   import { api } from '../api.js'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import { timezoneGroups, allTimezones } from '../timezones.js'
+  import { features } from '../features.js'
 
   let config = $state(null)
   let loading = $state(true)
@@ -41,6 +42,11 @@
   let webFetchDraft = $state(null)
   let webFetchError = $state('')
   let webFetchSaveTimer = null
+
+  // Tasks. The saved value applies on restart; until then it differs from what
+  // /health says is running, and the page says so.
+  let savingTasks = $state(false)
+  const tasksPending = $derived(!!config && config.tasks_enabled !== $features.tasks)
 
   async function fetchConfig() {
     loading = true
@@ -215,6 +221,20 @@
       error = e.message
     } finally {
       savingScript = false
+    }
+  }
+
+  async function toggleTasks() {
+    savingTasks = true
+    error = ''
+    try {
+      const enabled = !config.tasks_enabled
+      await api.updateServerConfig({ tasks_enabled: enabled })
+      config.tasks_enabled = enabled
+    } catch (e) {
+      error = e.message
+    } finally {
+      savingTasks = false
     }
   }
 
@@ -539,6 +559,33 @@
   {#if toolsRestartHint}
     <div class="mcp-hint">
       Saved. Restart the server (Process Control below) for the change to take effect.
+    </div>
+  {/if}
+
+  <h2 class="section-title">Features</h2>
+  <div class="config-card">
+    <div class="config-row">
+      <div class="config-label">
+        <div class="config-name">Tasks</div>
+        <div class="config-desc">
+          A shared task board for you, your agents and outside harnesses like Claude Code:
+          the Tasks page, the task_* tools and the task API. Applies on restart.
+        </div>
+      </div>
+      <div class="config-value-row">
+        <span class="status-dot" class:status-on={config.tasks_enabled} class:status-off={!config.tasks_enabled}></span>
+        <span class="config-value">{config.tasks_enabled ? 'Enabled' : 'Disabled'}</span>
+        <label class="switch switch-sm">
+          <input type="checkbox" aria-label="Tasks" checked={config.tasks_enabled} onchange={toggleTasks} disabled={savingTasks} />
+          <span class="switch-slider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+  {#if tasksPending}
+    <div class="mcp-hint" role="status" data-testid="tasks-pending">
+      Saved as {config.tasks_enabled ? 'on' : 'off'}, but the server is still running with tasks {$features.tasks ? 'on' : 'off'}.
+      Restart it (Process Control below) to apply.
     </div>
   {/if}
 

@@ -812,6 +812,7 @@ export const handlers = [
     web_tools_enabled: true,
     web_fetch_max_response_chars: 8000,
     script_enabled: true,
+    tasks_enabled: false,
     external_url: 'https://den.example.com',
     timezone: 'UTC',
     version: 'v0.25.0',

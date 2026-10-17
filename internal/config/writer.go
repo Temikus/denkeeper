@@ -914,6 +914,11 @@ func UpdateScriptConfig(path string, changes map[string]any) error {
 	return updateTopLevelSection(path, "script", changes)
 }
 
+// UpdateTasksConfig persists partial updates to the top-level [tasks] section.
+func UpdateTasksConfig(path string, changes map[string]any) error {
+	return updateTopLevelSection(path, "tasks", changes)
+}
+
 // ---------------------------------------------------------------------------
 // Auth config persistence
 // ---------------------------------------------------------------------------

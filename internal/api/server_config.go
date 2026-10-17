@@ -31,10 +31,13 @@ type serverConfigResponse struct {
 	WebToolsEnabled          bool     `json:"web_tools_enabled"`
 	WebFetchMaxResponseChars int      `json:"web_fetch_max_response_chars"`
 	ScriptEnabled            bool     `json:"script_enabled"`
-	Version                  string   `json:"version"`
-	Commit                   string   `json:"commit"`
-	BuildDate                string   `json:"build_date"`
-	GoVersion                string   `json:"go_version"`
+	// TasksEnabled is the configured [tasks] enabled. The running process
+	// changes only on restart; /health tasks_enabled reports what is running.
+	TasksEnabled bool   `json:"tasks_enabled"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildDate    string `json:"build_date"`
+	GoVersion    string `json:"go_version"`
 }
 
 // serverConfigUpdateInput holds the mutable fields for PATCH /api/v1/server/config.
@@ -51,6 +54,7 @@ type serverConfigUpdateInput struct {
 	// bounds match config.validateWeb so the API and TOML paths agree.
 	WebFetchMaxResponseChars *int  `json:"web_fetch_max_response_chars,omitempty"`
 	ScriptEnabled            *bool `json:"script_enabled,omitempty"`
+	TasksEnabled             *bool `json:"tasks_enabled,omitempty"`
 }
 
 // Bounds for web_fetch_max_response_chars, kept in step with config.validateWeb.
@@ -91,6 +95,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 		WebToolsEnabled:          snap.Web.WebEnabled(),
 		WebFetchMaxResponseChars: snap.Web.Fetch.MaxResponseChars,
 		ScriptEnabled:            snap.Script.ScriptEnabled(),
+		TasksEnabled:             snap.Tasks.Enabled,
 		Version:                  s.deps.Version,
 		Commit:                   s.deps.Commit,
 		BuildDate:                s.deps.BuildDate,
@@ -104,7 +109,7 @@ func (s *Server) handleGetServerConfig(w http.ResponseWriter, _ *http.Request) {
 
 // handlePatchServerConfig godoc
 // @Summary      Update server configuration
-// @Description  Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, or web_fetch_max_response_chars returns restart_required: true, since the in-process MCP tools are registered — and their limits read — only at process start. web_fetch_max_response_chars must be between 1 and 100000.
+// @Description  Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, tasks_enabled, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, tasks_enabled, or web_fetch_max_response_chars returns restart_required: true, since those features are wired, and their limits read, only at process start. web_fetch_max_response_chars must be between 1 and 100000.
 // @Tags         server
 // @Accept       json
 // @Produce      json
@@ -169,6 +174,13 @@ func applyInProcessToolInput(cfg *config.Config, input *serverConfigUpdateInput)
 			changed = true
 		}
 		cfg.Script.Enabled = input.ScriptEnabled
+	}
+	if input.TasksEnabled != nil {
+		// main builds the task service, its tools and its routes at start.
+		if cfg.Tasks.Enabled != *input.TasksEnabled {
+			changed = true
+		}
+		cfg.Tasks.Enabled = *input.TasksEnabled
 	}
 	return changed
 }
@@ -358,6 +370,11 @@ func (s *Server) persistInProcessToolConfig(input *serverConfigUpdateInput) {
 	if input.ScriptEnabled != nil {
 		if err := config.UpdateScriptConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.ScriptEnabled}); err != nil {
 			s.logger.Warn("failed to persist script config", "error", err)
+		}
+	}
+	if input.TasksEnabled != nil {
+		if err := config.UpdateTasksConfig(s.deps.ConfigPath, map[string]any{"enabled": *input.TasksEnabled}); err != nil {
+			s.logger.Warn("failed to persist tasks config", "error", err)
 		}
 	}
 }
