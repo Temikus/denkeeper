@@ -95,7 +95,7 @@ func New(store Store, agentName string, logger *slog.Logger) *Effector {
 // tracking reports whether mutations are journaled.
 func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 
-// Create writes a new skill and journals that it did not exist before.
+// Create writes a new skill and journals the state it replaces.
 //
 // Tracked-write ordering, shared by all four mutators: read the current state,
 // append the revision, *then* perform the mutation. Journal-before-write means
@@ -106,15 +106,26 @@ func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 // aborts the mutation: fail closed.
 func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, actor string, maxBytes int) error {
 	if name, version, ok := e.parseTracked(payload); ok && validName(name) {
-		// prior_payload stays NULL: the prior state of a create is "absent",
-		// which is what tells the reverter to delete rather than restore.
-		if err := e.journal(ctx, agent.SkillRevision{
+		prior, err := e.readPrior(sa, name)
+		if err != nil {
+			return err
+		}
+		// A NULL prior_payload tells the reverter to delete. If a file is
+		// already there, the create replaces it, so journal it as an update
+		// and let the revert restore the old bytes.
+		rev := agent.SkillRevision{
 			TransitionID: tid,
 			Op:           agent.SkillOpCreate,
 			SkillName:    name,
 			NewVersion:   version,
 			Actor:        actor,
-		}); err != nil {
+		}
+		if prior != nil {
+			rev.Op = agent.SkillOpUpdate
+			rev.PriorPayload = prior
+			rev.PriorVersion = versionOf(prior)
+		}
+		if err := e.journal(ctx, rev); err != nil {
 			return err
 		}
 	}
