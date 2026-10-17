@@ -34,7 +34,8 @@ func deciderReviewDeps(t *testing.T, at time.Time) Deps {
 		Timestamp: at, Category: audit.CategorySupervisor, Action: "review", Agent: "default",
 		Status: audit.StatusOK, Source: "decider:jev", ConversationID: "c1",
 		Detail: `{"tool":"echo","arguments":"{}","decision":"shadow","model":"typesafe/jev-1.13","cost":0.0001,` +
-			`"answers":{"aligned":{"type":"noul","noul":0.99},"safe_args":{"type":"noul","noul":0.97},"scoped":{"type":"noul","noul":0.98}}}`,
+			`"answers":{"aligned":{"type":"noul","noul":0.99},"scoped":{"type":"noul","noul":0.98},"injection":{"type":"noul","noul":0.01},` +
+			`"secrets":{"type":"noul","noul":0.03},"sends_external":{"type":"noul","noul":0.02},"private_data":{"type":"noul","noul":0.5}}}`,
 	})
 	insert(audit.Event{
 		Timestamp: at.Add(time.Second), Category: audit.CategorySupervisor, Action: "review", Agent: "default",
@@ -69,8 +70,8 @@ func TestDeciderReviews_PairsStoredReviews(t *testing.T) {
 		t.Fatalf("body = %+v, want one review by jev", body)
 	}
 	r := body.Reviews[0]
-	if r.Supervisor != "APPROVE" || r.MinScore == nil || *r.MinScore != 0.97 || r.Lowest != "safe_args" {
-		t.Errorf("review = %+v, want APPROVE with min 0.97 on safe_args", r)
+	if r.Supervisor != "APPROVE" || r.MinScore == nil || *r.MinScore != 0.97 || r.Lowest != "no_secrets" {
+		t.Errorf("review = %+v, want APPROVE with min 0.97 on no_secrets", r)
 	}
 	if r.SupervisorCost == nil || *r.SupervisorCost != 0.04 {
 		t.Errorf("supervisor cost = %v, want 0.04", r.SupervisorCost)

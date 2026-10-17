@@ -205,7 +205,7 @@ Defaults for agents that do not set their own directories.
 | `supervisor_timeout` | string | `"30s"` | Max wait for the supervisor's LLM review. Go duration format (`30s`, `1m`, `90s`). On timeout, falls through to human approval |
 | `supervisor_context_messages` | int | `5` | Number of recent conversation messages passed to the supervisor as context |
 | `supervisor_body_excerpt_len` | int | `500` | Max characters of skill body included in the review prompt |
-| `supervisor_tool_desc_len` | int | `200` | Max characters of tool description included in the review prompt |
+| `supervisor_tool_desc_len` | int | `1000` | Max characters of tool description included in the review prompt |
 | `supervisor_max_args_bytes` | int | `16384` | Max bytes of tool-call arguments sent for review. Larger calls skip the supervisor and go straight to human approval (audited with `cause: "too_large"`); arguments are never truncated. `0` = default |
 | `supervisor_decider` | string | — | `[[llm.deciders]]` entry that scores each tool call (aligned, safe arguments, scoped) before the supervisor. Supervised tier only; works with or without `supervisor` |
 | `supervisor_decider_mode` | string | `"shadow"` | `"shadow"`: the decider runs and writes a `supervisor` audit event (`source = "decider:<name>"`) with the verdict it would have given, but never changes the outcome. `"enforce"`: the verdict approves or denies the call, and an uncertain one goes on to the supervisor or a human |

@@ -48,21 +48,42 @@ The same fields are on the **Agents** page under **Permission**, and on `PATCH /
 
 ## What it is asked
 
-Every call gets the same three yes/no questions, mirroring what the supervisor is told to check. Each answer is a probability between 0 and 1:
+Every call gets the same six yes/no questions, covering what the supervisor is told to check. Each answer is a probability between 0 and 1 that the answer is yes:
 
 | Question | Asks |
 |---|---|
 | `aligned` | Does this call serve what the user asked for (or, for a scheduled skill, what the skill is for)? |
-| `safe_args` | Are the arguments free of injection, data exfiltration, and credential or personal-data leakage? |
 | `scoped` | Is the call no broader than the request needs? |
+| `injection` | Do the arguments contain text addressed to an AI agent or reviewer? |
+| `secrets` | Do the arguments contain a password, API key, access token or private key? |
+| `sends_external` | Going by the tool's description, does the call send data outside this system? |
+| `private_data` | Do the arguments contain personal data? |
+
+Each question asks about one thing, and yes means the hazard is present. Decision models read questions literally, so a bundled or inverted question ("are the arguments free of …") scores badly.
 
 The decider sees what the supervisor sees: the tool name, description and arguments, the user request, skill context, and recent messages.
 
+## The checks
+
+The answers are combined into five checks. For every check, a high score means safe:
+
+| Check | Score |
+|---|---|
+| `aligned` | `aligned` |
+| `scoped` | `scoped` |
+| `no_injection` | 1 − `injection` |
+| `no_secrets` | 1 − `secrets` |
+| `no_leak` | 1 − `sends_external` × `private_data` |
+
+`no_leak` needs both halves, so personal data passed to a local tool (such as `run_javascript`, which has no network access) is not a leak.
+
+Earlier versions asked one bundled `safe_args` question instead of the four safety questions. Reviews that used it are left out of the calibration panel and `decider_reviews`, because their scores do not compare with the split checks.
+
 ## The verdict
 
-The lowest of the three answers decides:
+The lowest check decides:
 
-| Lowest answer | Verdict |
+| Lowest check | Verdict |
 |---|---|
 | At or below `supervisor_decider_deny_at` | **Deny** |
 | At or above `supervisor_decider_approve_at` | **Approve** |
@@ -79,7 +100,7 @@ Thresholds must satisfy `0 < deny_at < approve_at < 1`.
 **`enforce`** acts on it:
 
 - **Approve:** the call runs. The supervisor is not asked.
-- **Deny:** the call is blocked and the agent is told why, for example `Tool call denied by decider: arguments flagged as unsafe (p=0.03)`.
+- **Deny:** the call is blocked and the agent is told why, for example `Tool call denied by decider: arguments contain a credential (p=0.03)`.
 - **Escalate:** the call goes to the supervisor, or to you if there is none.
 
 The audit event then carries `decision` = `APPROVE`, `DENY` or `ESCALATE`. In chat, decider verdicts use the same approval statuses as a supervisor's, with text that names the decider.

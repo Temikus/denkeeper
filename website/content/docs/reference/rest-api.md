@@ -358,7 +358,7 @@ List the agent's shadow-mode [decision model](/docs/concepts/deciders/) reviews 
 
 Query parameters: `decider` (default: the agent's `supervisor_decider`) and `since` (RFC3339, default: 30 days ago). The response carries `reviews`, `failed` (decider reviews that errored) and `truncated` (only the newest reviews fit). Each review has:
 
-- `scores` for the `aligned`, `safe_args` and `scoped` checks, plus `lowest` and `min_score`. The lowest score decides the verdict. `min_score` is `null` when an answer was missing, and such a call always escalates.
+- `scores` for the `aligned`, `scoped`, `no_injection`, `no_secrets` and `no_leak` checks (high means safe), plus `lowest` and `min_score`. Reviews recorded before the safety question was split (they carry a `safe_args` answer) are left out. The lowest score decides the verdict. `min_score` is `null` when an answer was missing, and such a call always escalates.
 - `supervisor`: `APPROVE`, `DENY`, `ESCALATE`, or `""` when there is no supervisor verdict for the call.
 - `decider_cost` and `supervisor_cost`. `supervisor_cost` is `null` for reviews recorded before the supervisor's cost was audited.
 
