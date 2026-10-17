@@ -961,6 +961,7 @@ func TestRouter_ListModelDetails_DetailListerMissingPricingUsesRegistry(t *testi
 		models: []ModelInfo{
 			{ID: "claude-sonnet-5-5", Provider: "p1"},
 			{ID: "claude-opus-5-5", Provider: "p1", InputPerMTok: &reported, OutputPerMTok: &reported},
+			{ID: "claude-haiku-5-5", Provider: "p1", InputPerMTok: &reported},
 		},
 	}
 	r.RegisterProvider(p)
@@ -977,6 +978,10 @@ func TestRouter_ListModelDetails_DetailListerMissingPricingUsesRegistry(t *testi
 	}
 	if opus := byID["claude-opus-5-5"]; *opus.InputPerMTok != 99.0 {
 		t.Errorf("opus InputPerMTok = %v, want provider-reported 99", *opus.InputPerMTok)
+	}
+	haiku := byID["claude-haiku-5-5"]
+	if *haiku.InputPerMTok != 99.0 || haiku.OutputPerMTok == nil || *haiku.OutputPerMTok != 0.50 {
+		t.Errorf("haiku pricing = %v/%v, want provider 99 + registry 0.50", *haiku.InputPerMTok, haiku.OutputPerMTok)
 	}
 }
 

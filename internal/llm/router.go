@@ -200,14 +200,20 @@ func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []
 	return result
 }
 
-// withRegistryPricing fills pricing from the registry when the provider
-// reported none. Provider-reported pricing is never overwritten.
+// withRegistryPricing fills each price the provider omitted from the
+// registry. Provider-reported prices are never overwritten.
 func (r *Router) withRegistryPricing(m ModelInfo) ModelInfo {
-	if r.pricing == nil || m.InputPerMTok != nil || m.OutputPerMTok != nil {
+	if r.pricing == nil || (m.InputPerMTok != nil && m.OutputPerMTok != nil) {
 		return m
 	}
-	if price, ok := r.pricing.Lookup(m.ID); ok {
+	price, ok := r.pricing.Lookup(m.ID)
+	if !ok {
+		return m
+	}
+	if m.InputPerMTok == nil {
 		m.InputPerMTok = &price.InputPerMTok
+	}
+	if m.OutputPerMTok == nil {
 		m.OutputPerMTok = &price.OutputPerMTok
 	}
 	return m
