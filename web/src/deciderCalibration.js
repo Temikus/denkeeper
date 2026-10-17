@@ -4,12 +4,16 @@
 export const DECIDER_APPROVE_DEFAULT = 0.95
 export const DECIDER_DENY_DEFAULT = 0.05
 
+// The lowest check that can deny. no_leak only escalates, so it is left out
+// server-side; rows without the field fall back to min_score.
+const denyScore = row => row.min_deny_score ?? row.min_score
+
 // Mirrors decideSupervisorOutcome in internal/agent/supervisor_decider.go:
 // deny is checked first, and a review with a missing answer always escalates.
 export function verdict(row, approveAt, denyAt) {
   const min = row.min_score
   if (min === null || min === undefined) return 'ESCALATE'
-  if (min <= denyAt) return 'DENY'
+  if (denyScore(row) <= denyAt) return 'DENY'
   if (min >= approveAt) return 'APPROVE'
   return 'ESCALATE'
 }
@@ -95,7 +99,7 @@ export function suggestion(rows, approveAt, denyAt) {
     return { kind: 'approve', value, count: s.unsafeApprovals, removed, settledAfter: summarize(rows, value, denyAt).settled }
   }
   if (s.wrongDenials > 0) {
-    const scores = rows.filter(r => wrongDenial(r, verdict(r, approveAt, denyAt))).map(r => r.min_score)
+    const scores = rows.filter(r => wrongDenial(r, verdict(r, approveAt, denyAt))).map(denyScore)
     const value = Math.max(fix2(roundDown2(Math.min(...scores))), MIN_DENY)
     const removed = scores.filter(x => x > value).length
     if (!removed || value >= denyAt) return { kind: 'deny', value: null, count: s.wrongDenials }

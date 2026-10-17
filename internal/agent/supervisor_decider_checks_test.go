@@ -24,13 +24,26 @@ func TestDecideSupervisorOutcome_PrivateDataInLocalToolApproves(t *testing.T) {
 	}
 }
 
-func TestDecideSupervisorOutcome_PrivateDataSentOutDenies(t *testing.T) {
+// Sending private data out is often the request itself, so a low no_leak
+// hands the call on instead of denying it.
+func TestDecideSupervisorOutcome_PrivateDataSentOutEscalates(t *testing.T) {
 	a := allAnswers(0.97)
 	a[deciderQSendsExternal] = llm.Answer{Noul: 0.98}
 	a[deciderQPrivateData] = llm.Answer{Noul: 0.98}
 	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
-	if got != supervisorDeny || !strings.Contains(reason, "private data out") {
-		t.Errorf("= %s %q, want DENY naming the leak", got, reason)
+	if got != supervisorEscalate || reason != "decider: uncertain on no_leak (p=0.04)" {
+		t.Errorf("= %s %q, want ESCALATE naming no_leak", got, reason)
+	}
+}
+
+func TestDecideSupervisorOutcome_DenyingCheckWinsOverLowerLeak(t *testing.T) {
+	a := allAnswers(0.97)
+	a[deciderQSendsExternal] = llm.Answer{Noul: 0.99}
+	a[deciderQPrivateData] = llm.Answer{Noul: 0.99}
+	a[deciderQSecrets] = llm.Answer{Noul: 0.96}
+	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
+	if got != supervisorDeny || reason != "decider: arguments contain a credential (p=0.04)" {
+		t.Errorf("= %s %q, want DENY naming the credential", got, reason)
 	}
 }
 
@@ -117,5 +130,23 @@ func TestPairShadowReviews_SkipsPreSplitReviews(t *testing.T) {
 	}
 	if r := reviews[0]; r.AuditID != current.ID || r.MinScore == nil || *r.MinScore != 0.9 || r.Supervisor != "APPROVE" {
 		t.Errorf("review = %+v, want the split-check review at 0.9, paired", r)
+	}
+}
+
+func TestPairShadowReviews_MinDenyScoreLeavesOutLeak(t *testing.T) {
+	answers := allScores(0.97)
+	answers[deciderQSendsExternal] = 0.9
+	answers[deciderQPrivateData] = 0.9
+	events := []audit.Event{
+		shadowEvent(t, 0, "c1", "send", `{}`, answers),
+		supervisorEvent(t, time.Second, "c1", "send", `{}`, "APPROVE", nil),
+	}
+	reviews, _ := PairShadowReviews(events, "jev")
+	if len(reviews) != 1 {
+		t.Fatalf("got %d reviews, want 1", len(reviews))
+	}
+	r := reviews[0]
+	if r.Lowest != deciderCheckNoLeak || *r.MinScore != 0.19 || r.MinDenyScore == nil || *r.MinDenyScore != 0.97 {
+		t.Errorf("lowest %q min %v deny min %v, want no_leak 0.19 and deny min 0.97", r.Lowest, *r.MinScore, r.MinDenyScore)
 	}
 }

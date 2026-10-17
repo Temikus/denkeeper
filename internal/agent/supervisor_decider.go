@@ -107,12 +107,16 @@ var deciderCheckOrder = []string{
 	deciderQAligned, deciderCheckNoInjection, deciderCheckNoSecrets, deciderCheckNoLeak, deciderQScoped,
 }
 
+// deciderEscalateOnlyChecks can block approval but never deny. Sending private
+// data out is often what was asked for (emailing the user their own tasks),
+// and only the supervisor or a human can tell.
+var deciderEscalateOnlyChecks = map[string]bool{deciderCheckNoLeak: true}
+
 var deciderDenyReasons = map[string]string{
 	deciderQAligned:         "call does not match the request",
 	deciderQScoped:          "call is broader than the request needs",
 	deciderCheckNoInjection: "arguments contain instructions aimed at an AI",
 	deciderCheckNoSecrets:   "arguments contain a credential",
-	deciderCheckNoLeak:      "call sends private data out of the system",
 }
 
 func supervisorDeciderQuestions(skill *agentctx.SkillSummary) map[string]llm.Question {
@@ -156,10 +160,10 @@ func supervisorDeciderQuestions(skill *agentctx.SkillSummary) map[string]llm.Que
 		},
 		deciderQPrivateData: {
 			Type:         llm.QuestionNoul,
-			Instructions: "Do `tool.arguments` contain personal data about a person?",
+			Instructions: "Apart from recipient or destination addresses, do `tool.arguments` contain personal data about a person?",
 			Choices: map[string]string{
-				"true":  "Names, email addresses, phone numbers, private messages or account details appear.",
-				"false": "Only public, technical or impersonal content appears.",
+				"true":  "The content to send or process (message text, files, queries or records) includes names, contact details, private messages or account details.",
+				"false": "The only personal data is who the call goes to, or the content is public, technical or impersonal.",
 			},
 		},
 	}
@@ -203,6 +207,17 @@ func isLegacyDeciderAnswers(answers map[string]llm.Answer) bool {
 
 func roundCheck(v float64) float64 { return math.Round(v*1e6) / 1e6 }
 
+// denyingChecks is order without the escalate-only checks.
+func denyingChecks(order []string) []string {
+	out := make([]string, 0, len(order))
+	for _, id := range order {
+		if !deciderEscalateOnlyChecks[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // lowestCheck returns the first check in order with the lowest score.
 func lowestCheck(scores map[string]float64, order []string) (string, float64) {
 	lowID, low := "", 2.0
@@ -215,17 +230,18 @@ func lowestCheck(scores map[string]float64, order []string) (string, float64) {
 }
 
 // decideSupervisorOutcome maps answers to a verdict through deciderChecks: any
-// check <= denyAt denies, all checks >= approveAt approve, anything else
-// escalates. A missing answer escalates.
+// deny-eligible check <= denyAt denies, all checks >= approveAt approve,
+// anything else escalates. A missing answer escalates.
 func decideSupervisorOutcome(answers map[string]llm.Answer, approveAt, denyAt float64) (supervisorDecision, string) {
 	scores, order, missing := deciderChecks(answers)
 	if missing != "" {
 		return supervisorEscalate, "decider: no answer for " + missing
 	}
 	lowID, low := lowestCheck(scores, order)
+	denyID, denyLow := lowestCheck(scores, denyingChecks(order))
 	switch {
-	case low <= denyAt:
-		return supervisorDeny, fmt.Sprintf("decider: %s (p=%.2f)", deciderDenyReasons[lowID], low)
+	case denyLow <= denyAt:
+		return supervisorDeny, fmt.Sprintf("decider: %s (p=%.2f)", deciderDenyReasons[denyID], denyLow)
 	case low >= approveAt:
 		return supervisorApprove, fmt.Sprintf("decider: all checks passed (min p=%.2f)", low)
 	default:

@@ -34,7 +34,7 @@ describe('DeciderCalibration', () => {
       review(1, 0.99, 'APPROVE'),
       review(2, 0.97, 'DENY', { tool: 'kv_set' }),
       review(3, 0.5, 'APPROVE'),
-      review(4, 0.02, 'APPROVE', { tool: 'run_javascript', lowest: 'no_leak' }),
+      review(4, 0.02, 'APPROVE', { tool: 'run_javascript', lowest: 'no_injection' }),
     ])
     render(DeciderCalibration, { props })
 
@@ -52,7 +52,7 @@ describe('DeciderCalibration', () => {
     expect(rows[0].textContent).toContain('jev approved')
     expect(rows[0].textContent).toContain('argus denied')
     expect(rows[0].textContent).toContain('no secrets 0.97')
-    expect(rows[1].textContent).toContain('no leak 0.02')
+    expect(rows[1].textContent).toContain('no injection 0.02')
   })
 
   test('using the suggested threshold recomputes the panel', async () => {

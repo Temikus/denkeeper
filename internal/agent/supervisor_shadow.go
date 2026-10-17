@@ -34,9 +34,10 @@ type ShadowReview struct {
 	Tool           string             `json:"tool"`
 	Arguments      string             `json:"arguments"`
 	Model          string             `json:"model"`
-	Scores         map[string]float64 `json:"scores"`    // check scores by name; high means safe
-	Lowest         string             `json:"lowest"`    // check with the lowest score; "" when an answer is missing
-	MinScore       *float64           `json:"min_score"` // nil: an answer is missing, so the call always escalates
+	Scores         map[string]float64 `json:"scores"`         // check scores by name; high means safe
+	Lowest         string             `json:"lowest"`         // check with the lowest score; "" when an answer is missing
+	MinScore       *float64           `json:"min_score"`      // nil: an answer is missing, so the call always escalates
+	MinDenyScore   *float64           `json:"min_deny_score"` // lowest check that can deny (no_leak only escalates); nil when an answer is missing
 	DeciderCost    float64            `json:"decider_cost"`
 	Supervisor     string             `json:"supervisor"` // APPROVE, DENY or ESCALATE; "" when no supervisor verdict was recorded
 	SupervisorName string             `json:"supervisor_name,omitempty"`
@@ -189,7 +190,8 @@ func shadowReviewFrom(ev audit.Event) (ShadowReview, bool) {
 	r.Scores = scores
 	if missing == "" {
 		lowID, low := lowestCheck(scores, order)
-		r.Lowest, r.MinScore = lowID, &low
+		_, denyLow := lowestCheck(scores, denyingChecks(order))
+		r.Lowest, r.MinScore, r.MinDenyScore = lowID, &low, &denyLow
 	}
 	return r, true
 }
