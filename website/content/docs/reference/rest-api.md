@@ -743,7 +743,7 @@ Update an existing skill. Fields are merged with existing values — only provid
 
 **Scope:** `skills:write`
 
-Preview what a skill would do without persisting anything. The turn stores no messages, telemetry, or memory; only idempotent tools actually execute, and every other tool call returns a suppressed marker instead of running.
+Preview what a skill would do without persisting anything. The turn stores no messages, telemetry, or memory; only read-only tools actually execute, and every other tool call returns a suppressed marker instead of running.
 
 It sits behind the **write** scope despite persisting nothing, because it executes read tools and spends real tokens.
 

@@ -25,16 +25,16 @@ What changes is everything around it:
 | Messages, telemetry, memory | Persisted | Nothing written |
 | Post-turn reviewer, nudges | Run | Skipped |
 | Approvals | Supervised agents prompt | Forced off |
-| Idempotent tools | Execute | Execute |
+| Read-only tools | Execute | Execute |
 | Every other tool | Executes | Returns a suppressed marker |
 | Current date | Now | `as_of`, if given |
 
 Isolation is **structural, not filtered** — the persistence step returns immediately rather than writing and later hiding. There is no dry-run data to leak, because none is created.
 
-Unknown tools are suppressed too. The rule fails closed: a tool has to be positively known idempotent to run.
+Read-only means the same classification the `restricted` tier uses: the built-in reads (`web_fetch`, `web_search`, `kv_get`, `skill_get`, `schedule_list`, and so on) plus external tools declared read-only in `[tools.*]` — see [Tools (MCP)](/docs/concepts/tools/). Unknown tools are suppressed too. The rule fails closed: a tool has to be positively known read-only to run.
 
 {{< callout context="danger" >}}
-"Idempotent tools execute" means a preview really does hit the network — `web_fetch` fetches, `web_search` searches. A dry run is safe with respect to *your data*, not with respect to *other people's servers*.
+"Read-only tools execute" means a preview really does hit the network — `web_fetch` fetches, `web_search` searches. A dry run is safe with respect to *your data*, not with respect to *other people's servers*.
 
 Both dry-run endpoints therefore sit behind their parent's **write** scope despite persisting nothing.
 {{< /callout >}}

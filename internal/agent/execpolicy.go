@@ -46,8 +46,8 @@ const outcomeSuppressed = "suppressed"
 // tool-round budget — there is no engine-level mutable state, so a policy turn
 // and a live turn can run concurrently on the same Engine.
 //
-// Tool execution is split by the *existing* idempotency signal
-// (tool.Manager.IsIdempotent, built for within-turn memoization): idempotent
+// Tool execution is split by the read-only classification
+// (tool.Manager.IsReadOnly, the one the restricted tier trusts): read-only
 // tools run for real so the model sees a truthful world; everything else
 // returns a suppression marker.
 type ExecPolicy struct {
@@ -148,13 +148,13 @@ func (p *ExecPolicy) clock(fallback func() time.Time) func() time.Time {
 
 // suppresses reports whether a call to the named tool must be replaced by a
 // synthetic result rather than executed. Unknown tools are suppressed: the
-// idempotency allowlist is the only "safe to execute" signal, and its default
-// is deliberately false.
-func (p *ExecPolicy) suppresses(name string, idempotent func(string) bool) bool {
+// read-only classification is the only "safe to execute" signal, and its
+// default is deliberately false.
+func (p *ExecPolicy) suppresses(name string, readOnly func(string) bool) bool {
 	if !p.active() {
 		return false
 	}
-	return idempotent == nil || !idempotent(name)
+	return readOnly == nil || !readOnly(name)
 }
 
 // toolGrant is what the turn's permission tier lets the tool loop run. The
