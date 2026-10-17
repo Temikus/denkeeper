@@ -105,6 +105,11 @@ type Server struct {
 	// and both succeed in creating a key.
 	setupMu sync.Mutex
 
+	// serverConfigMu holds a PATCH server/config across its file write and its
+	// live-config update, so concurrent PATCHes can't save and apply in
+	// different orders and leave the two disagreeing.
+	serverConfigMu sync.Mutex
+
 	// Auth: session-based login (password + OIDC).
 	sessions     *SessionManager
 	passwordHash string

@@ -5,7 +5,7 @@ import { server } from '../test/server.js'
 import { features, refreshFeatures, RETRY_MS } from '../features.js'
 
 beforeEach(() => {
-  features.set({ tasks: false })
+  features.set({ tasks: false, loaded: false })
   vi.useFakeTimers({ shouldAdvanceTime: true })
 })
 afterEach(() => vi.useRealTimers())
@@ -26,9 +26,9 @@ describe('features', () => {
         : HttpResponse.json({ status: 'ok', tasks_enabled: true })
     }))
     await refreshFeatures()
-    expect(get(features).tasks).toBe(false)
+    expect(get(features)).toEqual({ tasks: false, loaded: false })
     await vi.advanceTimersByTimeAsync(RETRY_MS + 10)
-    await vi.waitFor(() => expect(get(features).tasks).toBe(true))
+    await vi.waitFor(() => expect(get(features)).toEqual({ tasks: true, loaded: true }))
     expect(calls).toBe(2)
   })
 })

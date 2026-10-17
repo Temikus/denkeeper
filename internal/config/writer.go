@@ -858,6 +858,16 @@ func UpdateAPIConfig(path string, changes map[string]any) error {
 // handling — so updating one sub-key does not clobber its siblings. Scalars are
 // replaced.
 func updateTopLevelSection(path, section string, changes map[string]any) error {
+	return UpdateSections(path, map[string]map[string]any{section: changes})
+}
+
+// UpdateSections applies partial updates to several top-level tables in one
+// read-modify-write, with updateTopLevelSection's merge rules. Either every
+// section is saved or the file is left as it was.
+func UpdateSections(path string, sections map[string]map[string]any) error {
+	if len(sections) == 0 {
+		return nil
+	}
 	ConfigMu.Lock()
 	defer ConfigMu.Unlock()
 
@@ -865,23 +875,23 @@ func updateTopLevelSection(path, section string, changes map[string]any) error {
 	if err != nil {
 		return err
 	}
-
-	sec, ok := raw[section].(map[string]any)
-	if !ok {
-		sec = map[string]any{}
-	}
-	for k, v := range changes {
-		switch val := v.(type) {
-		case nil:
-			delete(sec, k)
-		case map[string]any:
-			sec[k] = mergeSubTable(sec[k], val)
-		default:
-			sec[k] = v
+	for section, changes := range sections {
+		sec, ok := raw[section].(map[string]any)
+		if !ok {
+			sec = map[string]any{}
 		}
+		for k, v := range changes {
+			switch val := v.(type) {
+			case nil:
+				delete(sec, k)
+			case map[string]any:
+				sec[k] = mergeSubTable(sec[k], val)
+			default:
+				sec[k] = v
+			}
+		}
+		raw[section] = sec
 	}
-	raw[section] = sec
-
 	return WriteRawConfig(path, raw)
 }
 

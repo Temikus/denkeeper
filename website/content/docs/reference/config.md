@@ -347,7 +347,7 @@ The shared task board that your agents, outside harnesses such as Claude Code, a
 |---|---|---|---|
 | `enabled` | bool | `false` | Turns on the `/api/v1/tasks` endpoints, the `task_*` tools on every agent and on the [MCP server](/docs/guides/mcp-server/), and the dashboard's **Tasks** page |
 
-While it is off, the task endpoints answer `503` and the tools aren't offered. Changing it needs a restart. See [Tasks](/docs/concepts/built-in-tools/#tasks).
+While it is off, the task endpoints answer `503` and the tools aren't offered. Changing it needs a restart. You can also switch it under **Features** on the dashboard's Server page, which writes this key and tells you when a restart is still needed. See [Tasks](/docs/concepts/built-in-tools/#tasks).
 
 ## `[skills]`
 

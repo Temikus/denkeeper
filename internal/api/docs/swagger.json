@@ -6240,7 +6240,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, and web_fetch_max_response_chars). Changes are applied in-memory and persisted to the TOML config file. Changing web_tools_enabled, script_enabled, or web_fetch_max_response_chars returns restart_required: true, since the in-process MCP tools are registered — and their limits read — only at process start. web_fetch_max_response_chars must be between 1 and 100000.",
+                "description": "Partially updates server configuration (external_url, timezone, MCP server, the in-process web_tools_enabled / script_enabled toggles, tasks_enabled, and web_fetch_max_response_chars). Changes are saved to the TOML config file in one write, then applied in memory; if the save fails, nothing changes and the call returns 500. Changing web_tools_enabled, script_enabled, tasks_enabled, or web_fetch_max_response_chars returns restart_required: true, since those features are wired, and their limits read, only at process start. web_fetch_max_response_chars must be between 1 and 100000.",
                 "consumes": [
                     "application/json"
                 ],
@@ -6292,6 +6292,15 @@
                     },
                     "403": {
                         "description": "Forbidden — requires admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Config file could not be saved; nothing was changed",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -12130,6 +12139,10 @@
                 "script_enabled": {
                     "type": "boolean"
                 },
+                "tasks_enabled": {
+                    "description": "TasksEnabled is the configured [tasks] enabled. The running process\nchanges only on restart; /health tasks_enabled reports what is running.",
+                    "type": "boolean"
+                },
                 "timezone": {
                     "type": "string"
                 },
@@ -12178,6 +12191,9 @@
                     "type": "string"
                 },
                 "script_enabled": {
+                    "type": "boolean"
+                },
+                "tasks_enabled": {
                     "type": "boolean"
                 },
                 "timezone": {
