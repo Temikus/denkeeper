@@ -93,7 +93,8 @@ type serverConn struct {
 	probeFailures int       // consecutive health-probe failures (reset on healthy probe)
 	oauthWarned   bool      // true once a pending_auth OAuth warning has been emitted (reset when a token/session appears)
 	lastError     string    // most recent failure message
-	disabled      bool      // true when restarts exhausted
+	nextRetryAt   time.Time // past max_restart_attempts: no probe or restart before this
+	disabled      bool      // true when startup connection retries are exhausted
 	connecting    bool      // true while background init retries are in progress
 	userDisabled  bool      // true when explicitly disabled by user
 	configError   string    // non-empty when auto-disabled due to config validation error
@@ -1807,19 +1808,8 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 	m.mu.RUnlock()
 
 	for _, name := range names {
-		m.mu.RLock()
-		sc, ok := m.servers[name]
-		m.mu.RUnlock()
-		if !ok || sc.disabled || sc.userDisabled || sc.configError != "" {
-			// Skip disabled and config-error servers.
-			continue
-		}
-		if sc.drainStatus() == drainStateDraining {
-			// Teardown owns this conn right now. Probing it would fail and kick
-			// off a redundant second teardown of the same server. A *closed*
-			// conn is deliberately not skipped: handleServerFailure re-inserts
-			// one when re-registration fails, relying on the next probe to fail
-			// and retry.
+		sc := m.probeCandidate(name)
+		if sc == nil {
 			continue
 		}
 		// OAuth tools that never completed authorization sit with session==nil
@@ -1861,6 +1851,27 @@ func (m *Manager) checkServers(ctx context.Context, maxAttempts int, cooldown ti
 			m.mu.Unlock()
 		}
 	}
+}
+
+// probeCandidate returns the server to health-check this tick, or nil to skip
+// it: gone, disabled, config-error, waiting out nextRetryAt, or draining.
+func (m *Manager) probeCandidate(name string) *serverConn {
+	m.mu.RLock()
+	sc, ok := m.servers[name]
+	backingOff := ok && time.Now().Before(sc.nextRetryAt)
+	m.mu.RUnlock()
+	if !ok || sc.disabled || sc.userDisabled || sc.configError != "" || backingOff {
+		return nil
+	}
+	if sc.drainStatus() == drainStateDraining {
+		// Teardown owns this conn right now. Probing it would fail and kick
+		// off a redundant second teardown of the same server. A *closed*
+		// conn is deliberately not skipped: handleServerFailure re-inserts
+		// one when re-registration fails, relying on the next probe to fail
+		// and retry.
+		return nil
+	}
+	return sc
 }
 
 // auditProbeFailure bumps the consecutive-failure counter and emits a
@@ -1929,21 +1940,39 @@ func (m *Manager) probeServer(ctx context.Context, sc *serverConn) error {
 	return err
 }
 
-// handleServerFailure records the error and attempts a restart if allowed.
+// slowRetryDelay is the wait before the nth restart attempt past
+// max_restart_attempts: 30s, doubling, capped at limit.
+func slowRetryDelay(n int, limit time.Duration) time.Duration {
+	// 30s<<28 is the largest shift that fits in an int64 of nanoseconds.
+	delay := 30 * time.Second << min(n-1, 28)
+	if delay > limit {
+		return limit
+	}
+	return delay
+}
+
+// maxRestartBackoff is [mcp] max_restart_backoff, defaulting to 5m.
+func (m *Manager) maxRestartBackoff() time.Duration {
+	if d, err := time.ParseDuration(m.mcpCfg.MaxRestartBackoff); err == nil && d > 0 {
+		return d
+	}
+	return 5 * time.Minute
+}
+
+// handleServerFailure records the error and restarts the server. The first
+// maxAttempts restarts follow a short inline backoff; after that each attempt
+// sets a growing nextRetryAt instead, so a long outage never disables the server.
 func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAttempts int, cooldown time.Duration, errMsg string) {
 	m.mu.Lock()
 	sc.lastError = errMsg
 	sc.restartCount++
-
-	if sc.restartCount > maxAttempts {
-		sc.disabled = true
-		m.mu.Unlock()
-		m.logger.Error("MCP server disabled after max restart attempts",
-			"server", sc.name, "attempts", sc.restartCount-1)
-		return
-	}
-
 	attempt := sc.restartCount
+	slow := attempt > maxAttempts
+	var wait time.Duration
+	if slow {
+		wait = slowRetryDelay(attempt-maxAttempts, m.maxRestartBackoff())
+		sc.nextRetryAt = time.Now().Add(wait)
+	}
 	cfg := sc.cfg
 	// Carry over the negotiated transport so restarts skip failed protocols
 	// (e.g. don't retry Streamable HTTP for servers that only support legacy SSE).
@@ -1961,20 +1990,26 @@ func (m *Manager) handleServerFailure(ctx context.Context, sc *serverConn, maxAt
 	))
 	defer span.End()
 
-	// Exponential backoff: 2^(attempt-1) seconds, capped at 60s.
-	backoffSecs := 1 << (attempt - 1)
-	if backoffSecs > 60 {
-		backoffSecs = 60
-	}
-	span.SetAttributes(attribute.Int("tool.restart.backoff_secs", backoffSecs))
-	m.logger.Info("restarting MCP server",
-		"server", name, "attempt", attempt, "backoff_secs", backoffSecs)
+	if slow {
+		span.SetAttributes(attribute.Int("tool.restart.next_retry_secs", int(wait.Seconds())))
+		m.logger.Warn("restarting MCP server, still failing past max_restart_attempts",
+			"server", name, "attempt", attempt, "next_retry_in", wait)
+	} else {
+		// Quick retries: 2^(attempt-1) seconds inline, capped at 60s.
+		backoffSecs := 1 << min(attempt-1, 6)
+		if backoffSecs > 60 {
+			backoffSecs = 60
+		}
+		span.SetAttributes(attribute.Int("tool.restart.backoff_secs", backoffSecs))
+		m.logger.Info("restarting MCP server",
+			"server", name, "attempt", attempt, "backoff_secs", backoffSecs)
 
-	select {
-	case <-time.After(time.Duration(backoffSecs) * time.Second):
-	case <-ctx.Done():
-		span.SetStatus(codes.Error, "context cancelled during backoff")
-		return
+		select {
+		case <-time.After(time.Duration(backoffSecs) * time.Second):
+		case <-ctx.Done():
+			span.SetStatus(codes.Error, "context cancelled during backoff")
+			return
+		}
 	}
 
 	// Close old session, re-register.

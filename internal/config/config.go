@@ -926,9 +926,14 @@ type MCPConfig struct {
 	SSEKeepAliveSecs int `toml:"sse_keep_alive_secs"`
 	// AutoRestart enables automatic restart of crashed MCP servers. Default: true.
 	AutoRestart *bool `toml:"auto_restart"`
-	// MaxRestartAttempts is the maximum number of consecutive restart attempts before
-	// a server is disabled. Default: 3.
+	// MaxRestartAttempts is the number of quick consecutive restart attempts
+	// (1s, 2s, 4s, ...) before retries slow down to max_restart_backoff pacing.
+	// A server is never disabled for failing health checks. Default: 3.
 	MaxRestartAttempts int `toml:"max_restart_attempts"`
+	// MaxRestartBackoff caps the wait between restart attempts once
+	// max_restart_attempts is used up. The wait starts at 30s and doubles.
+	// Default: "5m".
+	MaxRestartBackoff string `toml:"max_restart_backoff"`
 	// RestartCooldown is the duration a server must stay connected before its
 	// consecutive failure counter resets (e.g. "5m"). Default: "5m".
 	RestartCooldown string `toml:"restart_cooldown"`
@@ -1801,6 +1806,9 @@ func applyMCPDefaults(mcp *MCPConfig) {
 	}
 	if mcp.MaxRestartAttempts == 0 {
 		mcp.MaxRestartAttempts = 3
+	}
+	if mcp.MaxRestartBackoff == "" {
+		mcp.MaxRestartBackoff = "5m"
 	}
 	if mcp.RestartCooldown == "" {
 		mcp.RestartCooldown = "5m"
@@ -3645,6 +3653,15 @@ func validateMCP(mcp *MCPConfig) error {
 	}
 	if mcp.MaxRestartAttempts < 0 {
 		return fmt.Errorf("config: mcp.max_restart_attempts must be non-negative")
+	}
+	if mcp.MaxRestartBackoff != "" {
+		d, err := time.ParseDuration(mcp.MaxRestartBackoff)
+		if err != nil {
+			return fmt.Errorf("config: mcp.max_restart_backoff: invalid duration %q: %w", mcp.MaxRestartBackoff, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("config: mcp.max_restart_backoff must be positive")
+		}
 	}
 	if mcp.RestartCooldown != "" {
 		if _, err := time.ParseDuration(mcp.RestartCooldown); err != nil {
