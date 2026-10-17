@@ -608,6 +608,27 @@ describe('ServerConfig page', () => {
     await waitFor(() => {
       expect(screen.getByText('Toggle failed')).toBeInTheDocument()
     })
+    expect(webToggle.checked).toBe(true)
+  })
+
+  test('a failed MCP transport save puts the old value back', async () => {
+    server.use(
+      http.get('/api/v1/server/config', () => HttpResponse.json({
+        version: '0.52.0', listen: ':8080', cors_origins: [],
+        mcp_server_enabled: true, mcp_server_transport: 'streamable',
+      })),
+      http.patch('/api/v1/server/config', () =>
+        HttpResponse.json({ error: 'config file could not be saved' }, { status: 500 })
+      ),
+    )
+    const { container } = render(ServerConfig)
+    await screen.findByText('Transport')
+    const select = container.querySelector('select.inline-select')
+
+    await fireEvent.change(select, { target: { value: 'sse' } })
+
+    await screen.findByText('config file could not be saved')
+    expect(select.value).toBe('streamable')
   })
 
   describe('Tasks toggle', () => {

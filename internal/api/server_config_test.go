@@ -701,3 +701,79 @@ func TestPatchServerConfig_EnableTasks_PersistsAndRequestsRestart(t *testing.T) 
 		t.Errorf("GET server/config doesn't report tasks_enabled: %s", rec.Body)
 	}
 }
+
+func patchServerConfig(t *testing.T, srv *Server, fields map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(fields)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/server/config", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPatchServerConfig_SaveFails_Returns500AndChangesNothing(t *testing.T) {
+	deps := testDepsWithServerConfig()
+	// A config path that doesn't exist makes the read-modify-write fail.
+	deps.ConfigPath = filepath.Join(t.TempDir(), "missing", "config.toml")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := patchServerConfig(t, srv, map[string]any{
+		"tasks_enabled": true, "external_url": "https://new.example.com", "script_enabled": false,
+	})
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body)
+	}
+	got := deps.Config.Get()
+	if got.Tasks.Enabled || got.API.ExternalURL != "https://den.example.com" || !got.Script.ScriptEnabled() {
+		t.Errorf("running config changed after a failed save: tasks=%v url=%q script=%v",
+			got.Tasks.Enabled, got.API.ExternalURL, got.Script.ScriptEnabled())
+	}
+}
+
+func TestPatchServerConfig_EverySectionSavedTogether(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	seed := "[api]\nlisten = \":8443\"\n[api.mcp_server]\nchat_timeout = \"30s\"\n[web.fetch]\ntimeout = \"10s\"\n"
+	if err := os.WriteFile(cfgPath, []byte(seed), 0644); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDepsWithServerConfig()
+	deps.ConfigPath = cfgPath
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := patchServerConfig(t, srv, map[string]any{
+		"timezone":                     "Europe/London",
+		"mcp_server_transport":         "sse",
+		"web_tools_enabled":            false,
+		"web_fetch_max_response_chars": 5000,
+		"script_enabled":               true,
+		"tasks_enabled":                true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rec.Code, rec.Body)
+	}
+
+	raw, err := config.ReadRawConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, _ := raw["api"].(map[string]any)
+	mcp, _ := api["mcp_server"].(map[string]any)
+	web, _ := raw["web"].(map[string]any)
+	fetch, _ := web["fetch"].(map[string]any)
+	script, _ := raw["script"].(map[string]any)
+	tasks, _ := raw["tasks"].(map[string]any)
+	if api["timezone"] != "Europe/London" || api["listen"] != ":8443" {
+		t.Errorf("[api] = %v", api)
+	}
+	if mcp["transport"] != "sse" || mcp["chat_timeout"] != "30s" {
+		t.Errorf("[api.mcp_server] = %v", mcp)
+	}
+	if web["enabled"] != false || fetch["max_response_chars"] != int64(5000) || fetch["timeout"] != "10s" {
+		t.Errorf("[web] = %v", web)
+	}
+	if script["enabled"] != true || tasks["enabled"] != true {
+		t.Errorf("[script] = %v, [tasks] = %v", script, tasks)
+	}
+}

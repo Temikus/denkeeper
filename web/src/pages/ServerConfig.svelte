@@ -121,7 +121,15 @@
       .filter(g => g.zones.length > 0)
   }
 
-  async function toggleMcp() {
+  // Inputs here are one-way (checked={...}, value={...}). After a failed save
+  // config is unchanged, so Svelte won't redraw: put the control back by hand.
+  function revert(el, value) {
+    if (el.type === 'checkbox') el.checked = value
+    else el.value = String(value)
+  }
+
+  async function toggleMcp(e) {
+    const input = e.currentTarget
     savingMcp = true
     error = ''
     try {
@@ -130,14 +138,18 @@
       config.mcp_server_enabled = enabled
       saveMcpOk = true
       setTimeout(() => { saveMcpOk = false }, 3000)
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.mcp_server_enabled)
     } finally {
       savingMcp = false
     }
   }
 
-  async function saveMcpField(field, value) {
+  // What the timeout inputs show when the config leaves them empty.
+  const MCP_FIELD_SHOWN_DEFAULT = { mcp_server_session_timeout: '30m', mcp_server_chat_timeout: '2m' }
+
+  async function saveMcpField(field, value, el) {
     savingMcp = true
     error = ''
     try {
@@ -147,12 +159,14 @@
       setTimeout(() => { saveMcpOk = false }, 3000)
     } catch (e) {
       error = e.message
+      if (el) revert(el, config[field] || MCP_FIELD_SHOWN_DEFAULT[field] || config[field])
     } finally {
       savingMcp = false
     }
   }
 
-  async function toggleWebTools() {
+  async function toggleWebTools(e) {
+    const input = e.currentTarget
     savingWeb = true
     error = ''
     try {
@@ -160,8 +174,9 @@
       const res = await api.updateServerConfig({ web_tools_enabled: enabled })
       config.web_tools_enabled = enabled
       if (res?.restart_required) toolsRestartHint = true
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.web_tools_enabled)
     } finally {
       savingWeb = false
     }
@@ -209,7 +224,8 @@
     }
   }
 
-  async function toggleScript() {
+  async function toggleScript(e) {
+    const input = e.currentTarget
     savingScript = true
     error = ''
     try {
@@ -217,8 +233,9 @@
       const res = await api.updateServerConfig({ script_enabled: enabled })
       config.script_enabled = enabled
       if (res?.restart_required) toolsRestartHint = true
-    } catch (e) {
-      error = e.message
+    } catch (err) {
+      error = err.message
+      revert(input, config.script_enabled)
     } finally {
       savingScript = false
     }
@@ -234,8 +251,7 @@
       config.tasks_enabled = enabled
     } catch (err) {
       error = err.message
-      // checked is one-way and config didn't change, so put the switch back.
-      input.checked = config.tasks_enabled
+      revert(input, config.tasks_enabled)
     } finally {
       savingTasks = false
     }
@@ -425,7 +441,7 @@
           <select
             class="input inline-select"
             value={config.mcp_server_transport}
-            onchange={(e) => saveMcpField('mcp_server_transport', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_transport', e.target.value, e.target)}
             disabled={savingMcp}
           >
             <option value="streamable">Streamable HTTP</option>
@@ -441,7 +457,7 @@
             class="input inline-input"
             value={config.mcp_server_session_timeout || '30m'}
             disabled={savingMcp}
-            onchange={(e) => saveMcpField('mcp_server_session_timeout', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_session_timeout', e.target.value, e.target)}
             placeholder="30m"
           />
         </div>
@@ -454,7 +470,7 @@
             class="input inline-input"
             value={config.mcp_server_chat_timeout || '2m'}
             disabled={savingMcp}
-            onchange={(e) => saveMcpField('mcp_server_chat_timeout', e.target.value)}
+            onchange={(e) => saveMcpField('mcp_server_chat_timeout', e.target.value, e.target)}
             placeholder="2m"
           />
         </div>
@@ -465,7 +481,7 @@
           <select
             class="input inline-select"
             value={config.mcp_server_stateless ? 'true' : 'false'}
-            onchange={(e) => saveMcpField('mcp_server_stateless', e.target.value === 'true')}
+            onchange={(e) => saveMcpField('mcp_server_stateless', e.target.value === 'true', e.target)}
             disabled={savingMcp}
           >
             <option value="false">No</option>
