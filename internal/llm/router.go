@@ -130,7 +130,8 @@ func (r *Router) ListModels(ctx context.Context) []string {
 
 // ListModelDetails queries all providers and returns enriched model metadata
 // including pricing and tool support. Providers implementing ModelDetailLister
-// supply authoritative data; others fall back to the pricing registry and a
+// supply authoritative data, with the pricing registry filling any prices they
+// omit; others fall back to the pricing registry and a
 // static tool-support heuristic. When providerFilter is non-empty only the
 // matching provider is queried, which avoids expensive remote calls.
 func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []ModelInfo {
@@ -153,7 +154,7 @@ func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []
 					continue
 				}
 				seen[m.ID] = true
-				result = append(result, m)
+				result = append(result, r.withRegistryPricing(m))
 			}
 			continue
 		}
@@ -197,6 +198,19 @@ func (r *Router) ListModelDetails(ctx context.Context, providerFilter string) []
 		return result[i].ID < result[j].ID
 	})
 	return result
+}
+
+// withRegistryPricing fills pricing from the registry when the provider
+// reported none. Provider-reported pricing is never overwritten.
+func (r *Router) withRegistryPricing(m ModelInfo) ModelInfo {
+	if r.pricing == nil || m.InputPerMTok != nil || m.OutputPerMTok != nil {
+		return m
+	}
+	if price, ok := r.pricing.Lookup(m.ID); ok {
+		m.InputPerMTok = &price.InputPerMTok
+		m.OutputPerMTok = &price.OutputPerMTok
+	}
+	return m
 }
 
 // modelDisplayName derives a human-friendly name from a model ID.
