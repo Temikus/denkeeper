@@ -59,7 +59,7 @@ Every call gets the same six yes/no questions, covering what the supervisor is t
 | `sends_external` | Going by the tool's description, does the call send data outside this system? |
 | `private_data` | Do the arguments contain personal data? |
 
-Each question asks about one thing, and yes means the hazard is present. Decision models read questions literally, so a bundled or inverted question ("are the arguments free of …") scores badly.
+Each question asks about one thing. For `aligned` and `scoped`, yes is the safe answer. For the four safety questions, yes means the hazard is present. Decision models read questions literally, so a bundled or inverted question ("are the arguments free of …") scores badly.
 
 The decider sees what the supervisor sees: the tool name, description and arguments, the user request, skill context, and recent messages.
 
