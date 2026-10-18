@@ -839,7 +839,7 @@ func buildLLMAuditDetail(resp *llm.ChatResponse, provider string) map[string]any
 	const maxLen = 64 * 1024
 	d := map[string]any{
 		"model": resp.Model, "provider": provider,
-		"tokens": resp.TokensUsed.Total, "cost": resp.CostUSD,
+		"tokens": resp.TokensUsed.Total, "cost": resp.BilledUSD,
 		"tokens_prompt": resp.TokensUsed.Prompt, "tokens_completion": resp.TokensUsed.Completion,
 		"tokens_cached": resp.TokensUsed.CachedPrompt,
 		"finish_reason": resp.FinishReason,
@@ -1883,7 +1883,7 @@ func (e *Engine) DryRun(ctx context.Context, msg adapter.IncomingMessage, policy
 	}
 	if out.resp != nil {
 		result.Tokens = out.resp.TokensUsed
-		result.CostUSD = out.resp.CostUSD
+		result.CostUSD = out.resp.BilledUSD
 		result.Model = out.resp.Model
 		result.Upstream = out.resp.Upstream
 	}
@@ -2022,7 +2022,7 @@ func (e *Engine) chatWithApproval(ctx context.Context, msg adapter.IncomingMessa
 			Type:         "usage",
 			Tokens:       resp.TokensUsed.Total,
 			TokensCached: resp.TokensUsed.CachedPrompt,
-			CostUSD:      resp.CostUSD,
+			CostUSD:      resp.BilledUSD,
 		})
 	}
 
@@ -2274,7 +2274,7 @@ func (e *Engine) persistTurn(ctx context.Context, msg adapter.IncomingMessage, p
 		Content:          responseText,
 		ReasoningContent: resp.ThinkingContent,
 		TokensUsed:       resp.TokensUsed.Total,
-		Cost:             resp.CostUSD,
+		Cost:             resp.BilledUSD,
 		Model:            resp.Model,
 		Provider:         e.router.DefaultProvider(),
 		TokensPrompt:     resp.TokensUsed.Prompt,
@@ -2506,7 +2506,7 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 	var totalUsage llm.TokenUsage
 	var totalCost float64
 	totalUsage.Add(resp.TokensUsed)
-	totalCost += resp.CostUSD
+	totalCost += resp.BilledUSD
 
 	parentSpan := trace.SpanFromContext(ctx)
 	out, err := e.runToolLoop(ctx, convID, perms, resp, llmMessages, run, onEvent, &totalUsage, &totalCost)
@@ -2550,12 +2550,12 @@ func (e *Engine) executeToolRounds(ctx context.Context, convID string, perms *se
 			return nil, llmMessages, out.toolRecords, out.stopReason, err
 		}
 		totalUsage.Add(resp.TokensUsed)
-		totalCost += resp.CostUSD
+		totalCost += resp.BilledUSD
 	}
 
 	// Replace per-round usage with accumulated totals.
 	resp.TokensUsed = totalUsage
-	resp.CostUSD = totalCost
+	resp.BilledUSD = totalCost
 	return resp, llmMessages, out.toolRecords, out.stopReason, nil
 }
 
@@ -2625,7 +2625,7 @@ func (e *Engine) runToolLoop(ctx context.Context, convID string, perms *security
 		}
 
 		totalUsage.Add(resp.TokensUsed)
-		*totalCost += resp.CostUSD
+		*totalCost += resp.BilledUSD
 
 		if e.softCostLimitReached(convID, onEvent) {
 			break
@@ -2845,7 +2845,7 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 		return nil, llmMessages, fmt.Errorf("tool loop stopped (%s); wrap-up failed: %w", stopReason, err)
 	}
 	totalUsage.Add(resp.TokensUsed)
-	*totalCost += resp.CostUSD
+	*totalCost += resp.BilledUSD
 	if strings.TrimSpace(resp.Content) == "" {
 		// Do not nudge a second time — the wrap-up was already the nudge.
 		if strings.TrimSpace(out.accumulated) == "" {
@@ -2855,7 +2855,7 @@ func (e *Engine) finishStoppedToolLoop(ctx context.Context, convID string, out t
 	}
 	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", stopReason)
 	resp.TokensUsed = *totalUsage
-	resp.CostUSD = *totalCost
+	resp.BilledUSD = *totalCost
 	return resp, llmMessages, nil
 }
 
@@ -2883,7 +2883,7 @@ func (e *Engine) finishStoppedTurn(convID string, out toolLoopOutcome, totalUsag
 		resp.Content = marker
 	}
 	resp.TokensUsed = *totalUsage
-	resp.CostUSD = *totalCost
+	resp.BilledUSD = *totalCost
 
 	e.logger.Warn("turn stopped at step boundary",
 		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
@@ -2908,13 +2908,13 @@ func (e *Engine) finishCancelledTurn(ctx context.Context, convID string, out too
 		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 	}
 	totalUsage.Add(resp.TokensUsed)
-	*totalCost += resp.CostUSD
+	*totalCost += resp.BilledUSD
 	if strings.TrimSpace(resp.Content) == "" {
 		return e.finishStoppedTurn(convID, out, totalUsage, totalCost)
 	}
 	resp.Content += fmt.Sprintf("\n\n[engine: turn ended early — %s]", stopCancelled)
 	resp.TokensUsed = *totalUsage
-	resp.CostUSD = *totalCost
+	resp.BilledUSD = *totalCost
 	e.logger.Warn("turn cancelled at step boundary",
 		"conversation", convID, "tool_rounds", out.toolRounds, "tool_calls", len(out.toolRecords))
 	return resp, llmMessages

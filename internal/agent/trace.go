@@ -351,7 +351,7 @@ func (e *Engine) buildTurnTrace(p traceParams) *TurnTrace {
 		t.Model = p.resp.Model
 		t.Upstream = p.resp.Upstream
 		t.Tokens = p.resp.TokensUsed
-		t.CostUSD = p.resp.CostUSD
+		t.CostUSD = p.resp.BilledUSD
 	}
 	if blob, err := json.Marshal(payload); err == nil {
 		t.encoded = string(blob)

@@ -475,9 +475,8 @@ func (r *Runner) runSample(ctx context.Context, st *runState, task Task, k int, 
 		LatencyMs: time.Since(start).Milliseconds(),
 	}
 
-	// Real spend is the cost tracker's, not TurnResult.CostUSD: the latter is
-	// provider-reported and only OpenRouter fills it in, so the cap would
-	// never trip on Anthropic/OpenAI/Ollama.
+	// Real spend is the cost tracker's, not TurnResult.CostUSD: the tracker
+	// also counts a leaked tool-call attempt the router retried away.
 	smp.Cost = sessionCost(st.engine, convID)
 
 	switch {
