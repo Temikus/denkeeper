@@ -15,6 +15,12 @@ type agentInfoInput struct {
 	Agent string `json:"agent" jsonschema:"Agent name to get info for"`
 }
 
+type agentUpdateInput struct {
+	Agent           string `json:"agent" jsonschema:"Agent name to update"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty" jsonschema:"Output-token cap per completion. 0 inherits llm.max_output_tokens. Above the model's output limit the provider rejects every request"`
+	MaxToolRounds   *int   `json:"max_tool_rounds,omitempty" jsonschema:"Tool-call rounds per turn, at least 1"`
+}
+
 func (s *Server) registerAgentTools() {
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name: "agent_list",
@@ -32,6 +38,104 @@ func (s *Server) registerAgentTools() {
 			"(name, model, mode, approve_at, deny_at), each when configured. " +
 			"Requires 'agents:read' scope.",
 	}, s.handleAgentInfo)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "agent_update",
+		Description: "Change an agent's max_output_tokens and/or max_tool_rounds. " +
+			"Takes effect on the next LLM call and is saved to the config file. " +
+			"Omitted fields are left unchanged. Requires 'agents:write' scope.",
+	}, s.handleAgentUpdate)
+}
+
+func (s *Server) handleAgentUpdate(ctx context.Context, _ *mcp.CallToolRequest, input agentUpdateInput) (*mcp.CallToolResult, any, error) {
+	if err := requireScope(ctx, "agents:write"); err != nil {
+		return err, nil, nil
+	}
+	if msg := validateAgentUpdate(input); msg != "" {
+		return toolError(msg), nil, nil
+	}
+	e := s.deps.Dispatcher.Agent(input.Agent)
+	if e == nil {
+		return toolError("agent not found: " + input.Agent), nil, nil
+	}
+
+	s.applyAgentUpdate(e, input)
+	persisted := s.persistAgentUpdate(input)
+
+	r, err := toolJSON(map[string]any{
+		"status":            "updated",
+		"agent":             e.Name(),
+		"max_output_tokens": e.MaxOutputTokens(),
+		"max_tool_rounds":   e.MaxToolRounds(),
+		"persisted":         persisted,
+	})
+	return r, nil, err
+}
+
+// validateAgentUpdate mirrors the REST PATCH /agents/{name} rules.
+func validateAgentUpdate(input agentUpdateInput) string {
+	if input.MaxOutputTokens == nil && input.MaxToolRounds == nil {
+		return "nothing to update: set max_output_tokens and/or max_tool_rounds"
+	}
+	if input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+		return "max_output_tokens must be >= 0 (0 = inherit llm.max_output_tokens)"
+	}
+	if input.MaxToolRounds != nil && *input.MaxToolRounds <= 0 {
+		return "max_tool_rounds must be >= 1"
+	}
+	return ""
+}
+
+// applyAgentUpdate changes the live engine and the in-memory config.
+func (s *Server) applyAgentUpdate(e *agent.Engine, input agentUpdateInput) {
+	if input.MaxOutputTokens != nil {
+		global := 0
+		if s.deps.Config != nil {
+			global = s.deps.Config.Get().LLM.MaxOutputTokens
+		}
+		ac := config.AgentInstanceConfig{MaxOutputTokens: *input.MaxOutputTokens}
+		e.SetMaxOutputTokens(ac.EffectiveMaxOutputTokens(global))
+	}
+	if input.MaxToolRounds != nil {
+		e.SetMaxToolRounds(*input.MaxToolRounds)
+	}
+	if s.deps.Config == nil {
+		return
+	}
+	s.deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name != input.Agent {
+				continue
+			}
+			if input.MaxOutputTokens != nil {
+				c.Agents[i].MaxOutputTokens = *input.MaxOutputTokens
+			}
+			if input.MaxToolRounds != nil {
+				c.Agents[i].MaxToolRounds = *input.MaxToolRounds
+			}
+			return
+		}
+	})
+}
+
+// persistAgentUpdate writes the change to TOML. It reports false when there
+// is no config file or the write failed; the live change stands either way.
+func (s *Server) persistAgentUpdate(input agentUpdateInput) bool {
+	if s.deps.ConfigPath == "" {
+		return false
+	}
+	changes := map[string]any{}
+	if input.MaxOutputTokens != nil {
+		changes["max_output_tokens"] = *input.MaxOutputTokens
+	}
+	if input.MaxToolRounds != nil {
+		changes["max_tool_rounds"] = *input.MaxToolRounds
+	}
+	if err := config.UpdateAgentInConfig(s.deps.ConfigPath, input.Agent, changes); err != nil {
+		s.deps.Logger.Error("agent updated but config persistence failed", "agent", input.Agent, "error", err)
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleAgentList(ctx context.Context, _ *mcp.CallToolRequest, _ agentListInput) (*mcp.CallToolResult, any, error) {
@@ -103,7 +207,12 @@ func (s *Server) handleAgentInfo(ctx context.Context, _ *mcp.CallToolRequest, in
 		"permission_tier": e.PermissionTier(),
 		"provider":        e.ProviderName(),
 		"model":           e.ModelName(),
+		"max_tool_rounds": e.MaxToolRounds(),
 		"skills":          si,
+	}
+	// Omitted at 0, the provider default, like the fields below.
+	if n := e.MaxOutputTokens(); n > 0 {
+		info["max_output_tokens"] = n
 	}
 	// Supervisor, decider, persona sections, and channel bindings are omitted
 	// rather than reported as empty when the agent has none, so their presence

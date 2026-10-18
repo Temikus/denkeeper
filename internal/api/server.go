@@ -676,21 +676,25 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"name":             e.Name(),
-		"display_name":     e.DisplayName(),
-		"permission_tier":  e.PermissionTier(),
-		"provider":         e.ProviderName(),
-		"model":            e.ModelName(),
-		"max_tool_rounds":  e.MaxToolRounds(),
-		"has_tools":        e.HasTools(),
-		"adapters":         adapters,
-		"skills":           skillList,
-		"command_skills":   commandSkills,
-		"schedules":        s.schedulesForAgent(name),
-		"tool_names":       e.ToolNames(),
-		"persona_dir":      e.PersonaDir(),
-		"persona_sections": e.PersonaSections(),
-		"fallbacks":        fallbacks,
+		"name":            e.Name(),
+		"display_name":    e.DisplayName(),
+		"permission_tier": e.PermissionTier(),
+		"provider":        e.ProviderName(),
+		"model":           e.ModelName(),
+		"max_tool_rounds": e.MaxToolRounds(),
+		// Configured value (0 = inherit llm.max_output_tokens) and the cap
+		// the engine sends (0 = provider default).
+		"max_output_tokens":           agentCfg.MaxOutputTokens,
+		"effective_max_output_tokens": e.MaxOutputTokens(),
+		"has_tools":                   e.HasTools(),
+		"adapters":                    adapters,
+		"skills":                      skillList,
+		"command_skills":              commandSkills,
+		"schedules":                   s.schedulesForAgent(name),
+		"tool_names":                  e.ToolNames(),
+		"persona_dir":                 e.PersonaDir(),
+		"persona_sections":            e.PersonaSections(),
+		"fallbacks":                   fallbacks,
 	}
 	if costLimitSoft != nil {
 		resp["cost_limit_soft"] = *costLimitSoft

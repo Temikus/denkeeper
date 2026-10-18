@@ -782,6 +782,9 @@ func (e *Engine) SetReviewer(r *Engine) {
 	e.reviewer = r
 }
 
+// Reviewer returns the post-turn reviewer engine, or nil when none is wired.
+func (e *Engine) Reviewer() *Engine { return e.reviewer }
+
 func (e *Engine) SetReviewerConfig(maxIter int, timeout time.Duration) {
 	if maxIter > 0 {
 		e.reviewMaxIter = maxIter
@@ -1072,6 +1075,24 @@ func (e *Engine) LLMRouter() *llm.Router { return e.router }
 // SetModel changes the engine's default LLM model.
 func (e *Engine) SetModel(model string) {
 	e.router.SetDefaultModel(model)
+}
+
+// SetMaxOutputTokens caps each completion's output tokens; 0 = provider default.
+// A no-op without a router: reload applies it to every engine, including
+// router-less ones.
+func (e *Engine) SetMaxOutputTokens(n int) {
+	if e.router == nil {
+		return
+	}
+	e.router.SetMaxOutputTokens(n)
+}
+
+// MaxOutputTokens returns the per-completion output cap; 0 = provider default.
+func (e *Engine) MaxOutputTokens() int {
+	if e.router == nil {
+		return 0
+	}
+	return e.router.MaxOutputTokens()
 }
 
 // SetProvider changes the engine's default LLM provider.

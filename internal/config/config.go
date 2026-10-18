@@ -751,6 +751,10 @@ type AgentInstanceConfig struct {
 	// LLMModel overrides the global default_model for this agent.
 	LLMModel string `toml:"llm_model"`
 
+	// MaxOutputTokens overrides llm.max_output_tokens for this agent.
+	// 0 inherits the global value.
+	MaxOutputTokens int `toml:"max_output_tokens"`
+
 	// SessionTier overrides the global session.tier for this agent.
 	SessionTier string `toml:"session_tier"`
 
@@ -1115,6 +1119,10 @@ type LLMConfig struct {
 	StreamIdleTimeoutSecs int                      `toml:"stream_idle_timeout_secs"`
 	Fallbacks             []FallbackConfig         `toml:"fallback"`
 	Deciders              []DeciderConfig          `toml:"deciders"`
+
+	// MaxOutputTokens caps each completion. 0 = provider default (4096 for
+	// Anthropic, unset elsewhere). Above the model's limit, the provider 400s.
+	MaxOutputTokens int `toml:"max_output_tokens"`
 }
 
 // DeciderConfig names a non-generative decision model (e.g. typesafe/jev-1.13)
@@ -2092,6 +2100,7 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("DENKEEPER_DISCORD_TOKEN", &cfg.Discord.Token)
 	envOverride("DENKEEPER_LLM_PROVIDER", &cfg.LLM.DefaultProvider)
 	envOverride("DENKEEPER_LLM_MODEL", &cfg.LLM.DefaultModel)
+	envOverrideInt("DENKEEPER_LLM_MAX_OUTPUT_TOKENS", &cfg.LLM.MaxOutputTokens)
 	envOverride("DENKEEPER_LLM_OPENROUTER_API_KEY", &cfg.LLM.OpenRouter.APIKey)
 	envOverrideBoolPtr("DENKEEPER_LLM_OPENROUTER_REASONING_ENABLED", &cfg.LLM.OpenRouter.Reasoning.Enabled)
 	envOverride("DENKEEPER_LLM_OPENROUTER_REASONING_EFFORT", &cfg.LLM.OpenRouter.Reasoning.Effort)
@@ -2676,6 +2685,9 @@ func validateSubsystems(cfg *Config) error {
 	if err := validateOpenRouter(&cfg.LLM.OpenRouter); err != nil {
 		return fmt.Errorf("validate openrouter: %w", err)
 	}
+	if cfg.LLM.MaxOutputTokens < 0 {
+		return fmt.Errorf("config: llm.max_output_tokens must be >= 0 (0 = provider default), got %d", cfg.LLM.MaxOutputTokens)
+	}
 	if err := validateEval(&cfg.Eval); err != nil {
 		return fmt.Errorf("validate eval: %w", err)
 	}
@@ -3104,6 +3116,9 @@ func validateAgentCounts(a AgentInstanceConfig) error {
 	if a.MaxToolRounds < 0 {
 		return fmt.Errorf("config: agent %q: max_tool_rounds must be >= 0 (0 = default)", a.Name)
 	}
+	if a.MaxOutputTokens < 0 {
+		return fmt.Errorf("config: agent %q: max_output_tokens must be >= 0 (0 = inherit llm.max_output_tokens)", a.Name)
+	}
 	if a.SupervisorMaxArgsBytes < 0 {
 		return fmt.Errorf("config: agent %q: supervisor_max_args_bytes must be >= 0 (0 = default)", a.Name)
 	}
@@ -3162,6 +3177,15 @@ func validateAgentBindings(a AgentInstanceConfig, wildcards map[string]string) e
 		}
 	}
 	return nil
+}
+
+// EffectiveMaxOutputTokens is the agent's own max_output_tokens, else the
+// global llm.max_output_tokens.
+func (a AgentInstanceConfig) EffectiveMaxOutputTokens(global int) int {
+	if a.MaxOutputTokens > 0 {
+		return a.MaxOutputTokens
+	}
+	return global
 }
 
 // effectiveTier is the tier an agent's engine runs under: its own
