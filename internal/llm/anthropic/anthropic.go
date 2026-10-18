@@ -322,12 +322,7 @@ func (a *anthropicStreamAccumulator) handleBlockDelta(data string) {
 func (a *anthropicStreamAccumulator) finish() *llm.ChatResponse {
 	a.out.Content = a.contentBuf.String()
 	a.out.ThinkingContent = a.thinkingBuf.String()
-	a.out.TokensUsed = llm.TokenUsage{
-		Prompt:       a.usage.InputTokens,
-		Completion:   a.usage.OutputTokens,
-		CachedPrompt: a.usage.CacheReadInputTokens,
-		Total:        a.usage.InputTokens + a.usage.OutputTokens + a.usage.CacheReadInputTokens,
-	}
+	a.out.TokensUsed = a.usage.tokenUsage()
 	for i := 0; i < len(a.tools); i++ {
 		acc, ok := a.tools[i]
 		if !ok {
@@ -376,6 +371,7 @@ func (c *Client) readStreamResponse(body io.Reader, onStream llm.StreamCallback,
 				acc.out.Model = msg.Message.Model
 				acc.usage.InputTokens = msg.Message.Usage.InputTokens
 				acc.usage.CacheReadInputTokens = msg.Message.Usage.CacheReadInputTokens
+				acc.usage.CacheCreationInputToks = msg.Message.Usage.CacheCreationInputToks
 			}
 
 		case "content_block_start":
@@ -447,6 +443,10 @@ func (c *Client) buildRequest(req llm.ChatRequest) (*apiRequest, error) {
 
 	// Map llm.ToolDef → Anthropic tool format.
 	if len(req.Tools) > 0 {
+		// A cache write costs 1.25x input and only pays off when the prefix is
+		// resent, which a tool loop does each round. A tool-less request ends
+		// the turn, so it is never marked.
+		out.CacheControl = &cacheControl{Type: "ephemeral"}
 		out.Tools = make([]apiTool, len(req.Tools))
 		for i, t := range req.Tools {
 			out.Tools[i] = apiTool{
@@ -548,12 +548,7 @@ func (c *Client) parseResponse(r *apiResponse) (*llm.ChatResponse, error) {
 	out := &llm.ChatResponse{
 		Model:        r.Model,
 		FinishReason: normalizeStopReason(r.StopReason),
-		TokensUsed: llm.TokenUsage{
-			Prompt:       r.Usage.InputTokens,
-			Completion:   r.Usage.OutputTokens,
-			CachedPrompt: r.Usage.CacheReadInputTokens,
-			Total:        r.Usage.InputTokens + r.Usage.OutputTokens + r.Usage.CacheReadInputTokens,
-		},
+		TokensUsed:   r.Usage.tokenUsage(),
 	}
 
 	for _, block := range r.Content {
@@ -591,6 +586,13 @@ type apiRequest struct {
 	Tools       []apiTool    `json:"tools,omitempty"`
 	Temperature *float64     `json:"temperature,omitempty"`
 	Stream      bool         `json:"stream,omitempty"`
+	// CacheControl turns on automatic prompt caching: the API caches up to
+	// the last cacheable block and moves that point as the turn grows.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+type cacheControl struct {
+	Type string `json:"type"`
 }
 
 type apiMessage struct {
@@ -639,6 +641,20 @@ type apiUsage struct {
 	OutputTokens           int `json:"output_tokens"`
 	CacheReadInputTokens   int `json:"cache_read_input_tokens"`
 	CacheCreationInputToks int `json:"cache_creation_input_tokens"`
+}
+
+// tokenUsage maps Anthropic usage, where input_tokens excludes both cache
+// reads and cache writes. Writes are counted in Prompt, since they are input
+// processed at full price plus the write surcharge.
+func (u apiUsage) tokenUsage() llm.TokenUsage {
+	prompt := u.InputTokens + u.CacheCreationInputToks
+	return llm.TokenUsage{
+		Prompt:           prompt,
+		Completion:       u.OutputTokens,
+		CachedPrompt:     u.CacheReadInputTokens,
+		CacheWritePrompt: u.CacheCreationInputToks,
+		Total:            prompt + u.OutputTokens + u.CacheReadInputTokens,
+	}
 }
 
 type apiErrorResponse struct {

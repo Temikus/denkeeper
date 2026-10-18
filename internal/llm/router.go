@@ -813,6 +813,7 @@ func TokenCost(resp *ChatResponse, reg *pricing.Registry, providerName string) (
 			resp.TokensUsed.Prompt,
 			resp.TokensUsed.Completion,
 			resp.TokensUsed.CachedPrompt,
+			resp.TokensUsed.CacheWritePrompt,
 			resp.CostUSD,
 		)
 	}
