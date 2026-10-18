@@ -131,7 +131,7 @@ func (r *Registry) Lookup(model string) (ModelPrice, bool) {
 //  4. provider sub-registry fallback rate
 //  5. global fallback rate
 //  6. 0 / "unknown"
-func (r *Registry) Cost(providerName, model string, input, output, cachedInput int, providerCost float64) (float64, string) {
+func (r *Registry) Cost(providerName, model string, input, output, cachedInput, cacheWrite int, providerCost float64) (float64, string) {
 	if providerCost > 0 {
 		return providerCost, "provider"
 	}
@@ -140,14 +140,14 @@ func (r *Registry) Cost(providerName, model string, input, output, cachedInput i
 	if providerName != "" {
 		if sub, ok := r.providerOverrides[providerName]; ok {
 			if p, found := sub.Lookup(model); found {
-				return computeCost(p, input, output, cachedInput), "registry"
+				return computeCost(p, input, output, cachedInput, cacheWrite), "registry"
 			}
 		}
 	}
 
 	// Global registry lookup.
 	if p, ok := r.Lookup(model); ok {
-		return computeCost(p, input, output, cachedInput), "registry"
+		return computeCost(p, input, output, cachedInput, cacheWrite), "registry"
 	}
 
 	// Provider sub-registry fallback rate.
@@ -167,12 +167,19 @@ func (r *Registry) Cost(providerName, model string, input, output, cachedInput i
 	return 0, "unknown"
 }
 
-func computeCost(p ModelPrice, input, output, cachedInput int) float64 {
+// cacheWriteSurcharge is Anthropic's 5-minute cache-write premium over the
+// input price (writes bill at 1.25x). Only Anthropic reports write tokens.
+const cacheWriteSurcharge = 0.25
+
+// computeCost prices one completion. cacheWrite is a subset of input, so it
+// adds only the surcharge; cachedInput is separate from input.
+func computeCost(p ModelPrice, input, output, cachedInput, cacheWrite int) float64 {
 	cachedRate := p.CachedInputPerMTok
 	if cachedRate == 0 {
 		cachedRate = p.InputPerMTok
 	}
 	return float64(input)/1_000_000*p.InputPerMTok +
+		float64(cacheWrite)/1_000_000*p.InputPerMTok*cacheWriteSurcharge +
 		float64(output)/1_000_000*p.OutputPerMTok +
 		float64(cachedInput)/1_000_000*cachedRate
 }

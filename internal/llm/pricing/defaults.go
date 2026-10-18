@@ -11,6 +11,7 @@ func (r *Registry) loadDefaults() {
 	r.RegisterPrefix("claude-fable-5", ModelPrice{10.0, 50.0, 1.0})
 	r.RegisterPrefix("claude-opus-5-5", ModelPrice{4.0, 20.0, 0.20})
 	r.RegisterPrefix("claude-opus-5", ModelPrice{5.0, 25.0, 0.50})
+	r.RegisterPrefix("claude-sonnet-5-5", ModelPrice{2.0, 10.0, 0.10}) // reads at 5% of input
 	r.RegisterPrefix("claude-sonnet-5", ModelPrice{2.0, 10.0, 0.20})
 	r.RegisterPrefix("claude-haiku-5", ModelPrice{0.10, 0.50, 0.01})
 	r.RegisterPrefix("claude-opus-4-8", ModelPrice{5.0, 25.0, 0.50})

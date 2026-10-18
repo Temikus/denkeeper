@@ -501,3 +501,107 @@ func TestChatCompletion_CachedTokensPopulated(t *testing.T) {
 		t.Errorf("CostUSD = %f, want 0 (pricing moved to central registry)", resp.CostUSD)
 	}
 }
+
+// sentCacheControl returns the raw top-level cache_control the client sent.
+func sentCacheControl(t *testing.T, tools []llm.ToolDef) json.RawMessage {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Errorf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{Content: []contentBlock{{Type: "text", Text: "ok"}}})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "Hello"}},
+		Tools:    tools,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return raw["cache_control"]
+}
+
+func TestChatCompletion_ToolsRequestCaching(t *testing.T) {
+	got := sentCacheControl(t, []llm.ToolDef{{
+		Type:     "function",
+		Function: llm.FunctionDef{Name: "get_time", Parameters: map[string]any{"type": "object"}},
+	}})
+	if string(got) != `{"type":"ephemeral"}` {
+		t.Errorf("cache_control = %s, want {\"type\":\"ephemeral\"}", got)
+	}
+}
+
+func TestChatCompletion_NoToolsNoCaching(t *testing.T) {
+	if got := sentCacheControl(t, nil); got != nil {
+		t.Errorf("cache_control = %s, want absent: a tool-less call cannot reuse the write", got)
+	}
+}
+
+func assertCacheUsage(t *testing.T, u llm.TokenUsage) {
+	t.Helper()
+	// Prompt = input 4 + write 2648; read 1000; output 26.
+	want := llm.TokenUsage{Prompt: 2652, Completion: 26, CachedPrompt: 1000, CacheWritePrompt: 2648, Total: 3678}
+	if u != want {
+		t.Errorf("usage = %+v, want %+v", u, want)
+	}
+}
+
+func TestChatCompletion_CacheWriteTokensCounted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			StopReason: "end_turn",
+			Content:    []contentBlock{{Type: "text", Text: "hi"}},
+			Usage:      apiUsage{InputTokens: 4, OutputTokens: 26, CacheReadInputTokens: 1000, CacheCreationInputToks: 2648},
+		})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertCacheUsage(t, resp.TokensUsed)
+}
+
+func TestChatCompletionStream_CacheWriteTokensCounted(t *testing.T) {
+	const stream = "event: message_start\n" +
+		`data: {"type":"message_start","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":4,"cache_read_input_tokens":1000,"cache_creation_input_tokens":2648,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\n" +
+		"event: message_delta\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":26}}` + "\n\n" +
+		"event: message_stop\n" +
+		`data: {"type":"message_stop"}` + "\n\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(stream))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(llm.StreamChunk) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "hi" {
+		t.Errorf("content = %q, want hi", resp.Content)
+	}
+	assertCacheUsage(t, resp.TokensUsed)
+}

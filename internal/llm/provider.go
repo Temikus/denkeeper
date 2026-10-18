@@ -207,7 +207,10 @@ type TokenUsage struct {
 	Prompt       int
 	Completion   int
 	CachedPrompt int // tokens served from cache (Anthropic cache_read, OpenAI cached_tokens)
-	Total        int
+	// CacheWritePrompt is the part of Prompt written to the cache (Anthropic
+	// cache_creation), billed at a surcharge on top of the input price.
+	CacheWritePrompt int
+	Total            int
 }
 
 // Add accumulates u into t field-by-field. Keeping accumulation in one place
@@ -218,6 +221,7 @@ func (t *TokenUsage) Add(u TokenUsage) {
 	t.Prompt += u.Prompt
 	t.Completion += u.Completion
 	t.CachedPrompt += u.CachedPrompt
+	t.CacheWritePrompt += u.CacheWritePrompt
 	t.Total += u.Total
 }
 

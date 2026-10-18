@@ -389,6 +389,8 @@ Individual agents can narrow this further with `browser_url_allowlist` on `[[age
 
 Denkeeper ships a pricing registry covering roughly 70 models. Lookup priority is: provider-reported cost > registry exact match > registry longest-prefix match > `default_rate_per_1k_tokens` > $0 with a warning. The winning source is recorded as the `pricing_source` telemetry attribute, so you can tell a real price from a fallback.
 
+Anthropic requests that carry tools turn on prompt caching, because a tool loop resends the same prompt each round. Cache writes bill at 1.25x the `input` rate and cache reads at `cached_input`, so a reply that ends without a tool call pays the write premium for nothing. Calls sent without tools, such as the end-of-loop wrap-up and `/compact`, are never cached.
+
 ## `[costs.model_prices.<model>]`
 
 Override or add pricing for a model. Rates are **USD per million tokens**.
