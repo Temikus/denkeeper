@@ -1244,8 +1244,9 @@ func convertFallbacks(cfgs []config.FallbackConfig) []llm.FallbackRule {
 }
 
 // buildAgentRouter creates a per-agent LLM router with provider registrations.
-func buildAgentRouter(provider, model string, abc agentBuildCtx) *llm.Router {
+func buildAgentRouter(provider, model string, maxOutputTokens int, abc agentBuildCtx) *llm.Router {
 	router := llm.NewRouterWithProviders(provider, model, abc.llm.cost, abc.llm.providers)
+	router.SetMaxOutputTokens(maxOutputTokens)
 	if len(abc.llm.fallbacks) > 0 {
 		router.SetFallbacks(abc.llm.fallbacks)
 	}
@@ -1411,7 +1412,7 @@ func buildAgentEngine(ctx context.Context, ac config.AgentInstanceConfig, abc ag
 	if ac.LLMProvider != "" {
 		provider = ac.LLMProvider
 	}
-	agentRouter := buildAgentRouter(provider, model, abc)
+	agentRouter := buildAgentRouter(provider, model, ac.EffectiveMaxOutputTokens(abc.cfg.LLM.MaxOutputTokens), abc)
 
 	// Per-agent fallback overrides replace global rules when defined.
 	if len(ac.Fallbacks) > 0 {
@@ -1634,7 +1635,8 @@ func buildReviewerEngine(ctx context.Context, ac config.AgentInstanceConfig, par
 	if revProvider == "" {
 		revProvider = abc.cfg.LLM.DefaultProvider
 	}
-	revRouter := buildAgentRouter(revProvider, ac.ReviewerModel, abc)
+	// Global cap, not the agent's: the reviewer runs its own reviewer_model.
+	revRouter := buildAgentRouter(revProvider, ac.ReviewerModel, abc.cfg.LLM.MaxOutputTokens, abc)
 
 	// The reviewer is headless: it sends through noopSend, so an approval
 	// prompt it raised could never reach a human. Its safety boundary is
@@ -2376,6 +2378,10 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			}
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
+			e.SetMaxOutputTokens(ac.EffectiveMaxOutputTokens(cfg.LLM.MaxOutputTokens))
+			if rev := e.Reviewer(); rev != nil {
+				rev.SetMaxOutputTokens(cfg.LLM.MaxOutputTokens)
+			}
 			reconcileSupervisor(e, ac, dispatcher, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))

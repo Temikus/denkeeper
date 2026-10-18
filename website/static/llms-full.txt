@@ -66,6 +66,7 @@ All paths default relative to `data_dir`. Override with `DENKEEPER_*` env vars.
     cost_limit_soft = 0.0            # soft cost limit per session (USD)
     cost_limit_hard = 1.0            # hard cost limit per session (USD)
     stream_idle_timeout_secs = 120   # idle timeout for LLM SSE streams
+    max_output_tokens = 0            # output-token cap per completion (0 = provider default; Anthropic 4096)
 
     [llm.openrouter]
     api_key = ""                     # OpenRouter API key
@@ -148,7 +149,8 @@ Multi-agent definitions. If absent, a single "default" agent is synthesized.
     adapters = ["telegram"]          # adapter bindings
     llm_provider = ""                # override default provider
     llm_model = ""                   # override default model
-    session_tier = ""                # override default permission tier
+    max_output_tokens = 0            # override llm.max_output_tokens (0 = inherit)
+    session_tier = ""              # override default permission tier
     browser_url_allowlist = []       # allowed domains for browser automation
     cost_limit_soft = 0.0            # soft cost limit override
     cost_limit_hard = 0.0            # hard cost limit override

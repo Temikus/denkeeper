@@ -10797,6 +10797,10 @@
                 "llm_provider": {
                     "type": "string"
                 },
+                "max_output_tokens": {
+                    "description": "0 = inherit llm.max_output_tokens",
+                    "type": "integer"
+                },
                 "max_tool_rounds": {
                     "type": "integer"
                 },

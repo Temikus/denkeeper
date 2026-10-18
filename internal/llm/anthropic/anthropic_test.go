@@ -400,6 +400,31 @@ func TestChatCompletion_MaxTokensDefault(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_MaxTokensOverride(t *testing.T) {
+	var gotReq apiRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Errorf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiResponse{Content: []contentBlock{{Type: "text", Text: "ok"}}})
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	_, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:     "claude-sonnet-4-6",
+		Messages:  []llm.Message{{Role: "user", Content: "Hello"}},
+		MaxTokens: 16384,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotReq.MaxTokens != 16384 {
+		t.Errorf("max_tokens = %d, want 16384", gotReq.MaxTokens)
+	}
+}
+
 func TestName(t *testing.T) {
 	c := New("key")
 	if c.Name() != "anthropic" {
