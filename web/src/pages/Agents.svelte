@@ -309,6 +309,14 @@
     return `#/evals?${q}`
   })
 
+  // The effective cap is the inherited one only while the agent has no
+  // override of its own; with one, the global value is not in the payload.
+  let outputTokensPlaceholder = $derived.by(() => {
+    if (!detail) return ''
+    if (detail.max_output_tokens) return 'Inherit global setting'
+    return detail.effective_max_output_tokens ? `Inherit (${detail.effective_max_output_tokens})` : 'Provider default'
+  })
+
   // Fallback rules modal
   let showFallbackModal = $state(false)
   let fallbackRules = $state([])
@@ -402,8 +410,12 @@
         if (configModel !== detail.model) data.llm_model = configModel
         if (configProvider && configProvider !== detail.provider) data.llm_provider = configProvider
         if (configDescription !== undefined) data.description = configDescription
-        const outTokens = configMaxOutputTokens === '' || configMaxOutputTokens == null ? 0 : parseInt(configMaxOutputTokens, 10)
-        if (!isNaN(outTokens) && outTokens !== (detail.max_output_tokens || 0)) data.max_output_tokens = outTokens
+        const outTokens = configMaxOutputTokens === '' || configMaxOutputTokens == null ? 0 : Number(configMaxOutputTokens)
+        if (!Number.isInteger(outTokens) || outTokens < 0) {
+          error = 'Max output tokens must be a whole number, 0 or more'
+          return
+        }
+        if (outTokens !== (detail.max_output_tokens || 0)) data.max_output_tokens = outTokens
       } else if (expandedCard === 'permission') {
         if (configTier !== detail.permission_tier) data.session_tier = configTier
         const rounds = parseInt(configMaxToolRounds, 10)
@@ -893,7 +905,7 @@
               <label class="config-label" for="cfg-desc">Description</label>
               <input id="cfg-desc" class="config-input" type="text" bind:value={configDescription} placeholder="Agent description" />
               <label class="config-label" for="cfg-max-output-tokens">Max Output Tokens</label>
-              <input id="cfg-max-output-tokens" class="config-input" type="number" min="0" step="1" bind:value={configMaxOutputTokens} placeholder={detail.effective_max_output_tokens ? `Inherit (${detail.effective_max_output_tokens})` : 'Provider default'} aria-describedby="max-output-tokens-hint" />
+              <input id="cfg-max-output-tokens" class="config-input" type="number" min="0" step="1" bind:value={configMaxOutputTokens} placeholder={outputTokensPlaceholder} aria-describedby="max-output-tokens-hint" />
               <span class="hint" id="max-output-tokens-hint">Longest reply the model may write per call. Empty inherits the global setting. Keep it within the model's output limit, or the provider rejects the request.</span>
               {#if compareHref}
                 <span class="hint" id="compare-hint" data-testid="compare-hint">Compare in Evals opens a cheap check of this model against the current one, before you switch. It does not save the change here.</span>

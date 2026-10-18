@@ -38,10 +38,10 @@ type Router struct {
 	toolSource        func() []ToolDef  // dynamic tool resolution; nil = no tools
 	pricing           *pricing.Registry // model pricing lookup; nil = legacy fallback
 	streamIdleTimeout time.Duration     // idle timeout for LLM SSE streams; 0 = disabled
-	// Per-completion output cap; 0 = provider default. Accessed atomically:
-	// PATCH and reload set it while turns read it. Plain int64, not
-	// atomic.Int64, because WithModel/WithProvider copy the struct.
-	maxOutputTokens int64
+	// Per-completion output cap; 0 = provider default. Atomic because PATCH
+	// and reload set it while turns read it. A pointer, so WithModel and
+	// WithProvider clones share it rather than copying it mid-write.
+	maxOutputTokens *atomic.Int64
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
 	tracer    trace.Tracer
@@ -303,6 +303,7 @@ func NewRouterWithProviders(defaultProvider, defaultModel string, costTracker *C
 		defaultProvider: defaultProvider,
 		defaultModel:    defaultModel,
 		costTracker:     costTracker,
+		maxOutputTokens: new(atomic.Int64),
 		tracer:          tracer,
 		mDuration:       dur,
 		mTokens:         tok,
@@ -336,11 +337,11 @@ func (r *Router) SetStreamIdleTimeout(d time.Duration) {
 // SetMaxOutputTokens caps the output tokens of each completion. Zero leaves
 // the provider default (4096 for Anthropic, uncapped elsewhere).
 func (r *Router) SetMaxOutputTokens(n int) {
-	atomic.StoreInt64(&r.maxOutputTokens, int64(n))
+	r.maxOutputTokens.Store(int64(n))
 }
 
 // MaxOutputTokens returns the per-completion output cap; 0 = provider default.
-func (r *Router) MaxOutputTokens() int { return int(atomic.LoadInt64(&r.maxOutputTokens)) }
+func (r *Router) MaxOutputTokens() int { return int(r.maxOutputTokens.Load()) }
 
 // SetTools configures a dynamic tool definition source. The function is
 // called on every LLM request so that tools added at runtime are visible

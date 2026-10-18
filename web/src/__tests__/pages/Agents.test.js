@@ -248,11 +248,35 @@ describe('Agents model config', () => {
     await fireEvent.click(screen.getByText('MODEL'))
     const input = await screen.findByLabelText('Max Output Tokens')
     expect(input).toHaveValue(16384)
+    // The effective cap is the agent's own here, so it is not shown as inherited.
+    expect(input).toHaveAttribute('placeholder', 'Inherit global setting')
 
     await fireEvent.input(input, { target: { value: '' } })
     await fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(patchBody?.max_output_tokens).toBe(0))
+  })
+
+  test('a fractional max output tokens is refused before saving', async () => {
+    let patchCalled = false
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) =>
+        HttpResponse.json({ name: params.name, model: 'm', provider: 'anthropic', permission_tier: 'autonomous', max_output_tokens: 0, effective_max_output_tokens: 0 })),
+      http.patch('/api/v1/agents/:name', () => {
+        patchCalled = true
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(Agents)
+    await waitFor(() => screen.getByText('MODEL'))
+    await fireEvent.click(screen.getByText('MODEL'))
+    const input = await screen.findByLabelText('Max Output Tokens')
+
+    await fireEvent.input(input, { target: { value: '1.5' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    expect(await screen.findByText('Max output tokens must be a whole number, 0 or more')).toBeInTheDocument()
+    expect(patchCalled).toBe(false)
   })
 
   test('max output tokens without any cap set names the provider default', async () => {

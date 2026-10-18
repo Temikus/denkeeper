@@ -782,6 +782,9 @@ func (e *Engine) SetReviewer(r *Engine) {
 	e.reviewer = r
 }
 
+// Reviewer returns the post-turn reviewer engine, or nil when none is wired.
+func (e *Engine) Reviewer() *Engine { return e.reviewer }
+
 func (e *Engine) SetReviewerConfig(maxIter int, timeout time.Duration) {
 	if maxIter > 0 {
 		e.reviewMaxIter = maxIter

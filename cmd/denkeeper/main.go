@@ -2379,6 +2379,9 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 			e.SetMaxContextMessages(ac.MaxContextMessages)
 			e.SetMaxToolRounds(ac.MaxToolRounds)
 			e.SetMaxOutputTokens(ac.EffectiveMaxOutputTokens(cfg.LLM.MaxOutputTokens))
+			if rev := e.Reviewer(); rev != nil {
+				rev.SetMaxOutputTokens(cfg.LLM.MaxOutputTokens)
+			}
 			reconcileSupervisor(e, ac, dispatcher, logger)
 			applySupervisorKnobs(e, ac)
 			e.SetLocation(agentLocation(cfg, ac))

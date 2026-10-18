@@ -310,6 +310,16 @@ func TestRouter_MaxOutputTokens_ZeroLeavesProviderDefault(t *testing.T) {
 	}
 }
 
+func TestRouter_MaxOutputTokens_SharedWithClones(t *testing.T) {
+	r := NewRouter("primary", "m", nil)
+	clone := r.WithModel("other").WithProvider("secondary")
+	r.SetMaxOutputTokens(12000)
+
+	if got := clone.MaxOutputTokens(); got != 12000 {
+		t.Errorf("clone MaxOutputTokens = %d, want 12000", got)
+	}
+}
+
 func TestRouter_MaxOutputTokens_SentOnFallback(t *testing.T) {
 	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
 	cap := &capturingMockProvider{}
