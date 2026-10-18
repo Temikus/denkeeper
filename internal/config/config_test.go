@@ -1182,6 +1182,103 @@ max_tool_rounds = -1
 	}
 }
 
+func TestParse_MaxOutputTokens_BothLevels(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm]
+max_output_tokens = 8192
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+max_output_tokens = 16384
+
+[[agents]]
+name = "quiet"
+persona_dir = "/agents/quiet"
+`)
+
+	cfg, err := Parse(tomlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.MaxOutputTokens != 8192 {
+		t.Errorf("llm.max_output_tokens = %d, want 8192", cfg.LLM.MaxOutputTokens)
+	}
+	if got := cfg.Agents[0].EffectiveMaxOutputTokens(cfg.LLM.MaxOutputTokens); got != 16384 {
+		t.Errorf("agent override = %d, want 16384", got)
+	}
+	if got := cfg.Agents[1].EffectiveMaxOutputTokens(cfg.LLM.MaxOutputTokens); got != 8192 {
+		t.Errorf("inherited value = %d, want 8192", got)
+	}
+}
+
+func TestParse_MaxOutputTokens_DefaultsToProvider(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLM.MaxOutputTokens != 0 {
+		t.Errorf("llm.max_output_tokens = %d, want 0 (provider default)", cfg.LLM.MaxOutputTokens)
+	}
+}
+
+func TestParse_Agents_NegativeMaxOutputTokens(t *testing.T) {
+	tomlData := []byte(baseConfig + `
+[[agents]]
+name = "default"
+persona_dir = "/agents/default"
+adapters = ["telegram"]
+max_output_tokens = -1
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative max_output_tokens")
+	}
+	if !strings.Contains(err.Error(), "max_output_tokens must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParse_LLM_NegativeMaxOutputTokens(t *testing.T) {
+	tomlData := []byte(`
+[telegram]
+token = "123456:ABC-DEF"
+allowed_users = [111222333]
+
+[llm]
+max_output_tokens = -5
+
+[llm.openrouter]
+api_key = "sk-or-test-key"
+`)
+
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatal("expected error for negative llm.max_output_tokens")
+	}
+	if !strings.Contains(err.Error(), "llm.max_output_tokens must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyEnvOverrides_MaxOutputTokens(t *testing.T) {
+	t.Setenv("DENKEEPER_LLM_MAX_OUTPUT_TOKENS", "12000")
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+	if cfg.LLM.MaxOutputTokens != 12000 {
+		t.Errorf("llm.max_output_tokens = %d, want 12000", cfg.LLM.MaxOutputTokens)
+	}
+}
+
 func TestParse_Agents_NegativeSupervisorMaxArgsBytes(t *testing.T) {
 	tomlData := []byte(baseConfig + `
 [[agents]]

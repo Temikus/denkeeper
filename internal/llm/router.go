@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -37,6 +38,10 @@ type Router struct {
 	toolSource        func() []ToolDef  // dynamic tool resolution; nil = no tools
 	pricing           *pricing.Registry // model pricing lookup; nil = legacy fallback
 	streamIdleTimeout time.Duration     // idle timeout for LLM SSE streams; 0 = disabled
+	// Per-completion output cap; 0 = provider default. Accessed atomically:
+	// PATCH and reload set it while turns read it. Plain int64, not
+	// atomic.Int64, because WithModel/WithProvider copy the struct.
+	maxOutputTokens int64
 
 	// OTel instrumentation (global no-ops when OTel is disabled).
 	tracer    trace.Tracer
@@ -328,6 +333,15 @@ func (r *Router) SetStreamIdleTimeout(d time.Duration) {
 	r.streamIdleTimeout = d
 }
 
+// SetMaxOutputTokens caps the output tokens of each completion. Zero leaves
+// the provider default (4096 for Anthropic, uncapped elsewhere).
+func (r *Router) SetMaxOutputTokens(n int) {
+	atomic.StoreInt64(&r.maxOutputTokens, int64(n))
+}
+
+// MaxOutputTokens returns the per-completion output cap; 0 = provider default.
+func (r *Router) MaxOutputTokens() int { return int(atomic.LoadInt64(&r.maxOutputTokens)) }
+
 // SetTools configures a dynamic tool definition source. The function is
 // called on every LLM request so that tools added at runtime are visible
 // immediately.
@@ -432,7 +446,7 @@ func (r *Router) completeInternal(ctx context.Context, sessionID string, message
 			currentTools = opts.toolFilter(currentTools)
 		}
 	}
-	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, StreamIdleTimeout: r.streamIdleTimeout}
+	req := ChatRequest{Model: activeModel, Messages: messages, Tools: currentTools, MaxTokens: r.MaxOutputTokens(), StreamIdleTimeout: r.streamIdleTimeout}
 	if opts.onStream != nil {
 		if sp, ok := activeProvider.(StreamingProvider); ok && sp.SupportsStreaming() {
 			req.OnStream = opts.onStream
@@ -694,7 +708,7 @@ func (r *Router) fallbackMatchesError(rule FallbackRule, err error) bool {
 func (r *Router) executeFallbackAction(ctx context.Context, rule FallbackRule, activeProvider Provider, activeModel string, messages []Message, tools []ToolDef, onStream StreamCallback) (*ChatResponse, string, error) {
 	// buildReq creates a ChatRequest and enables streaming if the provider supports it.
 	buildReq := func(p Provider, model string) ChatRequest {
-		req := ChatRequest{Model: model, Messages: messages, Tools: tools}
+		req := ChatRequest{Model: model, Messages: messages, Tools: tools, MaxTokens: r.MaxOutputTokens()}
 		if onStream != nil {
 			if sp, ok := p.(StreamingProvider); ok && sp.SupportsStreaming() {
 				req.OnStream = onStream

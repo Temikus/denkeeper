@@ -1074,6 +1074,24 @@ func (e *Engine) SetModel(model string) {
 	e.router.SetDefaultModel(model)
 }
 
+// SetMaxOutputTokens caps each completion's output tokens; 0 = provider default.
+// A no-op without a router: reload applies it to every engine, including
+// router-less ones.
+func (e *Engine) SetMaxOutputTokens(n int) {
+	if e.router == nil {
+		return
+	}
+	e.router.SetMaxOutputTokens(n)
+}
+
+// MaxOutputTokens returns the per-completion output cap; 0 = provider default.
+func (e *Engine) MaxOutputTokens() int {
+	if e.router == nil {
+		return 0
+	}
+	return e.router.MaxOutputTokens()
+}
+
 // SetProvider changes the engine's default LLM provider.
 func (e *Engine) SetProvider(provider string) error {
 	return e.router.SetDefaultProvider(provider)

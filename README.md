@@ -620,7 +620,7 @@ Cursor (`.cursor/mcp.json`):
 
 Other MCP clients that support Streamable HTTP or SSE transports can connect to `http://<host>:8080/api/v1/mcp` with a `Bearer` token in the `Authorization` header.
 
-The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
+The API key must have scopes matching the tools you want to use (e.g. `chat`, `agents:read`, `sessions:read`, `skills:read`, `schedules:read`). Available MCP tools: `chat`, `agent_list`, `agent_info`, `agent_update`, `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact`, `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert`, `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete`, `channel_list`, `approval_list`, `approval_resolve`, `tool_list`, `tool_health`, `tool_restart`, `kv_get`, `kv_set`, `kv_list`, `kv_delete`, `cost_summary`, `telemetry_summary`, `panic`, `resume`, `panic_status`.
 
 ## Development
 

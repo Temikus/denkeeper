@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Temikus/denkeeper/internal/agent"
@@ -627,6 +630,91 @@ func TestAgentConfigUpdate_MaxToolRounds_Negative(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAgentConfigUpdate_MaxOutputTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "denkeeper.toml")
+	if err := os.WriteFile(path, []byte("[[agents]]\nname = \"default\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDeps()
+	deps.ConfigPath = path
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	rec := patchAgent(t, srv, map[string]any{"max_output_tokens": 16384})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := deps.Dispatcher.Agent("default").MaxOutputTokens(); got != 16384 {
+		t.Errorf("engine max_output_tokens = %d, want 16384", got)
+	}
+	for _, ac := range deps.Config.Get().Agents {
+		if ac.Name == "default" && ac.MaxOutputTokens != 16384 {
+			t.Errorf("in-memory max_output_tokens = %d, want 16384", ac.MaxOutputTokens)
+		}
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), "max_output_tokens = 16384") {
+		t.Errorf("TOML not persisted:\n%s", saved)
+	}
+}
+
+func TestAgentConfigUpdate_MaxOutputTokens_ZeroInheritsGlobal(t *testing.T) {
+	deps := testDeps()
+	deps.Config.Update(func(c *config.Config) { c.LLM.MaxOutputTokens = 8192 })
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	deps.Dispatcher.Agent("default").SetMaxOutputTokens(16384)
+
+	rec := patchAgent(t, srv, map[string]any{"max_output_tokens": 0})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := deps.Dispatcher.Agent("default").MaxOutputTokens(); got != 8192 {
+		t.Errorf("engine max_output_tokens = %d, want global 8192", got)
+	}
+}
+
+func TestAgentConfigUpdate_MaxOutputTokens_Negative(t *testing.T) {
+	srv := New(testConfig(allScopesKey()), testDeps(), testLogger())
+
+	rec := patchAgent(t, srv, map[string]any{"max_output_tokens": -1})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAgentDetail_IncludesMaxOutputTokens(t *testing.T) {
+	deps := testDeps()
+	deps.Config.Update(func(c *config.Config) {
+		for i := range c.Agents {
+			if c.Agents[i].Name == "default" {
+				c.Agents[i].MaxOutputTokens = 16384
+			}
+		}
+	})
+	deps.Dispatcher.Agent("default").SetMaxOutputTokens(16384)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/default", nil)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["max_output_tokens"] != float64(16384) {
+		t.Errorf("max_output_tokens = %v, want 16384", resp["max_output_tokens"])
+	}
+	if resp["effective_max_output_tokens"] != float64(16384) {
+		t.Errorf("effective_max_output_tokens = %v, want 16384", resp["effective_max_output_tokens"])
 	}
 }
 

@@ -35,11 +35,13 @@ func (m *mockProvider) HealthCheck(_ context.Context) error { return m.healthErr
 // capturingMockProvider records the model from each ChatCompletion call.
 type capturingMockProvider struct {
 	mockProvider
-	lastModel string
+	lastModel     string
+	lastMaxTokens int
 }
 
 func (c *capturingMockProvider) ChatCompletion(_ context.Context, req ChatRequest) (*ChatResponse, error) {
 	c.lastModel = req.Model
+	c.lastMaxTokens = req.MaxTokens
 	return c.mockProvider.ChatCompletion(context.Background(), req)
 }
 
@@ -274,6 +276,55 @@ func TestRouter_Fallback_ErrorTrigger_SwitchProvider_WithModelOverride(t *testin
 	}
 	if cap.lastModel != "cheap-model" {
 		t.Errorf("model = %q, want cheap-model", cap.lastModel)
+	}
+}
+
+func TestRouter_MaxOutputTokens_SentOnRequest(t *testing.T) {
+	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok"}
+	r.RegisterProvider(cap)
+	r.SetMaxOutputTokens(16384)
+
+	if _, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastMaxTokens != 16384 {
+		t.Errorf("MaxTokens = %d, want 16384", cap.lastMaxTokens)
+	}
+}
+
+func TestRouter_MaxOutputTokens_ZeroLeavesProviderDefault(t *testing.T) {
+	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
+	cap := &capturingMockProvider{}
+	cap.name = "primary"
+	cap.response = &ChatResponse{Content: "ok"}
+	r.RegisterProvider(cap)
+
+	if _, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastMaxTokens != 0 {
+		t.Errorf("MaxTokens = %d, want 0", cap.lastMaxTokens)
+	}
+}
+
+func TestRouter_MaxOutputTokens_SentOnFallback(t *testing.T) {
+	r := NewRouter("primary", "m", NewCostTracker(SessionLimits{Hard: 10.0}, nil))
+	cap := &capturingMockProvider{}
+	cap.name = "secondary"
+	cap.response = &ChatResponse{Content: "fallback"}
+	r.RegisterProvider(&mockProvider{name: "primary", err: &LLMError{StatusCode: 503, Message: "down"}})
+	r.RegisterProvider(cap)
+	r.SetFallbacks([]FallbackRule{{Trigger: "error", Action: "switch_provider", Provider: "secondary"}})
+	r.SetMaxOutputTokens(9000)
+
+	if _, err := r.Complete(context.Background(), "s1", []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cap.lastMaxTokens != 9000 {
+		t.Errorf("fallback MaxTokens = %d, want 9000", cap.lastMaxTokens)
 	}
 }
 

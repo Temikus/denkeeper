@@ -210,6 +210,62 @@ describe('Agents model config', () => {
       expect(patchCalled).toBe(true)
     })
   })
+
+  test('max output tokens shows the inherited cap and saves a new one', async () => {
+    let patchBody = null
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) =>
+        HttpResponse.json({ name: params.name, model: 'm', provider: 'anthropic', permission_tier: 'autonomous', max_output_tokens: 0, effective_max_output_tokens: 8192 })),
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(Agents)
+    await waitFor(() => screen.getByText('MODEL'))
+    await fireEvent.click(screen.getByText('MODEL'))
+    const input = await screen.findByLabelText('Max Output Tokens')
+    expect(input).toHaveAttribute('placeholder', 'Inherit (8192)')
+
+    await fireEvent.input(input, { target: { value: '16384' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody?.max_output_tokens).toBe(16384))
+  })
+
+  test('clearing max output tokens sends 0 to inherit', async () => {
+    let patchBody = null
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) =>
+        HttpResponse.json({ name: params.name, model: 'm', provider: 'anthropic', permission_tier: 'autonomous', max_output_tokens: 16384, effective_max_output_tokens: 16384 })),
+      http.patch('/api/v1/agents/:name', async ({ request }) => {
+        patchBody = await request.json()
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    render(Agents)
+    await waitFor(() => screen.getByText('MODEL'))
+    await fireEvent.click(screen.getByText('MODEL'))
+    const input = await screen.findByLabelText('Max Output Tokens')
+    expect(input).toHaveValue(16384)
+
+    await fireEvent.input(input, { target: { value: '' } })
+    await fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(patchBody?.max_output_tokens).toBe(0))
+  })
+
+  test('max output tokens without any cap set names the provider default', async () => {
+    server.use(
+      http.get('/api/v1/agents/:name', ({ params }) =>
+        HttpResponse.json({ name: params.name, model: 'm', provider: 'anthropic', permission_tier: 'autonomous', max_output_tokens: 0, effective_max_output_tokens: 0 })),
+    )
+    render(Agents)
+    await waitFor(() => screen.getByText('MODEL'))
+    await fireEvent.click(screen.getByText('MODEL'))
+    const input = await screen.findByLabelText('Max Output Tokens')
+    expect(input).toHaveAttribute('placeholder', 'Provider default')
+  })
 })
 
 describe('Agents permission config', () => {

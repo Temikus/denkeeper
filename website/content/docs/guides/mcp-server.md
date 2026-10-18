@@ -53,7 +53,7 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Area | Tools |
 |---|---|
 | Chat | `chat` |
-| Agents | `agent_list`, `agent_info` |
+| Agents | `agent_list`, `agent_info`, `agent_update` |
 | Skills | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`, `skill_revert` |
 | Schedules | `schedule_list`, `schedule_create`, `schedule_update`, `schedule_delete` |
 | Sessions | `session_list`, `session_messages`, `session_search`, `session_clear`, `session_compact` |
@@ -67,7 +67,9 @@ Behind a reverse proxy, set `api.external_url` so generated URLs are correct.
 | Tasks | `task_list`, `task_get`, `task_create`, `task_checkout`, `task_comment`, `task_update` |
 | Safety | `panic`, `panic_status`, `resume` |
 
-`agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `supervisor_decider`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. `supervisor_decider` gives the [decision model](/docs/concepts/deciders/)'s name, model, mode, and thresholds; `agent_list` shows its name only. Supervisor and decider information is read from live wiring, so it reflects the state after a config reload or an API change rather than what the file said at startup.
+`agent_info` reports an agent's name, tier, provider, model, and skills, and adds `supervisor`, `supervisor_decider`, `persona_sections`, and `channels` only when they are non-empty — presence is the signal. `supervisor_decider` gives the [decision model](/docs/concepts/deciders/)'s name, model, mode, and thresholds; `agent_list` shows its name only. Supervisor and decider information is read from live wiring, so it reflects the state after a config reload or an API change rather than what the file said at startup. `agent_info` also reports `max_tool_rounds`, and `max_output_tokens` when it is not the provider default.
+
+`agent_update` (`agents:write`) changes an agent's `max_output_tokens` and `max_tool_rounds`. The change applies from the next LLM call and is saved to the config file. The result's `persisted` is `false` when there is no file or the save failed.
 
 Skill writes are disk-first: the file is written before memory is updated, so an IO error leaves the skill intact rather than creating a version that exists only in RAM until the next restart.
 

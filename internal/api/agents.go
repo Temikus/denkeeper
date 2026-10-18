@@ -22,6 +22,7 @@ type agentConfigUpdateInput struct {
 	LLMModel                   *string                  `json:"llm_model,omitempty"`
 	Description                *string                  `json:"description,omitempty"`
 	MaxToolRounds              *int                     `json:"max_tool_rounds,omitempty"`
+	MaxOutputTokens            *int                     `json:"max_output_tokens,omitempty"` // 0 = inherit llm.max_output_tokens
 	BrowserURLAllowlist        *[]string                `json:"browser_url_allowlist,omitempty"`
 	Fallbacks                  *[]config.FallbackConfig `json:"fallbacks,omitempty"`
 	CostLimitSoft              *float64                 `json:"cost_limit_soft,omitempty"`
@@ -100,7 +101,7 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Apply runtime changes to the engine.
-	if httpStatus, errMsg := applyAgentRuntimeChanges(e, &input); httpStatus != 0 {
+	if httpStatus, errMsg := applyAgentRuntimeChanges(e, &input, s.appConfig().LLM.MaxOutputTokens); httpStatus != 0 {
 		writeJSON(w, httpStatus, map[string]string{"error": errMsg})
 		return
 	}
@@ -143,6 +144,9 @@ func validateAgentInput(input *agentConfigUpdateInput) string {
 	}
 	if input.CostLimitHard != nil && *input.CostLimitHard < 0 {
 		return "cost_limit_hard must be >= 0"
+	}
+	if input.MaxOutputTokens != nil && *input.MaxOutputTokens < 0 {
+		return "max_output_tokens must be >= 0 (0 = inherit llm.max_output_tokens)"
 	}
 	if msg := validateSupervisorFields(input); msg != "" {
 		return msg
@@ -193,8 +197,9 @@ func validateReviewerFields(input *agentConfigUpdateInput) string {
 }
 
 // applyAgentRuntimeChanges mutates the engine for the fields present in input.
+// globalMaxOutputTokens is what max_output_tokens = 0 falls back to.
 // Returns (0, "") on success or (httpStatus, errorMessage) on failure.
-func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (int, string) {
+func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput, globalMaxOutputTokens int) (int, string) {
 	if input.SessionTier != nil {
 		if err := e.SetPermissionTier(*input.SessionTier); err != nil {
 			return http.StatusInternalServerError, "setting permission tier: " + err.Error()
@@ -213,6 +218,10 @@ func applyAgentRuntimeChanges(e *agent.Engine, input *agentConfigUpdateInput) (i
 			return http.StatusBadRequest, "max_tool_rounds must be >= 1"
 		}
 		e.SetMaxToolRounds(*input.MaxToolRounds)
+	}
+	if input.MaxOutputTokens != nil {
+		ac := config.AgentInstanceConfig{MaxOutputTokens: *input.MaxOutputTokens}
+		e.SetMaxOutputTokens(ac.EffectiveMaxOutputTokens(globalMaxOutputTokens))
 	}
 	if input.Fallbacks != nil {
 		e.LLMRouter().SetFallbacks(convertFallbackConfigs(*input.Fallbacks))
@@ -339,6 +348,9 @@ func buildAgentConfigChanges(input *agentConfigUpdateInput) map[string]any {
 	}
 	if input.MaxToolRounds != nil {
 		changes["max_tool_rounds"] = *input.MaxToolRounds
+	}
+	if input.MaxOutputTokens != nil {
+		changes["max_output_tokens"] = *input.MaxOutputTokens
 	}
 	if input.BrowserURLAllowlist != nil {
 		allowlist := make([]any, len(*input.BrowserURLAllowlist))
@@ -513,6 +525,9 @@ func applyAgentFields(ac *config.AgentInstanceConfig, input *agentConfigUpdateIn
 	}
 	if input.MaxToolRounds != nil {
 		ac.MaxToolRounds = *input.MaxToolRounds
+	}
+	if input.MaxOutputTokens != nil {
+		ac.MaxOutputTokens = *input.MaxOutputTokens
 	}
 	if input.BrowserURLAllowlist != nil {
 		ac.BrowserURLAllowlist = *input.BrowserURLAllowlist

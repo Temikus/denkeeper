@@ -41,6 +41,7 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 | `cost_limit_soft` | float | `0` | Soft cost limit per session in USD (warns but continues) |
 | `cost_limit_hard` | float | `1.0` | Hard cost limit per session in USD (stops generation) |
 | `stream_idle_timeout_secs` | int | `120` | Seconds a streaming LLM response may sit idle before the request is aborted |
+| `max_output_tokens` | int | `0` | Output-token cap per completion. `0` = provider default (4096 for Anthropic, no cap sent elsewhere). A value above the model's output limit makes every request fail. Env: `DENKEEPER_LLM_MAX_OUTPUT_TOKENS` |
 
 ## `[[llm.providers]]`
 
@@ -187,6 +188,7 @@ Defaults for agents that do not set their own directories.
 | `adapters` | string[] | — | Adapter bindings (e.g., `["telegram"]`, `["telegram:12345"]`) |
 | `llm_provider` | string | — | Override default provider (must match a configured provider instance name) |
 | `llm_model` | string | — | Override default model |
+| `max_output_tokens` | int | `0` | Override `llm.max_output_tokens` for this agent. `0` = inherit. The post-turn reviewer keeps the global value |
 | `session_tier` | string | — | Override default permission tier |
 | `timezone` | string | — | IANA name, e.g. `"Australia/Sydney"`. Precedence: agent > `api.timezone` > UTC. Does **not** affect cron evaluation, which stays on `api.timezone` and is restart-only |
 | `cost_limit_soft` | float | — | Per-agent soft cost limit in USD (overrides global) |
