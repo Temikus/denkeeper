@@ -569,6 +569,10 @@ func (r *Router) recordOTelSuccess(start time.Time, resp *ChatResponse, cost flo
 		r.mTokens.Add(ctx, int64(resp.TokensUsed.CachedPrompt),
 			addOptsWithUpstream(attrs, upstream, attribute.String("direction", "cached_prompt"))...)
 	}
+	if resp.TokensUsed.CacheWritePrompt > 0 {
+		r.mTokens.Add(ctx, int64(resp.TokensUsed.CacheWritePrompt),
+			addOptsWithUpstream(attrs, upstream, attribute.String("direction", "cache_write_prompt"))...)
+	}
 	if cost > 0 {
 		r.mCost.Add(ctx, cost,
 			addOptsWithUpstream(attrs, upstream, attribute.String("pricing_source", pricingSource))...)
@@ -606,6 +610,9 @@ func (r *Router) setSpanResponseAttrs(span trace.Span, resp *ChatResponse, cost 
 	)
 	if resp.TokensUsed.CachedPrompt > 0 {
 		span.SetAttributes(attribute.Int("gen_ai.usage.cached_tokens", resp.TokensUsed.CachedPrompt))
+	}
+	if resp.TokensUsed.CacheWritePrompt > 0 {
+		span.SetAttributes(attribute.Int("gen_ai.usage.cache_creation.input_tokens", resp.TokensUsed.CacheWritePrompt))
 	}
 	if cost > 0 {
 		span.SetAttributes(attribute.Float64("gen_ai.usage.cost", cost))

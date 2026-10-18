@@ -14,5 +14,5 @@ Config: `[costs] default_rate_per_1k_tokens` (fallback when model unknown; 0 = $
 
 ## Invariants
 
-- **Anthropic caching is requested only on tool-bearing requests** (top-level `cache_control`, automatic breakpoint, 5m TTL): a write costs 1.25x and pays off only when a tool loop resends the prefix. Tool-less calls (`CompleteFinal` wrap-up, reviewer, judge) end the turn and must stay unmarked.
+- **Anthropic caching is requested only on tool-bearing requests** (top-level `cache_control`, automatic breakpoint, 5m TTL): a write costs 1.25x and pays off only when the prefix is resent within 5 minutes. The router attaches tools to every non-final call, so a reply with no tool call pays the premium for nothing; break-even on Sonnet 5.5 is roughly 1 in 4 writes being read. Tool-less calls (`CompleteFinal` wrap-up and compaction, supervisor review, eval judge) stay unmarked.
 - **Pricing lookup priority**: provider-reported > registry exact > registry longest-prefix > `[costs]` fallback > $0 (with warning).

@@ -364,13 +364,13 @@ func approxEqual(a, b float64) bool {
 	return math.Abs(a-b) < 1e-12
 }
 
-func TestCost_CacheWriteAddsSurcharge(t *testing.T) {
+func TestRegistry_Cost_CacheWriteAddsSurcharge(t *testing.T) {
 	r := NewEmpty()
 	r.Register("m", ModelPrice{InputPerMTok: 2.0, OutputPerMTok: 10.0, CachedInputPerMTok: 0.10})
 
 	// 1M prompt tokens, all of them cache writes: 1M x $2 x 1.25.
 	cost, _ := r.Cost("", "m", 1_000_000, 0, 0, 1_000_000, 0)
-	if math.Abs(cost-2.50) > 1e-9 {
+	if !approxEqual(cost, 2.50) {
 		t.Errorf("cost = %v, want 2.50", cost)
 	}
 }

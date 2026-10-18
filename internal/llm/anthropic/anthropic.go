@@ -443,9 +443,10 @@ func (c *Client) buildRequest(req llm.ChatRequest) (*apiRequest, error) {
 
 	// Map llm.ToolDef → Anthropic tool format.
 	if len(req.Tools) > 0 {
-		// A cache write costs 1.25x input and only pays off when the prefix is
-		// resent, which a tool loop does each round. A tool-less request ends
-		// the turn, so it is never marked.
+		// A cache write costs 1.25x input and pays off only if the prefix is
+		// resent within 5 minutes, as each tool round does. A reply with no
+		// tool call pays the premium for nothing. Tool-less calls (wrap-up,
+		// supervisor review, compaction) never loop, so they stay unmarked.
 		out.CacheControl = &cacheControl{Type: "ephemeral"}
 		out.Tools = make([]apiTool, len(req.Tools))
 		for i, t := range req.Tools {

@@ -832,6 +832,24 @@ func TestTokenCost_UsesRegistry(t *testing.T) {
 	}
 }
 
+// Distinct rates per token kind catch a swapped cachedInput/cacheWrite
+// argument, which compiles because both are ints.
+func TestTokenCost_CacheWriteAndReadPricedSeparately(t *testing.T) {
+	reg := pricing.NewEmpty()
+	reg.Register("claude-sonnet-5-5", pricing.ModelPrice{InputPerMTok: 2.0, OutputPerMTok: 10.0, CachedInputPerMTok: 0.10})
+
+	resp := &ChatResponse{
+		Model:      "claude-sonnet-5-5",
+		TokensUsed: TokenUsage{Prompt: 3000, Completion: 100, CachedPrompt: 5000, CacheWritePrompt: 2000, Total: 8100},
+	}
+	got, _ := TokenCost(resp, reg, "")
+	// 3000 input at $2 + 2000 of them written (+25%) + 5000 read at $0.10 + 100 out at $10.
+	want := (3000*2.0 + 2000*2.0*0.25 + 5000*0.10 + 100*10.0) / 1_000_000
+	if diff := got - want; diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("TokenCost = %e, want %e", got, want)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Streaming tests
 // ---------------------------------------------------------------------------

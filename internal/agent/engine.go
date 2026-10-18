@@ -4205,7 +4205,9 @@ func (e *Engine) CompactSession(ctx context.Context, convID string) (string, err
 		{Role: "user", Content: transcript.String()},
 	}
 
-	resp, err := e.router.Complete(ctx, convID, llmMessages)
+	// Tools-stripped: the summariser has nothing to call, and a one-off
+	// request must not pay a prompt-cache write.
+	resp, err := e.router.CompleteFinal(ctx, convID, llmMessages)
 	if err != nil {
 		return "", fmt.Errorf("LLM summarisation: %w", err)
 	}
