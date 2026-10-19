@@ -605,3 +605,72 @@ func TestChatCompletionStream_CacheWriteTokensCounted(t *testing.T) {
 	}
 	assertCacheUsage(t, resp.TokensUsed)
 }
+
+// streamToolCalls serves stream over SSE and returns the tool calls the
+// streaming parser produced.
+func streamToolCalls(t *testing.T, stream string) []llm.ToolCall {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(stream))
+	}))
+	defer server.Close()
+
+	client := NewWithHTTPClient("key", server.URL, server.Client())
+	resp, err := client.ChatCompletion(context.Background(), llm.ChatRequest{
+		Model:    "claude-sonnet-5-5",
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		OnStream: func(llm.StreamChunk) {},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("finish_reason = %q, want tool_calls", resp.FinishReason)
+	}
+	return resp.ToolCalls
+}
+
+func sseEvent(typ, data string) string {
+	return "event: " + typ + "\ndata: " + data + "\n\n"
+}
+
+func TestChatCompletionStream_ToolUseAfterEmptyTextBlock(t *testing.T) {
+	stream := sseEvent("message_start", `{"type":"message_start","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":4}}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"run_javascript","input":{}}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"code\":"}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"1+1\"}"}}`) +
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":1}`) +
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}`) +
+		sseEvent("message_stop", `{"type":"message_stop"}`)
+
+	calls := streamToolCalls(t, stream)
+	if len(calls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(calls))
+	}
+	if calls[0].ID != "toolu_1" || calls[0].Function.Name != "run_javascript" || calls[0].Function.Arguments != `{"code":"1+1"}` {
+		t.Errorf("tool call = %+v", calls[0])
+	}
+}
+
+func TestChatCompletionStream_ToolUsesAfterTextKeepAllInOrder(t *testing.T) {
+	stream := sseEvent("message_start", `{"type":"message_start","message":{"model":"claude-sonnet-5-5","usage":{"input_tokens":4}}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking."}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_a","name":"kv_get","input":{}}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"key\":\"a\"}"}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_b","name":"kv_get","input":{}}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"key\":\"b\"}"}}`) +
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}`) +
+		sseEvent("message_stop", `{"type":"message_stop"}`)
+
+	calls := streamToolCalls(t, stream)
+	if len(calls) != 2 {
+		t.Fatalf("got %d tool calls, want 2", len(calls))
+	}
+	if calls[0].ID != "toolu_a" || calls[1].ID != "toolu_b" {
+		t.Errorf("tool call order = %s, %s; want toolu_a, toolu_b", calls[0].ID, calls[1].ID)
+	}
+}
