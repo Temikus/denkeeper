@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -323,11 +325,10 @@ func (a *anthropicStreamAccumulator) finish() *llm.ChatResponse {
 	a.out.Content = a.contentBuf.String()
 	a.out.ThinkingContent = a.thinkingBuf.String()
 	a.out.TokensUsed = a.usage.tokenUsage()
-	for i := 0; i < len(a.tools); i++ {
-		acc, ok := a.tools[i]
-		if !ok {
-			continue
-		}
+	// Keys are content-block indexes shared with text blocks, so they need
+	// not start at 0 or be contiguous.
+	for _, i := range slices.Sorted(maps.Keys(a.tools)) {
+		acc := a.tools[i]
 		a.out.ToolCalls = append(a.out.ToolCalls, llm.ToolCall{
 			ID:   acc.ID,
 			Type: "function",
