@@ -448,8 +448,24 @@ func TestWSConn_ConcurrentChatSemaphore(t *testing.T) {
 		t.Error("expected a rate_limited error frame for the 11th concurrent request")
 	}
 
-	// Unblock all goroutines so test can clean up.
+	// Unblock the in-flight chats and wait for each to finish. Returning
+	// while they still write to the SQLite store races t.TempDir's cleanup
+	// ("directory not empty", #555). done is sent after the engine returns.
 	close(bp.gate)
+	doneCount := 0
+	drainDeadline := time.Now().Add(5 * time.Second)
+	for doneCount < wsMaxConcurrentChats {
+		_ = conn.SetReadDeadline(drainDeadline)
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("drain read: %v (doneCount=%d)", err, doneCount)
+		}
+		var f map[string]any
+		_ = json.Unmarshal(data, &f)
+		if f["type"] == "done" {
+			doneCount++
+		}
+	}
 }
 
 func TestWSConn_SemaphoreReleasedAfterCompletion(t *testing.T) {
