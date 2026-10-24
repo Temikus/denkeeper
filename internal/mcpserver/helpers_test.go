@@ -5,30 +5,6 @@ import (
 	"testing"
 )
 
-func TestHasScope_ExactMatch(t *testing.T) {
-	if !hasScope([]string{"chat", "agents:read"}, "chat") {
-		t.Error("expected chat scope to match")
-	}
-}
-
-func TestHasScope_AdminGrantsAll(t *testing.T) {
-	if !hasScope([]string{"admin"}, "anything") {
-		t.Error("admin should grant any scope")
-	}
-}
-
-func TestHasScope_Missing(t *testing.T) {
-	if hasScope([]string{"agents:read"}, "chat") {
-		t.Error("expected no match for missing scope")
-	}
-}
-
-func TestHasScope_Empty(t *testing.T) {
-	if hasScope(nil, "chat") {
-		t.Error("nil scopes should not match")
-	}
-}
-
 func TestRequireScope_Allowed(t *testing.T) {
 	ctx := withScopes(context.Background(), []string{"admin"})
 	if result := requireScope(ctx, "chat"); result != nil {

@@ -402,6 +402,36 @@ func TestRequireScope_ValidKeyValidScope(t *testing.T) {
 	}
 }
 
+// An admin-only key must pass narrower scopes, as the config docs and the MCP
+// server already promise (#477). Covers both the TOML and SQLite key paths.
+func TestRequireScope_AdminKeyGrantsOtherScopes(t *testing.T) {
+	ks := testKeyStore(t)
+	_, sqliteKey, err := ks.Create(context.Background(), "ops-db", []string{"admin"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cfg := testConfig(config.APIKeyConfig{
+		Name: "ops-toml", Key: "dk-admin", Scopes: []string{"admin"},
+	})
+	deps := testDeps()
+	deps.KeyStore = ks
+	srv := New(cfg, deps, testLogger())
+
+	handler := srv.RequireScope("agents:write", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	})
+
+	for _, token := range []string{"dk-admin", sqliteKey} {
+		req := httptest.NewRequest(http.MethodPatch, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("admin key %q: status = %d, want %d", token[:3], rec.Code, http.StatusOK)
+		}
+	}
+}
+
 func TestRequireScope_ContextContainsKeyName(t *testing.T) {
 	cfg := testConfig(config.APIKeyConfig{
 		Name: "my-key", Key: "dk-secret", Scopes: []string{"health"},
