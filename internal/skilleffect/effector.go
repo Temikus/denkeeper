@@ -95,7 +95,8 @@ func New(store Store, agentName string, logger *slog.Logger) *Effector {
 // tracking reports whether mutations are journaled.
 func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 
-// Create writes a new skill and journals the state it replaces.
+// Create writes a new skill and journals that it did not exist before. A name
+// that already has a file is refused with configmcp.ErrSkillExists.
 //
 // Tracked-write ordering, shared by all four mutators: read the current state,
 // append the revision, *then* perform the mutation. Journal-before-write means
@@ -105,27 +106,22 @@ func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 // one failure mode this design exists to prevent. A failed append therefore
 // aborts the mutation: fail closed.
 func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, actor string, maxBytes int) error {
+	defer configmcp.LockSkillCreate(sa.SkillsDir())()
 	if name, version, ok := e.parseTracked(payload); ok && validName(name) {
-		prior, err := e.readPrior(sa, name)
-		if err != nil {
+		// Refuse before journaling: a create revision for a write that never
+		// happens would delete the existing skill on revert.
+		if err := configmcp.RefuseExistingSkill(sa.SkillsDir(), name); err != nil {
 			return err
 		}
-		// A NULL prior_payload tells the reverter to delete. If a file is
-		// already there, the create replaces it, so journal it as an update
-		// and let the revert restore the old bytes.
-		rev := agent.SkillRevision{
+		// prior_payload stays NULL: the prior state of a create is "absent",
+		// which is what tells the reverter to delete rather than restore.
+		if err := e.journal(ctx, agent.SkillRevision{
 			TransitionID: tid,
 			Op:           agent.SkillOpCreate,
 			SkillName:    name,
 			NewVersion:   version,
 			Actor:        actor,
-		}
-		if prior != nil {
-			rev.Op = agent.SkillOpUpdate
-			rev.PriorPayload = prior
-			rev.PriorVersion = versionOf(prior)
-		}
-		if err := e.journal(ctx, rev); err != nil {
+		}); err != nil {
 			return err
 		}
 	}

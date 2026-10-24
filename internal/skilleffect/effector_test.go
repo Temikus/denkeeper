@@ -201,35 +201,62 @@ func TestEffector_Create_JournalsAbsentPriorState(t *testing.T) {
 	}
 }
 
-// A create over an existing file is journaled as an update, so revert puts the
-// original back instead of deleting it.
-func TestEffector_Create_OverExistingFile_RevertRestoresPrior(t *testing.T) {
+// A create over an existing file is refused before it journals, so no create
+// revision exists whose revert would delete the original.
+func TestEffector_Create_OverExistingFile_Refused(t *testing.T) {
 	store := newStore(t)
 	sa := newFakeSkills(t)
 	e := newEffector(t, store)
 
 	original := seed(t, e, sa, "greet", "1.0.0", "old body")
-	if err := e.Create(context.Background(), sa, "t2", payloadFor("greet", "2.0.0", "new body"), agent.SkillActorSelf, 0); err != nil {
-		t.Fatalf("create over existing: %v", err)
-	}
+	err := e.Create(context.Background(), sa, "t2", payloadFor("greet", "2.0.0", "new body"), agent.SkillActorSelf, 0)
 
-	rev := latest(t, store, "greet")
-	if rev.Op != agent.SkillOpUpdate {
-		t.Errorf("op = %q, want %q", rev.Op, agent.SkillOpUpdate)
-	}
-	if rev.PriorPayload == nil || *rev.PriorPayload != original {
-		t.Fatalf("prior payload = %v, want the replaced file", rev.PriorPayload)
-	}
-	if rev.PriorVersion != "1.0.0" {
-		t.Errorf("prior version = %q, want 1.0.0", rev.PriorVersion)
-	}
-
-	if _, err := e.Revert(context.Background(), sa, "greet", 0); err != nil {
-		t.Fatalf("revert: %v", err)
+	if !errors.Is(err, configmcp.ErrSkillExists) {
+		t.Fatalf("err = %v, want ErrSkillExists", err)
 	}
 	if got := onDisk(t, sa, "greet"); got != original {
-		t.Errorf("after revert file = %q, want the original %q", got, original)
+		t.Errorf("file = %q, want the original %q", got, original)
 	}
+	if rev := latest(t, store, "greet"); rev.TransitionID != "seed-greet" {
+		t.Errorf("latest revision is %q, want the seed's: a refused create must not journal", rev.TransitionID)
+	}
+}
+
+// Concurrent creates of one name: exactly one wins, the rest are refused, and
+// the single create revision reverts to "absent".
+func TestEffector_Create_Concurrent_OneWins(t *testing.T) {
+	store := newSharedStore(t)
+	sa := newFakeSkills(t)
+	e := newEffector(t, store)
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = e.Create(context.Background(), sa, "t"+string(rune('a'+i)), payloadFor("race", "1.0.0", "body "+string(rune('a'+i))), agent.SkillActorUser, 0)
+		}()
+	}
+	wg.Wait()
+
+	wins := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+		case !errors.Is(err, configmcp.ErrSkillExists):
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("%d creates succeeded, want exactly 1", wins)
+	}
+	if _, err := e.Revert(context.Background(), sa, "race", 0); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	mustNotExist(t, sa, "race")
 }
 
 // failingStore fails every append, leaving everything else to the real store.

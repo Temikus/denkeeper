@@ -1909,6 +1909,19 @@ func SkillFileExists(agentSkillsDir, name string) (bool, error) {
 	return false, nil
 }
 
+// RefuseExistingSkill returns an error wrapping ErrSkillExists if name already
+// has a skill file in either form.
+func RefuseExistingSkill(agentSkillsDir, name string) error {
+	exists, err := SkillFileExists(agentSkillsDir, name)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("skill %q %w", name, ErrSkillExists)
+	}
+	return nil
+}
+
 // SkillPayloadFromFile converts raw skill-file bytes back into the payload form
 // the Apply* helpers take, by removing the trailer writeSkillFileAtomic
 // appends. Without it, feeding a file's own bytes back through a write helper
@@ -1922,7 +1935,9 @@ func SkillPayloadFromFile(content string) string {
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the
-// in-memory skill list.
+// in-memory skill list. It refuses a name that already has a file with
+// ErrSkillExists. Callers hold LockSkillCreate so that check stays true
+// through the write.
 func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
 	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
 		return err
@@ -1931,7 +1946,7 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
-	if err := ValidateSkillName(s.Name); err != nil {
+	if err := RefuseExistingSkill(agentSkillsDir, s.Name); err != nil {
 		return err
 	}
 

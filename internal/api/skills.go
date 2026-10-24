@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -183,7 +184,11 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.skillWriter(agentName, e).Create(r.Context(), payload); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
+		status := http.StatusInternalServerError
+		if errors.Is(err, configmcp.ErrSkillExists) {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
 		return
 	}
 
