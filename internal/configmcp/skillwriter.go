@@ -1,6 +1,35 @@
 package configmcp
 
-import "context"
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"sync"
+)
+
+// ErrSkillExists is returned by a create whose name already has a skill file.
+var ErrSkillExists = errors.New("already exists")
+
+var (
+	createLocksMu sync.Mutex
+	createLocks   = map[string]*sync.Mutex{} // cleaned skills dir → lock
+)
+
+// LockSkillCreate serialises creates into one skills directory, so the
+// existence check and the write cannot interleave with another create. Take it
+// before journaling and hold it through ApplySkillCreate; it is not reentrant.
+func LockSkillCreate(agentSkillsDir string) (unlock func()) {
+	key := filepath.Clean(agentSkillsDir)
+	createLocksMu.Lock()
+	mu, ok := createLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		createLocks[key] = mu
+	}
+	createLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
 
 // SkillWriter performs a *tracked* skill mutation: it records the prior on-disk
 // state in an undo journal before performing the write, so the mutation can be
@@ -43,6 +72,7 @@ func (d Deps) skillWriter() SkillWriter {
 type directSkillWriter struct{ deps Deps }
 
 func (w directSkillWriter) Create(_ context.Context, payload string) error {
+	defer LockSkillCreate(w.deps.AgentSkillsDir)()
 	return ApplySkillCreate(w.deps.AgentSkillsDir, w.deps.AppendSkill, w.deps.Logger, payload, w.deps.MaxSkillBytes)
 }
 

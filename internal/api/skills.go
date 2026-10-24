@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -121,6 +122,7 @@ type skillWriteResponse struct {
 // @Success 201 {object} skillWriteResponse "Skill created"
 // @Failure 400 {object} map[string]string "Invalid input"
 // @Failure 404 {object} map[string]string "Agent not found"
+// @Failure 409 {object} map[string]string "Skill already exists"
 // @Failure 500 {object} map[string]string "Creation failed"
 // @Failure 503 {object} map[string]string "Skill management unavailable"
 // @Router /skills/{agent} [post]
@@ -154,6 +156,20 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
 		return
 	}
+	if err := configmcp.ValidateSkillName(input.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// The file check catches a skill whose file exists but failed to load.
+	onDisk, err := configmcp.SkillFileExists(skillsDir, input.Name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("checking skill: %v", err)})
+		return
+	}
+	if _, loaded := e.GetSkill(input.Name); loaded || onDisk {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("skill %q already exists", input.Name)})
+		return
+	}
 
 	version := input.Version
 	if version == "" {
@@ -168,7 +184,11 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.skillWriter(agentName, e).Create(r.Context(), payload); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
+		status := http.StatusInternalServerError
+		if errors.Is(err, configmcp.ErrSkillExists) {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"error": fmt.Sprintf("creating skill: %v", err)})
 		return
 	}
 

@@ -440,6 +440,13 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 	if strings.TrimSpace(input.Body) == "" {
 		return toolError("body is required"), nil
 	}
+	exists, err := s.skillExists(input.Name)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+	if exists {
+		return toolError(fmt.Sprintf("skill %q already exists; use skill_update to change it", input.Name)), nil
+	}
 
 	version := input.Version
 	if version == "" {
@@ -461,6 +468,18 @@ func (s *Server) handleSkillCreate(ctx context.Context, req *mcp.CallToolRequest
 
 	return s.applyLintedSkill(ctx, nil, approval.ActionKindCreateSkill,
 		"Create new skill: "+input.Name, payload, applyFn)
+}
+
+// skillExists reports whether name is a loaded skill or already has a file on
+// disk. The disk check matters because GetSkill does not gate skill_create and
+// may be nil, and a file can exist that failed to load.
+func (s *Server) skillExists(name string) (bool, error) {
+	if s.deps.GetSkill != nil {
+		if _, ok := s.deps.GetSkill(name); ok {
+			return true, nil
+		}
+	}
+	return SkillFileExists(s.deps.AgentSkillsDir, name)
 }
 
 func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1891,6 +1910,45 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 	return string(data), true, nil
 }
 
+// SkillFileExists reports whether name has a skill file on disk in either form,
+// "<name>.md" or "<name>/SKILL.md", whether or not it loaded. Like ReadSkillFile,
+// an IO failure other than "not found" is an error, not "absent".
+func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+	if err := ValidateSkillName(name); err != nil {
+		return false, err
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("opening skills directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	for _, p := range []string{name + ".md", name + "/SKILL.md"} {
+		if _, err := root.Lstat(p); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("checking skill file %s: %w", p, err)
+		}
+	}
+	return false, nil
+}
+
+// RefuseExistingSkill returns an error wrapping ErrSkillExists if name already
+// has a skill file in either form.
+func RefuseExistingSkill(agentSkillsDir, name string) error {
+	exists, err := SkillFileExists(agentSkillsDir, name)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("skill %q %w", name, ErrSkillExists)
+	}
+	return nil
+}
+
 // SkillPayloadFromFile converts raw skill-file bytes back into the payload form
 // the Apply* helpers take, by removing the trailer writeSkillFileAtomic
 // appends. Without it, feeding a file's own bytes back through a write helper
@@ -1904,7 +1962,9 @@ func SkillPayloadFromFile(content string) string {
 }
 
 // ApplySkillCreate writes the skill file to disk and appends it to the
-// in-memory skill list.
+// in-memory skill list. It refuses a name that already has a file with
+// ErrSkillExists. Callers hold LockSkillCreate so that check stays true
+// through the write.
 func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logger skillLogger, payload string, maxBytes int) error {
 	if err := checkSkillPayloadSize(payload, maxBytes); err != nil {
 		return err
@@ -1913,7 +1973,7 @@ func ApplySkillCreate(agentSkillsDir string, appendSkill func(skill.Skill), logg
 	if err != nil {
 		return fmt.Errorf("parsing skill: %w", err)
 	}
-	if err := ValidateSkillName(s.Name); err != nil {
+	if err := RefuseExistingSkill(agentSkillsDir, s.Name); err != nil {
 		return err
 	}
 

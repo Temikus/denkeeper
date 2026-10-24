@@ -95,7 +95,8 @@ func New(store Store, agentName string, logger *slog.Logger) *Effector {
 // tracking reports whether mutations are journaled.
 func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 
-// Create writes a new skill and journals that it did not exist before.
+// Create writes a new skill and journals that it did not exist before. A name
+// that already has a file is refused with configmcp.ErrSkillExists.
 //
 // Tracked-write ordering, shared by all four mutators: read the current state,
 // append the revision, *then* perform the mutation. Journal-before-write means
@@ -105,7 +106,13 @@ func (e *Effector) tracking() bool { return e != nil && e.store != nil }
 // one failure mode this design exists to prevent. A failed append therefore
 // aborts the mutation: fail closed.
 func (e *Effector) Create(ctx context.Context, sa SkillAccess, tid, payload, actor string, maxBytes int) error {
+	defer configmcp.LockSkillCreate(sa.SkillsDir())()
 	if name, version, ok := e.parseTracked(payload); ok && validName(name) {
+		// Refuse before journaling: a create revision for a write that never
+		// happens would delete the existing skill on revert.
+		if err := configmcp.RefuseExistingSkill(sa.SkillsDir(), name); err != nil {
+			return err
+		}
 		// prior_payload stays NULL: the prior state of a create is "absent",
 		// which is what tells the reverter to delete rather than restore.
 		if err := e.journal(ctx, agent.SkillRevision{

@@ -196,7 +196,12 @@ func (s *Server) handleSkillCreate(ctx context.Context, _ *mcp.CallToolRequest, 
 		return toolError("skill management is not available for this agent"), nil, nil
 	}
 
-	if _, exists := e.GetSkill(input.Name); exists {
+	// The file check catches a skill whose file exists but failed to load.
+	onDisk, err := configmcp.SkillFileExists(skillsDir, input.Name)
+	if err != nil {
+		return toolError("checking skill: " + err.Error()), nil, nil
+	}
+	if _, exists := e.GetSkill(input.Name); exists || onDisk {
 		return toolError(fmt.Sprintf("skill %q already exists", input.Name)), nil, nil
 	}
 
