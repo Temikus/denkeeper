@@ -35,6 +35,27 @@ func TestScopeCanonicalList(t *testing.T) {
 	}
 }
 
+func TestGrants_ExactMatch(t *testing.T) {
+	if !scope.Grants([]string{"chat", "agents:read"}, "chat") {
+		t.Error("expected chat scope to match")
+	}
+}
+
+func TestGrants_AdminGrantsAll(t *testing.T) {
+	if !scope.Grants([]string{"admin"}, "agents:write") {
+		t.Error("admin should grant any scope")
+	}
+}
+
+func TestGrants_Missing(t *testing.T) {
+	if scope.Grants([]string{"agents:read"}, "agents:write") {
+		t.Error("agents:read must not grant agents:write")
+	}
+	if scope.Grants(nil, "chat") {
+		t.Error("nil scopes should not match")
+	}
+}
+
 // TestFrontendApiKeysScopesInSync verifies that web/src/pages/ApiKeys.svelte
 // contains every scope from the canonical list.
 func TestFrontendApiKeysScopesInSync(t *testing.T) {

@@ -1959,28 +1959,23 @@ func (s *Server) RequireScope(scope string, next http.HandlerFunc) http.HandlerF
 // Returns (keyName, scopeOK, identified). identified is true when valid
 // credentials were found (even if the scope doesn't match), allowing callers
 // to distinguish 401 (no credentials) from 403 (insufficient scope).
-func (s *Server) authenticate(ctx context.Context, r *http.Request, scope string) (string, bool, bool) {
+func (s *Server) authenticate(ctx context.Context, r *http.Request, required string) (string, bool, bool) {
 	// 1. Try Bearer token authentication first.
-	if name, scopeOK, identified := s.authenticateBearer(ctx, r, scope); identified {
+	if name, scopeOK, identified := s.authenticateBearer(ctx, r, required); identified {
 		return name, scopeOK, true
 	}
 
 	// 2. Fall back to session cookie authentication.
 	if s.sessions != nil {
 		if sess, err := s.sessions.Read(r); err == nil {
-			for _, sc := range sess.Scopes {
-				if sc == scope {
-					return sess.Email, true, true
-				}
-			}
-			return sess.Email, false, true // session valid but scope missing
+			return sess.Email, scope.Grants(sess.Scopes, required), true
 		}
 	}
 
 	return "", false, false
 }
 
-func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope string) (string, bool, bool) {
+func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, required string) (string, bool, bool) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		return "", false, false
@@ -1997,11 +1992,9 @@ func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope 
 		if sk != nil {
 			var scopes []string
 			_ = json.Unmarshal([]byte(sk.ScopesJSON), &scopes)
-			for _, sc := range scopes {
-				if sc == scope {
-					go s.deps.KeyStore.TouchLastUsed(context.WithoutCancel(ctx), sk.ID)
-					return sk.Name, true, true
-				}
+			if scope.Grants(scopes, required) {
+				go s.deps.KeyStore.TouchLastUsed(context.WithoutCancel(ctx), sk.ID)
+				return sk.Name, true, true
 			}
 			return sk.Name, false, true // key valid but scope missing
 		}
@@ -2010,12 +2003,7 @@ func (s *Server) authenticateBearer(ctx context.Context, r *http.Request, scope 
 	// Fall back to TOML-configured keys (backward-compatible).
 	for _, k := range s.cfg.Keys {
 		if subtle.ConstantTimeCompare([]byte(token), []byte(k.Key)) == 1 {
-			for _, s := range k.Scopes {
-				if s == scope {
-					return k.Name, true, true
-				}
-			}
-			return k.Name, false, true // key valid but scope missing
+			return k.Name, scope.Grants(k.Scopes, required), true
 		}
 	}
 	return "", false, false // no matching key found

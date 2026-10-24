@@ -135,7 +135,7 @@ func TestDeciderReviews_NoAuditStoreIs503(t *testing.T) {
 // The reviews carry tool arguments from the audit log, so agents:read alone
 // is not enough.
 func TestDeciderReviews_NeedsAuditScope(t *testing.T) {
-	key := config.APIKeyConfig{Name: "test", Key: "dk-test-key", Scopes: []string{"agents:read", "admin"}}
+	key := config.APIKeyConfig{Name: "test", Key: "dk-test-key", Scopes: []string{"agents:read"}}
 	srv := New(testConfig(key), deciderReviewDeps(t, time.Now()), testLogger())
 	if rec, _ := getDeciderReviews(t, srv, "?decider=jev"); rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
