@@ -177,7 +177,7 @@ func TestPanic_RequiresAdminScope(t *testing.T) {
 
 func TestStopSession_RequiresChatScope(t *testing.T) {
 	h := NewHarness(t, &HarnessOpts{
-		Scopes: []string{"admin"}, // no chat scope
+		Scopes: []string{"sessions:write"}, // no chat scope
 	})
 
 	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/sessions/s1/stop", nil))
