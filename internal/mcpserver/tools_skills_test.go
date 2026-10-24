@@ -98,6 +98,30 @@ func TestSkillCreate_PersistsToDisk(t *testing.T) {
 	}
 }
 
+// A file that exists on disk but is not loaded still owns its name.
+func TestSkillCreate_ExistingFileNotLoaded_Refused(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := skillServer(t, dir)
+	path := filepath.Join(dir, "orphan.md")
+	if err := os.WriteFile(path, []byte("not a loadable skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := s.handleSkillCreate(writeScope(t), nil, skillCreateInput{
+		Agent: "test-agent", Name: "orphan", Body: "new",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	if !res.IsError {
+		t.Fatal("expected an error for an existing file")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "not a loadable skill" {
+		t.Errorf("file was overwritten: %q", got)
+	}
+}
+
 func TestSkillUpdate_PersistsToDisk(t *testing.T) {
 	dir := t.TempDir()
 	s, e := skillServer(t, dir)

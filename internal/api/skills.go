@@ -155,8 +155,12 @@ func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body is required"})
 		return
 	}
+	if err := configmcp.ValidateSkillName(input.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	// The file check catches a skill whose file exists but failed to load.
-	_, onDisk, err := configmcp.ReadSkillFile(skillsDir, input.Name)
+	onDisk, err := configmcp.SkillFileExists(skillsDir, input.Name)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("checking skill: %v", err)})
 		return

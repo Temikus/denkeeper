@@ -298,6 +298,31 @@ func TestSkillCreate_ExistingFileWithoutGetSkill_Refused(t *testing.T) {
 	}
 }
 
+// A subdirectory-form skill owns its name too, or a create would write a flat
+// file beside it and both would load.
+func TestSkillCreate_ExistingSubdirSkill_Refused(t *testing.T) {
+	session, deps := newTestServer(t, nil)
+	subdir := filepath.Join(deps.AgentSkillsDir, "test-skill")
+	if err := os.MkdirAll(subdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "SKILL.md"), []byte("not a loadable skill"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	text, isErr := callTool(t, session, "skill_create", map[string]any{
+		"name": "test-skill",
+		"body": "new body",
+	})
+
+	if !isErr {
+		t.Fatalf("expected an error for an existing subdirectory skill, got: %s", text)
+	}
+	if _, err := os.Stat(filepath.Join(deps.AgentSkillsDir, "test-skill.md")); !os.IsNotExist(err) {
+		t.Errorf("flat file was written beside the subdirectory skill (stat err: %v)", err)
+	}
+}
+
 func TestSkillCreate_MissingName(t *testing.T) {
 	session, _ := newTestServer(t, nil)
 	text, isErr := callTool(t, session, "skill_create", map[string]any{

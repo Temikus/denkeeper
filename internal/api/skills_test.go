@@ -236,6 +236,21 @@ func TestCreateSkill_ExistingFileNotLoaded_Conflict(t *testing.T) {
 	}
 }
 
+func TestCreateSkill_InvalidName_BadRequest(t *testing.T) {
+	deps := testDepsWithSkillsDir(t)
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/skills/default", strings.NewReader(`{"name":"a/b","body":"x"}`))
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 func TestCreateSkill_NoSkillsDir(t *testing.T) {
 	deps := testDeps() // no SetSkillDirs — SkillsDir() returns ""
 	srv := New(testConfig(allScopesKey()), deps, testLogger())

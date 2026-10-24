@@ -472,8 +472,7 @@ func (s *Server) skillExists(name string) (bool, error) {
 			return true, nil
 		}
 	}
-	_, ok, err := ReadSkillFile(s.deps.AgentSkillsDir, name)
-	return ok, err
+	return SkillFileExists(s.deps.AgentSkillsDir, name)
 }
 
 func (s *Server) handleSkillList(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1882,6 +1881,32 @@ func ReadSkillFile(agentSkillsDir, name string) (string, bool, error) {
 		return "", false, fmt.Errorf("reading skill file: %w", err)
 	}
 	return string(data), true, nil
+}
+
+// SkillFileExists reports whether name has a skill file on disk in either form,
+// "<name>.md" or "<name>/SKILL.md", whether or not it loaded. Like ReadSkillFile,
+// an IO failure other than "not found" is an error, not "absent".
+func SkillFileExists(agentSkillsDir, name string) (bool, error) {
+	if err := ValidateSkillName(name); err != nil {
+		return false, err
+	}
+	root, err := os.OpenRoot(agentSkillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("opening skills directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	for _, p := range []string{name + ".md", name + "/SKILL.md"} {
+		if _, err := root.Lstat(p); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, fmt.Errorf("checking skill file %s: %w", p, err)
+		}
+	}
+	return false, nil
 }
 
 // SkillPayloadFromFile converts raw skill-file bytes back into the payload form
