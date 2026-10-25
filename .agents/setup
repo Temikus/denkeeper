@@ -62,10 +62,41 @@ warm_go_cache() {
   go build ./...
 }
 
+# Paper Desktop (paper.design) for the orb Desktop. Skipped once installed;
+# the app keeps itself updated.
+install_paper() {
+  if ! dpkg -s paper >/dev/null 2>&1; then
+    local deb
+    deb="$(mktemp -d)/paper.deb"
+    curl -fsSL -o "$deb" https://download.paper.design/linux/deb/x64
+    sudo apt-get install -y "$deb"
+    rm -rf "$(dirname "$deb")"
+  fi
+
+  # Debian 12's xdg-open (xdg-utils 1.1.3) splits Exec= on spaces and ignores
+  # quotes, so the packaged `/bin/sh -c '…' _ %U` entry fails with
+  # "Unterminated quoted string" and the paper:// sign-in callback never reaches
+  # the app. Shadow it with a user entry that runs an unquoted launcher.
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+  cat >"$HOME/.local/bin/paper-desktop" <<'EOF'
+#!/usr/bin/env bash
+if unshare -Ur true 2>/dev/null; then
+  exec /opt/Paper/paper-desktop "$@"
+fi
+exec /opt/Paper/paper-desktop --no-sandbox "$@"
+EOF
+  chmod +x "$HOME/.local/bin/paper-desktop"
+  sed "s|^Exec=.*|Exec=$HOME/.local/bin/paper-desktop %U|" \
+    /usr/share/applications/paper-desktop.desktop \
+    >"$HOME/.local/share/applications/paper-desktop.desktop"
+  xdg-mime default paper-desktop.desktop x-scheme-handler/paper
+}
+
 step "install mise" install_mise
 step "install pinned tools" install_tools
 step "persist PATH" persist_path
 step "go mod download" go_deps
 step "web UI deps + build" web_ui
 step "warm Go build cache" warm_go_cache
+step "Paper Desktop" install_paper
 echo "setup complete"
