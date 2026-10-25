@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Temikus/denkeeper/internal/scope"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,24 +34,15 @@ func keyNameFromCtx(ctx context.Context) string {
 	return v
 }
 
-func hasScope(scopes []string, scope string) bool {
-	for _, s := range scopes {
-		if s == scope || s == "admin" {
-			return true
-		}
-	}
-	return false
-}
-
 // requireScope checks that the request context carries the given scope.
 // Returns nil if the scope is present, or an MCP error result if missing.
-func requireScope(ctx context.Context, scope string) *mcp.CallToolResult {
-	if hasScope(scopesFromCtx(ctx), scope) {
+func requireScope(ctx context.Context, required string) *mcp.CallToolResult {
+	if scope.Grants(scopesFromCtx(ctx), required) {
 		return nil
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{
-			Text: fmt.Sprintf("insufficient scope: requires %q", scope),
+			Text: fmt.Sprintf("insufficient scope: requires %q", required),
 		}},
 		IsError: true,
 	}

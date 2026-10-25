@@ -48,6 +48,17 @@ func Names() []string {
 	return out
 }
 
+// Grants reports whether granted satisfies required. "admin" implies every
+// other scope. REST and MCP authorization both go through this check.
+func Grants(granted []string, required string) bool {
+	for _, s := range granted {
+		if s == required || s == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
 // IsValid reports whether s is a recognised scope.
 func IsValid(s string) bool {
 	_, ok := Valid[s]
