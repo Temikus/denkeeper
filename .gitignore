@@ -57,6 +57,7 @@ Thumbs.db
 !.claude/skills/
 !.claude/rules/
 .mcp.json
+.amp/portals/*
 
 # Git worktrees
 .worktrees/

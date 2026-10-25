@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Amp orb setup: installs the pinned toolchain (.mise.toml), Go modules, and
+# web UI dependencies so fresh orbs can `just build` / `just test` immediately.
+# Must stay idempotent and fast on a warm (stale-snapshot) filesystem.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+repo_root="$PWD"
+
+step() {
+  local name="$1"
+  shift
+  local start=$SECONDS
+  echo "==> $name"
+  "$@"
+  echo "<== $name ($((SECONDS - start))s)"
+}
+
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+export MISE_YES=1
+
+install_mise() {
+  if command -v mise >/dev/null 2>&1; then
+    mise --version
+    return
+  fi
+  curl -fsSL https://mise.run | sh
+}
+
+install_tools() {
+  mise trust "$repo_root/.mise.toml"
+  mise install
+  mise reshim
+}
+
+# Non-interactive login shells (Amp, supervised services) need mise's shims.
+persist_path() {
+  local marker="# denkeeper: mise toolchain"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<'EOF'
+
+# denkeeper: mise toolchain
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+EOF
+  fi
+}
+
+go_deps() {
+  go mod download
+}
+
+# Fingerprinted by Task: npm ci only when package(-lock).json changed, and the
+# UI build (required by //go:embed) only when web sources changed.
+web_ui() {
+  task ui:build
+}
+
+# Warm the Go build cache. The -race test build is deliberately skipped: it
+# costs ~5 minutes cold (k8s client-go) and would push setup past Amp's
+# 5-minute connection warning; the first `just test` pays it instead.
+warm_go_cache() {
+  go build ./...
+}
+
+step "install mise" install_mise
+step "install pinned tools" install_tools
+step "persist PATH" persist_path
+step "go mod download" go_deps
+step "web UI deps + build" web_ui
+step "warm Go build cache" warm_go_cache
+echo "setup complete"
