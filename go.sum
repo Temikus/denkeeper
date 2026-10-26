@@ -39,6 +39,8 @@ github.com/dop251/goja v0.0.0-20261011204819-0c9fae1b959d h1:ONwCIvg9kcijZYa0B9S
 github.com/dop251/goja v0.0.0-20261011204819-0c9fae1b959d/go.mod h1:Cp9NYOLrEKg/ypIRkUWYXWLuKAyyFGkDmGeJ95Sw0zI=
 github.com/dop251/goja v0.0.0-20261018113103-d42f16bb6161 h1:D9Bbwh0iJ8T/hHCDebeQzADTqaRRlEjLM/vt0Fjsgvw=
 github.com/dop251/goja v0.0.0-20261018113103-d42f16bb6161/go.mod h1:Cp9NYOLrEKg/ypIRkUWYXWLuKAyyFGkDmGeJ95Sw0zI=
+github.com/dop251/goja v0.0.0-20261026132650-6b6a90e51946 h1:XiP6PJnb0OB3kzs3Wv7ynJFI8yG+zo+JgOa2G5rq6f8=
+github.com/dop251/goja v0.0.0-20261026132650-6b6a90e51946/go.mod h1:Cp9NYOLrEKg/ypIRkUWYXWLuKAyyFGkDmGeJ95Sw0zI=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/emicklei/go-restful/v3 v3.13.0 h1:C4Bl2xDndpU6nJ4bc1jXd+uTmYPVUwkD6bFY/oTyCes=
