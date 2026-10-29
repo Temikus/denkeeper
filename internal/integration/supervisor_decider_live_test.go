@@ -76,7 +76,7 @@ func runEnforceLive(t *testing.T, message, args, want string) {
 		t.Errorf("mode = %v, want enforce", detail["mode"])
 	}
 	answers, _ := detail["answers"].(map[string]any)
-	for _, q := range []string{"aligned", "scoped", "injection", "secrets", "sends_external", "private_data"} {
+	for _, q := range []string{"off_task", "overreach", "injection", "secrets", "sends_external", "private_data"} {
 		if _, ok := answers[q]; !ok {
 			t.Errorf("no answer for %q in %v", q, answers)
 		}

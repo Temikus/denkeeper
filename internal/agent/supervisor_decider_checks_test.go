@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Temikus/denkeeper/internal/agentctx"
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/scriptmcp"
@@ -114,7 +115,7 @@ func TestGatherSupervisorInput_DefaultCapKeepsRunJavascriptDescription(t *testin
 // calibration chart only shows scores from the split checks.
 func TestPairShadowReviews_SkipsPreSplitReviews(t *testing.T) {
 	old := shadowEvent(t, 0, "c1", "echo", `{}`, map[string]float64{
-		deciderQAligned: 0.99, deciderQLegacySafeArgs: 0.4, deciderQScoped: 0.97,
+		deciderQLegacyAligned: 0.99, deciderQLegacySafeArgs: 0.4, "scoped": 0.97,
 	})
 	current := shadowEvent(t, 2*time.Second, "c1", "echo", `{}`, allScores(0.9))
 	old.ID, current.ID = 1, 2
@@ -148,5 +149,52 @@ func TestPairShadowReviews_MinDenyScoreLeavesOutLeak(t *testing.T) {
 	r := reviews[0]
 	if r.Lowest != deciderCheckNoLeak || *r.MinScore != 0.19 || r.MinDenyScore == nil || *r.MinDenyScore != 0.97 {
 		t.Errorf("lowest %q min %v deny min %v, want no_leak 0.19 and deny min 0.97", r.Lowest, *r.MinScore, r.MinDenyScore)
+	}
+}
+
+// off_task and overreach ask whether the hazard is present, so their checks
+// read the answer inverted.
+func TestDeciderChecks_TaskQuestionsReadInverted(t *testing.T) {
+	a := allAnswers(0.99)
+	a[deciderQOffTask] = llm.Answer{Noul: 0.12}
+	a[deciderQOverreach] = llm.Answer{Noul: 0.7}
+	scores, _, _ := deciderChecks(a)
+	if scores[deciderCheckAligned] != 0.88 || scores[deciderCheckScoped] != 0.3 {
+		t.Errorf("aligned/scoped = %v/%v, want 0.88/0.3", scores[deciderCheckAligned], scores[deciderCheckScoped])
+	}
+}
+
+// Reviews from the yes-is-safe alignment question scored benign calls around
+// 0.65, so mixing them in would drag calibration down.
+func TestPairShadowReviews_SkipsYesIsSafeReviews(t *testing.T) {
+	old := shadowEvent(t, 0, "c1", "echo", `{}`, map[string]float64{
+		deciderQLegacyAligned: 0.65, "scoped": 0.7, deciderQInjection: 0.2,
+		deciderQSecrets: 0.03, deciderQSendsExternal: 0.05, deciderQPrivateData: 0.05,
+	})
+	reviews, failed := PairShadowReviews([]audit.Event{
+		old,
+		supervisorEvent(t, time.Second, "c1", "echo", `{}`, "APPROVE", nil),
+	}, "jev")
+	if len(reviews) != 0 || failed != 0 {
+		t.Errorf("got %d reviews, %d failed; want 0, 0", len(reviews), failed)
+	}
+}
+
+// The decider must see the code a skill prescribes, which sits far past the
+// supervisor's 500-char excerpt.
+func TestGatherSupervisorInput_DeciderSeesMoreSkillBody(t *testing.T) {
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, nil, nil)
+	defer h.teardown()
+
+	body := strings.Repeat("a", 2000) + "PRESCRIBED_CODE"
+	ctx := agentctx.WithSkillContext(context.Background(), &agentctx.SkillSummary{Name: "digest", Body: body, IsScheduled: true})
+	tc := llm.ToolCall{ID: "1", Type: "function", Function: llm.FunctionCall{Name: "run_javascript", Arguments: `{"code":"return 1"}`}}
+	in := h.engine.gatherSupervisorInput(ctx, tc, "c1")
+
+	if got := in.deciderState().Skill.Instructions; got != body {
+		t.Errorf("decider instructions are %d chars, want the whole %d-char body", len(got), len(body))
+	}
+	if strings.Contains(in.markdown(), "PRESCRIBED_CODE") {
+		t.Error("supervisor prompt grew past its own excerpt cap")
 	}
 }

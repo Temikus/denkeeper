@@ -40,7 +40,7 @@ func SupervisorDeciderVerdict(answers map[string]llm.Answer, approveAt, denyAt f
 // the given score, so a fake decider can put every check at one value.
 func DeciderAnswerForScore(questionID string, score float64) float64 {
 	switch questionID {
-	case deciderQInjection, deciderQSecrets, deciderQSendsExternal:
+	case deciderQOffTask, deciderQOverreach, deciderQInjection, deciderQSecrets, deciderQSendsExternal:
 		return 1 - score
 	case deciderQPrivateData:
 		return 1 // no_leak = 1 - sends_external, which is 1 - (1 - score)

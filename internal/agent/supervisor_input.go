@@ -12,7 +12,8 @@ import (
 
 // supervisorReviewInput is everything a tool-call review is judged on. It is
 // gathered once per call and rendered twice — markdown for the LLM supervisor,
-// JSON state for the decider — so the two views cannot drift.
+// JSON state for the decider — so the two views cannot drift. They differ in
+// one field on purpose: the decider sees far more of the skill body.
 type supervisorReviewInput struct {
 	agent           string
 	tool            string
@@ -20,7 +21,8 @@ type supervisorReviewInput struct {
 	toolGuidance    string // verbatim; load caps it at config.MaxToolGuidanceBytes
 	arguments       string
 	skill           *agentctx.SkillSummary
-	bodyExcerptLen  int
+	bodyExcerptLen  int // supervisor's skill body cap
+	deciderBodyLen  int // decider's skill body cap
 	hasUserRequest  bool
 	userRequest     string // last user message in recent, truncated
 	recent          []StoredMessage
@@ -29,6 +31,11 @@ type supervisorReviewInput struct {
 const (
 	supervisorUserRequestLen = 500
 	supervisorRecentMsgLen   = 200
+	// deciderSkillBodyLen lets the decider see the exact code and arguments a
+	// skill prescribes, usually well past the supervisor's 500-char excerpt.
+	// It stays under the ~32 KB of text where Jev drops to a slower, less
+	// accurate long-context mode, leaving room for the arguments.
+	deciderSkillBodyLen = 12000
 )
 
 func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, convID string) *supervisorReviewInput {
@@ -39,6 +46,7 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 		skill:          agentctx.SkillContext(ctx),
 		bodyExcerptLen: e.SupervisorBodyExcerptLen(),
 	}
+	in.deciderBodyLen = max(in.bodyExcerptLen, deciderSkillBodyLen)
 	if e.tools != nil {
 		if desc := e.tools.ToolDescription(in.tool); desc != "" {
 			in.toolDescription = truncateForSupervisor(desc, e.SupervisorToolDescLen())
@@ -153,8 +161,8 @@ func (in *supervisorReviewInput) deciderState() deciderState {
 			Scheduled:   sk.IsScheduled,
 			Schedule:    sk.ScheduleName,
 		}
-		if in.bodyExcerptLen > 0 {
-			s.Skill.Instructions = truncateForSupervisor(sk.Body, in.bodyExcerptLen)
+		if in.deciderBodyLen > 0 {
+			s.Skill.Instructions = truncateForSupervisor(sk.Body, in.deciderBodyLen)
 		}
 	}
 	for _, m := range in.recent {
