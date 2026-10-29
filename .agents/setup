@@ -62,34 +62,72 @@ warm_go_cache() {
   go build ./...
 }
 
-# Paper Desktop (paper.design) for the orb Desktop. Skipped once installed;
-# the app keeps itself updated.
+# Paper Desktop (paper.design) for the orb Desktop. Unpacked into $HOME, not
+# apt-installed: only /home/user survives into the orb, and the root overlay
+# is rebuilt after setup. Its linked libs ship with the desktop base image.
+# Delete ~/.local/opt/Paper to force a reinstall of the latest release.
 install_paper() {
-  if ! dpkg -s paper >/dev/null 2>&1; then
-    local deb
-    deb="$(mktemp -d)/paper.deb"
-    curl -fsSL -o "$deb" https://download.paper.design/linux/deb/x64
-    sudo apt-get install -y "$deb"
-    rm -rf "$(dirname "$deb")"
+  local app="$HOME/.local/opt/Paper"
+  if [[ ! -x "$app/paper-desktop" ]]; then
+    # Stage on the same filesystem so the final mv is an atomic rename; a
+    # cross-fs copy killed midway would leave a partial app the guard accepts.
+    mkdir -p "$HOME/.local/opt" "$HOME/.local/share/applications" "$HOME/.local/share/icons"
+    local tmp
+    tmp="$(mktemp -d "$HOME/.local/opt/.paper.XXXXXX")"
+    curl -fsSL -o "$tmp/paper.deb" https://download.paper.design/linux/deb/x64
+    dpkg-deb -x "$tmp/paper.deb" "$tmp/root"
+    rm -rf "$app"
+    mv "$tmp/root/opt/Paper" "$app"
+    cp -r "$tmp/root/usr/share/icons/hicolor" "$HOME/.local/share/icons/"
+    # Debian 12's xdg-open (xdg-utils 1.1.3) splits Exec= on spaces and ignores
+    # quotes, so the packaged `/bin/sh -c '…' _ %U` entry breaks the paper://
+    # sign-in callback. Point the entry at the unquoted launcher below.
+    sed "s|^Exec=.*|Exec=$HOME/.local/bin/paper-desktop %U|" \
+      "$tmp/root/usr/share/applications/paper-desktop.desktop" \
+      >"$HOME/.local/share/applications/paper-desktop.desktop"
+    rm -rf "$tmp"
   fi
 
-  # Debian 12's xdg-open (xdg-utils 1.1.3) splits Exec= on spaces and ignores
-  # quotes, so the packaged `/bin/sh -c '…' _ %U` entry fails with
-  # "Unterminated quoted string" and the paper:// sign-in callback never reaches
-  # the app. Shadow it with a user entry that runs an unquoted launcher.
-  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
-  cat >"$HOME/.local/bin/paper-desktop" <<'EOF'
+  # Native Wayland window; the orb has no GPU.
+  mkdir -p "$HOME/.local/bin"
+  cat >"$HOME/.local/bin/paper-desktop" <<EOF
 #!/usr/bin/env bash
-if unshare -Ur true 2>/dev/null; then
-  exec /opt/Paper/paper-desktop "$@"
-fi
-exec /opt/Paper/paper-desktop --no-sandbox "$@"
+flags=(--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations --disable-gpu)
+unshare -Ur true 2>/dev/null || flags+=(--no-sandbox)
+exec "$app/paper-desktop" "\${flags[@]}" "\$@"
 EOF
   chmod +x "$HOME/.local/bin/paper-desktop"
-  sed "s|^Exec=.*|Exec=$HOME/.local/bin/paper-desktop %U|" \
-    /usr/share/applications/paper-desktop.desktop \
-    >"$HOME/.local/share/applications/paper-desktop.desktop"
-  xdg-mime default paper-desktop.desktop x-scheme-handler/paper
+
+  # xdg-utils may be absent while setup runs, so write the handler directly.
+  local mime="$HOME/.config/mimeapps.list"
+  if ! grep -Fqx 'x-scheme-handler/paper=paper-desktop.desktop' "$mime" 2>/dev/null; then
+    mkdir -p "$HOME/.config"
+    [[ -s "$mime" && -n "$(tail -c1 "$mime")" ]] && echo >>"$mime"
+    grep -Fqx '[Default Applications]' "$mime" 2>/dev/null || echo '[Default Applications]' >>"$mime"
+    sed -i '/^\[Default Applications\]$/a x-scheme-handler/paper=paper-desktop.desktop' "$mime"
+  fi
+}
+
+# Paper MCP for Amp: the stdio relay (`paper mcp`) talks to the open Desktop
+# file. Desktop installs the CLI to ~/.paper/bin on first launch; copy it now so
+# the server works before then.
+install_paper_mcp() {
+  local cli="$HOME/.paper/bin/paper"
+  if [[ ! -x "$cli" ]]; then
+    mkdir -p "$(dirname "$cli")"
+    cp "$HOME/.local/opt/Paper/resources/app.asar.unpacked/dist/cli-bin/linux-x64/paper" "$cli"
+  fi
+
+  local settings="$HOME/.config/amp/settings.json"
+  mkdir -p "$(dirname "$settings")"
+  [[ -s "$settings" ]] || echo '{}' >"$settings"
+  if ! jq --arg cli "$cli" '."amp.mcpServers".paper = {command: $cli, args: ["mcp"]}' \
+    "$settings" >"$settings.tmp"; then
+    rm -f "$settings.tmp"
+    echo "warning: $settings is not plain JSON; add the paper MCP server by hand" >&2
+    return 0
+  fi
+  mv "$settings.tmp" "$settings"
 }
 
 step "install mise" install_mise
@@ -99,4 +137,5 @@ step "go mod download" go_deps
 step "web UI deps + build" web_ui
 step "warm Go build cache" warm_go_cache
 step "Paper Desktop" install_paper
+step "Paper MCP" install_paper_mcp
 echo "setup complete"
