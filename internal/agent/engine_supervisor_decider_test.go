@@ -317,6 +317,36 @@ func TestSupervisorDecider_TooLargeFallsThroughWithoutCalling(t *testing.T) {
 	assertDeciderFailureFallsThrough(t, &fakeDecisionProvider{p: 0.99}, cfg, 0, "too_large", 0)
 }
 
+func TestSupervisorDecider_PaddedArgumentsFallThroughWithoutCalling(t *testing.T) {
+	padded := []*llm.ChatResponse{
+		{
+			ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"` + strings.Repeat("a", 35000) + `"}`}}},
+			TokensUsed:   llm.TokenUsage{Total: 10},
+			FinishReason: "tool_calls",
+		},
+		{Content: "done", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+	}
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, padded, supervisorSays("DENY: no"))
+	defer h.teardown()
+	h.engine.SetSupervisorMaxArgsBytes(64000)
+	prov := &fakeDecisionProvider{p: 0.99}
+	// Under the configured 30000 tokens, over Jev's default-mode budget.
+	wireDecider(h, prov, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+
+	if statuses := approvalStatuses(events); len(statuses) != 1 || statuses[0] != "supervisor_denied" {
+		t.Errorf("statuses = %v, want the supervisor's denial", statuses)
+	}
+	if _, detail := deciderAudit(t, h); detail["cause"] != "too_large" {
+		t.Errorf("cause = %v, want too_large", detail["cause"])
+	}
+	if prov.calls != 0 {
+		t.Errorf("provider calls = %d, want 0", prov.calls)
+	}
+}
+
 func TestSupervisorDecider_CostLimitFallsThroughWithoutCalling(t *testing.T) {
 	assertDeciderFailureFallsThrough(t, &fakeDecisionProvider{p: 0.99}, llm.DeciderConfig{}, 5.0, "cost_limit", 0)
 }

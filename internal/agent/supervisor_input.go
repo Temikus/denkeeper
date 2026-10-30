@@ -33,8 +33,8 @@ const (
 	supervisorRecentMsgLen   = 200
 	// deciderSkillBodyLen lets the decider see the exact code and arguments a
 	// skill prescribes, usually well past the supervisor's 500-char excerpt.
-	// It stays under the ~32 KB of text where Jev drops to a slower, less
-	// accurate long-context mode, leaving room for the arguments.
+	// It leaves room for the arguments under the decider's default-mode
+	// budget (llm.Decider.WithinDefaultMode).
 	deciderSkillBodyLen = 12000
 )
 
@@ -45,8 +45,8 @@ func (e *Engine) gatherSupervisorInput(ctx context.Context, tc llm.ToolCall, con
 		arguments:      tc.Function.Arguments,
 		skill:          agentctx.SkillContext(ctx),
 		bodyExcerptLen: e.SupervisorBodyExcerptLen(),
+		deciderBodyLen: deciderSkillBodyLen,
 	}
-	in.deciderBodyLen = max(in.bodyExcerptLen, deciderSkillBodyLen)
 	if e.tools != nil {
 		if desc := e.tools.ToolDescription(in.tool); desc != "" {
 			in.toolDescription = truncateForSupervisor(desc, e.SupervisorToolDescLen())

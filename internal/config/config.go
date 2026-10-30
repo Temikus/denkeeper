@@ -823,7 +823,7 @@ type AgentInstanceConfig struct {
 	SupervisorBodyExcerptLen int `toml:"supervisor_body_excerpt_len"`
 
 	// SupervisorToolDescLen overrides the max characters of the MCP tool
-	// description included in the supervisor review prompt (default 200;
+	// description included in the supervisor review prompt (default 1000;
 	// 0 = use default).
 	SupervisorToolDescLen int `toml:"supervisor_tool_desc_len"`
 
@@ -1137,8 +1137,9 @@ type DeciderConfig struct {
 	MaxInputTokens int    `toml:"max_input_tokens"` // default 30000; oversize inputs are refused, never truncated
 }
 
-// Default decider knobs. Jev's context is 32k tokens; 30k leaves headroom for
-// the token estimate being approximate.
+// Default decider knobs. Jev's context is 262,144 tokens, so 30k is a cost
+// bound, not the model's. Supervisor reviews get a lower per-model budget
+// (llm.Decider.WithinDefaultMode).
 const (
 	DefaultDeciderTimeout        = "5s"
 	DefaultDeciderMaxInputTokens = 30000

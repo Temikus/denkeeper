@@ -278,7 +278,9 @@ func deciderSessionKey(decider, agent, convID string) string {
 // shadow mode and on any failure: the caller must then ignore the verdict, so
 // a failed decider can never approve.
 func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, in *supervisorReviewInput, convID string) (decision supervisorDecision, reason string, ok bool) {
-	d := stage.decider
+	// Fail closed rather than review in the model's less accurate mode: an
+	// oversized call goes to the supervisor or a human as too_large.
+	d := stage.decider.WithinDefaultMode()
 	ctx, span := e.tracer.Start(ctx, "agent.supervisor_decider", trace.WithAttributes(
 		attribute.String("agent", e.name),
 		attribute.String("decider", d.Name()),
@@ -294,7 +296,8 @@ func (e *Engine) runSupervisorDecider(ctx context.Context, stage *deciderStage, 
 	}
 
 	start := time.Now()
-	resp, err := d.Decide(ctx, sessionID, in.deciderState(), supervisorDeciderQuestions(in.skill))
+	questions := supervisorDeciderQuestions(in.skill)
+	resp, err := d.Decide(ctx, sessionID, in.deciderState(), questions)
 	duration := time.Since(start)
 
 	detail := map[string]any{
