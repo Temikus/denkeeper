@@ -13,7 +13,8 @@ import (
 // supervisorReviewInput is everything a tool-call review is judged on. It is
 // gathered once per call and rendered twice — markdown for the LLM supervisor,
 // JSON state for the decider — so the two views cannot drift. They differ in
-// one field on purpose: the decider sees far more of the skill body.
+// one field on purpose: the skill body cap. The decider's is fixed, so a large
+// supervisor_body_excerpt_len cannot push every review over its size budget.
 type supervisorReviewInput struct {
 	agent           string
 	tool            string
