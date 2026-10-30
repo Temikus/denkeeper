@@ -14,13 +14,13 @@ import (
 	"github.com/Temikus/denkeeper/internal/llm"
 )
 
-// denyingDecider answers every question with a confident "false".
+// denyingDecider puts every check at 0.01.
 type denyingDecider struct{}
 
 func (denyingDecider) Decide(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
 	answers := make(map[string]llm.Answer, len(req.Questions))
 	for id := range req.Questions {
-		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: 0.01}
+		answers[id] = llm.Answer{Type: llm.QuestionNoul, Noul: agent.DeciderAnswerForScore(id, 0.01)}
 	}
 	return &llm.DecisionResponse{Model: req.Model, Answers: answers, CostUSD: 0.0001}, nil
 }

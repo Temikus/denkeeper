@@ -121,7 +121,7 @@ Once an agent is in `enforce`, its supervisor only reviews the calls the decider
 
 If the decider errors, times out, hits its cost limit, or the review is too large, the call goes on to the next stage as if no decider were configured. The failure is audited with a `cause`. An oversized review is refused, never truncated: a truncated view could hide the part that matters.
 
-A review is too large when it exceeds `max_input_tokens`, or, for Jev, about 32,000 bytes. Jev runs requests above that in a slower, [less accurate long-context mode](https://openrouter.ai/docs/guides/community/jev.md), and a verdict from that mode is not trusted to approve a call. Padding a call's arguments therefore hands it to the supervisor rather than weakening the decider.
+A review is too large when it exceeds `max_input_tokens`, or, for Jev, about 32,000 bytes. Jev runs requests above that in a slower, [less accurate long-context mode](https://openrouter.ai/docs/guides/community/jev.md), and a verdict from that mode is not trusted to approve a call. Padding a call's arguments therefore sends it on to the next stage rather than weakening the decider.
 
 ## Cost
 
