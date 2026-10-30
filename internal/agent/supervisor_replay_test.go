@@ -81,7 +81,7 @@ func TestReplaySupervisorDecider_ErrorCauseMatchesAudit(t *testing.T) {
 func TestSupervisorDeciderVerdict_ThresholdsAreInclusive(t *testing.T) {
 	answers := func(p float64) map[string]llm.Answer {
 		a := allAnswers(0.99)
-		a[deciderQScoped] = llm.Answer{Noul: p}
+		a[deciderQOverreach] = llm.Answer{Noul: DeciderAnswerForScore(deciderQOverreach, p)}
 		return a
 	}
 	if v, _ := SupervisorDeciderVerdict(answers(0.95), 0.95, 0.05); v != "APPROVE" {

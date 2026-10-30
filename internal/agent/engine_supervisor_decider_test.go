@@ -317,6 +317,36 @@ func TestSupervisorDecider_TooLargeFallsThroughWithoutCalling(t *testing.T) {
 	assertDeciderFailureFallsThrough(t, &fakeDecisionProvider{p: 0.99}, cfg, 0, "too_large", 0)
 }
 
+func TestSupervisorDecider_PaddedArgumentsFallThroughWithoutCalling(t *testing.T) {
+	padded := []*llm.ChatResponse{
+		{
+			ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"` + strings.Repeat("a", 35000) + `"}`}}},
+			TokensUsed:   llm.TokenUsage{Total: 10},
+			FinishReason: "tool_calls",
+		},
+		{Content: "done", TokensUsed: llm.TokenUsage{Total: 5}, FinishReason: "stop"},
+	}
+	h := newSupervisorCostHarness(t, llm.SessionLimits{}, padded, supervisorSays("DENY: no"))
+	defer h.teardown()
+	h.engine.SetSupervisorMaxArgsBytes(64000)
+	prov := &fakeDecisionProvider{p: 0.99}
+	// Under the configured 30000 tokens, over Jev's default-mode budget.
+	wireDecider(h, prov, llm.DeciderConfig{})
+	enforce(h)
+
+	events := h.chat(t, "default:test:c1", "c1")
+
+	if statuses := approvalStatuses(events); len(statuses) != 1 || statuses[0] != "supervisor_denied" {
+		t.Errorf("statuses = %v, want the supervisor's denial", statuses)
+	}
+	if _, detail := deciderAudit(t, h); detail["cause"] != "too_large" {
+		t.Errorf("cause = %v, want too_large", detail["cause"])
+	}
+	if prov.calls != 0 {
+		t.Errorf("provider calls = %d, want 0", prov.calls)
+	}
+}
+
 func TestSupervisorDecider_CostLimitFallsThroughWithoutCalling(t *testing.T) {
 	assertDeciderFailureFallsThrough(t, &fakeDecisionProvider{p: 0.99}, llm.DeciderConfig{}, 5.0, "cost_limit", 0)
 }
@@ -383,21 +413,22 @@ func TestDeciderState_ScheduledSkillAndExcerpts(t *testing.T) {
 			IsScheduled: true, ScheduleName: "morning",
 		},
 		bodyExcerptLen: 10,
+		deciderBodyLen: 20,
 		recent:         []StoredMessage{{Role: "user", Content: strings.Repeat("m", 300)}},
 	}
 	s := in.deciderState()
 	if s.Skill == nil || s.Skill.Name != "digest" || !s.Skill.Scheduled || s.Skill.Schedule != "morning" {
 		t.Fatalf("skill = %+v", s.Skill)
 	}
-	// Same truncation as the markdown prompt, so the two views match.
-	if s.Skill.Instructions != strings.Repeat("b", 10)+"..." {
+	// The decider's own cap, not the supervisor's.
+	if s.Skill.Instructions != strings.Repeat("b", 20)+"..." {
 		t.Errorf("instructions excerpt = %q", s.Skill.Instructions)
 	}
 	if got := s.RecentMessages[0].Content; got != strings.Repeat("m", supervisorRecentMsgLen)+"..." {
 		t.Errorf("recent message not truncated to %d: len %d", supervisorRecentMsgLen, len(got))
 	}
 
-	in.bodyExcerptLen = 0
+	in.deciderBodyLen = 0
 	if s := in.deciderState(); s.Skill.Instructions != "" {
 		t.Errorf("excerpt len 0 must omit instructions, got %q", s.Skill.Instructions)
 	}
@@ -429,7 +460,7 @@ func TestDecideSupervisorOutcome_ApproveAtBoundary(t *testing.T) {
 
 func TestDecideSupervisorOutcome_JustBelowApproveEscalates(t *testing.T) {
 	a := allAnswers(0.99)
-	a[deciderQScoped] = llm.Answer{Noul: 0.94}
+	a[deciderQOverreach] = llm.Answer{Noul: DeciderAnswerForScore(deciderQOverreach, 0.94)}
 	got, reason := decideSupervisorOutcome(a, 0.95, 0.05)
 	if got != supervisorEscalate || !strings.Contains(reason, "scoped") {
 		t.Errorf("= %s %q, want ESCALATE naming scoped", got, reason)
@@ -456,24 +487,29 @@ func TestDecideSupervisorOutcome_JustAboveDenyEscalates(t *testing.T) {
 
 func TestDecideSupervisorOutcome_MissingAnswerEscalates(t *testing.T) {
 	a := allAnswers(0.99)
-	delete(a, deciderQAligned)
+	delete(a, deciderQOffTask)
 	if got, _ := decideSupervisorOutcome(a, 0.95, 0.05); got != supervisorEscalate {
 		t.Errorf("= %s, want ESCALATE", got)
 	}
 }
 
 func TestSupervisorDeciderQuestions_ScheduledSkillUsesSkillPurpose(t *testing.T) {
-	qs := supervisorDeciderQuestions(&agentctx.SkillSummary{Name: "digest", IsScheduled: true})
+	qs := supervisorDeciderQuestions(&agentctx.SkillSummary{Name: "digest", Body: "steps", IsScheduled: true})
 	if err := llm.ValidateQuestions(qs); err != nil {
 		t.Fatalf("questions invalid: %v", err)
 	}
-	for _, id := range []string{deciderQAligned, deciderQScoped} {
-		if in := qs[id].Instructions; !strings.Contains(in, "`skill.description`") || strings.Contains(in, "`user_request`") {
-			t.Errorf("%s instructions = %q, want skill.description only", id, in)
+	for _, id := range []string{deciderQOffTask, deciderQOverreach} {
+		in := qs[id].Instructions
+		if !strings.Contains(in, "`skill.description`") || !strings.Contains(in, "`skill.instructions_excerpt`") || strings.Contains(in, "`user_request`") {
+			t.Errorf("%s instructions = %q, want the skill's description and instructions only", id, in)
 		}
 	}
-	if in := supervisorDeciderQuestions(nil)[deciderQAligned].Instructions; !strings.Contains(in, "`user_request`") {
-		t.Errorf("interactive aligned instructions = %q, want user_request", in)
+	// No body means no excerpt in the state, so the question must not name it.
+	if in := supervisorDeciderQuestions(&agentctx.SkillSummary{Name: "digest", IsScheduled: true})[deciderQOffTask].Instructions; strings.Contains(in, "instructions_excerpt") {
+		t.Errorf("bodyless skill off_task instructions = %q, want no excerpt reference", in)
+	}
+	if in := supervisorDeciderQuestions(nil)[deciderQOffTask].Instructions; !strings.Contains(in, "`user_request`") {
+		t.Errorf("interactive off_task instructions = %q, want user_request", in)
 	}
 }
 

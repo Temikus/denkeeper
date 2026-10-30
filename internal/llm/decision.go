@@ -147,9 +147,13 @@ func sortedQuestionIDs(qs map[string]Question) []string {
 	return ids
 }
 
+// estimateBytesPerToken is EstimateDecisionTokens' ratio: conservative for
+// punctuation-heavy JSON, so an estimate under the limit is unlikely to be
+// rejected upstream.
+const estimateBytesPerToken = 3
+
 // EstimateDecisionTokens estimates the input size of a decision call at one
-// token per 3 bytes of JSON: conservative for punctuation-heavy JSON, so an
-// estimate under the limit is unlikely to be rejected upstream.
+// token per estimateBytesPerToken bytes of JSON.
 func EstimateDecisionTokens(state any, qs map[string]Question) (int, error) {
 	b, err := json.Marshal(struct {
 		State     any                 `json:"state"`
@@ -158,7 +162,26 @@ func EstimateDecisionTokens(state any, qs map[string]Question) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshaling decision input: %w", err)
 	}
-	return (len(b) + 2) / 3, nil
+	return (len(b) + estimateBytesPerToken - 1) / estimateBytesPerToken, nil
+}
+
+// defaultModeBytes maps a model id prefix to the largest request, in bytes of
+// text, the model serves in its default mode. Above it Jev runs a slower, less
+// accurate long-context mode: https://openrouter.ai/docs/guides/community/jev.md
+// (FAQ). The models API reports only the hard context length, not this.
+var defaultModeBytes = map[string]int{
+	"typesafe/jev": 32000,
+}
+
+// defaultModeInputTokens is the estimated-token limit that keeps a request to
+// model in its default mode, or 0 when the model has no known threshold.
+func defaultModeInputTokens(model string) int {
+	for prefix, n := range defaultModeBytes {
+		if strings.HasPrefix(model, prefix) {
+			return n / estimateBytesPerToken
+		}
+	}
+	return 0
 }
 
 // DeciderConfig binds a named decider to a provider instance and model.
@@ -210,6 +233,9 @@ func (d *Decider) Provider() string { return d.cfg.Provider }
 // Model returns the decision model the decider calls.
 func (d *Decider) Model() string { return d.cfg.Model }
 
+// MaxInputTokens returns the pre-flight size limit (0 = none).
+func (d *Decider) MaxInputTokens() int { return d.cfg.MaxInputTokens }
+
 // CostTracker returns the tracker calls are billed to (may be nil).
 func (d *Decider) CostTracker() *CostTracker { return d.costs }
 
@@ -240,6 +266,20 @@ func (d *Decider) decisionProvider() (DecisionProvider, error) {
 func (d *Decider) WithTimeout(timeout time.Duration) *Decider {
 	clone := *d
 	clone.cfg.Timeout = timeout
+	return &clone
+}
+
+// WithinDefaultMode returns a clone whose size guard also refuses requests
+// that would push the model out of its default mode, or d itself when the
+// model has no known threshold or max_input_tokens is already lower. Callers
+// whose verdict must not come from the less accurate mode use it.
+func (d *Decider) WithinDefaultMode() *Decider {
+	n := defaultModeInputTokens(d.cfg.Model)
+	if n == 0 || (d.cfg.MaxInputTokens > 0 && d.cfg.MaxInputTokens <= n) {
+		return d
+	}
+	clone := *d
+	clone.cfg.MaxInputTokens = n
 	return &clone
 }
 

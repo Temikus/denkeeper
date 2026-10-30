@@ -163,12 +163,12 @@ func TestPairShadowReviews_SkipsEnforceErrorsAndOtherDeciders(t *testing.T) {
 // A missing answer escalates in decideSupervisorOutcome, so it has no score
 // that a threshold could settle.
 func TestPairShadowReviews_MissingAnswerHasNoMinScore(t *testing.T) {
-	events := []audit.Event{shadowEvent(t, 0, "c1", "echo", `{}`, map[string]float64{deciderQAligned: 0.99})}
+	events := []audit.Event{shadowEvent(t, 0, "c1", "echo", `{}`, map[string]float64{deciderQOffTask: 0.01})}
 	reviews, _ := PairShadowReviews(events, "jev")
 	if len(reviews) != 1 || reviews[0].MinScore != nil || reviews[0].Lowest != "" {
 		t.Fatalf("reviews = %+v, want one with no min score", reviews)
 	}
-	if reviews[0].Scores[deciderQAligned] != 0.99 {
+	if reviews[0].Scores[deciderCheckAligned] != 0.99 {
 		t.Errorf("scores = %v, want the answer that came back", reviews[0].Scores)
 	}
 }

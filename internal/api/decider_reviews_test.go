@@ -34,7 +34,7 @@ func deciderReviewDeps(t *testing.T, at time.Time) Deps {
 		Timestamp: at, Category: audit.CategorySupervisor, Action: "review", Agent: "default",
 		Status: audit.StatusOK, Source: "decider:jev", ConversationID: "c1",
 		Detail: `{"tool":"echo","arguments":"{}","decision":"shadow","model":"typesafe/jev-1.13","cost":0.0001,` +
-			`"answers":{"aligned":{"type":"noul","noul":0.99},"scoped":{"type":"noul","noul":0.98},"injection":{"type":"noul","noul":0.01},` +
+			`"answers":{"off_task":{"type":"noul","noul":0.01},"overreach":{"type":"noul","noul":0.02},"injection":{"type":"noul","noul":0.01},` +
 			`"secrets":{"type":"noul","noul":0.03},"sends_external":{"type":"noul","noul":0.02},"private_data":{"type":"noul","noul":0.5}}}`,
 	})
 	insert(audit.Event{

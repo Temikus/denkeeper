@@ -235,6 +235,43 @@ func TestDecider_WithTimeout_ClonesWithoutTouchingTheOriginal(t *testing.T) {
 	}
 }
 
+func TestDecider_WithinDefaultMode_RefusesJevLongContext(t *testing.T) {
+	prov := &stubDecisionProvider{resp: noulResponse(0.9, 0)}
+	d := NewDecider(DeciderConfig{Name: "jev", Model: "typesafe/jev-1.13", MaxInputTokens: 30000}, prov, nil)
+	within := d.WithinDefaultMode()
+
+	if _, err := within.Decide(context.Background(), "s", strings.Repeat("a", 20000), noulQuestions()); err != nil {
+		t.Fatalf("20 KB request: %v", err)
+	}
+	if _, err := within.Decide(context.Background(), "s", strings.Repeat("a", 40000), noulQuestions()); !errors.Is(err, ErrDecisionTooLarge) {
+		t.Fatalf("40 KB request err = %v, want ErrDecisionTooLarge", err)
+	}
+	// The original keeps max_input_tokens: the eval judge shares it.
+	if _, err := d.Decide(context.Background(), "s", strings.Repeat("a", 40000), noulQuestions()); err != nil {
+		t.Fatalf("original must not be capped: %v", err)
+	}
+	if prov.calls != 2 {
+		t.Errorf("provider calls = %d, want 2", prov.calls)
+	}
+}
+
+func TestDecider_WithinDefaultMode_UnknownModelUnchanged(t *testing.T) {
+	prov := &stubDecisionProvider{resp: noulResponse(0.9, 0)}
+	d := NewDecider(DeciderConfig{Name: "other", Model: "acme/judge", MaxInputTokens: 30000}, prov, nil)
+
+	if _, err := d.WithinDefaultMode().Decide(context.Background(), "s", strings.Repeat("a", 40000), noulQuestions()); err != nil {
+		t.Fatalf("unknown model got a default-mode cap: %v", err)
+	}
+}
+
+func TestDecider_WithinDefaultMode_KeepsLowerConfiguredLimit(t *testing.T) {
+	d := NewDecider(DeciderConfig{Name: "jev", Model: "typesafe/jev-1.13", MaxInputTokens: 50}, &stubDecisionProvider{resp: noulResponse(0.9, 0)}, nil)
+
+	if got := d.WithinDefaultMode().MaxInputTokens(); got != 50 {
+		t.Errorf("MaxInputTokens = %d, want the configured 50", got)
+	}
+}
+
 // Causes are classified with errors.Is and callers hand the provider error
 // back wrapped, so each mapping is checked through a wrap — an unwrapped-only
 // match would record nothing in production.
