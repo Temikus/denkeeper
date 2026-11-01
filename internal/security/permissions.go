@@ -64,6 +64,21 @@ func (p *PermissionEngine) Tier() string {
 	return p.tier
 }
 
+// tierRank orders tiers by how much they grant.
+var tierRank = map[string]int{"restricted": 0, "supervised": 1, "autonomous": 2}
+
+// TierExceeds reports whether tier grants more than ceiling. It fails closed:
+// an unrecognised tier or ceiling (e.g. deny-all) counts as exceeding, since
+// the engine ignores an invalid override and falls back to the agent's tier.
+func TierExceeds(tier, ceiling string) bool {
+	t, ok := tierRank[tier]
+	if !ok {
+		return true
+	}
+	c, ok := tierRank[ceiling]
+	return !ok || t > c
+}
+
 // ValidTier reports whether tier is a recognised permission tier name.
 func ValidTier(tier string) bool {
 	_, ok := tierAllowlists[tier]

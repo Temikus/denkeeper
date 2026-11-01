@@ -805,6 +805,7 @@ Create a new schedule. The schedule is registered in the scheduler and persisted
 - `channel`: format `adapter:externalID` (e.g. `telegram:123456`).
 - `session_mode`: `isolated` (default) or `shared`.
 - `enabled`: defaults to `true` if omitted.
+- `session_tier`: may not exceed the agent's own tier unless the key has `admin`, otherwise `403`. The same rule applies to `PATCH`. Agents writing schedules through MCP can never raise it.
 
 ### `PATCH /api/v1/schedules/{name}`
 

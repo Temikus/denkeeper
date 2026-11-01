@@ -22,6 +22,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/audit"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
 
@@ -931,6 +932,9 @@ func (s *Server) handleScheduleAdd(ctx context.Context, req *mcp.CallToolRequest
 	if errMsg != "" {
 		return toolError(errMsg), nil
 	}
+	if errMsg := ValidateScheduleTier(input.SessionTier, tier); errMsg != "" {
+		return toolError(errMsg), nil
+	}
 
 	if input.Skill != "" && s.deps.GetSkill != nil {
 		if _, ok := s.deps.GetSkill(input.Skill); !ok {
@@ -1114,6 +1118,20 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 	}, ""
 }
 
+// ValidateScheduleTier rejects a schedule tier above ceiling: a schedule must
+// not run with more permission than the agent it runs on or the agent writing
+// it. Only an operator (TOML or an admin API key) may set a higher tier.
+// Returns an error message, or "" when valid.
+func ValidateScheduleTier(tier, ceiling string) string {
+	if tier != "" && !security.ValidTier(tier) {
+		return fmt.Sprintf("invalid session_tier %q: must be autonomous, supervised, or restricted", tier)
+	}
+	if tier != "" && security.TierExceeds(tier, ceiling) {
+		return fmt.Sprintf("session_tier %q is above the agent's tier %q; only an operator can raise a schedule's tier", tier, ceiling)
+	}
+	return ""
+}
+
 // ValidateScheduleDelivery checks where a schedule's reply goes: a channel in
 // adapter:externalID or @name form, or, for a headless schedule, nowhere.
 // Returns an error message, or "" when valid.
@@ -1148,6 +1166,26 @@ func (s *Server) ownsSchedule(name string) (scheduler.Entry, bool) {
 		return scheduler.Entry{}, false
 	}
 	return e, true
+}
+
+// validateScheduleUpdateTier caps an updated schedule at this agent's tier,
+// so editing an operator-raised schedule is refused too. A schedule moved to
+// another agent must name its tier (an empty one runs at the target's) and is
+// also capped at the target's tier.
+func (s *Server) validateScheduleUpdateTier(cfg scheduler.Config) string {
+	if errMsg := ValidateScheduleTier(cfg.SessionTier, s.tier()); errMsg != "" {
+		return errMsg
+	}
+	if cfg.Agent == s.deps.AgentName {
+		return ""
+	}
+	if cfg.SessionTier == "" {
+		return "set session_tier when moving a schedule to another agent"
+	}
+	if s.deps.AgentTier == nil {
+		return "cross-agent schedule reassignment is not supported"
+	}
+	return ValidateScheduleTier(cfg.SessionTier, s.deps.AgentTier(cfg.Agent))
 }
 
 // resolveScheduleHandler returns the message handler for the given agent name.
@@ -1214,6 +1252,9 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, req *mcp.CallToolRequ
 	handleMsg, resolveErr := s.resolveScheduleHandler(cfg.Agent)
 	if resolveErr != "" {
 		return toolError(resolveErr), nil
+	}
+	if errMsg := s.validateScheduleUpdateTier(cfg); errMsg != "" {
+		return toolError(errMsg), nil
 	}
 
 	payload, err := BuildSchedulePayload(cfg.Name, cfg.Schedule, cfg.Skill,

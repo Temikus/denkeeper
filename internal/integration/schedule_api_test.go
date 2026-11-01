@@ -350,3 +350,47 @@ func TestScheduleAPI_BroadcastAuditOnPartialFailure(t *testing.T) {
 		t.Errorf("expected broadcast_partial_failure audit event, got %d schedule events", len(events))
 	}
 }
+
+func TestScheduleAPI_NonAdminCannotRaiseTier(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, nil, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{ConfigPath: cfgPath, WithKeyStore: true})
+	_, key := createTestKey(t, h, "sched-writer", []string{"schedules:write"})
+
+	rec := h.Do(h.BearerRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name": "escalate", "schedule": "@hourly", "channel": "telegram:1",
+		"session_tier": "autonomous",
+	}, key))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("create status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// At the agent's own tier the same key may create, but not raise it later.
+	rec = h.Do(h.BearerRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name": "plain", "schedule": "@hourly", "channel": "telegram:1",
+		"session_tier": "supervised",
+	}, key))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201; body: %s", rec.Code, rec.Body.String())
+	}
+	rec = h.Do(h.BearerRequest(http.MethodPatch, "/api/v1/schedules/plain", map[string]any{
+		"session_tier": "autonomous",
+	}, key))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("update status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestScheduleAPI_AdminCanRaiseTier(t *testing.T) {
+	h := scheduleHarness(t)
+
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/schedules", map[string]any{
+		"name": "operator-raised", "schedule": "@hourly", "channel": "telegram:1",
+		"session_tier": "autonomous",
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201; body: %s", rec.Code, rec.Body.String())
+	}
+}

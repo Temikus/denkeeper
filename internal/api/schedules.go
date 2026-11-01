@@ -10,6 +10,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/configmcp"
 	"github.com/Temikus/denkeeper/internal/scheduler"
+	"github.com/Temikus/denkeeper/internal/security"
 )
 
 // ---------------------------------------------------------------------------
@@ -78,6 +79,25 @@ func validateScheduleInput(input scheduleCreateInput) string {
 	return configmcp.ValidateScheduleDelivery(input.Channel, input.Headless)
 }
 
+// checkScheduleTier rejects an invalid tier with 400, and with 403 a non-admin
+// caller setting a tier above its agent's. Admin keys are the operator and
+// may raise it.
+func (s *Server) checkScheduleTier(w http.ResponseWriter, r *http.Request, tier string, e *agent.Engine) bool {
+	if tier != "" && !security.ValidTier(tier) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid session_tier %q", tier)})
+		return false
+	}
+	errMsg := configmcp.ValidateScheduleTier(tier, e.PermissionTier())
+	if errMsg == "" {
+		return true
+	}
+	if _, isAdmin, _ := s.authenticate(r.Context(), r, "admin"); isAdmin {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": errMsg})
+	return false
+}
+
 // handleCreateSchedule godoc
 // @Summary Create a new schedule
 // @Description Creates a scheduled job bound to a channel and optionally a skill. Validates the cron expression, channel reference, and agent/skill existence. Persists the schedule to the TOML config file.
@@ -88,6 +108,7 @@ func validateScheduleInput(input scheduleCreateInput) string {
 // @Param body body scheduleCreateInput true "Schedule configuration"
 // @Success 201 {object} map[string]string "Created schedule with name, schedule expression, and status"
 // @Failure 400 {object} map[string]string "Validation error (missing fields, invalid cron, unknown skill)"
+// @Failure 403 {object} map[string]string "session_tier above the agent's tier without the admin scope"
 // @Failure 404 {object} map[string]string "Referenced agent not found"
 // @Failure 409 {object} map[string]string "Schedule name already exists"
 // @Failure 503 {object} map[string]string "Schedule management not available"
@@ -131,6 +152,9 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+	if !s.checkScheduleTier(w, r, input.SessionTier, e) {
 		return
 	}
 
@@ -188,6 +212,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 // @Param body body configmcp.ScheduleUpdateInput true "Fields to update (all optional)"
 // @Success 200 {object} map[string]string "Updated schedule with name, schedule expression, and status"
 // @Failure 400 {object} map[string]string "Invalid JSON, invalid cron expression, or unknown skill"
+// @Failure 403 {object} map[string]string "session_tier above the agent's tier without the admin scope"
 // @Failure 404 {object} map[string]string "Schedule or agent not found"
 // @Failure 500 {object} map[string]string "Internal error during re-registration"
 // @Failure 503 {object} map[string]string "Schedule management not available"
@@ -229,6 +254,9 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+	if !s.checkScheduleTier(w, r, cfg.SessionTier, e) {
 		return
 	}
 
