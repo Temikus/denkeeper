@@ -736,7 +736,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wsc := newWSConn(conn, s.wsHub, s, keyName)
-	wsc.authReq = r.Clone(context.Background())
+	wsc.authReq = r.Clone(wsc.connCtx)
 
 	if !s.wsHub.Register(wsc) {
 		s.logger.Warn("ws: max connections reached, rejecting", "key", keyName)
