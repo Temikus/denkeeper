@@ -24,6 +24,7 @@ import (
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/security"
 	"github.com/Temikus/denkeeper/internal/skill"
+	"github.com/Temikus/denkeeper/internal/tool"
 )
 
 // registerTools registers all Config MCP tools. Every tool is gated on the
@@ -1544,6 +1545,9 @@ func (s *Server) handleToolAdd(ctx context.Context, req *mcp.CallToolRequest) (*
 	if strings.TrimSpace(input.Name) == "" {
 		return toolError("name is required"), nil
 	}
+	if err := tool.ValidateUntrustedEnvRefs(input.Env, input.URL, input.Headers); err != nil {
+		return toolError(err.Error()), nil
+	}
 
 	cfg := config.ToolConfig{
 		Command:            input.Command,
@@ -1684,6 +1688,9 @@ func (s *Server) handlePluginAdd(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 	if input.Type != "subprocess" && input.Type != "docker" {
 		return toolError("type must be \"subprocess\" or \"docker\""), nil
+	}
+	if err := tool.ValidateUntrustedEnvRefs(input.Env, "", nil); err != nil {
+		return toolError(err.Error()), nil
 	}
 
 	cfg := config.PluginConfig{

@@ -637,7 +637,7 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 | `transport` | string | `"stdio"` | Transport type: `"stdio"` (subprocess) or `"sse"` (remote HTTP/SSE) |
 | `command` | string | *required for stdio* | MCP server command (stdio only) |
 | `args` | string[] | — | Command arguments (stdio only) |
-| `env` | map | — | Environment variables; supports `${NAME}` placeholder expansion (stdio only) |
+| `env` | map | — | Environment variables; supports `${NAME}` placeholder expansion (stdio only). Agent- or non-admin-written tools may not use it, see **Untrusted writers** below |
 | `url` | string | *required for sse* | Remote server URL (SSE only, must be http/https) |
 | `headers` | map | — | HTTP headers sent with SSE requests (SSE only) |
 | `request_timeout_secs` | int | `0` | Per-server timeout override (0 = use global `[mcp]` value) |
@@ -655,6 +655,8 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 | `guidance` | string | `""` | Operator-authored argument rules for this server, injected into the system prompt of every agent that can call its tools, next to the server's tool list, and into the supervisor's review prompt when a call to one of its tools is reviewed. Argument conventions only (ID provenance, forbidden filter grammar, fields the API accepts but that must be omitted) — workflow belongs in skills. Max 2000 bytes: rejected over the cap via REST/UI, truncated with a warning at load. A server with no callable tools (disabled, failed, every tool in `disabled_tools`) contributes nothing. Restart-only when hand-edited in TOML; applied immediately when written through REST/UI |
 
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
+
+**Untrusted writers**: a tool or plugin added by an agent (`tool_add`, `plugin_add`), or through the REST API without the `admin` scope, cannot reference host variables. `env` values may not contain `$` references, `url` and `headers` placeholders must name a key of the tool's own `env`, and REST rejects `env_passthrough`. Tools in this file are unchanged: `env` expands any variable, and the denylist above covers only `url` and `headers`.
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
 
