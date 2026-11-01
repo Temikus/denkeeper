@@ -656,7 +656,7 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 
 **SSE security**: SSRF protection blocks localhost, link-local (169.254.x.x), and cloud metadata endpoints. `${NAME}` placeholders in `url` and `headers` are resolved from environment but secrets matching `DENKEEPER_*_SECRET`, `DENKEEPER_*_PASSWORD*`, and related patterns are denied. URL and header values are redacted in API responses.
 
-**Untrusted writers**: a tool or plugin added by an agent (`tool_add`, `plugin_add`), or through the REST API without the `admin` scope, cannot reference host variables. `env` values may not contain `$` references, `url` and `headers` placeholders must name a key of the tool's own `env`, and REST rejects `env_passthrough`. Tools in this file keep the expansion and denylist described above.
+**Untrusted writers**: a tool or plugin added by an agent (`tool_add`, `plugin_add`), or through the REST API without the `admin` scope, cannot reference host variables. `env` values may not contain `$` references, `url` and `headers` placeholders must name a key of the tool's own `env`, and REST rejects `env_passthrough`. Tools in this file are unchanged: `env` expands any variable, and the denylist above covers only `url` and `headers`.
 
 Tools can also be added and removed at runtime via the REST API (`tools:write` scope) or the Config MCP server (`tool_add`/`tool_remove`). Runtime changes are persisted to the TOML config file.
 
