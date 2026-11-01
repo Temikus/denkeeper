@@ -118,6 +118,8 @@ func writeEvalError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	case errors.Is(err, eval.ErrNameTaken), errors.Is(err, eval.ErrTaskSetInUse):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, eval.ErrHalted):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -608,7 +610,10 @@ func (s *Server) handleCreateEvalRun(w http.ResponseWriter, r *http.Request) {
 		writeEvalError(w, err)
 		return
 	}
-	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); err != nil {
+	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); errors.Is(err, eval.ErrHalted) {
+		writeEvalError(w, err)
+		return
+	} else if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": fmt.Sprintf("starting run: %v", err)})
 		return

@@ -2248,6 +2248,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 	defer evalRunner.Shutdown()
 	evalJudge := buildEvalJudge(cfg, st.evalStore, dispatcher, auditor, clients.deciders, logger)
 	defer evalJudge.Shutdown()
+	evalRunner.Halted = dispatcher.IsPanicked
+	evalJudge.Halted = dispatcher.IsPanicked
 
 	if err := registerSchedules(ctx, cfg, sched, dispatcher, auditor, logger); err != nil {
 		return err

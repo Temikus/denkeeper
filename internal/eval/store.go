@@ -32,6 +32,10 @@ var ErrNotFound = errors.New("eval: not found")
 // it to 409.
 var ErrTaskSetInUse = errors.New("eval: task set is referenced by runs")
 
+// ErrHalted is returned when a run or judging pass is refused because the
+// panic switch is engaged.
+var ErrHalted = errors.New("eval: processing is halted")
+
 // ErrNameTaken is returned when a task-set name collides with an existing one.
 var ErrNameTaken = errors.New("eval: task set name already exists")
 

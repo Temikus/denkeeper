@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -659,6 +660,20 @@ func TestRunner_StartRunRejectsNonPendingRun(t *testing.T) {
 
 	if err := f.runner.StartRun(context.Background(), run.ID); err == nil {
 		t.Fatal("StartRun accepted a terminal run")
+	}
+}
+
+func TestRunner_StartRunRefusedWhileHalted(t *testing.T) {
+	f := newRunnerFixture(t, Config{MaxConcurrent: 1}, nil)
+	f.addTasks(t, "a")
+	run := f.createRun(t, 1, 10.0, twoVariants()...)
+	f.runner.Halted = func() bool { return true }
+
+	if err := f.runner.StartRun(context.Background(), run.ID); !errors.Is(err, ErrHalted) {
+		t.Fatalf("StartRun err = %v, want ErrHalted", err)
+	}
+	if f.runner.IsActive(run.ID) {
+		t.Fatal("a halted runner registered the run")
 	}
 }
 

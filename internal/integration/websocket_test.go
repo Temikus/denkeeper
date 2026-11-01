@@ -355,4 +355,12 @@ func TestWebSocket_ChatRefusedDuringPanic(t *testing.T) {
 	if code := wsReadError(t, conn); code != "panicked" {
 		t.Fatalf("error code = %q, want panicked", code)
 	}
+
+	// An unroutable frame gets the same code, not agent_not_found.
+	if err := conn.WriteJSON(map[string]any{"type": "chat_request", "message": "hi", "agent": "nope"}); err != nil {
+		t.Fatalf("ws write: %v", err)
+	}
+	if code := wsReadError(t, conn); code != "panicked" {
+		t.Fatalf("unroutable frame error code = %q, want panicked", code)
+	}
 }
