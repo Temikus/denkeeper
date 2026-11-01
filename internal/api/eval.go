@@ -111,7 +111,8 @@ func (s *Server) evalRequired(w http.ResponseWriter) bool {
 }
 
 // writeEvalError maps the package's sentinels onto status codes: ErrNotFound
-// is a 404, the two conflict sentinels are 409, everything else is a 500.
+// is a 404, the two conflict sentinels are 409, ErrHalted is a 503, and
+// everything else is a 500.
 func writeEvalError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, eval.ErrNotFound):

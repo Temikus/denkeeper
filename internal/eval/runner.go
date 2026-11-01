@@ -149,6 +149,10 @@ func (r *Runner) StartRun(ctx context.Context, runID int64) error {
 	if r.Halted != nil && r.Halted() {
 		r.mu.Unlock()
 		cancel()
+		// Stop the refused run so it does not sit in pending forever.
+		if err := r.store.FinishRun(ctx, runID, StatusStopped, ErrHalted.Error()); err != nil {
+			return fmt.Errorf("%w; marking run stopped: %w", ErrHalted, err)
+		}
 		return ErrHalted
 	}
 	if _, dup := r.active[runID]; dup {

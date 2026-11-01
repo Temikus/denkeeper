@@ -675,6 +675,13 @@ func TestRunner_StartRunRefusedWhileHalted(t *testing.T) {
 	if f.runner.IsActive(run.ID) {
 		t.Fatal("a halted runner registered the run")
 	}
+	got, err := f.store.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.Status != StatusStopped {
+		t.Fatalf("refused run status = %q, want %q", got.Status, StatusStopped)
+	}
 }
 
 func TestRunner_TraceCarriesArgumentsAndTruncatesLongFields(t *testing.T) {
