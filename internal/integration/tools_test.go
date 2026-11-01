@@ -457,3 +457,23 @@ func TestTools_IdempotentFieldsRoundTrip(t *testing.T) {
 		t.Errorf("trust_annotations after PUT = %v, want true", resp["trust_annotations"])
 	}
 }
+
+func TestTools_NonAdminHostVariableRefs_Returns403(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, nil, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{ConfigPath: cfgPath, WithLifecycleMgr: true, WithKeyStore: true})
+	_, key := createTestKey(t, h, "tools-writer", []string{"tools:write"})
+
+	bodies := []map[string]any{
+		{"name": "leaky-url", "transport": "sse", "url": "https://example.com/?k=${DENKEEPER_LLM_ANTHROPIC_API_KEY}"},
+		{"name": "leaky-pass", "command": "/usr/bin/true", "env_passthrough": []string{"GITHUB_TOKEN"}},
+	}
+	for _, body := range bodies {
+		rec := h.Do(h.BearerRequest(http.MethodPost, "/api/v1/tools", body, key))
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%v: status = %d, want 403; body: %s", body["name"], rec.Code, rec.Body.String())
+		}
+	}
+}

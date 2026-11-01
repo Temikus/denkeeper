@@ -2022,6 +2022,24 @@ func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
 	return true
 }
 
+// allowToolEnvRefs writes 403 when a non-admin caller's tool config pulls in
+// the host environment through variable references or env_passthrough. Admin
+// keys are the operator and may.
+func (s *Server) allowToolEnvRefs(w http.ResponseWriter, r *http.Request, cfg config.ToolConfig) bool {
+	err := tool.ValidateUntrustedEnvRefs(cfg.Env, cfg.URL, cfg.Headers)
+	if err == nil && len(cfg.EnvPassthrough) > 0 {
+		err = fmt.Errorf("env_passthrough forwards host variables; only an operator can set it")
+	}
+	if err == nil {
+		return true
+	}
+	if _, isAdmin, _ := s.authenticate(r.Context(), r, "admin"); isAdmin {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error() + " (requires the admin scope)"})
+	return false
+}
+
 // handleListTools godoc
 // @Summary List MCP tool servers
 // @Description Returns all registered MCP tool servers with their connection status.
@@ -2186,6 +2204,7 @@ func (s *Server) handleToolDefs(w http.ResponseWriter, r *http.Request) {
 // @Param body body object true "Tool server configuration"
 // @Success 201 {object} tool.ServerStatus "Created tool server"
 // @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string "Host variable references or env_passthrough without the admin scope"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools [post]
 func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
@@ -2257,6 +2276,9 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Enabled:            body.Enabled,
 	}
 
+	if !s.allowToolEnvRefs(w, r, cfg) {
+		return
+	}
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
 		s.logger.Error("adding tool", "name", body.Name, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -2288,6 +2310,7 @@ func derefSlice[T any](p *[]T) []T {
 // @Param body body object true "Updated tool server configuration"
 // @Success 200 {object} tool.ServerStatus "Updated tool server"
 // @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string "Host variable references or env_passthrough without the admin scope"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /tools/{name} [put]
 func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
@@ -2361,6 +2384,9 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Enabled:            body.Enabled,
 	}
 
+	if !s.allowToolEnvRefs(w, r, cfg) {
+		return
+	}
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {
 		s.logger.Error("updating tool", "name", name, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

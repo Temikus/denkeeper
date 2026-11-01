@@ -8139,6 +8139,15 @@
                             }
                         }
                     },
+                    "403": {
+                        "description": "Host variable references or env_passthrough without the admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "503": {
                         "description": "Tool management not configured",
                         "schema": {
@@ -8336,6 +8345,15 @@
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Host variable references or env_passthrough without the admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

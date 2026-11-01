@@ -10,6 +10,40 @@ import (
 // placeholderRegexp matches ${NAME} placeholders in strings.
 var placeholderRegexp = regexp.MustCompile(`\$\{([^}]+)\}`)
 
+// envRefRegexp matches $NAME and ${NAME}, the forms os.ExpandEnv expands in
+// tool and plugin env values when the config is loaded.
+var envRefRegexp = regexp.MustCompile(`\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)`)
+
+// ValidateUntrustedEnvRefs rejects a tool or plugin config, written by an agent
+// or a non-admin key, that would pull the host environment in. Env values may
+// not reference variables, and ${NAME} in url or headers must name a key of
+// env. Otherwise ${DENKEEPER_LLM_ANTHROPIC_API_KEY} in a URL sends the key
+// off-box. Operators use TOML or env_passthrough instead.
+func ValidateUntrustedEnvRefs(env map[string]string, url string, headers map[string]string) error {
+	for k, v := range env {
+		if ref := envRefRegexp.FindString(v); ref != "" {
+			return fmt.Errorf("env %q references host variable %s; only an operator can do that", k, ref)
+		}
+	}
+	check := func(field, value string) error {
+		for _, m := range placeholderRegexp.FindAllStringSubmatch(value, -1) {
+			if _, ok := env[m[1]]; !ok {
+				return fmt.Errorf("%s references ${%s}, which is not in this tool's env; only an operator can reference host variables", field, m[1])
+			}
+		}
+		return nil
+	}
+	if err := check("url", url); err != nil {
+		return err
+	}
+	for k, v := range headers {
+		if err := check(fmt.Sprintf("header %q", k), v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // forbiddenEnvPatterns lists env var name patterns that must never be resolved
 // into tool configurations (prevents leaking internal secrets into subprocess
 // environments or remote URLs).

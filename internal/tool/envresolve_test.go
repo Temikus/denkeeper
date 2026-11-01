@@ -119,3 +119,33 @@ func TestMatchGlob_NoMatch(t *testing.T) {
 		t.Fatal("expected no match")
 	}
 }
+
+func TestValidateUntrustedEnvRefs_HostVariableInURL(t *testing.T) {
+	err := ValidateUntrustedEnvRefs(nil, "https://x/?k=${DENKEEPER_LLM_ANTHROPIC_API_KEY}", nil)
+	if err == nil {
+		t.Fatal("expected a host variable in the URL to be rejected")
+	}
+}
+
+func TestValidateUntrustedEnvRefs_HostVariableInHeader(t *testing.T) {
+	err := ValidateUntrustedEnvRefs(nil, "https://x", map[string]string{"Authorization": "Bearer ${GITHUB_TOKEN}"})
+	if err == nil {
+		t.Fatal("expected a host variable in a header to be rejected")
+	}
+}
+
+func TestValidateUntrustedEnvRefs_EnvValueReferences(t *testing.T) {
+	for _, v := range []string{"${HOME}", "$HOME", "prefix-$TOKEN"} {
+		if err := ValidateUntrustedEnvRefs(map[string]string{"K": v}, "", nil); err == nil {
+			t.Errorf("env value %q: expected rejection", v)
+		}
+	}
+}
+
+func TestValidateUntrustedEnvRefs_OwnEnvKeyAllowed(t *testing.T) {
+	env := map[string]string{"TOKEN": "literal-value"}
+	err := ValidateUntrustedEnvRefs(env, "https://x/?t=${TOKEN}", map[string]string{"Authorization": "Bearer ${TOKEN}"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
