@@ -872,6 +872,12 @@ func connectConfigMCP(ctx context.Context, agentName, skillsDir string, e *agent
 			}
 			return eng.HandleMessage
 		},
+		AgentTier: func(name string) string {
+			if eng := abc.dispatcher.Agent(name); eng != nil {
+				return eng.PermissionTier()
+			}
+			return ""
+		},
 		AgentLocation: func(name string) *time.Location {
 			if eng := abc.dispatcher.Agent(name); eng != nil {
 				return eng.Location()

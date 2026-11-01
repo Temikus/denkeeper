@@ -128,7 +128,7 @@ func TestTierExceeds_UnknownCeilingIsExceeded(t *testing.T) {
 	if !TierExceeds("restricted", NewDenyAll().Tier()) {
 		t.Error("a deny-all ceiling must be exceeded by any real tier")
 	}
-	if TierExceeds("bogus", "restricted") {
-		t.Error("an unrecognised tier must not count as exceeding")
+	if !TierExceeds("bogus", "autonomous") {
+		t.Error("an unrecognised tier must count as exceeding")
 	}
 }

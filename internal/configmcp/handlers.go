@@ -1123,6 +1123,9 @@ func MergeScheduleUpdate(existing scheduler.Entry, input ScheduleUpdateInput) (s
 // it. Only an operator (TOML or an admin API key) may set a higher tier.
 // Returns an error message, or "" when valid.
 func ValidateScheduleTier(tier, ceiling string) string {
+	if tier != "" && !security.ValidTier(tier) {
+		return fmt.Sprintf("invalid session_tier %q: must be autonomous, supervised, or restricted", tier)
+	}
 	if tier != "" && security.TierExceeds(tier, ceiling) {
 		return fmt.Sprintf("session_tier %q is above the agent's tier %q; only an operator can raise a schedule's tier", tier, ceiling)
 	}
@@ -1167,15 +1170,22 @@ func (s *Server) ownsSchedule(name string) (scheduler.Entry, bool) {
 
 // validateScheduleUpdateTier caps an updated schedule at this agent's tier,
 // so editing an operator-raised schedule is refused too. A schedule moved to
-// another agent must name its tier: an empty one runs at the target's tier.
+// another agent must name its tier (an empty one runs at the target's) and is
+// also capped at the target's tier.
 func (s *Server) validateScheduleUpdateTier(cfg scheduler.Config) string {
 	if errMsg := ValidateScheduleTier(cfg.SessionTier, s.tier()); errMsg != "" {
 		return errMsg
 	}
-	if cfg.Agent != s.deps.AgentName && cfg.SessionTier == "" {
+	if cfg.Agent == s.deps.AgentName {
+		return ""
+	}
+	if cfg.SessionTier == "" {
 		return "set session_tier when moving a schedule to another agent"
 	}
-	return ""
+	if s.deps.AgentTier == nil {
+		return "cross-agent schedule reassignment is not supported"
+	}
+	return ValidateScheduleTier(cfg.SessionTier, s.deps.AgentTier(cfg.Agent))
 }
 
 // resolveScheduleHandler returns the message handler for the given agent name.

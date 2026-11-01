@@ -79,6 +79,11 @@ type Deps struct {
 	// is not supported via Config MCP.
 	ResolveAgentHandler func(name string) func(context.Context, adapter.IncomingMessage) error
 
+	// AgentTier resolves another agent's permission tier by name ("" if not
+	// found). schedule_update caps a reassigned schedule at the target's
+	// tier; if nil, cross-agent reassignment is refused.
+	AgentTier func(name string) string
+
 	// AgentLocation resolves the effective timezone for a target agent's
 	// scheduled-message headers (agent override > global). May be nil or
 	// return nil; the scheduler's location is used as the fallback.

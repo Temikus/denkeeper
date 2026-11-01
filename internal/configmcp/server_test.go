@@ -455,7 +455,7 @@ func TestScheduleAdd_TierAboveAgentRejected(t *testing.T) {
 }
 
 func TestScheduleAdd_TierAtOrBelowAgentAllowed(t *testing.T) {
-	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
 		d.PermissionTier = func() string { return "supervised" }
 	})
 
@@ -466,6 +466,10 @@ func TestScheduleAdd_TierAtOrBelowAgentAllowed(t *testing.T) {
 		})
 		if isErr {
 			t.Errorf("tier %q: unexpected error: %s", tier, text)
+			continue
+		}
+		if e, _ := deps.Sched.GetEntry("ok-" + tier); e.SessionTier != tier {
+			t.Errorf("tier %q: stored SessionTier = %q", tier, e.SessionTier)
 		}
 	}
 }
@@ -1991,6 +1995,7 @@ func TestScheduleUpdate_MissingName(t *testing.T) {
 func TestScheduleUpdate_CrossAgentReassign(t *testing.T) {
 	otherHandlerCalled := false
 	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.AgentTier = func(string) string { return "supervised" }
 		d.ResolveAgentHandler = func(name string) func(context.Context, adapter.IncomingMessage) error {
 			if name == "other-agent" {
 				return func(_ context.Context, _ adapter.IncomingMessage) error {
@@ -2069,6 +2074,53 @@ func TestScheduleUpdate_OperatorRaisedScheduleNotEditable(t *testing.T) {
 	}
 	if !strings.Contains(text, "only an operator") {
 		t.Errorf("expected the tier rejection, got: %s", text)
+	}
+}
+
+// newMoveTestServer is a supervised agent that can move schedules to
+// "target", whose tier is targetTier.
+func newMoveTestServer(t *testing.T, targetTier string) (*mcp.ClientSession, *configmcp.Deps) {
+	t.Helper()
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+		d.ResolveAgentHandler = func(string) func(context.Context, adapter.IncomingMessage) error {
+			return func(context.Context, adapter.IncomingMessage) error { return nil }
+		}
+		d.AgentTier = func(string) string { return targetTier }
+	})
+	if _, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "move-me", "schedule": "@daily", "channel": "telegram:1",
+	}); isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+	return session, deps
+}
+
+func TestScheduleUpdate_CrossAgentCappedAtTargetTier(t *testing.T) {
+	session, deps := newMoveTestServer(t, "restricted")
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "move-me", "agent": "target", "session_tier": "supervised",
+	})
+	if !isErr {
+		t.Fatalf("expected error moving a supervised schedule to a restricted agent, got: %s", text)
+	}
+	if e, ok := deps.Sched.GetEntry("move-me"); !ok || e.Agent != deps.AgentName {
+		t.Error("schedule moved despite rejection")
+	}
+}
+
+func TestScheduleUpdate_InvalidTierRejected(t *testing.T) {
+	session, _ := newMoveTestServer(t, "autonomous")
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "move-me", "agent": "target", "session_tier": "bogus",
+	})
+	if !isErr {
+		t.Fatalf("expected error for an invalid tier, got: %s", text)
+	}
+	if !strings.Contains(text, "invalid session_tier") {
+		t.Errorf("expected invalid tier error, got: %s", text)
 	}
 }
 

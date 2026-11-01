@@ -5952,6 +5952,15 @@
                             }
                         }
                     },
+                    "403": {
+                        "description": "session_tier above the agent's tier without the admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Referenced agent not found",
                         "schema": {
@@ -6074,6 +6083,15 @@
                     },
                     "400": {
                         "description": "Invalid JSON, invalid cron expression, or unknown skill",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "session_tier above the agent's tier without the admin scope",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
