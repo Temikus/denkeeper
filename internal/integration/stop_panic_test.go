@@ -107,10 +107,9 @@ func TestStopSession_NoInFlight(t *testing.T) {
 }
 
 func TestPanic_ThenChatStillWorks(t *testing.T) {
-	// Verify that chat works before panic, is rejected during panic (at the
-	// dispatcher level for adapter messages), and works again after resume.
-	// Note: REST API chat bypasses the dispatcher Run() loop, so this tests
-	// the REST round-trip. In-flight cancellation is tested by unit tests.
+	// Verify that REST chat works before panic, is refused with 503 during
+	// panic, and works again after resume. In-flight cancellation is tested by
+	// unit tests.
 	h := NewHarness(t, nil)
 
 	// Chat works before panic.
@@ -126,6 +125,17 @@ func TestPanic_ThenChatStillWorks(t *testing.T) {
 	}
 	if !h.Dispatcher.IsPanicked() {
 		t.Fatal("dispatcher should be panicked")
+	}
+
+	// REST chat, sync and SSE, is refused while panicked.
+	rec = h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/chat", map[string]any{"message": "during panic"}))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("chat during panic: status = %d, want 503; body: %s", rec.Code, rec.Body.String())
+	}
+	sse := h.AuthedRequest(http.MethodPost, "/api/v1/chat", map[string]any{"message": "during panic"})
+	sse.Header.Set("Accept", "text/event-stream")
+	if rec = h.Do(sse); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("SSE chat during panic: status = %d, want 503; body: %s", rec.Code, rec.Body.String())
 	}
 
 	// Resume.

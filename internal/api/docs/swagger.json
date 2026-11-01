@@ -2494,6 +2494,15 @@
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "Emergency stop (panic) is active",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -2854,7 +2863,7 @@
                         }
                     },
                     "503": {
-                        "description": "Eval subsystem not configured",
+                        "description": "Eval subsystem not configured, or emergency stop (panic) active",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2996,7 +3005,7 @@
                         }
                     },
                     "503": {
-                        "description": "Eval subsystem or internal judge not configured",
+                        "description": "Eval subsystem or internal judge not configured, or emergency stop (panic) active",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -6208,7 +6217,7 @@
                         }
                     },
                     "503": {
-                        "description": "Schedule management not available",
+                        "description": "Schedule management not available, or emergency stop (panic) active",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -7558,6 +7567,15 @@
                     },
                     "500": {
                         "description": "Dry run failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Emergency stop (panic) is active",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

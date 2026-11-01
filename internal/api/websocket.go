@@ -483,6 +483,12 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 		return
 	}
 
+	// After the replay branch: a reconnect may still read buffered frames.
+	if c.server.deps.Dispatcher.IsPanicked() {
+		c.sendError(sessionID, "panicked", panicMessage)
+		return
+	}
+
 	if conversationID == "" {
 		conversationID = sessionID
 	}

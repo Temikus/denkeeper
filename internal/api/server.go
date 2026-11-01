@@ -193,7 +193,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("POST /api/v1/setup/account", s.handleSetupAccount)
 
 	// Chat endpoint.
-	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.handleChat))
+	mux.HandleFunc("POST /api/v1/chat", s.RequireScope("chat", s.notWhilePanicked(s.handleChat)))
 
 	// WebSocket streaming endpoint — auth handled inside the handler because
 	// the upgrade must happen before RequireScope writes an HTTP response.
@@ -226,12 +226,12 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/skills/{agent}/{name}", s.RequireScope("skills:write", s.handleDeleteSkill))
 	// Dry runs write nothing, but they execute read tools and spend real
 	// tokens, so they sit behind the write scope of their parent resource.
-	mux.HandleFunc("POST /api/v1/skills/{agent}/{name}/dry-run", s.RequireScope("skills:write", s.handleDryRunSkill))
+	mux.HandleFunc("POST /api/v1/skills/{agent}/{name}/dry-run", s.RequireScope("skills:write", s.notWhilePanicked(s.handleDryRunSkill)))
 	mux.HandleFunc("GET /api/v1/schedules", s.RequireScope("schedules:read", s.handleSchedules))
 	mux.HandleFunc("POST /api/v1/schedules", s.RequireScope("schedules:write", s.handleCreateSchedule))
 	mux.HandleFunc("PATCH /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleUpdateSchedule))
 	mux.HandleFunc("DELETE /api/v1/schedules/{name}", s.RequireScope("schedules:write", s.handleDeleteSchedule))
-	mux.HandleFunc("POST /api/v1/schedules/{name}/dry-run", s.RequireScope("schedules:write", s.handleDryRunSchedule))
+	mux.HandleFunc("POST /api/v1/schedules/{name}/dry-run", s.RequireScope("schedules:write", s.notWhilePanicked(s.handleDryRunSchedule)))
 	mux.HandleFunc("GET /api/v1/sessions", s.RequireScope("sessions:read", s.handleSessions))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", s.RequireScope("sessions:read", s.handleSessionMessages))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/stats", s.RequireScope("sessions:read", s.handleSessionStats))
@@ -309,7 +309,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/eval/task-sets/{name}/tasks/{id}", s.RequireScope("eval:write", s.handleDeleteEvalTask))
 	mux.HandleFunc("GET /api/v1/eval/task-sets/{name}/export", s.RequireScope("eval:read", s.handleExportEvalTaskSet))
 	mux.HandleFunc("POST /api/v1/eval/task-sets/{name}/import", s.RequireScope("eval:write", s.handleImportEvalTaskSet))
-	mux.HandleFunc("POST /api/v1/eval/runs", s.RequireScope("eval:write", s.handleCreateEvalRun))
+	mux.HandleFunc("POST /api/v1/eval/runs", s.RequireScope("eval:write", s.notWhilePanicked(s.handleCreateEvalRun)))
 	mux.HandleFunc("GET /api/v1/eval/runs", s.RequireScope("eval:read", s.handleListEvalRuns))
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}", s.RequireScope("eval:read", s.handleGetEvalRun))
 	mux.HandleFunc("POST /api/v1/eval/runs/{id}/stop", s.RequireScope("eval:write", s.handleStopEvalRun))
@@ -320,7 +320,7 @@ func New(cfg config.APIConfig, deps Deps, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/eval/runs/{id}/pairs", s.RequireScope("eval:read", s.handleEvalRunPairs))
 	// Judging spends real money, so it sits behind eval:write beside the run
 	// endpoints — not on the read side with the pair views.
-	mux.HandleFunc("POST /api/v1/eval/runs/{id}/judge", s.RequireScope("eval:write", s.handleJudgeEvalRun))
+	mux.HandleFunc("POST /api/v1/eval/runs/{id}/judge", s.RequireScope("eval:write", s.notWhilePanicked(s.handleJudgeEvalRun)))
 	// Estimating, suggesting and reading the policy spend nothing, so all
 	// three are read-scoped.
 	mux.HandleFunc("POST /api/v1/eval/estimate", s.RequireScope("eval:read", s.handleEvalEstimate))
@@ -1150,6 +1150,22 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// panicMessage is the error every turn-starting endpoint returns while panicked.
+const panicMessage = "system is paused by an emergency stop; resume to continue"
+
+// notWhilePanicked answers 503 while the panic switch is on. Every route that
+// starts an agent turn is wrapped in it: panic must stop new work on every
+// surface, not only the adapters.
+func (s *Server) notWhilePanicked(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.deps.Dispatcher.IsPanicked() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": panicMessage})
+			return
+		}
+		next(w, r)
+	}
+}
+
 // chatRequest is the JSON body for POST /api/v1/chat.
 type chatRequest struct {
 	Agent     string `json:"agent"`      // optional; defaults to fallback agent
@@ -1177,6 +1193,7 @@ type chatResponse struct {
 // @Success 200 {object} chatResponse
 // @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string "Emergency stop (panic) is active"
 // @Router /chat [post]
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
