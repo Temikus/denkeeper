@@ -195,6 +195,11 @@ type WSConn struct {
 
 	// otelSpan tracks the connection lifetime for tracing.
 	otelSpan trace.Span
+
+	// authReq keeps the upgrade request's credentials so privileged frames
+	// re-check scope like REST does: a revoked key or expired session loses
+	// approval and panic power immediately. The upgrade only requires chat.
+	authReq *http.Request
 }
 
 func newWSConn(conn *websocket.Conn, hub *WSHub, server *Server, keyName string) *WSConn {
@@ -568,6 +573,10 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 }
 
 func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
+	if !c.hasScope("approvals:write") {
+		c.sendError("", "forbidden", "approvals:write scope required")
+		return
+	}
 	if c.server.deps.Approvals == nil {
 		c.sendError("", "internal", "approval manager not configured")
 		return
@@ -591,19 +600,8 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 		return
 	}
 
-	// Create auto-approve rule if requested.
-	if approved && resolved.Kind == approval.ActionKindToolCall {
-		toolName := approval.ExtractToolName(resolved.Summary)
-		if toolName != "" {
-			switch f.Action {
-			case "auto_session":
-				c.server.deps.Approvals.AddSessionRule(resolveCtx, resolved.AgentName, toolName, resolved.ConversationID, "ws")
-			case "auto_always":
-				if _, aaErr := c.server.deps.Approvals.AddPermanentRule(resolveCtx, resolved.AgentName, toolName, "ws"); aaErr != nil {
-					c.hub.logger.Error("ws: creating auto-approve rule", "error", aaErr)
-				}
-			}
-		}
+	if approved {
+		c.addAutoApproveRule(resolveCtx, f.Action, resolved)
 	}
 
 	// Notify the originating adapter channel in a goroutine so a slow
@@ -625,6 +623,26 @@ func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
 	}()
 }
 
+// addAutoApproveRule creates the session or permanent rule an "auto_*"
+// approval action asks for.
+func (c *WSConn) addAutoApproveRule(ctx context.Context, action string, resolved *approval.Request) {
+	if resolved.Kind != approval.ActionKindToolCall {
+		return
+	}
+	toolName := approval.ExtractToolName(resolved.Summary)
+	if toolName == "" {
+		return
+	}
+	switch action {
+	case "auto_session":
+		c.server.deps.Approvals.AddSessionRule(ctx, resolved.AgentName, toolName, resolved.ConversationID, "ws")
+	case "auto_always":
+		if _, err := c.server.deps.Approvals.AddPermanentRule(ctx, resolved.AgentName, toolName, "ws"); err != nil {
+			c.hub.logger.Error("ws: creating auto-approve rule", "error", err)
+		}
+	}
+}
+
 // handleCancel stops the turn running for a session. It does not cancel the
 // context here: StopChat raises the cooperative stop so the turn ends at its
 // next step boundary with a reply the client actually receives, and arms the
@@ -637,8 +655,21 @@ func (c *WSConn) handleCancel(f CancelFrame) {
 	}
 }
 
+// hasScope re-authenticates the upgrade credentials against required.
+func (c *WSConn) hasScope(required string) bool {
+	if c.authReq == nil {
+		return false
+	}
+	_, ok, _ := c.server.authenticate(c.connCtx, c.authReq, required)
+	return ok
+}
+
 // handlePanic triggers an emergency stop via the Dispatcher.
 func (c *WSConn) handlePanic() {
+	if !c.hasScope("admin") {
+		c.sendError("", "forbidden", "admin scope required")
+		return
+	}
 	c.server.deps.Dispatcher.Panic()
 	c.hub.logger.Warn("ws: panic triggered", "key", c.keyName)
 }
@@ -705,6 +736,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wsc := newWSConn(conn, s.wsHub, s, keyName)
+	wsc.authReq = r.Clone(wsc.connCtx)
 
 	if !s.wsHub.Register(wsc) {
 		s.logger.Warn("ws: max connections reached, rejecting", "key", keyName)
