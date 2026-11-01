@@ -165,6 +165,19 @@ func TestJudge_RejectsUnregisteredProvider(t *testing.T) {
 
 // --- The happy path ---
 
+func TestJudge_StartRefusedWhileHalted(t *testing.T) {
+	f := newJudgeFixture(t)
+	j := f.judge(t, JudgeConfig{Model: "judge-model", MaxConcurrent: 2})
+	j.Halted = func() bool { return true }
+
+	if _, err := j.Start(context.Background(), f.run.ID, JudgeOpts{}); !errors.Is(err, ErrHalted) {
+		t.Fatalf("Start err = %v, want ErrHalted", err)
+	}
+	if got := f.verdicts(t); len(got) != 0 {
+		t.Fatalf("a halted judge recorded %d verdicts", len(got))
+	}
+}
+
 func TestJudge_RecordsVerdictsUnderItsOwnIdentAndRubric(t *testing.T) {
 	f := newJudgeFixture(t)
 	j := f.judge(t, JudgeConfig{Model: "judge-model", MaxConcurrent: 2})

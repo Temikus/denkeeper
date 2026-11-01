@@ -121,6 +121,9 @@ type Judge struct {
 	mu     sync.Mutex
 	active map[int64]*activeRun
 	wg     sync.WaitGroup
+
+	// Halted refuses new passes with ErrHalted; see Runner.Halted. Nil-safe.
+	Halted func() bool
 }
 
 // NewJudge builds a judge. A zero-value Model leaves it unavailable; callers
@@ -276,6 +279,11 @@ func (j *Judge) Start(ctx context.Context, runID int64, opts JudgeOpts) (*JudgeP
 	handle := &activeRun{cancel: cancel, done: make(chan struct{})}
 
 	j.mu.Lock()
+	if j.Halted != nil && j.Halted() {
+		j.mu.Unlock()
+		cancel()
+		return nil, ErrHalted
+	}
 	if _, dup := j.active[runID]; dup {
 		j.mu.Unlock()
 		cancel()

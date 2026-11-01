@@ -514,3 +514,15 @@ func TestDryRunSkill_NoOverrideLeavesRequestedModelEmpty(t *testing.T) {
 		t.Errorf("RequestedModel = %q, want empty when the live model ran", got)
 	}
 }
+
+func TestDryRunSchedule_RejectedDuringPanic(t *testing.T) {
+	deps := testDeps()
+	registerTestSchedule(t, deps, "nightly")
+	srv := New(testConfig(allScopesKey()), deps, testLogger())
+	deps.Dispatcher.Panic()
+
+	rec := postDryRun(t, srv, "/api/v1/schedules/nightly/dry-run", `{}`, "dk-test-key")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
+	}
+}

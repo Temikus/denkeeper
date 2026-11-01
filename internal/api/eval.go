@@ -111,13 +111,16 @@ func (s *Server) evalRequired(w http.ResponseWriter) bool {
 }
 
 // writeEvalError maps the package's sentinels onto status codes: ErrNotFound
-// is a 404, the two conflict sentinels are 409, everything else is a 500.
+// is a 404, the two conflict sentinels are 409, ErrHalted is a 503, and
+// everything else is a 500.
 func writeEvalError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, eval.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	case errors.Is(err, eval.ErrNameTaken), errors.Is(err, eval.ErrTaskSetInUse):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, eval.ErrHalted):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -558,7 +561,7 @@ func (s *Server) handleImportEvalTaskSet(w http.ResponseWriter, r *http.Request)
 // @Failure 400 {object} map[string]string "Invalid JSON, fewer than two variants, unknown agent/provider/model, or an empty task set"
 // @Failure 404 {object} map[string]string "Task set not found"
 // @Failure 500 {object} map[string]string "Store error"
-// @Failure 503 {object} map[string]string "Eval subsystem not configured"
+// @Failure 503 {object} map[string]string "Eval subsystem not configured, or emergency stop (panic) active"
 // @Router /eval/runs [post]
 func (s *Server) handleCreateEvalRun(w http.ResponseWriter, r *http.Request) {
 	if !s.evalRequired(w) {
@@ -608,7 +611,10 @@ func (s *Server) handleCreateEvalRun(w http.ResponseWriter, r *http.Request) {
 		writeEvalError(w, err)
 		return
 	}
-	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); err != nil {
+	if err := s.deps.EvalRunner.StartRun(r.Context(), run.ID); errors.Is(err, eval.ErrHalted) {
+		writeEvalError(w, err)
+		return
+	} else if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": fmt.Sprintf("starting run: %v", err)})
 		return
@@ -1110,7 +1116,7 @@ type evalJudgeInput struct {
 // @Failure 400 {object} map[string]string "Bad run id or body"
 // @Failure 404 {object} map[string]string "Run not found"
 // @Failure 409 {object} map[string]string "Run is not terminal, or is already being judged"
-// @Failure 503 {object} map[string]string "Eval subsystem or internal judge not configured"
+// @Failure 503 {object} map[string]string "Eval subsystem or internal judge not configured, or emergency stop (panic) active"
 // @Router /eval/runs/{id}/judge [post]
 func (s *Server) handleJudgeEvalRun(w http.ResponseWriter, r *http.Request) {
 	if !s.evalRequired(w) {

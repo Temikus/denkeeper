@@ -318,7 +318,7 @@ func (s *Server) runDryRun(w http.ResponseWriter, r *http.Request, e *agent.Engi
 // @Failure 400 {object} map[string]string "Invalid JSON, invalid as_of, or unknown model"
 // @Failure 404 {object} map[string]string "Schedule or agent not found"
 // @Failure 500 {object} map[string]string "Dry run failed"
-// @Failure 503 {object} map[string]string "Schedule management not available"
+// @Failure 503 {object} map[string]string "Schedule management not available, or emergency stop (panic) active"
 // @Router /schedules/{name}/dry-run [post]
 func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scheduler == nil {
@@ -398,6 +398,7 @@ func (s *Server) handleDryRunSchedule(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string "Invalid JSON, invalid mode, missing message, no command trigger, invalid as_of, or unknown model"
 // @Failure 404 {object} map[string]string "Agent or skill not found"
 // @Failure 500 {object} map[string]string "Dry run failed"
+// @Failure 503 {object} map[string]string "Emergency stop (panic) is active"
 // @Router /skills/{agent}/{name}/dry-run [post]
 func (s *Server) handleDryRunSkill(w http.ResponseWriter, r *http.Request) {
 	agentName := r.PathValue("agent")

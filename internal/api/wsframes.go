@@ -63,7 +63,7 @@ type PingFrame struct {
 type WSErrorFrame struct {
 	Type      string `json:"type"`                 // "error"
 	SessionID string `json:"session_id,omitempty"` // session this error relates to
-	Code      string `json:"code"`                 // "rate_limited", "permission_denied", "agent_not_found", "internal", "replay_unavailable"
+	Code      string `json:"code"`                 // "rate_limited", "permission_denied", "agent_not_found", "internal", "replay_unavailable", "panicked"
 	Message   string `json:"message"`              // human-readable detail
 }
 

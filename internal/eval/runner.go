@@ -95,6 +95,11 @@ type Runner struct {
 
 	// OnProgress is called after each sample and at run start/finish. Nil-safe.
 	OnProgress func(ProgressEvent)
+
+	// Halted refuses new runs with ErrHalted while it reports true. Nil-safe.
+	// It is checked under mu, so a panic that sets its flag before calling
+	// StopAll either refuses a run or cancels it, never misses it.
+	Halted func() bool
 }
 
 // NewRunner builds a runner. It starts no goroutine: a user who never launches
@@ -141,6 +146,15 @@ func (r *Runner) StartRun(ctx context.Context, runID int64) error {
 	handle := &activeRun{cancel: cancel, done: make(chan struct{})}
 
 	r.mu.Lock()
+	if r.Halted != nil && r.Halted() {
+		r.mu.Unlock()
+		cancel()
+		// Stop the refused run so it does not sit in pending forever.
+		if err := r.store.FinishRun(ctx, runID, StatusStopped, ErrHalted.Error()); err != nil {
+			return fmt.Errorf("%w; marking run stopped: %w", ErrHalted, err)
+		}
+		return ErrHalted
+	}
 	if _, dup := r.active[runID]; dup {
 		r.mu.Unlock()
 		cancel()

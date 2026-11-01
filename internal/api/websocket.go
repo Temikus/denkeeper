@@ -440,6 +440,32 @@ func (c *WSConn) resolveAgentName(explicit string) string {
 }
 
 func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
+	sessionID := f.SessionID
+	if sessionID == "" {
+		sessionID = generateID()
+	}
+
+	// Handle replay-only reconnect.
+	if f.ResumeAfterSeq > 0 && f.Message == "" {
+		buf := c.hub.replayStore.Buffer(sessionID)
+		frames := buf.ReplaySince(f.ResumeAfterSeq)
+		if len(frames) == 0 {
+			c.sendError(sessionID, "replay_unavailable", "replay buffer expired or empty")
+			return
+		}
+		for _, ef := range frames {
+			c.sendJSON(ef)
+		}
+		return
+	}
+
+	// After the replay branch so a reconnect may still read buffered frames,
+	// and before validation so every other chat frame gets this one code.
+	if c.server.deps.Dispatcher.IsPanicked() {
+		c.sendError(sessionID, "panicked", panicMessage)
+		return
+	}
+
 	agentName := c.resolveAgentName(f.Agent)
 	if len(f.Message) > maxChatMessageLen {
 		c.sendError(f.SessionID, "invalid_frame",
@@ -461,25 +487,6 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 	eng := c.server.deps.Dispatcher.Agent(agentName)
 	if eng == nil {
 		c.sendError(f.SessionID, "agent_not_found", fmt.Sprintf("agent %q not found", agentName))
-		return
-	}
-
-	sessionID := f.SessionID
-	if sessionID == "" {
-		sessionID = generateID()
-	}
-
-	// Handle replay-only reconnect.
-	if f.ResumeAfterSeq > 0 && f.Message == "" {
-		buf := c.hub.replayStore.Buffer(sessionID)
-		frames := buf.ReplaySince(f.ResumeAfterSeq)
-		if len(frames) == 0 {
-			c.sendError(sessionID, "replay_unavailable", "replay buffer expired or empty")
-			return
-		}
-		for _, ef := range frames {
-			c.sendJSON(ef)
-		}
 		return
 	}
 
