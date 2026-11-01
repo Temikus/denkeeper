@@ -135,7 +135,7 @@ func TestValidateUntrustedEnvRefs_HostVariableInHeader(t *testing.T) {
 }
 
 func TestValidateUntrustedEnvRefs_EnvValueReferences(t *testing.T) {
-	for _, v := range []string{"${HOME}", "$HOME", "prefix-$TOKEN"} {
+	for _, v := range []string{"${HOME}", "$HOME", "prefix-$TOKEN", "pa$$", "$1", "$?"} {
 		if err := ValidateUntrustedEnvRefs(map[string]string{"K": v}, "", nil); err == nil {
 			t.Errorf("env value %q: expected rejection", v)
 		}

@@ -477,3 +477,54 @@ func TestTools_NonAdminHostVariableRefs_Returns403(t *testing.T) {
 		}
 	}
 }
+
+// toolKeyHarness returns a tool harness with a key store and a non-admin
+// tools:write key.
+func toolKeyHarness(t *testing.T) (*Harness, string) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "denkeeper.toml")
+	if err := os.WriteFile(cfgPath, nil, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	h := NewHarness(t, &HarnessOpts{ConfigPath: cfgPath, WithLifecycleMgr: true, WithKeyStore: true})
+	_, key := createTestKey(t, h, "tools-writer", []string{"tools:write"})
+	return h, key
+}
+
+func TestTools_NonAdminUpdateInheritsPassthrough_Returns403(t *testing.T) {
+	ts := startTestMCPServer(t) // before the harness, so it closes last
+	h, key := toolKeyHarness(t)
+
+	// Operator (admin) creates a tool carrying a passthrough grant.
+	rec := h.Do(h.AuthedRequest(http.MethodPost, "/api/v1/tools", map[string]any{
+		"name": "op-tool", "transport": "sse", "url": ts.URL, "allow_loopback": true,
+		"env_passthrough": []string{"GITHUB_TOKEN"},
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("admin create: status = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	t.Cleanup(func() {
+		h.Do(h.AuthedRequest(http.MethodDelete, "/api/v1/tools/op-tool", nil))
+	})
+
+	// A non-admin turns it into a stdio command and omits env_passthrough,
+	// which UpdateTool would otherwise carry over to the new process.
+	rec = h.Do(h.BearerRequest(http.MethodPut, "/api/v1/tools/op-tool", map[string]any{
+		"transport": "stdio", "command": "/usr/bin/env",
+	}, key))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("update status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPlugins_NonAdminHostVariableRefs_Returns403(t *testing.T) {
+	h, key := toolKeyHarness(t)
+
+	rec := h.Do(h.BearerRequest(http.MethodPost, "/api/v1/plugins", map[string]any{
+		"name": "leaky-plugin", "type": "subprocess", "command": "/usr/bin/true",
+		"env": map[string]string{"K": "${DENKEEPER_TELEGRAM_TOKEN}"},
+	}, key))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body: %s", rec.Code, rec.Body.String())
+	}
+}

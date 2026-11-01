@@ -10,9 +10,10 @@ import (
 // placeholderRegexp matches ${NAME} placeholders in strings.
 var placeholderRegexp = regexp.MustCompile(`\$\{([^}]+)\}`)
 
-// envRefRegexp matches $NAME and ${NAME}, the forms os.ExpandEnv expands in
-// tool and plugin env values when the config is loaded.
-var envRefRegexp = regexp.MustCompile(`\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)`)
+// envRefRegexp matches what os.ExpandEnv rewrites in tool and plugin env
+// values on config load: ${NAME}, $NAME, and the shell specials ($0-$9, $$,
+// $*, $#, $@, $!, $?, $-), which it replaces too (e.g. "pa$$" becomes "pa").
+var envRefRegexp = regexp.MustCompile(`\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9*#$@!?-])`)
 
 // ValidateUntrustedEnvRefs rejects a tool or plugin config, written by an agent
 // or a non-admin key, that would pull the host environment in. Env values may

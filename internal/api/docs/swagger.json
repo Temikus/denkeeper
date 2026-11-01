@@ -5743,6 +5743,15 @@
                             }
                         }
                     },
+                    "403": {
+                        "description": "Host variable references in env without the admin scope",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "503": {
                         "description": "Tool management not configured",
                         "schema": {

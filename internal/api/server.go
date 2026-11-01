@@ -2384,7 +2384,15 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 		Enabled:            body.Enabled,
 	}
 
-	if !s.allowToolEnvRefs(w, r, cfg) {
+	// UpdateTool keeps the stored env_passthrough when the body omits it, so
+	// check that value: a new command must not inherit an operator's grant.
+	checked := cfg
+	if checked.EnvPassthrough == nil {
+		if old, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
+			checked.EnvPassthrough = old.EnvPassthrough
+		}
+	}
+	if !s.allowToolEnvRefs(w, r, checked) {
 		return
 	}
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {
@@ -2644,6 +2652,7 @@ func (s *Server) handleGetPlugin(w http.ResponseWriter, r *http.Request) {
 // @Param body body object true "Plugin configuration (name, type, command/image, etc.)"
 // @Success 201 {object} tool.PluginStatus "Created plugin"
 // @Failure 400 {object} map[string]string
+// @Failure 403 {object} map[string]string "Host variable references in env without the admin scope"
 // @Failure 503 {object} map[string]string "Tool management not configured"
 // @Router /plugins [post]
 func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
@@ -2687,6 +2696,9 @@ func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
 		Network:      body.Network,
 	}
 
+	if !s.allowToolEnvRefs(w, r, config.ToolConfig{Env: cfg.Env}) {
+		return
+	}
 	if err := s.deps.LifecycleMgr.AddPlugin(r.Context(), body.Name, cfg); err != nil {
 		s.logger.Error("adding plugin", "name", body.Name, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
