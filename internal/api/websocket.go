@@ -196,10 +196,10 @@ type WSConn struct {
 	// otelSpan tracks the connection lifetime for tracing.
 	otelSpan trace.Span
 
-	// canApprove and canPanic hold the scopes the REST equivalents require
-	// (approvals:write, admin). The upgrade itself only requires chat.
-	canApprove bool
-	canPanic   bool
+	// authReq keeps the upgrade request's credentials so privileged frames
+	// re-check scope like REST does: a revoked key or expired session loses
+	// approval and panic power immediately. The upgrade only requires chat.
+	authReq *http.Request
 }
 
 func newWSConn(conn *websocket.Conn, hub *WSHub, server *Server, keyName string) *WSConn {
@@ -573,7 +573,7 @@ func (c *WSConn) handleChatRequest(f ChatRequestFrame) {
 }
 
 func (c *WSConn) handleApprovalResponse(f ApprovalResponseFrame) {
-	if !c.canApprove {
+	if !c.hasScope("approvals:write") {
 		c.sendError("", "forbidden", "approvals:write scope required")
 		return
 	}
@@ -655,9 +655,18 @@ func (c *WSConn) handleCancel(f CancelFrame) {
 	}
 }
 
+// hasScope re-authenticates the upgrade credentials against required.
+func (c *WSConn) hasScope(required string) bool {
+	if c.authReq == nil {
+		return false
+	}
+	_, ok, _ := c.server.authenticate(c.connCtx, c.authReq, required)
+	return ok
+}
+
 // handlePanic triggers an emergency stop via the Dispatcher.
 func (c *WSConn) handlePanic() {
-	if !c.canPanic {
+	if !c.hasScope("admin") {
 		c.sendError("", "forbidden", "admin scope required")
 		return
 	}
@@ -687,11 +696,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name, scopeOK, _ := s.authenticate(r.Context(), r, scope) //nolint:dogsled // identified intentionally ignored: WS always returns 401
-	var canApprove, canPanic bool
-	if scopeOK {
-		_, canApprove, _ = s.authenticate(r.Context(), r, "approvals:write")
-		_, canPanic, _ = s.authenticate(r.Context(), r, "admin")
-	}
 
 	// Redact the token from the URL to prevent it from appearing in logs.
 	if hasToken {
@@ -732,7 +736,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wsc := newWSConn(conn, s.wsHub, s, keyName)
-	wsc.canApprove, wsc.canPanic = canApprove, canPanic
+	wsc.authReq = r.Clone(context.Background())
 
 	if !s.wsHub.Register(wsc) {
 		s.logger.Warn("ws: max connections reached, rejecting", "key", keyName)

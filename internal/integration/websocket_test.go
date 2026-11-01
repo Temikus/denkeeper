@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -204,9 +205,14 @@ func TestWebSocket_SessionPersistence(t *testing.T) {
 // wsDialKey opens a WebSocket on a fresh test server using the harness key.
 func wsDialKey(t *testing.T, h *Harness) *websocket.Conn {
 	t.Helper()
+	return wsDialToken(t, h, h.APIKey)
+}
+
+func wsDialToken(t *testing.T, h *Harness, token string) *websocket.Conn {
+	t.Helper()
 	ts := httptest.NewServer(h.Handler)
 	t.Cleanup(ts.Close)
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/v1/ws?token=" + h.APIKey
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/v1/ws?token=" + token
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
@@ -263,7 +269,10 @@ func TestWebSocket_ChatScopeCannotResolveApprovals(t *testing.T) {
 	if got.Status != approval.StatusPending {
 		t.Errorf("status = %q, want pending", got.Status)
 	}
-	rules, _ := h.Approvals.ListAutoApproveRules(context.Background(), "default")
+	rules, err := h.Approvals.ListAutoApproveRules(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("ListAutoApproveRules: %v", err)
+	}
 	if len(rules) != 0 {
 		t.Errorf("auto-approve rules = %d, want 0", len(rules))
 	}
@@ -304,5 +313,33 @@ func TestWebSocket_ChatScopeCannotPanic(t *testing.T) {
 	}
 	if h.Dispatcher.IsPanicked() {
 		t.Error("dispatcher panicked from a non-admin WS connection")
+	}
+}
+
+func TestWebSocket_RevokedKeyLosesApprovalPower(t *testing.T) {
+	h := NewHarness(t, &HarnessOpts{WithKeyStore: true})
+	id, key := createTestKey(t, h, "ws-approver", []string{"chat", "approvals:write"})
+	conn := wsDialToken(t, h, key)
+	req := submitTestApproval(t, h)
+
+	rec := h.Do(h.AuthedRequest(http.MethodDelete, "/api/v1/keys/"+id, nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type": "approval_response", "approval_id": req.ID, "action": "approve",
+	}); err != nil {
+		t.Fatalf("ws write: %v", err)
+	}
+	if code := wsReadError(t, conn); code != "forbidden" {
+		t.Fatalf("error code = %q, want forbidden", code)
+	}
+	got, err := h.Approvals.Get(context.Background(), req.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != approval.StatusPending {
+		t.Errorf("status = %q, want pending", got.Status)
 	}
 }
