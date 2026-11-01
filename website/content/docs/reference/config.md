@@ -520,7 +520,7 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | `schedule` | string | *required* | Cron expression, interval, or named schedule |
 | `skill` | string | — | Skill to invoke |
 | `agent` | string | `"default"` | Target agent |
-| `session_tier` | string | `"supervised"` | Permission tier for this schedule |
+| `session_tier` | string | `"supervised"` | Permission tier for this schedule. Only the operator (this file or an `admin` API key) can set it above the agent's own tier |
 | `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`). Without one, a schedule does nothing unless it is `headless` |
 | `headless` | bool | `false` | Run with no chat: the turn runs and is kept in Sessions (and in the Turn inspector when `[eval] capture` is on), and nothing is sent. Leave `channel` empty. Used by task check-ins |
 | `tags` | string[] | — | Freeform labels |

@@ -140,6 +140,9 @@ func (s *Server) handleScheduleCreate(ctx context.Context, _ *mcp.CallToolReques
 	if agentName == "" {
 		agentName = e.Name()
 	}
+	if errMsg := configmcp.ValidateScheduleTier(input.SessionTier, e.PermissionTier()); errMsg != "" {
+		return toolError(errMsg), nil, nil
+	}
 
 	enabled := true
 	if input.Enabled != nil {
@@ -222,6 +225,9 @@ func (s *Server) handleScheduleUpdate(ctx context.Context, _ *mcp.CallToolReques
 	e := s.resolveEngine(merged.Agent)
 	if e == nil {
 		return toolError("agent not found: " + merged.Agent), nil, nil
+	}
+	if errMsg := configmcp.ValidateScheduleTier(merged.SessionTier, e.PermissionTier()); errMsg != "" {
+		return toolError(errMsg), nil, nil
 	}
 
 	if err := s.deps.Scheduler.Unregister(input.Name); err != nil {

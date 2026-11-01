@@ -133,6 +133,9 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
 		return
 	}
+	if !s.checkScheduleTier(w, r, input.SessionTier, e) {
+		return
+	}
 
 	if input.Skill != "" {
 		if _, ok := e.GetSkill(input.Skill); !ok {
@@ -192,6 +195,20 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string "Internal error during re-registration"
 // @Failure 503 {object} map[string]string "Schedule management not available"
 // @Router /schedules/{name} [patch]
+// checkScheduleTier writes 403 when a non-admin caller sets a schedule tier
+// above its agent's tier. Admin keys are the operator and may raise it.
+func (s *Server) checkScheduleTier(w http.ResponseWriter, r *http.Request, tier string, e *agent.Engine) bool {
+	errMsg := configmcp.ValidateScheduleTier(tier, e.PermissionTier())
+	if errMsg == "" {
+		return true
+	}
+	if _, isAdmin, _ := s.authenticate(r.Context(), r, "admin"); isAdmin {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": errMsg})
+	return false
+}
+
 func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Scheduler == nil || s.deps.ConfigPath == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -229,6 +246,9 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	e := s.deps.Dispatcher.Agent(agentName)
 	if e == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", agentName)})
+		return
+	}
+	if !s.checkScheduleTier(w, r, cfg.SessionTier, e) {
 		return
 	}
 

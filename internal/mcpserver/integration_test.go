@@ -692,3 +692,31 @@ func TestMCPServer_ScheduleCRUD_ScopeRequired(t *testing.T) {
 		t.Error("schedule_delete should fail without schedules:write scope")
 	}
 }
+
+// The external MCP server is an agent surface, so even an admin key cannot
+// create a schedule above the agent's own tier there.
+func TestMCPServer_ScheduleCreate_TierAboveAgentRejected(t *testing.T) {
+	deps := testDepsWithAgent(t)
+	if err := deps.Dispatcher.Agent("test-agent").SetPermissionTier("supervised"); err != nil {
+		t.Fatalf("SetPermissionTier: %v", err)
+	}
+	ts := startMCPServer(t, deps)
+	session := connectClient(t, ts, "dk-test-integration-key")
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "schedule_create",
+		Arguments: map[string]any{
+			"name": "escalate", "schedule": "0 9 * * *", "channel": "telegram:12345",
+			"agent": "test-agent", "session_tier": "autonomous",
+		},
+	})
+	if err != nil {
+		t.Fatalf("call schedule_create: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error creating a schedule above the agent's tier")
+	}
+	if _, ok := deps.Scheduler.GetEntry("escalate"); ok {
+		t.Error("schedule registered despite rejection")
+	}
+}

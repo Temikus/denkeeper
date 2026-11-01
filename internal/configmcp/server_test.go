@@ -434,6 +434,42 @@ func TestScheduleAdd_Autonomous_Success(t *testing.T) {
 	}
 }
 
+func TestScheduleAdd_TierAboveAgentRejected(t *testing.T) {
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+	})
+
+	text, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "escalate", "schedule": "@every 1h", "channel": "telegram:1",
+		"session_tier": "autonomous",
+	})
+	if !isErr {
+		t.Fatalf("expected error raising schedule tier above agent tier, got: %s", text)
+	}
+	if !strings.Contains(text, "only an operator") {
+		t.Errorf("error should say only an operator can raise it, got: %s", text)
+	}
+	if _, ok := deps.Sched.GetEntry("escalate"); ok {
+		t.Error("schedule registered despite rejection")
+	}
+}
+
+func TestScheduleAdd_TierAtOrBelowAgentAllowed(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+	})
+
+	for _, tier := range []string{"supervised", "restricted"} {
+		text, isErr := callTool(t, session, "schedule_add", map[string]any{
+			"name": "ok-" + tier, "schedule": "@every 1h", "channel": "telegram:1",
+			"session_tier": tier,
+		})
+		if isErr {
+			t.Errorf("tier %q: unexpected error: %s", tier, text)
+		}
+	}
+}
+
 func TestScheduleAdd_HeadlessNeedsNoChannel(t *testing.T) {
 	session, deps := newTestServer(t, nil)
 	text, isErr := callTool(t, session, "schedule_add", map[string]any{
@@ -1974,8 +2010,9 @@ func TestScheduleUpdate_CrossAgentReassign(t *testing.T) {
 	}
 
 	text, isErr := callTool(t, session, "schedule_update", map[string]any{
-		"name":  "reassign-me",
-		"agent": "other-agent",
+		"name":         "reassign-me",
+		"agent":        "other-agent",
+		"session_tier": "supervised",
 	})
 	if isErr {
 		t.Fatalf("schedule_update error: %s", text)
@@ -1988,6 +2025,74 @@ func TestScheduleUpdate_CrossAgentReassign(t *testing.T) {
 		t.Errorf("reassigned schedule should leave this agent's list, got: %s", listText)
 	}
 	_ = otherHandlerCalled
+}
+
+func TestScheduleUpdate_TierAboveAgentRejected(t *testing.T) {
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+	})
+	if _, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "raise-me", "schedule": "@daily", "channel": "telegram:1",
+	}); isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "raise-me", "session_tier": "autonomous",
+	})
+	if !isErr {
+		t.Fatalf("expected error raising schedule tier, got: %s", text)
+	}
+	e, _ := deps.Sched.GetEntry("raise-me")
+	if e.SessionTier == "autonomous" {
+		t.Error("schedule tier was raised despite rejection")
+	}
+}
+
+func TestScheduleUpdate_OperatorRaisedScheduleNotEditable(t *testing.T) {
+	session, deps := newTestServer(t, func(d *configmcp.Deps) {
+		d.PermissionTier = func() string { return "supervised" }
+	})
+	if err := deps.Sched.Register(scheduler.Config{
+		Name: "operator-raised", Type: string(scheduler.ScheduleTypeAgent),
+		Agent: deps.AgentName, Schedule: "@daily", SessionTier: "autonomous", Enabled: true,
+		Channel: "telegram:1",
+	}, func(scheduler.Entry) {}); err != nil {
+		t.Fatalf("registering schedule: %v", err)
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "operator-raised", "skill": "",
+	})
+	if !isErr {
+		t.Fatalf("expected a supervised agent to be refused editing an autonomous schedule, got: %s", text)
+	}
+	if !strings.Contains(text, "only an operator") {
+		t.Errorf("expected the tier rejection, got: %s", text)
+	}
+}
+
+func TestScheduleUpdate_CrossAgentNeedsExplicitTier(t *testing.T) {
+	session, _ := newTestServer(t, func(d *configmcp.Deps) {
+		d.ResolveAgentHandler = func(string) func(context.Context, adapter.IncomingMessage) error {
+			return func(context.Context, adapter.IncomingMessage) error { return nil }
+		}
+	})
+	if _, isErr := callTool(t, session, "schedule_add", map[string]any{
+		"name": "move-me", "schedule": "@daily", "channel": "telegram:1",
+	}); isErr {
+		t.Fatal("setup: schedule_add failed")
+	}
+
+	text, isErr := callTool(t, session, "schedule_update", map[string]any{
+		"name": "move-me", "agent": "other-agent",
+	})
+	if !isErr {
+		t.Fatalf("expected error moving a schedule without a tier, got: %s", text)
+	}
+	if !strings.Contains(text, "session_tier") {
+		t.Errorf("error should name session_tier, got: %s", text)
+	}
 }
 
 func TestScheduleUpdate_CrossAgentUnknown(t *testing.T) {

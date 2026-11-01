@@ -111,3 +111,24 @@ func TestValidTier(t *testing.T) {
 		}
 	}
 }
+
+func TestTierExceeds_HigherTierExceeds(t *testing.T) {
+	if !TierExceeds("autonomous", "supervised") || !TierExceeds("supervised", "restricted") {
+		t.Error("a higher tier must exceed a lower ceiling")
+	}
+}
+
+func TestTierExceeds_EqualOrLowerDoesNot(t *testing.T) {
+	if TierExceeds("supervised", "supervised") || TierExceeds("restricted", "autonomous") {
+		t.Error("an equal or lower tier must not exceed the ceiling")
+	}
+}
+
+func TestTierExceeds_UnknownCeilingIsExceeded(t *testing.T) {
+	if !TierExceeds("restricted", NewDenyAll().Tier()) {
+		t.Error("a deny-all ceiling must be exceeded by any real tier")
+	}
+	if TierExceeds("bogus", "restricted") {
+		t.Error("an unrecognised tier must not count as exceeding")
+	}
+}
