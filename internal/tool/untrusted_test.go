@@ -86,6 +86,60 @@ func TestValidatePinnedPackageArgs_Uvx(t *testing.T) {
 	}
 }
 
+func TestValidatePinnedPackageArgs_NpxRegistryOverridesRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"--registry", "https://evil.example", "pkg@1.0.0"},
+		{"--registry=https://evil.example", "pkg@1.0.0"},
+		{"--userconfig", "/tmp/npmrc", "pkg@1.0.0"},
+		{"--globalconfig=/tmp/npmrc", "pkg@1.0.0"},
+		{"-y", "--node-options=--require=/tmp/x.js", "pkg@1.0.0"},
+	} {
+		if err := ValidatePinnedPackageArgs("npx", args); err == nil {
+			t.Errorf("npx %v: accepted, want rejection", args)
+		}
+	}
+}
+
+func TestValidatePinnedPackageArgs_UvxIndexOverridesRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"--index-url", "https://evil.example/simple", "pkg==1.0"},
+		{"--index-url=https://evil.example/simple", "pkg==1.0"},
+		{"-i", "https://evil.example/simple", "pkg==1.0"},
+		{"--default-index", "https://evil.example/simple", "pkg==1.0"},
+		{"--extra-index-url=https://evil.example/simple", "pkg==1.0"},
+		{"--index", "evil=https://evil.example/simple", "pkg==1.0"},
+		{"--find-links", "/tmp/wheels", "pkg==1.0"},
+		{"-f", "/tmp/wheels", "pkg==1.0"},
+		{"--allow-insecure-host", "pypi.org", "pkg==1.0"},
+	} {
+		if err := ValidatePinnedPackageArgs("uvx", args); err == nil {
+			t.Errorf("uvx %v: accepted, want rejection", args)
+		}
+	}
+}
+
+// An unknown option might take a value; reading it as boolean would check
+// the value as the package while the launcher runs the next argument.
+func TestValidatePinnedPackageArgs_UnknownOptionRefused(t *testing.T) {
+	if err := ValidatePinnedPackageArgs("uvx", []string{"--made-up-option", "pkg==1.0", "evil"}); err == nil {
+		t.Error("uvx with an unknown option before a pinned-looking value: accepted, want rejection")
+	}
+	if err := ValidatePinnedPackageArgs("npx", []string{"--made-up-option", "pkg@1.0.0", "evil"}); err == nil {
+		t.Error("npx with an unknown option before a pinned-looking value: accepted, want rejection")
+	}
+}
+
+// --refresh-package takes a value, so the package that runs is "evil", which
+// is unpinned.
+func TestValidatePinnedPackageArgs_UvxKnownValueFlagSkipsItsValue(t *testing.T) {
+	if err := ValidatePinnedPackageArgs("uvx", []string{"--refresh-package", "pkg==1.0", "evil"}); err == nil {
+		t.Error("uvx --refresh-package pkg==1.0 evil: accepted, want rejection")
+	}
+	if err := ValidatePinnedPackageArgs("uvx", []string{"--refresh-package", "dep", "-q", "pkg==1.0"}); err != nil {
+		t.Errorf("uvx --refresh-package dep -q pkg==1.0: unexpected error %v", err)
+	}
+}
+
 func TestValidatePinnedPackageArgs_OtherCommandsUntouched(t *testing.T) {
 	if err := ValidatePinnedPackageArgs("/usr/bin/my-mcp", []string{"anything"}); err != nil {
 		t.Errorf("unexpected error %v", err)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -2053,17 +2054,18 @@ func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
 //
 // It also gates what the tool spawns. Without [mcp] allowed_commands nothing
 // restricts a stdio command, so a non-admin key may not add one or change an
-// existing tool's command line (prev is the stored config on an update, nil on
-// an add). With the allowlist set, LifecycleManager enforces it for everyone.
+// existing tool's command line or env (prev is the stored config on an update,
+// nil on an add). Env counts because the respawned child reads it: a value such
+// as NODE_OPTIONS can make an operator's command run other code. With the allowlist set, LifecycleManager enforces it for everyone.
 func (s *Server) allowToolEnvRefs(w http.ResponseWriter, r *http.Request, cfg config.ToolConfig, prev *config.ToolConfig) bool {
 	err := tool.ValidateUntrustedEnvRefs(cfg.Env, cfg.URL, cfg.Headers)
 	if err == nil && len(cfg.EnvPassthrough) > 0 {
 		err = fmt.Errorf("env_passthrough forwards host variables; only an operator can set it")
 	}
 	if err == nil && (cfg.Transport == "" || cfg.Transport == "stdio") &&
-		(prev == nil || tool.CommandLineChanged(*prev, cfg)) &&
+		(prev == nil || tool.CommandLineChanged(*prev, cfg) || !maps.Equal(prev.Env, cfg.Env)) &&
 		!s.deps.LifecycleMgr.ToolManager().HasCommandAllowlist() {
-		err = fmt.Errorf("stdio tools run a program on the host and [mcp] allowed_commands is not set; only an operator can add or change one")
+		err = fmt.Errorf("stdio tools run a program on the host and [mcp] allowed_commands is not set; only an operator can add one or change its command line or env")
 	}
 	if err == nil {
 		return true
