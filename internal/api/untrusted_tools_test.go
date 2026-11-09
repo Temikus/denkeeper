@@ -73,16 +73,57 @@ func TestAddPlugin_NonAdminSubprocess_Forbidden(t *testing.T) {
 	}
 }
 
-// An admin key is the operator: the plugin checks do not stop it (the add
-// then fails later for unrelated reasons, which is not a 403).
+// An admin key is the operator: the plugin checks do not stop it. Without a
+// "tools" capability AddPlugin spawns nothing, so the add itself succeeds.
 func TestAddPlugin_AdminSubprocess_NotForbidden(t *testing.T) {
 	deps := testDeps()
 	deps.LifecycleMgr = testLifecycleMgr(t)
 	srv := New(testConfig(allScopesKey()), deps, testLogger())
 
 	rec := postJSON(srv, "/api/v1/plugins", `{"name":"p","type":"subprocess","command":"/nonexistent/binary"}`)
-	if rec.Code == http.StatusForbidden {
-		t.Fatalf("admin subprocess plugin forbidden: %s", rec.Body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body %s", rec.Code, rec.Body)
+	}
+}
+
+// allowToolEnvRefsFor runs the REST tool gate directly for a non-admin key,
+// so an update can be checked against a stored stdio config without spawning.
+func allowToolEnvRefsFor(t *testing.T, cfg config.ToolConfig, prev *config.ToolConfig) *httptest.ResponseRecorder {
+	t.Helper()
+	deps := testDeps()
+	deps.LifecycleMgr = testLifecycleMgr(t)
+	srv := New(testConfig(toolsWriteKey()), deps, testLogger())
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tools/x", nil)
+	req.Header.Set("Authorization", "Bearer dk-test-key")
+	rec := httptest.NewRecorder()
+	if srv.allowToolEnvRefs(rec, req, cfg, prev) {
+		rec.Code = http.StatusOK
+	}
+	return rec
+}
+
+// A new env on an operator's stdio tool reaches the respawned child
+// (NODE_OPTIONS=--require ... runs other code), so it is gated like a new
+// command line while no allowlist is set.
+func TestUpdateTool_NonAdminStdioEnvChangeWithoutAllowlist_Forbidden(t *testing.T) {
+	prev := config.ToolConfig{Command: "npx", Args: []string{"pkg@1.0.0"}, Env: map[string]string{"A": "1"}}
+	cfg := prev
+	cfg.Env = map[string]string{"A": "1", "NODE_OPTIONS": "--require=/tmp/x.js"}
+
+	rec := allowToolEnvRefsFor(t, cfg, &prev)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "env") {
+		t.Fatalf("status = %d, body %s; want 403 naming env", rec.Code, rec.Body)
+	}
+}
+
+func TestUpdateTool_NonAdminStdioUnchangedSpawn_Allowed(t *testing.T) {
+	prev := config.ToolConfig{Command: "npx", Args: []string{"pkg@1.0.0"}, Env: map[string]string{"A": "1"}}
+	cfg := prev
+	cfg.Env = map[string]string{"A": "1"}
+	cfg.RequestTimeoutSecs = 42
+
+	if rec := allowToolEnvRefsFor(t, cfg, &prev); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s; want an unchanged command line and env allowed", rec.Code, rec.Body)
 	}
 }
 

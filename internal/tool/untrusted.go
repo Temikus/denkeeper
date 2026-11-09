@@ -110,38 +110,66 @@ type launcher struct {
 	name         string
 	refused      map[string]bool            // flags that run unpinned or arbitrary code
 	packageFlags map[string]packageFlagRole // flags whose value is a package spec
-	valueFlags   map[string]bool            // other flags that take a separate value
+	valueFlags   map[string]bool            // other known flags that take a separate value
+	boolFlags    map[string]bool            // known flags that take no value
 	pinned       *regexp.Regexp
 	hint         string // an example of a pinned spec, for the error
 }
 
+func flagSet(names ...string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}
+
 var npxLauncher = launcher{
-	name:         "npx",
-	refused:      map[string]bool{"-c": true, "--call": true},
+	name: "npx",
+	// A pin says nothing about where the package comes from: a registry or
+	// npm config the caller chooses can serve anything under that version.
+	refused: flagSet("-c", "--call", "--registry", "--userconfig", "--globalconfig",
+		"--node-options", "--script-shell"),
 	packageFlags: map[string]packageFlagRole{"-p": namesPackage, "--package": namesPackage},
-	pinned:       npmPinned,
-	hint:         "name@1.2.3",
+	valueFlags:   flagSet("--loglevel"),
+	boolFlags: flagSet("-y", "--yes", "--no", "-q", "--quiet", "--silent",
+		"--prefer-offline", "--prefer-online", "--offline", "--no-update-notifier",
+		"--no-fund", "--no-audit"),
+	pinned: npmPinned,
+	hint:   "name@1.2.3",
 }
 
 var uvxLauncher = launcher{
-	name:         "uvx",
-	refused:      map[string]bool{"--with-requirements": true, "--with-editable": true},
-	packageFlags: map[string]packageFlagRole{"--from": namesPackage, "--with": extraPackage},
-	valueFlags: map[string]bool{
-		"--python": true, "-p": true, "--index": true, "--index-url": true, "-i": true,
-		"--extra-index-url": true, "--default-index": true, "--find-links": true, "-f": true,
-		"--constraints": true, "-c": true, "--overrides": true, "--build-constraints": true, "-b": true,
-		"--directory": true, "--project": true, "--config-file": true, "--cache-dir": true,
-		"--index-strategy": true, "--keyring-provider": true, "--resolution": true, "--prerelease": true,
-		"--exclude-newer": true, "--link-mode": true, "--python-platform": true,
+	name: "uvx",
+	// Index and find-links overrides pick where a pinned name is fetched
+	// from; --allow-insecure-host lets anyone on the path answer instead.
+	refused: flagSet("--with-requirements", "--with-editable",
+		"--index", "--index-url", "-i", "--default-index", "--extra-index-url",
+		"--find-links", "-f", "--allow-insecure-host", "--env-file"),
+	packageFlags: map[string]packageFlagRole{
+		"--from": namesPackage, "--with": extraPackage, "--with-executables-from": extraPackage,
 	},
+	valueFlags: flagSet(
+		"--python", "-p", "--constraints", "-c", "--overrides", "--build-constraints", "-b",
+		"--directory", "--project", "--config-file", "--cache-dir", "--color",
+		"--index-strategy", "--keyring-provider", "--resolution", "--prerelease",
+		"--exclude-newer", "--link-mode", "--python-platform",
+		"--refresh-package", "--reinstall-package", "--upgrade-package", "-P",
+		"--no-build-package", "--no-binary-package", "--no-build-isolation-package",
+	),
+	boolFlags: flagSet("-q", "--quiet", "-v", "--verbose", "-n", "--no-cache", "--offline",
+		"--isolated", "--refresh", "--reinstall", "--upgrade", "-U", "--native-tls",
+		"--no-progress", "--no-config", "--no-python-downloads", "--managed-python",
+		"--no-managed-python", "--no-build-isolation", "--no-build", "--no-binary",
+		"--no-sources", "--compile-bytecode", "--no-index"),
 	pinned: pyPinned,
 	hint:   "name==1.2.3",
 }
 
 // check walks the launcher's options up to the first positional argument.
-// Unknown flags are treated as boolean, so an unknown flag that takes a value
-// makes that value read as the package, which then fails the pin check.
+// An option it does not know is refused rather than guessed at: guessing that
+// it takes no value would let "--unknown pkg==1.0 evil" pass on the pinned-
+// looking value while the launcher runs evil.
 func (l launcher) check(args []string) error {
 	named := false
 	for i := 0; i < len(args); i++ {
@@ -166,10 +194,11 @@ func (l launcher) check(args []string) error {
 			if !hasValue {
 				i++ // skip the flag's value
 			}
+		case l.boolFlags[name]:
 		case arg == "--":
 			return l.checkPositional(named, args[i+1:])
 		case strings.HasPrefix(arg, "-"):
-			// A boolean flag (-y, --yes, --quiet, ...).
+			return fmt.Errorf("%s option %s is not one Denkeeper can check; only an operator can configure it", l.name, name)
 		default:
 			return l.checkPositional(named, args[i:])
 		}
