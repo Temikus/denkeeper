@@ -186,6 +186,8 @@ function handleToolEvent(agentMsg, evt) {
       agentMsg.approvals = [...agentMsg.approvals, {
         id: evt.approval_id, tool: evt.tool, tool_id: evt.tool_id, text: evt.text,
         status: 'pending', resolving: false,
+        // tool_add / plugin_add: one-off approval only, no auto-approve buttons.
+        humanOnly: !!evt.approval_human_only,
       }]
     }
   }

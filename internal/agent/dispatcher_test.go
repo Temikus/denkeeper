@@ -2741,3 +2741,38 @@ func TestDispatcher_Dispatch_NoAdapter_ApprovalDeniedImmediately(t *testing.T) {
 		t.Fatal("expected at least 1 sent message")
 	}
 }
+
+// A human-only approval (tool_add, plugin_add) offers no session/always
+// buttons on any rendering path.
+func TestDispatcher_HumanOnlyApproval_OnlyApproveAndDeny(t *testing.T) {
+	evt := ChatEvent{Type: "tool_approval", Tool: "tool_add", Text: "{}", ApprovalCallback: "appr:1", ApprovalHumanOnly: true}
+	msg := adapter.IncomingMessage{Adapter: "slack", ExternalID: "chat-1"}
+
+	check := func(path string, buttons []adapter.KeyboardButton) {
+		t.Helper()
+		if len(buttons) != 2 {
+			t.Fatalf("%s: %d buttons, want Approve and Deny only", path, len(buttons))
+		}
+		for _, b := range buttons {
+			if strings.HasSuffix(b.CallbackData, ":approve_session") || strings.HasSuffix(b.CallbackData, ":approve_always") {
+				t.Errorf("%s: offers %q", path, b.CallbackData)
+			}
+		}
+	}
+
+	a := &mockAdapter{name: "slack"}
+	d := &Dispatcher{adapters: map[string]adapter.Adapter{"slack": a}, logger: testLogger()}
+	d.sendStandaloneApprovalPrompt(context.Background(), a, msg, evt)
+	d.sendDebugApprovalPrompt(context.Background(), a, msg, evt)
+	if len(a.sent) != 2 {
+		t.Fatalf("sends = %d, want 2", len(a.sent))
+	}
+	check("standalone", a.sent[0].Buttons)
+	check("debug", a.sent[1].Buttons)
+
+	buttons, layout := approvalButtons("appr:1", true, "s", "a")
+	check("activity log", buttons)
+	if len(layout) != 1 || layout[0] != 2 {
+		t.Errorf("layout = %v, want [2]", layout)
+	}
+}

@@ -513,12 +513,14 @@ format = "text"
 #   denkeeper plugin sign --key ~/.denkeeper/keys/publisher.key /usr/bin/my-plugin
 #   # Creates /usr/bin/my-plugin.sig
 #
-# allow_unsigned = true  (default) — unsigned plugins produce a warning
+# allow_unsigned = true  — unsigned plugins produce a warning
+#                          (default when trusted_keys is empty)
 # allow_unsigned = false — unsigned plugins are rejected at startup
+#                          (default when trusted_keys is set)
 
 # [security]
 # trusted_keys  = ["~/.denkeeper/keys/publisher.pub"]
-# allow_unsigned = true
+# allow_unsigned = false
 
 # ---------------------------------------------------------------------------
 # Sandbox Runtime — Backend for Docker-type plugins
