@@ -475,8 +475,8 @@ type SecurityConfig struct {
 	// TrustedKeys is a list of file paths to PEM-encoded Ed25519 public keys.
 	// Plugins signed by any of these keys are trusted.
 	TrustedKeys []string `toml:"trusted_keys"`
-	// AllowUnsigned controls whether unsigned plugins are allowed.
-	// Defaults to true. Set to false to require all plugins to be signed.
+	// AllowUnsigned controls whether unsigned plugins are allowed. Defaults
+	// to true with no trusted_keys and to false when trusted_keys is set.
 	AllowUnsigned *bool `toml:"allow_unsigned"`
 }
 
@@ -967,6 +967,12 @@ type MCPConfig struct {
 	// allowlist. Secret-bearing names (DENKEEPER_* and the forbidden-pattern
 	// denylist) are always filtered out even if listed here.
 	EnvPassthrough []string `toml:"env_passthrough"`
+	// AllowedCommands, when non-empty, is the exact list of stdio commands a
+	// tool added or updated at runtime (config MCP tool_add, REST, external
+	// MCP) may run, compared on the full string. Tools in this file are not
+	// checked. Empty = no allowlist, except that a REST key without the admin
+	// scope may then not add or update a stdio tool at all. Restart-only.
+	AllowedCommands []string `toml:"allowed_commands"`
 }
 
 // ToolConfig defines an MCP tool server to spawn.
@@ -2172,8 +2178,11 @@ func applyMiscDefaults(cfg *Config) {
 		cfg.Voice.TTSVoice = "alloy"
 	}
 	if cfg.Security.AllowUnsigned == nil {
-		t := true
-		cfg.Security.AllowUnsigned = &t
+		// Listing trusted keys says signatures matter, so an unset
+		// allow_unsigned then requires them rather than waving unsigned
+		// binaries through with a warning. Set it explicitly to keep either.
+		allow := len(cfg.Security.TrustedKeys) == 0
+		cfg.Security.AllowUnsigned = &allow
 	}
 	if cfg.KV.MaxKeysPerAgent == 0 {
 		cfg.KV.MaxKeysPerAgent = 1000

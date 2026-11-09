@@ -1463,10 +1463,30 @@ func (d *Dispatcher) handleToolApproval(ctx context.Context, a adapter.Adapter, 
 		return
 	}
 	if alog != nil {
-		alog.setPending(ctx, evt.Tool, evt.Text, evt.ApprovalCallback)
+		alog.setPendingApproval(ctx, evt.Tool, evt.Text, evt.ApprovalCallback, evt.ApprovalHumanOnly)
 		return
 	}
 	d.sendStandaloneApprovalPrompt(ctx, a, msg, evt)
+}
+
+// approvalButtons builds the inline keyboard for a pending approval: Approve
+// and Deny, plus the session/always auto-approve buttons unless the approval
+// is human-only. A human-only request is never a tool_call request, so those
+// callbacks would only approve once anyway — they are dropped so the button
+// does not promise a rule it cannot create.
+func approvalButtons(callback string, humanOnly bool, sessionLabel, alwaysLabel string) ([]adapter.KeyboardButton, []int) {
+	buttons := []adapter.KeyboardButton{
+		{Label: "✅ Approve", CallbackData: callback + ":approve"},
+		{Label: "❌ Deny", CallbackData: callback + ":deny"},
+	}
+	if humanOnly {
+		return buttons, []int{2}
+	}
+	buttons = append(buttons,
+		adapter.KeyboardButton{Label: sessionLabel, CallbackData: callback + ":approve_session"},
+		adapter.KeyboardButton{Label: alwaysLabel, CallbackData: callback + ":approve_always"},
+	)
+	return buttons, []int{2, 2}
 }
 
 // supervisorStatusRender carries the per-status debug text and activity-log
@@ -1571,18 +1591,15 @@ func (d *Dispatcher) routeApprovalStatus(ctx context.Context, a adapter.Adapter,
 // sites in this file, losing an approval prompt stalls the turn until the
 // approval times out.
 func (d *Dispatcher) sendDebugApprovalPrompt(ctx context.Context, a adapter.Adapter, msg adapter.IncomingMessage, evt ChatEvent) {
+	// The debug prompt has always used the adapter's default layout.
+	buttons, _ := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 Auto (15 min)", "♾️ Auto (always)")
 	err := a.Send(ctx, adapter.OutgoingMessage{
 		Text: fmt.Sprintf("Agent wants to execute tool **%s**\n\n```\n%s\n```\n\nApprove?",
 			truncateEscaped(evt.Tool, toolNameMaxBytes),
 			truncateEscaped(evt.Text, approvalArgsMaxBytes)),
 		ExternalID: msg.ExternalID,
 		Adapter:    msg.Adapter,
-		Buttons: []adapter.KeyboardButton{
-			{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-			{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-			{Label: "🔄 Auto (15 min)", CallbackData: evt.ApprovalCallback + ":approve_session"},
-			{Label: "♾️ Auto (always)", CallbackData: evt.ApprovalCallback + ":approve_always"},
-		},
+		Buttons:    buttons,
 	})
 	if err != nil {
 		d.logger.Error("failed to send approval prompt", "error", err,
@@ -1599,18 +1616,14 @@ func (d *Dispatcher) sendStandaloneApprovalPrompt(ctx context.Context, a adapter
 		truncateEscaped(evt.Tool, toolNameMaxBytes),
 		truncateEscaped(evt.Text, approvalArgsMaxBytes),
 	)
+	buttons, layout := approvalButtons(evt.ApprovalCallback, evt.ApprovalHumanOnly, "🔄 15 min", "♾️ Always")
 	err := a.Send(ctx, adapter.OutgoingMessage{
-		Text:       text,
-		ParseMode:  "HTML",
-		ExternalID: msg.ExternalID,
-		Adapter:    msg.Adapter,
-		Buttons: []adapter.KeyboardButton{
-			{Label: "✅ Approve", CallbackData: evt.ApprovalCallback + ":approve"},
-			{Label: "❌ Deny", CallbackData: evt.ApprovalCallback + ":deny"},
-			{Label: "🔄 15 min", CallbackData: evt.ApprovalCallback + ":approve_session"},
-			{Label: "♾️ Always", CallbackData: evt.ApprovalCallback + ":approve_always"},
-		},
-		ButtonLayout: []int{2, 2},
+		Text:         text,
+		ParseMode:    "HTML",
+		ExternalID:   msg.ExternalID,
+		Adapter:      msg.Adapter,
+		Buttons:      buttons,
+		ButtonLayout: layout,
 	})
 	if err != nil {
 		d.logger.Error("failed to send approval prompt", "error", err,
@@ -1682,9 +1695,10 @@ type activityLine struct {
 // pendingApproval represents a tool call awaiting human approval, rendered
 // inline at the bottom of the active chunk with inline keyboard buttons.
 type pendingApproval struct {
-	tool     string
-	args     string
-	callback string
+	tool      string
+	args      string
+	callback  string
+	humanOnly bool // no session/always buttons (ChatEvent.ApprovalHumanOnly)
 }
 
 // Message-size budgets for the Telegram activity log.
@@ -1861,13 +1875,7 @@ func (l *activityLog) flush(ctx context.Context) {
 		Silent:     l.pending == nil,
 	}
 	if l.pending != nil {
-		msg.Buttons = []adapter.KeyboardButton{
-			{Label: "✅ Approve", CallbackData: l.pending.callback + ":approve"},
-			{Label: "❌ Deny", CallbackData: l.pending.callback + ":deny"},
-			{Label: "🔄 15 min", CallbackData: l.pending.callback + ":approve_session"},
-			{Label: "♾️ Always", CallbackData: l.pending.callback + ":approve_always"},
-		}
-		msg.ButtonLayout = []int{2, 2}
+		msg.Buttons, msg.ButtonLayout = approvalButtons(l.pending.callback, l.pending.humanOnly, "🔄 15 min", "♾️ Always")
 	}
 
 	if last.messageID == "" {
@@ -2034,10 +2042,17 @@ func (l *activityLog) toolDenied(ctx context.Context, tool string) {
 // and push it over Telegram's cap, which drops the message — and with it the
 // inline keyboard — entirely.
 func (l *activityLog) setPending(ctx context.Context, tool, args, callback string) {
+	l.setPendingApproval(ctx, tool, args, callback, false)
+}
+
+// setPendingApproval is setPending with the human-only switch: a human-only
+// approval gets Approve and Deny only.
+func (l *activityLog) setPendingApproval(ctx context.Context, tool, args, callback string, humanOnly bool) {
 	l.pending = &pendingApproval{
-		tool:     truncateEscaped(tool, toolNameMaxBytes),
-		args:     truncateEscaped(args, approvalArgsMaxBytes),
-		callback: callback,
+		tool:      truncateEscaped(tool, toolNameMaxBytes),
+		args:      truncateEscaped(args, approvalArgsMaxBytes),
+		callback:  callback,
+		humanOnly: humanOnly,
 	}
 	c := l.ensureChunk()
 	if c.messageID != "" || len(l.renderLines(c)) > activityChunkWithApprovalMaxBytes {

@@ -300,6 +300,7 @@ Global MCP settings.
     init_retry_backoff = "2s"        # backoff between retries
     url_allowlist = []               # allowed hosts for SSE servers
     env_passthrough = []             # extra parent env vars to forward into all stdio subprocesses; DENKEEPER_* always filtered
+    allowed_commands = []            # exact stdio commands runtime-added tools may run (empty = no allowlist; non-admin REST keys then cannot add stdio tools)
 
 ### [[schedules]]
 
@@ -509,7 +510,7 @@ Each signal takes "withhold", "warn" (audit but deliver anyway) or "off".
 Plugin signature verification.
 
     trusted_keys = []                # paths to Ed25519 public keys
-    allow_unsigned = true            # allow unsigned plugin binaries
+    allow_unsigned = true            # allow unsigned plugin binaries (default false when trusted_keys is set)
 
 ### [sandbox]
 

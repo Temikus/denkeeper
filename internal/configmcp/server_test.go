@@ -3361,3 +3361,21 @@ func TestSessionSearch_NilDep(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginAdd_SubprocessAndHostNetworkRejected(t *testing.T) {
+	session, _ := newTestServer(t, nil)
+	for _, args := range []map[string]any{
+		{"name": "sh-plugin", "type": "subprocess", "command": "/bin/sh"},
+		{"name": "net-plugin", "type": "docker", "image": "x:1", "network": "host"},
+		{"name": "ns-plugin", "type": "docker", "image": "x:1", "network": "container:other"},
+	} {
+		text, isErr := callTool(t, session, "plugin_add", args)
+		if !isErr {
+			t.Errorf("%v: accepted (%s), want rejection", args, text)
+			continue
+		}
+		if !strings.Contains(text, "only an operator") {
+			t.Errorf("%v: got %q, want the operator-only rejection", args, text)
+		}
+	}
+}

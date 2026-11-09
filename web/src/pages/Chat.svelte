@@ -473,8 +473,12 @@
           <div class="approval-actions">
             <button class="btn-appr btn-ok" onclick={() => resolvePending(appr, true)} disabled={appr._resolving} aria-label="Approve tool {label}">Approve</button>
             <button class="btn-appr btn-bad" onclick={() => resolvePending(appr, false)} disabled={appr._resolving} aria-label="Deny tool {label}">Deny</button>
-            <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {label} for 15 minutes">15 min</button>
-            <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {label}">Always</button>
+            <!-- Auto-approve rules exist for tool calls only; a tool_add or
+                 plugin_add request (kind install_tool) is approved one at a time. -->
+            {#if appr.kind === 'tool_call'}
+              <button class="btn-appr btn-session" onclick={() => resolvePending(appr, true, 'session')} disabled={appr._resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {label} for 15 minutes">15 min</button>
+              <button class="btn-appr btn-auto" onclick={() => resolvePending(appr, true, 'permanent')} disabled={appr._resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {label}">Always</button>
+            {/if}
           </div>
         </div>
       {/each}
@@ -549,8 +553,10 @@
                       <div class="approval-actions">
                         <button class="btn-appr btn-ok" onclick={() => resolveApproval(appr, true)} disabled={appr.resolving} aria-label="Approve {appr.tool}">Approve</button>
                         <button class="btn-appr btn-bad" onclick={() => resolveApproval(appr, false)} disabled={appr.resolving} aria-label="Deny {appr.tool}">Deny</button>
-                        <button class="btn-appr btn-session" onclick={() => resolveApproval(appr, true, 'session')} disabled={appr.resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.tool} for 15 minutes">15 min</button>
-                        <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
+                        {#if !appr.humanOnly}
+                          <button class="btn-appr btn-session" onclick={() => resolveApproval(appr, true, 'session')} disabled={appr.resolving} title="Auto-approve this tool for the next 15 minutes" aria-label="Approve {appr.tool} for 15 minutes">15 min</button>
+                          <button class="btn-appr btn-auto" onclick={() => resolveApproval(appr, true, 'permanent')} disabled={appr.resolving} title="Permanently auto-approve this tool for this agent" aria-label="Always approve {appr.tool}">Always</button>
+                        {/if}
                       </div>
                     {:else}
                       <span class="approval-badge">{approvalStatusLabel(appr.status, appr.text)}</span>

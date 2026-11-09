@@ -209,6 +209,38 @@ describe('Chat page', () => {
     })
   })
 
+  test('human-only approval offers no auto-approve buttons', async () => {
+    server.use(
+      http.post('/api/v1/chat', () => {
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"tool_approval","approval_id":"a1","tool":"tool_add","text":"add","approval_human_only":true}\n\n'))
+          },
+        })
+        return new HttpResponse(stream, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      })
+    )
+
+    render(Chat)
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Type a message/)).toBeInTheDocument()
+    })
+
+    const textarea = screen.getByPlaceholderText(/Type a message/)
+    await fireEvent.input(textarea, { target: { value: 'add a tool' } })
+    await fireEvent.click(document.querySelector('.btn-send'))
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Approve tool_add')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Deny tool_add')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Approve tool_add for 15 minutes')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Always approve tool_add')).not.toBeInTheDocument()
+  })
+
   test('labels a decider approval as the decider, with its reason', async () => {
     server.use(
       http.post('/api/v1/chat', () => {
