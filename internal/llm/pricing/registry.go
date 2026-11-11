@@ -7,9 +7,19 @@ import (
 
 // ModelPrice holds per-million-token pricing for a model.
 type ModelPrice struct {
-	InputPerMTok       float64 // cost per million input tokens
-	OutputPerMTok      float64 // cost per million output tokens
-	CachedInputPerMTok float64 // cost per million cached input tokens; 0 means same as InputPerMTok
+	InputPerMTok       float64    // cost per million input tokens
+	OutputPerMTok      float64    // cost per million output tokens
+	CachedInputPerMTok float64    // cost per million cached input tokens; 0 means same as InputPerMTok
+	LongPrompt         PromptTier // rates for long prompts; zero value means none
+}
+
+// PromptTier replaces every rate of a call whose prompt (input + cached
+// tokens) exceeds AboveTokens. AboveTokens 0 disables the tier.
+type PromptTier struct {
+	AboveTokens        int
+	InputPerMTok       float64
+	OutputPerMTok      float64
+	CachedInputPerMTok float64 // 0 means same as InputPerMTok
 }
 
 // Registry maps model names/prefixes to their pricing.
@@ -174,6 +184,9 @@ const cacheWriteSurcharge = 0.25
 // computeCost prices one completion. cacheWrite is a subset of input, so it
 // adds only the surcharge; cachedInput is separate from input.
 func computeCost(p ModelPrice, input, output, cachedInput, cacheWrite int) float64 {
+	if t := p.LongPrompt; t.AboveTokens > 0 && input+cachedInput > t.AboveTokens {
+		p = ModelPrice{InputPerMTok: t.InputPerMTok, OutputPerMTok: t.OutputPerMTok, CachedInputPerMTok: t.CachedInputPerMTok}
+	}
 	cachedRate := p.CachedInputPerMTok
 	if cachedRate == 0 {
 		cachedRate = p.InputPerMTok
