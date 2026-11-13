@@ -22,7 +22,7 @@ When installed via `.deb`/`.rpm`, the systemd service uses `/etc/denkeeper/denke
 
 ## Data directory
 
-Every default path — the SQLite database, persona directories, skills, browser profiles — derives from a single base directory, resolved in this order:
+Every default path — the SQLite database, persona directories, skills — derives from a single base directory, resolved in this order:
 
 1. `DENKEEPER_DATA_DIR` environment variable
 2. `data_dir` in the TOML file
@@ -40,6 +40,7 @@ Setting one value therefore relocates all of them. The Helm chart uses this: it 
 | `[llm]` | Default provider, model, cost limits |
 | `[[llm.providers]]` | Named provider instances (multiple of the same type) |
 | `[llm.openrouter]` / `[llm.anthropic]` / `[llm.ollama]` / `[llm.openai]` | Legacy single-slot provider syntax |
+| `[[llm.deciders]]` | Named decision models (supervisor decider, eval judge, `decide` tool) |
 | `[[llm.fallback]]` | Fallback strategies (cost limit, rate limit, error) |
 | `[session]` | Default permission tier, approval timeout and retries |
 | `[[agents]]` | Multi-agent definitions |
@@ -58,6 +59,9 @@ Setting one value therefore relocates all of them. The Helm chart uses this: it 
 | `[sandbox]` | Sandbox runtime for Docker-type plugins |
 | `[mcp]` | Global MCP settings (timeout, auto-restart, SSE URL allowlist) |
 | `[tools.*]` | MCP tool server definitions (stdio or SSE transport) |
+| `[decide]` | In-process `decide` tool |
+| `[tasks]` | Shared task board (off by default) |
+| `[safety.reply_guard]` | Withholds obviously broken replies on scheduled turns |
 | `[kv]` | Agent KV store limits |
 | `[web]` | Built-in `web_search` / `web_fetch` tools |
 | `[script]` | `run_javascript` sandbox bounds |
@@ -66,7 +70,7 @@ Setting one value therefore relocates all of them. The Helm chart uses this: it 
 | `[costs]` | Model pricing overrides and fallback rate |
 | `[audit]` | Audit log retention and buffering |
 | `[otel]` | OpenTelemetry traces and metrics |
-| `[eval]` | Dry-run / eval audit verbosity |
+| `[eval]` | Dry runs, eval runs and judging, turn-trace capture |
 
 ## Environment variable overrides
 
@@ -88,6 +92,7 @@ Secrets and select config fields can be set via `DENKEEPER_*` environment variab
 |---------|-------------|
 | `DENKEEPER_LLM_PROVIDER` | `llm.default_provider` |
 | `DENKEEPER_LLM_MODEL` | `llm.default_model` |
+| `DENKEEPER_LLM_MAX_OUTPUT_TOKENS` | `llm.max_output_tokens` |
 | `DENKEEPER_LLM_OPENROUTER_API_KEY` | `llm.openrouter.api_key` |
 | `DENKEEPER_LLM_ANTHROPIC_API_KEY` | `llm.anthropic.api_key` |
 | `DENKEEPER_LLM_ANTHROPIC_BASE_URL` | `llm.anthropic.base_url` |
