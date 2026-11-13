@@ -17,7 +17,7 @@ Every agent session operates in one of three tiers:
 |---|---|
 | **Autonomous** | All capabilities — intended for sandboxed environments |
 | **Supervised** | Chat, memory, tools. Every tool call requires approval — an auto-approve rule, a supervisor LLM decision, or a human — before it runs. Self-modification actions (create skills, modify schedules, update USER.md) are one case of this, not the whole story |
-| **Restricted** | Chat and read-only tools only. Nothing else runs, persona and memory writes included |
+| **Restricted** | Chat and read-only tools only. The agent's own persona and memory writes are denied; the post-turn reviewer may still append to `MEMORY.md` |
 
 A schedule's `session_tier` cannot exceed its agent's tier when an agent sets it; only the operator can raise it, in the TOML file or over REST with an `admin` key.
 

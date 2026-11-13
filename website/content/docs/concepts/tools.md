@@ -31,7 +31,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 
 1. On startup, Denkeeper spawns each tool as a subprocess using MCP's stdio transport
 2. It discovers available tools via the MCP `tools/list` method
-3. Tool definitions are sent to the LLM with each request
+3. Tool definitions are sent to the LLM with each request that can invoke tools
 4. When the LLM requests a tool call, Denkeeper executes it and returns the result
 5. This continues in an agentic loop until the LLM produces a final response
 

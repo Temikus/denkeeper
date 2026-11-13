@@ -183,7 +183,7 @@ Defaults for agents that do not set their own directories.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | *required* | Unique agent name. Messages with no binding fall back to the agent named `"default"`, if one exists |
+| `name` | string | *required* | Unique agent name. Messages with no binding fall back to the agent named `"default"` if one exists, otherwise to another configured agent |
 | `description` | string | — | Agent description |
 | `persona_dir` | string | `<data_dir>/agents/<name>` | Path to persona files |
 | `skills_dir` | string | — | Override the global skills directory. Agent-specific skills in `<persona_dir>/skills/` are always loaded regardless, and override global skills by name |

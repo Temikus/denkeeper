@@ -667,7 +667,7 @@ Starts a server-side judging pass over the run's outstanding blinded pairs with 
 
 **Scope:** `admin`
 
-Emergency stop: cancels all in-flight requests and pauses the scheduler. While panicked, every endpoint that starts a turn (`POST /chat`, skill and schedule dry-runs, `POST /eval/runs`, `POST /eval/runs/{id}/judge`) returns `503`, and WebSocket `chat_request` frames get an `error` frame with code `panicked`. Call `POST /resume` to accept turns again.
+Emergency stop: cancels all in-flight requests and pauses the scheduler. While panicked, every endpoint that starts a turn (`POST /chat`, skill and schedule dry-runs, `POST /eval/runs`, `POST /eval/runs/{id}/judge`) returns `503`, and WebSocket `chat_request` frames that would start a turn get an `error` frame with code `panicked` (a replay request for buffered frames still works). Call `POST /resume` to accept turns again.
 
 ### `POST /api/v1/resume`
 
@@ -957,7 +957,7 @@ Rotate an API key. Returns the new plaintext key once.
 
 ## Authentication
 
-All API endpoints (except health, `openapi.json`, `llms.txt`, setup, auth, the MCP OAuth callback, and metrics) require authentication. Two mechanisms are supported:
+All API endpoints (except health, `openapi.json`, `llms.txt`, setup, the public login/session endpoints under `/auth/`, the MCP OAuth callback, and metrics; `/api/v1/auth/*` needs `admin`) require authentication. Two mechanisms are supported:
 
 1. **Bearer token** — `Authorization: Bearer dk_...` header. API keys are scoped; a key with only `chat` scope cannot access `/api/v1/approvals`. A key with the `admin` scope satisfies every scope requirement.
 2. **Session cookie** — set by the password or OIDC login flow. Used by the web dashboard.
