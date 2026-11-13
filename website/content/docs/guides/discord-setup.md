@@ -49,7 +49,7 @@ The environment variable takes precedence over the TOML value, which is the usua
 
 **Typing indicator** — shown while the LLM is working, so a slow model does not look like a hung bot.
 
-**Approval buttons** — approval requests arrive as messages with Approve/Deny action-row buttons; resolving one is a click, not a reply.
+**Approval buttons** — approval requests arrive as messages with Approve / Deny / 15 min / Always action-row buttons; resolving one is a click, not a reply.
 
 {{< callout context="note" >}}
 Voice transcription is Telegram-only — the Discord adapter has no voice/STT/TTS support.

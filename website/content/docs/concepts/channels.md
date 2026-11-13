@@ -29,7 +29,7 @@ If you declare no `[[channels]]` at all, Denkeeper synthesizes one per agent fro
 
 A channel's conversation ID is `chan:{name}` — so the `work` channel above stores its history under `chan:work`.
 
-With `session_mode = "ephemeral"`, each interaction gets a fresh ID of the form `chan:{name}:{unix_nano}` instead, so nothing is remembered between interactions:
+With `session_mode = "ephemeral"`, each interaction gets a fresh ID of the form `chan:{name}:{unix_nano}_{seq}` instead, so nothing is remembered between interactions:
 
 ```toml
 [[channels]]

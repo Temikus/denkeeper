@@ -61,6 +61,8 @@ Denkeeper connects outward to MCP servers to give agents external tools (see [To
 
 **Stdio subprocess environment scoping** — a stdio MCP server does not inherit Denkeeper's process environment. It receives only a built-in non-secret allowlist (`PATH`, `HOME`, language-runtime variables, etc.) plus the tool's own configured `env`. `env_passthrough` on `[mcp]` or a specific `[tools.*]` entry can forward additional names, but a hard denylist — every `DENKEEPER_*` variable plus a fixed list of other secret-shaped names — is enforced even on explicit passthrough entries, so a misconfigured tool cannot pull API keys or tokens out of the parent process.
 
+**Agent-written tool configs cannot reach host variables** — a tool or plugin written by an agent (config MCP `tool_add`/`plugin_add`) or by a non-admin API key may not reference host environment variables: `env` values can't contain `$NAME`/`${NAME}`, and `${NAME}` in `url` or headers must name a key of the tool's own `env`. Only the TOML file or an `admin` key can.
+
 **Tool name collisions never silently merge** — if two connected servers advertise the same tool name, neither keeps the bare name. Both are re-advertised as `<server>__<tool>` and the bare name becomes unroutable, so a call can never be silently misrouted to the wrong server's tool.
 
 **Skill file writes are hardened** — every skill create/update/delete goes through an OS-level `os.Root` confined to the agent's skills directory (blocking `..` traversal and symlink escapes), writes land via a randomized, exclusively-created temp file and an atomic rename, and a configurable per-file byte cap (`[skills] max_bytes`, 1 MiB by default) bounds how much a single skill write can grow the file.

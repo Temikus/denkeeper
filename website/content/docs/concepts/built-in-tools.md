@@ -1,6 +1,6 @@
 ---
 title: "Built-in Tools"
-description: "Web search and fetch, JavaScript execution, decision-model classification, the KV store, and browser automation."
+description: "Web search and fetch, JavaScript execution, decision-model classification, the KV store, task tools, and browser automation."
 date: 2025-01-01T00:00:00+00:00
 lastmod: 2026-10-05T00:00:00+00:00
 draft: false
@@ -36,7 +36,7 @@ The live value is formatted into the tool description, so the model can plan its
 For JavaScript-heavy pages that return an empty shell, Jina Reader can be enabled as a fallback fetcher under `[web.fetch.jina]`.
 
 {{< callout context="note" >}}
-`[web]` settings are **restart-only**. The web tools are constructed once per agent at startup, and config hot-reload re-applies only per-agent engine knobs. The one exception is `max_response_chars`, which is also editable from the dashboard's Server Config page.
+`[web]` settings are **restart-only**. The web tools are constructed once per agent at startup, and config hot-reload re-applies only per-agent engine knobs. The one exception is `max_response_chars`, which is also editable from the dashboard's Server page.
 {{< /callout >}}
 
 ## Running JavaScript

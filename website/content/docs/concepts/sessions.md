@@ -17,7 +17,9 @@ Every agent session operates in one of three tiers:
 |---|---|
 | **Autonomous** | All capabilities — intended for sandboxed environments |
 | **Supervised** | Chat, memory, tools. Every tool call requires approval — an auto-approve rule, a supervisor LLM decision, or a human — before it runs. Self-modification actions (create skills, modify schedules, update USER.md) are one case of this, not the whole story |
-| **Restricted** | Chat and read-only tools only. No memory writes beyond MEMORY.md |
+| **Restricted** | Chat and read-only tools only. Nothing else runs, persona and memory writes included |
+
+A schedule's `session_tier` cannot exceed its agent's tier when an agent sets it; only the operator can raise it, in the TOML file or over REST with an `admin` key.
 
 Set the default tier globally:
 
@@ -36,7 +38,7 @@ session_tier = "restricted"
 
 ## Approval workflows
 
-In supervised mode, every tool call — not just self-modification actions like skill creation or schedule modification — produces an approval request unless an auto-approve rule or supervisor already resolved it. The user is notified via Telegram (inline keyboard with Approve/Deny buttons) or the REST API.
+In supervised mode, every tool call — not just self-modification actions like skill creation or schedule modification — produces an approval request unless an auto-approve rule or supervisor already resolved it. The user is notified via Telegram or Discord (Approve / Deny / 15 min / Always buttons), the web dashboard, or the REST API.
 
 Approval requests have a 24-hour TTL. Unapproved requests expire automatically.
 
@@ -46,9 +48,10 @@ To stop being asked about tools you trust — or to have a second LLM triage app
 
 When the agent wants to create a skill, the user sees a message with inline buttons:
 
-> **Approval required:** Create skill "weather-check"
+> 🔧 `skill_create` — approve?
+> *(the call's arguments follow)*
 >
-> [Approve] [Deny]
+> [✅ Approve] [❌ Deny] [🔄 15 min] [♾️ Always]
 
 ### Approval via API
 

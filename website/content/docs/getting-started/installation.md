@@ -63,10 +63,11 @@ Run with a bind-mounted config:
 docker run -d \
   --name denkeeper \
   -v ~/.denkeeper:/data \
+  -e DENKEEPER_DATA_DIR=/data \
   ghcr.io/temikus/denkeeper:latest
 ```
 
-The container reads config from the `DENKEEPER_CONFIG` env var (default `/data/denkeeper.toml`). Override with `-e DENKEEPER_CONFIG=/path/to/config.toml`.
+The container reads config from the `DENKEEPER_CONFIG` env var (default `/data/denkeeper.toml`). Override with `-e DENKEEPER_CONFIG=/path/to/config.toml`. The image does not set `DENKEEPER_DATA_DIR`, so pass `-e DENKEEPER_DATA_DIR=/data` (or set `data_dir` in the config) to keep the database, personas and skills on the mounted volume.
 
 ## Helm (Kubernetes)
 
