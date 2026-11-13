@@ -57,7 +57,7 @@ With the `[voice]` section configured, the bot transcribes incoming voice messag
 
 ### Inline keyboards
 
-Approval requests are delivered as messages with Approve/Deny inline buttons. The user taps a button to resolve the request without typing.
+Approval requests are delivered as messages with Approve / Deny / 15 min / Always inline buttons. The user taps a button to resolve the request without typing.
 
 ## Multiple agents
 

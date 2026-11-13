@@ -99,6 +99,7 @@ A run is bounded twice, by spend and by rate, and both are always in force — t
 - The cost cap is checked *before* each dispatch, so a sample already in flight always finishes; the run then ends `capped` and keeps its partial results. Never a silent truncation.
 - `[eval] max_concurrent` bounds how many samples run at once, process-wide across all runs.
 - `POST /api/v1/panic` cancels active runs along with everything else, and resume deliberately does not revive them: a panic is not a pause.
+- A sample whose final response is blank is recorded as failed ("empty final response"), so it counts in `samples_failed` and yields no pair instead of handing the other variant a free win.
 - A sample that fails takes only itself down and records its error. A run-level `failed` means a store error, never a provider hiccup.
 - Below `[eval] completeness_floor` the scorecard still reports its numbers but is flagged **inconclusive** rather than reading a verdict off thin data.
 

@@ -11,7 +11,7 @@ toc: true
 
 Tools are external processes that expose capabilities via the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). The agent discovers available tools at startup and can invoke them during conversations.
 
-Denkeeper also ships tools that need no external process — web search and fetch, JavaScript execution, a KV store, and browser automation. See [Built-in Tools](/docs/concepts/built-in-tools/) for those. For pointing MCP the other way, so that other clients can drive *this* instance, see [Denkeeper as an MCP Server](/docs/guides/mcp-server/).
+Denkeeper also ships tools that need no external process — web search and fetch, JavaScript execution, decision-model classification, a KV store, task tools, and browser automation. See [Built-in Tools](/docs/concepts/built-in-tools/) for those. For pointing MCP the other way, so that other clients can drive *this* instance, see [Denkeeper as an MCP Server](/docs/guides/mcp-server/).
 
 ## Configuration
 
@@ -31,7 +31,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 
 1. On startup, Denkeeper spawns each tool as a subprocess using MCP's stdio transport
 2. It discovers available tools via the MCP `tools/list` method
-3. Tool descriptions are included in the LLM system prompt
+3. Tool definitions are sent to the LLM with each request
 4. When the LLM requests a tool call, Denkeeper executes it and returns the result
 5. This continues in an agentic loop until the LLM produces a final response
 
@@ -45,7 +45,7 @@ Tool names you have written down elsewhere follow the same rule, deliberately: a
 
 Models occasionally repeat a tool call with byte-identical arguments in the same turn. For tools declared *idempotent*, the second identical call returns the first call's cached result instead of re-executing — skipping the tool latency and, on supervised agents, the approval round-trip (the original call already passed approval, and a cache hit executes nothing). The cache lives for a single message turn.
 
-The built-in `web_fetch`, `web_search`, `kv_get`, and `kv_list` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry. Server-supplied MCP annotations are never trusted by default, but `trust_annotations = true` extends eligibility to tools the server marks with `readOnlyHint` — an explicit per-server statement that you trust its self-description. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
+The built-in `web_fetch`, `web_search`, `decide`, `kv_get`, `kv_list`, and `approval_audit` tools are always cache-eligible. External MCP servers opt in via `idempotent = true` (whole server) or `idempotent_tools = ["lookup", ...]` (mixed read/write servers) on their `[tools.*]` entry. Server-supplied MCP annotations are never trusted by default, but `trust_annotations = true` extends eligibility to tools the server marks with `readOnlyHint` — an explicit per-server statement that you trust its self-description. Cached calls appear in telemetry with a `cached` outcome and in the audit log as `cache_hit` events.
 
 ## Tool calls and permissions
 

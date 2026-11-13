@@ -31,8 +31,8 @@ A rule says "this tool never needs asking about again". There are three scopes, 
 | Scope | Lives in | Created by | Lifetime |
 |---|---|---|---|
 | `config` | TOML | Operator, in the config file | Until config changes |
-| `session` | Memory | The *Auto (session)* button, dashboard, or REST | 15 minutes, conversation-scoped |
-| `permanent` | SQLite | The *Auto (always)* button, dashboard, or REST | Until deleted |
+| `session` | Memory | The *15 min* button, dashboard, or REST | 15 minutes, conversation-scoped |
+| `permanent` | SQLite | The *Always* button, dashboard, or REST | Until deleted |
 
 Declare `config` rules per agent:
 
@@ -89,9 +89,9 @@ Validation rejects configurations that would deadlock or recurse:
 - It must not itself be supervised — no chains
 - It must not use the `supervised` tier, which would deadlock
 - `supervisor` is only meaningful on a supervised agent
+- An agent that is referenced as a supervisor cannot be deleted
 
 An agent with no `session_tier` runs under `[session] tier`, which defaults to `supervised`, and validation checks that tier. Set the supervisor's `session_tier` explicitly.
-- An agent that is referenced as a supervisor cannot be deleted
 
 The review is a single call with no storage, no skills, and no tool loop of its own, which is what keeps it cheap enough to sit in front of every tool call. A small fast model is usually the right choice.
 

@@ -44,16 +44,17 @@
           <div class="dk-approval-head">
             <span class="dk-status dk-status-warn"></span>
             <strong>den wants to run</strong>
-            <code class="dk-tool">schedule_create</code>
+            <code class="dk-tool">schedule_add</code>
             <span class="dk-approval-meta">via Telegram &middot; 12s ago</span>
           </div>
           <pre class="dk-approval-args">{ "name": "morning-brief",
-  "cron": "0 7 * * 1-5",
-  "prompt": "Summarise my calendar and inbox" }</pre>
+  "schedule": "0 7 * * 1-5",
+  "skill": "morning-brief" }</pre>
           <div class="dk-approval-actions">
             <span class="dk-fake-btn dk-fake-btn-primary">Approve</span>
-            <span class="dk-fake-btn">Always allow</span>
             <span class="dk-fake-btn dk-fake-btn-danger">Deny</span>
+            <span class="dk-fake-btn">15 min</span>
+            <span class="dk-fake-btn">Always</span>
           </div>
         </div>
         <ul class="dk-dash-rows">
@@ -106,11 +107,11 @@
     </li>
     <li class="dk-step">
       <span class="dk-step-n">02 &middot; agent plans</span>
-      <code class="dk-step-body">schedule_create</code>
+      <code class="dk-step-body">schedule_add</code>
     </li>
     <li class="dk-step">
       <span class="dk-step-n">03 &middot; tier check</span>
-      <span class="dk-step-body">Supervised tier: it writes, so it waits</span>
+      <span class="dk-step-body">Supervised tier: every tool call waits for a decision</span>
     </li>
     <li class="dk-step dk-step-door">
       <span class="dk-step-n">04 &middot; the door</span>
@@ -137,7 +138,7 @@
   <div class="dk-costs-copy">
     <span class="dk-kicker">Cost aware</span>
     <h2>Know what every conversation costs.</h2>
-    <p>Per-session soft and hard limits, live pricing for every provider, and fallback rules that downshift to a cheaper model instead of just stopping.</p>
+    <p>Per-session soft and hard limits, a built-in pricing registry plus provider-reported costs, and fallback rules that downshift to a cheaper model instead of just stopping.</p>
     <a class="dk-link-strong" href="/docs/concepts/observability/">Cost tracking &rarr;</a>
   </div>
   <figure class="dk-chart">

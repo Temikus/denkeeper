@@ -81,7 +81,7 @@ Once you're logged in, the dashboard's setup wizard takes over. An empty config 
 1. **Connect a provider.** Pick Anthropic, OpenAI, OpenRouter or Ollama. The key is checked when you paste it.
 2. **Create an agent.** Choose a name, a model from the provider's list, and a permission tier. Supervised agents get a supervisor that checks tool calls first.
 3. **Give it a personality.** Set a display name, an emoji, a tone, and the house rules it follows.
-4. **Connect a chat app** (optional). Paste a Telegram bot token, then send your bot any message: the wizard reads your user ID from it, so you don't have to look it up. Chat apps start after a restart.
+4. **Connect a chat app** (optional). Pick Telegram or Discord (or web chat only) and paste the bot token. On Telegram, send your bot any message and the wizard reads your user ID from it, so you don't have to look it up; on Discord, enter your user ID. Chat apps start after a restart.
 
 Everything except the chat app works straight away; you can chat in the dashboard as soon as the agent exists. Progress is saved on the server, so you can close the tab and resume later, from any browser.
 
