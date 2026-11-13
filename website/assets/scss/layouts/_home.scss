@@ -481,6 +481,13 @@ body.home {
       text-align: center;
     }
   }
+
+  // Two rows of two on phones, as the chat adapters lay them out.
+  @include media-breakpoint-down(sm) {
+    > * {
+      flex: 1 1 calc(50% - 4px);
+    }
+  }
 }
 
 .dk-fake-btn {

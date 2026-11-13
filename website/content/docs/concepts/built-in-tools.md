@@ -137,6 +137,6 @@ A browser with a persistent profile is the most powerful capability an agent can
 
 ## Memoization
 
-Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools/). Of the built-ins, `web_search`, `web_fetch`, `decide`, `kv_get`, and `kv_list` are cache-eligible. `run_javascript` deliberately is not.
+Identical calls to *idempotent* tools are memoized within a single turn — see [Tools (MCP)](/docs/concepts/tools/). Of the built-ins, `web_search`, `web_fetch`, `decide`, `kv_get`, `kv_list`, and `approval_audit` are cache-eligible. `run_javascript` deliberately is not.
 
 See the [configuration reference](/docs/reference/config/) for every option in `[web]`, `[script]`, `[decide]`, `[kv]`, and `[browser]`.
