@@ -93,10 +93,10 @@ func TestValidatePinnedPackageArgs_NpxRegistryOverridesRefused(t *testing.T) {
 		{"--userconfig", "/tmp/npmrc", "pkg@1.0.0"},
 		{"--globalconfig=/tmp/npmrc", "pkg@1.0.0"},
 		{"-y", "--node-options=--require=/tmp/x.js", "pkg@1.0.0"},
+		{"--node-options", "--require=/tmp/x.js", "pkg@1.0.0"},
+		{"--script-shell", "/tmp/sh", "pkg@1.0.0"},
 	} {
-		if err := ValidatePinnedPackageArgs("npx", args); err == nil {
-			t.Errorf("npx %v: accepted, want rejection", args)
-		}
+		requireRefusedOption(t, "npx", args)
 	}
 }
 
@@ -111,10 +111,37 @@ func TestValidatePinnedPackageArgs_UvxIndexOverridesRefused(t *testing.T) {
 		{"--find-links", "/tmp/wheels", "pkg==1.0"},
 		{"-f", "/tmp/wheels", "pkg==1.0"},
 		{"--allow-insecure-host", "pypi.org", "pkg==1.0"},
+		{"--env-file", ".env", "pkg==1.0"},
 	} {
-		if err := ValidatePinnedPackageArgs("uvx", args); err == nil {
-			t.Errorf("uvx %v: accepted, want rejection", args)
+		requireRefusedOption(t, "uvx", args)
+	}
+}
+
+// Every entry in a launcher's refused set must hit the refused branch, in
+// both the separate-value and --flag=value forms, so a typo or a move into
+// valueFlags/boolFlags fails here. The "cannot be pinned" message tells the
+// refused branch apart from the unknown-option fallback, which also rejects.
+func TestValidatePinnedPackageArgs_EveryRefusedFlagRefused(t *testing.T) {
+	for _, tc := range []struct {
+		l   launcher
+		pkg string
+	}{{npxLauncher, "pkg@1.0.0"}, {uvxLauncher, "pkg==1.0"}} {
+		for flag := range tc.l.refused {
+			requireRefusedOption(t, tc.l.name, []string{flag, "x", tc.pkg})
+			requireRefusedOption(t, tc.l.name, []string{flag + "=x", tc.pkg})
 		}
+	}
+}
+
+func requireRefusedOption(t *testing.T, command string, args []string) {
+	t.Helper()
+	err := ValidatePinnedPackageArgs(command, args)
+	if err == nil {
+		t.Errorf("%s %v: accepted, want rejection", command, args)
+		return
+	}
+	if !strings.Contains(err.Error(), "cannot be pinned") {
+		t.Errorf("%s %v: rejected as %q, want the refused-option error", command, args, err)
 	}
 }
 
