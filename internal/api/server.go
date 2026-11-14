@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -1872,6 +1873,14 @@ func (s *Server) handleCreateAutoApprove(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent and tool are required"})
 		return
 	}
+	if tool.IsHumanOnlyToolName(body.Tool) {
+		// The engine never consults rules for these, so a rule would be inert;
+		// refusing it says so instead of listing a rule that does nothing.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": body.Tool + " starts a program on the host and always needs a one-off approval; it cannot be auto-approved",
+		})
+		return
+	}
 
 	switch body.Scope {
 	case "session":
@@ -2042,10 +2051,39 @@ func (s *Server) lifecycleRequired(w http.ResponseWriter) bool {
 // allowToolEnvRefs writes 403 when a non-admin caller's tool config pulls in
 // the host environment through variable references or env_passthrough. Admin
 // keys are the operator and may.
-func (s *Server) allowToolEnvRefs(w http.ResponseWriter, r *http.Request, cfg config.ToolConfig) bool {
+//
+// It also gates what the tool spawns. Without [mcp] allowed_commands nothing
+// restricts a stdio command, so a non-admin key may not add one or change an
+// existing tool's command line or env (prev is the stored config on an update,
+// nil on an add). Env counts because the respawned child reads it: a value such
+// as NODE_OPTIONS can make an operator's command run other code. With the allowlist set, LifecycleManager enforces it for everyone.
+func (s *Server) allowToolEnvRefs(w http.ResponseWriter, r *http.Request, cfg config.ToolConfig, prev *config.ToolConfig) bool {
 	err := tool.ValidateUntrustedEnvRefs(cfg.Env, cfg.URL, cfg.Headers)
 	if err == nil && len(cfg.EnvPassthrough) > 0 {
 		err = fmt.Errorf("env_passthrough forwards host variables; only an operator can set it")
+	}
+	if err == nil && (cfg.Transport == "" || cfg.Transport == "stdio") &&
+		(prev == nil || tool.CommandLineChanged(*prev, cfg) || !maps.Equal(prev.Env, cfg.Env)) &&
+		!s.deps.LifecycleMgr.ToolManager().HasCommandAllowlist() {
+		err = fmt.Errorf("stdio tools run a program on the host and [mcp] allowed_commands is not set; only an operator can add one or change its command line or env")
+	}
+	if err == nil {
+		return true
+	}
+	if _, isAdmin, _ := s.authenticate(r.Context(), r, "admin"); isAdmin {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error() + " (requires the admin scope)"})
+	return false
+}
+
+// allowUntrustedPlugin writes 403 when a non-admin caller's plugin pulls in
+// host variables or escapes the sandbox (subprocess type, host or container
+// network, volumes). Admin keys are the operator and may.
+func (s *Server) allowUntrustedPlugin(w http.ResponseWriter, r *http.Request, cfg config.PluginConfig) bool {
+	err := tool.ValidateUntrustedEnvRefs(cfg.Env, "", nil)
+	if err == nil {
+		err = tool.ValidateUntrustedPlugin(cfg)
 	}
 	if err == nil {
 		return true
@@ -2293,7 +2331,7 @@ func (s *Server) handleAddTool(w http.ResponseWriter, r *http.Request) {
 		Enabled:            body.Enabled,
 	}
 
-	if !s.allowToolEnvRefs(w, r, cfg) {
+	if !s.allowToolEnvRefs(w, r, cfg, nil) {
 		return
 	}
 	if err := s.deps.LifecycleMgr.AddTool(r.Context(), body.Name, cfg); err != nil {
@@ -2404,12 +2442,14 @@ func (s *Server) handleUpdateTool(w http.ResponseWriter, r *http.Request) {
 	// UpdateTool keeps the stored env_passthrough when the body omits it, so
 	// check that value: a new command must not inherit an operator's grant.
 	checked := cfg
-	if checked.EnvPassthrough == nil {
-		if old, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
+	var prev *config.ToolConfig
+	if old, ok := s.deps.LifecycleMgr.ToolManager().ServerToolConfig(name); ok {
+		prev = &old
+		if checked.EnvPassthrough == nil {
 			checked.EnvPassthrough = old.EnvPassthrough
 		}
 	}
-	if !s.allowToolEnvRefs(w, r, checked) {
+	if !s.allowToolEnvRefs(w, r, checked, prev) {
 		return
 	}
 	if err := s.deps.LifecycleMgr.UpdateTool(r.Context(), name, cfg); err != nil {
@@ -2713,7 +2753,7 @@ func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
 		Network:      body.Network,
 	}
 
-	if !s.allowToolEnvRefs(w, r, config.ToolConfig{Env: cfg.Env}) {
+	if !s.allowUntrustedPlugin(w, r, cfg) {
 		return
 	}
 	if err := s.deps.LifecycleMgr.AddPlugin(r.Context(), body.Name, cfg); err != nil {

@@ -298,7 +298,7 @@ func (s *Server) registerLifecycleTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "tool_add",
-		Description: "Add a new MCP tool server. Supports stdio (local subprocess) and sse (remote HTTP) transports.",
+		Description: "Add a new MCP tool server. Supports stdio (local subprocess) and sse (remote HTTP) transports. Every call waits for a one-off operator approval in every tier. A stdio command must be in the operator's [mcp] allowed_commands when that is set, and npx/uvx packages must be pinned to an exact version (name@1.2.3, name==1.2.3).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -347,20 +347,20 @@ func (s *Server) registerLifecycleTools() {
 
 	s.mcpServer.AddTool(&mcp.Tool{
 		Name:        "plugin_add",
-		Description: "Add a new plugin. Subprocess plugins execute directly; Docker plugins run in a container.",
+		Description: "Add a new Docker plugin, run in a container. Every call waits for a one-off operator approval in every tier. Subprocess plugins, host or container networking and volumes are operator-only (TOML).",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"name":         {"type": "string"},
-				"type":         {"type": "string", "enum": ["subprocess", "docker"]},
-				"command":      {"type": "string", "description": "Binary path (subprocess) or entrypoint override (docker)"},
+				"type":         {"type": "string", "enum": ["docker"]},
+				"command":      {"type": "string", "description": "Entrypoint override"},
 				"image":        {"type": "string", "description": "Docker image (required for docker type)"},
 				"args":         {"type": "array", "items": {"type": "string"}},
 				"env":          {"type": "object", "additionalProperties": {"type": "string"}},
 				"capabilities": {"type": "array", "items": {"type": "string"}, "description": "e.g. ['tools']"},
 				"memory_limit": {"type": "string", "description": "Docker memory limit (e.g. '256m')"},
 				"cpu_limit":    {"type": "string", "description": "Docker CPU limit (e.g. '0.5')"},
-				"network":      {"type": "string", "description": "Docker network mode (default: 'none')"}
+				"network":      {"type": "string", "description": "Docker network mode (default: 'none'; 'host' and 'container:...' are refused)"}
 			},
 			"required": ["name", "type"]
 		}`),
@@ -1703,6 +1703,11 @@ func (s *Server) handlePluginAdd(ctx context.Context, req *mcp.CallToolRequest) 
 		MemoryLimit:  input.MemoryLimit,
 		CPULimit:     input.CPULimit,
 		Network:      input.Network,
+	}
+	// An agent never gets a host process or host networking, even with the
+	// operator's approval of this call: those stay TOML-only.
+	if err := tool.ValidateUntrustedPlugin(cfg); err != nil {
+		return toolError(err.Error()), nil
 	}
 
 	lm := s.deps.LifecycleMgr

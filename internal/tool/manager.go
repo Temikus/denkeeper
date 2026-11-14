@@ -988,6 +988,30 @@ var builtinReadOnlyTools = map[string]bool{
 	"web_search":           true,
 }
 
+// builtinHumanOnlyTools names in-process tools that start code on the host:
+// tool_add spawns a stdio MCP server, plugin_add a plugin. Every call to one
+// needs a one-off human approval in every tier — no auto-approve rule, decider
+// or supervisor may answer it (DEN-82). Keyed by MCP tool name; consulted only
+// for session-registered (in-process) servers.
+var builtinHumanOnlyTools = map[string]bool{
+	"plugin_add": true,
+	"tool_add":   true,
+}
+
+// IsHumanOnlyToolName reports whether name, bare or collision-qualified
+// ("<server>__tool_add"), is one of the human-only tool names. It is the
+// name-only check for surfaces that see no server, such as auto-approve rule
+// creation; the engine uses Manager.RequiresHumanApproval.
+func IsHumanOnlyToolName(name string) bool {
+	if builtinHumanOnlyTools[name] {
+		return true
+	}
+	if i := strings.LastIndex(name, "__"); i >= 0 {
+		return builtinHumanOnlyTools[name[i+2:]]
+	}
+	return false
+}
+
 // toolClass is everything a classification decision reads about one tool,
 // snapshotted under the manager lock.
 type toolClass struct {
@@ -1071,6 +1095,24 @@ func (m *Manager) IsReadOnly(toolName string) bool {
 		return builtinReadOnlyTools[class.local]
 	}
 	return class.declaredReadOnly()
+}
+
+// RequiresHumanApproval reports whether every call to toolName must be
+// approved by a human, whatever the agent's tier: the in-process tools in
+// builtinHumanOnlyTools. An ambiguous name answers true when either owner
+// would, so a collision cannot be used to dodge the gate.
+func (m *Manager) RequiresHumanApproval(toolName string) bool {
+	class, parent, err := m.classify(toolName)
+	if err != nil {
+		if errors.Is(err, ErrAmbiguousTool) {
+			return IsHumanOnlyToolName(toolName)
+		}
+		if parent != nil && errors.Is(err, ErrToolNotFound) {
+			return parent.RequiresHumanApproval(toolName)
+		}
+		return false
+	}
+	return class.inProcess && builtinHumanOnlyTools[class.local]
 }
 
 // ToolDescription returns the MCP description for the named tool, or ""
