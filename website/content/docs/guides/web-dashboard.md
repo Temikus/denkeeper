@@ -33,7 +33,7 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Chat** | Talk to an agent, with streaming output and inline approvals |
 | **Sessions** | Browse conversations; per-session cost, tool calls, and skill usage |
 | **Agents** | Create and configure agents, personas, supervisors, and each agent's decision model, with a panel for calibrating its thresholds |
-| **Tasks** | The task board: file a task, assign it to an agent, Claude Code or yourself (or leave it for anyone), and follow its thread. Shown once [`[tasks]`](/docs/reference/config/#tasks) is on, which you can switch on the Server Config page |
+| **Tasks** | The task board: file a task, assign it to an agent, Claude Code or yourself (or leave it for anyone), and follow its thread. Shown once [`[tasks]`](/docs/reference/config/#tasks) is on, which you can switch on the Server page |
 | **Channels** | Routing endpoints and which adapter each is active on |
 | **Skills** | Create, edit, and preview skills |
 | **Schedules** | Recurring jobs, with dry-run previews |
@@ -44,10 +44,10 @@ See [First Run](/docs/getting-started/first-run/) for the full flow, and [Securi
 | **Audit Log** | Filterable event history |
 | **Turn inspector** | Per-turn traces: system prompt, tool calls, timings, usage ([Turn traces](/docs/concepts/evals/#turn-traces-and-the-inspector)) |
 | **Costs** | Spend by agent, model, and time range |
-| **KV** | Inspect and edit the agent key-value store |
+| **KV Store** | Inspect and edit the agent key-value store |
 | **Providers** | LLM provider instances, decision models, and global defaults |
 | **API Keys** | Create, rotate, and revoke keys |
-| **Server Config** | Runtime settings, reload, restart |
+| **Server** | Runtime settings, reload, restart |
 | **Settings** | Login preferences and session management |
 
 Configuration changes made here are written back to your TOML file, so they survive a restart. Formatting and comments are **not** preserved — the file round-trips through the parser — and a `.bak` backup is written before each save.
@@ -67,7 +67,7 @@ websocket_replay_buffer_ttl = "5m"
 
 ## Approvals from the browser
 
-Supervised agents surface tool-call approvals inline in Chat, and in the Approvals page. Alongside Approve and Deny, **Always Approve** creates an auto-approve rule so that tool stops asking — see [Supervisors & Auto-Approval](/docs/concepts/supervisors/) for how the scopes differ.
+Supervised agents surface tool-call approvals inline in Chat, and in the Approvals page. In Chat, **Always** next to Approve and Deny creates a permanent auto-approve rule so that tool stops asking; the Approvals page lists pending requests and lets you add or revoke rules — see [Supervisors & Auto-Approval](/docs/concepts/supervisors/) for how the scopes differ.
 
 Approval requests expire after 24 hours.
 

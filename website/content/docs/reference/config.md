@@ -36,7 +36,7 @@ All configuration lives in a single TOML file. Default location: `~/.denkeeper/d
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `default_provider` | string | `"openrouter"` | Name of the provider instance to use by default (must match a configured instance name) |
+| `default_provider` | string | see description | Name of the provider instance to use by default (must match a configured instance name). When unset: `openrouter` if OpenRouter is configured or no `[[llm.providers]]` exist, else the first `[[llm.providers]]` entry. A blank config (no LLM or adapter setup) leaves it empty so the setup wizard can run |
 | `default_model` | string | `"anthropic/claude-sonnet-4-20250514"` | Model identifier (format depends on provider) |
 | `cost_limit_soft` | float | `0` | Soft cost limit per session in USD (warns but continues) |
 | `cost_limit_hard` | float | `1.0` | Hard cost limit per session in USD (stops generation) |
@@ -85,11 +85,13 @@ cached_input = 1.5
 
 **Legacy single-slot syntax** (`[llm.openai]`, `[llm.anthropic]`, etc.) is still supported and auto-converted at startup. The two styles can coexist; an explicit `[[llm.providers]]` entry with the same name takes precedence.
 
-## `[llm.openrouter]` *(legacy)*
+## `[llm.openrouter]`
+
+Only `api_key` here is the legacy single-slot field (needed only if you use the legacy slot instead of `[[llm.providers]]`). The reasoning and provider-routing keys below apply to **every** `type = "openrouter"` provider instance, including `[[llm.providers]]` entries.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `api_key` | string | *required* | OpenRouter API key |
+| `api_key` | string | — | OpenRouter API key for the legacy single slot |
 | `provider_order` | []string | none | Explicit preference list of upstream provider slugs (e.g. `"moonshotai"`) that overrides sticky routing when set — usually unnecessary |
 | `provider_allow_fallbacks` | bool | unset (OpenRouter default: allowed) | Whether OpenRouter may fall back to providers outside `provider_order` |
 | `provider_ignore` | []string | none | Upstream provider slugs (e.g. `"inceptron"`) OpenRouter must never route to. Sent on every request, alongside `provider_order` and sticky routing. TOML only; the Providers page doesn't edit it yet |
@@ -174,16 +176,16 @@ Defaults for agents that do not set their own directories.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `persona_dir` | string | `<data_dir>/agents/<name>` | Base persona directory |
+| `persona_dir` | string | `<data_dir>/agents/default` | Persona directory of the synthesized `default` agent (used when no `[[agents]]` are defined) |
 | `skills_dir` | string | `<data_dir>/skills` | Global skills directory |
 
 ## `[[agents]]`
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `name` | string | *required* | Unique agent name (one must be `"default"`) |
+| `name` | string | *required* | Unique agent name. Messages with no binding fall back to the agent named `"default"` if one exists, otherwise to another configured agent |
 | `description` | string | — | Agent description |
-| `persona_dir` | string | — | Path to persona files |
+| `persona_dir` | string | `<data_dir>/agents/<name>` | Path to persona files |
 | `skills_dir` | string | — | Override the global skills directory. Agent-specific skills in `<persona_dir>/skills/` are always loaded regardless, and override global skills by name |
 | `adapters` | string[] | — | Adapter bindings (e.g., `["telegram"]`, `["telegram:12345"]`) |
 | `llm_provider` | string | — | Override default provider (must match a configured provider instance name) |
@@ -252,8 +254,8 @@ Users switch channels at runtime with `/session <name>`; the selection is persis
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `db_path` | string | `"<data_dir>/data/memory.db"` | SQLite database path |
-| `retention_days` | int | `90` | How long conversations are kept. 0 = unlimited |
-| `max_conversations` | int | `10000` | Cap on stored conversations. 0 = unlimited |
+| `retention_days` | int | `90` | How long conversations are kept. `0` takes the default; there is no unlimited setting |
+| `max_conversations` | int | `10000` | Cap on stored conversations. `0` takes the default |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
 | `persona_memory_char_limit` | int | `2200` | Cap on `MEMORY.md` size in characters. `0` in TOML falls back to this default — there is currently no way to request an unlimited cap |
 | `persona_user_char_limit` | int | `1375` | Cap on `USER.md` size in characters. `0` in TOML falls back to this default — there is currently no way to request an unlimited cap |
@@ -369,7 +371,7 @@ Containerized browser automation. Off by default.
 | `image` | string | `"ghcr.io/temikus/denkeeper-browser:latest"` | Browser plugin container image |
 | `memory_limit` | string | `"512m"` | Container memory limit |
 | `cpu_limit` | string | `"1"` | Container CPU limit |
-| `profile_dir` | string | `"data/browser-profiles"` | Per-agent profile directory, relative to `data_dir` |
+| `profile_dir` | string | `"data/browser-profiles"` | Per-agent profile directory. A relative path is resolved against `~/.denkeeper`, not `data_dir` |
 | `session_ttl` | string | `"10m"` | Idle session close timeout |
 | `max_pages` | int | `5` | Concurrent pages per agent |
 
@@ -413,7 +415,7 @@ cached_input = 0.3
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `true` | Enable audit logging |
-| `retention_days` | int | `30` | How long audit events are kept. 0 = unlimited |
+| `retention_days` | int | `30` | How long audit events are kept. `0` takes the default |
 | `cleanup_interval` | string | `"1h"` | How often retention is enforced |
 | `buffer_size` | int | `1000` | Capacity of the in-memory event buffer. Emission never blocks an agent turn: events past a full buffer are dropped with a warning log |
 
@@ -519,9 +521,9 @@ Note the direction: `[tools.*]` is Denkeeper connecting *outward* to MCP servers
 | `type` | string | *required* | `"system"` or `"agent"` |
 | `schedule` | string | *required* | Cron expression, interval, or named schedule |
 | `skill` | string | — | Skill to invoke |
-| `agent` | string | `"default"` | Target agent |
+| `agent` | string | first `[[agents]]` entry | Target agent |
 | `session_tier` | string | `"supervised"` | Permission tier for this schedule. Only the operator can set it above the agent's own tier: in this file, or through the REST API with an `admin` key. MCP schedule tools always reject it |
-| `channel` | string | — | Delivery channel (e.g., `"telegram:12345"`). Without one, a schedule does nothing unless it is `headless` |
+| `channel` | string | — | Delivery target: `adapter:externalID` (e.g., `"telegram:12345"`) or `@channelname` for a `[[channels]]` entry. Without one, a schedule does nothing unless it is `headless` |
 | `headless` | bool | `false` | Run with no chat: the turn runs and is kept in Sessions (and in the Turn inspector when `[eval] capture` is on), and nothing is sent. Leave `channel` empty. Used by task check-ins |
 | `tags` | string[] | — | Freeform labels |
 | `enabled` | bool | `true` | Enable/disable without removing |
@@ -608,7 +610,7 @@ Global settings that apply to all MCP tool servers.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `request_timeout_secs` | int | `30` | Per-request timeout for MCP calls (0 = no timeout) |
+| `request_timeout_secs` | int | `30` | Per-request timeout for MCP calls. `0` takes the default; the timeout cannot be turned off |
 | `auto_restart` | bool | `true` | Automatically restart crashed stdio servers |
 | `max_restart_attempts` | int | `3` | Quick restart attempts (1s, 2s, 4s apart) before retries slow down. A failing server is never disabled |
 | `max_restart_backoff` | string | `"5m"` | Longest wait between restart attempts after the quick ones. The wait starts at 30s and doubles |
@@ -634,6 +636,7 @@ per-tool-call timeout, so a call that was going to succeed gets to.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `enabled` | bool | `true` | Set `false` to keep the definition without starting the server |
 | `transport` | string | `"stdio"` | Transport type: `"stdio"` (subprocess) or `"sse"` (remote HTTP/SSE) |
 | `command` | string | *required for stdio* | MCP server command (stdio only) |
 | `args` | string[] | — | Command arguments (stdio only) |

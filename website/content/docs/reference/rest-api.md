@@ -15,7 +15,7 @@ The REST API is enabled with `[api] enabled = true` in your config. All authenti
 
 ### `GET /api/v1/health`
 
-No authentication required. Returns `200 OK` when the server is running.
+No authentication required. Returns `200 OK` when the server is running. With `?ready=true` it returns `503` until at least one agent is registered.
 
 ## Discovery
 
@@ -49,7 +49,7 @@ Send a message to an agent and receive a response.
 ```
 
 - `session_id` is auto-generated if omitted. Pass the same value in subsequent requests to continue the conversation.
-- `agent` defaults to `"default"` if omitted.
+- `agent` defaults to the `default` agent if omitted (or another registered agent when none is named `default`).
 - `channel` is optional; when set, the message routes through the named [channel](/docs/concepts/channels/) instead of a direct agent binding.
 
 **Response (JSON):**
@@ -64,20 +64,22 @@ Send a message to an agent and receive a response.
 **Response (SSE):** Set `Accept: text/event-stream` for streaming:
 
 ```
-data: {"type":"content","text":"Hello! "}
+data: {"type":"content_delta","text":"Hello! "}
 
-data: {"type":"content","text":"How can I help you?"}
+data: {"type":"content_delta","text":"How can I help you?"}
+
+data: {"type":"content","text":"Hello! How can I help you?"}
 
 data: {"type":"done","session_id":"abc123"}
 ```
 
-**SSE event types:** `content`, `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `done`, `error`.
+**SSE event types:** `content_delta`, `thinking_delta`, `thinking`, `tool_start`, `tool_end`, `tool_approval`, `usage`, `stream_rollback` (a stream was interrupted and is being retried; discard the partial text), `content` (one final frame carrying the full reply), `done`, `error`.
 
 ### `GET /api/v1/ws`
 
 **Scope:** `chat`
 
-Upgrades to a bidirectional WebSocket connection. Authentication is via `?token=` query parameter (API key auth) or session cookie. The WebSocket carries the same event types as SSE, plus supports sending chat requests and approval responses as JSON frames.
+Upgrades to a bidirectional WebSocket connection. `chat` scope is needed to connect. Authentication is via `Authorization: Bearer` header, `?token=` query parameter, or session cookie. The WebSocket carries the same event types as SSE. Client frames: `chat_request`, `approval_response` (needs `approvals:write`), `cancel`, `panic` (needs `admin`), and `pong`. Privileged frames re-check the connection's credentials each time, so a revoked key loses the power at once; a missing scope gets an `error` frame with code `forbidden`.
 
 The web dashboard connects via WebSocket by default and falls back to SSE after 3 failed reconnect attempts. Configure with `api.websocket_enabled`, `api.websocket_max_connections`, and `api.websocket_replay_buffer_ttl` in your config.
 
@@ -155,7 +157,7 @@ Update a provider's configuration (API key, base URL, etc.). Changes take effect
 
 **Scope:** `admin`
 
-Update global LLM configuration (default provider, default model).
+Update global LLM configuration: `default_provider`, `default_model`, `cost_limit_soft`, `cost_limit_hard`. Cost limits apply to the live cost tracker immediately.
 
 **Request body:**
 
@@ -210,7 +212,7 @@ Server configuration including version, build info, CORS origins, and WebSocket 
 
 **Scope:** `admin`
 
-Update server config (CORS origins, WebSocket settings).
+Update `external_url`, `timezone`, the `mcp_server_*` settings (`enabled`, `transport`, `session_timeout`, `chat_timeout`, `stateless`), `web_tools_enabled`, `web_fetch_max_response_chars` (1–100000), `script_enabled` and `tasks_enabled`. Changing a tool toggle, `tasks_enabled` or `web_fetch_max_response_chars` returns `restart_required: true`.
 
 ### `POST /api/v1/server/reload`
 
@@ -236,7 +238,7 @@ List all conversations.
 
 **Scope:** `sessions:read`
 
-Get all messages for a session.
+Get a session's messages (at most 200).
 
 ### `GET /api/v1/sessions/{id}/stats`
 
@@ -284,7 +286,7 @@ Replace the session's history with a single `[Session compacted]` summary messag
 
 **Scope:** `chat`
 
-Cancel the in-flight request for a session, if any.
+Ask the session's in-flight turn to stop. It ends at its next step boundary and replies with a summary of what it did; a turn still running after the grace period is cancelled outright. `204` means stopping, not stopped; `404` if nothing is in flight.
 
 ## Telemetry
 
@@ -665,7 +667,7 @@ Starts a server-side judging pass over the run's outstanding blinded pairs with 
 
 **Scope:** `admin`
 
-Emergency stop: cancels all in-flight requests and pauses the scheduler.
+Emergency stop: cancels all in-flight requests and pauses the scheduler. While panicked, every endpoint that starts a turn (`POST /chat`, skill and schedule dry-runs, `POST /eval/runs`, `POST /eval/runs/{id}/judge`) returns `503`, and WebSocket `chat_request` frames that would start a turn get an `error` frame with code `panicked` (a replay request for buffered frames still works). Call `POST /resume` to accept turns again.
 
 ### `POST /api/v1/resume`
 
@@ -955,9 +957,9 @@ Rotate an API key. Returns the new plaintext key once.
 
 ## Authentication
 
-All API endpoints (except health, setup, auth, and metrics) require authentication. Two mechanisms are supported:
+All API endpoints (except health, `openapi.json`, `llms.txt`, setup, the public login/session endpoints under `/auth/`, the MCP OAuth callback, and metrics; `/api/v1/auth/*` needs `admin`) require authentication. Two mechanisms are supported:
 
-1. **Bearer token** — `Authorization: Bearer dk_...` header. API keys are scoped; a key with only `chat` scope cannot access `/api/v1/approvals`.
+1. **Bearer token** — `Authorization: Bearer dk_...` header. API keys are scoped; a key with only `chat` scope cannot access `/api/v1/approvals`. A key with the `admin` scope satisfies every scope requirement.
 2. **Session cookie** — set by the password or OIDC login flow. Used by the web dashboard.
 
 ```bash
