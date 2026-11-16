@@ -308,7 +308,7 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 | `respect_agents_txt` | bool | `false` | Check agents.txt before fetching |
 | `allow_private` | bool | `false` | Allow private ranges: RFC1918, CGNAT `100.64.0.0/10`, ULA `fc00::/7`. Every agent can then fetch any host on your LAN, such as router and NAS admin pages; `allowed_domains` can't narrow this without also blocking the public web |
 | `allow_loopback` | bool | `false` | Allow `127.0.0.0/8`, `::1` and `localhost`, where Denkeeper's own API listens |
-| `allowed_domains` | list | `[]` | When non-empty, only matching hosts are fetched. Entries are `example.com` or `*.example.com` (the domain and its subdomains) |
+| `allowed_domains` | list | `[]` | When non-empty, only matching hosts are fetched. Entries are `example.com` (that exact host only) or `*.example.com` (the domain and its subdomains) |
 | `blocked_domains` | list | `[]` | Matching hosts are always refused; wins over `allowed_domains` |
 
 ### Network policy
@@ -318,7 +318,7 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 - Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
 - Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
 - IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4) are judged by that IPv4 address. NAT64 with a network-specific prefix or a non-/96 layout is not decoded; on such networks, egress filtering must block private targets.
-- With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. The URL checks and domain lists still apply.
+- With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. Hosts matching `NO_PROXY` are connected to directly and go through the address check instead. The URL checks and domain lists apply either way.
 
 The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on.
 

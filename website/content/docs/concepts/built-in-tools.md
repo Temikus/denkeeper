@@ -35,7 +35,7 @@ The live value is formatted into the tool description, so the model can plan its
 
 For JavaScript-heavy pages that return an empty shell, Jina Reader can be enabled as a fallback fetcher under `[web.fetch.jina]`.
 
-`web_fetch` cannot reach loopback, private, link-local or cloud-metadata addresses, so a prompt-injected page cannot point the agent at Denkeeper's own API or your LAN. A refused fetch returns an error naming the setting that would allow it. `allowed_domains` and `blocked_domains` limit which hosts can be fetched at all. Before opening private or loopback ranges for a home-lab service, read [Network policy](/docs/reference/config/#network-policy): `allow_private` opens your whole LAN to every agent.
+By default, `web_fetch` cannot reach loopback, private, link-local or cloud-metadata addresses, so a prompt-injected page cannot point the agent at Denkeeper's own API or your LAN. A refused fetch returns an error naming the setting that would allow it, or saying it is never allowed. `allowed_domains` and `blocked_domains` limit which hosts can be fetched at all. Before opening private or loopback ranges for a home-lab service, read [Network policy](/docs/reference/config/#network-policy): `allow_private` opens your whole LAN to every agent.
 
 {{< callout context="note" >}}
 `[web]` settings are **restart-only**. The web tools are constructed once per agent at startup, and config hot-reload re-applies only per-agent engine knobs. The one exception is `max_response_chars`, which is also editable from the dashboard's Server Config page.
