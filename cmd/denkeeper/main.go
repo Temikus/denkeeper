@@ -1166,16 +1166,21 @@ func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config,
 	return nil
 }
 
+// warnWebFetchOptIns logs once at startup when [web.fetch] opens private or
+// loopback ranges. The setting is global, so it is not logged per agent.
+func warnWebFetchOptIns(w config.WebConfig, logger *slog.Logger) {
+	if !w.WebEnabled() || (!w.Fetch.AllowPrivate && !w.Fetch.AllowLoopback) {
+		return
+	}
+	logger.Warn("web_fetch network policy opened for every agent",
+		"allow_private", w.Fetch.AllowPrivate, "allow_loopback", w.Fetch.AllowLoopback)
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
 	if err != nil {
 		timeout = 30 * time.Second
-	}
-
-	if fc.AllowPrivate || fc.AllowLoopback {
-		logger.Warn("web_fetch network policy opened; agents can reach these ranges",
-			"allow_private", fc.AllowPrivate, "allow_loopback", fc.AllowLoopback)
 	}
 
 	primary := webfetch.NewDefaultFetcher(webfetch.Options{
@@ -2122,6 +2127,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfgHolder := config.NewHolder(cfg)
 
 	logger := initLogger(cfg)
+	warnWebFetchOptIns(cfg.Web, logger)
 
 	otelShutdown, err := dkotel.Setup(dkotel.Config{
 		Enabled:        cfg.OTel.Enabled,

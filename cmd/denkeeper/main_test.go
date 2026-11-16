@@ -673,18 +673,52 @@ func TestBuildWebFetcher_DomainListsWired(t *testing.T) {
 	}
 }
 
-func TestBuildWebFetcher_WarnsWhenOptInOn(t *testing.T) {
+// [web.fetch] is global, so the opt-in warning is logged once at startup by
+// warnWebFetchOptIns, never by the per-agent buildWebFetcher.
+func TestWarnWebFetchOptIns_WarnsOnceWhenOptInOn(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
-	buildWebFetcher(webFetchConfig(t, "[web.fetch]\nallow_private = true\n"), logger)
-	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "allow_private=true") {
+	cfg, err := config.Parse([]byte("[web.fetch]\nallow_private = true\n"))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if strings.Count(buf.String(), "level=WARN") != 1 || !strings.Contains(buf.String(), "allow_private=true") {
 		t.Errorf("want one Warn naming allow_private, got: %s", buf.String())
 	}
 
 	buf.Reset()
-	buildWebFetcher(webFetchConfig(t, ""), logger)
+	buildWebFetcher(cfg.Web.Fetch, logger)
 	if strings.Contains(buf.String(), "level=WARN") {
-		t.Errorf("default config must not warn, got: %s", buf.String())
+		t.Errorf("buildWebFetcher runs per agent and must not warn, got: %s", buf.String())
+	}
+}
+
+func TestWarnWebFetchOptIns_SilentByDefault(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg, err := config.Parse([]byte(""))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if buf.Len() != 0 {
+		t.Errorf("default config must not log, got: %s", buf.String())
+	}
+}
+
+func TestWarnWebFetchOptIns_SilentWhenWebDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg, err := config.Parse([]byte("[web]\nenabled = false\n\n[web.fetch]\nallow_loopback = true\n"))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if buf.Len() != 0 {
+		t.Errorf("disabled web tools must not warn, got: %s", buf.String())
 	}
 }

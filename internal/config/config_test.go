@@ -3329,13 +3329,18 @@ blocked_domains = ["evil.example.com"]
 
 func assertWebFetchDomainRejected(t *testing.T, key, entry string) {
 	t.Helper()
-	tomlData := []byte(baseConfig + "\n[web.fetch]\n" + key + ` = ["` + entry + `"]` + "\n")
+	// TOML literal string, so entries with backslashes reach the validator as-is.
+	tomlData := []byte(baseConfig + "\n[web.fetch]\n" + key + ` = ['` + entry + `']` + "\n")
 	_, err := Parse(tomlData)
 	if err == nil {
 		t.Fatalf("expected error for %s entry %q", key, entry)
 	}
-	if !strings.Contains(err.Error(), "web.fetch."+key) || !strings.Contains(err.Error(), `"`+entry+`"`) {
+	msg := err.Error()
+	if !strings.Contains(msg, "web.fetch."+key) || !strings.Contains(msg, entry) {
 		t.Errorf("error should name the key and entry: %v", err)
+	}
+	if !strings.Contains(msg, `use a bare host such as "example.com" or "*.example.com"`) {
+		t.Errorf("error should carry the bare-host guidance: %v", err)
 	}
 }
 
@@ -3366,6 +3371,69 @@ func TestValidate_WebFetchDomainMisplacedWildcard_Rejected(t *testing.T) {
 func TestValidate_WebFetchDomainUnmappable_Rejected(t *testing.T) {
 	// Mixed-direction label: fails the IDNA bidi rule net/http applies.
 	assertWebFetchDomainRejected(t, "blocked_domains", "*.a\u05d0.example")
+}
+
+func TestValidate_WebFetchDomainLeadingDot_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", ".evil.com")
+	_, err := Parse([]byte(baseConfig + "\n[web.fetch]\nblocked_domains = ['.evil.com']\n"))
+	if err == nil || !strings.Contains(err.Error(), `"*.evil.com"`) {
+		t.Errorf("error should suggest *.evil.com: %v", err)
+	}
+}
+
+func TestValidate_WebFetchDomainUserinfo_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "user@evil.com")
+}
+
+func TestValidate_WebFetchDomainQuery_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "evil.com?")
+}
+
+func TestValidate_WebFetchDomainFragment_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "evil.com#x")
+}
+
+func TestValidate_WebFetchDomainPercentEncoded_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "ev%69l.com")
+}
+
+func TestValidate_WebFetchDomainBackslash_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", `evil.com\`)
+}
+
+func TestValidate_WebFetchDomainEmptyLabel_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "evil..com")
+}
+
+func TestValidate_WebFetchDomainLeadingHyphen_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "-evil.com")
+}
+
+func TestValidate_WebFetchDomainUnderscore_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "evil_com")
+}
+
+func TestValidate_WebFetchDomainIPv4Literal_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "10.0.0.5")
+	_, err := Parse([]byte(baseConfig + "\n[web.fetch]\nblocked_domains = ['10.0.0.5']\n"))
+	if err == nil || !strings.Contains(err.Error(), "IP literals aren't supported") || !strings.Contains(err.Error(), "allow_private") {
+		t.Errorf("error should say IP literals aren't supported and point at allow_private: %v", err)
+	}
+}
+
+// An IPv6 literal must be blamed on being an IP, not on a "port".
+func TestValidate_WebFetchDomainIPv6Literal_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "fd00::1")
+	_, err := Parse([]byte(baseConfig + "\n[web.fetch]\nblocked_domains = ['fd00::1']\n"))
+	if err == nil || !strings.Contains(err.Error(), "IP literals aren't supported") {
+		t.Errorf("error should say IP literals aren't supported: %v", err)
+	}
+}
+
+func TestValidate_WebFetchDomainWildcardTLD_Accepted(t *testing.T) {
+	if _, err := Parse([]byte(baseConfig + "\n[web.fetch]\nallowed_domains = ['*.com', 'Docs.Example.com']\n")); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestParse_BrowserDefaults(t *testing.T) {
