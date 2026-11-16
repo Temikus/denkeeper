@@ -211,6 +211,43 @@ func TestNewAllowlist_UnmappableWildcardPatternRefused(t *testing.T) {
 	}
 }
 
+func TestNewAllowlist_EmptyLabelPatternRefused(t *testing.T) {
+	// "*." would match every host with a trailing dot; U+00AD maps to nothing.
+	for _, p := range []string{"*.", "*.\u00ad", "\u00ad", ".example.com", "example.com.", "a..example.com", "*.example.com."} {
+		if _, err := NewAllowlist([]string{"github.com", p}); err == nil {
+			t.Errorf("NewAllowlist(%q) error = nil, want an empty-label error", p)
+		}
+	}
+}
+
+func TestAllowlist_TrailingDotHostMatches(t *testing.T) {
+	a := mustAllowlist(t, []string{"github.com", "*.example.com"})
+
+	for _, u := range []string{"https://github.com./repo", "https://sub.example.com./", "https://example.com./"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if !ok {
+			t.Errorf("Allowed(%q) = false, want true for a host with one trailing dot", u)
+		}
+	}
+}
+
+func TestAllowlist_TrailingDotHostNotAllowedElsewhere(t *testing.T) {
+	a := mustAllowlist(t, []string{"github.com"})
+
+	for _, u := range []string{"https://evil.com./", "https://github.com../"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if ok {
+			t.Errorf("Allowed(%q) = true, want false", u)
+		}
+	}
+}
+
 func TestAllowlist_InvalidURL(t *testing.T) {
 	a := mustAllowlist(t, []string{"example.com"})
 

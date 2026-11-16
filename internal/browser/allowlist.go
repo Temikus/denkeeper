@@ -42,14 +42,19 @@ func NewAllowlist(domains []string) (*Allowlist, error) {
 }
 
 // normalizePattern maps the host part of a pattern, after any "*." prefix.
+// An empty label is refused: "*." would match every host with a trailing dot,
+// and IDNA maps some characters, such as U+00AD, to nothing.
 func normalizePattern(p string) (string, error) {
-	prefix := ""
-	if strings.HasPrefix(p, "*.") {
-		prefix, p = "*.", p[2:]
+	prefix, rest := "", p
+	if strings.HasPrefix(rest, "*.") {
+		prefix, rest = "*.", rest[2:]
 	}
-	h, err := netguard.HostToASCII(p)
+	h, err := netguard.HostToASCII(rest)
 	if err != nil {
 		return "", err
+	}
+	if h == "" || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") || strings.Contains(h, "..") {
+		return "", fmt.Errorf("pattern %q has an empty label", p)
 	}
 	return prefix + h, nil
 }
@@ -74,6 +79,9 @@ func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("allowlist: %w", err)
 	}
+	// A browser loads "github.com." as github.com. Trim only one dot, so
+	// "github.com.." still matches nothing.
+	host = strings.TrimSuffix(host, ".")
 
 	// Always block dangerous ranges regardless of allowlist.
 	if isBlockedHost(host) {
