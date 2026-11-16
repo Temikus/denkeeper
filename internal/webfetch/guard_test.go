@@ -326,3 +326,103 @@ func TestDefaultFetcher_NonASCIIWildcardPattern(t *testing.T) {
 		}
 	}
 }
+
+// setTestProxy points both proxy env spellings at proxyURL and clears
+// NO_PROXY. httpproxy reads the lowercase names first.
+func setTestProxy(t *testing.T, proxyURL string) {
+	t.Helper()
+	for _, k := range []string{"http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"} {
+		t.Setenv(k, proxyURL)
+	}
+	for _, k := range []string{"no_proxy", "NO_PROXY"} {
+		t.Setenv(k, "")
+	}
+}
+
+// With a proxy set, the proxy dial is exempt from the dial check, so a
+// redirect from Jina to a private literal must be refused before the hop.
+func TestJinaFetcher_RedirectToPrivateViaProxyRefused(t *testing.T) {
+	proxy, proxyHits := countingServer(t, nil)
+	setTestProxy(t, proxy.URL)
+	// Loopback is never proxied, so Jina itself is reached directly.
+	jinaSrv, _ := countingServer(t, redirectTo("http://10.0.0.5/secret"))
+	jina := newTestJina(jinaSrv.URL)
+
+	_, err := jina.Fetch(context.Background(), "https://example.com")
+	assertBlocked(t, err)
+	if proxyHits.Load() != 0 {
+		t.Errorf("proxy saw %d requests, want 0", proxyHits.Load())
+	}
+}
+
+func TestJinaFetcher_RedirectToMetadataViaProxyRefused(t *testing.T) {
+	proxy, proxyHits := countingServer(t, nil)
+	setTestProxy(t, proxy.URL)
+	jinaSrv, _ := countingServer(t, redirectTo("http://169.254.169.254/latest/meta-data/"))
+	jina := newTestJina(jinaSrv.URL)
+
+	_, err := jina.Fetch(context.Background(), "https://example.com")
+	assertBlocked(t, err)
+	if proxyHits.Load() != 0 {
+		t.Errorf("proxy saw %d requests, want 0", proxyHits.Load())
+	}
+}
+
+// A hand-set CheckRedirect drops net/http's default cap, so it needs its own.
+func TestJinaCheckRedirect_CapsAtTenHops(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/next", nil)
+	if err := jinaCheckRedirect(req, make([]*http.Request, 9)); err != nil {
+		t.Errorf("hop 10 to a public host = %v, want nil", err)
+	}
+	if err := jinaCheckRedirect(req, make([]*http.Request, 10)); err == nil {
+		t.Error("hop 11 = nil, want a redirect-limit error")
+	}
+}
+
+// netip rejects these forms; a cgo resolver may decode them to the address
+// in the comment, the pure-Go one fails with a DNS error that is not
+// ErrBlocked. Either way they must be refused up front.
+func TestRequestGuard_DecimalIPv4HostRefused(t *testing.T) {
+	g := newRequestGuard(Options{})
+	u := &url.URL{Scheme: "http", Host: "2852039166"} // 169.254.169.254
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+func TestRequestGuard_ShortIPv4HostRefused(t *testing.T) {
+	g := newRequestGuard(Options{})
+	u := &url.URL{Scheme: "http", Host: "127.1"}
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+func TestRequestGuard_HexIPv4HostRefused(t *testing.T) {
+	g := newRequestGuard(Options{})
+	u := &url.URL{Scheme: "http", Host: "0x7f.1"}
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+// Opt-ins don't open these forms: the guard cannot tell what they name.
+func TestRequestGuard_NumericHostRefusedWithOptIns(t *testing.T) {
+	g := newRequestGuard(Options{AllowLoopback: true, AllowPrivate: true})
+	u := &url.URL{Scheme: "http", Host: "127.1"}
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+func TestChainFetcher_NumericHostSkipsJina(t *testing.T) {
+	jinaSrv, jinaHits := countingServer(t, nil)
+	jina := newTestJina(jinaSrv.URL)
+	primary := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+
+	_, err := NewChainFetcher(primary, jina, nil).Fetch(context.Background(), "http://2852039166/latest/meta-data/")
+	assertBlocked(t, err)
+	if jinaHits.Load() != 0 {
+		t.Errorf("Jina saw %d requests, want 0", jinaHits.Load())
+	}
+}

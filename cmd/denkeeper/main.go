@@ -1176,6 +1176,24 @@ func warnWebFetchOptIns(w config.WebConfig, logger *slog.Logger) {
 		"allow_private", w.Fetch.AllowPrivate, "allow_loopback", w.Fetch.AllowLoopback)
 }
 
+// warnWebFetchOptInsOnReload repeats the opt-in Warn only when a reload
+// changes it. Agents built after a reload (reloadNewAgents, the API agent
+// factory) read the reloaded [web.fetch]; running agents keep theirs.
+func warnWebFetchOptInsOnReload(prev *config.Config, next config.WebConfig, logger *slog.Logger) {
+	if prev != nil && webFetchOptIns(prev.Web) == webFetchOptIns(next) {
+		return
+	}
+	warnWebFetchOptIns(next, logger)
+}
+
+// webFetchOptIns returns the effective opt-ins: none when web tools are off.
+func webFetchOptIns(w config.WebConfig) [2]bool {
+	if !w.WebEnabled() {
+		return [2]bool{}
+	}
+	return [2]bool{w.Fetch.AllowPrivate, w.Fetch.AllowLoopback}
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
@@ -2374,7 +2392,9 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
+		prev := cfgHolder.Get()
 		cfgHolder.Store(cfg)
+		warnWebFetchOptInsOnReload(prev, cfg.Web, logger)
 
 		if rt.providers != nil {
 			syncProviders(*rt.providers, cfg)

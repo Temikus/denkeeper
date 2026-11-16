@@ -41,6 +41,9 @@ func (g *requestGuard) check(u *url.URL) error {
 	if err := g.policy.CheckHost(host); err != nil {
 		return err
 	}
+	if netguard.EndsInNumber(host) {
+		return fmt.Errorf("host %q is a numeric IPv4 form other than a.b.c.d; write the dotted-quad address: %w", host, netguard.ErrBlocked)
+	}
 	return g.checkDomain(host)
 }
 

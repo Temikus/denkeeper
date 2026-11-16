@@ -8,12 +8,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
 	"github.com/Temikus/denkeeper/internal/netguard"
@@ -692,6 +695,56 @@ func TestWarnWebFetchOptIns_WarnsOnceWhenOptInOn(t *testing.T) {
 	buildWebFetcher(cfg.Web.Fetch, logger)
 	if strings.Contains(buf.String(), "level=WARN") {
 		t.Errorf("buildWebFetcher runs per agent and must not warn, got: %s", buf.String())
+	}
+}
+
+// reloadWebFetchLog loads before, reloads after, and returns what the reload
+// logged.
+func reloadWebFetchLog(t *testing.T, before, after string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "denkeeper.toml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(before)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	disp := agent.NewDispatcher(map[string]*agent.Engine{}, nil, nil, logger)
+	reload := buildReloadFunc(path, config.NewHolder(cfg), disp, approval.NewManager(store, logger), nil, reloadRuntime{}, logger)
+
+	write(after)
+	if err := reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	return buf.String()
+}
+
+// Agents built after a reload read the reloaded [web.fetch], so turning an
+// opt-in on by reload must warn.
+func TestReload_WebFetchOptInTurnedOn_Warns(t *testing.T) {
+	out := reloadWebFetchLog(t, "", "[web.fetch]\nallow_private = true\n")
+	if strings.Count(out, "web_fetch network policy opened") != 1 {
+		t.Errorf("want one opt-in Warn on reload, got: %s", out)
+	}
+}
+
+// Startup already warned; an unchanged reload must not repeat it.
+func TestReload_WebFetchOptInUnchanged_Silent(t *testing.T) {
+	cfg := "[web.fetch]\nallow_loopback = true\n"
+	out := reloadWebFetchLog(t, cfg, cfg)
+	if strings.Contains(out, "web_fetch network policy opened") {
+		t.Errorf("unchanged opt-in must not warn again, got: %s", out)
 	}
 }
 

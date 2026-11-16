@@ -178,12 +178,20 @@ var (
 )
 
 // Classify returns the class of addr. IPv6 forms that carry an IPv4 address
-// (mapped, IPv4-compatible, NAT64, 6to4) are classified by that IPv4 address.
+// (mapped, IPv4-compatible, well-known NAT64, 6to4) are classified by that
+// IPv4 address. Local-use NAT64 is private; see classifyLocalUseNAT64.
 func Classify(addr netip.Addr) Class {
 	if !addr.IsValid() {
 		return ClassInvalid
 	}
-	addr = embeddedIPv4(addr.WithZone(""))
+	addr = addr.WithZone("")
+	if nat64LocalUse.Contains(addr) {
+		return classifyLocalUseNAT64(addr)
+	}
+	return classifyRules(embeddedIPv4(addr))
+}
+
+func classifyRules(addr netip.Addr) Class {
 	for _, r := range rules {
 		if r.prefix.Contains(addr) {
 			return r.class
@@ -192,9 +200,22 @@ func Classify(addr netip.Addr) Class {
 	return ClassPublic
 }
 
+// classifyLocalUseNAT64 treats 64:ff9b:1::/48 as private: RFC 8215 §5 leaves
+// its layout to the site, and IANA lists it as not globally reachable. A
+// never-open IPv4 in the /96 position keeps its class, so allow_private does
+// not open it. 0.0.0.0/8 there is skipped: it is never a destination, and
+// other layouts put zeros in those bits.
+func classifyLocalUseNAT64(a netip.Addr) Class {
+	b := a.As16()
+	inner := classifyRules(netip.AddrFrom4([4]byte(b[12:16])))
+	if inner != ClassPublic && inner != ClassUnspecified && inner.Opener() == "" {
+		return inner
+	}
+	return ClassPrivate
+}
+
 // embeddedIPv4 returns the IPv4 address carried by an IPv6 form, or a
-// unchanged. Local-use NAT64 is decoded with the /96 layout (IPv4 in the
-// last 32 bits); RFC 6052's shorter prefix layouts are not decoded.
+// unchanged.
 func embeddedIPv4(a netip.Addr) netip.Addr {
 	if a.Is4In6() {
 		return a.Unmap()
@@ -204,7 +225,7 @@ func embeddedIPv4(a netip.Addr) netip.Addr {
 	}
 	b := a.As16()
 	switch {
-	case nat64.Contains(a), nat64LocalUse.Contains(a), ipv4Compat.Contains(a):
+	case nat64.Contains(a), ipv4Compat.Contains(a):
 		return netip.AddrFrom4([4]byte(b[12:16]))
 	case sixToFour.Contains(a):
 		return netip.AddrFrom4([4]byte(b[2:6]))

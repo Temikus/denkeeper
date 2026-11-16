@@ -32,7 +32,13 @@ func NewJinaFetcher(timeout time.Duration, logger *slog.Logger) *JinaFetcher {
 	}
 	return &JinaFetcher{
 		// Guarded so a redirect from Jina cannot reach this host's network.
-		client:  &http.Client{Timeout: timeout, Transport: netguard.Policy{}.Transport()},
+		// The dial check can't see a proxied hop's target, so each redirect
+		// is also checked by URL.
+		client: &http.Client{
+			Timeout:       timeout,
+			Transport:     netguard.Policy{}.Transport(),
+			CheckRedirect: jinaCheckRedirect,
+		},
 		logger:  logger,
 		baseURL: "https://r.jina.ai",
 	}
@@ -93,6 +99,15 @@ func extractJinaTitle(content string) string {
 		}
 	}
 	return ""
+}
+
+// jinaCheckRedirect keeps net/http's 10-hop cap, which a custom
+// CheckRedirect replaces, and checks every hop like the first URL.
+func jinaCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("jina: stopped after 10 redirects")
+	}
+	return checkJinaTarget(req.URL.String())
 }
 
 // checkJinaTarget refuses URLs Jina must never see: non-http(s) schemes and

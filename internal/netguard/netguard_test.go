@@ -309,9 +309,81 @@ func TestClassify_AzureWireServer(t *testing.T) {
 	assertBlockedUnderAll(t, "168.63.129.16")
 }
 
-func TestClassify_LocalUseNAT64(t *testing.T) {
+// RFC 8215 leaves the local-use layout to the site, so the prefix is private
+// whatever an embedded IPv4 decodes to.
+func TestClassify_LocalUseNAT64_Private(t *testing.T) {
+	assertClass(t, "64:ff9b:1::808:808", ClassPrivate)    // 8.8.8.8, /96 layout
+	assertClass(t, "64:ff9b:1:808:8:800::", ClassPrivate) // 8.8.8.8, /48 layout
+}
+
+// The /48 layout of 169.254.169.254 reads as 0.0.0.0 under /96; it must
+// not come out public.
+func TestClassify_LocalUseNAT64_48LayoutBlockedByDefault(t *testing.T) {
+	a := mustAddr(t, "64:ff9b:1:a9fe:a9:fe00::")
+	if err := (Policy{}).CheckIP(a); !errors.Is(err, ErrBlocked) {
+		t.Errorf("CheckIP(%s) = %v, want ErrBlocked", a, err)
+	}
+}
+
+func TestClassify_LocalUseNAT64_OpenedByAllowPrivate(t *testing.T) {
+	a := mustAddr(t, "64:ff9b:1::808:808")
+	if err := (Policy{AllowPrivate: true}).CheckIP(a); err != nil {
+		t.Errorf("CheckIP(%s) with allow_private = %v, want nil", a, err)
+	}
+}
+
+// A never-open IPv4 in the /96 position stays closed under allow_private.
+func TestClassify_LocalUseNAT64_NeverOpenStaysBlocked(t *testing.T) {
 	assertClass(t, "64:ff9b:1::a9fe:a9fe", ClassLinkLocal) // 169.254.169.254
-	assertClass(t, "64:ff9b:1::808:808", ClassPublic)
+	assertBlockedUnderAll(t, "64:ff9b:1::a9fe:a9fe")
+	assertClass(t, "64:ff9b:1::6464:64c8", ClassMetadata) // 100.100.100.200
+}
+
+func TestEndsInNumber_Decimal(t *testing.T) {
+	if !EndsInNumber("2852039166") {
+		t.Error("EndsInNumber(2852039166) = false, want true")
+	}
+}
+
+func TestEndsInNumber_ShortForm(t *testing.T) {
+	if !EndsInNumber("127.1") {
+		t.Error("EndsInNumber(127.1) = false, want true")
+	}
+}
+
+func TestEndsInNumber_Hex(t *testing.T) {
+	for _, h := range []string{"0x7f.1", "0X7F.0.0.1", "0x7f000001"} {
+		if !EndsInNumber(h) {
+			t.Errorf("EndsInNumber(%q) = false, want true", h)
+		}
+	}
+}
+
+func TestEndsInNumber_Octal(t *testing.T) {
+	if !EndsInNumber("0177.0.0.01") {
+		t.Error("EndsInNumber(0177.0.0.01) = false, want true")
+	}
+}
+
+func TestEndsInNumber_TrailingDot(t *testing.T) {
+	if !EndsInNumber("127.1.") {
+		t.Error("EndsInNumber(127.1.) = false, want true")
+	}
+}
+
+// netip parses the canonical form, so CheckHost judges it instead.
+func TestEndsInNumber_CanonicalIPv4False(t *testing.T) {
+	if EndsInNumber("10.0.0.5") {
+		t.Error("EndsInNumber(10.0.0.5) = true, want false")
+	}
+}
+
+func TestEndsInNumber_HostNamesFalse(t *testing.T) {
+	for _, h := range []string{"example.com", "1password.com", "123abc", "v6.example", "::1", ""} {
+		if EndsInNumber(h) {
+			t.Errorf("EndsInNumber(%q) = true, want false", h)
+		}
+	}
 }
 
 func TestClassify_IPv4Compatible(t *testing.T) {
@@ -319,6 +391,39 @@ func TestClassify_IPv4Compatible(t *testing.T) {
 	assertClass(t, "::a9fe:a9fe", ClassLinkLocal) // ::169.254.169.254
 	assertClass(t, "::1", ClassLoopback)
 	assertClass(t, "::", ClassUnspecified)
+}
+
+// The ClassProxy check compares text, but only the exact text the dial
+// exemption matches; any other spelling of the proxy's address goes through
+// the guarded dialer and the policy.
+func TestTransport_OtherSpellingOfProxyAddrUsesPolicy(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+
+	for _, k := range []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"} {
+		t.Setenv(k, "http://localhost:"+port)
+	}
+	for _, k := range []string{"no_proxy", "NO_PROXY"} {
+		t.Setenv(k, "")
+	}
+
+	client := &http.Client{Transport: Policy{}.Transport(), Timeout: 5 * time.Second}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:"+port+"/", nil)
+	resp, err := client.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	var be *BlockedError
+	if !errors.As(err, &be) || be.Class != ClassLoopback {
+		t.Errorf("err = %v, want a loopback BlockedError from the dialer", err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
+	}
 }
 
 // A request that goes direct (no proxy for its scheme, or a NO_PROXY match)

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3336,7 +3337,8 @@ func assertWebFetchDomainRejected(t *testing.T, key, entry string) {
 		t.Fatalf("expected error for %s entry %q", key, entry)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "web.fetch."+key) || !strings.Contains(msg, entry) {
+	// Quoted, so the empty entry is checked too.
+	if !strings.Contains(msg, "web.fetch."+key) || !strings.Contains(msg, strconv.Quote(entry)) {
 		t.Errorf("error should name the key and entry: %v", err)
 	}
 	if !strings.Contains(msg, `use a bare host such as "example.com" or "*.example.com"`) {
@@ -3428,6 +3430,52 @@ func TestValidate_WebFetchDomainIPv6Literal_Rejected(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "IP literals aren't supported") {
 		t.Errorf("error should say IP literals aren't supported: %v", err)
 	}
+}
+
+func assertWebFetchDomainIPRejected(t *testing.T, entry string) {
+	t.Helper()
+	assertWebFetchDomainRejected(t, "blocked_domains", entry)
+	_, err := Parse([]byte(baseConfig + "\n[web.fetch]\nblocked_domains = ['" + entry + "']\n"))
+	if err == nil || !strings.Contains(err.Error(), "IP literals aren't supported") {
+		t.Errorf("error should say IP literals aren't supported: %v", err)
+	}
+}
+
+func TestValidate_WebFetchDomainWildcardIPv4_Rejected(t *testing.T) {
+	assertWebFetchDomainIPRejected(t, "*.127.0.0.1")
+}
+
+// IDNA maps fullwidth digits and dots, so this is 10.0.0.5 to net/http.
+func TestValidate_WebFetchDomainFullwidthIPv4_Rejected(t *testing.T) {
+	assertWebFetchDomainIPRejected(t, "１０．０．０．５")
+}
+
+func TestValidate_WebFetchDomainShortIPv4_Rejected(t *testing.T) {
+	assertWebFetchDomainIPRejected(t, "127.1")
+}
+
+func TestValidate_WebFetchDomainHexIPv4_Rejected(t *testing.T) {
+	assertWebFetchDomainIPRejected(t, "0x7f.0.0.1")
+}
+
+func TestValidate_WebFetchDomainDecimalIPv4_Rejected(t *testing.T) {
+	assertWebFetchDomainIPRejected(t, "2852039166")
+}
+
+// URL parsers read a numeric last label as IPv4, so no host name ends in one.
+func TestValidate_WebFetchDomainNumericLastLabel_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "example.123")
+}
+
+// The matcher trims one trailing dot, so the validator accepts one.
+func TestValidate_WebFetchDomainTrailingDot_Accepted(t *testing.T) {
+	if _, err := Parse([]byte(baseConfig + "\n[web.fetch]\nallowed_domains = ['example.com.', '*.example.org.']\n")); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_WebFetchDomainDoubleTrailingDot_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "example.com..")
 }
 
 func TestValidate_WebFetchDomainWildcardTLD_Accepted(t *testing.T) {

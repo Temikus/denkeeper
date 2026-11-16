@@ -3074,18 +3074,19 @@ func validateFetchDomains(key string, entries []string) error {
 }
 
 // fetchDomainProblem returns why e is not a valid pattern, or "". The part
-// after "*." must map through IDNA the way net/http does, then be plain DNS
-// labels.
+// after "*." and before one trailing dot (the matcher trims one too) must map
+// through IDNA the way net/http does, then be plain DNS labels. IP checks run
+// on the mapped form, which is what net/http dials.
 func fetchDomainProblem(e string) string {
-	if _, err := netip.ParseAddr(strings.Trim(e, "[]")); err == nil {
-		return "IP literals aren't supported (the lists match host names; allow_private and allow_loopback control address ranges)"
-	}
 	if strings.HasPrefix(e, ".") {
 		return fmt.Sprintf("a leading dot matches nothing; for a domain and its subdomains use %q", "*"+e)
 	}
-	host, err := netguard.HostToASCII(strings.TrimPrefix(e, "*."))
+	host, err := netguard.HostToASCII(strings.TrimSuffix(strings.TrimPrefix(e, "*."), "."))
 	if err != nil {
 		return err.Error()
+	}
+	if _, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil || netguard.EndsInNumber(host) {
+		return "IP literals aren't supported (the lists match host names; allow_private and allow_loopback control address ranges)"
 	}
 	for _, label := range strings.Split(host, ".") {
 		if !validDNSLabel(label) {
