@@ -91,7 +91,8 @@ func validateHeaders(headers map[string]string) error {
 
 // isBlockedHost returns true for hosts that should always be blocked:
 // link-local addresses, cloud metadata endpoints, and localhost.
-// Mirrors internal/browser/allowlist.go:isBlockedHost.
+// It allows RFC1918 on purpose, because LAN MCP servers are supported.
+// web_fetch and the browser allowlist use the stricter internal/netguard.
 func isBlockedHost(host string) bool {
 	if host == "localhost" {
 		return true
