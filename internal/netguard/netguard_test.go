@@ -303,3 +303,53 @@ func TestClassify_MetadataInsidePrivateRanges(t *testing.T) {
 		assertBlockedUnderAll(t, a)
 	}
 }
+
+func TestClassify_AzureWireServer(t *testing.T) {
+	assertClass(t, "168.63.129.16", ClassMetadata)
+	assertBlockedUnderAll(t, "168.63.129.16")
+}
+
+func TestClassify_LocalUseNAT64(t *testing.T) {
+	assertClass(t, "64:ff9b:1::a9fe:a9fe", ClassLinkLocal) // 169.254.169.254
+	assertClass(t, "64:ff9b:1::808:808", ClassPublic)
+}
+
+func TestClassify_IPv4Compatible(t *testing.T) {
+	assertClass(t, "::7f00:1", ClassLoopback)     // ::127.0.0.1
+	assertClass(t, "::a9fe:a9fe", ClassLinkLocal) // ::169.254.169.254
+	assertClass(t, "::1", ClassLoopback)
+	assertClass(t, "::", ClassUnspecified)
+}
+
+// A request that goes direct (no proxy for its scheme, or a NO_PROXY match)
+// must not inherit the proxy's dial exemption.
+func TestTransport_DirectRequestToProxyAddrBlocked(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	proxyURL := "http://localhost:" + port
+
+	// httpproxy reads the lowercase names first.
+	for _, k := range []string{"https_proxy", "HTTPS_PROXY"} {
+		t.Setenv(k, proxyURL)
+	}
+	for _, k := range []string{"http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"} {
+		t.Setenv(k, "")
+	}
+
+	client := &http.Client{Transport: Policy{}.Transport(), Timeout: 5 * time.Second}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, proxyURL+"/", nil)
+	resp, err := client.Do(req)
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	if !errors.Is(err, ErrBlocked) {
+		t.Errorf("err = %v, want ErrBlocked", err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
+	}
+}

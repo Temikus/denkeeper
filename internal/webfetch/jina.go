@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // JinaFetcher uses the Jina Reader API (r.jina.ai) to fetch URLs and convert
@@ -29,7 +31,8 @@ func NewJinaFetcher(timeout time.Duration, logger *slog.Logger) *JinaFetcher {
 		logger = slog.Default()
 	}
 	return &JinaFetcher{
-		client:  &http.Client{Timeout: timeout},
+		// Guarded so a redirect from Jina cannot reach this host's network.
+		client:  &http.Client{Timeout: timeout, Transport: netguard.Policy{}.Transport()},
 		logger:  logger,
 		baseURL: "https://r.jina.ai",
 	}

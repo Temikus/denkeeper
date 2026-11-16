@@ -28,6 +28,7 @@ const (
 	ClassUnspecified
 	ClassMulticast
 	ClassBroadcast
+	ClassProxy
 	ClassInvalid
 )
 
@@ -49,6 +50,8 @@ func (c Class) String() string {
 		return "multicast"
 	case ClassBroadcast:
 		return "broadcast"
+	case ClassProxy:
+		return "configured proxy"
 	default:
 		return "unrecognised"
 	}
@@ -146,10 +149,11 @@ var rules = []struct {
 	class  Class
 }{
 	// First match wins. These metadata endpoints sit inside private ranges
-	// (AWS IPv6 in ULA, Alibaba in CGNAT) and must stay closed under
-	// allow_private.
+	// (AWS IPv6 in ULA, Alibaba in CGNAT) or public space (Azure WireServer)
+	// and must stay closed under every policy.
 	{netip.MustParsePrefix("fd00:ec2::254/128"), ClassMetadata},
 	{netip.MustParsePrefix("100.100.100.200/32"), ClassMetadata},
+	{netip.MustParsePrefix("168.63.129.16/32"), ClassMetadata},
 	{netip.MustParsePrefix("0.0.0.0/8"), ClassUnspecified},
 	{netip.MustParsePrefix("127.0.0.0/8"), ClassLoopback},
 	{netip.MustParsePrefix("169.254.0.0/16"), ClassLinkLocal},
@@ -167,12 +171,14 @@ var rules = []struct {
 }
 
 var (
-	nat64     = netip.MustParsePrefix("64:ff9b::/96")
-	sixToFour = netip.MustParsePrefix("2002::/16")
+	nat64         = netip.MustParsePrefix("64:ff9b::/96")
+	nat64LocalUse = netip.MustParsePrefix("64:ff9b:1::/48")
+	ipv4Compat    = netip.MustParsePrefix("::/96")
+	sixToFour     = netip.MustParsePrefix("2002::/16")
 )
 
 // Classify returns the class of addr. IPv6 forms that carry an IPv4 address
-// (mapped, NAT64, 6to4) are classified by that IPv4 address.
+// (mapped, IPv4-compatible, NAT64, 6to4) are classified by that IPv4 address.
 func Classify(addr netip.Addr) Class {
 	if !addr.IsValid() {
 		return ClassInvalid
@@ -186,13 +192,19 @@ func Classify(addr netip.Addr) Class {
 	return ClassPublic
 }
 
+// embeddedIPv4 returns the IPv4 address carried by an IPv6 form, or a
+// unchanged. Local-use NAT64 is decoded with the /96 layout (IPv4 in the
+// last 32 bits); RFC 6052's shorter prefix layouts are not decoded.
 func embeddedIPv4(a netip.Addr) netip.Addr {
 	if a.Is4In6() {
 		return a.Unmap()
 	}
+	if a == netip.IPv6Unspecified() || a == netip.IPv6Loopback() {
+		return a
+	}
 	b := a.As16()
 	switch {
-	case nat64.Contains(a):
+	case nat64.Contains(a), nat64LocalUse.Contains(a), ipv4Compat.Contains(a):
 		return netip.AddrFrom4([4]byte(b[12:16]))
 	case sixToFour.Contains(a):
 		return netip.AddrFrom4([4]byte(b[2:6]))

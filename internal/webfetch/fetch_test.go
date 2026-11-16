@@ -412,8 +412,7 @@ func TestJinaFetcher_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	j := NewJinaFetcher(5*time.Second, nil)
-	j.baseURL = srv.URL
+	j := newTestJina(srv.URL)
 
 	_, err := j.Fetch(context.Background(), "https://example.com")
 	if err == nil {
@@ -431,8 +430,7 @@ func TestJinaFetcher_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	j := NewJinaFetcher(5*time.Second, nil)
-	j.baseURL = srv.URL
+	j := newTestJina(srv.URL)
 
 	result, err := j.Fetch(context.Background(), "https://example.com")
 	if err != nil {

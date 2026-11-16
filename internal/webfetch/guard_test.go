@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,16 @@ func redirectTo(target string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusFound)
 	}
+}
+
+// newTestJina points a JinaFetcher at a local server. Its guarded transport
+// is swapped for one that admits loopback, or the server would be unreachable
+// and "zero hits" assertions would pass vacuously.
+func newTestJina(baseURL string) *JinaFetcher {
+	j := NewJinaFetcher(5*time.Second, nil)
+	j.baseURL = baseURL
+	j.client.Transport = netguard.Policy{AllowLoopback: true}.Transport()
+	return j
 }
 
 func assertBlocked(t *testing.T, err error) {
@@ -107,8 +118,7 @@ func TestChainFetcher_BlockedPrimarySkipsJina(t *testing.T) {
 	target, _ := countingServer(t, nil)
 	jinaSrv, jinaHits := countingServer(t, nil)
 
-	jina := NewJinaFetcher(5*time.Second, nil)
-	jina.baseURL = jinaSrv.URL
+	jina := newTestJina(jinaSrv.URL)
 	primary := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
 
 	c := NewChainFetcher(primary, jina, nil)
@@ -123,8 +133,7 @@ func TestChainFetcher_BlockedRedirectSkipsJina(t *testing.T) {
 	target, _ := countingServer(t, redirectTo("http://169.254.169.254/"))
 	jinaSrv, jinaHits := countingServer(t, nil)
 
-	jina := NewJinaFetcher(5*time.Second, nil)
-	jina.baseURL = jinaSrv.URL
+	jina := newTestJina(jinaSrv.URL)
 	primary := NewDefaultFetcher(Options{Timeout: 5 * time.Second, AllowLoopback: true})
 
 	_, err := NewChainFetcher(primary, jina, nil).Fetch(context.Background(), target.URL)
@@ -136,8 +145,7 @@ func TestChainFetcher_BlockedRedirectSkipsJina(t *testing.T) {
 
 func TestJinaFetcher_RefusesBlockedTarget(t *testing.T) {
 	jinaSrv, jinaHits := countingServer(t, nil)
-	jina := NewJinaFetcher(5*time.Second, nil)
-	jina.baseURL = jinaSrv.URL
+	jina := newTestJina(jinaSrv.URL)
 
 	for _, u := range []string{
 		"http://169.254.169.254/latest/meta-data/",
@@ -157,8 +165,7 @@ func TestJinaFetcher_RefusesBlockedTarget(t *testing.T) {
 
 func TestJinaFetcher_RefusesNonHTTPScheme(t *testing.T) {
 	jinaSrv, jinaHits := countingServer(t, nil)
-	jina := NewJinaFetcher(5*time.Second, nil)
-	jina.baseURL = jinaSrv.URL
+	jina := newTestJina(jinaSrv.URL)
 
 	if _, err := jina.Fetch(context.Background(), "file:///etc/passwd"); err == nil {
 		t.Error("expected scheme error")
@@ -255,5 +262,57 @@ func TestDefaultFetcher_DomainListDoesNotOpenIPClass(t *testing.T) {
 	assertBlocked(t, err)
 	if hits.Load() != 0 {
 		t.Errorf("hits = %d, want 0", hits.Load())
+	}
+}
+
+// net/http dials the IDNA-mapped name, so the domain lists must compare
+// against it too.
+func TestDefaultFetcher_FullwidthHostBlockedDomain(t *testing.T) {
+	srv, hits := countingServer(t, nil)
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+
+	f := NewDefaultFetcher(Options{
+		Timeout:        5 * time.Second,
+		AllowLoopback:  true,
+		BlockedDomains: []string{"localhost"},
+	})
+	_, err := f.Fetch(context.Background(), "http://ｌｏｃａｌｈｏｓｔ:"+port+"/")
+	assertBlocked(t, err)
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
+	}
+}
+
+func TestDefaultFetcher_IdeographicDotBlockedDomain(t *testing.T) {
+	g := newRequestGuard(Options{BlockedDomains: []string{"evil.com"}})
+	u, err := url.Parse("https://evil。com/?q=secret")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+func TestDefaultFetcher_InvalidIDNAHostRefused(t *testing.T) {
+	g := newRequestGuard(Options{})
+	// Mixed-direction label: fails the IDNA bidi rule.
+	u := &url.URL{Scheme: "https", Host: "a\u05d0.example"}
+	if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("check = %v, want ErrBlocked", err)
+	}
+}
+
+// The production client must refuse non-public dials, so a 3xx from Jina
+// cannot steer it at this host's network.
+func TestJinaFetcher_ClientUsesGuardedTransport(t *testing.T) {
+	jinaSrv, hits := countingServer(t, nil)
+	jina := NewJinaFetcher(5*time.Second, nil)
+	jina.baseURL = jinaSrv.URL // loopback: the default policy must refuse it
+
+	_, err := jina.Fetch(context.Background(), "https://example.com")
+	assertBlocked(t, err)
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
 	}
 }

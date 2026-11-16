@@ -31,9 +31,12 @@ func (g *requestGuard) check(u *url.URL) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("unsupported scheme %q: only http and https are supported", u.Scheme)
 	}
-	host := u.Hostname()
-	if host == "" {
+	if u.Hostname() == "" {
 		return fmt.Errorf("URL %q has no host", u.Redacted())
+	}
+	host, err := netguard.HostToASCII(u.Hostname())
+	if err != nil {
+		return fmt.Errorf("%w: %w", err, netguard.ErrBlocked)
 	}
 	if err := g.policy.CheckHost(host); err != nil {
 		return err
@@ -41,8 +44,8 @@ func (g *requestGuard) check(u *url.URL) error {
 	return g.checkDomain(host)
 }
 
-// checkDomain applies blocked_domains, then allowed_domains. The lists never
-// open an IP class.
+// checkDomain applies blocked_domains, then allowed_domains to an
+// IDNA-mapped host. The lists never open an IP class.
 func (g *requestGuard) checkDomain(host string) error {
 	h := normalizeHost(host)
 	if matchAny(h, g.blocked) {
@@ -74,7 +77,11 @@ func normalizeHost(h string) string {
 func normalizePatterns(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, p := range in {
-		if p = normalizeHost(p); p != "" {
+		p = normalizeHost(p)
+		if a, err := netguard.HostToASCII(p); err == nil {
+			p = a
+		}
+		if p != "" {
 			out = append(out, p)
 		}
 	}
