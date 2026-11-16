@@ -251,7 +251,7 @@ release bump:
 # Pass --force to a specific scan (e.g. `mise x -- task scan:govulncheck --force`)
 # to re-check against a fresh vulnerability database when sources are unchanged.
 # `secrets` scans git history and is always uncached.
-scan tool="all":
+scan tool="all": ensure-web-dist
     #!/usr/bin/env sh
     set -e
     case "{{tool}}" in
