@@ -127,6 +127,29 @@ func TestAllowlist_AllowlistedPrivateIPRefused(t *testing.T) {
 	}
 }
 
+func TestAllowlist_MatchesIDNAMappedHost(t *testing.T) {
+	a := NewAllowlist([]string{"github.com"})
+
+	// Fullwidth "ｇｉｔｈｕｂ.com" maps to github.com, as a browser would load it.
+	ok, err := a.Allowed("https://ｇｉｔｈｕｂ.com/repo")
+	if err != nil {
+		t.Fatalf("Allowed: %v", err)
+	}
+	if !ok {
+		t.Error("Allowed = false, want true for a host that maps to an allowlisted domain")
+	}
+}
+
+func TestAllowlist_UnmappableHostRefused(t *testing.T) {
+	a := NewAllowlist(nil)
+
+	// U+FFFD is disallowed by IDNA, so the host cannot be mapped.
+	ok, _ := a.Allowed("https://bad�host.com/")
+	if ok {
+		t.Error("Allowed = true, want false when the host cannot be mapped to ASCII")
+	}
+}
+
 func TestAllowlist_InvalidURL(t *testing.T) {
 	a := NewAllowlist([]string{"example.com"})
 
@@ -223,6 +246,23 @@ func TestIsBlockedHost(t *testing.T) {
 		{"172.32.0.1", false},
 		{"100.128.0.1", false},
 		{"2606:4700:4700::1111", false},
+		// Non-canonical IPv4 forms a browser reads as an address.
+		{"2130706433", true},
+		{"0x7f000001", true},
+		{"0X7F000001", true},
+		{"0x7f.1", true},
+		{"017700000001", true},
+		{"127.1", true},
+		{"2852039166", true},
+		{"8.8.8.8.", false},
+		{"134744072", true}, // 8.8.8.8 in decimal: refused, not decoded
+		// Fullwidth forms that IDNA maps to a blocked host.
+		{"１２７.０.０.１", true},
+		{"１６９.２５４.１６９.２５４", true},
+		{"ｌｏｃａｌｈｏｓｔ", true},
+		// A numeric label that is not the last one is a hostname.
+		{"123.example.com", false},
+		{"example.com1", false},
 	}
 
 	for _, tt := range tests {

@@ -3,6 +3,8 @@
 package browser
 
 import (
+	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -48,6 +50,11 @@ func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Map and lowercase as a browser would, so both checks see the host it loads.
+	host, err = netguard.HostToASCII(host)
+	if err != nil {
+		return false, fmt.Errorf("allowlist: %w", err)
+	}
 
 	// Always block dangerous ranges regardless of allowlist.
 	if isBlockedHost(host) {
@@ -59,7 +66,6 @@ func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 		return true, nil
 	}
 
-	host = strings.ToLower(host)
 	for _, pattern := range a.domains {
 		if matchDomain(host, pattern) {
 			return true, nil
@@ -103,8 +109,35 @@ func matchDomain(host, pattern string) bool {
 // isBlockedHost reports whether host is refused by the netguard default
 // policy: localhost names, cloud metadata names and IPs, and literal
 // loopback, private (RFC1918, CGNAT, ULA), link-local, unspecified, multicast
-// and broadcast addresses, including IPv6 forms that carry one. Hostnames
-// that resolve to such addresses are not caught here.
+// and broadcast addresses, including IPv6 forms that carry one. The host is
+// IDNA-mapped first; an unmappable host and a non-canonical IPv4 literal are
+// refused. Hostnames that resolve to such addresses are not caught here.
 func isBlockedHost(host string) bool {
-	return netguard.Policy{}.CheckHost(host) != nil
+	h, err := netguard.HostToASCII(host)
+	if err != nil {
+		return true
+	}
+	return netguard.Policy{}.CheckHost(h) != nil || endsInNumber(h)
+}
+
+// endsInNumber applies the WHATWG URL rule: a browser parses a host whose last
+// label is numeric as IPv4, accepting decimal, octal, hex and short forms that
+// netip rejects. Such a form is refused, not decoded.
+func endsInNumber(h string) bool {
+	h = strings.TrimSuffix(h, ".")
+	last := h[strings.LastIndexByte(h, '.')+1:]
+	if last == "" || (!strings.HasPrefix(last, "0x") && !allDigits(last)) {
+		return false
+	}
+	_, err := netip.ParseAddr(h)
+	return err != nil
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
