@@ -3290,6 +3290,84 @@ max_response_chars = -1
 	}
 }
 
+func TestParse_WebFetchNetworkPolicyDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	f := cfg.Web.Fetch
+	if f.AllowPrivate || f.AllowLoopback {
+		t.Errorf("allow_private = %v, allow_loopback = %v, want both false", f.AllowPrivate, f.AllowLoopback)
+	}
+	if len(f.AllowedDomains) != 0 || len(f.BlockedDomains) != 0 {
+		t.Errorf("domain lists should default empty, got %v / %v", f.AllowedDomains, f.BlockedDomains)
+	}
+}
+
+func TestParse_WebFetchNetworkPolicyKeys(t *testing.T) {
+	cfg, err := Parse([]byte(baseConfig + `
+[web.fetch]
+allow_private = true
+allow_loopback = true
+allowed_domains = ["example.com", "*.docs.example.org", "*.ｅｘａｍｐｌｅ.net"]
+blocked_domains = ["evil.example.com"]
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	f := cfg.Web.Fetch
+	if !f.AllowPrivate || !f.AllowLoopback {
+		t.Errorf("allow_private = %v, allow_loopback = %v, want both true", f.AllowPrivate, f.AllowLoopback)
+	}
+	if len(f.AllowedDomains) != 3 || f.AllowedDomains[1] != "*.docs.example.org" {
+		t.Errorf("allowed_domains = %v", f.AllowedDomains)
+	}
+	if len(f.BlockedDomains) != 1 || f.BlockedDomains[0] != "evil.example.com" {
+		t.Errorf("blocked_domains = %v", f.BlockedDomains)
+	}
+}
+
+func assertWebFetchDomainRejected(t *testing.T, key, entry string) {
+	t.Helper()
+	tomlData := []byte(baseConfig + "\n[web.fetch]\n" + key + ` = ["` + entry + `"]` + "\n")
+	_, err := Parse(tomlData)
+	if err == nil {
+		t.Fatalf("expected error for %s entry %q", key, entry)
+	}
+	if !strings.Contains(err.Error(), "web.fetch."+key) || !strings.Contains(err.Error(), `"`+entry+`"`) {
+		t.Errorf("error should name the key and entry: %v", err)
+	}
+}
+
+func TestValidate_WebFetchDomainEmpty_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "")
+}
+
+func TestValidate_WebFetchDomainScheme_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "https://evil.com")
+}
+
+func TestValidate_WebFetchDomainPath_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "example.com/docs")
+}
+
+func TestValidate_WebFetchDomainPort_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "blocked_domains", "evil.com:8080")
+}
+
+func TestValidate_WebFetchDomainWhitespace_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "example .com")
+}
+
+func TestValidate_WebFetchDomainMisplacedWildcard_Rejected(t *testing.T) {
+	assertWebFetchDomainRejected(t, "allowed_domains", "docs.*.example.com")
+}
+
+func TestValidate_WebFetchDomainUnmappable_Rejected(t *testing.T) {
+	// Mixed-direction label: fails the IDNA bidi rule net/http applies.
+	assertWebFetchDomainRejected(t, "blocked_domains", "*.a\u05d0.example")
+}
+
 func TestParse_BrowserDefaults(t *testing.T) {
 	tomlData := []byte(baseConfig)
 	cfg, err := Parse(tomlData)

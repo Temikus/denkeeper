@@ -78,8 +78,15 @@ func normalizePatterns(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, p := range in {
 		p = normalizeHost(p)
-		if a, err := netguard.HostToASCII(p); err == nil {
-			p = a
+		// Map only the host part; HostToASCII rejects the "*" label.
+		base, wild := strings.CutPrefix(p, "*.")
+		if a, err := netguard.HostToASCII(base); err == nil {
+			base = a
+		}
+		if wild {
+			p = "*." + base
+		} else {
+			p = base
 		}
 		if p != "" {
 			out = append(out, p)

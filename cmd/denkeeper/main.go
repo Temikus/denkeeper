@@ -1173,6 +1173,11 @@ func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fet
 		timeout = 30 * time.Second
 	}
 
+	if fc.AllowPrivate || fc.AllowLoopback {
+		logger.Warn("web_fetch network policy opened; agents can reach these ranges",
+			"allow_private", fc.AllowPrivate, "allow_loopback", fc.AllowLoopback)
+	}
+
 	primary := webfetch.NewDefaultFetcher(webfetch.Options{
 		Timeout:          timeout,
 		MaxSizeBytes:     fc.MaxSizeBytes,
@@ -1180,6 +1185,10 @@ func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fet
 		RespectRobotsTxt: fc.RespectRobotsTxt,
 		RespectAgentsTxt: fc.RespectAgentsTxt,
 		Logger:           logger,
+		AllowPrivate:     fc.AllowPrivate,
+		AllowLoopback:    fc.AllowLoopback,
+		AllowedDomains:   fc.AllowedDomains,
+		BlockedDomains:   fc.BlockedDomains,
 	})
 
 	if !fc.Jina.Enabled {

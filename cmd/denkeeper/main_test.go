@@ -1,16 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/netguard"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
@@ -610,5 +616,75 @@ func TestTraceCapDefaultsAgree(t *testing.T) {
 	if config.DefaultMaxTraceBytes != agent.DefaultMaxTraceBytes {
 		t.Errorf("config default %d != agent default %d",
 			config.DefaultMaxTraceBytes, agent.DefaultMaxTraceBytes)
+	}
+}
+
+// webFetchConfig returns the [web.fetch] section a config file produces,
+// with all defaults applied.
+func webFetchConfig(t *testing.T, toml string) config.WebFetchConfig {
+	t.Helper()
+	cfg, err := config.Parse([]byte(toml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	return cfg.Web.Fetch
+}
+
+// The default deployment must not reach loopback, where Denkeeper's own API
+// listens.
+func TestBuildWebFetcher_DefaultConfigBlocksLoopback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+
+	f := buildWebFetcher(webFetchConfig(t, ""), slog.Default())
+	_, err := f.Fetch(context.Background(), srv.URL)
+	if !errors.Is(err, netguard.ErrBlocked) {
+		t.Fatalf("err = %v, want netguard.ErrBlocked", err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
+	}
+}
+
+func TestBuildWebFetcher_AllowLoopbackReaches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer srv.Close()
+
+	f := buildWebFetcher(webFetchConfig(t, "[web.fetch]\nallow_loopback = true\n"), slog.Default())
+	res, err := f.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Content != "hello" {
+		t.Errorf("content = %q, want hello", res.Content)
+	}
+}
+
+func TestBuildWebFetcher_DomainListsWired(t *testing.T) {
+	fc := webFetchConfig(t, "[web.fetch]\nblocked_domains = [\"evil.example.com\"]\n")
+	_, err := buildWebFetcher(fc, slog.Default()).Fetch(context.Background(), "https://evil.example.com/")
+	if !errors.Is(err, netguard.ErrBlocked) || !strings.Contains(err.Error(), "blocked_domains") {
+		t.Errorf("err = %v, want a blocked_domains refusal", err)
+	}
+}
+
+func TestBuildWebFetcher_WarnsWhenOptInOn(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	buildWebFetcher(webFetchConfig(t, "[web.fetch]\nallow_private = true\n"), logger)
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "allow_private=true") {
+		t.Errorf("want one Warn naming allow_private, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	buildWebFetcher(webFetchConfig(t, ""), logger)
+	if strings.Contains(buf.String(), "level=WARN") {
+		t.Errorf("default config must not warn, got: %s", buf.String())
 	}
 }

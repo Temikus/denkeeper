@@ -316,3 +316,13 @@ func TestJinaFetcher_ClientUsesGuardedTransport(t *testing.T) {
 		t.Errorf("handler ran %d times, want 0", hits.Load())
 	}
 }
+
+// HostToASCII rejects "*", so only the part after "*." may be mapped.
+func TestDefaultFetcher_NonASCIIWildcardPattern(t *testing.T) {
+	g := newRequestGuard(Options{BlockedDomains: []string{"*.ｅｖｉｌ.com"}})
+	for _, h := range []string{"evil.com", "sub.evil.com"} {
+		if err := g.checkDomain(h); !errors.Is(err, netguard.ErrBlocked) {
+			t.Errorf("checkDomain(%q) = %v, want ErrBlocked", h, err)
+		}
+	}
+}

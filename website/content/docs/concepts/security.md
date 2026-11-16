@@ -22,7 +22,7 @@ Every capability in Denkeeper is opt-in. The agent starts with zero permissions 
 | Cost runaway | Per-session budget caps, global cost tracking, automatic fallback to cheaper models |
 | Plugin escape | Subprocess isolation and sandboxed execution via Docker (`--cap-drop ALL`, `--read-only`, `--network none`) or Kubernetes (ephemeral Pods with init-container network isolation, Pod Security Admission, optional gVisor/Kata); Ed25519 signature verification |
 | Config file secrets | File permissions (`0o600`), environment variable expansion for secrets |
-| SSRF via remote MCP tool servers or the browser tool | Connect-time IP blocking of link-local, loopback, and cloud-metadata addresses, plus an optional hostname allowlist |
+| SSRF via remote MCP tool servers, the browser tool, or `web_fetch` | Connect-time IP blocking of link-local, loopback, and cloud-metadata addresses, plus an optional hostname allowlist. `web_fetch` also blocks private ranges (RFC1918, CGNAT, ULA) by default, with domain allow/block lists; see [Network policy](/docs/reference/config/#network-policy) |
 | Secret leakage into stdio MCP subprocesses | Children do not inherit the parent environment — they get a fixed non-secret allowlist; any `DENKEEPER_*` or otherwise denylisted name is blocked even if explicitly passed through |
 | Skill file writes escaping the skills directory | Skill writes are confined to the agent's skills directory at the OS level (Go's `os.Root`), backstopping name validation against `..` traversal and symlink escapes |
 

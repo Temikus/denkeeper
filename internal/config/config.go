@@ -18,6 +18,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/Temikus/denkeeper/internal/kv"
+	"github.com/Temikus/denkeeper/internal/netguard"
 	"github.com/Temikus/denkeeper/internal/scope"
 )
 
@@ -413,6 +414,15 @@ type WebFetchConfig struct {
 	RespectRobotsTxt bool `toml:"respect_robots_txt"`
 	// RespectAgentsTxt checks agents.txt before fetching. Default: false.
 	RespectAgentsTxt bool `toml:"respect_agents_txt"`
+	// AllowPrivate opens RFC1918, CGNAT and ULA ranges. Default: false.
+	AllowPrivate bool `toml:"allow_private"`
+	// AllowLoopback opens 127.0.0.0/8, ::1 and localhost. Default: false.
+	AllowLoopback bool `toml:"allow_loopback"`
+	// AllowedDomains, when non-empty, limits fetches to matching hosts
+	// ("example.com" or "*.example.com"). Default: empty.
+	AllowedDomains []string `toml:"allowed_domains"`
+	// BlockedDomains refuses matching hosts; wins over AllowedDomains.
+	BlockedDomains []string `toml:"blocked_domains"`
 	// Jina configures optional Jina Reader integration for JS-heavy pages.
 	Jina JinaFetchConfig `toml:"jina"`
 }
@@ -3042,6 +3052,25 @@ func validateWeb(w *WebConfig) error {
 	}
 	if w.Fetch.MaxResponseChars < 1 || w.Fetch.MaxResponseChars > 100000 {
 		return fmt.Errorf("config: web.fetch.max_response_chars must be between 1 and 100000, got %d", w.Fetch.MaxResponseChars)
+	}
+	if err := validateFetchDomains("allowed_domains", w.Fetch.AllowedDomains); err != nil {
+		return err
+	}
+	return validateFetchDomains("blocked_domains", w.Fetch.BlockedDomains)
+}
+
+// validateFetchDomains accepts "example.com" or "*.example.com" entries. The
+// part after "*." must map through IDNA the way net/http does, or the
+// pattern could never match the host actually dialed.
+func validateFetchDomains(key string, entries []string) error {
+	for _, e := range entries {
+		host := strings.TrimPrefix(e, "*.")
+		if host == "" || strings.ContainsAny(host, "*:/ \t\r\n") {
+			return fmt.Errorf("config: web.fetch.%s: invalid entry %q — use a bare host such as \"example.com\" or \"*.example.com\" (no scheme, path, port or spaces)", key, e)
+		}
+		if _, err := netguard.HostToASCII(host); err != nil {
+			return fmt.Errorf("config: web.fetch.%s: invalid entry %q: %w", key, e, err)
+		}
 	}
 	return nil
 }

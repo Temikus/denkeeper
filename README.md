@@ -228,7 +228,7 @@ Key sections:
 | `[kv]` | Agent KV store limits (`max_keys_per_agent`, `max_value_bytes`, `list_max_bytes`, `list_value_head_bytes`, `cleanup_interval`) |
 | `[script]` | `run_javascript` deterministic-compute tool (`enabled`, `timeout`, `max_output_chars`, `max_input_bytes`) |
 | `[decide]` | Agent-facing `decide` classification tool (`decider`, `enabled`) |
-| `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, `[web.fetch.jina]` fallback |
+| `[web]` | Built-in web tools — `[web.search]` provider/API key/result count, `[web.fetch]` timeout, size caps, `max_response_chars` page size, robots/agents.txt policy, network policy (`allow_private`, `allow_loopback`, `allowed_domains`, `blocked_domains`), `[web.fetch.jina]` fallback |
 | `[memory]` | SQLite database path |
 | `[log]` | Log level and format |
 
