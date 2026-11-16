@@ -2,8 +2,17 @@ package browser
 
 import "testing"
 
+func mustAllowlist(t *testing.T, domains []string) *Allowlist {
+	t.Helper()
+	a, err := NewAllowlist(domains)
+	if err != nil {
+		t.Fatalf("NewAllowlist(%q): %v", domains, err)
+	}
+	return a
+}
+
 func TestAllowlist_EmptyIsUnrestricted(t *testing.T) {
-	a := NewAllowlist(nil)
+	a := mustAllowlist(t, nil)
 	if !a.IsEmpty() {
 		t.Error("nil allowlist should be empty")
 	}
@@ -18,7 +27,7 @@ func TestAllowlist_EmptyIsUnrestricted(t *testing.T) {
 }
 
 func TestAllowlist_ExactDomainMatch(t *testing.T) {
-	a := NewAllowlist([]string{"github.com", "example.org"})
+	a := mustAllowlist(t, []string{"github.com", "example.org"})
 
 	tests := []struct {
 		url  string
@@ -44,7 +53,7 @@ func TestAllowlist_ExactDomainMatch(t *testing.T) {
 }
 
 func TestAllowlist_WildcardSubdomain(t *testing.T) {
-	a := NewAllowlist([]string{"*.example.com"})
+	a := mustAllowlist(t, []string{"*.example.com"})
 
 	tests := []struct {
 		url  string
@@ -70,7 +79,7 @@ func TestAllowlist_WildcardSubdomain(t *testing.T) {
 
 func TestAllowlist_BlockedRanges(t *testing.T) {
 	// Even with an empty (unrestricted) allowlist, blocked ranges are denied.
-	a := NewAllowlist(nil)
+	a := mustAllowlist(t, nil)
 
 	blocked := []string{
 		"http://169.254.169.254/latest/meta-data",
@@ -94,7 +103,7 @@ func TestAllowlist_BlockedRanges(t *testing.T) {
 
 func TestAllowlist_BlockedRangesOverrideAllowlist(t *testing.T) {
 	// Even if explicitly in the allowlist, blocked ranges are denied.
-	a := NewAllowlist([]string{"169.254.169.254", "localhost", "metadata.google.internal"})
+	a := mustAllowlist(t, []string{"169.254.169.254", "localhost", "metadata.google.internal"})
 
 	blocked := []string{
 		"http://169.254.169.254/latest/meta-data",
@@ -114,7 +123,7 @@ func TestAllowlist_BlockedRangesOverrideAllowlist(t *testing.T) {
 }
 
 func TestAllowlist_AllowlistedPrivateIPRefused(t *testing.T) {
-	a := NewAllowlist([]string{"10.0.0.1", "192.168.1.10"})
+	a := mustAllowlist(t, []string{"10.0.0.1", "192.168.1.10"})
 
 	for _, u := range []string{"http://10.0.0.1/", "http://192.168.1.10:8080/admin"} {
 		ok, err := a.Allowed(u)
@@ -128,7 +137,7 @@ func TestAllowlist_AllowlistedPrivateIPRefused(t *testing.T) {
 }
 
 func TestAllowlist_MatchesIDNAMappedHost(t *testing.T) {
-	a := NewAllowlist([]string{"github.com"})
+	a := mustAllowlist(t, []string{"github.com"})
 
 	// Fullwidth "ｇｉｔｈｕｂ.com" maps to github.com, as a browser would load it.
 	ok, err := a.Allowed("https://ｇｉｔｈｕｂ.com/repo")
@@ -141,17 +150,69 @@ func TestAllowlist_MatchesIDNAMappedHost(t *testing.T) {
 }
 
 func TestAllowlist_UnmappableHostRefused(t *testing.T) {
-	a := NewAllowlist(nil)
+	a := mustAllowlist(t, nil)
 
 	// U+FFFD is disallowed by IDNA, so the host cannot be mapped.
-	ok, _ := a.Allowed("https://bad�host.com/")
+	ok, err := a.Allowed("https://bad�host.com/")
+	if err == nil {
+		t.Error("Allowed error = nil, want a mapping error")
+	}
 	if ok {
 		t.Error("Allowed = true, want false when the host cannot be mapped to ASCII")
 	}
 }
 
+func TestAllowlist_MatchesUnicodePattern(t *testing.T) {
+	a := mustAllowlist(t, []string{"пример.рф"})
+
+	for _, u := range []string{"https://пример.рф/", "https://xn--e1afmkfd.xn--p1ai/"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if !ok {
+			t.Errorf("Allowed(%q) = false, want true for a Unicode allowlist entry", u)
+		}
+	}
+}
+
+func TestAllowlist_MatchesUnicodeWildcardPattern(t *testing.T) {
+	a := mustAllowlist(t, []string{"*.ПРИМЕР.рф"})
+
+	for _, u := range []string{"https://sub.пример.рф/", "https://пример.рф/", "https://sub.xn--e1afmkfd.xn--p1ai/"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if !ok {
+			t.Errorf("Allowed(%q) = false, want true for a Unicode wildcard entry", u)
+		}
+	}
+	if got := a.Domains()[0]; got != "*.xn--e1afmkfd.xn--p1ai" {
+		t.Errorf("Domains()[0] = %q, want *.xn--e1afmkfd.xn--p1ai", got)
+	}
+}
+
+func TestNewAllowlist_UnmappablePatternRefused(t *testing.T) {
+	// Dropping the bad entry would leave an empty, unrestricted list.
+	a, err := NewAllowlist([]string{"bad�host.com"})
+	if err == nil {
+		t.Fatal("NewAllowlist error = nil, want a mapping error")
+	}
+	if a != nil {
+		t.Errorf("NewAllowlist returned %v, want nil on error", a.Domains())
+	}
+}
+
+func TestNewAllowlist_UnmappableWildcardPatternRefused(t *testing.T) {
+	_, err := NewAllowlist([]string{"github.com", "*.bad�host.com"})
+	if err == nil {
+		t.Fatal("NewAllowlist error = nil, want a mapping error")
+	}
+}
+
 func TestAllowlist_InvalidURL(t *testing.T) {
-	a := NewAllowlist([]string{"example.com"})
+	a := mustAllowlist(t, []string{"example.com"})
 
 	_, err := a.Allowed("://bad")
 	if err == nil {
@@ -160,7 +221,7 @@ func TestAllowlist_InvalidURL(t *testing.T) {
 }
 
 func TestAllowlist_Domains(t *testing.T) {
-	a := NewAllowlist([]string{"  GitHub.COM  ", "*.Example.Org"})
+	a := mustAllowlist(t, []string{"  GitHub.COM  ", "*.Example.Org"})
 	domains := a.Domains()
 	if len(domains) != 2 {
 		t.Fatalf("Domains() length = %d, want 2", len(domains))
@@ -174,7 +235,7 @@ func TestAllowlist_Domains(t *testing.T) {
 }
 
 func TestAllowlist_EmptyStringsFiltered(t *testing.T) {
-	a := NewAllowlist([]string{"", "  ", "github.com", ""})
+	a := mustAllowlist(t, []string{"", "  ", "github.com", ""})
 	if len(a.Domains()) != 1 {
 		t.Errorf("expected 1 domain after filtering, got %d", len(a.Domains()))
 	}

@@ -20,19 +20,38 @@ type Allowlist struct {
 // NewAllowlist creates an Allowlist from a list of domain patterns.
 // Supports exact matches ("github.com") and wildcard subdomains ("*.example.com").
 // An empty list means unrestricted (all non-blocked domains are allowed).
-func NewAllowlist(domains []string) *Allowlist {
+// Patterns are IDNA-mapped like hosts in Allowed. An unmappable pattern is an
+// error, not dropped: dropping every entry would leave the list unrestricted.
+func NewAllowlist(domains []string) (*Allowlist, error) {
 	if len(domains) == 0 {
-		return &Allowlist{}
+		return &Allowlist{}, nil
 	}
-	// Normalize: lowercase, trim whitespace.
 	normalized := make([]string, 0, len(domains))
 	for _, d := range domains {
-		d = strings.TrimSpace(strings.ToLower(d))
-		if d != "" {
-			normalized = append(normalized, d)
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
 		}
+		p, err := normalizePattern(d)
+		if err != nil {
+			return nil, fmt.Errorf("allowlist: %w", err)
+		}
+		normalized = append(normalized, p)
 	}
-	return &Allowlist{domains: normalized}
+	return &Allowlist{domains: normalized}, nil
+}
+
+// normalizePattern maps the host part of a pattern, after any "*." prefix.
+func normalizePattern(p string) (string, error) {
+	prefix := ""
+	if strings.HasPrefix(p, "*.") {
+		prefix, p = "*.", p[2:]
+	}
+	h, err := netguard.HostToASCII(p)
+	if err != nil {
+		return "", err
+	}
+	return prefix + h, nil
 }
 
 // IsEmpty returns true if the allowlist has no domain restrictions.
