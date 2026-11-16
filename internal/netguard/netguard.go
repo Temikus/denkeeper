@@ -145,6 +145,11 @@ var rules = []struct {
 	prefix netip.Prefix
 	class  Class
 }{
+	// First match wins. These metadata endpoints sit inside private ranges
+	// (AWS IPv6 in ULA, Alibaba in CGNAT) and must stay closed under
+	// allow_private.
+	{netip.MustParsePrefix("fd00:ec2::254/128"), ClassMetadata},
+	{netip.MustParsePrefix("100.100.100.200/32"), ClassMetadata},
 	{netip.MustParsePrefix("0.0.0.0/8"), ClassUnspecified},
 	{netip.MustParsePrefix("127.0.0.0/8"), ClassLoopback},
 	{netip.MustParsePrefix("169.254.0.0/16"), ClassLinkLocal},

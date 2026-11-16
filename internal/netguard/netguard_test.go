@@ -294,3 +294,12 @@ func TestTransport_ProxyDialExempt(t *testing.T) {
 		t.Errorf("proxy saw %v, want absolute URI", gotURI.Load())
 	}
 }
+
+// Some metadata endpoints sit inside private ranges; allow_private must not
+// open them.
+func TestClassify_MetadataInsidePrivateRanges(t *testing.T) {
+	for _, a := range []string{"fd00:ec2::254", "100.100.100.200", "::ffff:100.100.100.200"} {
+		assertClass(t, a, ClassMetadata)
+		assertBlockedUnderAll(t, a)
+	}
+}
