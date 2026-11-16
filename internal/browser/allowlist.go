@@ -3,9 +3,10 @@
 package browser
 
 import (
-	"net"
 	"net/url"
 	"strings"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // Allowlist enforces domain restrictions on browser navigation.
@@ -38,8 +39,9 @@ func (a *Allowlist) IsEmpty() bool {
 }
 
 // Allowed checks whether a URL is permitted by the allowlist.
-// Returns false if the URL's host matches a blocked range (link-local,
-// metadata endpoints) regardless of the allowlist.
+// Returns false, regardless of the allowlist, if the URL's host is blocked by
+// isBlockedHost: localhost, cloud metadata, or a literal loopback, private,
+// link-local, unspecified, multicast or broadcast address.
 // If the allowlist is empty, all non-blocked URLs are allowed.
 func (a *Allowlist) Allowed(rawURL string) (bool, error) {
 	host, err := extractHost(rawURL)
@@ -98,37 +100,11 @@ func matchDomain(host, pattern string) bool {
 	return host == pattern
 }
 
-// isBlockedHost returns true for hosts that should always be blocked:
-// link-local addresses, cloud metadata endpoints, and localhost.
+// isBlockedHost reports whether host is refused by the netguard default
+// policy: localhost names, cloud metadata names and IPs, and literal
+// loopback, private (RFC1918, CGNAT, ULA), link-local, unspecified, multicast
+// and broadcast addresses, including IPv6 forms that carry one. Hostnames
+// that resolve to such addresses are not caught here.
 func isBlockedHost(host string) bool {
-	// Block localhost.
-	if host == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Not an IP — check known metadata hostnames.
-		return host == "metadata.google.internal" ||
-			host == "metadata.google.com"
-	}
-
-	// IPv4 link-local: 169.254.0.0/16 (includes AWS/GCP/Azure metadata at 169.254.169.254).
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 169 && ip4[1] == 254 {
-			return true
-		}
-		// Loopback: 127.0.0.0/8.
-		if ip4[0] == 127 {
-			return true
-		}
-		return false
-	}
-
-	// IPv6 loopback (::1) and link-local (fe80::/10).
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-
-	return false
+	return netguard.Policy{}.CheckHost(host) != nil
 }

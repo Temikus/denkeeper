@@ -113,6 +113,20 @@ func TestAllowlist_BlockedRangesOverrideAllowlist(t *testing.T) {
 	}
 }
 
+func TestAllowlist_AllowlistedPrivateIPRefused(t *testing.T) {
+	a := NewAllowlist([]string{"10.0.0.1", "192.168.1.10"})
+
+	for _, u := range []string{"http://10.0.0.1/", "http://192.168.1.10:8080/admin"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if ok {
+			t.Errorf("Allowed(%q) = true, want false (private range blocked even if in allowlist)", u)
+		}
+	}
+}
+
 func TestAllowlist_InvalidURL(t *testing.T) {
 	a := NewAllowlist([]string{"example.com"})
 
@@ -180,8 +194,35 @@ func TestIsBlockedHost(t *testing.T) {
 		{"metadata.google.com", true},
 		{"8.8.8.8", false},
 		{"github.com", false},
-		{"192.168.1.1", false},
-		{"10.0.0.1", false},
+		{"LOCALHOST", true},
+		{"app.localhost", true},
+		{"metadata.google.internal.", true},
+		{"fe80::1", true},
+		// Private: RFC1918, CGNAT, ULA.
+		{"10.0.0.1", true},
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"192.168.1.1", true},
+		{"100.64.0.1", true},
+		{"fd00::1", true},
+		// Metadata inside private or public space.
+		{"100.100.100.200", true},
+		{"168.63.129.16", true},
+		// Unspecified, multicast, broadcast.
+		{"0.0.0.0", true},
+		{"::", true},
+		{"224.0.0.1", true},
+		{"ff02::1", true},
+		{"255.255.255.255", true},
+		// IPv6 forms carrying a blocked IPv4 address.
+		{"::ffff:127.0.0.1", true},
+		{"::ffff:10.0.0.1", true},
+		{"64:ff9b::a9fe:a9fe", true},
+		{"2002:a9fe:a9fe::", true},
+		// Public neighbours of the private ranges stay allowed.
+		{"172.32.0.1", false},
+		{"100.128.0.1", false},
+		{"2606:4700:4700::1111", false},
 	}
 
 	for _, tt := range tests {
