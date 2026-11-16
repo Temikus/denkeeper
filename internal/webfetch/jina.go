@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -39,6 +40,9 @@ func (j *JinaFetcher) Name() string { return "jina" }
 
 // Fetch retrieves a URL via Jina Reader and returns Markdown content.
 func (j *JinaFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult, error) {
+	if err := checkJinaTarget(rawURL); err != nil {
+		return nil, err
+	}
 	jinaURL := j.baseURL + "/" + rawURL
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
@@ -86,4 +90,19 @@ func extractJinaTitle(content string) string {
 		}
 	}
 	return ""
+}
+
+// checkJinaTarget refuses URLs Jina must never see: non-http(s) schemes and
+// hosts the default policy blocks. Opt-ins do not apply, since Jina cannot
+// reach this host's network anyway. Domain lists are enforced by the
+// DefaultFetcher that a ChainFetcher runs first.
+func checkJinaTarget(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", rawURL, err)
+	}
+	if err := newRequestGuard(Options{}).check(u); err != nil {
+		return fmt.Errorf("jina: refusing %s: %w", u.Redacted(), err)
+	}
+	return nil
 }
