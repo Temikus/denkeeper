@@ -3,6 +3,7 @@ package scriptmcp
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -575,6 +576,56 @@ func TestRunJavaScript_StringInputSizeCheckedRaw(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	if !strings.Contains(extractText(result), "exceeds") {
+		t.Errorf("error should mention size: %s", extractText(result))
+	}
+}
+
+// callHandlerRaw sends arguments byte-for-byte. The MCP client re-encodes
+// arguments with HTML escaping, which would hide key-growth bugs.
+func callHandlerRaw(t *testing.T, deps Deps, args string) *mcp.CallToolResult {
+	t.Helper()
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Name:      "run_javascript",
+		Arguments: json.RawMessage(args),
+	}}
+	result, err := New(deps).handleRunJavaScript(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned err: %v", err)
+	}
+	return result
+}
+
+func TestRunJavaScript_HoistKeepsRawKeyBytes(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxInputBytes = 2000
+	key := strings.Repeat("<", 1500)
+
+	result := callHandlerRaw(t, deps,
+		`{"code":"","input":{"code":"return __denkeeper_input_json.length","`+key+`":1}}`)
+	if result.IsError {
+		t.Fatalf("near-cap input with HTML characters in a key should run: %s", extractText(result))
+	}
+	n, err := strconv.Atoi(extractText(result))
+	if err != nil {
+		t.Fatalf("output %q is not a length: %v", extractText(result), err)
+	}
+	if n > deps.MaxInputBytes {
+		t.Errorf("VM saw %d bytes of input JSON, cap is %d", n, deps.MaxInputBytes)
+	}
+}
+
+func TestRunJavaScript_DecodedInputSizeRechecked(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxInputBytes = 2000
+	// Each invalid UTF-8 byte decodes to U+FFFD: 1 raw byte becomes 3.
+	invalid := strings.Repeat("\xff", 1000)
+
+	result := callHandlerRaw(t, deps,
+		`{"code":"return __denkeeper_input_json.length","input":"[\"`+invalid+`\"]"}`)
+	if !result.IsError {
+		t.Fatalf("decoded input over the cap must be refused, got: %s", extractText(result))
 	}
 	if !strings.Contains(extractText(result), "exceeds") {
 		t.Errorf("error should mention size: %s", extractText(result))

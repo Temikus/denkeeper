@@ -55,6 +55,10 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	if err != nil {
 		return toolError(err.Error()), nil
 	}
+	// Decoding can grow input (invalid UTF-8 becomes U+FFFD), so check again.
+	if s.deps.MaxInputBytes > 0 && len(args.input) > s.deps.MaxInputBytes {
+		return toolError(fmt.Sprintf("input exceeds %d bytes", s.deps.MaxInputBytes)), nil
+	}
 
 	release, errResult := s.acquireSlot(ctx)
 	if errResult != nil {
@@ -170,7 +174,8 @@ func hoistCode(raw json.RawMessage) (code string, rest json.RawMessage, badKey b
 
 // splitObjectKey returns the value under key and the object without it. ok is
 // false when raw is not a JSON object. With duplicate keys the last value wins,
-// matching encoding/json.
+// matching encoding/json. Kept keys and values are copied as raw bytes:
+// re-encoding a key can grow it past max_input_bytes ('<' becomes <).
 func splitObjectKey(raw json.RawMessage, key string) (val, rest json.RawMessage, ok bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
@@ -179,25 +184,26 @@ func splitObjectKey(raw json.RawMessage, key string) (val, rest json.RawMessage,
 	var out bytes.Buffer
 	out.WriteByte('{')
 	for dec.More() {
-		var k string
-		var v json.RawMessage
+		start := dec.InputOffset()
 		tok, err := dec.Token()
 		if err != nil {
 			return nil, nil, false
 		}
-		k, _ = tok.(string)
+		// Only a comma and whitespace can precede the key's opening quote.
+		keyRaw := raw[start:dec.InputOffset()]
+		keyRaw = keyRaw[bytes.IndexByte(keyRaw, '"'):]
+		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
 			return nil, nil, false
 		}
-		if k == key {
+		if k, _ := tok.(string); k == key {
 			val = v
 			continue
 		}
 		if out.Len() > 1 {
 			out.WriteByte(',')
 		}
-		kb, _ := json.Marshal(k)
-		out.Write(kb)
+		out.Write(keyRaw)
 		out.WriteByte(':')
 		out.Write(v)
 	}
