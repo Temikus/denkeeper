@@ -186,6 +186,9 @@ func TestRunJavaScript_EmptyCode(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected error for empty code")
 	}
+	if !strings.Contains(extractText(result), "top-level") {
+		t.Errorf("error should say code is a top-level argument: %s", extractText(result))
+	}
 }
 
 func TestRunJavaScript_NullInputWhenOmitted(t *testing.T) {
@@ -374,5 +377,206 @@ func TestRunJavaScript_EnabledRegistersTool(t *testing.T) {
 	}
 	if tools.Tools[0].Name != "run_javascript" {
 		t.Errorf("tool name = %q, want %q", tools.Tools[0].Name, "run_javascript")
+	}
+}
+
+func TestRunJavaScript_HoistsCodeFromObjectInput(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"input": json.RawMessage(`{"b":1,"code":"return Object.keys(input).join(',');","a":2}`),
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	// The code key is gone and the remaining keys keep their order.
+	if got := extractText(result); got != "b,a" {
+		t.Errorf("output = %q, want %q", got, "b,a")
+	}
+}
+
+func TestRunJavaScript_HoistsCodeFromStringInput(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"input": `{"code":"return Object.keys(input).join(',') + '=' + input.n * 2;","n":21}`,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "n=42" {
+		t.Errorf("output = %q, want %q", got, "n=42")
+	}
+}
+
+func TestRunJavaScript_TopLevelCodeWinsOverInputCode(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return "top:" + input.code;`,
+		"input": map[string]any{"code": "data"},
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "top:data" {
+		t.Errorf("output = %q, want %q", got, "top:data")
+	}
+}
+
+func TestRunJavaScript_MissingCodeNamesTopLevel(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"input": map[string]any{"n": 1},
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	text := extractText(result)
+	if !strings.Contains(text, "top-level") || !strings.Contains(text, "next to `input`") {
+		t.Errorf("error should say code is top-level, next to input: %s", text)
+	}
+}
+
+func TestRunJavaScript_NonStringInputCodeNotHoisted(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"input": map[string]any{"code": 5},
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	text := extractText(result)
+	if !strings.Contains(text, "top-level") || !strings.Contains(text, "`input.code`") {
+		t.Errorf("error should name top-level code and the bad input.code: %s", text)
+	}
+}
+
+func TestRunJavaScript_StringInputObjectDecoded(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return input.name;`,
+		"input": " {\"name\":\"alpha\"}\n",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "alpha" {
+		t.Errorf("output = %q, want %q", got, "alpha")
+	}
+}
+
+func TestRunJavaScript_StringInputArrayDecoded(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return input.length;`,
+		"input": `[1,2,3]`,
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "3" {
+		t.Errorf("output = %q, want %q", got, "3")
+	}
+}
+
+func TestRunJavaScript_StringInputBrokenJSONRefused(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return "SCRIPT-RAN";`,
+		"input": `{"name":"alpha"`,
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	text := extractText(result)
+	if strings.Contains(text, "SCRIPT-RAN") {
+		t.Fatalf("script must not run on broken input: %s", text)
+	}
+	if !strings.Contains(text, "JSON value, not a string") || !strings.Contains(text, "byte 15") {
+		t.Errorf("error should ask for a JSON value and give the position: %s", text)
+	}
+}
+
+func TestRunJavaScript_StringInputPlainTextStaysString(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return typeof input + ":" + input;`,
+		"input": "hello {world}",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "string:hello {world}" {
+		t.Errorf("output = %q, want %q", got, "string:hello {world}")
+	}
+}
+
+func TestRunJavaScript_StringInputNumberStaysString(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `return typeof input + ":" + input;`,
+		"input": "123",
+	})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", extractText(result))
+	}
+	if got := extractText(result); got != "string:123" {
+		t.Errorf("output = %q, want %q", got, "string:123")
+	}
+}
+
+func TestRunJavaScript_JSONParseOnDecodedInputHints(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `var d = JSON.parse(input); return d.a;`,
+		"input": `{"a":1}`,
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	text := extractText(result)
+	if !strings.Contains(text, "javascript error") || !strings.Contains(text, "remove JSON.parse(input)") {
+		t.Errorf("error should carry the decode hint: %s", text)
+	}
+}
+
+func TestRunJavaScript_UndecodedInputErrorHasNoHint(t *testing.T) {
+	session := newTestServer(t, defaultDeps())
+
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"code":  `throw new Error("boom");`,
+		"input": map[string]any{"a": 1},
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	if strings.Contains(extractText(result), "JSON.parse(input)") {
+		t.Errorf("hint must only follow a decoded string input: %s", extractText(result))
+	}
+}
+
+func TestRunJavaScript_StringInputSizeCheckedRaw(t *testing.T) {
+	deps := defaultDeps()
+	deps.MaxInputBytes = 30
+	session := newTestServer(t, deps)
+
+	// No top-level code: the size check must still run first, on the raw bytes.
+	result := callTool(t, session, "run_javascript", map[string]any{
+		"input": `{"code":"return 1;","pad":"xxxxxxxx"}`,
+	})
+	if !result.IsError {
+		t.Fatalf("expected error, got: %s", extractText(result))
+	}
+	if !strings.Contains(extractText(result), "exceeds") {
+		t.Errorf("error should mention size: %s", extractText(result))
 	}
 }
