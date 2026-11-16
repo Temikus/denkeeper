@@ -251,9 +251,11 @@ release bump:
 # Pass --force to a specific scan (e.g. `mise x -- task scan:govulncheck --force`)
 # to re-check against a fresh vulnerability database when sources are unchanged.
 # `secrets` scans git history and is always uncached.
-scan tool="all": ensure-web-dist
+scan tool="all":
     #!/usr/bin/env sh
     set -e
+    # Go scans compile packages that embed internal/web/dist; secrets only reads git history.
+    [ "{{tool}}" = secrets ] || mise x -- task ui:build
     case "{{tool}}" in
         all)         mise x -- task scan ;;
         gosec)       mise x -- task scan:gosec ;;
