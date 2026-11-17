@@ -94,7 +94,7 @@ Lookup priority:
 
 Whichever source won is recorded as the `pricing_source` attribute, so a real price is always distinguishable from a fallback. An unknown model logs a warning rather than failing quietly — a cost of exactly zero in your dashboard should be treated as a missing price, not a free model.
 
-Cached prompt tokens are tracked separately, read from the provider's own cache-read counts.
+Cached prompt tokens are tracked separately, read from the provider's own cache-read counts. On Anthropic, requests that carry tools are cached automatically (5-minute TTL); cache writes count as prompt tokens and are billed at 1.25× the input rate, cache reads at the cached rate.
 
 Limits are enforced per session against the agent's `cost_limit_soft` and `cost_limit_hard`; see [Sessions & Permissions](/docs/concepts/sessions/). Fallback rules can switch to a cheaper model when a limit is approached rather than simply stopping.
 

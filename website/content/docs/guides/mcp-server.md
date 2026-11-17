@@ -35,7 +35,7 @@ Every request needs a Bearer token — the same scoped API keys the REST API use
 denkeeper keys create claude-code --scopes chat,skills:read,sessions:read
 ```
 
-Scopes are enforced per tool, so a key that can chat cannot necessarily read your audit log. Give each client its own key with the narrowest scope set that does the job; revoking one then does not disturb the others.
+Scopes are enforced per tool, so a key that can chat cannot necessarily read your audit log (an `admin` key passes every tool's check). Give each client its own key with the narrowest scope set that does the job; revoking one then does not disturb the others.
 
 ## Connecting a client
 

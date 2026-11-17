@@ -472,12 +472,20 @@ body.home {
 
 .dk-approval-actions {
   display: flex;
+  flex-wrap: wrap; // four buttons, as the real chat adapters show; wrap on phones
   gap: 8px;
 
   @include media-breakpoint-down(lg) {
     > * {
       flex: 1;
       text-align: center;
+    }
+  }
+
+  // Two rows of two on phones, as the chat adapters lay them out.
+  @include media-breakpoint-down(sm) {
+    > * {
+      flex: 1 1 calc(50% - 4px);
     }
   }
 }

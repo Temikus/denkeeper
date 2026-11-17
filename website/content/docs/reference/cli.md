@@ -27,7 +27,7 @@ toc: true
 
 | Flag | Available on | Description |
 |---|---|---|
-| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `decide` | Path to config file (default: `~/.denkeeper/denkeeper.toml`) |
+| `--config PATH`, `-c` | `serve`, `keys`, `sessions`, `decide` | Path to config file (default: `$DENKEEPER_CONFIG`, else `denkeeper.toml` in the data directory — `$DENKEEPER_DATA_DIR` or `~/.denkeeper`) |
 | `--help` | all commands | Print help |
 
 There is no `--version` flag. Use the `denkeeper version` subcommand.
@@ -92,10 +92,11 @@ Manage conversation sessions stored in the memory database.
 
 ### `denkeeper sessions list`
 
-List all sessions with metadata.
+List sessions with metadata. Isolated scheduled-run sessions (`sched:*`) are hidden unless `--include-scheduled` is set.
 
 ```bash
 denkeeper sessions list
+denkeeper sessions list --include-scheduled
 denkeeper sessions list --config /path/to/denkeeper.toml
 ```
 
