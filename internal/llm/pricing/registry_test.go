@@ -218,7 +218,8 @@ func TestNew_ClaudeCurrentModels(t *testing.T) {
 			t.Errorf("Lookup(%q): expected match", tt.model)
 			continue
 		}
-		want := ModelPrice{tt.input, tt.output, tt.cached}
+		p.LongPrompt = PromptTier{} // tiers are covered by the Cost_LongPrompt tests
+		want := price(tt.input, tt.output, tt.cached)
 		if p != want {
 			t.Errorf("Lookup(%q) = %+v, want %+v", tt.model, p, want)
 		}
@@ -372,5 +373,59 @@ func TestRegistry_Cost_CacheWriteAddsSurcharge(t *testing.T) {
 	cost, _ := r.Cost("", "m", 1_000_000, 0, 0, 1_000_000, 0)
 	if !approxEqual(cost, 2.50) {
 		t.Errorf("cost = %v, want 2.50", cost)
+	}
+}
+
+// Haiku 5.5: $0.10/$0.50 (cached $0.01) up to 100K prompt tokens, then
+// $0.50/$2.50 (cached $0.05).
+func TestRegistry_Cost_LongPromptAtThresholdUsesBaseRate(t *testing.T) {
+	cost, _ := New().Cost("", "claude-haiku-5-5", 100_000, 1_000, 0, 0, 0)
+	want := 100_000.0/1_000_000*0.10 + 1_000.0/1_000_000*0.50
+	if !approxEqual(cost, want) {
+		t.Errorf("cost = %v, want %v", cost, want)
+	}
+}
+
+func TestRegistry_Cost_LongPromptAboveThresholdUsesTierRate(t *testing.T) {
+	cost, _ := New().Cost("", "claude-haiku-5-5", 100_001, 1_000, 0, 0, 0)
+	want := 100_001.0/1_000_000*0.50 + 1_000.0/1_000_000*2.50
+	if !approxEqual(cost, want) {
+		t.Errorf("cost = %v, want %v", cost, want)
+	}
+}
+
+func TestRegistry_Cost_LongPromptCountsCachedTokens(t *testing.T) {
+	// 60K input + 40,001 cached = 100,001 prompt tokens: over the threshold.
+	cost, _ := New().Cost("", "claude-haiku-5-5", 60_000, 1_000, 40_001, 0, 0)
+	want := 60_000.0/1_000_000*0.50 + 1_000.0/1_000_000*2.50 + 40_001.0/1_000_000*0.05
+	if !approxEqual(cost, want) {
+		t.Errorf("cost = %v, want %v", cost, want)
+	}
+}
+
+func TestRegistry_Cost_LongPromptCacheWriteUsesTierRate(t *testing.T) {
+	// 200K prompt tokens, all cache writes: 200K x $0.50 x 1.25.
+	cost, _ := New().Cost("", "claude-haiku-5-5", 200_000, 0, 0, 200_000, 0)
+	if !approxEqual(cost, 0.125) {
+		t.Errorf("cost = %v, want 0.125", cost)
+	}
+}
+
+func TestRegistry_Cost_NoTierKeepsBaseRateForLongPrompt(t *testing.T) {
+	cost, _ := New().Cost("", "claude-sonnet-5-5", 1_000_000, 0, 0, 0, 0)
+	if !approxEqual(cost, 2.0) {
+		t.Errorf("cost = %v, want 2.0", cost)
+	}
+}
+
+func TestRegistry_Cost_ConfigOverrideReplacesTier(t *testing.T) {
+	// [costs.model_prices] registers a flat price; it must not inherit the
+	// bundled long-prompt tier.
+	r := New()
+	r.RegisterPrefix("claude-haiku-5", ModelPrice{InputPerMTok: 1.0, OutputPerMTok: 5.0})
+
+	cost, _ := r.Cost("", "claude-haiku-5-5", 200_000, 0, 0, 0, 0)
+	if !approxEqual(cost, 0.2) {
+		t.Errorf("cost = %v, want 0.2", cost)
 	}
 }
