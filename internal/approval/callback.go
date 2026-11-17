@@ -57,6 +57,11 @@ func (h *Handler) Resolve(ctx context.Context, data string) (string, error) {
 	}
 
 	_, action, _ := parseCallback(data)
+	if resolved.Kind != ActionKindToolCall && action != CallbackDeny {
+		// Auto-approve rules exist for tool calls only, so an auto_* press on
+		// any other kind (including a human-only tool_add) approved once.
+		action = CallbackApprove
+	}
 	switch action {
 	case CallbackApproveSession:
 		return "✅ Approved (auto-approve for 15 min): " + resolved.Summary, nil

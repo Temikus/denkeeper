@@ -75,23 +75,11 @@ func (lm *LifecycleManager) AddTool(ctx context.Context, name string, cfg config
 	if err := validateToolName(name); err != nil {
 		return err
 	}
-	transport := cfg.Transport
-	if transport == "" {
-		transport = "stdio"
+	transport, err := validateToolTransport(cfg)
+	if err != nil {
+		return err
 	}
-	switch transport {
-	case "stdio":
-		if cfg.Command == "" {
-			return fmt.Errorf("command is required for stdio transport")
-		}
-	case "sse":
-		if cfg.URL == "" {
-			return fmt.Errorf("url is required for sse transport")
-		}
-	default:
-		return fmt.Errorf("unsupported transport %q", transport)
-	}
-	if err := config.ValidateToolGuidance(cfg.Guidance); err != nil {
+	if err := lm.toolMgr.checkRuntimeCommand(cfg); err != nil {
 		return err
 	}
 
@@ -168,23 +156,8 @@ func preserveUnsetFields(cfg, oldCfg config.ToolConfig) config.ToolConfig {
 // zeroed: a nil EnvPassthrough/DisabledTools/Enabled means "not specified", an
 // empty non-nil slice means "clear". Every other field replaces wholesale.
 func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg config.ToolConfig) error {
-	transport := cfg.Transport
-	if transport == "" {
-		transport = "stdio"
-	}
-	switch transport {
-	case "stdio":
-		if cfg.Command == "" {
-			return fmt.Errorf("command is required for stdio transport")
-		}
-	case "sse":
-		if cfg.URL == "" {
-			return fmt.Errorf("url is required for sse transport")
-		}
-	default:
-		return fmt.Errorf("unsupported transport %q", transport)
-	}
-	if err := config.ValidateToolGuidance(cfg.Guidance); err != nil {
+	transport, err := validateToolTransport(cfg)
+	if err != nil {
 		return err
 	}
 
@@ -198,6 +171,15 @@ func (lm *LifecycleManager) UpdateTool(ctx context.Context, name string, cfg con
 	}
 
 	cfg = preserveUnsetFields(cfg, oldCfg)
+
+	// An edit that keeps the stored command line (a UI save that only touched
+	// timeouts or disabled tools) is not re-checked: that command came from the
+	// operator or already passed. A changed one is checked like an add.
+	if CommandLineChanged(oldCfg, cfg) {
+		if err := lm.toolMgr.checkRuntimeCommand(cfg); err != nil {
+			return err
+		}
+	}
 
 	// A stored token belongs to the OAuth identity it was issued for. If the
 	// update changes that identity, discard the token so the tool re-auths —
@@ -596,4 +578,30 @@ func buildPluginDockerArgs(cfg config.PluginConfig) []string {
 	args = append(args, cfg.Args...)
 
 	return args
+}
+
+// validateToolTransport checks the fields AddTool and UpdateTool share: a
+// known transport with its required field, and the guidance cap. It returns
+// the transport with the stdio default applied.
+func validateToolTransport(cfg config.ToolConfig) (string, error) {
+	transport := cfg.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
+	switch transport {
+	case "stdio":
+		if cfg.Command == "" {
+			return "", fmt.Errorf("command is required for stdio transport")
+		}
+	case "sse":
+		if cfg.URL == "" {
+			return "", fmt.Errorf("url is required for sse transport")
+		}
+	default:
+		return "", fmt.Errorf("unsupported transport %q", transport)
+	}
+	if err := config.ValidateToolGuidance(cfg.Guidance); err != nil {
+		return "", err
+	}
+	return transport, nil
 }

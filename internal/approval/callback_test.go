@@ -231,3 +231,36 @@ func TestHandler_Resolve_ExpiredByTTL(t *testing.T) {
 		t.Errorf("expected expired message, got %q", text)
 	}
 }
+
+// An install_tool request (a human-only tool_add / plugin_add) has no
+// auto-approve rule to create, so an auto_* press approves once: the reply
+// must not claim a rule, and no rule may appear.
+func TestHandler_Resolve_InstallToolAutoPressApprovesOnce(t *testing.T) {
+	for _, suffix := range []string{":approve_session", ":approve_always"} {
+		t.Run(suffix, func(t *testing.T) {
+			h, mgr, _ := newTestHandler(t)
+			ctx := context.Background()
+			req, err := mgr.Submit(ctx, "default", ActionKindInstallTool,
+				`Execute tool "tool_add" with args: {}`, "payload", "12345", "telegram", "conv-1",
+				func(_ context.Context, _ string) error { return nil })
+			if err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+
+			text, err := h.Resolve(ctx, req.CallbackData+suffix)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !strings.HasPrefix(text, "✅ Approved: ") {
+				t.Errorf("reply = %q, want it to start with %q", text, "✅ Approved: ")
+			}
+			rules, err := mgr.ListAutoApproveRules(ctx, "default")
+			if err != nil {
+				t.Fatalf("ListAutoApproveRules: %v", err)
+			}
+			if len(rules) != 0 {
+				t.Errorf("auto-approve rules = %+v, want none", rules)
+			}
+		})
+	}
+}

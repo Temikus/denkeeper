@@ -2741,3 +2741,45 @@ func TestDispatcher_Dispatch_NoAdapter_ApprovalDeniedImmediately(t *testing.T) {
 		t.Fatal("expected at least 1 sent message")
 	}
 }
+
+// A human-only approval (tool_add, plugin_add) offers only Approve and Deny,
+// in one row, on every rendering path. Each path is driven through
+// handleToolApproval so the ApprovalHumanOnly wiring is covered too.
+func TestDispatcher_HumanOnlyApproval_OnlyApproveAndDeny(t *testing.T) {
+	evt := ChatEvent{Type: "tool_approval", Tool: "tool_add", Text: "{}", ApprovalCallback: "appr:1", ApprovalHumanOnly: true}
+	msg := adapter.IncomingMessage{Adapter: "slack", ExternalID: "chat-1"}
+
+	// The debug prompt keeps the adapter's default layout, so it sets none.
+	check := func(path string, out adapter.OutgoingMessage, wantLayout bool) {
+		t.Helper()
+		if len(out.Buttons) != 2 {
+			t.Fatalf("%s: %d buttons, want Approve and Deny only", path, len(out.Buttons))
+		}
+		if got := out.Buttons[0].CallbackData; got != "appr:1:approve" {
+			t.Errorf("%s: first button callback = %q, want appr:1:approve", path, got)
+		}
+		if got := out.Buttons[1].CallbackData; got != "appr:1:deny" {
+			t.Errorf("%s: second button callback = %q, want appr:1:deny", path, got)
+		}
+		if got := out.ButtonLayout; wantLayout && (len(got) != 1 || got[0] != 2) {
+			t.Errorf("%s: layout = %v, want [2]", path, got)
+		}
+	}
+
+	a := &mockAdapter{name: "slack"}
+	d := &Dispatcher{adapters: map[string]adapter.Adapter{"slack": a}, logger: testLogger()}
+	d.handleToolApproval(context.Background(), a, msg, evt, false, nil)
+	d.handleToolApproval(context.Background(), a, msg, evt, true, nil)
+	if len(a.sent) != 2 {
+		t.Fatalf("sends = %d, want 2", len(a.sent))
+	}
+	check("standalone", a.sent[0], true)
+	check("debug", a.sent[1], false)
+
+	me := &mockMessageEditor{msgID: "m1"}
+	d.handleToolApproval(context.Background(), a, msg, evt, false, newTestActivityLog(me))
+	if len(me.sends) != 1 {
+		t.Fatalf("activity log sends = %d, want 1", len(me.sends))
+	}
+	check("activity log", me.sends[0], true)
+}
