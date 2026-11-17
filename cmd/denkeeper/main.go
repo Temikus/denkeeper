@@ -1176,14 +1176,22 @@ func warnWebFetchOptIns(w config.WebConfig, logger *slog.Logger) {
 		"allow_private", w.Fetch.AllowPrivate, "allow_loopback", w.Fetch.AllowLoopback)
 }
 
-// warnWebFetchOptInsOnReload repeats the opt-in Warn only when a reload
-// changes it. Agents built after a reload (reloadNewAgents, the API agent
-// factory) read the reloaded [web.fetch]; running agents keep theirs.
+// warnWebFetchOptInsOnReload warns, in either direction, when a reload
+// changes the effective opt-ins. Agents built after a reload (reloadNewAgents,
+// the API agent factory) read the reloaded [web.fetch]; running agents keep
+// theirs, so closing by reload leaves them open until restart.
 func warnWebFetchOptInsOnReload(prev *config.Config, next config.WebConfig, logger *slog.Logger) {
-	if prev != nil && webFetchOptIns(prev.Web) == webFetchOptIns(next) {
+	var was [2]bool
+	if prev != nil {
+		was = webFetchOptIns(prev.Web)
+	}
+	now := webFetchOptIns(next)
+	if was == now {
 		return
 	}
-	warnWebFetchOptIns(next, logger)
+	logger.Warn("[web.fetch] network policy changed by reload; agents created from now on use it, running agents keep the old policy until restart",
+		"allow_private", now[0], "allow_loopback", now[1],
+		"was_allow_private", was[0], "was_allow_loopback", was[1])
 }
 
 // webFetchOptIns returns the effective opt-ins: none when web tools are off.

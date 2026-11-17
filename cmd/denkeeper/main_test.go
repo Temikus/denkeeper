@@ -730,21 +730,59 @@ func reloadWebFetchLog(t *testing.T, before, after string) string {
 	return buf.String()
 }
 
-// Agents built after a reload read the reloaded [web.fetch], so turning an
-// opt-in on by reload must warn.
+const reloadPolicyWarn = "[web.fetch] network policy changed by reload"
+
+// assertOneReloadPolicyWarn checks for exactly one reload Warn carrying all
+// four opt-in fields, and no startup-style Warn.
+func assertOneReloadPolicyWarn(t *testing.T, out string, fields ...string) {
+	t.Helper()
+	if strings.Count(out, "level=WARN") != 1 || strings.Count(out, reloadPolicyWarn) != 1 {
+		t.Fatalf("want exactly one reload policy Warn, got: %s", out)
+	}
+	if strings.Contains(out, "network policy opened for every agent") {
+		t.Errorf("reload must not reuse the startup Warn, got: %s", out)
+	}
+	for _, f := range fields {
+		if !strings.Contains(out, f) {
+			t.Errorf("reload Warn missing %q, got: %s", f, out)
+		}
+	}
+}
+
+// Agents built after a reload read the reloaded [web.fetch]; running agents
+// keep theirs. Opening by reload must say so.
 func TestReload_WebFetchOptInTurnedOn_Warns(t *testing.T) {
 	out := reloadWebFetchLog(t, "", "[web.fetch]\nallow_private = true\n")
-	if strings.Count(out, "web_fetch network policy opened") != 1 {
-		t.Errorf("want one opt-in Warn on reload, got: %s", out)
-	}
+	assertOneReloadPolicyWarn(t, out,
+		"allow_private=true", "allow_loopback=false",
+		"was_allow_private=false", "was_allow_loopback=false")
+}
+
+// Closing by reload leaves running agents open until restart, so it must
+// warn too.
+func TestReload_WebFetchOptInTurnedOff_Warns(t *testing.T) {
+	out := reloadWebFetchLog(t, "[web.fetch]\nallow_loopback = true\n", "")
+	assertOneReloadPolicyWarn(t, out,
+		"allow_private=false", "allow_loopback=false",
+		"was_allow_private=false", "was_allow_loopback=true")
 }
 
 // Startup already warned; an unchanged reload must not repeat it.
 func TestReload_WebFetchOptInUnchanged_Silent(t *testing.T) {
 	cfg := "[web.fetch]\nallow_loopback = true\n"
 	out := reloadWebFetchLog(t, cfg, cfg)
-	if strings.Contains(out, "web_fetch network policy opened") {
-		t.Errorf("unchanged opt-in must not warn again, got: %s", out)
+	if strings.Contains(out, "level=WARN") {
+		t.Errorf("unchanged opt-in must not warn, got: %s", out)
+	}
+}
+
+// With web tools off the opt-ins have no effect, so toggling them is silent.
+func TestReload_WebFetchOptInWhileWebOff_Silent(t *testing.T) {
+	out := reloadWebFetchLog(t,
+		"[web]\nenabled = false\n",
+		"[web]\nenabled = false\n[web.fetch]\nallow_private = true\n")
+	if strings.Contains(out, "level=WARN") {
+		t.Errorf("opt-in change with web off must not warn, got: %s", out)
 	}
 }
 

@@ -282,7 +282,7 @@ Users switch channels at runtime with `/session <name>`; the selection is persis
 
 ## `[web]`
 
-Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings are not hot-reloaded.
+Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` settings until restart; agents created after a reload use the new values.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -318,7 +318,7 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 - Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
 - Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
 - Numeric hosts other than dotted-quad IPv4, such as `2852039166`, `127.1` or `0x7f.0.0.1`, are refused under any setting.
-- IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` has a site-defined layout (RFC 8215), so it counts as private: if your DNS64 uses it, fetching IPv4-only sites needs `allow_private`. A never-allowed IPv4 in its last 32 bits stays refused. NAT64 with a network-specific prefix is not decoded; on such networks, egress filtering must block private targets.
+- IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` has a site-defined layout (RFC 8215), so it counts as private: if your DNS64 uses it, fetching IPv4-only sites needs `allow_private` (refusals then show a `64:ff9b:1:` address with the `allow_private` hint). A never-allowed IPv4 at any RFC 6052 position stays refused. NAT64 with a network-specific prefix is not decoded; on such networks, egress filtering must block private targets.
 - With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. Hosts matching `NO_PROXY` are connected to directly and go through the address check instead. The URL checks and domain lists apply either way.
 
 The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on.
