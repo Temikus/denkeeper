@@ -415,6 +415,37 @@ func TestRequestGuard_NumericHostRefusedWithOptIns(t *testing.T) {
 	}
 }
 
+func TestRequestGuard_EmptyLabelRefused(t *testing.T) {
+	g := newRequestGuard(Options{AllowLoopback: true, AllowPrivate: true})
+	for _, h := range []string{"2852039166..", "127.1..", "example..com", ".example.com"} {
+		u := &url.URL{Scheme: "http", Host: h}
+		if err := g.check(u); !errors.Is(err, netguard.ErrBlocked) {
+			t.Errorf("check(%q) = %v, want ErrBlocked", h, err)
+		}
+	}
+}
+
+// One trailing dot is the fully qualified form, not an empty label.
+func TestRequestGuard_SingleTrailingDotAllowed(t *testing.T) {
+	g := newRequestGuard(Options{})
+	u := &url.URL{Scheme: "https", Host: "example.com."}
+	if err := g.check(u); err != nil {
+		t.Errorf("check(example.com.) = %v, want nil", err)
+	}
+}
+
+func TestChainFetcher_EmptyLabelNumericHostSkipsJina(t *testing.T) {
+	jinaSrv, jinaHits := countingServer(t, nil)
+	jina := newTestJina(jinaSrv.URL)
+	primary := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+
+	_, err := NewChainFetcher(primary, jina, nil).Fetch(context.Background(), "http://2852039166../latest/meta-data/")
+	assertBlocked(t, err)
+	if jinaHits.Load() != 0 {
+		t.Errorf("Jina saw %d requests, want 0", jinaHits.Load())
+	}
+}
+
 func TestChainFetcher_NumericHostSkipsJina(t *testing.T) {
 	jinaSrv, jinaHits := countingServer(t, nil)
 	jina := newTestJina(jinaSrv.URL)

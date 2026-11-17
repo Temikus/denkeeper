@@ -11,7 +11,7 @@ import (
 // the pure-Go resolver fails on it instead. Refuse it, never decode it.
 // Canonical dotted-quad IPv4 returns false: CheckHost judges that.
 func EndsInNumber(h string) bool {
-	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	h = strings.ToLower(strings.TrimRight(h, "."))
 	last := h[strings.LastIndexByte(h, '.')+1:]
 	if last == "" || (!strings.HasPrefix(last, "0x") && !allDigits(last)) {
 		return false

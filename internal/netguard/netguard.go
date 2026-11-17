@@ -200,16 +200,25 @@ func classifyRules(addr netip.Addr) Class {
 	return ClassPublic
 }
 
+// rfc6052Positions holds the byte offsets of the embedded IPv4 address for
+// each RFC 6052 §2.2 prefix length (/32 to /96). Byte 8 is the reserved u
+// octet, so layouts that cross it skip it.
+var rfc6052Positions = [...][4]int{
+	{4, 5, 6, 7}, {5, 6, 7, 9}, {6, 7, 9, 10},
+	{7, 9, 10, 11}, {9, 10, 11, 12}, {12, 13, 14, 15},
+}
+
 // classifyLocalUseNAT64 treats 64:ff9b:1::/48 as private: RFC 8215 §5 leaves
 // its layout to the site, and IANA lists it as not globally reachable. A
-// never-open IPv4 in the /96 position keeps its class, so allow_private does
-// not open it. 0.0.0.0/8 there is skipped: it is never a destination, and
-// other layouts put zeros in those bits.
+// never-open IPv4 at any RFC 6052 position keeps its class, so allow_private
+// does not open it. 0.0.0.0/8 is skipped: other layouts put zeros there.
 func classifyLocalUseNAT64(a netip.Addr) Class {
 	b := a.As16()
-	inner := classifyRules(netip.AddrFrom4([4]byte(b[12:16])))
-	if inner != ClassPublic && inner != ClassUnspecified && inner.Opener() == "" {
-		return inner
+	for _, p := range rfc6052Positions {
+		v4 := netip.AddrFrom4([4]byte{b[p[0]], b[p[1]], b[p[2]], b[p[3]]})
+		if inner := classifyRules(v4); inner != ClassPublic && inner != ClassUnspecified && inner.Opener() == "" {
+			return inner
+		}
 	}
 	return ClassPrivate
 }

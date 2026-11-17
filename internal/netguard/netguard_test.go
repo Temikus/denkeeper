@@ -339,6 +339,22 @@ func TestClassify_LocalUseNAT64_NeverOpenStaysBlocked(t *testing.T) {
 	assertClass(t, "64:ff9b:1::6464:64c8", ClassMetadata) // 100.100.100.200
 }
 
+// 169.254.169.254 in the /48 layout: allow_private must not open it.
+func TestClassify_LocalUseNAT64_48LayoutNeverOpenStaysBlocked(t *testing.T) {
+	assertClass(t, "64:ff9b:1:a9fe:a9:fe00::", ClassLinkLocal)
+	assertBlockedUnderAll(t, "64:ff9b:1:a9fe:a9:fe00::")
+}
+
+func TestClassify_LocalUseNAT64_56LayoutNeverOpenStaysBlocked(t *testing.T) {
+	assertClass(t, "64:ff9b:1:a9:fe:a9fe::", ClassLinkLocal)
+	assertBlockedUnderAll(t, "64:ff9b:1:a9:fe:a9fe::")
+}
+
+func TestClassify_LocalUseNAT64_64LayoutNeverOpenStaysBlocked(t *testing.T) {
+	assertClass(t, "64:ff9b:1:0:a9:fea9:fe00::", ClassLinkLocal)
+	assertBlockedUnderAll(t, "64:ff9b:1:0:a9:fea9:fe00::")
+}
+
 func TestEndsInNumber_Decimal(t *testing.T) {
 	if !EndsInNumber("2852039166") {
 		t.Error("EndsInNumber(2852039166) = false, want true")
@@ -368,6 +384,14 @@ func TestEndsInNumber_Octal(t *testing.T) {
 func TestEndsInNumber_TrailingDot(t *testing.T) {
 	if !EndsInNumber("127.1.") {
 		t.Error("EndsInNumber(127.1.) = false, want true")
+	}
+}
+
+func TestEndsInNumber_SeveralTrailingDots(t *testing.T) {
+	for _, h := range []string{"2852039166..", "127.1..", "0x7f.1..."} {
+		if !EndsInNumber(h) {
+			t.Errorf("EndsInNumber(%q) = false, want true", h)
+		}
 	}
 }
 

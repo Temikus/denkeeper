@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/Temikus/denkeeper/internal/netguard"
@@ -37,6 +38,9 @@ func (g *requestGuard) check(u *url.URL) error {
 	host, err := netguard.HostToASCII(u.Hostname())
 	if err != nil {
 		return fmt.Errorf("%w: %w", err, netguard.ErrBlocked)
+	}
+	if slices.Contains(strings.Split(strings.TrimSuffix(host, "."), "."), "") {
+		return fmt.Errorf("host %q has an empty label: %w", host, netguard.ErrBlocked)
 	}
 	if err := g.policy.CheckHost(host); err != nil {
 		return err
