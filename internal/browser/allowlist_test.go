@@ -248,6 +248,20 @@ func TestAllowlist_TrailingDotHostNotAllowedElsewhere(t *testing.T) {
 	}
 }
 
+func TestAllowlist_NumericHostWithSeveralTrailingDotsRefused(t *testing.T) {
+	a := mustAllowlist(t, nil)
+
+	for _, u := range []string{"http://127.1../", "http://2130706433.../"} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if ok {
+			t.Errorf("Allowed(%q) = true, want false (numeric host with trailing dots)", u)
+		}
+	}
+}
+
 func TestAllowlist_InvalidURL(t *testing.T) {
 	a := mustAllowlist(t, []string{"example.com"})
 
@@ -354,6 +368,8 @@ func TestIsBlockedHost(t *testing.T) {
 		{"2852039166", true},
 		{"8.8.8.8.", false},
 		{"134744072", true}, // 8.8.8.8 in decimal: refused, not decoded
+		{"127.1..", true},
+		{"0x7f000001...", true},
 		// Fullwidth forms that IDNA maps to a blocked host.
 		{"１２７.０.０.１", true},
 		{"１６９.２５４.１６９.２５４", true},

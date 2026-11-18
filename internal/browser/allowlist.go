@@ -4,7 +4,6 @@ package browser
 
 import (
 	"fmt"
-	"net/netip"
 	"net/url"
 	"strings"
 
@@ -144,27 +143,5 @@ func isBlockedHost(host string) bool {
 	if err != nil {
 		return true
 	}
-	return netguard.Policy{}.CheckHost(h) != nil || endsInNumber(h)
-}
-
-// endsInNumber applies the WHATWG URL rule: a browser parses a host whose last
-// label is numeric as IPv4, accepting decimal, octal, hex and short forms that
-// netip rejects. Such a form is refused, not decoded.
-func endsInNumber(h string) bool {
-	h = strings.TrimSuffix(h, ".")
-	last := h[strings.LastIndexByte(h, '.')+1:]
-	if last == "" || (!strings.HasPrefix(last, "0x") && !allDigits(last)) {
-		return false
-	}
-	_, err := netip.ParseAddr(h)
-	return err != nil
-}
-
-func allDigits(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
+	return netguard.Policy{}.CheckHost(h) != nil || netguard.EndsInNumber(h)
 }
