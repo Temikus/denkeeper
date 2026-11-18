@@ -1,9 +1,12 @@
 package scriptmcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -26,7 +29,7 @@ func (s *Server) registerTools() {
 			"type": "object",
 			"properties": {
 				"code": {"type": "string", "description": "JavaScript to execute. Use return to produce the result."},
-				"input": {"description": "JSON data bound to the variable ` + "`input`" + ` inside the snippet."}
+				"input": {"description": "JSON data bound to the variable ` + "`input`" + ` inside the snippet. Pass the value itself (object, array, string, number), not a JSON-encoded string of it. ` + "`code`" + ` is a separate top-level argument, not a key inside ` + "`input`" + `."}
 			},
 			"required": ["code"]
 		}`),
@@ -45,14 +48,16 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
 		return toolError("invalid arguments: " + err.Error()), nil
 	}
-	if input.Code == "" {
-		return toolError("code is required"), nil
-	}
 	if s.deps.MaxInputBytes > 0 && len(input.Input) > s.deps.MaxInputBytes {
 		return toolError(fmt.Sprintf("input exceeds %d bytes", s.deps.MaxInputBytes)), nil
 	}
-	if len(input.Input) == 0 {
-		input.Input = json.RawMessage("null")
+	args, err := normalizeArgs(input.Code, input.Input)
+	if err != nil {
+		return toolError(err.Error()), nil
+	}
+	// Decoding can grow input (invalid UTF-8 becomes U+FFFD), so check again.
+	if s.deps.MaxInputBytes > 0 && len(args.input) > s.deps.MaxInputBytes {
+		return toolError(fmt.Sprintf("input exceeds %d bytes", s.deps.MaxInputBytes)), nil
 	}
 
 	release, errResult := s.acquireSlot(ctx)
@@ -64,7 +69,7 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	vm := goja.New()
 	// Bind the raw JSON as a string and parse it inside the VM, which keeps
 	// nested data predictable rather than relying on Go→JS value coercion.
-	if err := vm.Set("__denkeeper_input_json", string(input.Input)); err != nil {
+	if err := vm.Set("__denkeeper_input_json", string(args.input)); err != nil {
 		return toolError("failed to bind input: " + err.Error()), nil
 	}
 
@@ -81,12 +86,12 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 	}()
 
 	// Wrap user code in an IIFE so `return` works and `input` is scoped.
-	wrapped := "(function(input){" + input.Code + "})(JSON.parse(__denkeeper_input_json))"
+	wrapped := "(function(input){" + args.code + "})(JSON.parse(__denkeeper_input_json))"
 	val, err := vm.RunString(wrapped)
 	close(done)
 	if err != nil {
 		// goja surfaces JS exceptions and interrupts as Go errors; feed back to the LLM.
-		return toolError("javascript error: " + err.Error()), nil
+		return toolError(scriptErrorText(err, args.decoded)), nil
 	}
 
 	out := exportResult(val)
@@ -94,6 +99,136 @@ func (s *Server) handleRunJavaScript(ctx context.Context, req *mcp.CallToolReque
 		out = out[:s.deps.MaxOutputChars]
 	}
 	return toolText(out), nil
+}
+
+// runArgs holds the arguments after normalizeArgs.
+type runArgs struct {
+	code    string
+	input   json.RawMessage
+	decoded bool // input arrived as a JSON-encoded string and was decoded
+}
+
+// normalizeArgs repairs two argument shapes models send (#607): `code` nested
+// inside `input`, and `input` double-encoded as a JSON string. It returns an
+// error whose text names the fix when the shape cannot be repaired.
+func normalizeArgs(code string, raw json.RawMessage) (runArgs, error) {
+	if len(raw) == 0 {
+		raw = json.RawMessage("null")
+	}
+	args := runArgs{code: code, input: raw}
+	decodedInput, decodeErr := decodeStringInput(raw)
+	if decodedInput != nil {
+		args.input, args.decoded = decodedInput, true
+	}
+	if args.code == "" {
+		var badKey bool
+		args.code, args.input, badKey = hoistCode(args.input)
+		if args.code == "" {
+			return args, missingCodeError(badKey)
+		}
+	}
+	if decodeErr != nil {
+		return args, decodeErr
+	}
+	return args, nil
+}
+
+// decodeStringInput returns the decoded bytes when raw is a JSON string that
+// holds an object or array. A string that starts with { or [ but does not
+// decode returns an error; any other value returns nil, nil and stays as sent.
+func decodeStringInput(raw json.RawMessage) (json.RawMessage, error) {
+	var str string
+	if json.Unmarshal(raw, &str) != nil {
+		return nil, nil // not a JSON string
+	}
+	trimmed := strings.TrimSpace(str)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return nil, nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(trimmed), &v); err != nil {
+		pos := ""
+		var syn *json.SyntaxError
+		if errors.As(err, &syn) {
+			pos = fmt.Sprintf(" at byte %d", syn.Offset)
+		}
+		return nil, fmt.Errorf("`input` must be passed as a JSON value, not a string: "+
+			"the string does not parse as JSON%s: %w", pos, err)
+	}
+	return json.RawMessage(trimmed), nil
+}
+
+// hoistCode moves a non-empty string `code` key out of a JSON object. It
+// returns the code, the object without that key (other keys keep their
+// order), and badKey when a `code` key exists but is not a non-empty string.
+func hoistCode(raw json.RawMessage) (code string, rest json.RawMessage, badKey bool) {
+	codeVal, rest, ok := splitObjectKey(raw, "code")
+	if !ok || codeVal == nil {
+		return "", raw, false
+	}
+	if json.Unmarshal(codeVal, &code) != nil || code == "" {
+		return "", raw, true
+	}
+	return code, rest, false
+}
+
+// splitObjectKey returns the value under key and the object without it. ok is
+// false when raw is not a JSON object. With duplicate keys the last value wins,
+// matching encoding/json. Kept keys and values are copied as raw bytes:
+// re-encoding a key can grow it past max_input_bytes ('<' becomes <).
+func splitObjectKey(raw json.RawMessage, key string) (val, rest json.RawMessage, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, nil, false
+	}
+	var out bytes.Buffer
+	out.WriteByte('{')
+	for dec.More() {
+		start := dec.InputOffset()
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, nil, false
+		}
+		// Only a comma and whitespace can precede the key's opening quote.
+		keyRaw := raw[start:dec.InputOffset()]
+		keyRaw = keyRaw[bytes.IndexByte(keyRaw, '"'):]
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, nil, false
+		}
+		if k, _ := tok.(string); k == key {
+			val = v
+			continue
+		}
+		if out.Len() > 1 {
+			out.WriteByte(',')
+		}
+		out.Write(keyRaw)
+		out.WriteByte(':')
+		out.Write(v)
+	}
+	out.WriteByte('}')
+	return val, out.Bytes(), true
+}
+
+func missingCodeError(badKey bool) error {
+	msg := "code is required: pass `code` as a top-level string argument, next to `input`, not inside it"
+	if badKey {
+		msg += "; `input.code` was found but is not a non-empty string"
+	}
+	return errors.New(msg)
+}
+
+// scriptErrorText formats a script failure. After a decoded string input, a
+// script that throws most likely still calls JSON.parse(input) on the object.
+func scriptErrorText(err error, decoded bool) string {
+	text := "javascript error: " + err.Error()
+	var interrupted *goja.InterruptedError
+	if decoded && !errors.As(err, &interrupted) {
+		text += "\n`input` was sent as a JSON-encoded string and was decoded to an object " +
+			"or array before the script ran; remove JSON.parse(input) and use `input` directly."
+	}
+	return text
 }
 
 // acquireSlot bounds concurrency before a VM is allocated. A fresh goja VM has
