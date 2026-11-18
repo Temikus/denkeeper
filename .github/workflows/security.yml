@@ -73,9 +73,27 @@ jobs:
 
   grype:
     name: Vulnerability Scan (Grype)
+    needs: build-ui
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Download web UI
+        uses: actions/download-artifact@v8
+        with:
+          name: web-ui-dist
+          path: internal/web/dist/
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: Cache Go modules and build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
+      - name: Build binaries for Go module scan
+        run: mise x -- task scan:grype:targets
       - name: Grype filesystem scan
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         id: grype
@@ -84,6 +102,15 @@ jobs:
           severity-cutoff: "high"
           only-fixed: "true"
           output-format: "sarif"
+      # A binary Grype doesn't catalog leaves the scan green with no Go coverage.
+      - name: Check Go modules were cataloged from every binary
+        run: |
+          mise x -- grype dir:. -q -o cyclonedx-json > "$RUNNER_TEMP/cdx.json"
+          for bin in pkg/scan/denkeeper-linux-amd64 pkg/scan/denkeeper-darwin-arm64; do
+            n=$(jq --arg p "/$bin" '[.components[]? | select((.purl // "") | startswith("pkg:golang/")) | select(any(.properties[]?; .name == "syft:location:0:path" and .value == $p))] | length' "$RUNNER_TEMP/cdx.json")
+            echo "$bin: $n Go modules"
+            [ "$n" -gt 0 ] || { echo "::error::Grype cataloged no Go modules from $bin"; exit 1; }
+          done
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v4
         if: always()

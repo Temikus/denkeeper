@@ -254,6 +254,8 @@ release bump:
 scan tool="all":
     #!/usr/bin/env sh
     set -e
+    # Go scans compile packages that embed internal/web/dist; secrets only reads git history.
+    [ "{{tool}}" = secrets ] || mise x -- task ui:build
     case "{{tool}}" in
         all)         mise x -- task scan ;;
         gosec)       mise x -- task scan:gosec ;;

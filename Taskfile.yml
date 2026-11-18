@@ -204,6 +204,7 @@ tasks:
 
   scan:grype:
     desc: Filesystem vulnerability scan (matches CI's Grype job; uses .grype.yaml)
+    deps: [scan:grype:targets]
     sources:
       - "**/*.go"
       - go.mod
@@ -215,6 +216,28 @@ tasks:
       - exclude: pkg/**
     cmds:
       - mise x -- grype dir:. --fail-on high --only-fixed
+
+  # .grype.yaml excludes go.mod/go.sum, so Grype sees Go modules only through
+  # these binaries. Linux and darwin link different modules; amd64 and arm64
+  # don't. CI's Grype job runs this task too.
+  scan:grype:targets:
+    desc: Build the release-target binaries Grype scans for Go modules (needs internal/web/dist)
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/web/dist/**/*
+      - exclude: "**/*_test.go"
+      - exclude: web/**
+      - exclude: pkg/**
+    generates:
+      - pkg/scan/denkeeper-linux-amd64
+      - pkg/scan/denkeeper-darwin-arm64
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - GOOS=linux GOARCH=amd64 go build -o pkg/scan/denkeeper-linux-amd64 ./cmd/denkeeper
+      - GOOS=darwin GOARCH=arm64 go build -o pkg/scan/denkeeper-darwin-arm64 ./cmd/denkeeper
 
   # Deliberately uncached (no sources): this scans git history, not the working
   # tree, so a file fingerprint is the wrong cache key — a commit that touches
