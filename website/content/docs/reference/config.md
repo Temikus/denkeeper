@@ -321,7 +321,7 @@ Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` s
 - IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` has a site-defined layout (RFC 8215), so it counts as private: if your DNS64 uses it, fetching IPv4-only sites needs `allow_private` (refusals then show a `64:ff9b:1:` address with the `allow_private` hint). A never-allowed IPv4 at any RFC 6052 position stays refused, so a local-use layout other than /96 may refuse some public addresses. NAT64 with a network-specific prefix is not decoded; on such networks, egress filtering must block private targets.
 - With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. Hosts matching `NO_PROXY` are connected to directly and go through the address check instead. The URL checks and domain lists apply either way.
 
-The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on.
+The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on. With `[web.fetch.jina]` enabled, Jina follows redirects and runs page scripts on its own servers, so the domain lists apply only to the URL Denkeeper sends it.
 
 ## `[web.fetch.jina]`
 
