@@ -1,16 +1,25 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Temikus/denkeeper/internal/agent"
+	"github.com/Temikus/denkeeper/internal/approval"
 	"github.com/Temikus/denkeeper/internal/config"
 	"github.com/Temikus/denkeeper/internal/llm"
+	"github.com/Temikus/denkeeper/internal/netguard"
 	"github.com/Temikus/denkeeper/internal/scheduler"
 	"github.com/Temikus/denkeeper/internal/skill"
 )
@@ -610,5 +619,197 @@ func TestTraceCapDefaultsAgree(t *testing.T) {
 	if config.DefaultMaxTraceBytes != agent.DefaultMaxTraceBytes {
 		t.Errorf("config default %d != agent default %d",
 			config.DefaultMaxTraceBytes, agent.DefaultMaxTraceBytes)
+	}
+}
+
+// webFetchConfig returns the [web.fetch] section a config file produces,
+// with all defaults applied.
+func webFetchConfig(t *testing.T, toml string) config.WebFetchConfig {
+	t.Helper()
+	cfg, err := config.Parse([]byte(toml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	return cfg.Web.Fetch
+}
+
+// The default deployment must not reach loopback, where Denkeeper's own API
+// listens.
+func TestBuildWebFetcher_DefaultConfigBlocksLoopback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer srv.Close()
+
+	f := buildWebFetcher(webFetchConfig(t, ""), slog.Default())
+	_, err := f.Fetch(context.Background(), srv.URL)
+	if !errors.Is(err, netguard.ErrBlocked) {
+		t.Fatalf("err = %v, want netguard.ErrBlocked", err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", hits.Load())
+	}
+}
+
+func TestBuildWebFetcher_AllowLoopbackReaches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer srv.Close()
+
+	f := buildWebFetcher(webFetchConfig(t, "[web.fetch]\nallow_loopback = true\n"), slog.Default())
+	res, err := f.Fetch(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Content != "hello" {
+		t.Errorf("content = %q, want hello", res.Content)
+	}
+}
+
+func TestBuildWebFetcher_DomainListsWired(t *testing.T) {
+	fc := webFetchConfig(t, "[web.fetch]\nblocked_domains = [\"evil.example.com\"]\n")
+	_, err := buildWebFetcher(fc, slog.Default()).Fetch(context.Background(), "https://evil.example.com/")
+	if !errors.Is(err, netguard.ErrBlocked) || !strings.Contains(err.Error(), "blocked_domains") {
+		t.Errorf("err = %v, want a blocked_domains refusal", err)
+	}
+}
+
+// [web.fetch] is global, so the opt-in warning is logged once at startup by
+// warnWebFetchOptIns, never by the per-agent buildWebFetcher.
+func TestWarnWebFetchOptIns_WarnsOnceWhenOptInOn(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg, err := config.Parse([]byte("[web.fetch]\nallow_private = true\n"))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if strings.Count(buf.String(), "level=WARN") != 1 || !strings.Contains(buf.String(), "allow_private=true") {
+		t.Errorf("want one Warn naming allow_private, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	buildWebFetcher(cfg.Web.Fetch, logger)
+	if strings.Contains(buf.String(), "level=WARN") {
+		t.Errorf("buildWebFetcher runs per agent and must not warn, got: %s", buf.String())
+	}
+}
+
+// reloadWebFetchLog loads before, reloads after, and returns what the reload
+// logged.
+func reloadWebFetchLog(t *testing.T, before, after string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "denkeeper.toml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(before)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	store, err := approval.NewInMemoryStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	disp := agent.NewDispatcher(map[string]*agent.Engine{}, nil, nil, logger)
+	reload := buildReloadFunc(path, config.NewHolder(cfg), disp, approval.NewManager(store, logger), nil, reloadRuntime{}, logger)
+
+	write(after)
+	if err := reload(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	return buf.String()
+}
+
+const reloadPolicyWarn = "[web.fetch] network policy changed by reload"
+
+// assertOneReloadPolicyWarn checks for exactly one reload Warn carrying all
+// four opt-in fields, and no startup-style Warn.
+func assertOneReloadPolicyWarn(t *testing.T, out string, fields ...string) {
+	t.Helper()
+	if strings.Count(out, "level=WARN") != 1 || strings.Count(out, reloadPolicyWarn) != 1 {
+		t.Fatalf("want exactly one reload policy Warn, got: %s", out)
+	}
+	if strings.Contains(out, "network policy opened for every agent") {
+		t.Errorf("reload must not reuse the startup Warn, got: %s", out)
+	}
+	for _, f := range fields {
+		if !strings.Contains(out, f) {
+			t.Errorf("reload Warn missing %q, got: %s", f, out)
+		}
+	}
+}
+
+// Agents built after a reload read the reloaded [web.fetch]; running agents
+// keep theirs. Opening by reload must say so.
+func TestReload_WebFetchOptInTurnedOn_Warns(t *testing.T) {
+	out := reloadWebFetchLog(t, "", "[web.fetch]\nallow_private = true\n")
+	assertOneReloadPolicyWarn(t, out,
+		"allow_private=true", "allow_loopback=false",
+		"was_allow_private=false", "was_allow_loopback=false")
+}
+
+// Closing by reload leaves running agents open until restart, so it must
+// warn too.
+func TestReload_WebFetchOptInTurnedOff_Warns(t *testing.T) {
+	out := reloadWebFetchLog(t, "[web.fetch]\nallow_loopback = true\n", "")
+	assertOneReloadPolicyWarn(t, out,
+		"allow_private=false", "allow_loopback=false",
+		"was_allow_private=false", "was_allow_loopback=true")
+}
+
+// Startup already warned; an unchanged reload must not repeat it.
+func TestReload_WebFetchOptInUnchanged_Silent(t *testing.T) {
+	cfg := "[web.fetch]\nallow_loopback = true\n"
+	out := reloadWebFetchLog(t, cfg, cfg)
+	if strings.Contains(out, "level=WARN") {
+		t.Errorf("unchanged opt-in must not warn, got: %s", out)
+	}
+}
+
+// With web tools off the opt-ins have no effect, so toggling them is silent.
+func TestReload_WebFetchOptInWhileWebOff_Silent(t *testing.T) {
+	out := reloadWebFetchLog(t,
+		"[web]\nenabled = false\n",
+		"[web]\nenabled = false\n[web.fetch]\nallow_private = true\n")
+	if strings.Contains(out, "level=WARN") {
+		t.Errorf("opt-in change with web off must not warn, got: %s", out)
+	}
+}
+
+func TestWarnWebFetchOptIns_SilentByDefault(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg, err := config.Parse([]byte(""))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if buf.Len() != 0 {
+		t.Errorf("default config must not log, got: %s", buf.String())
+	}
+}
+
+func TestWarnWebFetchOptIns_SilentWhenWebDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg, err := config.Parse([]byte("[web]\nenabled = false\n\n[web.fetch]\nallow_loopback = true\n"))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	warnWebFetchOptIns(cfg.Web, logger)
+	if buf.Len() != 0 {
+		t.Errorf("disabled web tools must not warn, got: %s", buf.String())
 	}
 }

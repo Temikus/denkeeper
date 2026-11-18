@@ -505,3 +505,40 @@ func TestToolRegistration_Both(t *testing.T) {
 		t.Fatalf("expected 2 tools, got %d", len(tools.Tools))
 	}
 }
+
+func TestWebFetch_MetadataURLBlockedByPolicy(t *testing.T) {
+	session := newTestServer(t, Deps{
+		Fetcher:          webfetch.NewDefaultFetcher(webfetch.Options{}),
+		MaxResponseChars: 8000,
+		PermissionTier:   func() string { return "autonomous" },
+	})
+
+	result := callTool(t, session, "web_fetch", map[string]any{
+		"url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+	})
+	if !result.IsError {
+		t.Fatal("expected IsError for a metadata URL")
+	}
+	text := extractText(result)
+	for _, want := range []string{"169.254.169.254", "blocked by network policy", "never allowed"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("error should contain %q: %s", want, text)
+		}
+	}
+}
+
+func TestWebFetch_LoopbackErrorNamesConfigKey(t *testing.T) {
+	session := newTestServer(t, Deps{
+		Fetcher:          webfetch.NewDefaultFetcher(webfetch.Options{}),
+		MaxResponseChars: 8000,
+		PermissionTier:   func() string { return "autonomous" },
+	})
+
+	result := callTool(t, session, "web_fetch", map[string]any{"url": "http://127.0.0.1:8080/api/v1/sessions"})
+	if !result.IsError {
+		t.Fatal("expected IsError for a loopback URL")
+	}
+	if !strings.Contains(extractText(result), "[web.fetch] allow_loopback = true") {
+		t.Errorf("error should name the opening key: %s", extractText(result))
+	}
+}

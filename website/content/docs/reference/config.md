@@ -282,7 +282,7 @@ Users switch channels at runtime with `/session <name>`; the selection is persis
 
 ## `[web]`
 
-Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings are not hot-reloaded.
+Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` settings until restart; agents created after a reload use the new values.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -306,6 +306,22 @@ Built-in `web_search` and `web_fetch` tools. Restart-only — `[web]` settings a
 | `user_agent` | string | `"Denkeeper/1.0 (+https://denkeeper.io)"` | HTTP User-Agent header |
 | `respect_robots_txt` | bool | `false` | Check robots.txt before fetching |
 | `respect_agents_txt` | bool | `false` | Check agents.txt before fetching |
+| `allow_private` | bool | `false` | Allow private ranges: RFC1918, CGNAT `100.64.0.0/10`, ULA `fc00::/7`, local-use NAT64 `64:ff9b:1::/48`. Every agent can then fetch any host on your LAN, such as router and NAS admin pages; `allowed_domains` can't narrow this without also blocking the public web |
+| `allow_loopback` | bool | `false` | Allow `127.0.0.0/8`, `::1` and `localhost`, where Denkeeper's own API listens |
+| `allowed_domains` | list | `[]` | When non-empty, only matching hosts are fetched. Entries are `example.com` (that exact host only) or `*.example.com` (the domain and its subdomains) |
+| `blocked_domains` | list | `[]` | Matching hosts are always refused; wins over `allowed_domains` |
+
+### Network policy
+
+`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A URL refused by the address check or the domain lists is never passed to the Jina fallback. A robots.txt or agents.txt disallow is not: with Jina enabled, that URL is still fetched through Jina.
+
+- Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
+- Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
+- Numeric hosts other than dotted-quad IPv4, such as `2852039166`, `127.1` or `0x7f.0.0.1`, are refused under any setting.
+- IPv6 forms that carry an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4) are judged by that IPv4 address. The local-use NAT64 prefix `64:ff9b:1::/48` has a site-defined layout (RFC 8215), so it counts as private: if your DNS64 uses it, fetching IPv4-only sites needs `allow_private` (refusals then show a `64:ff9b:1:` address with the `allow_private` hint). A never-allowed IPv4 at any RFC 6052 position stays refused, so a local-use layout other than /96 may refuse some public addresses. NAT64 with a network-specific prefix is not decoded; on such networks, egress filtering must block private targets.
+- With `HTTP_PROXY` / `HTTPS_PROXY` set, Denkeeper connects to the proxy, not the target, so the proxy itself must enforce egress for proxied requests. Hosts matching `NO_PROXY` are connected to directly and go through the address check instead. The URL checks and domain lists apply either way.
+
+The domain lists match host names only; IP literals are rejected at load. They never open an address class: a listed host that resolves to a private address is still refused unless `allow_private` is on. With `[web.fetch.jina]` enabled, Jina follows redirects and runs page scripts on its own servers, so the domain lists apply only to the URL Denkeeper sends it.
 
 ## `[web.fetch.jina]`
 

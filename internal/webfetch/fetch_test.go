@@ -17,7 +17,7 @@ func TestDefaultFetcher_BasicHTML(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	result, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -43,7 +43,7 @@ func TestDefaultFetcher_PlainText(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	result, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -62,8 +62,9 @@ func TestDefaultFetcher_SizeLimit(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
-		Timeout:      5 * time.Second,
-		MaxSizeBytes: 1024, // 1KB limit
+		AllowLoopback: true,
+		Timeout:       5 * time.Second,
+		MaxSizeBytes:  1024, // 1KB limit
 	})
 	result, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
@@ -80,7 +81,7 @@ func TestDefaultFetcher_HTTP4xxError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	_, err := f.Fetch(context.Background(), srv.URL)
 	if err == nil {
 		t.Fatal("expected error for 404")
@@ -91,7 +92,7 @@ func TestDefaultFetcher_HTTP4xxError(t *testing.T) {
 }
 
 func TestDefaultFetcher_InvalidScheme(t *testing.T) {
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	_, err := f.Fetch(context.Background(), "ftp://example.com/file")
 	if err == nil {
 		t.Fatal("expected error for ftp scheme")
@@ -112,7 +113,7 @@ func TestDefaultFetcher_Redirects(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	result, err := f.Fetch(context.Background(), srv.URL+"/redirect")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -131,7 +132,7 @@ func TestDefaultFetcher_TooManyRedirects(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	_, err := f.Fetch(context.Background(), srv.URL+"/loop")
 	if err == nil {
 		t.Fatal("expected error for too many redirects")
@@ -148,8 +149,9 @@ func TestDefaultFetcher_UserAgent(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
-		Timeout:   5 * time.Second,
-		UserAgent: "TestBot/1.0",
+		AllowLoopback: true,
+		Timeout:       5 * time.Second,
+		UserAgent:     "TestBot/1.0",
 	})
 	_, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
@@ -172,6 +174,7 @@ func TestDefaultFetcher_RobotsTxtBlocking(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
+		AllowLoopback:    true,
 		Timeout:          5 * time.Second,
 		RespectRobotsTxt: true,
 	})
@@ -207,6 +210,7 @@ func TestDefaultFetcher_RobotsTxtNotFound(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
+		AllowLoopback:    true,
 		Timeout:          5 * time.Second,
 		RespectRobotsTxt: true,
 	})
@@ -233,6 +237,7 @@ func TestDefaultFetcher_AgentsTxtBlocking(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
+		AllowLoopback:    true,
 		Timeout:          5 * time.Second,
 		RespectAgentsTxt: true,
 	})
@@ -260,6 +265,7 @@ func TestDefaultFetcher_RobotsTxtCaching(t *testing.T) {
 	defer srv.Close()
 
 	f := NewDefaultFetcher(Options{
+		AllowLoopback:    true,
 		Timeout:          5 * time.Second,
 		RespectRobotsTxt: true,
 	})
@@ -290,7 +296,7 @@ func TestDefaultFetcher_RobotsTxtDisabledByDefault(t *testing.T) {
 	defer srv.Close()
 
 	// Default: robots.txt NOT respected.
-	f := NewDefaultFetcher(Options{Timeout: 5 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 5 * time.Second})
 	result, err := f.Fetch(context.Background(), srv.URL+"/blocked")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -310,7 +316,7 @@ func TestDefaultFetcher_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	f := NewDefaultFetcher(Options{Timeout: 10 * time.Second})
+	f := NewDefaultFetcher(Options{AllowLoopback: true, Timeout: 10 * time.Second})
 	_, err := f.Fetch(ctx, srv.URL)
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
@@ -406,8 +412,7 @@ func TestJinaFetcher_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	j := NewJinaFetcher(5*time.Second, nil)
-	j.baseURL = srv.URL
+	j := newTestJina(srv.URL)
 
 	_, err := j.Fetch(context.Background(), "https://example.com")
 	if err == nil {
@@ -425,8 +430,7 @@ func TestJinaFetcher_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	j := NewJinaFetcher(5*time.Second, nil)
-	j.baseURL = srv.URL
+	j := newTestJina(srv.URL)
 
 	result, err := j.Fetch(context.Background(), "https://example.com")
 	if err != nil {

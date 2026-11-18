@@ -1166,6 +1166,42 @@ func connectDecideMCP(ctx context.Context, agentName string, cfg *config.Config,
 	return nil
 }
 
+// warnWebFetchOptIns logs once at startup when [web.fetch] opens private or
+// loopback ranges. The setting is global, so it is not logged per agent.
+func warnWebFetchOptIns(w config.WebConfig, logger *slog.Logger) {
+	if !w.WebEnabled() || (!w.Fetch.AllowPrivate && !w.Fetch.AllowLoopback) {
+		return
+	}
+	logger.Warn("web_fetch network policy opened for every agent",
+		"allow_private", w.Fetch.AllowPrivate, "allow_loopback", w.Fetch.AllowLoopback)
+}
+
+// warnWebFetchOptInsOnReload warns, in either direction, when a reload
+// changes the effective opt-ins. Agents built after a reload (reloadNewAgents,
+// the API agent factory) read the reloaded [web.fetch]; running agents keep
+// theirs, so closing by reload leaves them open until restart.
+func warnWebFetchOptInsOnReload(prev *config.Config, next config.WebConfig, logger *slog.Logger) {
+	var was [2]bool
+	if prev != nil {
+		was = webFetchOptIns(prev.Web)
+	}
+	now := webFetchOptIns(next)
+	if was == now {
+		return
+	}
+	logger.Warn("[web.fetch] network policy changed by reload; agents created from now on use it, running agents keep the old policy until restart",
+		"allow_private", now[0], "allow_loopback", now[1],
+		"was_allow_private", was[0], "was_allow_loopback", was[1])
+}
+
+// webFetchOptIns returns the effective opt-ins: none when web tools are off.
+func webFetchOptIns(w config.WebConfig) [2]bool {
+	if !w.WebEnabled() {
+		return [2]bool{}
+	}
+	return [2]bool{w.Fetch.AllowPrivate, w.Fetch.AllowLoopback}
+}
+
 // buildWebFetcher constructs a Fetcher (with optional Jina fallback chain) from config.
 func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fetcher {
 	timeout, err := time.ParseDuration(fc.Timeout)
@@ -1180,6 +1216,10 @@ func buildWebFetcher(fc config.WebFetchConfig, logger *slog.Logger) webfetch.Fet
 		RespectRobotsTxt: fc.RespectRobotsTxt,
 		RespectAgentsTxt: fc.RespectAgentsTxt,
 		Logger:           logger,
+		AllowPrivate:     fc.AllowPrivate,
+		AllowLoopback:    fc.AllowLoopback,
+		AllowedDomains:   fc.AllowedDomains,
+		BlockedDomains:   fc.BlockedDomains,
 	})
 
 	if !fc.Jina.Enabled {
@@ -2113,6 +2153,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfgHolder := config.NewHolder(cfg)
 
 	logger := initLogger(cfg)
+	warnWebFetchOptIns(cfg.Web, logger)
 
 	otelShutdown, err := dkotel.Setup(dkotel.Config{
 		Enabled:        cfg.OTel.Enabled,
@@ -2359,7 +2400,9 @@ func buildReloadFunc(path string, cfgHolder *config.Holder, dispatcher *agent.Di
 		if err != nil {
 			return fmt.Errorf("reloading config: %w", err)
 		}
+		prev := cfgHolder.Get()
 		cfgHolder.Store(cfg)
+		warnWebFetchOptInsOnReload(prev, cfg.Web, logger)
 
 		if rt.providers != nil {
 			syncProviders(*rt.providers, cfg)

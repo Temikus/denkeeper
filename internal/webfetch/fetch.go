@@ -5,6 +5,7 @@ package webfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/temoto/robotstxt"
 	"golang.org/x/net/html"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // FetchResult holds the fetched and converted content from a URL.
@@ -34,7 +37,8 @@ type Fetcher interface {
 	Name() string
 }
 
-// Options configures a DefaultFetcher.
+// Options configures a DefaultFetcher. The zero value blocks loopback,
+// private, link-local and metadata addresses.
 type Options struct {
 	Timeout          time.Duration
 	MaxSizeBytes     int64
@@ -42,12 +46,18 @@ type Options struct {
 	RespectRobotsTxt bool
 	RespectAgentsTxt bool
 	Logger           *slog.Logger
+
+	AllowLoopback  bool     // opens 127.0.0.0/8, ::1, localhost
+	AllowPrivate   bool     // opens RFC1918, CGNAT, ULA
+	AllowedDomains []string // non-empty: host must match one
+	BlockedDomains []string // wins over AllowedDomains
 }
 
 // DefaultFetcher fetches URLs via HTTP and converts HTML to Markdown.
 type DefaultFetcher struct {
 	client    *http.Client
 	opts      Options
+	guard     *requestGuard
 	robotsBot string // User-agent name for robots.txt lookups
 
 	// robots.txt / agents.txt cache: domain → (data, fetchTime)
@@ -84,17 +94,20 @@ func NewDefaultFetcher(opts Options) *DefaultFetcher {
 		opts.MaxSizeBytes = 5 * 1024 * 1024 // 5MB
 	}
 
+	guard := newRequestGuard(opts)
 	return &DefaultFetcher{
 		client: &http.Client{
-			Timeout: opts.Timeout,
-			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			Timeout:   opts.Timeout,
+			Transport: guard.policy.Transport(),
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects (max 5)")
 				}
-				return nil
+				return guard.check(req.URL)
 			},
 		},
 		opts:        opts,
+		guard:       guard,
 		robotsBot:   "Denkeeper",
 		robotsCache: make(map[string]*robotsCacheEntry),
 		agentsCache: make(map[string]*agentsCacheEntry),
@@ -104,19 +117,22 @@ func NewDefaultFetcher(opts Options) *DefaultFetcher {
 // Name returns the fetcher identifier.
 func (f *DefaultFetcher) Name() string { return "default" }
 
-// Fetch retrieves a URL and converts its content to Markdown.
 // checkCompliance verifies that the URL is not blocked by robots.txt or agents.txt.
 func (f *DefaultFetcher) checkCompliance(ctx context.Context, parsed *url.URL) error {
 	rawURL := parsed.String()
 	if f.opts.RespectRobotsTxt {
-		if blocked, err := f.isBlockedByRobots(ctx, parsed); err != nil {
+		if blocked, err := f.isBlockedByRobots(ctx, parsed); errors.Is(err, netguard.ErrBlocked) {
+			return withHint(err)
+		} else if err != nil {
 			f.opts.Logger.Warn("robots.txt check failed, proceeding", "url", rawURL, "error", err)
 		} else if blocked {
 			return fmt.Errorf("blocked by robots.txt: %s", rawURL)
 		}
 	}
 	if f.opts.RespectAgentsTxt {
-		if blocked, err := f.isBlockedByAgents(ctx, parsed); err != nil {
+		if blocked, err := f.isBlockedByAgents(ctx, parsed); errors.Is(err, netguard.ErrBlocked) {
+			return withHint(err)
+		} else if err != nil {
 			f.opts.Logger.Warn("agents.txt check failed, proceeding", "url", rawURL, "error", err)
 		} else if blocked {
 			return fmt.Errorf("blocked by agents.txt: %s", rawURL)
@@ -125,13 +141,14 @@ func (f *DefaultFetcher) checkCompliance(ctx context.Context, parsed *url.URL) e
 	return nil
 }
 
+// Fetch retrieves a URL and converts its content to Markdown.
 func (f *DefaultFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL %q: %w", rawURL, err)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported scheme %q: only http and https are supported", parsed.Scheme)
+	if err := f.guard.check(parsed); err != nil {
+		return nil, withHint(err)
 	}
 
 	if err := f.checkCompliance(ctx, parsed); err != nil {
@@ -147,7 +164,7 @@ func (f *DefaultFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching %s: %w", rawURL, err)
+		return nil, fmt.Errorf("fetching %s: %w", rawURL, withHint(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 

@@ -6,8 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Temikus/denkeeper/internal/netguard"
 )
 
 // JinaFetcher uses the Jina Reader API (r.jina.ai) to fetch URLs and convert
@@ -28,7 +31,14 @@ func NewJinaFetcher(timeout time.Duration, logger *slog.Logger) *JinaFetcher {
 		logger = slog.Default()
 	}
 	return &JinaFetcher{
-		client:  &http.Client{Timeout: timeout},
+		// Guarded so a redirect from Jina cannot reach this host's network.
+		// The dial check can't see a proxied hop's target, so each redirect
+		// is also checked by URL.
+		client: &http.Client{
+			Timeout:       timeout,
+			Transport:     netguard.Policy{}.Transport(),
+			CheckRedirect: jinaCheckRedirect,
+		},
 		logger:  logger,
 		baseURL: "https://r.jina.ai",
 	}
@@ -39,6 +49,9 @@ func (j *JinaFetcher) Name() string { return "jina" }
 
 // Fetch retrieves a URL via Jina Reader and returns Markdown content.
 func (j *JinaFetcher) Fetch(ctx context.Context, rawURL string) (*FetchResult, error) {
+	if err := checkJinaTarget(rawURL); err != nil {
+		return nil, err
+	}
 	jinaURL := j.baseURL + "/" + rawURL
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
@@ -86,4 +99,28 @@ func extractJinaTitle(content string) string {
 		}
 	}
 	return ""
+}
+
+// jinaCheckRedirect keeps net/http's 10-hop cap, which a custom
+// CheckRedirect replaces, and checks every hop like the first URL.
+func jinaCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("jina: stopped after 10 redirects")
+	}
+	return checkJinaTarget(req.URL.String())
+}
+
+// checkJinaTarget refuses URLs Jina must never see: non-http(s) schemes and
+// hosts the default policy blocks. Opt-ins do not apply, since Jina cannot
+// reach this host's network anyway. Domain lists are enforced by the
+// DefaultFetcher that a ChainFetcher runs first.
+func checkJinaTarget(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", rawURL, err)
+	}
+	if err := newRequestGuard(Options{}).check(u); err != nil {
+		return fmt.Errorf("jina: refusing %s: %w", u.Redacted(), err)
+	}
+	return nil
 }

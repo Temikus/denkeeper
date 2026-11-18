@@ -338,6 +338,10 @@ Global MCP settings.
     user_agent = ""                  # HTTP User-Agent header
     respect_robots_txt = false       # check robots.txt
     respect_agents_txt = false       # check agents.txt
+    allow_private = false            # open RFC1918, CGNAT, ULA (metadata/link-local never open)
+    allow_loopback = false           # open 127.0.0.0/8, ::1, localhost
+    allowed_domains = []             # non-empty: only these hosts ("example.com", "*.example.com")
+    blocked_domains = []             # always refused; wins over allowed_domains
 
     [web.fetch.jina]
     enabled = false                  # enable Jina Reader fallback for JS-heavy pages

@@ -323,6 +323,10 @@ format = "text"
 # user_agent       = "Denkeeper/1.0 (+https://denkeeper.io)"
 # respect_robots_txt = false       # Check robots.txt before fetching
 # respect_agents_txt = false       # Check agents.txt before fetching
+# allow_private    = false         # Open RFC1918, CGNAT (100.64/10) and ULA ranges
+# allow_loopback   = false         # Open 127.0.0.0/8, ::1, localhost (Denkeeper's own API lives here)
+# allowed_domains  = []            # Non-empty: only these hosts, e.g. ["example.com", "*.example.org"]
+# blocked_domains  = []            # Always refused; wins over allowed_domains
 
 # [web.fetch.jina]
 # enabled = false                  # Enable Jina Reader fallback for JS-heavy pages
