@@ -313,7 +313,7 @@ Built-in `web_search` and `web_fetch` tools. Running agents keep their `[web]` s
 
 ### Network policy
 
-`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A refused URL is never passed to the Jina fallback.
+`web_fetch` refuses non-public addresses. The check runs on the IP each connection actually reaches, so it covers redirects, robots.txt and agents.txt lookups, and hostnames that resolve to a blocked address. A URL refused by the address check or the domain lists is never passed to the Jina fallback. A robots.txt or agents.txt disallow is not: with Jina enabled, that URL is still fetched through Jina.
 
 - Never allowed, under any setting: link-local `169.254.0.0/16` and `fe80::/10`, cloud metadata (including `metadata.google.internal`, `fd00:ec2::254`, `100.100.100.200` and Azure's `168.63.129.16`), unspecified, multicast and broadcast addresses, and a direct request to the configured proxy's own address.
 - Loopback and private ranges: opened only by `allow_loopback` and `allow_private` respectively.
