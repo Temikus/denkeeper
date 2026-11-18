@@ -410,6 +410,31 @@ func TestEndsInNumber_HostNamesFalse(t *testing.T) {
 	}
 }
 
+func TestHasEmptyLabel_ExtraTrailingDots(t *testing.T) {
+	for _, h := range []string{"localhost..", "127.0.0.1...", "metadata.google.internal.."} {
+		if !HasEmptyLabel(h) {
+			t.Errorf("HasEmptyLabel(%q) = false, want true", h)
+		}
+	}
+}
+
+func TestHasEmptyLabel_LeadingOrInnerDot(t *testing.T) {
+	for _, h := range []string{".example.com", "example..com", "", "."} {
+		if !HasEmptyLabel(h) {
+			t.Errorf("HasEmptyLabel(%q) = false, want true", h)
+		}
+	}
+}
+
+// One trailing dot is the fully qualified form, not an empty label.
+func TestHasEmptyLabel_WellFormedFalse(t *testing.T) {
+	for _, h := range []string{"example.com", "example.com.", "localhost", "10.0.0.1", "::1", "fe80::1"} {
+		if HasEmptyLabel(h) {
+			t.Errorf("HasEmptyLabel(%q) = true, want false", h)
+		}
+	}
+}
+
 func TestClassify_IPv4Compatible(t *testing.T) {
 	assertClass(t, "::7f00:1", ClassLoopback)     // ::127.0.0.1
 	assertClass(t, "::a9fe:a9fe", ClassLinkLocal) // ::169.254.169.254

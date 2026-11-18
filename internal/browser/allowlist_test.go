@@ -248,6 +248,40 @@ func TestAllowlist_TrailingDotHostNotAllowedElsewhere(t *testing.T) {
 	}
 }
 
+func TestAllowlist_EmptyLabelHostRefused(t *testing.T) {
+	a := mustAllowlist(t, nil)
+
+	for _, u := range []string{
+		"http://127.0.0.1.../",
+		"http://10.0.0.1.../",
+		"http://169.254.169.254.../",
+		"http://localhost.../",
+		"http://a.localhost.../",
+		"http://metadata.google.internal.../",
+		"http://example..com/",
+	} {
+		ok, err := a.Allowed(u)
+		if err != nil {
+			t.Fatalf("Allowed(%q): %v", u, err)
+		}
+		if ok {
+			t.Errorf("Allowed(%q) = true, want false (empty label)", u)
+		}
+	}
+}
+
+func TestAllowlist_EmptyListAllowsSingleTrailingDot(t *testing.T) {
+	a := mustAllowlist(t, nil)
+
+	ok, err := a.Allowed("https://example.com./")
+	if err != nil {
+		t.Fatalf("Allowed: %v", err)
+	}
+	if !ok {
+		t.Error("Allowed(https://example.com./) = false, want true")
+	}
+}
+
 func TestAllowlist_NumericHostWithSeveralTrailingDotsRefused(t *testing.T) {
 	a := mustAllowlist(t, nil)
 
@@ -370,6 +404,11 @@ func TestIsBlockedHost(t *testing.T) {
 		{"134744072", true}, // 8.8.8.8 in decimal: refused, not decoded
 		{"127.1..", true},
 		{"0x7f000001...", true},
+		// Empty labels: CheckHost alone trims only one trailing dot.
+		{"localhost...", true},
+		{"127.0.0.1...", true},
+		{"example..com", true},
+		{".example.com", true},
 		// Fullwidth forms that IDNA maps to a blocked host.
 		{"１２７.０.０.１", true},
 		{"１６９.２５４.１６９.２５４", true},

@@ -136,12 +136,13 @@ func matchDomain(host, pattern string) bool {
 // policy: localhost names, cloud metadata names and IPs, and literal
 // loopback, private (RFC1918, CGNAT, ULA), link-local, unspecified, multicast
 // and broadcast addresses, including IPv6 forms that carry one. The host is
-// IDNA-mapped first; an unmappable host and a non-canonical IPv4 literal are
-// refused. Hostnames that resolve to such addresses are not caught here.
+// IDNA-mapped first; an unmappable host, a host with an empty label and a
+// non-canonical IPv4 literal are refused. Hostnames that resolve to such
+// addresses are not caught here.
 func isBlockedHost(host string) bool {
 	h, err := netguard.HostToASCII(host)
 	if err != nil {
 		return true
 	}
-	return netguard.Policy{}.CheckHost(h) != nil || netguard.EndsInNumber(h)
+	return netguard.HasEmptyLabel(h) || netguard.Policy{}.CheckHost(h) != nil || netguard.EndsInNumber(h)
 }
