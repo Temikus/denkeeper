@@ -25,6 +25,7 @@ curl -fsSL https://denkeeper.io/install.sh | sh -s -- --version v0.9.0
 The script honours two environment variables: `INSTALL_DIR` to install into another existing directory instead of `/usr/local/bin` (it falls back to `sudo` only when that directory isn't writable), and `GITHUB_TOKEN` to avoid GitHub API rate limits when resolving the latest release:
 
 ```bash
+mkdir -p "$HOME/.local/bin"
 curl -fsSL https://denkeeper.io/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
