@@ -2,7 +2,7 @@
 title: "Installation"
 description: "How to install the Denkeeper binary on Linux and macOS."
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-08-14T00:00:00+00:00
+lastmod: 2026-11-20T00:00:00+00:00
 draft: false
 weight: 10
 toc: true
@@ -19,7 +19,13 @@ curl -fsSL https://denkeeper.io/install.sh | sh
 To pin a specific version:
 
 ```bash
-curl -fsSL https://denkeeper.io/install.sh | sh -s -- --version v0.0.1
+curl -fsSL https://denkeeper.io/install.sh | sh -s -- --version v0.9.0
+```
+
+The script honours two environment variables: `INSTALL_DIR` to install into another existing directory instead of `/usr/local/bin` (it falls back to `sudo` only when that directory isn't writable), and `GITHUB_TOKEN` to avoid GitHub API rate limits when resolving the latest release:
+
+```bash
+curl -fsSL https://denkeeper.io/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 ## Homebrew (macOS)

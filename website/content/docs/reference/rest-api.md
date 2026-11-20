@@ -3,7 +3,7 @@ title: "REST API Reference"
 description: "HTTP API endpoints for external integrations."
 slug: "rest-api"
 date: 2025-01-01T00:00:00+00:00
-lastmod: 2026-10-16T00:00:00+00:00
+lastmod: 2026-11-20T00:00:00+00:00
 draft: false
 weight: 30
 toc: true
@@ -78,6 +78,16 @@ data: {"type":"done","session_id":"abc123"}
 **Scope:** `chat`
 
 Upgrades to a bidirectional WebSocket connection. Authentication is via `?token=` query parameter (API key auth) or session cookie. The WebSocket carries the same event types as SSE, plus supports sending chat requests and approval responses as JSON frames.
+
+The upgrade only needs `chat`, but privileged client frames are checked against the same scopes as their REST equivalents, re-authenticated on every frame so a key revoked or a session expired after connecting loses that power immediately:
+
+| Client frame | Scope required |
+|---|---|
+| `chat_request`, `cancel` | `chat` (checked at upgrade) |
+| `approval_response` | `approvals:write` |
+| `panic` | `admin` |
+
+A frame the connection's credentials don't cover gets an `error` frame with code `forbidden` and is otherwise ignored. While the [panic switch](#safety) is on, `chat_request` frames are answered with an `error` frame with code `panicked`; reconnects that only replay buffered events still work.
 
 The web dashboard connects via WebSocket by default and falls back to SSE after 3 failed reconnect attempts. Configure with `api.websocket_enabled`, `api.websocket_max_connections`, and `api.websocket_replay_buffer_ttl` in your config.
 
@@ -666,6 +676,12 @@ Starts a server-side judging pass over the run's outstanding blinded pairs with 
 **Scope:** `admin`
 
 Emergency stop: cancels all in-flight requests and pauses the scheduler.
+
+While panicked, every endpoint that starts a new turn refuses it with `503 Service Unavailable` until resume: `POST /api/v1/chat` (sync and SSE), skill and schedule dry-runs, `POST /api/v1/eval/runs`, and `POST /api/v1/eval/runs/{id}/judge`. WebSocket chat frames get a `panicked` error frame instead. Read-only endpoints keep working, so the dashboard can still show what happened.
+
+```json
+{ "error": "system is paused by an emergency stop; resume to continue" }
+```
 
 ### `POST /api/v1/resume`
 
