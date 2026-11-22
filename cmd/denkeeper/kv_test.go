@@ -168,7 +168,25 @@ func TestKVBackfillTTL_PromptNamesCountWithoutExpiryWarning(t *testing.T) {
 	}
 }
 
+// The warning goes on its own line before the question, so the irreversible
+// part is read first and the question stays short.
 func TestKVBackfillTTL_PromptWarnsWhenKeysAlreadyExpired(t *testing.T) {
+	cfgPath, dbPath := kvBackfillFixture(t, `{ "log:" = "30d" }`)
+	backdateKey(t, dbPath, "log:a", 800*time.Hour)
+	backdateKey(t, dbPath, "log:b", 800*time.Hour)
+
+	var out bytes.Buffer
+	if err := runKVBackfillTTL(context.Background(), &out, strings.NewReader("n\n"), cfgPath, false, false); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	want := "\n2 keys are already past their new expiry and will disappear at once. This cannot be undone.\n" +
+		"Set expiries on 2 key(s), including any stored without one on purpose? [y/N]: "
+	if got := out.String(); !strings.Contains(got, want) {
+		t.Errorf("prompt missing %q:\n%s", want, got)
+	}
+}
+
+func TestKVBackfillTTL_PromptWarnsAboutOneExpiredKeyInTheSingular(t *testing.T) {
 	cfgPath, dbPath := kvBackfillFixture(t, `{ "log:" = "30d" }`)
 	backdateKey(t, dbPath, "log:a", 800*time.Hour)
 
@@ -176,8 +194,8 @@ func TestKVBackfillTTL_PromptWarnsWhenKeysAlreadyExpired(t *testing.T) {
 	if err := runKVBackfillTTL(context.Background(), &out, strings.NewReader("n\n"), cfgPath, false, false); err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	want := "Set expiries on 2 key(s), including any stored without one on purpose? " +
-		"1 are already past their new expiry and will disappear at once; this cannot be undone. [y/N]: "
+	want := "\n1 key is already past its new expiry and will disappear at once. This cannot be undone.\n" +
+		"Set expiries on 2 key(s), including any stored without one on purpose? [y/N]: "
 	if got := out.String(); !strings.Contains(got, want) {
 		t.Errorf("prompt missing %q:\n%s", want, got)
 	}

@@ -127,14 +127,18 @@ func printBackfill(w io.Writer, counts []kv.BackfillCount, rawTTL map[string]str
 
 // backfillPrompt names the count and warns about loss only when some keys are
 // already past their new expiry. A warning shown on every run gets skipped on
-// the run where it matters.
+// the run where it matters. The warning goes on its own line first, so the
+// question stays short and ends at the prompt.
 func backfillPrompt(planned []kv.BackfillCount) string {
 	keys, expired := backfillTotals(planned)
-	prompt := fmt.Sprintf("Set expiries on %d key(s), including any stored without one on purpose? ", keys)
-	if expired > 0 {
-		prompt += fmt.Sprintf("%d are already past their new expiry and will disappear at once; this cannot be undone. ", expired)
+	var warning string
+	switch {
+	case expired == 1:
+		warning = "1 key is already past its new expiry and will disappear at once. This cannot be undone.\n"
+	case expired > 1:
+		warning = fmt.Sprintf("%d keys are already past their new expiry and will disappear at once. This cannot be undone.\n", expired)
 	}
-	return prompt + "[y/N]: "
+	return warning + fmt.Sprintf("Set expiries on %d key(s), including any stored without one on purpose? [y/N]: ", keys)
 }
 
 func backfillTotals(counts []kv.BackfillCount) (keys, expired int) {
