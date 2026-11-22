@@ -158,7 +158,7 @@ Maintain the key-value store the agents write with `kv_set`. It lives in the mem
 
 ### `denkeeper kv backfill-ttl`
 
-Give existing keys the expiry [`[kv] default_ttl`](/docs/reference/config/) gives new writes. Every key that has no expiry and matches a `default_ttl` prefix gets `expires_at = updated_at + ttl`, which is what `kv_set` would have set. Prefixes match the way `kv_set` matches them: longest prefix wins, case-sensitive. Keys that already have an expiry are left alone, as are keys under a prefix with no default. Values and timestamps do not change.
+Give existing keys the expiry [`[kv] default_ttl`](/docs/reference/config/) gives new writes. Every key that has no expiry and matches a `default_ttl` prefix gets `expires_at = updated_at + ttl`, whoever wrote it: the agent's `kv_set`, `kv_setnx` locks, the dashboard, the REST API or the external MCP server. The store does not record which writer stored a key, so keys deliberately stored without an expiry get one too, such as a `kv_set` with `ttl: "0s"` or a value you saved from the dashboard. Prefixes match the way `kv_set` matches them: longest prefix wins, case-sensitive. Keys that already have an expiry are left alone, as are keys under a prefix with no default. Values, `created_at` and `updated_at` do not change.
 
 ```bash
 denkeeper kv backfill-ttl --dry-run
@@ -175,7 +175,7 @@ pamela  log:       720h  214   40
 Dry run: nothing was written.
 ```
 
-`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table and asks for confirmation before writing. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up.
+`ALREADY EXPIRED` counts keys whose new expiry is in the past. Those keys disappear from reads as soon as the backfill runs, and the next cleanup deletes them, so this cannot be undone. Without `--dry-run` the command prints the same table and asks for confirmation before writing; the prompt names the key count and, when any are already past their new expiry, how many will disappear. Without a terminal it writes nothing unless you pass `--yes`. Running it again prints `No keys need a TTL.` It is safe to run while `denkeeper serve` is up.
 
 | Flag | Description |
 |---|---|

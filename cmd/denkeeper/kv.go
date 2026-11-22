@@ -28,7 +28,10 @@ func newKVCmd() *cobra.Command {
 		Use:   "backfill-ttl",
 		Short: "Give existing keys the expiry [kv] default_ttl gives new writes",
 		Long: "Sets expires_at = updated_at + ttl on every key that has no expiry and matches a [kv] default_ttl prefix, " +
-			"the expiry kv_set would have given it. Keys that already have an expiry, and keys under a prefix with no default, are left alone. " +
+			"whoever wrote it: kv_set, kv_setnx locks, the dashboard, the REST API or the external MCP server. " +
+			"Keys stored without an expiry on purpose, such as a kv_set with ttl \"0s\", get one too. " +
+			"Keys that already have an expiry, and keys under a prefix with no default, are left alone. " +
+			"Run with --dry-run first to see the count per agent and namespace. " +
 			"Safe to run while denkeeper serve is up; a second run changes nothing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -87,9 +90,16 @@ func backfillTTL(ctx context.Context, w io.Writer, r io.Reader, store *kv.SQLite
 		_, _ = fmt.Fprintln(w, "Dry run: nothing was written.")
 		return nil
 	}
-	if !yes && !confirm(w, r, "Set these expiries? Keys already expired disappear at once and cannot be restored. [y/N]: ") {
-		_, _ = fmt.Fprintln(w, "Cancelled.")
-		return nil
+	if !yes {
+		ok, answered := confirm(w, r, backfillPrompt(planned))
+		if !answered {
+			_, _ = fmt.Fprintln(w, "No answer; nothing was written. Pass --yes to run without a prompt.")
+			return nil
+		}
+		if !ok {
+			_, _ = fmt.Fprintln(w, "Cancelled.")
+			return nil
+		}
 	}
 
 	done, err := store.BackfillTTL(ctx, defaults, false)
@@ -115,6 +125,18 @@ func printBackfill(w io.Writer, counts []kv.BackfillCount, rawTTL map[string]str
 	return tw.Flush()
 }
 
+// backfillPrompt names the count and warns about loss only when some keys are
+// already past their new expiry. A warning shown on every run gets skipped on
+// the run where it matters.
+func backfillPrompt(planned []kv.BackfillCount) string {
+	keys, expired := backfillTotals(planned)
+	prompt := fmt.Sprintf("Set expiries on %d key(s), including any stored without one on purpose? ", keys)
+	if expired > 0 {
+		prompt += fmt.Sprintf("%d are already past their new expiry and will disappear at once; this cannot be undone. ", expired)
+	}
+	return prompt + "[y/N]: "
+}
+
 func backfillTotals(counts []kv.BackfillCount) (keys, expired int) {
 	for _, c := range counts {
 		keys += c.Keys
@@ -123,14 +145,15 @@ func backfillTotals(counts []kv.BackfillCount) (keys, expired int) {
 	return keys, expired
 }
 
-// confirm reads one answer. No answer (closed stdin) is a no.
-func confirm(w io.Writer, r io.Reader, prompt string) bool {
+// confirm reads one answer. answered is false on a closed stdin (a pipe or
+// cron), which never counts as yes.
+func confirm(w io.Writer, r io.Reader, prompt string) (ok, answered bool) {
 	_, _ = fmt.Fprint(w, prompt)
 	scanner := bufio.NewScanner(r)
 	if !scanner.Scan() {
 		_, _ = fmt.Fprintln(w)
-		return false
+		return false, false
 	}
 	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
-	return answer == "y" || answer == "yes"
+	return answer == "y" || answer == "yes", true
 }

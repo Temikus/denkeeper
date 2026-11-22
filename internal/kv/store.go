@@ -296,9 +296,11 @@ type backfillRow struct {
 	expiresAt             time.Time
 }
 
-// BackfillTTL gives every key with no expiry the default TTL kv_set would
-// have applied: expires_at = updated_at + ttl. Keys with any expiry are never
-// touched, and value and timestamps never change. With dryRun it only counts.
+// BackfillTTL gives every key with no expiry under a defaulted prefix
+// expires_at = updated_at + ttl. The store does not record the writer, so keys
+// stored without an expiry on purpose (kv_setnx locks, REST, ttl "0s") are
+// selected too. Keys with any expiry are never touched, and value, created_at
+// and updated_at never change. With dryRun it only counts.
 // Rows are sorted by agent, then namespace. Not on Store: only the CLI uses it.
 func (s *SQLiteStore) BackfillTTL(ctx context.Context, defaults map[string]time.Duration, dryRun bool) ([]BackfillCount, error) {
 	if len(defaults) == 0 {
