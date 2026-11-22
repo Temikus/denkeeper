@@ -92,7 +92,21 @@
       rounds ? `${rounds} tool round${rounds === 1 ? '' : 's'}` : null,
       c.faults ? `${c.faults} fault${c.faults === 1 ? '' : 's'}` : null,
       c.cost_usd ? `$${c.cost_usd.toFixed(4)}` : null,
+      // On the collapsed card too: "Accept selected" saves notes from cards
+      // that were never expanded.
+      c.notes ? '+ judge notes' : null,
     ].filter(Boolean).join(' · ')
+  }
+
+  /** One hint line for what accepting saves beyond the prompt. */
+  function contextHint(c) {
+    const pinned = c.preceding?.length > 0
+    if (pinned && c.notes) {
+      return 'The pinned turns replay as history when this case runs. Notes are saved with the case for the judge; edit them in Test sets.'
+    }
+    if (pinned) return 'The pinned turns replay as history when this case runs.'
+    if (c.notes) return 'Saved with the case for the judge; edit them in Test sets.'
+    return ''
   }
 
   // The store's role names read as data next to the two written labels the
@@ -105,7 +119,7 @@
 
   /** Whether the disclosure has anything behind it. */
   function hasContext(c) {
-    return !!(c.preceding?.length || c.trigger || c.reply_preview)
+    return !!(c.preceding?.length || c.trigger || c.reply_preview || c.notes)
   }
 
   /** The "why" line: the signals that made this turn interesting. */
@@ -267,6 +281,7 @@
       prompt: c.prompt,
       category: c.category,
       pinned_history: pinned.length ? pinned : undefined,
+      notes: c.notes || undefined,
       source_conversation_id: c.conversation_id || undefined,
       source_message_id: c.message_id ?? null,
     })
@@ -466,9 +481,14 @@
                   <dt class="role">agent replied</dt>
                   <dd class="turn card-sub">{c.reply_preview}</dd>
                 {/if}
+                {#if c.notes}
+                  <!-- Saved with the case when it is accepted. -->
+                  <dt class="role">judge notes</dt>
+                  <dd class="turn card-sub">{c.notes}</dd>
+                {/if}
               </dl>
-              {#if c.preceding?.length}
-                <p class="hint">The pinned turns replay as history when this case runs.</p>
+              {#if contextHint(c)}
+                <p class="hint">{contextHint(c)}</p>
               {/if}
             </div>
           </div>

@@ -3,8 +3,10 @@ package eval
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Temikus/denkeeper/internal/agent"
 )
@@ -339,6 +341,111 @@ func TestSuggest_NamesTheScheduledTrigger(t *testing.T) {
 	for _, c := range got {
 		if c.Trigger != want[c.MessageID] {
 			t.Errorf("message %d trigger = %q, want %q", c.MessageID, c.Trigger, want[c.MessageID])
+		}
+	}
+}
+
+// scheduledSkillTurn is a scheduled heartbeat turn for agent pamela that
+// carries a fault, so Suggest offers it.
+func scheduledSkillTurn() agent.InterestingTurn {
+	return turn(1, "[Scheduled: heartbeat | 2026-08-25T10:15:09+10:00 Australia/Sydney | 2026-W35]",
+		func(x *agent.InterestingTurn) { x.Faults = 1; x.Agent = "pamela" })
+}
+
+const heartbeatNameOnly = "Good: does the job of the heartbeat skill."
+
+// describedAs opens the quoted description: it is agent-writable, so the
+// note presents it as the skill's own words, not the operator's.
+const describedAs = heartbeatNameOnly + ` The skill describes itself as: "`
+
+func onlyCandidate(t *testing.T, got []Candidate) Candidate {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("candidates = %d, want 1: %+v", len(got), got)
+	}
+	return got[0]
+}
+
+func TestSuggest_ScheduledSkillNotesCarryTheDescription(t *testing.T) {
+	var asked [2]string
+	lookup := func(agentName, skillName string) (string, bool) {
+		asked = [2]string{agentName, skillName}
+		return "Checks in on open tasks every morning.", true
+	}
+
+	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()},
+		SuggestOpts{Limit: 20, SkillDescription: lookup}))
+
+	want := describedAs + `Checks in on open tasks every morning."`
+	if c.Notes != want {
+		t.Errorf("Notes = %q, want %q", c.Notes, want)
+	}
+	if asked != [2]string{"pamela", "heartbeat"} {
+		t.Errorf("lookup asked for %v, want the turn's agent and skill", asked)
+	}
+}
+
+func TestSuggest_ScheduledSkillNotesWithoutLookupNameTheSkill(t *testing.T) {
+	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()}, SuggestOpts{Limit: 20}))
+	if c.Notes != heartbeatNameOnly {
+		t.Errorf("Notes = %q, want %q", c.Notes, heartbeatNameOnly)
+	}
+}
+
+func TestSuggest_ScheduledSkillNotesWhenTheSkillIsGone(t *testing.T) {
+	gone := func(string, string) (string, bool) { return "", false }
+	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()},
+		SuggestOpts{Limit: 20, SkillDescription: gone}))
+	if c.Notes != heartbeatNameOnly {
+		t.Errorf("Notes = %q, want %q", c.Notes, heartbeatNameOnly)
+	}
+}
+
+func TestSuggest_ScheduledSkillNotesCutALongDescriptionOnARune(t *testing.T) {
+	// A three-byte rune repeated past the cap: a byte cut would split one.
+	long := strings.Repeat("é日", 200)
+	lookup := func(string, string) (string, bool) { return long, true }
+
+	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()},
+		SuggestOpts{Limit: 20, SkillDescription: lookup}))
+
+	desc, ok := strings.CutPrefix(c.Notes, describedAs)
+	if !ok {
+		t.Fatalf("Notes = %q, want the name sentence then the quoted description", c.Notes)
+	}
+	desc, ok = strings.CutSuffix(desc, `"`)
+	if !ok {
+		t.Fatalf("Notes = %q, want the description to close its quote", c.Notes)
+	}
+	if !utf8.ValidString(desc) {
+		t.Fatalf("description is not valid UTF-8: %q", desc)
+	}
+	body, marked := strings.CutSuffix(desc, "…")
+	if !marked {
+		t.Errorf("a cut description must end with …, got %q", desc)
+	}
+	if n := utf8.RuneCountInString(body); n != skillNoteDescMax {
+		t.Errorf("description kept %d runes, want %d", n, skillNoteDescMax)
+	}
+	if !strings.HasPrefix(long, body) {
+		t.Error("the kept part is not the head of the description")
+	}
+}
+
+func TestSuggest_NoNotesForScheduledTriggerOrChat(t *testing.T) {
+	lookup := func(string, string) (string, bool) { return "should not be used", true }
+	turns := []agent.InterestingTurn{
+		turn(1, "[Scheduled trigger: nightly-digest | 2026-08-25T10:15:09Z UTC | 2026-W35]",
+			func(x *agent.InterestingTurn) { x.Faults = 1 }),
+		turn(2, "write me a poem", func(x *agent.InterestingTurn) { x.Faults = 1 }),
+	}
+	got := Suggest(turns, SuggestOpts{Limit: 20, SkillDescription: lookup})
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2: %+v", len(got), got)
+	}
+	for _, c := range got {
+		if c.Notes != "" {
+			t.Errorf("message %d notes = %q, want none", c.MessageID, c.Notes)
 		}
 	}
 }

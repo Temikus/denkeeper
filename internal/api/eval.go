@@ -1043,7 +1043,7 @@ func suggestCategoryError(category string) string {
 
 // handleEvalSuggest godoc
 // @Summary Suggest eval test cases from history
-// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
+// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Candidates from a scheduled skill run carry suggested judge notes (`notes`) that name the skill. The notes quote the skill's description only when the caller has skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth
@@ -1089,8 +1089,35 @@ func (s *Server) handleEvalSuggest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, evalSuggestResult{
-		Candidates: eval.Suggest(turns, eval.SuggestOpts{Limit: q.limit, Exclude: saved, Category: q.category}),
+		Candidates: eval.Suggest(turns, eval.SuggestOpts{
+			Limit: q.limit, Exclude: saved, Category: q.category,
+			SkillDescription: s.suggestSkillDescriptions(r),
+		}),
 	})
+}
+
+// suggestSkillDescriptions returns a skill-description lookup over the live
+// agents, or nil when the caller lacks skills:read: suggest needs only
+// eval:read, and must not become a way to read skill frontmatter.
+func (s *Server) suggestSkillDescriptions(r *http.Request) func(agentName, skillName string) (string, bool) {
+	if _, ok, _ := s.authenticate(r.Context(), r, "skills:read"); !ok {
+		return nil
+	}
+	return func(agentName, skillName string) (string, bool) {
+		if agentName == "" {
+			return "", false
+		}
+		e := s.deps.Dispatcher.Agent(agentName)
+		if e == nil {
+			return "", false
+		}
+		for _, sk := range e.Skills() {
+			if sk.Name == skillName {
+				return sk.Description, true
+			}
+		}
+		return "", false
+	}
 }
 
 // evalJudgeInput scopes one internal-judge pass.
