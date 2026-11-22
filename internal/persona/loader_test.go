@@ -266,6 +266,34 @@ func TestSave_Soul(t *testing.T) {
 	}
 }
 
+// Load refuses an empty SOUL.md, so Save must never write one.
+func TestSave_EmptySoulRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Original soul.")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if err := p.Save("Soul", " \n\t "); err == nil {
+		t.Fatal("expected error for an empty soul")
+	}
+	if p.GetSoul() != "Original soul." {
+		t.Errorf("Soul = %q, want the original", p.GetSoul())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "Original soul." {
+		t.Errorf("SOUL.md = %q, want it unchanged", data)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Errorf("Load after refused save: %v", err)
+	}
+}
+
 func TestSave_CaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")

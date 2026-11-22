@@ -235,13 +235,8 @@ func (p *Persona) saveLocked(section, content string) error {
 	}
 
 	trimmed := strings.TrimSpace(content)
-	if section == "user" && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
-		return &MemoryFullError{
-			Section: "user",
-			Limit:   p.userCharLimit,
-			Current: len(p.user),
-			Adding:  len(trimmed),
-		}
+	if err := p.checkContentLocked(section, trimmed); err != nil {
+		return err
 	}
 
 	filename, err := sectionFilename(section)
@@ -274,6 +269,25 @@ func (p *Persona) saveLocked(section, content string) error {
 		p.user = trimmed
 	case "soul":
 		p.soul = trimmed
+	}
+	return nil
+}
+
+// checkContentLocked refuses content Save must not write. Caller must hold
+// p.mu.
+func (p *Persona) checkContentLocked(section, trimmed string) error {
+	// Load refuses an empty SOUL.md, so writing one would leave a persona
+	// that fails to load on the next start.
+	if trimmed == "" && strings.EqualFold(section, "soul") {
+		return fmt.Errorf("persona: soul cannot be empty")
+	}
+	if section == "user" && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
+		return &MemoryFullError{
+			Section: "user",
+			Limit:   p.userCharLimit,
+			Current: len(p.user),
+			Adding:  len(trimmed),
+		}
 	}
 	return nil
 }
