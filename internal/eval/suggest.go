@@ -272,7 +272,9 @@ func triggerOf(content string) string {
 }
 
 // scheduledSkillNotes writes judge notes for a turn a schedule fired for a
-// skill. A "Scheduled trigger:" turn names no skill, so it gets none.
+// skill. A "Scheduled trigger:" turn names no skill, so it gets none. The judge
+// never sees the skill body, so the note asks only that the job got done. The
+// description is agent-writable, so it is quoted as the skill's own words.
 func scheduledSkillNotes(t agent.InterestingTurn, lookup func(string, string) (string, bool)) string {
 	if !strings.HasPrefix(t.Content, scheduledSkillLabel) {
 		return ""
@@ -281,7 +283,7 @@ func scheduledSkillNotes(t agent.InterestingTurn, lookup func(string, string) (s
 	if name == "" {
 		return ""
 	}
-	note := fmt.Sprintf("Good: follows the %s skill's steps and reply shape.", name)
+	note := fmt.Sprintf("Good: does the job of the %s skill.", name)
 	if lookup == nil {
 		return note
 	}
@@ -290,7 +292,7 @@ func scheduledSkillNotes(t agent.InterestingTurn, lookup func(string, string) (s
 	if !ok || desc == "" {
 		return note
 	}
-	return note + " The skill: " + cutRunes(desc, skillNoteDescMax)
+	return note + ` The skill describes itself as: "` + cutRunes(desc, skillNoteDescMax) + `"`
 }
 
 // cutRunes keeps the first limit runes of s and marks the cut with "…".

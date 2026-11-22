@@ -1043,7 +1043,7 @@ func suggestCategoryError(category string) string {
 
 // handleEvalSuggest godoc
 // @Summary Suggest eval test cases from history
-// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. A turn a schedule fired for a skill carries suggested judge notes naming that skill; they quote the skill's description only for callers with skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
+// @Description Mines past turns for ones worth saving as test cases: any rejected or failed tool call, three or more tool rounds, a reply cost in the pool's top decile, or a command-triggered skill. Candidates are stratified across the categories rather than ranked overall, since a set drawn purely by interestingness would be all failures and represent nothing the agent normally does. Turns already saved as a task are skipped, and a turn carrying no signal is never offered. Candidates from a scheduled skill run carry suggested judge notes (`notes`) that name the skill. The notes quote the skill's description only when the caller has skills:read. Nothing is written — accepting a candidate is a separate call to the task create endpoint.
 // @Tags eval
 // @Produce json
 // @Security BearerAuth

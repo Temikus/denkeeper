@@ -398,7 +398,7 @@ describe('SuggestCases — session context', () => {
   })
 
   test('accepting a candidate with notes saves them with the case', async () => {
-    const notes = "Good: follows the skill-forge skill's steps and reply shape."
+    const notes = 'Good: does the job of the skill-forge skill.'
     server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
       candidates: [{ ...SCHEDULED.candidates[0], notes }],
     })))
@@ -409,8 +409,23 @@ describe('SuggestCases — session context', () => {
     expect(addedTasks[0].body.notes).toBe(notes)
   })
 
+  test('a collapsed card says it carries judge notes, so a batch accept is not blind', async () => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes: 'Good: does the job of the skill-forge skill.' }],
+    })))
+    await renderPanel()
+
+    expect(screen.getByTestId('context-chan:cron:104')).not.toHaveClass('open')
+    expect(screen.getByTestId('meta-chan:cron:104')).toHaveTextContent('+ judge notes')
+  })
+
+  test('a card without notes has no judge-notes marker', async () => {
+    await renderPanel()
+    expect(screen.getByTestId('meta-chan:cron:104')).not.toHaveTextContent('judge notes')
+  })
+
   test('the expanded context shows the judge notes, even when they are all there is', async () => {
-    const notes = "Good: follows the skill-forge skill's steps and reply shape."
+    const notes = 'Good: does the job of the skill-forge skill.'
     server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
       candidates: [{
         ...SCHEDULED.candidates[0],
@@ -424,6 +439,19 @@ describe('SuggestCases — session context', () => {
     expect(context).toHaveClass('open')
     expect(context).toHaveTextContent('judge notes')
     expect(context).toHaveTextContent(notes)
+    expect(context).toHaveTextContent('Saved with the case for the judge; edit them in Test sets.')
+  })
+
+  test('pinned turns and notes share one hint line', async () => {
+    server.use(http.get('/api/v1/eval/suggest', () => HttpResponse.json({
+      candidates: [{ ...SCHEDULED.candidates[0], notes: 'Good: does the job of the skill-forge skill.' }],
+    })))
+    await renderPanel()
+
+    const hints = screen.getByTestId('context-chan:cron:104').querySelectorAll('.hint')
+    expect(hints).toHaveLength(1)
+    expect(hints[0]).toHaveTextContent('The pinned turns replay as history when this case runs.')
+    expect(hints[0]).toHaveTextContent('Notes are saved with the case for the judge; edit them in Test sets.')
   })
 
   test('a turn with nothing behind it has no disclosure', async () => {

@@ -294,7 +294,7 @@ func TestEvalSuggest_ScheduledNotesQuoteTheSkillWithSkillsRead(t *testing.T) {
 	srv, _ := evalTestServer(t, allScopesKey())
 	seedScheduledGreetTurn(t, srv)
 
-	want := "Good: follows the greet skill's steps and reply shape. The skill: Greeting skill"
+	want := `Good: does the job of the greet skill. The skill describes itself as: "Greeting skill"`
 	if got := scheduledNotes(t, srv, "dk-test-key"); got != want {
 		t.Errorf("notes = %q, want %q", got, want)
 	}
@@ -306,7 +306,7 @@ func TestEvalSuggest_ScheduledNotesNameOnlyWithoutSkillsRead(t *testing.T) {
 	seedScheduledGreetTurn(t, srv)
 
 	got := scheduledNotes(t, srv, "dk-eval-readonly")
-	if want := "Good: follows the greet skill's steps and reply shape."; got != want {
+	if want := "Good: does the job of the greet skill."; got != want {
 		t.Errorf("notes = %q, want %q", got, want)
 	}
 	if strings.Contains(got, "Greeting skill") {

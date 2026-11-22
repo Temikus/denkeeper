@@ -352,7 +352,11 @@ func scheduledSkillTurn() agent.InterestingTurn {
 		func(x *agent.InterestingTurn) { x.Faults = 1; x.Agent = "pamela" })
 }
 
-const heartbeatNameOnly = "Good: follows the heartbeat skill's steps and reply shape."
+const heartbeatNameOnly = "Good: does the job of the heartbeat skill."
+
+// describedAs opens the quoted description: it is agent-writable, so the
+// note presents it as the skill's own words, not the operator's.
+const describedAs = heartbeatNameOnly + ` The skill describes itself as: "`
 
 func onlyCandidate(t *testing.T, got []Candidate) Candidate {
 	t.Helper()
@@ -372,7 +376,7 @@ func TestSuggest_ScheduledSkillNotesCarryTheDescription(t *testing.T) {
 	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()},
 		SuggestOpts{Limit: 20, SkillDescription: lookup}))
 
-	want := heartbeatNameOnly + " The skill: Checks in on open tasks every morning."
+	want := describedAs + `Checks in on open tasks every morning."`
 	if c.Notes != want {
 		t.Errorf("Notes = %q, want %q", c.Notes, want)
 	}
@@ -405,9 +409,13 @@ func TestSuggest_ScheduledSkillNotesCutALongDescriptionOnARune(t *testing.T) {
 	c := onlyCandidate(t, Suggest([]agent.InterestingTurn{scheduledSkillTurn()},
 		SuggestOpts{Limit: 20, SkillDescription: lookup}))
 
-	desc, ok := strings.CutPrefix(c.Notes, heartbeatNameOnly+" The skill: ")
+	desc, ok := strings.CutPrefix(c.Notes, describedAs)
 	if !ok {
-		t.Fatalf("Notes = %q, want the name sentence then the description", c.Notes)
+		t.Fatalf("Notes = %q, want the name sentence then the quoted description", c.Notes)
+	}
+	desc, ok = strings.CutSuffix(desc, `"`)
+	if !ok {
+		t.Fatalf("Notes = %q, want the description to close its quote", c.Notes)
 	}
 	if !utf8.ValidString(desc) {
 		t.Fatalf("description is not valid UTF-8: %q", desc)
