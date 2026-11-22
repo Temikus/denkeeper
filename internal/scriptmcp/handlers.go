@@ -104,7 +104,7 @@ func (s *Server) formatRun(val goja.Value, runErr error, decoded bool) (res *mcp
 	defer func() {
 		if r := recover(); r != nil {
 			s.deps.Logger.Warn("run_javascript: formatting the result panicked", "panic_type", fmt.Sprintf("%T", r))
-			res = toolError("javascript error: the result could not be converted to text")
+			res = toolError("javascript error: the script's error or result could not be converted to text")
 		}
 	}()
 	limit := s.deps.MaxOutputChars
