@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -282,12 +283,12 @@ func (p *Persona) checkContentLocked(section, trimmed string) error {
 	if trimmed == "" && strings.EqualFold(section, "soul") {
 		return errors.New("persona: soul cannot be empty: it defines the agent. Send its full text")
 	}
-	if strings.EqualFold(section, "user") && p.userCharLimit > 0 && len(trimmed) > p.userCharLimit {
+	if strings.EqualFold(section, "user") && p.userCharLimit > 0 && charCount(trimmed) > p.userCharLimit {
 		return &MemoryFullError{
 			Section: "user",
 			Limit:   p.userCharLimit,
-			Current: len(p.user),
-			Adding:  len(trimmed),
+			Current: charCount(p.user),
+			Adding:  charCount(trimmed),
 		}
 	}
 	return nil
@@ -311,17 +312,17 @@ func (p *Persona) AppendMemoryEntry(entry string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	proposedLen := len(entry)
+	proposedLen := charCount(entry)
 	if p.memory != "" {
-		proposedLen += len(p.memory) + len("\n\n---\n\n")
+		proposedLen += charCount(p.memory) + charCount(memoryEntrySeparator)
 	}
 
 	if p.memoryCharLimit > 0 && proposedLen > p.memoryCharLimit {
 		return &MemoryFullError{
 			Section:        "memory",
 			Limit:          p.memoryCharLimit,
-			Current:        len(p.memory),
-			Adding:         len(entry),
+			Current:        charCount(p.memory),
+			Adding:         charCount(entry),
 			CurrentEntries: splitMemoryEntries(p.memory),
 		}
 	}
@@ -330,7 +331,7 @@ func (p *Persona) AppendMemoryEntry(entry string) error {
 	if p.memory == "" {
 		updated = entry
 	} else {
-		updated = p.memory + "\n\n---\n\n" + entry
+		updated = p.memory + memoryEntrySeparator + entry
 	}
 	return p.saveLocked("memory", updated)
 }
@@ -525,17 +526,26 @@ func (p *Persona) SystemPrompt() string {
 
 	if p.user != "" {
 		b.WriteString("\n\n")
-		b.WriteString(sectionHeader("User", len(p.user), p.userCharLimit))
+		b.WriteString(sectionHeader("User", charCount(p.user), p.userCharLimit))
 		b.WriteString(p.user)
 	}
 
 	if p.memory != "" {
 		b.WriteString("\n\n")
-		b.WriteString(sectionHeader("Memory", len(p.memory), p.memoryCharLimit))
+		b.WriteString(sectionHeader("Memory", charCount(p.memory), p.memoryCharLimit))
 		b.WriteString(p.memory)
 	}
 
 	return b.String()
+}
+
+// memoryEntrySeparator joins MEMORY.md entries.
+const memoryEntrySeparator = "\n\n---\n\n"
+
+// charCount measures persona text the way its limits are stated and reported:
+// in characters (runes), not UTF-8 bytes.
+func charCount(s string) int {
+	return utf8.RuneCountInString(s)
 }
 
 func sectionHeader(name string, current, limit int) string {

@@ -295,6 +295,71 @@ func TestSave_EmptySoulRefused(t *testing.T) {
 	}
 }
 
+// loadWithLimits loads a persona from a fresh directory and sets its limits.
+func loadWithLimits(t *testing.T, memory, user int) *Persona {
+	t.Helper()
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p.SetCharLimits(memory, user)
+	return p
+}
+
+// "ééé" is 3 characters and 6 bytes: the limit is in characters.
+func TestSave_UserLimitCountsCharactersNotBytes(t *testing.T) {
+	p := loadWithLimits(t, 0, 5)
+
+	if err := p.Save("user", "ééé"); err != nil {
+		t.Fatalf("Save of 3 characters under a 5-character limit: %v", err)
+	}
+	if p.GetUser() != "ééé" {
+		t.Errorf("User = %q, want ééé", p.GetUser())
+	}
+}
+
+func TestSave_UserLimitReportsCharacters(t *testing.T) {
+	p := loadWithLimits(t, 0, 2)
+
+	var full *MemoryFullError
+	if err := p.Save("user", "ééé"); !errors.As(err, &full) {
+		t.Fatalf("Save error = %v, want MemoryFullError", err)
+	}
+	if full.Adding != 3 || full.Limit != 2 {
+		t.Errorf("Adding = %d, Limit = %d; want 3 characters over a limit of 2", full.Adding, full.Limit)
+	}
+}
+
+func TestAppendMemoryEntry_LimitCountsCharactersNotBytes(t *testing.T) {
+	p := loadWithLimits(t, 10, 0)
+
+	// 8 characters, 16 bytes.
+	if err := p.AppendMemoryEntry("éééééééé"); err != nil {
+		t.Fatalf("append of 8 characters under a 10-character limit: %v", err)
+	}
+
+	var full *MemoryFullError
+	if err := p.AppendMemoryEntry("ü"); !errors.As(err, &full) {
+		t.Fatalf("second append error = %v, want MemoryFullError", err)
+	}
+	if full.Current != 8 || full.Adding != 1 {
+		t.Errorf("Current = %d, Adding = %d; want 8 and 1 characters", full.Current, full.Adding)
+	}
+}
+
+func TestSystemPrompt_SectionUsageCountsCharacters(t *testing.T) {
+	p := loadWithLimits(t, 0, 10)
+	if err := p.Save("user", "ééé"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if prompt := p.SystemPrompt(); !strings.Contains(prompt, "3/10 chars") {
+		t.Errorf("prompt does not show 3/10 chars:\n%s", prompt)
+	}
+}
+
 func TestSave_UserLimitAppliesInAnyCase(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "SOUL.md"), "Soul.")
