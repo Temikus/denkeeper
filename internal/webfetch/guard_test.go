@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -443,6 +444,117 @@ func TestChainFetcher_EmptyLabelNumericHostSkipsJina(t *testing.T) {
 	assertBlocked(t, err)
 	if jinaHits.Load() != 0 {
 		t.Errorf("Jina saw %d requests, want 0", jinaHits.Load())
+	}
+}
+
+// pinnedTarget is a public name, so checkJinaTarget lets it through and a
+// Jina hit count of 0 means the chain stopped, not that Jina refused it.
+const pinnedTarget = "http://example.com"
+
+// pinnedFetcher is a real DefaultFetcher whose dials all go to srv. Only the
+// dial is replaced; the guard, robots/agents lookups and fetch run as usual.
+func pinnedFetcher(srv *httptest.Server, opts Options) *DefaultFetcher {
+	opts.Timeout = 5 * time.Second
+	f := NewDefaultFetcher(opts)
+	addr := srv.Listener.Addr().String()
+	f.client.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		},
+	}
+	return f
+}
+
+// disallowServer serves policyPath disallowing /private and counts page hits.
+func disallowServer(t *testing.T, policyPath string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var pageHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == policyPath {
+			_, _ = fmt.Fprint(w, "User-agent: *\nDisallow: /private\n")
+			return
+		}
+		pageHits.Add(1)
+		_, _ = fmt.Fprint(w, "page")
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &pageHits
+}
+
+func assertDisallowedSkippedJina(t *testing.T, err error, pageHits, jinaHits *atomic.Int32) {
+	t.Helper()
+	if !errors.Is(err, ErrDisallowed) {
+		t.Fatalf("err = %v, want ErrDisallowed", err)
+	}
+	if errors.Is(err, netguard.ErrBlocked) {
+		t.Errorf("err = %v, must not be netguard.ErrBlocked", err)
+	}
+	if n := jinaHits.Load(); n != 0 {
+		t.Errorf("Jina saw %d requests, want 0", n)
+	}
+	if n := pageHits.Load(); n != 0 {
+		t.Errorf("target page saw %d requests, want 0", n)
+	}
+}
+
+func TestChainFetcher_RobotsDisallowSkipsJina(t *testing.T) {
+	target, pageHits := disallowServer(t, "/robots.txt")
+	jinaSrv, jinaHits := countingServer(t, nil)
+
+	primary := pinnedFetcher(target, Options{RespectRobotsTxt: true})
+	c := NewChainFetcher(primary, newTestJina(jinaSrv.URL), nil)
+	_, err := c.Fetch(context.Background(), pinnedTarget+"/private")
+	assertDisallowedSkippedJina(t, err, pageHits, jinaHits)
+}
+
+func TestChainFetcher_AgentsDisallowSkipsJina(t *testing.T) {
+	target, pageHits := disallowServer(t, "/agents.txt")
+	jinaSrv, jinaHits := countingServer(t, nil)
+
+	primary := pinnedFetcher(target, Options{RespectAgentsTxt: true})
+	c := NewChainFetcher(primary, newTestJina(jinaSrv.URL), nil)
+	_, err := c.Fetch(context.Background(), pinnedTarget+"/private")
+	assertDisallowedSkippedJina(t, err, pageHits, jinaHits)
+}
+
+func TestChainFetcher_RobotsLookupFailureStillFallsBack(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(target.Close)
+	jinaSrv, jinaHits := countingServer(t, nil)
+
+	primary := pinnedFetcher(target, Options{RespectRobotsTxt: true})
+	c := NewChainFetcher(primary, newTestJina(jinaSrv.URL), nil)
+	if _, err := c.Fetch(context.Background(), pinnedTarget+"/page"); err != nil {
+		t.Fatalf("Fetch = %v, want the Jina result", err)
+	}
+	if n := jinaHits.Load(); n != 1 {
+		t.Errorf("Jina saw %d requests, want 1", n)
+	}
+}
+
+func TestChainFetcher_RobotsAllowedPathStillFallsBack(t *testing.T) {
+	target, pageHits := disallowServer(t, "/robots.txt")
+	jinaSrv, jinaHits := countingServer(t, nil)
+
+	primary := pinnedFetcher(target, Options{RespectRobotsTxt: true})
+	c := NewChainFetcher(primary, newTestJina(jinaSrv.URL), nil)
+	if _, err := c.Fetch(context.Background(), pinnedTarget+"/public"); err != nil {
+		t.Fatalf("Fetch = %v, want the Jina result", err)
+	}
+	if n := pageHits.Load(); n != 1 {
+		t.Errorf("target page saw %d requests, want 1", n)
+	}
+	if n := jinaHits.Load(); n != 1 {
+		t.Errorf("Jina saw %d requests, want 1 (page is under 100 chars)", n)
 	}
 }
 
